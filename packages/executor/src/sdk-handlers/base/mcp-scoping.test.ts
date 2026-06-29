@@ -26,9 +26,10 @@ describe('getMcpServersForSession', () => {
     const servers = await getMcpServersForSession('session-a' as SessionID, {
       mcpServerRepo: { findAll } as never,
       sessionMCPRepo: { listEffectiveServers, listServers } as never,
+      forUserId: 'user-a',
     });
 
-    expect(listEffectiveServers).toHaveBeenCalledWith('session-a', true);
+    expect(listEffectiveServers).toHaveBeenCalledWith('session-a', true, 'user-a');
     expect(findAll).not.toHaveBeenCalled();
     expect(listServers).not.toHaveBeenCalled();
     expect(servers).toEqual([

@@ -207,12 +207,19 @@ export class FeathersSessionMCPServersRepository {
    * Executors use the session-scoped route so session-token callers can receive
    * the raw config needed to launch only their own session's MCP servers.
    */
-  async listEffectiveServers(sessionId: SessionID, enabledOnly?: boolean): Promise<MCPServer[]> {
+  async listEffectiveServers(
+    sessionId: SessionID,
+    enabledOnly?: boolean,
+    forUserId?: string
+  ): Promise<MCPServer[]> {
     const service = this.client.service(`/sessions/${sessionId}/mcp-servers`);
     const query: Record<string, unknown> = { includeGlobal: true };
 
     if (enabledOnly) {
       query.enabledOnly = true;
+    }
+    if (forUserId) {
+      query.forUserId = forUserId;
     }
 
     const result = await service.find({ query });

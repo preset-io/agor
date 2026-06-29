@@ -78,6 +78,7 @@ import type {
   SessionsServiceImpl,
 } from './declarations.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
+import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
@@ -1381,7 +1382,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const queryForUserId = (context.params?.query as Record<string, unknown>)?.forUserId as
       | string
       | undefined;
-    const userId = context.params?.user?.user_id || queryForUserId;
+    const authPayloadType = (
+      context.params?.authentication as { payload?: { type?: unknown } } | undefined
+    )?.payload?.type;
+    const userId = resolveForUserIdWithGate({
+      queryForUserId,
+      isServiceAccount: context.params?.user?._isServiceAccount,
+      authPayloadType,
+      callerUserId: context.params?.user?.user_id,
+    });
     if (!userId) {
       return context;
     }

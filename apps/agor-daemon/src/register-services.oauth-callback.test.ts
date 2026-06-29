@@ -61,4 +61,17 @@ describe('register-services OAuth callback URL regression', () => {
     expect(codeOnly).toMatch(/requirePublicBaseUrl\s*\(/);
     expect(codeOnly).toMatch(/['"]\/mcp-servers\/oauth-callback['"]/);
   });
+
+  it('persists callback tokens inside the tenant captured when the flow started', () => {
+    // PendingOAuthFlow carries tenantId so the callback handler knows which tenant DB to use.
+    expect(codeOnly).toMatch(/tenantId\?\s*:\s*string/);
+    // Tenant is captured at flow start, not derived later, to guarantee it matches the
+    // authenticated caller at the time the flow was initiated.
+    expect(codeOnly).toMatch(/tenantId:\s*opts\.tenantId\s*\?\?\s*getCurrentTenantId\(\)/);
+    // persistPendingOAuthToken delegates through runInOAuthTenantScope so
+    // runWithTenantDatabaseScope is applied (see oauth-auth-helpers.ts + oauth-auth-helpers.test.ts
+    // for the behavioral assertion that the scope is actually invoked with the pending flow tenant).
+    expect(codeOnly).toMatch(/runInOAuthTenantScope\s*\(\s*db,\s*pendingFlow\.tenantId/);
+    expect(codeOnly).toMatch(/persistPendingOAuthToken\s*\(\s*tokenResponse,\s*pendingFlow/);
+  });
 });

@@ -56,6 +56,7 @@ describe('setupQuery - Local Settings Support', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getMcpServersForSession).mockResolvedValue([]);
+    vi.mocked(resolveMCPAuthHeaders).mockResolvedValue(undefined);
     vi.mocked(Claude.query).mockReturnValue({
       [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
       interrupt: () => Promise.resolve(),
@@ -170,6 +171,38 @@ describe('setupQuery - Local Settings Support', () => {
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor.alwaysLoad).toBeUndefined();
     expect(mcpServers.remote.alwaysLoad).toBeUndefined();
+  });
+
+  it('always loads authenticated OAuth MCP servers for non-gateway sessions', async () => {
+    const deps = createMockDeps();
+    vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+      session_id: 'test-session' as SessionID,
+      branch_id: 'test-branch' as BranchID,
+      mcp_token: 'test-token',
+    } as any);
+    deps.sessionMCPRepo = {} as any;
+    deps.mcpServerRepo = {} as any;
+    vi.mocked(resolveMCPAuthHeaders).mockResolvedValue({ Authorization: 'Bearer oauth-token' });
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      {
+        server: {
+          name: 'oauthRemote',
+          transport: 'http',
+          url: 'https://example.com/mcp',
+          auth: { type: 'oauth', oauth_access_token: 'oauth-token' },
+        },
+      } as any,
+    ]);
+
+    await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
+    expect(mcpServers.agor.alwaysLoad).toBeUndefined();
+    expect(mcpServers.oauthRemote).toMatchObject({
+      headers: { Authorization: 'Bearer oauth-token' },
+      alwaysLoad: true,
+    });
   });
 
   it('does not block gateway startup on unauthenticated OAuth servers with custom headers', async () => {

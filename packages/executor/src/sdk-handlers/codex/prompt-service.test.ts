@@ -1211,6 +1211,23 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     });
   });
 
+  it('passes forUserId to shared MCP scoping for per-user OAuth injection', async () => {
+    const service = makeService();
+
+    await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      '019e3700-user-user-user-user00000001'
+    );
+
+    expect(mcpScopingMocks.getMcpServersForSession).toHaveBeenCalledWith(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      expect.objectContaining({
+        forUserId: '019e3700-user-user-user-user00000001',
+      })
+    );
+  });
+
   it('emits default_tools_approval_mode=approve on a stdio server', async () => {
     mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
       {

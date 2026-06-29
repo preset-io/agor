@@ -92,6 +92,7 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
+import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
@@ -3262,7 +3263,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const includeMetadata =
             params.query?.includeMetadata === 'true' || params.query?.includeMetadata === true;
           const mcpService = app.service('mcp-servers');
-          const userId = params.user?.user_id;
+          const queryForUserId =
+            typeof params.query?.forUserId === 'string' ? params.query.forUserId : undefined;
+          const authPayloadType = (
+            params as RouteParams & { authentication?: { payload?: { type?: unknown } } }
+          ).authentication?.payload?.type;
+          const routeUser = params.user as
+            | (NonNullable<RouteParams['user']> & { _isServiceAccount?: boolean })
+            | undefined;
+          const userId = resolveForUserIdWithGate({
+            queryForUserId,
+            isServiceAccount: routeUser?._isServiceAccount,
+            authPayloadType,
+            callerUserId: params.user?.user_id,
+          });
           const rawLookupParams = {
             ...params,
             provider: undefined,

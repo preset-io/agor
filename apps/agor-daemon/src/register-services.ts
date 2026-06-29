@@ -16,6 +16,7 @@ import {
   BoardRepository,
   BranchRepository,
   eq,
+  getCurrentTenantId,
   inArray,
   MCPServerRepository,
   SessionMCPServerRepository,
@@ -56,6 +57,7 @@ import type {
   SessionsServiceImpl,
 } from './declarations.js';
 import { trackExecutorProcess, untrackExecutorProcess } from './executor-tracking.js';
+import { runInOAuthTenantScope } from './oauth-auth-helpers.js';
 import {
   cacheOAuth21Token,
   clearOAuth21Token,
@@ -1121,6 +1123,7 @@ async function registerMCPServices(
     mcpServerId?: string;
     userId?: string;
     oauthMode?: 'per_user' | 'shared';
+    tenantId?: string;
     socketId?: string;
     createdAt: number;
     /**
@@ -1213,6 +1216,7 @@ async function registerMCPServices(
     mcpServerId?: string;
     userId?: string;
     oauthMode?: 'per_user' | 'shared';
+    tenantId?: string;
     clientId?: string;
     clientSecret?: string;
     authorizationUrlOverride?: string;
@@ -1318,6 +1322,7 @@ async function registerMCPServices(
       mcpServerId: opts.mcpServerId,
       userId: opts.userId,
       oauthMode: opts.oauthMode,
+      tenantId: opts.tenantId ?? getCurrentTenantId(),
       socketId: opts.socketId,
       createdAt: Date.now(),
       tokenResolve,
@@ -1343,6 +1348,30 @@ async function registerMCPServices(
     }
     return base;
   }
+
+  const tenantIdFromParams = (params?: AuthenticatedParams): string | undefined =>
+    (params as (AuthenticatedParams & { tenant?: { tenant_id?: string } }) | undefined)?.tenant
+      ?.tenant_id ?? getCurrentTenantId();
+
+  const persistPendingOAuthToken = async (
+    tokenResponse: OAuthTokenResponse,
+    pendingFlow: PendingOAuthFlow,
+    logPrefix: string
+  ): Promise<void> =>
+    runInOAuthTenantScope(db, pendingFlow.tenantId, () =>
+      persistOAuthToken(
+        db,
+        tokenResponse,
+        pendingFlow.mcpUrl,
+        {
+          ...pendingFlow,
+          clientId: pendingFlow.context.clientId,
+          clientSecret: pendingFlow.context.clientSecret,
+          tokenEndpoint: pendingFlow.context.tokenEndpoint,
+        },
+        logPrefix
+      )
+    );
 
   // Set the OAuth callback handler
   const oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
@@ -1397,18 +1426,7 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
         pendingOAuthFlows.delete(state);
 
-        await persistOAuthToken(
-          db,
-          tokenResponse,
-          pendingFlow.mcpUrl,
-          {
-            ...pendingFlow,
-            clientId: pendingFlow.context.clientId,
-            clientSecret: pendingFlow.context.clientSecret,
-            tokenEndpoint: pendingFlow.context.tokenEndpoint,
-          },
-          'OAuth Callback'
-        );
+        await persistPendingOAuthToken(tokenResponse, pendingFlow, 'OAuth Callback');
 
         if (app.io) {
           const oauthEvent = {
@@ -1603,6 +1621,7 @@ async function registerMCPServices(
                   // call (writes to the shared MCP server row, not per-user).
                   oauthMode: 'shared',
                   clientId: data.client_id,
+                  tenantId: tenantIdFromParams(params as AuthenticatedParams | undefined),
                   socketId: connection?.id,
                 });
               } catch (err) {
@@ -1857,6 +1876,7 @@ async function registerMCPServices(
       try {
         console.log('[OAuth Start] Starting two-phase OAuth flow for:', data.mcp_url);
         const userId = params?.user?.user_id;
+        const tenantId = tenantIdFromParams(params);
 
         let oauthMode: 'per_user' | 'shared' | undefined;
         let authorizationUrlOverride: string | undefined;
@@ -1865,8 +1885,10 @@ async function registerMCPServices(
         let clientIdFromConfig: string | undefined;
         let scopeOverride: string | undefined;
         if (data.mcp_server_id) {
-          const mcpServerRepo = new MCPServerRepository(db);
-          const server = await mcpServerRepo.findById(data.mcp_server_id);
+          const server = await runInOAuthTenantScope(db, tenantId, () => {
+            const mcpServerRepo = new MCPServerRepository(db);
+            return mcpServerRepo.findById(data.mcp_server_id as string);
+          });
           if (server?.auth?.type === 'oauth') {
             oauthMode = server.auth.oauth_mode || 'per_user';
             authorizationUrlOverride = server.auth.oauth_authorization_url;
@@ -1923,6 +1945,7 @@ async function registerMCPServices(
             authorizationUrlOverride,
             tokenUrlOverride,
             scope: scopeOverride,
+            tenantId,
             socketId,
           });
         } catch (err) {
@@ -1977,18 +2000,7 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
         pendingOAuthFlows.delete(state);
 
-        await persistOAuthToken(
-          db,
-          tokenResponse,
-          pendingFlow.mcpUrl,
-          {
-            ...pendingFlow,
-            clientId: pendingFlow.context.clientId,
-            clientSecret: pendingFlow.context.clientSecret,
-            tokenEndpoint: pendingFlow.context.tokenEndpoint,
-          },
-          'OAuth Complete'
-        );
+        await persistPendingOAuthToken(tokenResponse, pendingFlow, 'OAuth Complete');
         return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
       } catch (error) {
         console.error('[OAuth Complete] Error:', error);
@@ -2518,6 +2530,7 @@ async function registerMCPServices(
               // call). Without a serverId nothing is persisted to the DB; the
               // daemon-level cache below carries the token for this request.
               oauthMode: 'shared',
+              tenantId: tenantIdFromParams(params),
               socketId: connection?.id,
             });
 

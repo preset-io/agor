@@ -257,6 +257,9 @@ export const mcpServerQuerySchema = createQuerySchema(
     source: Type.Optional(
       Type.Union([Type.Literal('user'), Type.Literal('imported'), Type.Literal('agor')])
     ),
+    // Executor/session-token callers pass this so hooks can inject the
+    // task creator's per-user OAuth token instead of the session owner's.
+    forUserId: Type.Optional(CommonSchemas.uuid),
     created_at: Type.Optional(CommonSchemas.timestamp),
   })
 );
