@@ -1759,6 +1759,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         delete updatedEnvironment[key];
       }
     }
+    // Backward compatibility for already-deployed executors that reported
+    // successful stop/nuke as `{ status: 'stopped', process: undefined }`
+    // across JSON. The undefined key is dropped before it reaches this merge,
+    // but a stopped environment must not keep stale process metadata.
+    if (environmentUpdate.status === 'stopped' && !Object.hasOwn(environmentUpdate, 'process')) {
+      delete updatedEnvironment.process;
+    }
 
     // Check if environment state actually changed (ignoring timestamp-only updates)
     // For health checks, we only care about status and message changes, not timestamp

@@ -606,6 +606,39 @@ describe('BranchesService environment start async behavior', () => {
     expect(patchedEnvironment).not.toHaveProperty('last_error');
     expect(patchedEnvironment).not.toHaveProperty('last_command');
   });
+
+  it('clears stale process metadata when old executor callbacks report stopped', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-old-executor' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-old-executor',
+      path: '/tmp/wt-env-old-executor',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_instance: {
+        status: 'stopping',
+        process: { pid: 789, started_at: '2026-01-01T00:00:00.000Z' },
+      },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+      return { ...branch, ...(data as object) } as never;
+    });
+
+    await service.updateEnvironment({
+      branch_id: branch.branch_id,
+      // Simulates an old executor callback where `process: undefined` was
+      // dropped by JSON before the daemon received the update.
+      environment_update: { status: 'stopped' },
+    });
+
+    const patchedEnvironment = patchSpy.mock.calls[0]?.[1]?.environment_instance as
+      | Record<string, unknown>
+      | undefined;
+    expect(patchedEnvironment).toMatchObject({ status: 'stopped' });
+    expect(patchedEnvironment).not.toHaveProperty('process');
+  });
 });
 
 describe('BranchesService.patch primary assistant invariants', () => {
