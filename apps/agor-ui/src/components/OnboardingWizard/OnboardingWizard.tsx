@@ -509,9 +509,10 @@ const GLASS_CARD_BORDER = '1px solid rgba(255,255,255,0.16)';
 const GLASS_CARD_SHADOW = '0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.13)';
 // Selection — brighter glass lift, minimal teal accent
 const WIZARD_SELECTED_BG =
-  'linear-gradient(135deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.06) 100%)';
-const WIZARD_SELECTED_BORDER = '1px solid rgba(46,154,146,0.32)';
-const WIZARD_SELECTED_SHADOW = '0 6px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.18)';
+  'linear-gradient(135deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.05) 100%)';
+const WIZARD_SELECTED_BORDER = '1px solid rgba(46,154,146,0.4)';
+const WIZARD_SELECTED_SHADOW =
+  '0 0 0 3px rgba(46,154,146,0.1), 0 6px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.16)';
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
