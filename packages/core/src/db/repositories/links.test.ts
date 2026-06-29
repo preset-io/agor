@@ -1,4 +1,4 @@
-import type { BranchID, Link, SessionID, UUID } from '@agor/core/types';
+import type { BranchID, Link, MessageID, SessionID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { normalizeRefTargetKey, normalizeUrlTargetKey } from '../../types/link';
@@ -8,6 +8,7 @@ import { type LinkInsert, type LinkRow, links } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { LinksRepository } from './links';
+import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { UsersRepository } from './users';
@@ -49,6 +50,19 @@ async function seedSession(db: Database, branchId: BranchID, createdBy: UUID) {
     created_by: createdBy,
     tasks: [],
     genealogy: { children: [] },
+  });
+}
+
+async function seedMessage(db: Database, sessionId: SessionID) {
+  return new MessagesRepository(db).create({
+    message_id: generateId() as MessageID,
+    session_id: sessionId,
+    type: 'user',
+    role: 'user',
+    index: 0,
+    timestamp: new Date().toISOString(),
+    content_preview: 'link source',
+    content: 'link source',
   });
 }
 
@@ -179,6 +193,64 @@ describe('LinksRepository', () => {
     expect(second.target_key).toBe(normalizeUrlTargetKey('https://example.com/repeat'));
     expect(second.title).toBe('deduped');
     expect(await repo.findAll({ sessionId: session.session_id })).toHaveLength(1);
+  });
+
+  dbTest(
+    'preserves first source message attribution when deduping parsed links',
+    async ({ db }) => {
+      const repo = new LinksRepository(db);
+      const branch = await seedBranch(db);
+      const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+      const firstMessageId = (await seedMessage(db, session.session_id)).message_id;
+      const secondMessageId = (await seedMessage(db, session.session_id)).message_id;
+
+      const first = await repo.create({
+        session_id: session.session_id,
+        source_message_id: firstMessageId,
+        kind: 'url',
+        source: 'parsed',
+        url: 'https://example.com/repeated',
+        title: 'first mention',
+      });
+      const second = await repo.create({
+        session_id: session.session_id,
+        source_message_id: secondMessageId,
+        kind: 'url',
+        source: 'parsed',
+        url: 'https://example.com/repeated',
+        title: 'latest title',
+      });
+
+      expect(second.link_id).toBe(first.link_id);
+      expect(second.title).toBe('latest title');
+      expect(second.source_message_id).toBe(firstMessageId);
+      expect(await repo.findAll({ sourceMessageId: firstMessageId })).toHaveLength(1);
+      expect(await repo.findAll({ sourceMessageId: secondMessageId })).toHaveLength(0);
+    }
+  );
+
+  dbTest('fills missing source message attribution during dedupe', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const messageId = (await seedMessage(db, session.session_id)).message_id;
+
+    const manual = await repo.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/later-attributed',
+    });
+    const attributed = await repo.create({
+      session_id: session.session_id,
+      source_message_id: messageId,
+      kind: 'url',
+      source: 'parsed',
+      url: 'https://example.com/later-attributed',
+    });
+
+    expect(attributed.link_id).toBe(manual.link_id);
+    expect(attributed.source_message_id).toBe(messageId);
   });
 
   dbTest('recomputes target_key and honors explicit null patch fields', async ({ db }) => {

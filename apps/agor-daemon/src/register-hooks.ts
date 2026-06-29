@@ -433,6 +433,17 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'leaderboard',
 ];
 
+export function isExternalFileBackedLinkMutation(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const record = data as Record<string, unknown>;
+  return (
+    (typeof record.file_path === 'string' && record.file_path.length > 0) ||
+    record.source === 'upload' ||
+    record.kind === 'image' ||
+    record.kind === 'document'
+  );
+}
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -811,6 +822,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
+  const rejectExternalFileBackedLinkMutations = (context: HookContext) => {
+    if (!context.params.provider) return context;
+    const records = Array.isArray(context.data) ? context.data : [context.data];
+    for (const record of records) {
+      if (isExternalFileBackedLinkMutation(record)) {
+        throw new Forbidden('File-backed links must be created through the upload endpoint');
+      }
+    }
+    return context;
+  };
+
   app.service('links').hooks({
     before: {
       all: [typedValidateQuery(linkQueryValidator), requireAuth, executorRuntimeScopeGuard()],
@@ -819,12 +841,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create links'),
         rejectLinkDerivedFields,
+        rejectExternalFileBackedLinkMutations,
         injectCreatedBy(),
         ensureLinkOwnerAccess('mutate'),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update links'),
         rejectLinkDerivedFields,
+        rejectExternalFileBackedLinkMutations,
         rejectLinkOwnerPatch,
         ensureLinkOwnerAccess('mutate'),
       ],

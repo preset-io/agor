@@ -71,6 +71,14 @@ function validateLinkSemantics(data: {
   if (error) throw new RepositoryError(error);
 }
 
+function preserveExistingSourceMessageOnDedupe(
+  existing: Link,
+  data: Partial<LinkCreate>
+): Partial<LinkCreate> {
+  if (!existing.source_message_id || data.source_message_id === undefined) return data;
+  return { ...data, source_message_id: existing.source_message_id };
+}
+
 export class LinksRepository {
   constructor(private db: Database) {}
 
@@ -153,7 +161,7 @@ export class LinksRepository {
     this.validateCreate(data);
     const existing = await this.findByOwnerAndTarget(data);
     if (existing) {
-      return this.update(existing.link_id, data);
+      return this.update(existing.link_id, preserveExistingSourceMessageOnDedupe(existing, data));
     }
 
     const row = this.createToInsert(data);
@@ -164,7 +172,10 @@ export class LinksRepository {
       if (!isUniqueConstraintError(err)) throw err;
       const racedExisting = await this.findByOwnerAndTarget(data);
       if (!racedExisting) throw err;
-      return this.update(racedExisting.link_id, data);
+      return this.update(
+        racedExisting.link_id,
+        preserveExistingSourceMessageOnDedupe(racedExisting, data)
+      );
     }
   }
 
