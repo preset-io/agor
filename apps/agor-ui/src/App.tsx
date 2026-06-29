@@ -18,12 +18,7 @@ import type {
   User,
   UUID,
 } from '@agor-live/client';
-import {
-  boardPath,
-  ENTITY_PATH_SEGMENTS,
-  getRepoReferenceOptions,
-  sessionPath,
-} from '@agor-live/client';
+import { boardPath, ENTITY_PATH_SEGMENTS, sessionPath } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider } from 'antd';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -49,17 +44,7 @@ import {
   useSessionActions,
 } from './hooks';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
-import { useAgorStore } from './store/agorStore';
-import {
-  selectBoardById,
-  selectBranchById,
-  selectCommentById,
-  selectRepoById,
-  selectSessionById,
-  selectSessionMcpServerIds,
-  selectSessionsByBranch,
-  selectUserById,
-} from './store/selectors';
+import { agorStore, useAgorStore } from './store/agorStore';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
@@ -346,17 +331,12 @@ function AppContent() {
     directSessionId: directSessionIdFromPath,
   });
 
-  // Entity maps are read directly from the store rather than the useAgorData
-  // return so each map is its own narrow subscription — the surface only
-  // re-renders for the slices it actually consumes, not on every entity write.
-  const sessionById = useAgorStore(selectSessionById);
-  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
-  const boardById = useAgorStore(selectBoardById);
-  const commentById = useAgorStore(selectCommentById);
-  const repoById = useAgorStore(selectRepoById);
-  const branchById = useAgorStore(selectBranchById);
-  const userById = useAgorStore(selectUserById);
-  const sessionMcpServerIds = useAgorStore(selectSessionMcpServerIds);
+  // Entity maps are NOT subscribed here. Each surface that needs a whole map
+  // (MobileApp, OnboardingWizard, KnowledgePage) self-subscribes via
+  // `useAgorStore(selectX)` at its own top, so the outer shell re-renders only
+  // on load-state — not on every entity write. Outer App's own handler-time
+  // lookups read imperatively through `agorStore.getState()`, and the single
+  // render-time entity read (currentUser) uses a narrow by-id selector below.
 
   // Session actions
   const { createSession, forkSession, btwForkSession, spawnSession, updateSession, deleteSession } =
@@ -424,10 +404,14 @@ function AppContent() {
     <InitialLoadingScreen message="Loading surface…" />
   );
 
-  // Get current user from users Map (real-time updates via WebSocket)
-  // This ensures we get the latest onboarding_completed status
-  // Fall back to user from auth if users Map hasn't loaded yet
-  const currentUser = user ? userById.get(user.user_id) || user : null;
+  // Get current user from users Map (real-time updates via WebSocket).
+  // Narrow by-id selector: subscribes to this ONE user entity, not the whole
+  // userById map, so unrelated user writes don't re-render the shell. Falls
+  // back to the auth user until the map has loaded that row.
+  const storedCurrentUser = useAgorStore((s) =>
+    user ? (s.userById.get(user.user_id) ?? null) : null
+  );
+  const currentUser = user ? storedCurrentUser || user : null;
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
@@ -510,7 +494,12 @@ function AppContent() {
     if (result.sessionId) {
       navigate(sessionPath(result.sessionId as SessionID));
     } else if (result.boardId) {
-      navigate(boardPath(result.boardId as BoardID, boardById.get(result.boardId)?.slug));
+      navigate(
+        boardPath(
+          result.boardId as BoardID,
+          agorStore.getState().boardById.get(result.boardId)?.slug
+        )
+      );
     } else {
       navigate('/');
     }
@@ -1435,7 +1424,7 @@ function AppContent() {
 
     try {
       // Get current session-MCP relationships for this session
-      const currentIds = sessionMcpServerIds.get(sessionId) || [];
+      const currentIds = agorStore.getState().sessionMcpServerIds.get(sessionId) || [];
       await updateSessionMcpServers(client, sessionId, currentIds, mcpServerIds);
 
       // Note: Don't show success message here - it's part of the session settings save
@@ -1467,7 +1456,7 @@ function AppContent() {
   const handleResolveComment = async (commentId: string) => {
     if (!client) return;
     try {
-      const comment = commentById.get(commentId);
+      const comment = agorStore.getState().commentById.get(commentId);
       await client.service('board-comments').patch(commentId, {
         resolved: !comment?.resolved,
       });
@@ -1518,14 +1507,6 @@ function AppContent() {
     }
   };
 
-  // Generate repo reference options for dropdowns
-  const allOptions = getRepoReferenceOptions(
-    Array.from(repoById.values()),
-    Array.from(branchById.values())
-  );
-  const _branchOptions = allOptions.filter((opt) => opt.type === 'managed-branch');
-  const _repoOptions = allOptions.filter((opt) => opt.type === 'managed');
-
   // Modal close handlers
   const handleSettingsClose = () => {
     setSettingsTabToOpen(null);
@@ -1543,7 +1524,6 @@ function AppContent() {
     <KnowledgePage
       client={client}
       currentUser={currentUser}
-      userById={userById}
       onUserSettingsClick={() => setOpenUserSettings(true)}
       onLogout={logout}
     />
@@ -1666,9 +1646,6 @@ function AppContent() {
           key={`${currentUser?.user_id ?? '__anon__'}:${onboardingWizardInstance}`}
           open={onboardingWizardOpen}
           onComplete={handleOnboardingComplete}
-          repoById={repoById}
-          branchById={branchById}
-          boardById={boardById}
           user={currentUser}
           client={client}
           onCreateRepo={handleCreateRepo}
@@ -1724,13 +1701,6 @@ function AppContent() {
                 <MobileApp
                   client={client}
                   user={user}
-                  sessionById={sessionById}
-                  sessionsByBranch={sessionsByBranch}
-                  boardById={boardById}
-                  commentById={commentById}
-                  repoById={repoById}
-                  branchById={branchById}
-                  userById={userById}
                   onSendPrompt={handleSendPrompt}
                   onSendComment={handleSendComment}
                   onReplyComment={handleReplyComment}
