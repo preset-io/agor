@@ -204,5 +204,8 @@ export function buildPromptWithAttachments(text: string, attachmentPaths: string
   const attachmentBlock = ['Attached files:', ...attachmentPaths.map((path) => `- ${path}`)].join(
     '\n'
   );
+  if (trimmedText.startsWith('/')) {
+    return `${trimmedText}\n\n${attachmentBlock}`;
+  }
   return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
 }

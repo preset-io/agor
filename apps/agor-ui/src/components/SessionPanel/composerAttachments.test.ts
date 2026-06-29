@@ -21,6 +21,15 @@ describe('composerAttachments', () => {
     );
   });
 
+  it('preserves slash commands at the start of the sent prompt', () => {
+    expect(
+      buildPromptWithAttachments('/compact focus on this chart', ['.agor/uploads/chart.png'])
+    ).toBe(`/compact focus on this chart
+
+Attached files:
+- .agor/uploads/chart.png`);
+  });
+
   it('supports attachment-only prompts', () => {
     expect(buildPromptWithAttachments('   ', ['.agor/uploads/chart-a.png'])).toBe(
       'Attached files:\n- .agor/uploads/chart-a.png'
