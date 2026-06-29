@@ -252,7 +252,7 @@ function createFindHarness(opts: {
 }
 
 describe('BranchesService environment start async behavior', () => {
-  function createStartHarness() {
+  function createStartHarness(status: 'stopped' | 'starting' | 'stopping' | 'running' = 'stopped') {
     const { service } = createServiceHarness();
     const branch = {
       branch_id: 'wt-start' as BranchID,
@@ -263,7 +263,7 @@ describe('BranchesService environment start async behavior', () => {
       branch_unique_id: 1,
       start_command: 'docker compose up -d --build',
       app_url: 'http://localhost:3000',
-      environment_instance: { status: 'stopped' },
+      environment_instance: { status },
     };
 
     let currentEnvironment: Record<string, unknown> = { ...branch.environment_instance };
@@ -337,6 +337,19 @@ describe('BranchesService environment start async behavior', () => {
         }),
       ])
     );
+  });
+
+  it('rejects starting while a lifecycle transition is already in progress', async () => {
+    for (const status of ['starting', 'stopping'] as const) {
+      const { service, branch, environmentUpdates } = createStartHarness(status);
+
+      await expect(service.startEnvironment(branch.branch_id)).rejects.toThrow(
+        status === 'starting' ? 'already starting' : 'is stopping'
+      );
+
+      expect(environmentUpdates).toEqual([]);
+      expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+    }
   });
 
   it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {
@@ -449,9 +462,15 @@ describe('BranchesService environment start async behavior', () => {
       };
       return { ...branch, environment_instance: currentEnvironment } as never;
     });
-    mockedRunExecutorCommand.mockResolvedValue({
-      success: true,
-      data: { branchId: branch.branch_id, action: 'stop' },
+    mockedRunExecutorCommand.mockImplementation(async () => {
+      currentEnvironment = {
+        ...currentEnvironment,
+        status: 'stopped',
+      };
+      return {
+        success: true,
+        data: { branchId: branch.branch_id, action: 'stop' },
+      };
     });
 
     await service.restartEnvironment(branch.branch_id);

@@ -636,6 +636,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   !canTriggerEnv ||
                   envStatus === 'running' ||
                   envStatus === 'starting' ||
+                  envStatus === 'stopping' ||
                   isStarting ||
                   isStopping ||
                   isRestarting
@@ -649,7 +650,12 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 icon={isStopping ? <LoadingOutlined /> : <PoweroffOutlined />}
                 onClick={handleStop}
                 loading={isStopping}
-                disabled={!canTriggerEnv}
+                disabled={
+                  !canTriggerEnv ||
+                  envStatus === 'stopped' ||
+                  envStatus === 'stopping' ||
+                  isStopping
+                }
                 title={triggerDisabledTooltip}
                 danger
               >

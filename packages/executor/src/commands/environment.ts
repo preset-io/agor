@@ -239,6 +239,47 @@ export async function handleEnvironmentLifecycle(
         commandType: 'start',
       });
 
+      const latest = await client.service('branches').get(branchId);
+      const latestStatus = latest.environment_instance?.status;
+      const startupWasCancelled = latestStatus === 'stopping' || latestStatus === 'stopped';
+      if (startupWasCancelled) {
+        let cancellationOutput: string | undefined;
+        if (payload.params.stopCommand) {
+          const stopResult = await runShellCommand({
+            command: payload.params.stopCommand,
+            cwd,
+            env: payload.env,
+            commandType: 'stop',
+          });
+          cancellationOutput = stopResult.output;
+        }
+
+        await updateBranchEnvironment(client, branchId, {
+          status: 'stopped',
+          process: null,
+          last_health_check: {
+            timestamp: new Date().toISOString(),
+            status: 'unknown',
+            message: 'Environment startup cancelled',
+          },
+          last_error: null,
+          last_command: {
+            action: 'stop',
+            status: 'succeeded',
+            timestamp: new Date().toISOString(),
+            message: payload.params.stopCommand
+              ? 'Startup cancelled; stop command completed'
+              : 'Startup cancelled after start command completed',
+            ...(cancellationOutput ? { output: cancellationOutput } : {}),
+          },
+        });
+
+        return {
+          success: true,
+          data: { branchId, action: payload.params.action, cancelled: true },
+        };
+      }
+
       await updateBranchEnvironment(client, branchId, {
         process: {
           ...(branch.environment_instance?.process ?? {}),

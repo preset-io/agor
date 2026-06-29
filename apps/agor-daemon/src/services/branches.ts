@@ -1841,8 +1841,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('No start command configured for this branch');
     }
 
-    if (branch.environment_instance?.status === 'running') {
+    const currentStatus = branch.environment_instance?.status;
+    if (currentStatus === 'running') {
       throw new Error('Environment is already running');
+    }
+    if (currentStatus === 'starting') {
+      throw new Error('Environment is already starting');
+    }
+    if (currentStatus === 'stopping') {
+      throw new Error('Environment is stopping; wait for it to stop before starting again');
     }
 
     const command = branch.start_command;
