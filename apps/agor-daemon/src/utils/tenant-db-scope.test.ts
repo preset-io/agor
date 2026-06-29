@@ -153,6 +153,30 @@ describe('createTenantDatabaseScopeAroundHook', () => {
     expect(db.transaction).not.toHaveBeenCalled();
   });
 
+  it('inherits an active tenant database scope for nested internal service calls', async () => {
+    const { db } = makePgDb();
+    const hook = createTenantDatabaseScopeAroundHook({
+      db: db as never,
+      jwtSecret: 'secret',
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      },
+    });
+    const context = { params: {} } as never;
+
+    await runWithTenantDatabaseScope(db as never, 'tenant-inherited', async () => {
+      await hook(context, async () => {
+        expect(getCurrentTenantId()).toBe('tenant-inherited');
+      });
+    });
+
+    expect((context as { params: { tenant?: unknown } }).params.tenant).toEqual({
+      tenant_id: 'tenant-inherited',
+      source: 'explicit',
+    });
+  });
+
   it('reuses tenant context already attached to a socket connection', async () => {
     const { db } = makePgDb();
     const hook = createTenantDatabaseScopeAroundHook({

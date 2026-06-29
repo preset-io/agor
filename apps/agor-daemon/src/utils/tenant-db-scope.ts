@@ -4,9 +4,9 @@ import {
   resolveTenantContext,
   TenantResolutionError,
 } from '@agor/core/config';
-import { type Database, runWithTenantDatabaseScope } from '@agor/core/db';
+import { type Database, getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
-import type { HookContext } from '@agor/core/types';
+import type { HookContext, TenantID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 
@@ -60,6 +60,11 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
       'tenant_id' in connectionTenant
     ) {
       return connectionTenant as ReturnType<typeof resolveTenantContext>;
+    }
+
+    const inheritedTenantId = getCurrentTenantId();
+    if (inheritedTenantId) {
+      return { tenant_id: inheritedTenantId as TenantID, source: 'explicit' as const };
     }
 
     return resolveTenantContext(multiTenancy, {
