@@ -4,9 +4,9 @@
  * Provides REST + WebSocket API for repository management.
  * Uses DrizzleService adapter with RepoRepository.
  *
- * Git operations (clone, branch add) are delegated to the executor process
- * for proper Unix isolation. The executor handles filesystem operations while
- * the daemon handles database records and business logic.
+ * Git clone/worktree mutations for queued branch/repo operations are delegated
+ * to the executor process for Unix isolation. The daemon still performs a small
+ * set of local preflight/repair checks for registered repo metadata.
  */
 
 import { homedir } from 'node:os';
@@ -14,29 +14,36 @@ import path from 'node:path';
 import {
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
-  isBranchRbacEnabled,
   isValidGitUrl,
   isValidSlug,
   normalizeRepoUrl,
   PAGINATION,
   parseAgorYml,
   resolveBranchStorageConfig,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
-import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/core/db';
+import {
+  BranchRepository,
+  RepoRepository,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   assertRemoteRefVisibleForClone,
-  getBranchPath,
   getDefaultBranch,
   getRemoteUrl,
-  getReposDir,
   isValidGitRepo,
-  redactGitUrlCredentials,
   scanGitConfigRemoteCredentials,
   scrubGitConfigRemoteCredentials,
+} from '@agor/core/git/exec';
+import {
+  getBranchPath,
+  getReposDir,
+  redactGitUrlCredentials,
   stripGitUrlCredentials,
-} from '@agor/core/git';
+} from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
   Branch,
@@ -53,7 +60,7 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
-  generateSessionToken,
+  generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
   spawnExecutorFireAndForget,
@@ -113,9 +120,9 @@ async function deriveLocalRepoSlug(path: string, explicitSlug?: string): Promise
 export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams> {
   private repoRepo: RepoRepository;
   private app: Application;
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const repoRepo = new RepoRepository(db);
     super(repoRepo, {
       id: 'repo_id',
@@ -220,12 +227,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // token ensures hooks like requireAdminForEnvConfig bypass via
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
-    const sessionToken = generateSessionToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    const sessionToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      params
     );
 
-    // Unix group initialization gates on RBAC explicitly.
-    const rbacEnabled = isBranchRbacEnabled();
+    // Unix group initialization is a filesystem concern controlled by
+    // unix_user_mode, not by app-level branch RBAC.
+    const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
 
     // Sudo wrap (asUser) is gated inside the resolver — returns undefined
     // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -285,7 +294,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
           ...(data.default_branch ? { default_branch: data.default_branch } : {}),
           createDbRecord: true,
           userId: userId as string | undefined,
-          initUnixGroup: rbacEnabled,
+          initUnixGroup,
         },
       },
       {
@@ -562,7 +571,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Currently, local repos don't trigger git operations via executor,
     // so we'd need a separate executor command (e.g., 'unix.init-repo-group').
     // For now, local repos don't get Unix group isolation automatically.
-    // Use `agor admin sync-unix` to initialize groups for existing repos.
+    // Use `agor local sync-unix` to initialize groups for existing repos.
 
     return repo;
   }
@@ -759,7 +768,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Create DB record EARLY with 'creating' status
     // Executor will:
     // 1. Create git branch on filesystem
-    // 2. Initialize Unix groups (if RBAC enabled)
+    // 2. Initialize Unix groups (if unix_user_mode needs filesystem isolation)
     // 3. Render environment templates with full context including GID
     // 4. Patch branch to 'ready' with rendered templates
     const branch = (await branchesService.create(
@@ -907,12 +916,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Per-user credentials: Feathers RPC (users.getGitEnvironment)
     // Unix group init: Feathers RPC (branches.initializeUnixGroup) — runs daemon-side
     try {
-      const sessionToken = generateSessionToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      const sessionToken = generateScopedServiceToken(
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        params
       );
 
-      // Unix group initialization gates on RBAC explicitly.
-      const rbacEnabled = isBranchRbacEnabled();
+      // Unix group initialization is a filesystem concern controlled by
+      // unix_user_mode, not by app-level branch RBAC.
+      const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
 
       // Sudo wrap (asUser) is gated inside the resolver — returns undefined
       // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -936,8 +947,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             createBranch: data.createBranch,
             refType: data.refType,
             userId: userId as string | undefined,
-            // Unix group isolation (only when RBAC is enabled)
-            initUnixGroup: rbacEnabled,
+            // Unix group isolation (only when unix_user_mode is non-simple)
+            initUnixGroup,
             othersAccess: branch.others_fs_access || 'read',
             // Branch storage mode (forwarded for the clone-mode code path)
             storageMode,
@@ -996,8 +1007,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     params: Record<string, unknown>,
     serviceParams?: RepoParams
   ) {
-    const sessionToken = generateSessionToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    const sessionToken = generateScopedServiceToken(
+      this.app as unknown as { settings: { authentication?: { secret?: string } } },
+      serviceParams
     );
     const asUser = await resolveExecutorReadAsUser(
       this.db,
@@ -1180,8 +1192,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST.
     // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
     if (cleanup && repo.repo_type === 'remote') {
-      const sessionToken = generateSessionToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      const sessionToken = generateScopedServiceToken(
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        params
       );
 
       const cleanupResult = await runExecutorCommand(
@@ -1259,6 +1272,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 /**
  * Service factory function
  */
-export function createReposService(db: Database, app: Application): ReposService {
+export function createReposService(db: TenantScopeAwareDatabase, app: Application): ReposService {
   return new ReposService(db, app);
 }

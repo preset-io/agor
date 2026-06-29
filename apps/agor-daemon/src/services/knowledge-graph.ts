@@ -3,13 +3,13 @@
  */
 
 import {
-  type Database,
   KnowledgeDocumentRepository,
   type KnowledgeGraphLinkInput,
   type KnowledgeGraphNeighborsQuery,
   KnowledgeGraphRepository,
   KnowledgeNamespaceRepository,
   type KnowledgeNodeRef,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { Forbidden, NotFound } from '@agor/core/feathers';
 import type {
@@ -57,7 +57,7 @@ export class KnowledgeGraphService {
   private documents: KnowledgeDocumentRepository;
   private namespaces: KnowledgeNamespaceRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     this.graph = new KnowledgeGraphRepository(db);
     this.documents = new KnowledgeDocumentRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
@@ -307,6 +307,6 @@ export class KnowledgeGraphService {
   }
 }
 
-export function createKnowledgeGraphService(db: Database): KnowledgeGraphService {
+export function createKnowledgeGraphService(db: TenantScopeAwareDatabase): KnowledgeGraphService {
   return new KnowledgeGraphService(db);
 }

@@ -212,6 +212,23 @@ fi
 echo ""
 echo "📋 Copying build artifacts to agor-live..."
 
+echo "  → Copying git..."
+mkdir -p "$DIST_STAGE/git"
+cp -r "$REPO_ROOT/packages/git/dist/"* "$DIST_STAGE/git/"
+
+echo "  → Creating package.json for bundled @agor/git..."
+jq '
+  def strip_dist: gsub("\\./dist/"; "./");
+  {
+    name: "@agor/git",
+    version: "0.1.0",
+    type: "module",
+    main: "./index.js",
+    types: "./index.d.ts",
+    exports: (.exports | walk(if type == "string" then strip_dist else . end))
+  }
+' "$REPO_ROOT/packages/git/package.json" > "$DIST_STAGE/git/package.json"
+
 echo "  → Copying core..."
 mkdir -p "$DIST_STAGE/core"
 cp -r "$REPO_ROOT/packages/core/dist/"* "$DIST_STAGE/core/"
@@ -283,10 +300,12 @@ fi
 rm -rf "$SCRIPT_DIR/dist.old"
 
 echo ""
-echo "📦 Setting up @agor/core symlink for local development..."
+echo "📦 Setting up @agor package symlinks for local development..."
 mkdir -p "$SCRIPT_DIR/node_modules/@agor"
-rm -f "$SCRIPT_DIR/node_modules/@agor/core"
-ln -s "../../dist/core" "$SCRIPT_DIR/node_modules/@agor/core"
+for package_name in core git; do
+  rm -rf "$SCRIPT_DIR/node_modules/@agor/$package_name"
+  ln -s "../../dist/$package_name" "$SCRIPT_DIR/node_modules/@agor/$package_name"
+done
 
 # ── Package sizes ────────────────────────────────────────────────────────────
 
@@ -294,6 +313,7 @@ echo ""
 echo "📊 Package sizes:"
 du -sh "$SCRIPT_DIR/dist" | awk '{print "  agor-live total: " $1}'
 du -sh "$SCRIPT_DIR/dist/core" | awk '{print "    Core:     " $1}'
+du -sh "$SCRIPT_DIR/dist/git" | awk '{print "    Git:      " $1}'
 du -sh "$SCRIPT_DIR/dist/cli" | awk '{print "    CLI:      " $1}'
 du -sh "$SCRIPT_DIR/dist/daemon" | awk '{print "    Daemon:   " $1}'
 du -sh "$SCRIPT_DIR/dist/executor" | awk '{print "    Executor: " $1}'

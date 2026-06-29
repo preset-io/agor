@@ -10,7 +10,7 @@
  * message_range.end_index (e.g. startup.ts) can read it from message.index.
  */
 
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { generateId, SessionRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -26,7 +26,7 @@ import { MessageRole } from '@agor/core/types';
 
 export interface AppendSystemMessageOptions {
   app: Application;
-  db: Database;
+  db: TenantScopeAwareDatabase;
   sessionId: string;
   taskId?: string;
   content: string | ContentBlock[];

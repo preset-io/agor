@@ -470,6 +470,8 @@ export interface User extends BaseUserFields {
 export type UserAuthMetadata = object & {
   /** Tokens issued at or before this timestamp are no longer valid. */
   tokens_valid_after?: Date;
+  /** Backend-only tenant id used while issuing/validating runtime tokens. */
+  tenant_id?: string;
 };
 
 export type InternalUser = User & UserAuthMetadata;

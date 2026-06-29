@@ -1,0 +1,43 @@
+{
+  "name": "@agor/git",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./pure": {
+      "source": "./src/pure.ts",
+      "types": "./dist/pure.d.ts",
+      "import": "./dist/pure.js",
+      "require": "./dist/pure.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc --emitDeclarationOnly --declaration --declarationMap --noEmit false --incremental false",
+    "dev": "concurrently -k -n js,dts -c cyan,magenta \"TSUP_CLEAN=false tsup --watch\" \"tsc --emitDeclarationOnly --declaration --declarationMap --noEmit false --watch --preserveWatchOutput\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "js-yaml": "^4.2.0",
+    "simple-git": "^3.36.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.6.0",
+    "concurrently": "^9.2.1",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  },
+  "files": [
+    "dist"
+  ]
+}

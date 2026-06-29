@@ -18,10 +18,10 @@
  */
 
 import { randomInt } from 'node:crypto';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { User } from '../types';
 import type { Database } from './client';
-import { select, update } from './database-wrapper';
+import { isPostgresDatabase, select, update } from './database-wrapper';
 import {
   boardComments,
   boards,
@@ -32,6 +32,7 @@ import {
   type UserRow,
   users,
 } from './schema';
+import { getCurrentTenantId } from './tenant-scope';
 import { userRowToUser } from './user-utils';
 
 /**
@@ -43,6 +44,19 @@ import { userRowToUser } from './user-utils';
  * real `user_id` value (UUIDv7 is always 36 chars with dashes).
  */
 export const LEGACY_ANONYMOUS_OWNER_ID = 'anonymous';
+
+function currentTenantPredicate(db: Database, table: unknown) {
+  const tenantId = getCurrentTenantId();
+  const tenantColumn = (table as { tenant_id?: never }).tenant_id;
+  return isPostgresDatabase(db) && tenantId && tenantColumn
+    ? eq(tenantColumn, tenantId)
+    : undefined;
+}
+
+function withCurrentTenant<T>(db: Database, table: unknown, predicate: T): T {
+  const tenantPredicate = currentTenantPredicate(db, table);
+  return tenantPredicate ? (and(predicate as never, tenantPredicate) as T) : predicate;
+}
 
 const DEFAULT_ADMIN_EMAIL = 'admin@agor.live';
 
@@ -98,7 +112,7 @@ export async function reattributeLegacyAnonymousRows(
   for (const table of tablesWithCreatedBy) {
     const result = (await update(db, table)
       .set({ created_by: targetUserId })
-      .where(eq(table.created_by, LEGACY_ANONYMOUS_OWNER_ID))
+      .where(withCurrentTenant(db, table, eq(table.created_by, LEGACY_ANONYMOUS_OWNER_ID)))
       .run()) as { rowsAffected?: number };
     total += result.rowsAffected ?? 0;
   }
@@ -118,10 +132,15 @@ async function findFallbackAdmin(db: Database): Promise<User | null> {
   };
   const adminRows = (await select(db)
     .from(users)
-    .where(inArray(users.role, ['superadmin', 'admin']))
+    .where(withCurrentTenant(db, users, inArray(users.role, ['superadmin', 'admin'])))
     .all()) as UserRow[];
   const pool: UserRow[] =
-    adminRows.length > 0 ? adminRows : ((await select(db).from(users).all()) as UserRow[]);
+    adminRows.length > 0
+      ? adminRows
+      : ((await select(db)
+          .from(users)
+          .where(currentTenantPredicate(db, users))
+          .all()) as UserRow[]);
   if (pool.length === 0) return null;
   pool.sort(byCreatedAtAsc);
   return userRowToUser(pool[0]);
@@ -137,7 +156,7 @@ async function findFallbackAdmin(db: Database): Promise<User | null> {
 async function hasRealUserWithSentinelId(db: Database): Promise<boolean> {
   const row = await select(db)
     .from(users)
-    .where(eq(users.user_id, LEGACY_ANONYMOUS_OWNER_ID))
+    .where(withCurrentTenant(db, users, eq(users.user_id, LEGACY_ANONYMOUS_OWNER_ID)))
     .one();
   return row != null;
 }
@@ -161,7 +180,7 @@ export async function bootstrapFirstRunAdmin(
   db: Database,
   createAdmin: () => Promise<User>
 ): Promise<AdminBootstrapResult> {
-  const existingUsers = await select(db).from(users).all();
+  const existingUsers = await select(db).from(users).where(currentTenantPredicate(db, users)).all();
 
   let admin: User | null;
   let createdAdmin = false;

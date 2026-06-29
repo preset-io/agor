@@ -23,7 +23,7 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { resolveApiKey } from '@agor/core/config';
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
 import { Claude } from '@agor/core/sdk';
 import type {
@@ -233,7 +233,7 @@ async function validateApiKey(tool: string, key: string): Promise<boolean> {
   }
 }
 
-export function createCheckAuthService(db: Database) {
+export function createCheckAuthService(db: TenantScopeAwareDatabase) {
   return {
     async create(
       data: { tool: string; apiKey?: string },

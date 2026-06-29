@@ -1,4 +1,5 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, render, renderHook } from '@testing-library/react';
+import { useEffect, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLocalStorage } from './useLocalStorage';
 
@@ -29,5 +30,45 @@ describe('useLocalStorage', () => {
 
     expect(result.current[0]).toBe('recent');
     expect(consoleError).toHaveBeenCalled();
+  });
+
+  it('does not trigger a setState-in-render warning when a sibling hook shares the key', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    function Writer() {
+      const [, setValue] = useLocalStorage<string>(KEY, 'recent');
+      const [, setTick] = useState(0);
+      useEffect(() => {
+        // Queue an unrelated update first so the writer's fiber already has
+        // pending work when setValue runs. That defeats React's eager-state
+        // bailout, forcing the state updater to execute during the render
+        // phase — the same condition under which a side effect dispatched
+        // from inside the updater would call a sibling's setState mid-render.
+        setTick((tick) => tick + 1);
+        setValue('written');
+      }, [setValue]);
+      return null;
+    }
+
+    function Reader() {
+      const [value] = useLocalStorage<string>(KEY, 'recent');
+      return <span>{value}</span>;
+    }
+
+    act(() => {
+      render(
+        <>
+          <Writer />
+          <Reader />
+        </>
+      );
+    });
+
+    const offendingCalls = consoleError.mock.calls.filter((callArgs) =>
+      callArgs.some(
+        (arg) => typeof arg === 'string' && arg.includes('while rendering a different component')
+      )
+    );
+    expect(offendingCalls).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@ import { shortId } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../../base-command';
-import { requestBranchEnvironmentAction } from './request';
+import { requestBranchEnvironmentAction } from '../../../lib/branch-environment-action.js';
 
 export default class BranchEnvStop extends BaseCommand {
   static description = 'Stop branch environment';

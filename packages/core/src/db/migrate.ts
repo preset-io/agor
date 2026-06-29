@@ -21,12 +21,13 @@
 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { migrate as migrateSQLite } from 'drizzle-orm/libsql/migrator';
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator';
 import type { Database } from './client';
 import { insert, isPostgresDatabase, isSQLiteDatabase, select } from './database-wrapper';
 import { boards } from './schema';
+import { getCurrentTenantId } from './tenant-scope';
 
 /**
  * Error thrown when migration fails
@@ -319,8 +320,20 @@ export async function seedInitialData(db: Database, createdBy?: string): Promise
     const now = new Date();
     const owner = createdBy ?? LEGACY_ANONYMOUS_OWNER_ID;
 
-    // 1. Check if default board exists (by slug to avoid duplicates)
-    const existingBoard = await select(db).from(boards).where(eq(boards.slug, 'default')).one();
+    // 1. Check if default board exists in the active tenant (by slug to avoid duplicates).
+    const tenantId = getCurrentTenantId();
+    const tenantPredicate =
+      isPostgresDatabase(db) && tenantId
+        ? eq((boards as never as { tenant_id: never }).tenant_id, tenantId)
+        : undefined;
+    const existingBoard = await select(db)
+      .from(boards)
+      .where(
+        tenantPredicate
+          ? and(eq(boards.slug, 'default'), tenantPredicate)
+          : eq(boards.slug, 'default')
+      )
+      .one();
 
     if (!existingBoard) {
       // Create default board
@@ -340,6 +353,7 @@ export async function seedInitialData(db: Database, createdBy?: string): Promise
             color: '#1677ff',
             icon: '⭐',
           },
+          ...(isPostgresDatabase(db) && tenantId ? { tenant_id: String(tenantId) } : {}),
         })
         .run();
 

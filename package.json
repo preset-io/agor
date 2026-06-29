@@ -25,8 +25,8 @@
     "format": "prettier --write .",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck --filter='!@agor/docs'",
-    "check": "pnpm typecheck && pnpm lint && pnpm check:shortid && turbo run build --filter='!@agor/docs'",
-    "check:fix": "pnpm lint:fix && pnpm typecheck && pnpm check:shortid && turbo run build --filter='!@agor/docs'",
+    "check": "pnpm typecheck && pnpm lint && pnpm check:shortid && pnpm check:multitenancy-boundaries && turbo run build --filter='!@agor/docs'",
+    "check:fix": "pnpm lint:fix && pnpm typecheck && pnpm check:shortid && pnpm check:multitenancy-boundaries && turbo run build --filter='!@agor/docs'",
     "check:clean": "turbo run typecheck build --filter='!@agor/docs' --force && pnpm lint && pnpm check:shortid",
     "check:shortid": "node scripts/check-no-ad-hoc-shortid.mjs",
     "clean": "turbo run clean && rm -rf node_modules",
@@ -37,7 +37,8 @@
     "seed": "tsx scripts/seed.ts",
     "load:fixtures": "tsx scripts/load-fixtures.ts",
     "sync:agor-live-deps": "node scripts/sync-agor-live-deps.mjs",
-    "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check"
+    "check:agor-live-deps": "node scripts/sync-agor-live-deps.mjs --check",
+    "check:multitenancy-boundaries": "node scripts/check-multitenancy-boundaries.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",

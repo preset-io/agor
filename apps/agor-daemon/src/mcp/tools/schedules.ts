@@ -34,7 +34,7 @@ const agenticToolConfigSchema = z
       .object({
         mode: z.enum(['alias', 'exact']).optional(),
         model: mcpOptionalString('model_config.model', 'Model name override.'),
-        effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+        effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
         advisorModel: mcpOptionalString(
           'model_config.advisorModel',
           "Claude Code advisor model override (e.g. 'opus', 'sonnet', 'fable')."

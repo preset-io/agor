@@ -46,11 +46,12 @@
  *   as a v0.19 backwards-compat alias.
  */
 
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   advisoryLockKeyForUuid,
   BranchRepository,
   isPostgresDatabase,
+  runWithTenantDatabaseScope,
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
@@ -69,6 +70,7 @@ import type {
   ScheduleID,
   Session,
   SessionID,
+  TenantID,
   User,
   UUID,
 } from '@agor/core/types';
@@ -200,12 +202,14 @@ export interface SchedulerConfig {
   debug?: boolean;
   /** Unix user mode for validation (default: 'simple') */
   unixUserMode?: UnixUserMode;
+  /** Tenant used for cron/background ticks when no request auth scope exists. */
+  tenantId?: TenantID | string;
 }
 
 export class SchedulerService {
   private app: Application;
-  private db: Database;
-  private config: Required<SchedulerConfig>;
+  private db: TenantScopeAwareDatabase;
+  private config: Required<Omit<SchedulerConfig, 'tenantId'>> & Pick<SchedulerConfig, 'tenantId'>;
   private intervalHandle?: NodeJS.Timeout;
   private isRunning = false;
   private branchRepo: BranchRepository;
@@ -214,7 +218,7 @@ export class SchedulerService {
   private userRepo: UsersRepository;
   private sessionMCPRepo: SessionMCPServerRepository;
 
-  constructor(db: Database, app: Application, config: SchedulerConfig = {}) {
+  constructor(db: TenantScopeAwareDatabase, app: Application, config: SchedulerConfig = {}) {
     this.app = app;
     this.db = db;
     this.config = {
@@ -222,6 +226,7 @@ export class SchedulerService {
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       debug: config.debug ?? false,
       unixUserMode: config.unixUserMode ?? 'simple',
+      tenantId: config.tenantId,
     };
     this.branchRepo = new BranchRepository(db);
     this.scheduleRepo = new ScheduleRepository(db);
@@ -286,6 +291,13 @@ export class SchedulerService {
    * 3. Process the schedule (dedup, concurrency check, spawn).
    */
   private async tick(): Promise<void> {
+    if (this.config.tenantId) {
+      return runWithTenantDatabaseScope(this.db, this.config.tenantId, () => this.tickInScope());
+    }
+    return this.tickInScope();
+  }
+
+  private async tickInScope(): Promise<void> {
     const now = Date.now();
 
     try {

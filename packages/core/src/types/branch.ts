@@ -514,6 +514,31 @@ export interface BranchEnvironmentInstance {
   };
 }
 
+export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
+  'process',
+  'last_health_check',
+  'last_error',
+  'last_command',
+  'logs',
+] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
+
+export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARABLE_FIELDS)[number];
+
+/**
+ * Patch shape for branch environment runtime state.
+ *
+ * `null` is accepted for clearable optional runtime fields because executor
+ * callbacks cross a JSON boundary, where `undefined` values are dropped.
+ * The daemon normalizes both explicit `null` and in-process `undefined` by
+ * deleting these fields before persisting the merged environment instance.
+ */
+export type BranchEnvironmentUpdate = Omit<
+  Partial<BranchEnvironmentInstance>,
+  BranchEnvironmentClearableField
+> & {
+  [K in BranchEnvironmentClearableField]?: BranchEnvironmentInstance[K] | null;
+};
+
 /**
  * Legacy (v1) repository environment configuration — single flat command set.
  *

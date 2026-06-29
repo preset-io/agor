@@ -115,9 +115,11 @@ export interface AgorDaemonSettings {
    *  agents discover others via agor_search_tools (default: true) */
   mcpToolSearch?: boolean;
 
-  /** Unix user the daemon runs as. Used to ensure daemon has access to all Unix groups.
-   * Required when Unix isolation is enabled (branch_rbac or unix_user_mode).
-   * In dev mode without isolation, falls back to current process user. */
+  /** Unix user the daemon runs as. Used to refresh supplemental Unix groups.
+   * Required when Unix impersonation/isolation is enabled (`unix_user_mode`
+   * is `insulated` or `strict`). App-level `branch_rbac` alone does not
+   * require Unix impersonation. In dev mode without isolation, falls back to
+   * current process user. */
   unix_user?: string;
 
   /** Instance label for deployment identification (e.g., "staging", "prod-us-east").
@@ -235,6 +237,12 @@ export interface AgorExternalLaunchSettings {
 
   /** Allow launch assertions to assign admin/superadmin roles (default: false). */
   allow_admin_roles?: boolean;
+
+  /**
+   * Trust a verified assertion email when linking launch auth to an existing
+   * local user that does not yet have this provider identity recorded.
+   */
+  trust_verified_email_for_linking?: boolean;
 
   /**
    * Optional HTTP(S) URL shown in the unauthenticated UI when external launch
@@ -824,6 +832,51 @@ export interface AgorPathSettings {
 }
 
 /**
+ * Public open-source telemetry settings.
+ *
+ * This is intentionally separate from `analytics`: `analytics` is for
+ * operator-configured instance analytics, while `telemetry` is Agor's
+ * lightweight opt-in/open-source install and aggregate usage telemetry.
+ */
+export interface AgorTelemetrySettings {
+  /** Ongoing telemetry opt-in. Undefined means the user has not answered yet. */
+  enabled?: boolean;
+
+  /** Random anonymous install identifier. Never derived from host/user data. */
+  instance_id?: string;
+
+  /** Advanced override for the Segment-compatible batch endpoint. Usually omitted. */
+  endpoint?: string | null;
+
+  /** Advanced override for direct Segment/RudderStack delivery. Usually omitted. */
+  write_key?: string | null;
+
+  /** Debug delivery without dumping payloads by default. */
+  debug?: boolean;
+
+  /** Delivery timeout. Defaults to 3000ms. */
+  timeout_ms?: number;
+
+  /** Batch flush interval. Defaults to 1000ms. */
+  flush_interval_ms?: number;
+
+  /** Maximum events per batch. Defaults to 10. */
+  max_batch_size?: number;
+
+  /** Last one-time install/result telemetry event sent by agor init. */
+  install_ping_sent_at?: string;
+
+  /** Last daemon active heartbeat day (YYYY-MM-DD). */
+  last_daemon_active_day?: string;
+
+  /** Last aggregate usage summary day (YYYY-MM-DD). */
+  last_usage_summary_day?: string;
+
+  /** Last daemon version that emitted daemon.upgraded. */
+  last_reported_version?: string;
+}
+
+/**
  * Backend analytics settings.
  *
  * Disabled by default. When enabled, daemon/server code sends curated
@@ -1040,6 +1093,29 @@ export interface AgorKnowledgeSettings {
 }
 
 /**
+ * App-level multi-tenancy settings.
+ *
+ * `static` preserves today's single-tenant behavior: every request belongs to
+ * one configured tenant id. `required_from_auth` is Postgres-only hosted/cloud
+ * mode and must resolve a tenant from trusted authentication or request
+ * context; missing tenant context should fail closed before tenant-owned data is
+ * accessed.
+ */
+export interface AgorMultiTenancySettings {
+  /** Multi-tenancy mode. Defaults to `static`. */
+  mode?: 'static' | 'required_from_auth';
+
+  /** Static tenant id for self-hosted/single-instance mode. Defaults to `default`. */
+  static_tenant_id?: string;
+
+  /** JWT/user claim name to read in `required_from_auth` mode, e.g. `tenant_id`. */
+  auth_claim?: string;
+
+  /** Optional trusted HTTP header set by an auth/edge layer, e.g. `x-agor-tenant-id`. */
+  trusted_header?: string;
+}
+
+/**
  * Complete Agor configuration
  */
 export interface AgorConfig {
@@ -1079,6 +1155,9 @@ export interface AgorConfig {
   /** Backend analytics settings. Disabled by default. */
   analytics?: AgorAnalyticsSettings;
 
+  /** Public open-source telemetry settings. */
+  telemetry?: AgorTelemetrySettings;
+
   /** Knowledge Base semantic search settings. */
   knowledge?: AgorKnowledgeSettings;
 
@@ -1087,6 +1166,9 @@ export interface AgorConfig {
 
   /** Onboarding settings (CLI init → UI wizard) */
   onboarding?: AgorOnboardingSettings;
+
+  /** App-level multi-tenancy settings. Defaults to static/default tenant. */
+  multi_tenancy?: AgorMultiTenancySettings;
 
   /**
    * HTTP proxy passthroughs for third-party APIs that don't return CORS
@@ -1137,6 +1219,7 @@ export type ConfigKey =
   | `branches.${keyof AgorBranchesSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
+  | `telemetry.${keyof AgorTelemetrySettings}`
   | `knowledge.${keyof AgorKnowledgeSettings}`
   | `credentials.${keyof AgorCredentials}`
   | `onboarding.${keyof AgorOnboardingSettings}`

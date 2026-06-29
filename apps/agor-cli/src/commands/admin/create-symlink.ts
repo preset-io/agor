@@ -1,50 +1,15 @@
-/**
- * Admin Command: Create Branch Symlink
- *
- * PRIVILEGED OPERATION - Must be called via sudo
- *
- * Creates a symlink in a user's ~/agor/worktrees directory pointing to a branch.
- * This command is designed to be called by the daemon via `sudo agor admin create-symlink`.
- *
- * @see context/guides/rbac-and-unix-isolation.md
- */
+import { Flags } from '@oclif/core';
+import { BaseCommand } from '../../base-command.js';
 
-import {
-  AGOR_HOME_BASE,
-  createAdminExecutor,
-  getBranchSymlinkPath,
-  isValidUnixUsername,
-  SymlinkCommands,
-} from '@agor/core/unix';
-import { Command, Flags } from '@oclif/core';
-
-export default class CreateSymlink extends Command {
-  static override description = 'Create a branch symlink in user home directory (admin only)';
-
-  static override examples = [
-    '<%= config.bin %> <%= command.id %> --username alice --branch-name my-feature --branch-path /var/agor/worktrees/abc123',
-    '<%= config.bin %> <%= command.id %> --username alice --branch-name my-feature --branch-path /var/agor/worktrees/abc123 --dry-run',
-  ];
-
+export default class CreateSymlink extends BaseCommand {
+  static override description = 'Create a branch symlink via the daemon';
   static override flags = {
-    username: Flags.string({
-      char: 'u',
-      description: 'Unix username (owner of symlink)',
-      required: true,
-    }),
-    'branch-name': Flags.string({
-      char: 'w',
-      description: 'Branch name/slug (symlink name)',
-      required: true,
-    }),
+    username: Flags.string({ char: 'u', description: 'Unix username', required: true }),
+    'branch-name': Flags.string({ char: 'w', description: 'Branch name/slug', required: true }),
     'branch-path': Flags.string({
       char: 'p',
-      description: 'Absolute path to branch directory (symlink target)',
+      description: 'Absolute path to branch directory',
       required: true,
-    }),
-    'home-base': Flags.string({
-      description: 'Base directory for home directories',
-      default: AGOR_HOME_BASE,
     }),
     'dry-run': Flags.boolean({
       char: 'n',
@@ -57,57 +22,23 @@ export default class CreateSymlink extends Command {
       default: false,
     }),
   };
-
   public async run(): Promise<void> {
     const { flags } = await this.parse(CreateSymlink);
-    const { username, verbose } = flags;
-    const branchName = flags['branch-name'];
-    const branchPath = flags['branch-path'];
-    const homeBase = flags['home-base'];
-    const dryRun = flags['dry-run'];
-
-    // Create executor with dry-run and verbose support
-    const executor = createAdminExecutor({ 'dry-run': dryRun, verbose });
-
-    if (dryRun) {
-      this.log('🔍 Dry run mode - no changes will be made\n');
-    }
-
-    // Validate username
-    if (!isValidUnixUsername(username)) {
-      this.error(`Invalid Unix username format: ${username}`);
-    }
-
-    // Validate branch path is absolute
-    if (!branchPath.startsWith('/')) {
-      this.error(`Branch path must be absolute: ${branchPath}`);
-    }
-
-    const linkPath = getBranchSymlinkPath(username, branchName, homeBase);
-
-    // Check if symlink already exists and points to same target
+    const client = await this.connectToDaemon();
     try {
-      const result = await executor.exec(SymlinkCommands.readSymlink(linkPath));
-      const existingTarget = result.stdout.trim();
-
-      if (existingTarget === branchPath) {
-        this.log(`✅ Symlink already exists: ${linkPath} -> ${branchPath}`);
-        return;
-      }
-      // Symlink exists but points elsewhere - will be replaced
-      this.log(`ℹ️  Updating symlink (was: ${existingTarget})`);
-    } catch {
-      // Symlink doesn't exist, will create
-    }
-
-    // Create symlink with proper ownership
-    try {
-      await executor.execAll(
-        SymlinkCommands.createSymlinkWithOwnership(branchPath, linkPath, username)
-      );
-      this.log(`✅ Created symlink: ${linkPath} -> ${branchPath}`);
-    } catch (error) {
-      this.error(`Failed to create symlink: ${error}`);
+      const result = await client.service('admin/local-actions').create({
+        action: 'unix.symlink.create',
+        params: {
+          username: flags.username,
+          branchName: flags['branch-name'],
+          branchPath: flags['branch-path'],
+        },
+        dryRun: flags['dry-run'],
+        verbose: flags.verbose,
+      });
+      for (const line of (result as { logs?: string[] }).logs ?? []) this.log(line);
+    } finally {
+      await this.cleanupClient(client);
     }
   }
 }

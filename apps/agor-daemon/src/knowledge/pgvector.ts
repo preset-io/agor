@@ -1,4 +1,4 @@
-import { type Database, executeRaw, isPostgresDatabase, sql } from '@agor/core/db';
+import { executeRaw, isPostgresDatabase, sql, type TenantScopeAwareDatabase } from '@agor/core/db';
 
 export interface KnowledgePgvectorCapability {
   available: boolean;
@@ -32,7 +32,32 @@ export function semanticUnavailableMessage(reason?: string | null): string {
   return `Semantic Knowledge search is unavailable${reason ? `: ${reason}` : ''}. ${SETUP_HINT}`;
 }
 
-async function readCapability(db: Database): Promise<KnowledgePgvectorStorageState> {
+async function ensureEmbeddingTenantIsolation(db: TenantScopeAwareDatabase): Promise<void> {
+  await executeRaw(
+    db,
+    sql`ALTER TABLE kb_unit_embeddings ADD COLUMN IF NOT EXISTS tenant_id text DEFAULT 'default' NOT NULL`
+  );
+  await executeRaw(
+    db,
+    sql`CREATE INDEX IF NOT EXISTS kb_unit_embeddings_tenant_id_idx ON kb_unit_embeddings USING btree (tenant_id)`
+  );
+  await executeRaw(db, sql`ALTER TABLE kb_unit_embeddings ENABLE ROW LEVEL SECURITY`);
+  await executeRaw(db, sql`ALTER TABLE kb_unit_embeddings FORCE ROW LEVEL SECURITY`);
+  await executeRaw(
+    db,
+    sql`DROP POLICY IF EXISTS tenant_isolation_kb_unit_embeddings ON kb_unit_embeddings`
+  );
+  await executeRaw(
+    db,
+    sql`CREATE POLICY tenant_isolation_kb_unit_embeddings ON kb_unit_embeddings
+      USING (tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'))
+      WITH CHECK (tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'))`
+  );
+}
+
+async function readCapability(
+  db: TenantScopeAwareDatabase
+): Promise<KnowledgePgvectorStorageState> {
   if (!isPostgresDatabase(db)) {
     return {
       available: false,
@@ -98,13 +123,13 @@ async function readCapability(db: Database): Promise<KnowledgePgvectorStorageSta
 }
 
 export async function getKnowledgePgvectorCapability(
-  db: Database
+  db: TenantScopeAwareDatabase
 ): Promise<KnowledgePgvectorCapability> {
   return readCapability(db);
 }
 
 export async function ensureKnowledgePgvectorStorage(
-  db: Database
+  db: TenantScopeAwareDatabase
 ): Promise<KnowledgePgvectorCapability> {
   if (!isPostgresDatabase(db)) return readCapability(db);
 
@@ -133,6 +158,7 @@ export async function ensureKnowledgePgvectorStorage(
       await executeRaw(
         db,
         sql`CREATE TABLE IF NOT EXISTS kb_unit_embeddings (
+          tenant_id text DEFAULT 'default' NOT NULL,
           unit_id varchar(36) NOT NULL REFERENCES public.kb_document_units(unit_id) ON DELETE cascade,
           embedding_space_id varchar(36) NOT NULL REFERENCES public.kb_embedding_spaces(embedding_space_id) ON DELETE cascade,
           content_sha256 text NOT NULL,
@@ -145,6 +171,9 @@ export async function ensureKnowledgePgvectorStorage(
       );
       capability.tableReady = true;
     }
+
+    await ensureEmbeddingTenantIsolation(db);
+
     if (!capability.spaceIndexReady) {
       await executeRaw(
         db,

@@ -9,11 +9,14 @@
 import { PublicBaseUrlNotConfiguredError, requirePublicBaseUrl } from '@agor/core/config';
 import {
   BranchRepository,
-  type Database,
   GatewayChannelRepository,
   GatewayOutboundMessageRepository,
+  getCurrentTenantId,
   MCPServerRepository,
+  runWithoutTenantDatabaseScope,
+  runWithTenantDatabaseScope,
   shortId,
+  type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -49,6 +52,7 @@ import type {
   Session,
   SessionID,
   Task,
+  TenantID,
   ThreadSessionMap,
   User,
   UserID,
@@ -187,6 +191,11 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
     default:
       return false;
   }
+}
+
+function tenantIdFromGatewayChannel(channel: GatewayChannel): TenantID | string | undefined {
+  const tenantId = (channel as GatewayChannel & { tenant_id?: unknown }).tenant_id;
+  return typeof tenantId === 'string' && tenantId.length > 0 ? tenantId : undefined;
 }
 
 function isSlackThinkingPlaceholder(text: string): boolean {
@@ -523,6 +532,7 @@ function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): Ga
  * Gateway routing service
  */
 export class GatewayService {
+  private db: TenantScopeAwareDatabase;
   private channelRepo: GatewayChannelRepository;
   private threadMapRepo: ThreadSessionMapRepository;
   private outboundRepo: GatewayOutboundMessageRepository;
@@ -569,7 +579,8 @@ export class GatewayService {
   private static SLACK_STREAM_STATUS_REFRESH_MS = 300;
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
+    this.db = db;
     this.channelRepo = new GatewayChannelRepository(db);
     this.threadMapRepo = new ThreadSessionMapRepository(db);
     this.outboundRepo = new GatewayOutboundMessageRepository(db);
@@ -2471,34 +2482,52 @@ export class GatewayService {
       return; // Already listening
     }
 
-    try {
-      const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+    const listenerTenantId = tenantIdFromGatewayChannel(channel) ?? getCurrentTenantId();
 
-      if (!connector.startListening) {
-        return; // Connector doesn't support listening
+    return runWithoutTenantDatabaseScope(async () => {
+      try {
+        const connector = getConnector(channel.channel_type as ChannelType, channel.config);
+
+        if (!connector.startListening) {
+          return; // Connector doesn't support listening
+        }
+
+        const callback = (msg: InboundMessage) => {
+          this.handleListenerInboundMessage(channel, listenerTenantId, msg).catch((error) => {
+            console.error(
+              `[gateway] Failed to process inbound message for channel ${channel.name}:`,
+              error
+            );
+          });
+        };
+
+        await connector.startListening(callback);
+        this.activeListeners.set(channel.id, connector);
+        console.log(`[gateway] Socket Mode listener started for channel "${channel.name}"`);
+      } catch (error) {
+        console.error(`[gateway] Failed to start listener for channel "${channel.name}":`, error);
       }
+    });
+  }
 
-      const callback = (msg: InboundMessage) => {
-        this.create({
-          channel_key: channel.channel_key,
-          thread_id: msg.threadId,
-          text: msg.text,
-          user_name: msg.userId,
-          metadata: msg.metadata,
-        }).catch((error) => {
-          console.error(
-            `[gateway] Failed to process inbound message for channel ${channel.name}:`,
-            error
-          );
-        });
-      };
-
-      await connector.startListening(callback);
-      this.activeListeners.set(channel.id, connector);
-      console.log(`[gateway] Socket Mode listener started for channel "${channel.name}"`);
-    } catch (error) {
-      console.error(`[gateway] Failed to start listener for channel "${channel.name}":`, error);
+  private async handleListenerInboundMessage(
+    channel: GatewayChannel,
+    tenantId: TenantID | string | undefined,
+    msg: InboundMessage
+  ): Promise<void> {
+    if (!tenantId) {
+      throw new Error(`Missing tenant context for gateway listener channel ${channel.id}`);
     }
+
+    await runWithTenantDatabaseScope(this.db, tenantId, async () => {
+      await this.create({
+        channel_key: channel.channel_key,
+        thread_id: msg.threadId,
+        text: msg.text,
+        user_name: msg.userId,
+        metadata: msg.metadata,
+      });
+    });
   }
 
   /**
@@ -2522,6 +2551,9 @@ export class GatewayService {
 /**
  * Service factory function
  */
-export function createGatewayService(db: Database, app: Application): GatewayService {
+export function createGatewayService(
+  db: TenantScopeAwareDatabase,
+  app: Application
+): GatewayService {
   return new GatewayService(db, app);
 }

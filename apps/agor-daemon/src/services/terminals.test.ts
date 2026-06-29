@@ -50,7 +50,10 @@ vi.mock('@agor/core/db', () => ({
       return { unix_username: 'alice' };
     }
   },
-  shortId: (id: string) => id.slice(0, 8),
+  shortId: (id: string) =>
+    Array.from(id)
+      .filter((_, index) => index < 8)
+      .join(''),
 }));
 
 vi.mock('@agor/core/unix', () => ({
@@ -71,6 +74,8 @@ vi.mock('../utils/mcp-token-authorization.js', () => ({
 
 vi.mock('../utils/spawn-executor.js', () => ({
   generateSessionToken: () => 'session-token',
+  generateScopedServiceToken: () => 'session-token',
+  serviceTokenScopeForParams: () => ({}),
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
 

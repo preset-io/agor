@@ -6,7 +6,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, MessagesRepository } from '@agor/core/db';
+import { MessagesRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type {
   Message,
   MessageID,
@@ -37,7 +37,7 @@ export type MessageParams = QueryParams<{
 export class MessagesService extends DrizzleService<Message, Partial<Message>, MessageParams> {
   private messagesRepo: MessagesRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const messagesRepo = new MessagesRepository(db);
     super(messagesRepo, {
       id: 'message_id',
@@ -189,6 +189,6 @@ export class MessagesService extends DrizzleService<Message, Partial<Message>, M
 /**
  * Service factory function
  */
-export function createMessagesService(db: Database): MessagesService {
+export function createMessagesService(db: TenantScopeAwareDatabase): MessagesService {
   return new MessagesService(db);
 }

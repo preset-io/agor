@@ -13,6 +13,7 @@ import type {
   AuthCheckResult,
   Board,
   Branch,
+  CloneRepositoryResult,
   CodexApprovalPolicy,
   CodexSandboxMode,
   CreateLocalRepoRequest,
@@ -27,6 +28,7 @@ import type {
 import {
   getDefaultPermissionMode,
   mapToCodexPermissionConfig,
+  shortId,
   TOOL_API_KEY_NAMES,
 } from '@agor-live/client';
 import { CheckCircleOutlined, KeyOutlined } from '@ant-design/icons';
@@ -54,6 +56,7 @@ import {
   FRAMEWORK_REPO_URL,
   findFrameworkRepo,
 } from '../../hooks/useFrameworkRepo';
+import type { CreateRepoOptions } from '../../types';
 import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
 import { ensureAssistantWelcomeNote } from '../../utils/assistantWelcomeNote';
 import { slugify } from '../../utils/repoSlug';
@@ -88,7 +91,10 @@ export interface OnboardingWizardProps {
   // biome-ignore lint/suspicious/noExplicitAny: AgorClient type varies across package boundaries in tests/apps.
   client: any;
 
-  onCreateRepo: (data: CreateRepoRequest) => Promise<void>;
+  onCreateRepo: (
+    data: CreateRepoRequest,
+    options?: CreateRepoOptions
+  ) => Promise<CloneRepositoryResult | undefined>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateBranch: (
     repoId: string,
@@ -129,6 +135,10 @@ function defaultAssistantBranchName(displayName: string): string {
 
 function findReadyFrameworkRepo(repoById: Map<string, Repo>): [string, Repo] | undefined {
   return findFrameworkRepo(repoById, { readyOnly: true });
+}
+
+function entriesByRepoId(repos: Repo[]): Map<string, Repo> {
+  return new Map(repos.map((repo) => [repo.repo_id, repo]));
 }
 
 function apiKeyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-key'): string {
@@ -226,7 +236,7 @@ export function OnboardingWizard({
   open,
   onComplete,
   repoById,
-  branchById: _branchById,
+  branchById,
   boardById,
   user,
   client,
@@ -237,8 +247,6 @@ export function OnboardingWizard({
   onCheckAuth,
   frameworkRepoUrl,
 }: OnboardingWizardProps) {
-  void _branchById;
-
   const { token } = useToken();
   const [currentStep, setCurrentStep] = useState<WizardStep>('identity');
   const [assistantDisplayName, setAssistantDisplayName] = useState('My Assistant');
@@ -256,6 +264,7 @@ export function OnboardingWizard({
   const [error, setError] = useState<string | null>(null);
 
   const cloneTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clonePollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completingRepoRef = useRef<string | null>(null);
   const knownFailedRepoIdsRef = useRef<Set<string>>(new Set());
   const effectiveFrameworkUrl = frameworkRepoUrl || FRAMEWORK_REPO_URL;
@@ -300,6 +309,7 @@ export function OnboardingWizard({
   useEffect(() => {
     return () => {
       if (cloneTimeoutRef.current) clearTimeout(cloneTimeoutRef.current);
+      if (clonePollTimeoutRef.current) clearTimeout(clonePollTimeoutRef.current);
     };
   }, []);
 
@@ -388,13 +398,88 @@ export function OnboardingWizard({
     [assistantDisplayName, assistantEmoji, selectedAgent, user]
   );
 
+  const branches = useMemo(() => Array.from(branchById.values()), [branchById]);
+
+  const findExistingAssistantBranch = useCallback(
+    async (repoId: string, branchName: string): Promise<Branch | null> => {
+      for (const branch of branches) {
+        if (
+          branch.repo_id === repoId &&
+          branch.name === branchName &&
+          !branch.archived &&
+          branch.filesystem_status !== 'failed'
+        ) {
+          return branch;
+        }
+      }
+
+      try {
+        const result = await client?.service('branches').find({
+          query: {
+            repo_id: repoId,
+            name: branchName,
+            archived: false,
+            filesystem_status: { $ne: 'failed' },
+            $limit: 1,
+          },
+        });
+        const branches = Array.isArray(result) ? result : (result?.data ?? []);
+        return (branches[0] as Branch | undefined) ?? null;
+      } catch {
+        return null;
+      }
+    },
+    [branches, client]
+  );
+
+  const findExistingAssistantSession = useCallback(
+    async (branchId: string): Promise<string | null> => {
+      try {
+        const result = await client?.service('sessions').find({
+          query: { branch_id: branchId, archived: false, $limit: 1, $sort: { created_at: -1 } },
+        });
+        const sessions = Array.isArray(result) ? result : (result?.data ?? []);
+        const sessionId = sessions[0]?.session_id;
+        return typeof sessionId === 'string' ? sessionId : null;
+      } catch {
+        return null;
+      }
+    },
+    [client]
+  );
+
+  const fetchExistingFrameworkRepo = useCallback(async (): Promise<Repo | null> => {
+    try {
+      const exactResult = await client?.service('repos').find({
+        query: { slug: FRAMEWORK_REPO_SLUG, $limit: 1 },
+      });
+      const exactRepos = Array.isArray(exactResult) ? exactResult : (exactResult?.data ?? []);
+      const exactMatch = findFrameworkRepo(entriesByRepoId(exactRepos), { excludeFailed: true });
+      if (exactMatch) return exactMatch[1];
+
+      const fallbackResult = await client?.service('repos').find({ query: { $limit: 50 } });
+      const fallbackRepos = Array.isArray(fallbackResult)
+        ? fallbackResult
+        : (fallbackResult?.data ?? []);
+      return (
+        findFrameworkRepo(entriesByRepoId(fallbackRepos), { excludeFailed: true })?.[1] ?? null
+      );
+    } catch {
+      return null;
+    }
+  }, [client]);
+
   const finishSetupFromRepo = useCallback(
-    async (repoId: string) => {
+    async (repoId: string, repoOverride?: Repo) => {
       if (completingRepoRef.current === repoId) return;
       completingRepoRef.current = repoId;
       if (cloneTimeoutRef.current) {
         clearTimeout(cloneTimeoutRef.current);
         cloneTimeoutRef.current = null;
+      }
+      if (clonePollTimeoutRef.current) {
+        clearTimeout(clonePollTimeoutRef.current);
+        clonePollTimeoutRef.current = null;
       }
 
       try {
@@ -427,7 +512,8 @@ export function OnboardingWizard({
 
         setSetupStage('branch');
         setOperationText('Creating the default assistant branch…');
-        const sourceBranch = repoById.get(repoId)?.default_branch || 'main';
+        const sourceBranch =
+          repoOverride?.default_branch || repoById.get(repoId)?.default_branch || 'main';
         const assistantConfig: AssistantConfig = {
           kind: 'assistant',
           displayName: assistantDisplayName.trim() || 'My Assistant',
@@ -435,16 +521,55 @@ export function OnboardingWizard({
           frameworkRepo: FRAMEWORK_REPO_SLUG,
           createdViaOnboarding: true,
         };
-        const branch = await onCreateBranch(repoId, {
-          name: defaultBranchName,
-          ref: defaultBranchName,
-          createBranch: true,
-          sourceBranch,
-          pullLatest: true,
-          boardId,
-          custom_context: { assistant: assistantConfig },
-        });
-        if (!branch?.branch_id) throw new Error('Failed to create assistant branch.');
+        const fallbackBranchSuffix = user?.user_id
+          ? shortId(user.user_id)
+          : Date.now().toString(36).slice(-6);
+        const uniqueDefaultBranchName = sanitizeBranchName(
+          `${defaultBranchName}-${fallbackBranchSuffix}`
+        );
+        const branchNameCandidates = [uniqueDefaultBranchName, defaultBranchName];
+        let branch: Branch | null = null;
+        let existingBranch: Branch | null = null;
+        let lastCreateError: unknown;
+
+        for (const branchName of branchNameCandidates) {
+          existingBranch = await findExistingAssistantBranch(repoId, branchName);
+          if (existingBranch) {
+            branch = existingBranch;
+            break;
+          }
+
+          try {
+            branch = await onCreateBranch(repoId, {
+              name: branchName,
+              ref: branchName,
+              createBranch: true,
+              sourceBranch,
+              pullLatest: true,
+              boardId,
+              custom_context: { assistant: assistantConfig },
+            });
+            if (branch?.branch_id) break;
+          } catch (err) {
+            lastCreateError = err;
+            const message = err instanceof Error ? err.message : String(err);
+            if (
+              !message.includes('already exists') &&
+              !message.includes('in use by another branch')
+            ) {
+              throw err;
+            }
+          }
+        }
+
+        if (!branch?.branch_id) {
+          if (lastCreateError instanceof Error) throw lastCreateError;
+          throw new Error('Failed to create assistant branch.');
+        }
+        if (existingBranch?.board_id && existingBranch.board_id !== boardId) {
+          boardId = existingBranch.board_id;
+          saveOnboardingProgress({ boardId });
+        }
         saveOnboardingProgress({ branchId: branch.branch_id });
         await client
           ?.service('boards')
@@ -452,14 +577,17 @@ export function OnboardingWizard({
 
         setSetupStage('session');
         setOperationText('Starting your assistant…');
-        const sessionId = await startAssistantBootstrapSession({
-          client,
-          branchId: branch.branch_id,
-          boardId,
-          sessionConfig: buildSessionConfig(branch.branch_id),
-          onCreateSession,
-          onStatusChange: setOperationText,
-        });
+        const existingSessionId = await findExistingAssistantSession(branch.branch_id);
+        const sessionId =
+          existingSessionId ??
+          (await startAssistantBootstrapSession({
+            client,
+            branchId: branch.branch_id,
+            boardId,
+            sessionConfig: buildSessionConfig(branch.branch_id),
+            onCreateSession,
+            onStatusChange: setOperationText,
+          }));
 
         setSetupStage('done');
         setOperationText('Opening your assistant…');
@@ -477,6 +605,8 @@ export function OnboardingWizard({
       buildSessionConfig,
       client,
       defaultBranchName,
+      findExistingAssistantBranch,
+      findExistingAssistantSession,
       onComplete,
       onCreateBranch,
       onCreateSession,
@@ -484,6 +614,42 @@ export function OnboardingWizard({
       saveOnboardingProgress,
       user,
     ]
+  );
+
+  const pollRepoUntilReady = useCallback(
+    (repoId: string) => {
+      const poll = async () => {
+        if (completingRepoRef.current === repoId) return;
+        try {
+          const repo = (await client?.service('repos').get(repoId)) as Repo | undefined;
+          if (!repo) return;
+          if (repo.clone_status === 'failed') {
+            setSetupStage('error');
+            setError(
+              repo.clone_error?.message ??
+                `Clone failed (exit ${repo.clone_error?.exit_code ?? '?'}).`
+            );
+            if (cloneTimeoutRef.current) {
+              clearTimeout(cloneTimeoutRef.current);
+              cloneTimeoutRef.current = null;
+            }
+            return;
+          }
+          if (repo.clone_status === 'ready' || repo.clone_status === undefined) {
+            await finishSetupFromRepo(repo.repo_id, repo);
+            return;
+          }
+        } catch {
+          // Keep polling until the existing clone timeout surfaces a user-facing error.
+        }
+
+        clonePollTimeoutRef.current = setTimeout(poll, 1000);
+      };
+
+      if (clonePollTimeoutRef.current) clearTimeout(clonePollTimeoutRef.current);
+      clonePollTimeoutRef.current = setTimeout(poll, 0);
+    },
+    [client, finishSetupFromRepo]
   );
 
   const startSetup = useCallback(async () => {
@@ -496,7 +662,7 @@ export function OnboardingWizard({
     const readyRepo = findReadyFrameworkRepo(repoById);
     if (readyRepo) {
       setOperationText('Preparing assistant workspace…');
-      void finishSetupFromRepo(readyRepo[0]);
+      void finishSetupFromRepo(readyRepo[0], readyRepo[1]);
       return;
     }
 
@@ -506,28 +672,77 @@ export function OnboardingWizard({
         .map((repo) => repo.repo_id)
     );
 
-    try {
-      await onCreateRepo({
-        url: effectiveFrameworkUrl,
-        slug: FRAMEWORK_REPO_SLUG,
-        default_branch: 'main',
-      });
+    const startCloneTimeout = () => {
+      if (cloneTimeoutRef.current) clearTimeout(cloneTimeoutRef.current);
       cloneTimeoutRef.current = setTimeout(() => {
         setSetupStage('error');
         setError(
           'Clone is taking longer than expected. Please check the repository connection and try again.'
         );
       }, CLONE_TIMEOUT_MS);
+    };
+
+    try {
+      const cloneResult = await onCreateRepo(
+        {
+          url: effectiveFrameworkUrl,
+          slug: FRAMEWORK_REPO_SLUG,
+          default_branch: 'main',
+        },
+        { silent: true }
+      );
+
+      if (cloneResult?.status === 'exists') {
+        setOperationText('Preparing assistant workspace…');
+      }
+
+      if (cloneResult?.repo_id) {
+        pollRepoUntilReady(cloneResult.repo_id);
+        startCloneTimeout();
+        return;
+      }
+
+      const existingRepo = await fetchExistingFrameworkRepo();
+      if (existingRepo?.repo_id) {
+        if (existingRepo.clone_status === 'cloning') {
+          pollRepoUntilReady(existingRepo.repo_id);
+          startCloneTimeout();
+        } else {
+          setOperationText('Preparing assistant workspace…');
+          void finishSetupFromRepo(existingRepo.repo_id, existingRepo);
+        }
+        return;
+      }
+
+      startCloneTimeout();
     } catch (err) {
+      const existingRepo = await fetchExistingFrameworkRepo();
+      if (existingRepo?.repo_id) {
+        setOperationText('Preparing assistant workspace…');
+        if (existingRepo.clone_status === 'cloning') {
+          pollRepoUntilReady(existingRepo.repo_id);
+          startCloneTimeout();
+        } else {
+          void finishSetupFromRepo(existingRepo.repo_id, existingRepo);
+        }
+        return;
+      }
       setSetupStage('error');
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [effectiveFrameworkUrl, finishSetupFromRepo, onCreateRepo, repoById]);
+  }, [
+    effectiveFrameworkUrl,
+    fetchExistingFrameworkRepo,
+    finishSetupFromRepo,
+    onCreateRepo,
+    pollRepoUntilReady,
+    repoById,
+  ]);
 
   useEffect(() => {
     if (currentStep !== 'loading' || setupStage !== 'cloning') return;
     const readyRepo = findReadyFrameworkRepo(repoById);
-    if (readyRepo) void finishSetupFromRepo(readyRepo[0]);
+    if (readyRepo) void finishSetupFromRepo(readyRepo[0], readyRepo[1]);
   }, [currentStep, finishSetupFromRepo, repoById, setupStage]);
 
   useEffect(() => {

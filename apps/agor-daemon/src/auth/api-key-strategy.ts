@@ -42,7 +42,7 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     });
 
     // Load the user
-    const user = await this.usersService.get(keyRow.user_id);
+    const user = await this.usersService.get(keyRow.user_id, params);
     if (!user) {
       throw new NotAuthenticated('User not found for API key');
     }

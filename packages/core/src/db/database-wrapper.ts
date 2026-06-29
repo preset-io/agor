@@ -22,6 +22,7 @@ import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import type { Database } from './client';
 import type * as postgresSchema from './schema.postgres';
 import type * as sqliteSchema from './schema.sqlite';
+import { getCurrentTenantId } from './tenant-context';
 
 /**
  * Cast a Drizzle transaction handle to the unified Database type.
@@ -298,11 +299,11 @@ export async function getOne<T extends SQLiteTable | PgTable, TResult = unknown>
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
     const query = db.select().from(table as any);
     if (where) {
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-      return await (query as any).where(where).get();
+      return (await (query as { where: (where: SQL) => { get: () => Promise<unknown> } })
+        .where(where)
+        .get()) as TResult;
     }
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-    return await (query as any).get();
+    return (await (query as { get: () => Promise<unknown> }).get()) as TResult;
   } else {
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
     const query = (db as any).select().from(table);
@@ -333,12 +334,15 @@ export async function insertOne<T extends SQLiteTable | PgTable, TResult = unkno
     const result = await db
       // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
       .insert(table as any)
-      .values(values)
+      .values(withTenantInsertValues(values, table) as never)
       .returning();
     return result as TResult;
   } else {
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types are complex and require type assertion
-    const result = await (db as any).insert(table).values(values).returning();
+    const result = await (db as any)
+      .insert(table)
+      .values(withTenantInsertValues(values, table) as never)
+      .returning();
     return result[0] as TResult;
   }
 }
@@ -347,29 +351,50 @@ export async function insertOne<T extends SQLiteTable | PgTable, TResult = unkno
  * Generic query type for Drizzle query builders
  */
 type DrizzleQuery = Record<string, unknown>;
+// biome-ignore lint/suspicious/noExplicitAny: Drizzle query builders are highly dialect/chain specific.
+type UnsafeDrizzleAny = any;
 
 /**
  * Wrap a query with unified execution methods
  */
-// biome-ignore lint/suspicious/noExplicitAny: This is a generic wrapper that needs to accept any Drizzle query builder type
-function wrapQuery(query: DrizzleQuery, db: Database): any {
+function tableHasTenantColumn(table?: SQLiteTable | PgTable): boolean {
+  return Boolean(table && 'tenant_id' in (table as unknown as object));
+}
+
+function withTenantInsertValues(values: unknown, table?: SQLiteTable | PgTable): unknown {
+  const tenantId = getCurrentTenantId();
+  if (!tenantId || !tableHasTenantColumn(table)) return values;
+
+  const stamp = (row: unknown): unknown => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+    if ('tenant_id' in row) return row;
+    return { tenant_id: tenantId, ...(row as Record<string, unknown>) };
+  };
+
+  return Array.isArray(values) ? values.map(stamp) : stamp(values);
+}
+
+function wrapQuery(
+  query: DrizzleQuery,
+  db: Database,
+  table?: SQLiteTable | PgTable
+): UnsafeDrizzleAny {
   return {
     ...query,
     one: async () => {
       if (isSQLiteDatabase(db)) {
-        // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-        return await (query as any).get();
+        return await (query as { get: () => Promise<unknown> }).get();
       } else {
         // For PostgreSQL, add .limit(1) and execute the query
-        // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-        const results = await (query as any).limit(1);
+        const results = (await (query as { limit: (count: number) => Promise<unknown[]> }).limit(
+          1
+        )) as unknown[];
         return results[0] || null;
       }
     },
     all: async () => {
       if (isSQLiteDatabase(db)) {
-        // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-        return await (query as any).all();
+        return await (query as { all: () => Promise<unknown[]> }).all();
       } else {
         // For PostgreSQL, just await the query (it's a promise)
         return await query;
@@ -377,8 +402,7 @@ function wrapQuery(query: DrizzleQuery, db: Database): any {
     },
     run: async () => {
       if (isSQLiteDatabase(db)) {
-        // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-        return await (query as any).run();
+        return await (query as { run: () => Promise<unknown> }).run();
       } else {
         // For PostgreSQL, execute and return result metadata
         // PostgreSQL returns an array for SELECT, but has a 'count' property for INSERT/UPDATE/DELETE
@@ -394,30 +418,68 @@ function wrapQuery(query: DrizzleQuery, db: Database): any {
         return { rowsAffected: (result as unknown[]).length || 0 };
       }
     },
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-    returning: () => wrapReturning((query as any).returning(), db),
+    returning: () => wrapReturning((query as { returning: () => DrizzleQuery }).returning(), db),
     // Preserve chainable methods
-    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
-    where: (...args: unknown[]) => wrapQuery((query as any).where(...args), db),
-    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
-    limit: (...args: unknown[]) => wrapQuery((query as any).limit(...args), db),
-    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
-    offset: (...args: unknown[]) => wrapQuery((query as any).offset(...args), db),
-    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
-    orderBy: (...args: unknown[]) => wrapQuery((query as any).orderBy(...args), db),
-    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
-    groupBy: (...args: unknown[]) => wrapQuery((query as any).groupBy(...args), db),
-    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
-    set: (...args: unknown[]) => wrapQuery((query as any).set(...args), db),
-    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
-    values: (...args: unknown[]) => wrapQuery((query as any).values(...args), db),
-    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
-    innerJoin: (...args: unknown[]) => wrapQuery((query as any).innerJoin(...args), db),
-    // biome-ignore lint/suspicious/noExplicitAny: These methods accept varying argument types from Drizzle
-    leftJoin: (...args: unknown[]) => wrapQuery((query as any).leftJoin(...args), db),
+    where: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { where: (...args: unknown[]) => DrizzleQuery }).where(...args),
+        db,
+        table
+      ),
+    limit: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { limit: (...args: unknown[]) => DrizzleQuery }).limit(...args),
+        db,
+        table
+      ),
+    offset: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { offset: (...args: unknown[]) => DrizzleQuery }).offset(...args),
+        db,
+        table
+      ),
+    orderBy: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { orderBy: (...args: unknown[]) => DrizzleQuery }).orderBy(...args),
+        db,
+        table
+      ),
+    groupBy: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { groupBy: (...args: unknown[]) => DrizzleQuery }).groupBy(...args),
+        db,
+        table
+      ),
+    set: (...args: unknown[]) =>
+      wrapQuery((query as { set: (...args: unknown[]) => DrizzleQuery }).set(...args), db, table),
+    values: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { values: (...args: unknown[]) => DrizzleQuery }).values(
+          ...args.map((arg) => withTenantInsertValues(arg, table))
+        ),
+        db,
+        table
+      ),
+    innerJoin: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { innerJoin: (...args: unknown[]) => DrizzleQuery }).innerJoin(...args),
+        db,
+        table
+      ),
+    leftJoin: (...args: unknown[]) =>
+      wrapQuery(
+        (query as { leftJoin: (...args: unknown[]) => DrizzleQuery }).leftJoin(...args),
+        db,
+        table
+      ),
     onConflictDoNothing: (...args: unknown[]) =>
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle exposes onConflictDoNothing on both dialects after .values()
-      wrapQuery((query as any).onConflictDoNothing(...args), db),
+      wrapQuery(
+        (
+          query as { onConflictDoNothing: (...args: unknown[]) => DrizzleQuery }
+        ).onConflictDoNothing(...args),
+        db,
+        table
+      ),
   };
 }
 
@@ -428,8 +490,7 @@ function wrapReturning(query: DrizzleQuery, db: Database): UnifiedReturning {
   return {
     one: async () => {
       if (isSQLiteDatabase(db)) {
-        // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-        return await (query as any).get();
+        return await (query as { get: () => Promise<unknown> }).get();
       } else {
         const results = (await query) as unknown;
         return (results as unknown[])[0];
@@ -437,8 +498,7 @@ function wrapReturning(query: DrizzleQuery, db: Database): UnifiedReturning {
     },
     all: async () => {
       if (isSQLiteDatabase(db)) {
-        // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-        return await (query as any).all();
+        return await (query as { all: () => Promise<unknown[]> }).all();
       } else {
         const result = (await query) as unknown;
         return result as unknown[];
@@ -472,7 +532,7 @@ export function select(db: Database, columns?: ColumnSelection) {
 export function insert(db: Database, table: SQLiteTable | PgTable) {
   // biome-ignore lint/suspicious/noExplicitAny: Drizzle's insert method has complex overloads
   const query = (db as any).insert(table);
-  return wrapQuery(query, db);
+  return wrapQuery(query, db, table);
 }
 
 /**
@@ -504,11 +564,9 @@ export async function executeGet<T = unknown>(
   db: Database
 ): Promise<T | null> {
   if (isSQLiteDatabase(db)) {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-    return await (query as any).get();
+    return (await (query as { get: () => Promise<unknown> }).get()) as T;
   } else {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-    const results = await (query as any).limit(1);
+    const results = await (query as { limit: (count: number) => Promise<unknown[]> }).limit(1);
     return (results[0] as T) || null;
   }
 }
@@ -519,8 +577,7 @@ export async function executeGet<T = unknown>(
  */
 export async function executeAll<T = unknown>(query: DrizzleQuery, db: Database): Promise<T[]> {
   if (isSQLiteDatabase(db)) {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-    return await (query as any).all();
+    return (await (query as { all: () => Promise<unknown[]> }).all()) as T[];
   } else {
     const result = (await query) as unknown;
     return result as T[];
@@ -536,8 +593,7 @@ export async function executeRun(
   db: Database
 ): Promise<MutationResult | unknown[]> {
   if (isSQLiteDatabase(db)) {
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle query builder types vary by dialect
-    return await (query as any).run();
+    return await (query as { run: () => Promise<MutationResult> }).run();
   } else {
     // PostgreSQL: Just execute the query
     const result = (await query) as unknown;

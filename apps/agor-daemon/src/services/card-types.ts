@@ -6,7 +6,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { CardTypeRepository, type Database } from '@agor/core/db';
+import { CardTypeRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { CardType, QueryParams } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
@@ -15,7 +15,7 @@ export type CardTypeParams = QueryParams<{
 }>;
 
 export class CardTypesService extends DrizzleService<CardType, Partial<CardType>, CardTypeParams> {
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     super(new CardTypeRepository(db), {
       id: 'card_type_id',
       resourceType: 'CardType',
@@ -27,6 +27,6 @@ export class CardTypesService extends DrizzleService<CardType, Partial<CardType>
   }
 }
 
-export function createCardTypesService(db: Database): CardTypesService {
+export function createCardTypesService(db: TenantScopeAwareDatabase): CardTypesService {
   return new CardTypesService(db);
 }

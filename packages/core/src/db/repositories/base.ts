@@ -7,6 +7,7 @@
 
 import { isValidUUID } from '../../lib/ids';
 import { prefixToLikePattern } from '../../types/id';
+import { getCurrentTenantId } from '../tenant-context';
 
 /**
  * Base repository interface with generic CRUD operations
@@ -126,3 +127,33 @@ export async function resolveByShortIdPrefix(
  * rows feed a richer `AmbiguousIdError.matches` list without unbounded growth.
  */
 export const RESOLVE_SHORT_ID_FETCH_LIMIT = 11;
+
+/**
+ * Tenant column values for inserts performed inside the canonical database
+ * scope. SQLite schemas do not have tenant_id, so callers should only spread
+ * this into Postgres tenant-ready tables; when no scope is active we omit it
+ * and let the database default preserve single-tenant behavior.
+ */
+export function currentTenantInsert(): { tenant_id?: string } {
+  const tenantId = getCurrentTenantId();
+  return tenantId ? { tenant_id: tenantId } : {};
+}
+
+/**
+ * Preserve tenant metadata for in-process service isolation without exposing it
+ * through JSON API responses. Some repositories map DB rows to public DTOs that
+ * intentionally omit tenant_id; Feathers' defensive tenant filter still needs
+ * to see it before serialization, especially in dev databases whose owner role
+ * can bypass RLS.
+ */
+export function attachHiddenTenant<T extends object>(dto: T, row: unknown): T {
+  const tenantId = (row as { tenant_id?: unknown } | undefined)?.tenant_id;
+  if (typeof tenantId === 'string') {
+    Object.defineProperty(dto, 'tenant_id', {
+      value: tenantId,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return dto;
+}

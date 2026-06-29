@@ -522,7 +522,15 @@ describe('BranchesService environment start async behavior', () => {
       path: '/tmp/wt-env-rpc',
       created_by: 'user-1' as UUID,
       branch_unique_id: 1,
-      environment_instance: { status: 'stopping' },
+      environment_instance: {
+        status: 'stopping',
+        process: { pid: 123 },
+        last_health_check: {
+          timestamp: '2026-01-01T00:00:00.000Z',
+          status: 'healthy',
+          message: 'old',
+        },
+      },
     };
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
     const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
@@ -533,20 +541,70 @@ describe('BranchesService environment start async behavior', () => {
       branch_id: branch.branch_id,
       environment_update: {
         status: 'stopped',
-        process: undefined,
+        // Remote executor calls cross JSON, where undefined is dropped; null is
+        // the explicit clear sentinel.
+        process: null,
+        last_health_check: null,
       },
     });
 
+    const patchedEnvironment = patchSpy.mock.calls[0]?.[1]?.environment_instance as
+      | Record<string, unknown>
+      | undefined;
+    expect(patchedEnvironment).toMatchObject({ status: 'stopped' });
+    expect(patchedEnvironment).not.toHaveProperty('process');
+    expect(patchedEnvironment).not.toHaveProperty('last_health_check');
     expect(patchSpy).toHaveBeenCalledWith(
       branch.branch_id,
       expect.objectContaining({
         environment_instance: expect.objectContaining({
           status: 'stopped',
-          process: undefined,
         }),
       }),
       undefined
     );
+  });
+
+  it('clears explicit undefined environment fields for in-process callers', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-clear' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-clear',
+      path: '/tmp/wt-env-clear',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_instance: {
+        status: 'error',
+        process: { pid: 456 },
+        last_error: 'old error',
+        last_command: {
+          action: 'start',
+          status: 'failed',
+          message: 'old failure',
+          timestamp: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+      return { ...branch, ...(data as object) } as never;
+    });
+
+    await service.updateEnvironment(branch.branch_id, {
+      status: 'starting',
+      process: undefined,
+      last_error: undefined,
+      last_command: undefined,
+    });
+
+    const patchedEnvironment = patchSpy.mock.calls[0]?.[1]?.environment_instance as
+      | Record<string, unknown>
+      | undefined;
+    expect(patchedEnvironment).toMatchObject({ status: 'starting' });
+    expect(patchedEnvironment).not.toHaveProperty('process');
+    expect(patchedEnvironment).not.toHaveProperty('last_error');
+    expect(patchedEnvironment).not.toHaveProperty('last_command');
   });
 });
 
@@ -1552,4 +1610,66 @@ describe('BranchesService.create permission defaults', () => {
       expect(branch.others_fs_access).toBe('write');
     }
   );
+});
+
+describe('BranchesService environment health recovery', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('recovers an errored environment to running when the health URL succeeds', async () => {
+    const branch = {
+      branch_id: 'wt-health-recover' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-recover',
+      path: '/tmp/wt-health-recover',
+      branch_unique_id: 1,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: {
+        status: 'error',
+        last_health_check: {
+          timestamp: '2026-06-27T00:00:00.000Z',
+          status: 'unhealthy',
+          message: 'start command exited with code 1',
+        },
+      },
+    };
+    const app = {
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update) =>
+        ({
+          ...branch,
+          environment_instance: {
+            ...branch.environment_instance,
+            ...(update as Record<string, unknown>),
+          },
+        }) as never
+    );
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      branch.health_check_url,
+      expect.objectContaining({ method: 'GET' })
+    );
+    expect(updateEnvironment).toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({
+        status: 'running',
+        last_health_check: expect.objectContaining({ status: 'healthy', message: 'HTTP 200' }),
+      }),
+      undefined
+    );
+    expect(result.environment_instance?.status).toBe('running');
+  });
 });

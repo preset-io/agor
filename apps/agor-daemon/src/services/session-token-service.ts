@@ -11,6 +11,7 @@
  * built-in JWT authentication infrastructure, avoiding the complexity of custom strategies.
  */
 
+import { getCurrentTenantId } from '@agor/core/db';
 import jwt from 'jsonwebtoken';
 
 const DEBUG_SESSION_TOKENS =
@@ -77,6 +78,7 @@ export class SessionTokenService {
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + this.config.expiration_ms);
+    const tenantId = getCurrentTenantId();
 
     // Create a JWT payload matching Feathers authentication format
     // This JWT will work seamlessly with the standard JWT strategy
@@ -88,6 +90,7 @@ export class SessionTokenService {
       session_id: sessionId,
       task_id: scope.taskId,
       branch_id: scope.branchId,
+      ...(tenantId ? { tenant_id: tenantId } : {}),
       iat: Math.floor(now.getTime() / 1000), // Issued at
       exp: Math.floor(expiresAt.getTime() / 1000), // Expiration
       aud: 'https://agor.dev', // Must match Feathers jwtOptions.audience

@@ -27,6 +27,7 @@ export type { ClaudeCodePermissionMode, CodexPermissionMode, PermissionMode } fr
 export * from './session';
 export * from './task';
 export * from './template';
+export * from './tenant';
 export * from './ui';
 export * from './user';
 export * from './utils';

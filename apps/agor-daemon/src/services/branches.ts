@@ -11,16 +11,16 @@ import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
-  isBranchRbacEnabled,
   loadConfig,
   PAGINATION,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   BoardRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
-  type Database,
   KnowledgeNamespaceRepository,
+  type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
@@ -34,12 +34,13 @@ import {
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { stripGitUrlCredentials } from '@agor/core/git';
+import { stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
   Board,
   BoardID,
   Branch,
+  BranchEnvironmentUpdate,
   BranchID,
   KnowledgeNamespace,
   QueryParams,
@@ -47,7 +48,11 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { getAssistantConfig, isAssistant } from '@agor/core/types';
+import {
+  BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  getAssistantConfig,
+  isAssistant,
+} from '@agor/core/types';
 import {
   getGidFromGroupName,
   resolveUnixUserForImpersonation,
@@ -62,7 +67,7 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
-  generateSessionToken,
+  generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
   spawnExecutor,
@@ -110,6 +115,8 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
   };
 }
 
+type EnvironmentInstance = NonNullable<Branch['environment_instance']>;
+
 /**
  * Process tracking for environment management
  */
@@ -127,7 +134,7 @@ interface ManagedProcess {
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
   private branchRepo: BranchRepository;
   private boardRepo: BoardRepository;
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
@@ -139,7 +146,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
   };
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const branchRepo = new BranchRepository(db);
     super(branchRepo, {
       id: 'branch_id',
@@ -1487,7 +1494,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const reposService = this.app.service('repos');
       const repo = (await reposService.get(branch.repo_id)) as Repo;
 
-      const rbacEnabled = isBranchRbacEnabled();
+      // Unix group initialization is a filesystem concern controlled by
+      // unix_user_mode. Logical branch RBAC may be enabled in simple/Cloud mode
+      // without creating OS groups.
+      const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
       const { getDaemonUser } = await import('@agor/core/config');
       const daemonUser = getDaemonUser();
 
@@ -1518,8 +1528,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // Use a service JWT so the executor can patch rendered env command
         // templates without tripping requireAdminForEnvConfig when unarchive
         // is performed by a non-admin user.
-        const sessionToken = generateSessionToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        const sessionToken = generateScopedServiceToken(
+          this.app as unknown as { settings: { authentication?: { secret?: string } } },
+          params
         );
         spawnExecutor(
           {
@@ -1542,7 +1553,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               restoreMode: true,
               sourceBranch: branch.base_ref || repo.default_branch || 'main',
               // Unix group isolation
-              initUnixGroup: rbacEnabled,
+              initUnixGroup,
               othersAccess: branch.others_fs_access || 'read',
               daemonUser,
               repoUnixGroup: repo.unix_group,
@@ -1715,17 +1726,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       | {
           branch_id?: BranchID;
           branchId?: BranchID;
-          environment_update?: Partial<Branch['environment_instance']>;
-          environmentUpdate?: Partial<Branch['environment_instance']>;
+          environment_update?: BranchEnvironmentUpdate;
+          environmentUpdate?: BranchEnvironmentUpdate;
         },
-    environmentUpdateOrParams?: Partial<Branch['environment_instance']> | BranchParams,
+    environmentUpdateOrParams?: BranchEnvironmentUpdate | BranchParams,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
     const isRpcEnvelope = typeof idOrData === 'object';
     const id = isRpcEnvelope ? (idOrData.branch_id ?? idOrData.branchId) : idOrData;
     const environmentUpdate = isRpcEnvelope
       ? (idOrData.environment_update ?? idOrData.environmentUpdate)
-      : (environmentUpdateOrParams as Partial<Branch['environment_instance']> | undefined);
+      : (environmentUpdateOrParams as BranchEnvironmentUpdate | undefined);
     const resolvedParams = isRpcEnvelope
       ? (environmentUpdateOrParams as BranchParams | undefined)
       : params;
@@ -1742,7 +1753,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const updatedEnvironment = {
       ...existing.environment_instance,
       ...environmentUpdate,
-    } as Branch['environment_instance'];
+    } as EnvironmentInstance;
+
+    for (const key of BRANCH_ENVIRONMENT_CLEARABLE_FIELDS) {
+      if (
+        Object.hasOwn(environmentUpdate, key) &&
+        (environmentUpdate[key] === undefined || environmentUpdate[key] === null)
+      ) {
+        delete updatedEnvironment[key];
+      }
+    }
 
     // Check if environment state actually changed (ignoring timestamp-only updates)
     // For health checks, we only care about status and message changes, not timestamp
@@ -1774,6 +1794,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       },
       resolvedParams
     );
+
+    // this.patch() calls the raw implementation and bypasses Feathers event
+    // dispatch, so the patched event is not automatically emitted. Emit it
+    // manually so WebSocket clients receive the environment status update.
+    this.app.service('branches').emit?.('patched', branch);
 
     return branch;
   }
@@ -2081,9 +2106,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const branch = await this.get(id, params);
     const _repo = (await this.app.service('repos').get(branch.repo_id, params)) as Repo;
 
-    // Only check health for 'running' or 'starting' status
+    // Only check active environments, plus errored environments that may have been
+    // started successfully out-of-band. Allowing explicit health checks to recover
+    // from `error` prevents stale start failures from keeping a live environment red.
     const currentStatus = branch.environment_instance?.status;
-    if (currentStatus !== 'running' && currentStatus !== 'starting') {
+    const canProbeHealth =
+      currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'error';
+    if (!canProbeHealth) {
       return branch;
     }
 
@@ -2151,13 +2180,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
       }
 
-      // If health check succeeds and we're in 'starting' state, transition to 'running'
-      const shouldTransitionToRunning = isHealthy && currentStatus === 'starting';
+      // If health check succeeds and we're in 'starting' or 'error' state,
+      // transition/recover to 'running'. The explicit 'error' recovery path matters
+      // when a lifecycle command failed or raced but the configured app is now live.
+      const shouldTransitionToRunning =
+        isHealthy && (currentStatus === 'starting' || currentStatus === 'error');
 
       if (shouldTransitionToRunning) {
-        console.log(
-          `✅ First successful health check for ${branch.name} - transitioning to 'running'`
-        );
+        console.log(`✅ Successful health check for ${branch.name} - transitioning to 'running'`);
       }
 
       return await this.updateEnvironment(
@@ -2392,6 +2422,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 /**
  * Service factory function
  */
-export function createBranchesService(db: Database, app: Application): BranchesService {
+export function createBranchesService(
+  db: TenantScopeAwareDatabase,
+  app: Application
+): BranchesService {
   return new BranchesService(db, app);
 }

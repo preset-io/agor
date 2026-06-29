@@ -12,7 +12,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { BoardCommentsRepository, type Database } from '@agor/core/db';
+import { BoardCommentsRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { BoardComment, QueryParams, UUID } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
@@ -42,7 +42,7 @@ export class BoardCommentsService extends DrizzleService<
 > {
   private commentsRepo: BoardCommentsRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const commentsRepo = new BoardCommentsRepository(db);
     super(commentsRepo, {
       id: 'comment_id',
@@ -185,6 +185,6 @@ export class BoardCommentsService extends DrizzleService<
 /**
  * Service factory function
  */
-export function createBoardCommentsService(db: Database): BoardCommentsService {
+export function createBoardCommentsService(db: TenantScopeAwareDatabase): BoardCommentsService {
   return new BoardCommentsService(db);
 }

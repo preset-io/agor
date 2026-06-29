@@ -13,7 +13,7 @@
  * - Only branch owners can manage other owners (requires 'all' permission)
  *
  * Unix Integration:
- * - When owners are added/removed, fire-and-forget sync to executor
+ * - When Unix filesystem isolation is enabled, owner changes fire-and-forget sync to executor
  *
  * @see context/guides/rbac-and-unix-isolation.md
  */
@@ -21,11 +21,12 @@
 import type { BranchRepository } from '@agor/core/db';
 import { shortId } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { BranchID, HookContext, User, UUID } from '@agor/core/types';
+import type { AuthenticatedParams, BranchID, HookContext, User, UUID } from '@agor/core/types';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
 import {
   createServiceToken,
   getDaemonUrl,
+  serviceTokenScopeForParams,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
 
@@ -143,6 +144,8 @@ export interface BranchOwnersServiceConfig {
   jwtSecret?: string;
   /** Daemon Unix user (for group membership) */
   daemonUser?: string;
+  /** Whether Unix filesystem isolation is enabled */
+  unixFsIsolationEnabled?: boolean;
   /** Whether superadmin bypass is enabled (default: true) */
   allowSuperadmin?: boolean;
 }
@@ -246,8 +249,8 @@ export function setupBranchOwnersService(
       // The executor will handle adding user to branch group, repo group, and creating symlinks
       create: [
         async (context: HookContext) => {
-          // Skip if no jwtSecret (Unix integration not configured)
-          if (!config.jwtSecret) {
+          // Skip unless Unix filesystem isolation is enabled/configured.
+          if (!config.unixFsIsolationEnabled || !config.jwtSecret) {
             return context;
           }
 
@@ -257,6 +260,7 @@ export function setupBranchOwnersService(
           // Syncing the branch will pick up the new owner from the DB
           console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner added`);
           const serviceToken = createServiceToken(config.jwtSecret, undefined, {
+            ...serviceTokenScopeForParams(context.params as Partial<AuthenticatedParams>),
             branch_id: branchId,
             command: 'unix.sync-branch',
           });
@@ -280,8 +284,8 @@ export function setupBranchOwnersService(
       // The executor will handle removing user from groups and updating permissions
       remove: [
         async (context: HookContext) => {
-          // Skip if no jwtSecret (Unix integration not configured)
-          if (!config.jwtSecret) {
+          // Skip unless Unix filesystem isolation is enabled/configured.
+          if (!config.unixFsIsolationEnabled || !config.jwtSecret) {
             return context;
           }
 
@@ -291,6 +295,7 @@ export function setupBranchOwnersService(
           // Syncing the branch will handle the removed owner
           console.log(`[Unix Integration] Syncing branch ${shortId(branchId)} after owner removed`);
           const serviceToken = createServiceToken(config.jwtSecret, undefined, {
+            ...serviceTokenScopeForParams(context.params as Partial<AuthenticatedParams>),
             branch_id: branchId,
             command: 'unix.sync-branch',
           });

@@ -9,12 +9,12 @@ import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   and,
   BoardRepository,
   BranchRepository,
-  type Database,
   eq,
   inArray,
   MCPServerRepository,
@@ -23,6 +23,7 @@ import {
   select,
   sessionMcpServers,
   shortId,
+  type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
@@ -102,6 +103,7 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
+import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
@@ -136,7 +138,7 @@ import { spawnExecutor } from './utils/spawn-executor.js';
  * Interface for dependencies needed by service registration.
  */
 export interface RegisterServicesContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   svcEnabled: (group: string) => boolean;
@@ -362,14 +364,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     !app.services['branches/:id/owners/:userId']
   ) {
     const branchRepo = new BranchRepository(db);
+    const executionMode = resolveExecutionSecurityMode(config);
     setupBranchOwnersService(app, branchRepo, {
       jwtSecret,
       daemonUser: config.daemon?.unix_user,
+      unixFsIsolationEnabled: executionMode.unixFsIsolationEnabled,
       allowSuperadmin,
     });
   }
 
-  if (branchRbacEnabled) {
+  if (resolveExecutionSecurityMode(config).unixFsIsolationEnabled) {
     const daemonUser = config.daemon?.unix_user || 'agor';
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
@@ -494,6 +498,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const configService = createConfigService(db);
   configService.app = app;
+  app.use('/admin/local-actions', createLocalActionsService());
+
   app.use('/config', configService);
 
   app.use('/config/resolve-api-key', {
