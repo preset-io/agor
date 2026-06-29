@@ -83,7 +83,7 @@ const checks = [
     excludeTests: true,
     patterns: [
       /import\s+(?:type\s+)?{[^}]*(?:\bDatabase\b|\bRawDatabase\b)[^}]*}\s*from\s*['"]@agor\/core\/db(?:\/client)?['"]/gs,
-      /import\s+\*\s+as\s+\w+\s+from\s*['"]@agor\/core\/db(?:\/client)?['"]/gs,
+      /import\s+(?:type\s+)?\*\s+as\s+\w+\s+from\s*['"]@agor\/core\/db(?:\/client)?['"]/gs,
     ],
     baseline: {},
   },

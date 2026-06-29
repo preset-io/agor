@@ -797,16 +797,24 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // the restart is detected and the task is closed.
   // --------------------------------------------------------------------------
   runPostStartJob('cli-watcher-rehydrate', async () => {
-    const { rehydrateCliWatchers } = await import('./services/claude-cli-integration.js');
-    await runWithTenantDatabaseScope(db, multiTenancy.static_tenant_id, () =>
-      rehydrateCliWatchers(app, async (branchId) => {
-        try {
-          const branch = (await app.service('branches').get(branchId)) as { path?: string };
-          return branch?.path ?? null;
-        } catch {
-          return null;
-        }
-      })
+    const { rehydrateCliWatchers, scanCliWatcherRehydrateSessions } = await import(
+      './services/claude-cli-integration.js'
+    );
+    const cliSessions = await runWithTenantDatabaseScope(db, multiTenancy.static_tenant_id, () =>
+      scanCliWatcherRehydrateSessions(app)
+    );
+    await rehydrateCliWatchers(
+      app,
+      (branchId) =>
+        runWithTenantDatabaseScope(db, multiTenancy.static_tenant_id, async () => {
+          try {
+            const branch = (await app.service('branches').get(branchId)) as { path?: string };
+            return branch?.path ?? null;
+          } catch {
+            return null;
+          }
+        }),
+      cliSessions
     );
   });
 }
