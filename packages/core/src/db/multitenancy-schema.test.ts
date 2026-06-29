@@ -19,19 +19,34 @@ function postgresSchemaTenantTables(): string[] {
   return [...tables].sort();
 }
 
+function postgresMigrationSql(): string {
+  const migrationsDir = path.join(repoRoot, 'packages/core/drizzle/postgres');
+  return fs
+    .readdirSync(migrationsDir)
+    .filter((entry) => entry.endsWith('.sql'))
+    .sort()
+    .map((entry) => fs.readFileSync(path.join(migrationsDir, entry), 'utf8'))
+    .join('\n');
+}
+
 function migrationTenantTables(): string[] {
-  const migration = readRepoFile('packages/core/drizzle/postgres/0054_app_level_multitenancy.sql');
-  return [
-    ...new Set(
-      [...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g)].map((m) => m[1])
-    ),
-  ].sort();
+  const migration = postgresMigrationSql();
+  const tables = new Set<string>();
+
+  for (const match of migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g)) {
+    tables.add(match[1]);
+  }
+
+  for (const match of migration.matchAll(/CREATE TABLE "([^"]+)" \(([\s\S]*?)\n\);/g)) {
+    const [, tableName, columnsBlock] = match;
+    if (columnsBlock.includes('"tenant_id" text')) tables.add(tableName);
+  }
+
+  return [...tables].sort();
 }
 
 function rlsPolicyTables(): string[] {
-  const migration = readRepoFile(
-    'packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'
-  );
+  const migration = postgresMigrationSql();
   return [
     ...new Set(
       [...migration.matchAll(/CREATE POLICY "tenant_isolation_([^"]+)" ON "([^"]+)"/g)].map(
