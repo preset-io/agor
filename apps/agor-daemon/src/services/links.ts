@@ -6,16 +6,18 @@
 
 import { PAGINATION } from '@agor/core/config';
 import { type Database, LinksRepository } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, BadRequest } from '@agor/core/feathers';
 import type {
   BranchID,
   HookContext,
+  Id,
   Link,
   LinkCreate,
   LinkKind,
   LinkSource,
   Message,
   MessageID,
+  NullableId,
   Params,
   QueryParams,
   SessionID,
@@ -23,6 +25,8 @@ import type {
 } from '@agor/core/types';
 import { extractLinksFromMessage } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+
+export const LINKS_SERVICE_METHODS = ['find', 'get', 'create', 'patch', 'remove'] as const;
 
 export type LinkParams = QueryParams<{
   branch_id?: BranchID;
@@ -46,7 +50,7 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
         default: PAGINATION.DEFAULT_LIMIT,
         max: PAGINATION.MAX_LIMIT,
       },
-      multi: ['create', 'remove'],
+      multi: ['create'],
     });
     this.linksRepo = linksRepo;
   }
@@ -77,6 +81,24 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
     const result = await this.linksRepo.upsert(data as Partial<LinkCreate>);
     this.emit?.(existing ? 'patched' : 'created', result, params);
     return result;
+  }
+
+  async update(_id: Id, _data: Partial<Link>, _params?: LinkParams): Promise<Link> {
+    throw new BadRequest('links.update is not supported; use patch instead');
+  }
+
+  async patch(id: NullableId, data: Partial<Link>, params?: LinkParams): Promise<Link | Link[]> {
+    if (id === null) {
+      throw new BadRequest('links.patch does not support multi operations');
+    }
+    return super.patch(id, data, params);
+  }
+
+  async remove(id: NullableId, params?: LinkParams): Promise<Link | Link[]> {
+    if (id === null) {
+      throw new BadRequest('links.remove does not support multi operations');
+    }
+    return super.remove(id, params);
   }
 }
 

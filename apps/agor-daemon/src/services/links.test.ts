@@ -6,12 +6,12 @@ import {
   SessionRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { BranchID, Message, MessageID, SessionID, UUID } from '@agor/core/types';
-import { describe, expect, vi } from 'vitest';
+import type { BranchID, Link, Message, MessageID, SessionID, UUID } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
 import type { Database } from '../../../../packages/core/src/db/client';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
-import { ingestParsedLinksAfterMessageCreate, LinksService } from './links';
+import { ingestParsedLinksAfterMessageCreate, LINKS_SERVICE_METHODS, LinksService } from './links';
 
 async function seedUser(db: Database, userId: UUID, email: string) {
   await new UsersRepository(db).create({ user_id: userId, email, name: email });
@@ -51,6 +51,66 @@ async function seedSession(db: Database, branchId: BranchID) {
 }
 
 describe('LinksService', () => {
+  it('does not expose full update over Feathers transports', () => {
+    expect(LINKS_SERVICE_METHODS).not.toContain('update');
+  });
+
+  dbTest('allows bulk create but rejects multi patch/remove', async ({ db }) => {
+    const branch = await seedBranch(db, 'view');
+    const session = await seedSession(db, branch.branch_id);
+    const service = new LinksService(db);
+
+    const created = await service.create([
+      {
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/a',
+      },
+      {
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/b',
+      },
+    ]);
+
+    expect(created).toHaveLength(2);
+    await expect(service.patch(null, { title: 'changed' }, { query: {} })).rejects.toThrow(
+      /does not support multi/
+    );
+    await expect(service.remove(null, { query: {} })).rejects.toThrow(/does not support multi/);
+  });
+
+  dbTest('rejects full update while preserving single patch/remove', async ({ db }) => {
+    const branch = await seedBranch(db, 'view');
+    const session = await seedSession(db, branch.branch_id);
+    const service = new LinksService(db);
+    const created = (await service.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/single',
+    })) as Link;
+
+    await expect(
+      service.update(created.link_id, {
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/replaced',
+      })
+    ).rejects.toThrow(/update is not supported/);
+
+    const patched = await service.patch(created.link_id, { title: 'single patch works' });
+    expect(Array.isArray(patched)).toBe(false);
+    expect((patched as { title: string | null }).title).toBe('single patch works');
+
+    const removed = await service.remove(created.link_id);
+    expect(Array.isArray(removed)).toBe(false);
+    expect((removed as { link_id: string }).link_id).toBe(created.link_id);
+  });
+
   dbTest('scopes find to links whose owner branch/session is visible to caller', async ({ db }) => {
     const viewer = generateId() as UUID;
     await seedUser(db, viewer, 'links-service-viewer@example.com');

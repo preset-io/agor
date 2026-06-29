@@ -103,7 +103,7 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
-import { createLinksService } from './services/links.js';
+import { createLinksService, LINKS_SERVICE_METHODS } from './services/links.js';
 import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
@@ -240,6 +240,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
 
   app.use('/links', createLinksService(db), {
+    methods: [...LINKS_SERVICE_METHODS],
     events: ['created', 'patched', 'removed'],
   });
 
