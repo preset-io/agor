@@ -11,6 +11,7 @@ import {
   type AgorConfig,
   isUnixImpersonationEnabled,
   loadConfig,
+  resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
   resolveMultiTenancyDatabaseDialect,
   resolveTenantContext,
@@ -408,6 +409,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const multiTenancy = resolveMultiTenancyConfig(config);
   const tenantColumnsEnabled = resolveMultiTenancyDatabaseDialect(config) === 'postgresql';
+  const executionMode = resolveExecutionSecurityMode(config);
 
   const tenantOwnedServicePaths = [
     'sessions',
@@ -559,12 +561,30 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const syncBranchUnixAccess = (branchId: BranchID, logPrefix: string): void => {
-    if (!jwtSecret) return;
-    const serviceToken = createServiceToken(jwtSecret, undefined, {
+  const createExecutorServiceToken = (
+    params: Partial<AuthenticatedParams> | undefined,
+    scope: Record<string, unknown>
+  ): string | undefined => {
+    if (!jwtSecret) return undefined;
+    return createServiceToken(jwtSecret, undefined, {
+      ...serviceTokenScopeForParams(params),
+      ...scope,
+    });
+  };
+
+  const syncBranchUnixAccess = (
+    branchId: BranchID,
+    logPrefix: string,
+    params?: Partial<AuthenticatedParams>,
+    options?: { delete?: boolean; scope?: Record<string, unknown> }
+  ): void => {
+    if (!executionMode.unixFsIsolationEnabled) return;
+    const serviceToken = createExecutorServiceToken(params, {
+      ...options?.scope,
       branch_id: branchId,
       command: 'unix.sync-branch',
     });
+    if (!serviceToken) return;
     spawnExecutorFireAndForget(
       {
         command: 'unix.sync-branch',
@@ -573,6 +593,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         params: {
           branchId,
           daemonUser: config.daemon?.unix_user,
+          ...(options?.delete ? { delete: true } : {}),
         },
       },
       { logPrefix }
@@ -581,9 +602,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   const syncUnixAccessForBoardAlignedBranches = async (
     boardId: unknown,
-    logPrefix: string
+    logPrefix: string,
+    params?: Partial<AuthenticatedParams>
   ): Promise<void> => {
-    if (!jwtSecret || typeof boardId !== 'string' || boardId.length === 0) return;
+    if (!executionMode.unixFsIsolationEnabled) return;
+    if (typeof boardId !== 'string' || boardId.length === 0) return;
     const alignedBranches = await branchRepository.findBoardAlignedBranches(boardId as BoardID);
     if (alignedBranches.length === 0) return;
     console.log(
@@ -593,10 +616,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       await invalidateRealtimeBranchAccess(branch.branch_id);
     }
 
-    const serviceToken = createServiceToken(jwtSecret, undefined, {
+    const serviceToken = createExecutorServiceToken(params, {
       board_id: boardId,
       command: 'unix.sync-board',
     });
+    if (!serviceToken) return;
     spawnExecutorFireAndForget(
       {
         command: 'unix.sync-board',
@@ -615,7 +639,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     context: HookContext,
     logPrefix: string
   ): Promise<HookContext> => {
-    await syncUnixAccessForBoardAlignedBranches(context.params.route?.id, logPrefix);
+    await syncUnixAccessForBoardAlignedBranches(
+      context.params.route?.id,
+      logPrefix,
+      context.params as Partial<AuthenticatedParams>
+    );
     return context;
   };
 
@@ -623,10 +651,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     context: HookContext,
     logPrefix: string
   ): Promise<HookContext> => {
-    if (!jwtSecret) return context;
+    if (!executionMode.unixFsIsolationEnabled) return context;
     const branches = await branchRepository.findAll({ includeArchived: false });
     for (const branch of branches) {
-      syncBranchUnixAccess(branch.branch_id as BranchID, logPrefix);
+      syncBranchUnixAccess(
+        branch.branch_id as BranchID,
+        logPrefix,
+        context.params as Partial<AuthenticatedParams>
+      );
       await invalidateRealtimeBranchAccess(branch.branch_id);
     }
     return context;
@@ -1159,7 +1191,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(branchRbacEnabled
           ? [
               async (context: HookContext) => {
-                // RBAC + Unix Integration: Create Unix group and add initial owner
+                // RBAC: Add the creator as the initial branch owner
                 const branch = context.result as import('@agor/core/types').Branch;
                 const creatorId = branch.created_by;
 
@@ -1184,7 +1216,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         invalidateRealtimeBranchFromResult,
-        ...(branchRbacEnabled
+        ...(executionMode.unixFsIsolationEnabled
           ? [
               async (context: HookContext) => {
                 // Unix Integration: Sync branch permissions when others_fs_access changes
@@ -1223,29 +1255,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   return context;
                 }
 
-                // Fire-and-forget sync to executor
-                // The executor will handle permission changes idempotently
-                if (jwtSecret) {
-                  console.log(
-                    `[Unix Integration] Syncing permissions for branch ${shortId(branch.branch_id)} (others_fs_access: ${previousValue} -> ${branch.others_fs_access})`
-                  );
-                  const serviceToken = createServiceToken(jwtSecret, undefined, {
-                    branch_id: branch.branch_id,
-                    command: 'unix.sync-branch',
-                  });
-                  spawnExecutorFireAndForget(
-                    {
-                      command: 'unix.sync-branch',
-                      sessionToken: serviceToken,
-                      daemonUrl: getDaemonUrl(),
-                      params: {
-                        branchId: branch.branch_id,
-                        daemonUser: config.daemon?.unix_user,
-                      },
-                    },
-                    { logPrefix: '[Executor/branch.patch]' }
-                  );
-                }
+                // Fire-and-forget sync to executor.
+                // The executor will handle permission changes idempotently.
+                console.log(
+                  `[Unix Integration] Syncing permissions for branch ${shortId(branch.branch_id)} (others_fs_access: ${previousValue} -> ${branch.others_fs_access})`
+                );
+                syncBranchUnixAccess(
+                  branch.branch_id,
+                  '[Executor/branch.patch]',
+                  context.params as Partial<AuthenticatedParams>
+                );
 
                 return context;
               },
@@ -1254,32 +1273,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       remove: [
         invalidateRealtimeBranchFromResult,
-        ...(branchRbacEnabled
+        ...(executionMode.unixFsIsolationEnabled
           ? [
               async (context: HookContext) => {
                 // Unix Integration: Delete Unix group when branch is deleted
                 const branchId = context.id as import('@agor/core/types').BranchID;
 
-                // Fire-and-forget sync with delete flag to executor
-                if (jwtSecret) {
-                  const serviceToken = createServiceToken(jwtSecret, undefined, {
-                    branch_id: branchId,
-                    command: 'unix.sync-branch',
-                  });
-                  spawnExecutorFireAndForget(
-                    {
-                      command: 'unix.sync-branch',
-                      sessionToken: serviceToken,
-                      daemonUrl: getDaemonUrl(),
-                      params: {
-                        branchId,
-                        daemonUser: config.daemon?.unix_user,
-                        delete: true, // Signal to delete the group instead of syncing
-                      },
-                    },
-                    { logPrefix: '[Executor/branch.remove]' }
-                  );
-                }
+                // Fire-and-forget sync with delete flag to executor.
+                syncBranchUnixAccess(
+                  branchId,
+                  '[Executor/branch.remove]',
+                  context.params as Partial<AuthenticatedParams>,
+                  { delete: true }
+                );
 
                 return context;
               },
@@ -1864,7 +1870,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           const branchId = context.params.route?.id;
           if (typeof branchId === 'string') {
-            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.create]');
+            syncBranchUnixAccess(
+              branchId as BranchID,
+              '[Executor/branch-group-grants.create]',
+              context.params as Partial<AuthenticatedParams>
+            );
           }
           return context;
         },
@@ -1874,7 +1884,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           const branchId = context.params.route?.id;
           if (typeof branchId === 'string') {
-            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.patch]');
+            syncBranchUnixAccess(
+              branchId as BranchID,
+              '[Executor/branch-group-grants.patch]',
+              context.params as Partial<AuthenticatedParams>
+            );
           }
           return context;
         },
@@ -1884,7 +1898,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         (context: HookContext) => {
           const branchId = context.params.route?.id;
           if (typeof branchId === 'string') {
-            syncBranchUnixAccess(branchId as BranchID, '[Executor/branch-group-grants.remove]');
+            syncBranchUnixAccess(
+              branchId as BranchID,
+              '[Executor/branch-group-grants.remove]',
+              context.params as Partial<AuthenticatedParams>
+            );
           }
           return context;
         },
@@ -2075,8 +2093,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       // After user create/patch: optionally ensure Unix user exists and sync password
       create: [
         async (context: HookContext) => {
-          // Need JWT secret for service tokens (required by executor)
-          if (!jwtSecret) {
+          // Need Unix integration and JWT secret for executor service tokens.
+          if (!executionMode.unixImpersonationEnabled || !jwtSecret) {
             return context;
           }
 
@@ -2098,10 +2116,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           // Fire-and-forget sync to executor
           console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createServiceToken(jwtSecret, undefined, {
-            user_id: user.user_id,
-            command: 'unix.sync-user',
-          });
+          const serviceToken = createExecutorServiceToken(
+            context.params as Partial<AuthenticatedParams>,
+            {
+              user_id: user.user_id,
+              command: 'unix.sync-user',
+            }
+          );
+          if (!serviceToken) return context;
           spawnExecutorFireAndForget(
             {
               command: 'unix.sync-user',
@@ -2139,8 +2161,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       patch: [
         async (context: HookContext) => {
-          // Need JWT secret for service tokens (required by executor)
-          if (!jwtSecret) {
+          // Need Unix integration and JWT secret for executor service tokens.
+          if (!executionMode.unixImpersonationEnabled || !jwtSecret) {
             return context;
           }
 
@@ -2167,10 +2189,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           // Fire-and-forget sync to executor
           console.log(`[Unix Integration] Syncing Unix user for: ${user.unix_username}`);
-          const serviceToken = createServiceToken(jwtSecret, undefined, {
-            user_id: user.user_id,
-            command: 'unix.sync-user',
-          });
+          const serviceToken = createExecutorServiceToken(
+            context.params as Partial<AuthenticatedParams>,
+            {
+              user_id: user.user_id,
+              command: 'unix.sync-user',
+            }
+          );
+          if (!serviceToken) return context;
           spawnExecutorFireAndForget(
             {
               command: 'unix.sync-user',
@@ -2573,7 +2599,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // unix groups. Without this, non-owners can't access the .git/ directory
         // (which uses 2770 = no others access) even if the branch directory itself
         // allows "others" access via ACLs.
-        ...(branchRbacEnabled
+        ...(executionMode.unixFsIsolationEnabled
           ? [
               async (context: HookContext) => {
                 const session = context.result as Session;
@@ -2597,29 +2623,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                   }
 
                   // Fire-and-forget: trigger unix.sync-branch to add session user to groups
-                  if (jwtSecret) {
-                    console.log(
-                      `[Unix Integration] Non-owner session created in branch ${shortId(session.branch_id)} ` +
-                        `by ${session.unix_username} (others_fs_access: ${branch.others_fs_access}), syncing group membership`
-                    );
-                    const serviceToken = createServiceToken(jwtSecret, undefined, {
-                      branch_id: branch.branch_id,
-                      session_id: session.session_id,
-                      command: 'unix.sync-branch',
-                    });
-                    spawnExecutorFireAndForget(
-                      {
-                        command: 'unix.sync-branch',
-                        sessionToken: serviceToken,
-                        daemonUrl: getDaemonUrl(),
-                        params: {
-                          branchId: session.branch_id,
-                          daemonUser: config.daemon?.unix_user,
-                        },
-                      },
-                      { logPrefix: '[Executor/session.create.unix-group]' }
-                    );
-                  }
+                  console.log(
+                    `[Unix Integration] Non-owner session created in branch ${shortId(session.branch_id)} ` +
+                      `by ${session.unix_username} (others_fs_access: ${branch.others_fs_access}), syncing group membership`
+                  );
+                  syncBranchUnixAccess(
+                    branch.branch_id,
+                    '[Executor/session.create.unix-group]',
+                    context.params as Partial<AuthenticatedParams>,
+                    { scope: { session_id: session.session_id } }
+                  );
                 } catch (error) {
                   // Don't fail session creation if unix sync fails
                   console.error(

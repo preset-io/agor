@@ -62,7 +62,7 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
-  generateSessionToken,
+  generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
   spawnExecutor,
@@ -1521,8 +1521,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // Use a service JWT so the executor can patch rendered env command
         // templates without tripping requireAdminForEnvConfig when unarchive
         // is performed by a non-admin user.
-        const sessionToken = generateSessionToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } }
+        const sessionToken = generateScopedServiceToken(
+          this.app as unknown as { settings: { authentication?: { secret?: string } } },
+          params
         );
         spawnExecutor(
           {
