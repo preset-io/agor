@@ -19,12 +19,12 @@ import {
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
+  runWithoutTenantDatabaseScope,
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
   shortId,
   TaskRepository,
-  tenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
 import { MANAGED_ENV_EXECUTION_MODE_DEFAULT } from '@agor/core/environment/webhook';
@@ -285,12 +285,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   /**
    * Schedule fn in a new event-loop tick, outside any ALS tenant scope.
    * Always use this instead of bare setImmediate inside route/service code —
-   * a bare setImmediate inherits the active tenantDatabaseScope (which may
+   * a bare setImmediate inherits the active tenant DB scope (which may
    * hold a committed Postgres transaction) and causes silent DB hangs when
    * that stale connection is reused.
    */
   function deferOutsideScope(fn: () => Promise<void>): void {
-    tenantDatabaseScope.exit(() => setImmediate(fn));
+    runWithoutTenantDatabaseScope(() => setImmediate(fn));
   }
 
   const registerAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (

@@ -6,6 +6,8 @@ export {
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabase,
   getCurrentTenantId,
+  requireCurrentTenantId,
+  runWithoutTenantDatabaseScope,
   tenantDatabaseScope,
 } from './tenant-context';
 

@@ -25,10 +25,10 @@ import {
   BoardRepository,
   type BranchRepository,
   type Database,
+  runWithoutTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
   shortId,
-  tenantDatabaseScope,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
@@ -2660,11 +2660,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             // buffered message as a PR/issue comment. Must happen before queue
             // processing so the response is posted before the next prompt starts.
             //
-            // tenantDatabaseScope.exit() breaks ALS inheritance so this
+            // runWithoutTenantDatabaseScope() breaks ALS inheritance so this
             // setImmediate fires outside the outer tenantDatabaseScopeAround
             // transaction — otherwise the gateway I/O runs inside that
             // transaction and can leave a zombie idle-in-transaction backend.
-            tenantDatabaseScope.exit(() =>
+            runWithoutTenantDatabaseScope(() =>
               setImmediate(async () => {
                 try {
                   const gatewayService = context.app.service(
@@ -2688,7 +2688,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               // Same ALS-escape pattern: queue processing must run outside the
               // outer transaction so it uses a fresh connection and doesn't
               // block behind the in-flight turn lock from within that transaction.
-              tenantDatabaseScope.exit(() =>
+              runWithoutTenantDatabaseScope(() =>
                 setImmediate(async () => {
                   try {
                     console.log(

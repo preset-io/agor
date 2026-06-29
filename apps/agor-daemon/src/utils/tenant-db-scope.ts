@@ -54,24 +54,30 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
       connection?: { tenant?: unknown; data?: { tenant?: unknown } };
     };
     const connectionTenant = params.connection?.tenant ?? params.connection?.data?.tenant;
-    if (
-      connectionTenant &&
-      typeof connectionTenant === 'object' &&
-      'tenant_id' in connectionTenant
-    ) {
-      return connectionTenant as ReturnType<typeof resolveTenantContext>;
-    }
+    const paramsWithConnectionTenant =
+      connectionTenant && typeof connectionTenant === 'object' && 'tenant_id' in connectionTenant
+        ? ({ ...params, tenant: params.tenant ?? connectionTenant } as typeof params)
+        : params;
 
-    const inheritedTenantId = getCurrentTenantId();
-    if (inheritedTenantId) {
-      return { tenant_id: inheritedTenantId as TenantID, source: 'explicit' as const };
+    try {
+      // Resolve explicit/auth/socket tenant context first, even for internal
+      // calls. If this is nested inside a different active tenant scope,
+      // runWithTenantDatabaseScope below will reject the cross-tenant switch
+      // instead of silently inheriting or switching.
+      return resolveTenantContext(multiTenancy, {
+        params: paramsWithConnectionTenant,
+        authPayload:
+          paramsWithConnectionTenant.authentication?.payload ??
+          bearerPayloadFromHeaders(paramsWithConnectionTenant.headers),
+        headers: paramsWithConnectionTenant.headers,
+      });
+    } catch (error) {
+      const inheritedTenantId = getCurrentTenantId();
+      if (error instanceof TenantResolutionError && inheritedTenantId) {
+        return { tenant_id: inheritedTenantId as TenantID, source: 'explicit' as const };
+      }
+      throw error;
     }
-
-    return resolveTenantContext(multiTenancy, {
-      params,
-      authPayload: params.authentication?.payload ?? bearerPayloadFromHeaders(params.headers),
-      headers: params.headers,
-    });
   };
 
   return async (context: HookContext, next: () => Promise<void>): Promise<void> => {

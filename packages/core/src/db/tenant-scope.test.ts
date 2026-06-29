@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Database } from './client';
 import { insert } from './database-wrapper';
-import { createTenantScopedDatabaseProxy, runWithTenantDatabaseScope } from './tenant-scope';
+import {
+  createTenantScopedDatabaseProxy,
+  getCurrentTenantId,
+  requireCurrentTenantId,
+  runWithoutTenantDatabaseScope,
+  runWithTenantDatabaseScope,
+} from './tenant-scope';
 
 describe('tenant-scoped database proxy', () => {
   it('routes repository-style calls to the active tenant transaction', async () => {
@@ -123,5 +129,25 @@ describe('tenant-scoped database proxy', () => {
         { id: 'row-3', tenant_id: 'explicit' },
       ],
     ]);
+  });
+
+  it('supports requiring and explicitly escaping the ambient tenant scope', async () => {
+    const base = {
+      run: vi.fn(),
+    };
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+    const seen: Array<string | undefined> = [];
+
+    await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
+      expect(requireCurrentTenantId()).toBe('tenant-a');
+      seen.push(getCurrentTenantId());
+      runWithoutTenantDatabaseScope(() => {
+        seen.push(getCurrentTenantId());
+        expect(() => requireCurrentTenantId()).toThrow('Missing active tenant context');
+      });
+      seen.push(getCurrentTenantId());
+    });
+
+    expect(seen).toEqual(['tenant-a', undefined, 'tenant-a']);
   });
 });

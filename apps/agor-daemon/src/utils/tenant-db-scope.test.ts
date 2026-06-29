@@ -1,6 +1,7 @@
 import {
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
+  runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
@@ -175,6 +176,102 @@ describe('createTenantDatabaseScopeAroundHook', () => {
       tenant_id: 'tenant-inherited',
       source: 'explicit',
     });
+  });
+
+  it('does not let a nested explicit tenant switch silently', async () => {
+    const { db } = makePgDb();
+    const hook = createTenantDatabaseScopeAroundHook({
+      db: db as never,
+      jwtSecret: 'secret',
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      },
+    });
+    const context = {
+      params: { tenant: { tenant_id: 'tenant-b', source: 'auth_claim' } },
+    } as never;
+
+    await expect(
+      runWithTenantDatabaseScope(db as never, 'tenant-a', async () => {
+        await hook(context, async () => undefined);
+      })
+    ).rejects.toThrow(/Cannot enter tenant scope tenant-b from active tenant scope tenant-a/);
+  });
+
+  it('treats provider-less nested calls as tenant-scoped rather than global', async () => {
+    const { db } = makePgDb();
+    const hook = createTenantDatabaseScopeAroundHook({
+      db: db as never,
+      jwtSecret: 'secret',
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      },
+    });
+    const outer = {
+      params: { provider: 'rest', authentication: { payload: { tenant_id: 'tenant-a' } } },
+    } as never;
+    const innerTasksPatch = { params: {} } as never;
+    const innerSessionLookup = { params: { provider: undefined } } as never;
+    const events: string[] = [];
+
+    await hook(outer, async () => {
+      events.push(`outer:${getCurrentTenantId()}`);
+      await hook(innerTasksPatch, async () => {
+        events.push(`tasks.patch:${getCurrentTenantId()}`);
+      });
+      await hook(innerSessionLookup, async () => {
+        events.push(`sessions.get:${getCurrentTenantId()}`);
+      });
+    });
+
+    expect(events).toEqual(['outer:tenant-a', 'tasks.patch:tenant-a', 'sessions.get:tenant-a']);
+    expect((innerTasksPatch as { params: { tenant?: unknown } }).params.tenant).toEqual({
+      tenant_id: 'tenant-a',
+      source: 'explicit',
+    });
+  });
+
+  it('keeps board owner lookups tenant-scoped under required_from_auth', async () => {
+    const { db } = makePgDb();
+    const hook = createTenantDatabaseScopeAroundHook({
+      db: db as never,
+      jwtSecret: 'secret',
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      },
+    });
+    const boardOwnersFind = {
+      params: { provider: 'rest', authentication: { payload: { tenant_id: 'tenant-board' } } },
+    } as never;
+    const nestedUsersGet = { params: {} } as never;
+    const events: string[] = [];
+
+    await hook(boardOwnersFind, async () => {
+      events.push(`boards/:id/owners.find:${getCurrentTenantId()}`);
+      await hook(nestedUsersGet, async () => {
+        events.push(`users.get:${getCurrentTenantId()}`);
+      });
+    });
+
+    expect(events).toEqual(['boards/:id/owners.find:tenant-board', 'users.get:tenant-board']);
+  });
+
+  it('allows an explicit global/system escape hatch outside the active scope', async () => {
+    const { db } = makePgDb();
+    const seen: Array<string | undefined> = [];
+
+    await runWithTenantDatabaseScope(db as never, 'tenant-a', async () => {
+      seen.push(getCurrentTenantId());
+      runWithoutTenantDatabaseScope(() => {
+        seen.push(getCurrentTenantId());
+      });
+      seen.push(getCurrentTenantId());
+    });
+
+    expect(seen).toEqual(['tenant-a', undefined, 'tenant-a']);
   });
 
   it('reuses tenant context already attached to a socket connection', async () => {
