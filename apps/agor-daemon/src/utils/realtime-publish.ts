@@ -4,7 +4,7 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import type { BranchRepository, SessionRepository } from '@agor/core/db';
-import { shortId } from '@agor/core/db';
+import { getCurrentTenantId, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, HookContext, User, UserID } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
@@ -304,6 +304,36 @@ function filterToUserIdsOrSuperadmins(
   });
 }
 
+function extractConnectionTenantId(context: HookContext): string | undefined {
+  const params = context.params as
+    | {
+        connection?: {
+          tenant?: unknown;
+          data?: { tenant?: unknown };
+        };
+      }
+    | undefined;
+  const tenant = params?.connection?.tenant ?? params?.connection?.data?.tenant;
+  return tenant && typeof tenant === 'object' && 'tenant_id' in tenant
+    ? typeof tenant.tenant_id === 'string'
+      ? tenant.tenant_id
+      : undefined
+    : undefined;
+}
+
+function resolveRealtimeTenantId(multiTenancy: ResolvedMultiTenancyConfig, context: HookContext) {
+  try {
+    return resolveTenantContext(multiTenancy, { params: context.params }).tenant_id;
+  } catch (error) {
+    const connectionTenantId = extractConnectionTenantId(context);
+    if (error instanceof TenantResolutionError && connectionTenantId) return connectionTenantId;
+
+    const ambientTenantId = getCurrentTenantId();
+    if (error instanceof TenantResolutionError && ambientTenantId) return ambientTenantId;
+    throw error;
+  }
+}
+
 /**
  * Register the single global Feathers publish handler.
  *
@@ -342,8 +372,8 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     let tenantScoped = authenticated;
     if (multiTenancy) {
       try {
-        const tenant = resolveTenantContext(multiTenancy, { params: context.params });
-        tenantScoped = app.channel(tenantChannelName(tenant.tenant_id));
+        const tenantId = resolveRealtimeTenantId(multiTenancy, context);
+        tenantScoped = app.channel(tenantChannelName(tenantId));
       } catch (error) {
         if (error instanceof TenantResolutionError) {
           console.warn('[realtime] Suppressing event without tenant context', {

@@ -1,3 +1,4 @@
+import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { Branch, BranchPermissionLevel, Session, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -52,6 +53,8 @@ function branch(id: string, others_can: Branch['others_can'] = 'none'): Branch {
 function session(id: string, branchId: string): Session {
   return { session_id: id, branch_id: branchId } as Session;
 }
+
+const scopeOnlyDb = { run: vi.fn() } as unknown as TenantScopeAwareDatabase;
 
 function repos(options: {
   branch: Branch;
@@ -140,6 +143,154 @@ describe('configureRealtimePublish', () => {
     );
 
     expect(channel.connections).toEqual([service]);
+  });
+
+  it('uses ambient tenant database scope for internal/manual emits without params tenant', async () => {
+    const tenantUser = user('tenant-user');
+    const otherTenantUser = user('other-tenant-user');
+    const app = makeApp(
+      [{ user: tenantUser }, { user: otherTenantUser }],
+      {},
+      {
+        authenticated: [{ user: tenantUser }, { user: otherTenantUser }],
+        'tenant:tenant-a': [{ user: tenantUser }],
+        'tenant:tenant-b': [{ user: otherTenantUser }],
+      }
+    );
+    const r = repos({ branch: branch('b1'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    const channel = await runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', async () =>
+      app.runPublish(
+        { branch_id: 'b1' },
+        { path: 'branches', method: 'patch', event: 'patched', params: {} }
+      )
+    );
+
+    expect(channel.connections).toEqual([{ user: tenantUser }]);
+  });
+
+  it('uses authenticated socket connection tenant for executor/service emits without params tenant', async () => {
+    const tenantUser = user('tenant-user');
+    const otherTenantUser = user('other-tenant-user');
+    const app = makeApp(
+      [{ user: tenantUser }, { user: otherTenantUser }],
+      {},
+      {
+        authenticated: [{ user: tenantUser }, { user: otherTenantUser }],
+        'tenant:tenant-a': [{ user: tenantUser }],
+        'tenant:tenant-b': [{ user: otherTenantUser }],
+      }
+    );
+    const r = repos({ branch: branch('b1'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    const channel = await app.runPublish(
+      { branch_id: 'b1' },
+      {
+        path: 'branches',
+        method: 'patch',
+        event: 'patched',
+        params: {
+          connection: {
+            tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+          },
+        },
+      }
+    );
+
+    expect(channel.connections).toEqual([{ user: tenantUser }]);
+  });
+
+  it('uses authenticated socket data tenant for executor/service emits without params tenant', async () => {
+    const tenantUser = user('tenant-user');
+    const otherTenantUser = user('other-tenant-user');
+    const app = makeApp(
+      [{ user: tenantUser }, { user: otherTenantUser }],
+      {},
+      {
+        authenticated: [{ user: tenantUser }, { user: otherTenantUser }],
+        'tenant:tenant-a': [{ user: tenantUser }],
+        'tenant:tenant-b': [{ user: otherTenantUser }],
+      }
+    );
+    const r = repos({ branch: branch('b1'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    const channel = await app.runPublish(
+      { branch_id: 'b1' },
+      {
+        path: 'branches',
+        method: 'patch',
+        event: 'patched',
+        params: {
+          connection: {
+            data: { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
+          },
+        },
+      }
+    );
+
+    expect(channel.connections).toEqual([{ user: tenantUser }]);
+  });
+
+  it('does not trust event payload tenant_id without auth or ambient tenant scope', async () => {
+    const member = user('member');
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp(
+      [{ user: member }, service],
+      {},
+      {
+        authenticated: [{ user: member }, service],
+        'tenant:tenant-a': [{ user: member }],
+      }
+    );
+    const r = repos({ branch: branch('b1'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    const channel = await app.runPublish(
+      { branch_id: 'b1', tenant_id: 'tenant-a' },
+      { path: 'branches', method: 'patch', event: 'patched', params: {} }
+    );
+
+    expect(channel.connections).toEqual([service]);
+    expect(app.channel).not.toHaveBeenCalledWith('tenant:tenant-a');
   });
 
   it('filters branch events to users with view access when RBAC is enabled', async () => {
