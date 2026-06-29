@@ -37,8 +37,9 @@ function readHeaderValue(
 
 type TenantScopedParams = { tenant?: { tenant_id?: string } } | undefined;
 
-export function resolveTenantIdForDeferredScope(params?: TenantScopedParams): string | undefined {
-  return params?.tenant?.tenant_id ?? getCurrentTenantId();
+export function resolveTenantIdForDeferredScope(params?: unknown): string | undefined {
+  const scopedParams = params as TenantScopedParams;
+  return scopedParams?.tenant?.tenant_id ?? getCurrentTenantId();
 }
 
 /**
@@ -50,7 +51,7 @@ export function resolveTenantIdForDeferredScope(params?: TenantScopedParams): st
  */
 export function deferWithTenantDatabaseScope(
   db: Database,
-  params: TenantScopedParams,
+  params: unknown,
   work: () => Promise<void>,
   onError?: (error: unknown) => void
 ): void {
