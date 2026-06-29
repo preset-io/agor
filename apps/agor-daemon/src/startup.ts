@@ -8,10 +8,14 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
-import { getAgorHome, resolveExecutorHeartbeatConfig } from '@agor/core/config';
+import {
+  getAgorHome,
+  resolveExecutorHeartbeatConfig,
+  resolveMultiTenancyConfig,
+} from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import { MessagesRepository, SessionRepository, shortId } from '@agor/core/db';
-import type { Id, Paginated, Session, SessionID, Task } from '@agor/core/types';
+import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
@@ -106,6 +110,16 @@ async function readAndClearSentinel(): Promise<boolean> {
 // Orphan cleanup
 // ---------------------------------------------------------------------------
 
+function startupTenantParams(config: AgorConfig): { tenant: TenantContext } {
+  const multiTenancy = resolveMultiTenancyConfig(config);
+  return {
+    tenant: {
+      tenant_id: multiTenancy.static_tenant_id,
+      source: 'static',
+    },
+  };
+}
+
 interface OrphanCleanupResult {
   wasGraceful: boolean;
   orphanedTasks: Task[];
@@ -120,18 +134,28 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
 
   // Get tasks service from the app (registered during services phase)
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
+  // Startup cleanup runs before any user request/auth context exists. In
+  // auth-resolved multi-tenant deployments, scope cleanup to the configured
+  // bootstrap/static tenant instead of failing daemon boot. Tenant-specific
+  // crash cleanup for every active tenant belongs in a later control-plane/DataPlane
+  // reconciler pass; startup must stay non-blocking for launch-auth tenants.
+  const startupParams = startupTenantParams(ctx.config);
 
   // Determine restart type before touching anything — sentinel is consumed here
   const wasGraceful = await readAndClearSentinel();
 
   // Find all orphaned executor-owned tasks (running, stopping, awaiting_permission, awaiting_input)
-  const orphanedTasks = await tasksService.getOrphaned();
+  const orphanedTasks = await tasksService.getOrphaned(startupParams as never);
 
   if (orphanedTasks.length > 0) {
     for (const task of orphanedTasks) {
-      await tasksService.patch(task.task_id, {
-        status: TaskStatus.STOPPED,
-      });
+      await tasksService.patch(
+        task.task_id,
+        {
+          status: TaskStatus.STOPPED,
+        },
+        startupParams as never
+      );
       startupDebug(
         `[startup] stopped orphaned task ${shortId(task.task_id)} (was: ${task.status})`
       );
@@ -144,14 +168,19 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   // hook (triggered below) from draining queued tasks that should be discarded.
   const queuedResult = (await tasksService.find({
     query: { status: TaskStatus.QUEUED, $limit: 1000 },
+    ...startupParams,
   })) as unknown as Paginated<Task>;
   const queuedTasks = queuedResult.data;
 
   if (queuedTasks.length > 0) {
     for (const task of queuedTasks) {
-      await tasksService.patch(task.task_id, {
-        status: TaskStatus.STOPPED,
-      });
+      await tasksService.patch(
+        task.task_id,
+        {
+          status: TaskStatus.STOPPED,
+        },
+        startupParams as never
+      );
     }
   }
 
@@ -166,6 +195,7 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   ]) {
     const result = (await sessionsService.find({
       query: { status, $limit: 1000 },
+      ...startupParams,
     })) as unknown as Paginated<Session>;
     orphanedSessions.push(...result.data);
   }
@@ -180,7 +210,7 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
           status: SessionStatus.IDLE,
           ready_for_prompt: true,
         },
-        {}
+        startupParams as never
       );
       startupDebug(
         `   ✓ Marked session ${shortId(session.session_id)} as idle (was: ${session.status})`
@@ -195,7 +225,7 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   let sessionsResetFromOrphanedTasks = 0;
   if (sessionIdsWithOrphanedTasks.size > 0) {
     for (const sessionId of sessionIdsWithOrphanedTasks) {
-      const session = await sessionsService.get(sessionId as Id);
+      const session = await sessionsService.get(sessionId as Id, startupParams as never);
       // If session is still in an active state after orphaned task cleanup, set to IDLE
       if (
         session.status === SessionStatus.RUNNING ||
@@ -209,7 +239,7 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
             status: SessionStatus.IDLE,
             ready_for_prompt: true,
           },
-          {}
+          startupParams as never
         );
         sessionsResetFromOrphanedTasks++;
         startupDebug(
@@ -226,12 +256,15 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   // ready_for_prompt=false is never a legitimate persistent state.
   const stuckIdleResult = (await sessionsService.find({
     query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000 },
+    ...startupParams,
   })) as unknown as Paginated<Session>;
   const stuckIdleSessions = stuckIdleResult.data;
 
   if (stuckIdleSessions.length > 0) {
     for (const session of stuckIdleSessions) {
-      await app.service('sessions').patch(session.session_id, { ready_for_prompt: true }, {});
+      await app
+        .service('sessions')
+        .patch(session.session_id, { ready_for_prompt: true }, startupParams as never);
       startupDebug(
         `   ✓ Unblocked stuck-idle session ${shortId(session.session_id)} (ready_for_prompt was false)`
       );
@@ -271,6 +304,7 @@ async function injectRestartNotices(
 
   // Get tasks service from the app (registered during services phase)
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
+  const startupParams = startupTenantParams(ctx.config);
 
   // Inject a system message into every affected session so the user (and the
   // agent on resume) see an in-transcript explanation — not a toast, a
@@ -319,10 +353,10 @@ async function injectRestartNotices(
       if (!attachTask) {
         // Sessions maintain an ordered task-ID list; the last entry is the most
         // recent task without relying on TasksService.find() sort behavior.
-        const session = await sessionsService.get(sessionId as Id);
+        const session = await sessionsService.get(sessionId as Id, startupParams as never);
         const latestTaskId = session.tasks?.at(-1);
         if (latestTaskId) {
-          attachTask = await tasksService.get(latestTaskId);
+          attachTask = await tasksService.get(latestTaskId, startupParams as never);
         }
       }
       if (!attachTask) {
