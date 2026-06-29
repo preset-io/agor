@@ -586,18 +586,20 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 6. Start scheduler service (background worker)
   let schedulerService: SchedulerService | null = null;
   if (svcEnabled('scheduler')) {
+    const multiTenancy = resolveMultiTenancyConfig(config);
     schedulerService = new SchedulerService(db, app, {
       tickInterval: 30000, // 30 seconds
       gracePeriod: 120000, // 2 minutes
       debug: process.env.NODE_ENV !== 'production',
       unixUserMode: config.execution?.unix_user_mode ?? 'simple',
-      tenantId: startupTenantParams(config).tenant.tenant_id,
+      // Static mode keeps the historical single-tenant scope. Auth-resolved
+      // multi-tenant mode leaves this undefined so the scheduler discovers due
+      // schedule tenant metadata at the DB boundary on each tick.
+      tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     });
-    schedulerService.start();
-    // Expose on app so route handlers (e.g. /branches/:id/execute-schedule-now)
-    // can reuse the scheduler's spawn code path.
     app.set('scheduler', schedulerService);
-    console.log(`🔄 Scheduler started (tick interval: 30s)`);
+    schedulerService.start();
+    console.log('🔄 Scheduler started (tick interval: 30s)');
   }
 
   // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)

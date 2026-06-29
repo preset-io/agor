@@ -146,9 +146,14 @@ export function currentTenantInsert(): { tenant_id?: string } {
  * to see it before serialization, especially in dev databases whose owner role
  * can bypass RLS.
  */
-export function attachHiddenTenant<T extends object>(dto: T, row: unknown): T {
+export function getHiddenTenantId(row: unknown): string | undefined {
   const tenantId = (row as { tenant_id?: unknown } | undefined)?.tenant_id;
-  if (typeof tenantId === 'string') {
+  return typeof tenantId === 'string' && tenantId.length > 0 ? tenantId : undefined;
+}
+
+export function attachHiddenTenant<T extends object>(dto: T, row: unknown): T {
+  const tenantId = getHiddenTenantId(row);
+  if (tenantId) {
     Object.defineProperty(dto, 'tenant_id', {
       value: tenantId,
       enumerable: false,

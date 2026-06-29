@@ -51,6 +51,7 @@ import {
   advisoryLockKeyForUuid,
   BranchRepository,
   isPostgresDatabase,
+  runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   ScheduleRepository,
   SessionMCPServerRepository,
@@ -202,7 +203,7 @@ export interface SchedulerConfig {
   debug?: boolean;
   /** Unix user mode for validation (default: 'simple') */
   unixUserMode?: UnixUserMode;
-  /** Tenant used for cron/background ticks when no request auth scope exists. */
+  /** Static/single-tenant id used for request-less cron ticks. Undefined means discover due schedule tenants from schedule rows. */
   tenantId?: TenantID | string;
 }
 
@@ -226,7 +227,10 @@ export class SchedulerService {
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       debug: config.debug ?? false,
       unixUserMode: config.unixUserMode ?? 'simple',
-      tenantId: config.tenantId,
+      tenantId:
+        typeof config.tenantId === 'string' && config.tenantId.trim()
+          ? config.tenantId.trim()
+          : undefined,
     };
     this.branchRepo = new BranchRepository(db);
     this.scheduleRepo = new ScheduleRepository(db);
@@ -291,30 +295,34 @@ export class SchedulerService {
    * 3. Process the schedule (dedup, concurrency check, spawn).
    */
   private async tick(): Promise<void> {
-    if (this.config.tenantId) {
-      return runWithTenantDatabaseScope(this.db, this.config.tenantId, () => this.tickInScope());
-    }
-    return this.tickInScope();
-  }
-
-  private async tickInScope(): Promise<void> {
     const now = Date.now();
 
     try {
-      const dueSchedules = await this.scheduleRepo.findDue(now + this.config.gracePeriod);
+      const dueScheduleRefs = await this.findDueScheduleRefs(now);
 
       if (this.config.debug) {
-        console.log(`🔄 Scheduler tick: Found ${dueSchedules.length} due schedules`);
+        console.log(`🔄 Scheduler tick: Found ${dueScheduleRefs.length} due schedules`);
       }
 
-      for (const schedule of dueSchedules) {
-        try {
-          await this.processSchedule(schedule, now);
-        } catch (error) {
+      for (const ref of dueScheduleRefs) {
+        if (!ref.tenantId) {
           console.error(
-            `❌ Failed to process schedule ${schedule.schedule_id} (${schedule.name}):`,
-            error
+            `❌ Skipping due schedule ${shortId(ref.scheduleId)}: missing tenant metadata`
           );
+          continue;
+        }
+
+        try {
+          await runWithTenantDatabaseScope(this.db, ref.tenantId, async () => {
+            // Re-load inside the tenant scope before reading schedule content or
+            // spawning work. The system discovery phase only supplies routing
+            // metadata.
+            const schedule = await this.scheduleRepo.findById(ref.scheduleId);
+            if (!schedule) return;
+            await this.processSchedule(schedule, now);
+          });
+        } catch (error) {
+          console.error(`❌ Failed to process schedule ${shortId(ref.scheduleId)}:`, error);
           // Continue processing other schedules
         }
       }
@@ -322,6 +330,26 @@ export class SchedulerService {
       console.error('❌ Scheduler tick failed:', error);
       throw error;
     }
+  }
+
+  private async findDueScheduleRefs(
+    now: number
+  ): Promise<Array<{ scheduleId: ScheduleID; tenantId?: TenantID | string }>> {
+    const findDue = async (tenantId?: TenantID | string) => {
+      const dueSchedules = await this.scheduleRepo.findDueRefs(now + this.config.gracePeriod);
+      return dueSchedules.map((schedule) => ({
+        scheduleId: schedule.schedule_id,
+        tenantId: tenantId ?? schedule.tenant_id,
+      }));
+    };
+
+    if (this.config.tenantId) {
+      return runWithTenantDatabaseScope(this.db, this.config.tenantId, () =>
+        findDue(this.config.tenantId)
+      );
+    }
+
+    return runWithSystemDatabaseScope(this.db, 'scheduler due schedule discovery', () => findDue());
   }
 
   /**

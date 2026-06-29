@@ -8,7 +8,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
+import {
+  AmbiguousIdError,
+  attachHiddenTenant,
+  EntityNotFoundError,
+  getHiddenTenantId,
+  RepositoryError,
+} from './base';
 
 // ============================================================================
 // RepositoryError
@@ -131,5 +137,26 @@ describe('AmbiguousIdError', () => {
 
     expect(error.message).toContain("Ambiguous ID prefix '' for Task");
     expect(error.prefix).toBe('');
+  });
+});
+
+// ============================================================================
+// Hidden tenant metadata
+// ============================================================================
+
+describe('hidden tenant metadata helpers', () => {
+  it('attaches tenant_id as non-enumerable metadata and reads it back', () => {
+    const dto = attachHiddenTenant({ id: 'schedule-1' }, { tenant_id: 'tenant-a' });
+
+    expect(getHiddenTenantId(dto)).toBe('tenant-a');
+    expect(Object.keys(dto)).toEqual(['id']);
+    expect(JSON.stringify(dto)).toBe('{"id":"schedule-1"}');
+  });
+
+  it('ignores missing or empty tenant ids', () => {
+    const dto = attachHiddenTenant({ id: 'schedule-1' }, { tenant_id: '' });
+
+    expect(getHiddenTenantId(dto)).toBeUndefined();
+    expect(Object.keys(dto)).toEqual(['id']);
   });
 });

@@ -3050,6 +3050,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/schedules/:id/run-now').hooks({
+    around: { all: [tenantDatabaseScopeAround] },
     before: {
       create: [
         requireAuth,
@@ -3141,6 +3142,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/execute-schedule-now').hooks({
+    around: { all: [tenantDatabaseScopeAround] },
     before: {
       create: [
         requireAuth,
