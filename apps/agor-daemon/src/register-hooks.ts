@@ -24,7 +24,6 @@ import {
   ArtifactRepository,
   BoardRepository,
   type BranchRepository,
-  LinksRepository,
   ScheduleRepository,
   type SessionRepository,
   shortId,
@@ -45,7 +44,6 @@ import {
   boardObjectQueryValidator,
   boardQueryValidator,
   branchQueryValidator,
-  linkQueryValidator,
   mcpServerQueryValidator,
   repoQueryValidator,
   sessionQueryValidator,
@@ -60,7 +58,6 @@ import type {
   Branch,
   BranchID,
   HookContext,
-  Link,
   MCPServer,
   Paginated,
   Params,
@@ -85,6 +82,7 @@ import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
 import { ingestParsedLinksAfterMessageCreate } from './services/links.js';
+import { linksHooks } from './services/links-hooks.js';
 import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
@@ -107,14 +105,11 @@ import {
   ensureCanPromptTargetSession,
   ensureCanView,
   ensureSessionImmutability,
-  isSuperAdmin,
   loadBranch,
   loadBranchFromSession,
   loadScheduleAndBranch,
   loadSession,
   loadSessionBranch,
-  PERMISSION_RANK,
-  resolveBranchPermission,
   resolveSessionContext,
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
@@ -433,17 +428,6 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'leaderboard',
 ];
 
-export function isExternalFileBackedLinkMutation(data: unknown): boolean {
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
-  const record = data as Record<string, unknown>;
-  return (
-    (typeof record.file_path === 'string' && record.file_path.length > 0) ||
-    record.source === 'upload' ||
-    record.kind === 'image' ||
-    record.kind === 'document'
-  );
-}
-
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -696,165 +680,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Helper to get usersService from app
   const usersService = app.service('users');
 
-  // ============================================================================
-  // Links hooks
-  // ============================================================================
-
-  const linksRepository = new LinksRepository(db);
-
-  const scopeFindToAccessibleLinksSql = () => (context: HookContext) => {
-    if (!branchRbacEnabled || !context.params.provider) return context;
-    if (context.params.user?._isServiceAccount) return context;
-    const user = context.params.user;
-    if (!user) throw new NotAuthenticated('Authentication required');
-    if (isSuperAdmin(user.role, superadminOpts.allowSuperadmin)) return context;
-    (context.params as { _agorSqlLinkAccessUserId?: UserID })._agorSqlLinkAccessUserId =
-      user.user_id as UserID;
-    return context;
-  };
-
-  const ensureLinkOwnerAccess = (mode: 'view' | 'mutate') => async (context: HookContext) => {
-    if (!branchRbacEnabled || !context.params.provider) return context;
-    if (context.params.user?._isServiceAccount) return context;
-
-    const user = context.params.user;
-    if (!user) throw new NotAuthenticated('Authentication required');
-
-    const checkAccess = async (branchId: string | null | undefined, session: Session | null) => {
-      if (!branchId) throw new Forbidden('Link owner branch not found');
-      const branch = await branchRepository.findById(branchId as BranchID);
-      if (!branch) throw new Forbidden(`Branch not found: ${branchId}`);
-
-      await cacheBranchAccess(context.params, branchRepository, branch);
-      const isOwner = context.params.isBranchOwner ?? false;
-      const effectiveLevel = resolveBranchPermission(
-        branch,
-        user.user_id as UserID,
-        isOwner,
-        user.role,
-        superadminOpts.allowSuperadmin,
-        context.params.branchPermission
-      );
-
-      if (mode === 'view') {
-        if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.view) return;
-        throw new Forbidden(
-          `You need 'view' permission to view links. You have '${effectiveLevel}' permission.`
-        );
-      }
-
-      const isSessionOwned = Boolean(session);
-      const allowed = isSessionOwned
-        ? PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-          (effectiveLevel === 'session' && session?.created_by === user.user_id)
-        : PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.all;
-
-      if (!allowed) {
-        throw new Forbidden(
-          isSessionOwned
-            ? `You need prompt permission (or session permission on your own session) to mutate session links. You have '${effectiveLevel}' permission.`
-            : `You need 'all' permission to mutate branch links. You have '${effectiveLevel}' permission.`
-        );
-      }
-    };
-
-    if (context.method === 'create') {
-      const records = Array.isArray(context.data) ? context.data : [context.data];
-      for (const record of records as Partial<Link>[]) {
-        let branchId: string | null | undefined = record.branch_id;
-        let session: Session | null = null;
-        if (record.session_id) {
-          session = (await sessionsService.get(record.session_id, {
-            provider: undefined,
-          })) as Session;
-          branchId = session.branch_id;
-        }
-        await checkAccess(branchId, session);
-      }
-      return context;
-    }
-
-    if (!context.id) return context;
-    const link = await linksRepository.findById(String(context.id));
-    if (!link) throw new Forbidden(`Link not found: ${context.id}`);
-    let branchId: string | null | undefined;
-    let session: Session | null = null;
-    if (link.session_id) {
-      session = (await sessionsService.get(link.session_id, { provider: undefined })) as Session;
-      branchId = session.branch_id;
-    } else {
-      branchId = link.branch_id;
-    }
-    (context.params as { _agorPrefetchedRecord?: unknown })._agorPrefetchedRecord = {
-      id: String(context.id),
-      idField: 'link_id',
-      record: link,
-    };
-    await checkAccess(branchId, session);
-
-    return context;
-  };
-
-  const rejectLinkOwnerPatch = (context: HookContext) => {
-    const data = context.data as Record<string, unknown> | undefined;
-    if (!data) return context;
-    for (const key of [
-      'link_id',
-      'branch_id',
-      'session_id',
-      'created_by',
-      'created_at',
-      'updated_at',
-    ]) {
-      if (key in data) throw new Forbidden(`Link field '${key}' is immutable`);
-    }
-    return context;
-  };
-
-  const rejectLinkDerivedFields = (context: HookContext) => {
-    if (!context.params.provider) return context;
-    const records = Array.isArray(context.data) ? context.data : [context.data];
-    for (const record of records as Array<Record<string, unknown> | undefined>) {
-      if (record && 'target_key' in record) {
-        throw new Forbidden("Link field 'target_key' is server-derived");
-      }
-    }
-    return context;
-  };
-
-  const rejectExternalFileBackedLinkMutations = (context: HookContext) => {
-    if (!context.params.provider) return context;
-    const records = Array.isArray(context.data) ? context.data : [context.data];
-    for (const record of records) {
-      if (isExternalFileBackedLinkMutation(record)) {
-        throw new Forbidden('File-backed links must be created through the upload endpoint');
-      }
-    }
-    return context;
-  };
-
-  app.service('links').hooks({
-    before: {
-      all: [typedValidateQuery(linkQueryValidator), requireAuth, executorRuntimeScopeGuard()],
-      find: [scopeFindToAccessibleLinksSql()],
-      get: [ensureLinkOwnerAccess('view')],
-      create: [
-        requireMinimumRole(ROLES.MEMBER, 'create links'),
-        rejectLinkDerivedFields,
-        rejectExternalFileBackedLinkMutations,
-        injectCreatedBy(),
-        ensureLinkOwnerAccess('mutate'),
-      ],
-      patch: [
-        requireMinimumRole(ROLES.MEMBER, 'update links'),
-        rejectLinkDerivedFields,
-        rejectExternalFileBackedLinkMutations,
-        rejectLinkOwnerPatch,
-        ensureLinkOwnerAccess('mutate'),
-      ],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete links'), ensureLinkOwnerAccess('mutate')],
-    },
-  });
+  app.service('links').hooks(
+    linksHooks({
+      db,
+      branchRepository,
+      branchRbacEnabled,
+      requireAuth,
+      sessionsService,
+      superadminOpts,
+    })
+  );
 
   // ============================================================================
   // Messages hooks

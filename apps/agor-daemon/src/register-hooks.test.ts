@@ -21,7 +21,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   enrichSessionFindResultWithRemoteRelationships,
-  isExternalFileBackedLinkMutation,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
   shouldDrainQueueAfterSessionPostTurnPatch,
@@ -51,33 +50,6 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
 describe('tenant-owned service registration', () => {
   it('wraps gateway inbound routing in tenant database scope', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
-  });
-});
-
-describe('isExternalFileBackedLinkMutation', () => {
-  it('rejects external upload/file-backed link payloads', () => {
-    expect(isExternalFileBackedLinkMutation({ file_path: '/tmp/upload.png' })).toBe(true);
-    expect(isExternalFileBackedLinkMutation({ source: 'upload' })).toBe(true);
-    expect(isExternalFileBackedLinkMutation({ kind: 'image' })).toBe(true);
-    expect(isExternalFileBackedLinkMutation({ kind: 'document' })).toBe(true);
-  });
-
-  it('allows external URL/ref links and metadata-only patches', () => {
-    expect(
-      isExternalFileBackedLinkMutation({
-        kind: 'url',
-        source: 'manual',
-        url: 'https://example.com',
-      })
-    ).toBe(false);
-    expect(
-      isExternalFileBackedLinkMutation({
-        kind: 'kb_ref',
-        source: 'manual',
-        ref_uri: 'agor://kb/team/runbook.md',
-      })
-    ).toBe(false);
-    expect(isExternalFileBackedLinkMutation({ title: 'Renamed upload' })).toBe(false);
   });
 });
 
