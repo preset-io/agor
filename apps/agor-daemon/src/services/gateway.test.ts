@@ -1,3 +1,4 @@
+import { getCurrentTenantId } from '@agor/core/db';
 import type { GatewayChannel, ThreadSessionMap, User } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -120,6 +121,44 @@ function makeGatewayHarness(args: {
 }
 
 describe('GatewayService Slack thread catch-up', () => {
+  it('runs listener inbound callbacks inside a fresh channel tenant DB scope', async () => {
+    const seenTenants: Array<string | undefined> = [];
+    const app = {
+      service: vi.fn(),
+    };
+    const service = new GatewayService({ run: vi.fn() } as never, app as never);
+    vi.spyOn(service, 'create').mockImplementation(async () => {
+      seenTenants.push(getCurrentTenantId() as string | undefined);
+      return { success: true, sessionId: 'sess-1', created: false };
+    });
+
+    const channel = {
+      ...slackChannel,
+      tenant_id: 'tenant-channel',
+    } as GatewayChannel & { tenant_id: string };
+
+    await (
+      service as unknown as {
+        handleListenerInboundMessage(
+          channel: GatewayChannel,
+          tenantId: string | undefined,
+          msg: {
+            threadId: string;
+            text: string;
+            userId: string;
+            metadata?: Record<string, unknown>;
+          }
+        ): Promise<void>;
+      }
+    ).handleListenerInboundMessage(channel, channel.tenant_id, {
+      threadId: 'C123-100.000000',
+      text: 'hello',
+      userId: 'U123',
+    });
+
+    expect(seenTenants).toEqual(['tenant-channel']);
+  });
+
   it('fetches missed Slack messages after the last delivered cursor and advances the cursor', async () => {
     const sendMessage = vi.fn(async () => '104.000000');
     const fetchThreadHistory = vi.fn(async () => ({
