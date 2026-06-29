@@ -247,6 +247,13 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   }
 
   /**
+   * Check whether a multi-record operation is enabled for a specific method.
+   */
+  private isMultiEnabled(method: string): boolean {
+    return this.multi === true || (Array.isArray(this.multi) && this.multi.includes(method));
+  }
+
+  /**
    * Resolve the candidate row set that `find` filters, sorts, and paginates.
    *
    * The base implementation reads the whole table and relies on `filterData` to
@@ -386,7 +393,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   async patch(id: NullableId, data: D, params?: P): Promise<T | T[]> {
     if (id === null) {
       // Multi-patch not supported in simple implementation
-      if (!this.multi) {
+      if (!this.isMultiEnabled('patch')) {
         throw new Error('Multi-patch is not enabled');
       }
 
@@ -432,7 +439,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   async remove(id: NullableId, params?: P): Promise<T | T[]> {
     if (id === null) {
       // Multi-remove not supported in simple implementation
-      if (!this.multi) {
+      if (!this.isMultiEnabled('remove')) {
         throw new Error('Multi-remove is not enabled');
       }
 
