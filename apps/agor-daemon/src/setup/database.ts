@@ -12,6 +12,7 @@ import {
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
   formatPendingMigrationsMessage,
+  runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   seedInitialData,
 } from '@agor/core/db';
@@ -102,7 +103,11 @@ async function checkAndReportMigrations(
  */
 export async function initializeDatabase(
   dbPath: string,
-  options: { tenantId?: TenantID | string; skipFirstRunAdminBootstrap?: boolean } = {}
+  options: {
+    tenantId?: TenantID | string;
+    requireTenantScope?: boolean;
+    skipFirstRunAdminBootstrap?: boolean;
+  } = {}
 ): Promise<DatabaseInitResult> {
   console.log(`📦 Connecting to database: ${dbPath}`);
 
@@ -111,12 +116,15 @@ export async function initializeDatabase(
 
   // Create database with foreign keys enabled
   const db = await createDatabaseAsync({ url: dbPath });
-  const scopedDb = createTenantScopedDatabaseProxy(db);
+  const scopedDb = createTenantScopedDatabaseProxy(db, {
+    requireScope: options.requireTenantScope === true,
+    label: 'daemon database',
+  });
 
   // Check migrations (exits if pending)
   await checkAndReportMigrations(db, dbPath);
 
-  await runWithTenantDatabaseScope(scopedDb, options.tenantId, async () => {
+  const runInitialDataSetup = async () => {
     // Seed initial data (idempotent - only creates if missing). In static
     // Postgres deployments, scope this to the configured tenant so changing
     // multi_tenancy.static_tenant_id starts from a clean tenant-local slate.
@@ -136,7 +144,13 @@ export async function initializeDatabase(
       const bootstrapResult = await runFirstRunAdminBootstrap(scopedDb);
       logFirstRunAdminBootstrap(bootstrapResult);
     }
-  });
+  };
+
+  if (options.tenantId) {
+    await runWithTenantDatabaseScope(scopedDb, options.tenantId, runInitialDataSetup);
+  } else {
+    await runWithSystemDatabaseScope(scopedDb, 'database initialization', runInitialDataSetup);
+  }
 
   console.log('✅ Database ready');
 

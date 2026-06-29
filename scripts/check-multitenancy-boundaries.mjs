@@ -54,6 +54,29 @@ const checks = [
       'apps/agor-daemon/src/setup/socketio.ts': 18,
     },
   },
+
+  {
+    name: 'raw tenant database scope imports',
+    roots: ['apps/agor-daemon/src'],
+    patterns: [/import\s*{[^}]*\btenantDatabaseScope\b[^}]*}\s*from\s*['"]@agor\/core\/db['"]/gs],
+    baseline: {},
+  },
+  {
+    name: 'raw tenant database scope exits',
+    roots: ['packages/core/src', 'apps/agor-daemon/src'],
+    patterns: [/\btenantDatabaseScope\.exit\s*\(/g],
+    baseline: {
+      'packages/core/src/db/tenant-context.ts': 1,
+    },
+  },
+  {
+    name: 'bare daemon setImmediate scheduling',
+    roots: ['apps/agor-daemon/src'],
+    patterns: [/\bsetImmediate\s*\(/g],
+    baseline: {
+      'apps/agor-daemon/src/utils/tenant-db-scope.ts': 1,
+    },
+  },
   {
     name: 'raw Drizzle transactions',
     roots: ['packages/core/src', 'apps/agor-daemon/src'],

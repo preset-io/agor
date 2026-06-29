@@ -5,6 +5,7 @@ import { tenantDatabaseScope } from './tenant-context';
 export {
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabase,
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
@@ -15,9 +16,39 @@ import type { Database } from './client';
 import { isPostgresDatabase } from './database-wrapper';
 
 const tenantScopedProxyTargets = new WeakMap<object, Database>();
+const tenantScopedProxyOptions = new WeakMap<object, TenantScopedDatabaseProxyOptions>();
+
+export interface TenantScopedDatabaseProxyOptions {
+  /** Throw on DB access unless a tenant or explicit system DB scope is active. */
+  requireScope?: boolean;
+  /** Human-readable label included in guard errors. */
+  label?: string;
+}
+
+export class MissingTenantDatabaseScopeError extends Error {
+  constructor(label = 'database') {
+    super(`Missing tenant database scope for ${label} access`);
+    this.name = 'MissingTenantDatabaseScopeError';
+  }
+}
+
+function assertDatabaseScopeAllowed(base: Database): void {
+  const options = tenantScopedProxyOptions.get(base as unknown as object);
+  if (!options?.requireScope) return;
+  const store = tenantDatabaseScope.getStore();
+  if (store?.kind === 'system') return;
+  if (store?.kind === 'tenant' && store.tenantId) return;
+  throw new MissingTenantDatabaseScopeError(options.label);
+}
 
 function scopedTarget(base: Database): Database {
-  return tenantDatabaseScope.getStore()?.db ?? base;
+  const scoped = tenantDatabaseScope.getStore()?.db;
+  if (scoped) {
+    assertDatabaseScopeAllowed(base);
+    return scoped;
+  }
+  assertDatabaseScopeAllowed(base);
+  return base;
 }
 
 function unwrapTenantScopedDatabaseProxy(db: Database): Database {
@@ -29,7 +60,10 @@ function unwrapTenantScopedDatabaseProxy(db: Database): Database {
  * current tenant-scoped transaction when one is active. Repositories can keep
  * accepting `Database` without knowing whether they are inside a tenant scope.
  */
-export function createTenantScopedDatabaseProxy(base: Database): Database {
+export function createTenantScopedDatabaseProxy(
+  base: Database,
+  options: TenantScopedDatabaseProxyOptions = {}
+): Database {
   const proxy = new Proxy(base as object, {
     get(_target, property, receiver) {
       const target = scopedTarget(base) as unknown as Record<PropertyKey, unknown>;
@@ -47,6 +81,7 @@ export function createTenantScopedDatabaseProxy(base: Database): Database {
     },
   }) as Database;
   tenantScopedProxyTargets.set(proxy as unknown as object, base);
+  tenantScopedProxyOptions.set(base as unknown as object, options);
   return proxy;
 }
 
@@ -62,6 +97,14 @@ export async function runWithTenantDatabaseScope<T>(
 ): Promise<T> {
   const existingScope = tenantDatabaseScope.getStore();
   if (existingScope) {
+    if (existingScope.kind === 'system') {
+      if (tenantId) {
+        throw new Error(
+          `Cannot enter tenant scope ${tenantId} from active system database scope (${existingScope.systemReason})`
+        );
+      }
+      return work();
+    }
     if (tenantId && existingScope.tenantId && tenantId !== existingScope.tenantId) {
       throw new Error(
         `Cannot enter tenant scope ${tenantId} from active tenant scope ${existingScope.tenantId}`
@@ -75,7 +118,7 @@ export async function runWithTenantDatabaseScope<T>(
 
   if (!isPostgresDatabase(baseDb) || !tenantId) {
     const result = await tenantDatabaseScope.run(
-      { db: baseDb, tenantId, postCommitCallbacks },
+      { db: baseDb, kind: 'tenant', tenantId, postCommitCallbacks },
       work
     );
     await drainTenantDatabasePostCommitCallbacks(baseDb, tenantId, postCommitCallbacks);
@@ -87,10 +130,37 @@ export async function runWithTenantDatabaseScope<T>(
     await (scopedDb as unknown as { execute(query: unknown): Promise<unknown> }).execute(
       sql`SELECT set_config('agor.tenant_id', ${tenantId}, true)`
     );
-    return tenantDatabaseScope.run({ db: scopedDb, tenantId, postCommitCallbacks }, work);
+    return tenantDatabaseScope.run(
+      { db: scopedDb, kind: 'tenant', tenantId, postCommitCallbacks },
+      work
+    );
   });
   await drainTenantDatabasePostCommitCallbacks(baseDb, tenantId, postCommitCallbacks);
   return result;
+}
+
+/**
+ * Run explicit global/system database work. This is the only supported no-tenant
+ * scope for guarded database proxies; absence of tenant scope is treated as a
+ * bug in required multi-tenant deployments.
+ */
+export async function runWithSystemDatabaseScope<T>(
+  db: Database,
+  reason: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const existingScope = tenantDatabaseScope.getStore();
+  if (existingScope) {
+    if (existingScope.kind === 'tenant') {
+      throw new Error(
+        `Cannot enter system database scope (${reason}) from active tenant scope ${existingScope.tenantId}`
+      );
+    }
+    return work();
+  }
+
+  const baseDb = unwrapTenantScopedDatabaseProxy(db);
+  return tenantDatabaseScope.run({ db: baseDb, kind: 'system', systemReason: reason }, work);
 }
 
 async function drainTenantDatabasePostCommitCallbacks(

@@ -624,6 +624,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
 
   const { db } = await initializeDatabase(DB_PATH, {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
+    requireTenantScope: multiTenancy.mode === 'required_from_auth',
     skipFirstRunAdminBootstrap: config.external_launch?.enabled === true,
   });
 

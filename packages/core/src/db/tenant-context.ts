@@ -4,7 +4,9 @@ import type { Database } from './client';
 
 export interface TenantDatabaseScope {
   db: Database;
+  kind: 'tenant' | 'system';
   tenantId?: TenantID | string;
+  systemReason?: string;
   postCommitCallbacks?: Array<() => Promise<void>>;
 }
 
@@ -15,7 +17,12 @@ export function getCurrentTenantDatabase(): Database | undefined {
 }
 
 export function getCurrentTenantId(): TenantID | string | undefined {
-  return tenantDatabaseScope.getStore()?.tenantId;
+  const store = tenantDatabaseScope.getStore();
+  return store?.kind === 'tenant' ? store.tenantId : undefined;
+}
+
+export function getCurrentTenantDatabaseScope(): TenantDatabaseScope | undefined {
+  return tenantDatabaseScope.getStore();
 }
 
 export function requireCurrentTenantId(
