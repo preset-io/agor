@@ -5,18 +5,18 @@ import { FileUploadButton } from '../FileUpload';
 
 interface SessionUploadControlsProps {
   connectionDisabled: boolean;
-  composerImageUploading: boolean;
+  composerAttachmentUploading: boolean;
   onAttachFiles: () => void;
   onOpenAdvancedUpload: () => void;
 }
 
 export const SessionUploadControls: React.FC<SessionUploadControlsProps> = ({
   connectionDisabled,
-  composerImageUploading,
+  composerAttachmentUploading,
   onAttachFiles,
   onOpenAdvancedUpload,
 }) => {
-  const uploadDisabled = connectionDisabled || composerImageUploading;
+  const uploadDisabled = connectionDisabled || composerAttachmentUploading;
 
   return (
     <>
@@ -24,7 +24,7 @@ export const SessionUploadControls: React.FC<SessionUploadControlsProps> = ({
         title={
           connectionDisabled
             ? 'Disconnected from daemon'
-            : composerImageUploading
+            : composerAttachmentUploading
               ? 'Uploading files…'
               : 'Attach files'
         }
@@ -35,7 +35,7 @@ export const SessionUploadControls: React.FC<SessionUploadControlsProps> = ({
         title={
           connectionDisabled
             ? 'Disconnected from daemon'
-            : composerImageUploading
+            : composerAttachmentUploading
               ? 'Uploading files…'
               : 'Advanced upload'
         }

@@ -27,7 +27,7 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { App, Badge, Button, Dropdown, Space, Tooltip, Typography, theme } from 'antd';
+import { Alert, App, Badge, Button, Dropdown, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -46,31 +46,26 @@ import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import type { UploadDestination, UploadedFile } from '../FileUpload';
 import { FileUpload } from '../FileUpload';
-import { uploadFilesToSession } from '../FileUpload/upload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
 import {
-  buildPromptWithImageAttachments,
-  type ComposerImageAttachment,
-  getComposerImageAccept,
+  buildPromptWithAttachments,
+  getComposerUploadAccept,
   getLatestComposerPromptText,
-  isBlockingComposerImageAttachment,
-  isSupportedComposerImage,
-  summarizeComposerFileRejections,
-  validateComposerFileIntake,
-} from './imageAttachments';
+  isBlockingComposerAttachment,
+} from './composerAttachments';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
+import { SessionAttachmentTray } from './SessionAttachmentTray';
 import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
-import { SessionImageAttachmentTray } from './SessionImageAttachmentTray';
 import { SessionPanelContent } from './SessionPanelContent';
 import { SessionUploadControls } from './SessionUploadControls';
+import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -389,15 +384,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
-  const [composerImageDestination, setComposerImageDestination] =
-    React.useState<UploadDestination>('branch');
-  const [composerImageAttachments, setComposerImageAttachments] = React.useState<
-    ComposerImageAttachment[]
-  >([]);
-  const [composerAttachmentValidationError, setComposerAttachmentValidationError] = React.useState<
-    string | null
-  >(null);
-  const [composerImageUploading, setComposerImageUploading] = React.useState(false);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
   const reactiveSessionId = session?.session_id ?? null;
@@ -407,8 +393,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   });
 
   const tasks = reactiveSessionState?.tasks || [];
-  const imageInputRef = React.useRef<HTMLInputElement>(null);
-  const previousSessionIdRef = React.useRef(session?.session_id);
+  const attachmentInputRef = React.useRef<HTMLInputElement>(null);
   const composerSessionIdentityRef = React.useRef<{
     sessionId: SessionID | null;
     generation: number;
@@ -423,37 +408,25 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       generation: composerSessionIdentityRef.current.generation + 1,
     };
   }
-  const composerImageAttachmentsRef = React.useRef<ComposerImageAttachment[]>([]);
-  const composerImageUploadingRef = React.useRef(false);
+  const {
+    attachments: composerAttachments,
+    attachmentsRef: composerAttachmentsRef,
+    clearAttachments: clearComposerAttachments,
+    destination: composerAttachmentDestination,
+    hasAttachments: hasComposerAttachments,
+    addAttachments: addComposerAttachments,
+    removeAttachment: removeComposerAttachment,
+    setDestination: handleComposerAttachmentDestinationChange,
+    uploadAttachments: uploadComposerAttachments,
+    uploading: composerAttachmentUploading,
+    uploadingRef: composerAttachmentUploadingRef,
+    validationError: composerAttachmentValidationError,
+    setValidationError: setComposerAttachmentValidationError,
+  } = useComposerAttachments({
+    sessionId: session?.session_id ?? null,
+    showError,
+  });
   const composerSendInFlightRef = React.useRef(false);
-  composerImageAttachmentsRef.current = composerImageAttachments;
-  composerImageUploadingRef.current = composerImageUploading;
-
-  const revokeComposerImagePreview = React.useCallback((attachment: ComposerImageAttachment) => {
-    if (attachment.previewUrl?.startsWith('blob:')) {
-      URL.revokeObjectURL(attachment.previewUrl);
-    }
-  }, []);
-
-  const clearComposerImages = React.useCallback(() => {
-    composerImageAttachmentsRef.current.forEach(revokeComposerImagePreview);
-    setComposerImageAttachments([]);
-  }, [revokeComposerImagePreview]);
-
-  React.useEffect(
-    () => () => {
-      composerImageAttachmentsRef.current.forEach(revokeComposerImagePreview);
-    },
-    [revokeComposerImagePreview]
-  );
-
-  React.useEffect(() => {
-    if (previousSessionIdRef.current === session?.session_id) return;
-    clearComposerImages();
-    setComposerAttachmentValidationError(null);
-    setComposerImageDestination('branch');
-    previousSessionIdRef.current = session?.session_id;
-  }, [session?.session_id, clearComposerImages]);
 
   // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
@@ -707,175 +680,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const isRunning =
     session.status === SessionStatus.RUNNING || session.status === SessionStatus.STOPPING;
   const isStopping = session.status === SessionStatus.STOPPING;
-  const hasComposerAttachments = composerImageAttachments.length > 0;
 
   const openAdvancedUpload = (initialFiles: File[] = []) => {
-    if (composerImageUploadingRef.current) return;
+    if (composerAttachmentUploadingRef.current) return;
     setAdvancedUploadInitialFiles(initialFiles);
     setUploadModalOpen(true);
-  };
-
-  const addComposerImages = (files: File[]) => {
-    if (composerImageUploadingRef.current) return;
-
-    if (files.length === 0) return;
-
-    const { acceptedFiles, rejections } = validateComposerFileIntake(
-      files,
-      composerImageAttachmentsRef.current,
-      composerImageDestination
-    );
-    if (rejections.length > 0) {
-      const validationMessage = summarizeComposerFileRejections(rejections);
-      setComposerAttachmentValidationError(validationMessage);
-      showError(validationMessage);
-    } else {
-      setComposerAttachmentValidationError(null);
-    }
-    if (acceptedFiles.length === 0) return;
-
-    setComposerImageAttachments((prev) => [
-      ...prev,
-      ...acceptedFiles.map((file) => {
-        const supported = isSupportedComposerImage(file);
-        return {
-          id:
-            typeof crypto !== 'undefined' && 'randomUUID' in crypto
-              ? crypto.randomUUID()
-              : `${Date.now()}-${file.name}`,
-          file,
-          previewUrl: supported ? URL.createObjectURL(file) : undefined,
-          destination: composerImageDestination,
-          status: 'pending' as const,
-        };
-      }),
-    ]);
-  };
-
-  const removeComposerImage = (id: string) => {
-    if (composerImageUploadingRef.current) return;
-    setComposerAttachmentValidationError(null);
-
-    setComposerImageAttachments((prev) => {
-      const removed = prev.find((attachment) => attachment.id === id);
-      if (removed) revokeComposerImagePreview(removed);
-      return prev.filter((attachment) => attachment.id !== id);
-    });
-  };
-
-  const handleComposerImageDestinationChange = (destination: UploadDestination) => {
-    if (composerImageUploadingRef.current) return;
-
-    setComposerImageDestination(destination);
-    setComposerImageAttachments((prev) =>
-      prev.map((attachment) =>
-        attachment.status === 'uploaded' ? attachment : { ...attachment, destination }
-      )
-    );
-  };
-
-  const uploadComposerImages = async (
-    attachmentsAtUploadStart: ComposerImageAttachment[] = composerImageAttachmentsRef.current,
-    uploadSessionId: SessionID = session.session_id
-  ): Promise<UploadedFile[]> => {
-    const current = attachmentsAtUploadStart;
-    if (current.length === 0) return [];
-
-    const blockingAttachment = current.find(isBlockingComposerImageAttachment);
-    if (blockingAttachment) {
-      throw new Error(
-        `${blockingAttachment.file.name} failed or cannot be uploaded. Remove failed files before sending.`
-      );
-    }
-
-    const reusableUploaded = current.flatMap((attachment) =>
-      attachment.uploadedFile ? [attachment.uploadedFile] : []
-    );
-    const uploadable = current.filter((attachment) => attachment.status !== 'uploaded');
-
-    if (uploadable.length === 0) {
-      return reusableUploaded;
-    }
-
-    setComposerImageUploading(true);
-    composerImageUploadingRef.current = true;
-    setComposerImageAttachments((prev) =>
-      prev.map((attachment) =>
-        uploadable.some((candidate) => candidate.id === attachment.id)
-          ? { ...attachment, status: 'uploading', error: undefined }
-          : attachment
-      )
-    );
-
-    const uploadedById = new Map<string, UploadedFile>();
-    const groups = new Map<UploadDestination, ComposerImageAttachment[]>();
-    for (const attachment of uploadable) {
-      const group = groups.get(attachment.destination) ?? [];
-      group.push(attachment);
-      groups.set(attachment.destination, group);
-    }
-
-    try {
-      for (const [destination, attachments] of groups.entries()) {
-        const result = await uploadFilesToSession({
-          sessionId: uploadSessionId,
-          daemonUrl: getDaemonUrl(),
-          files: attachments.map((attachment) => attachment.file),
-          destination,
-          notifyAgent: false,
-        });
-
-        if (result.files.length !== attachments.length) {
-          throw new Error('Upload response did not include every selected image');
-        }
-
-        attachments.forEach((attachment, index) => {
-          const uploaded = result.files[index];
-          if (uploaded) uploadedById.set(attachment.id, uploaded);
-        });
-      }
-
-      setComposerImageAttachments((prev) =>
-        prev.map((attachment) => {
-          const uploadedFile = uploadedById.get(attachment.id);
-          return uploadedFile
-            ? { ...attachment, status: 'uploaded', uploadedFile, error: undefined }
-            : attachment;
-        })
-      );
-
-      const uploadedFileById = new Map<string, UploadedFile>();
-      current.forEach((attachment) => {
-        if (attachment.uploadedFile) uploadedFileById.set(attachment.id, attachment.uploadedFile);
-      });
-      uploadedById.forEach((uploadedFile, attachmentId) => {
-        uploadedFileById.set(attachmentId, uploadedFile);
-      });
-
-      return current.flatMap((attachment) => {
-        const uploaded = uploadedFileById.get(attachment.id);
-        return uploaded ? [uploaded] : [];
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to upload images';
-      setComposerImageAttachments((prev) =>
-        prev.map((attachment) =>
-          uploadable.some((candidate) => candidate.id === attachment.id)
-            ? { ...attachment, status: 'failed', error: message }
-            : attachment
-        )
-      );
-      throw error;
-    } finally {
-      composerImageUploadingRef.current = false;
-      setComposerImageUploading(false);
-    }
   };
 
   const handleSendPrompt = async () => {
     if (
       composerSendInFlightRef.current ||
-      composerImageUploadingRef.current ||
+      composerAttachmentUploadingRef.current ||
       connectionDisabled
     ) {
       return;
@@ -886,11 +701,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       const sendStartSessionId = session.session_id;
       const sendStartComposerIdentity = composerSessionIdentityRef.current;
       const value = promptRef.current?.getValue() ?? '';
-      const attachmentsAtSendStart = composerImageAttachmentsRef.current;
-      const hasImages = attachmentsAtSendStart.length > 0;
-      if (!value.trim() && !hasImages) return;
+      const attachmentsAtSendStart = composerAttachmentsRef.current;
+      const hasAttachments = attachmentsAtSendStart.length > 0;
+      if (!value.trim() && !hasAttachments) return;
 
-      const blockingAttachment = attachmentsAtSendStart.find(isBlockingComposerImageAttachment);
+      const blockingAttachment = attachmentsAtSendStart.find(isBlockingComposerAttachment);
       if (blockingAttachment) {
         showError(
           `${blockingAttachment.file.name} failed or cannot be uploaded. Remove failed files before sending.`
@@ -903,8 +718,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         return;
       }
 
-      const uploadedImages = await uploadComposerImages(attachmentsAtSendStart, sendStartSessionId);
-      const imagePaths = uploadedImages.map((file) => file.path);
+      const uploadedFiles = await uploadComposerAttachments(
+        attachmentsAtSendStart,
+        sendStartSessionId
+      );
+      const attachmentPaths = uploadedFiles.map((file) => file.path);
       const composerStillOwnsSend =
         composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
         composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;
@@ -921,7 +739,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             sendStartValue: value,
           })
         : value;
-      const promptToSend = buildPromptWithImageAttachments(latestValue, imagePaths);
+      const promptToSend = buildPromptWithAttachments(latestValue, attachmentPaths);
       if (!promptToSend.trim()) return;
 
       // Single entry point: /prompt. The daemon decides run-vs-queue based on
@@ -932,7 +750,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
       if (composerStillOwnsSend) {
         promptRef.current?.clear();
-        clearComposerImages();
+        clearComposerAttachments();
         setComposerAttachmentValidationError(null);
       } else {
         // The old composer is no longer live; clear only its saved draft so the
@@ -975,7 +793,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleFork = async () => {
     if (!session) return;
-    if (composerImageAttachmentsRef.current.length > 0) {
+    if (composerAttachmentsRef.current.length > 0) {
       showError(
         'Attachments are only supported for normal Send for now. Remove attachments to fork.'
       );
@@ -1005,7 +823,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleBtwSend = async () => {
-    if (composerImageAttachmentsRef.current.length > 0) {
+    if (composerAttachmentsRef.current.length > 0) {
       showError(
         'Attachments are only supported for normal Send for now. Remove attachments to send BTW.'
       );
@@ -1200,9 +1018,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onCodexPermissionChange={handleCodexPermissionChange}
       promptInputSlot={
         <SessionComposerDropZone
-          disabled={composerImageUploading}
+          disabled={composerAttachmentUploading}
           onDragActiveChange={setComposerDropActive}
-          onFilesDrop={addComposerImages}
+          onFilesDrop={addComposerAttachments}
         >
           {composerAttachmentValidationError && (
             <Alert
@@ -1212,12 +1030,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               style={{ marginBottom: 0, borderRadius: token.borderRadius }}
             />
           )}
-          <SessionImageAttachmentTray
-            attachments={composerImageAttachments}
-            destination={composerImageDestination}
-            disabled={composerImageUploading}
-            onDestinationChange={handleComposerImageDestinationChange}
-            onRemove={removeComposerImage}
+          <SessionAttachmentTray
+            attachments={composerAttachments}
+            destination={composerAttachmentDestination}
+            disabled={composerAttachmentUploading}
+            onDestinationChange={handleComposerAttachmentDestinationChange}
+            onRemove={removeComposerAttachment}
           />
           <PromptInput
             ref={promptRef}
@@ -1237,8 +1055,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             autoSize={{ minRows: 1, maxRows: 10 }}
             client={client}
             userById={userById}
-            onFilesDrop={addComposerImages}
-            filesDropDisabled={composerImageUploading}
+            onFilesDrop={addComposerAttachments}
+            filesDropDisabled={composerAttachmentUploading}
             showFilesDropOverlay={false}
             suppressEmptyHighlight={composerDropActive}
             slashCommands={(() => {
@@ -1251,22 +1069,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             })()}
           />
           <input
-            ref={imageInputRef}
+            ref={attachmentInputRef}
             type="file"
-            accept={getComposerImageAccept()}
+            accept={getComposerUploadAccept()}
             multiple
-            disabled={composerImageUploading}
+            disabled={composerAttachmentUploading}
             style={{ display: 'none' }}
             onChange={(event) => {
-              addComposerImages(Array.from(event.target.files ?? []));
+              addComposerAttachments(Array.from(event.target.files ?? []));
               event.target.value = '';
             }}
           />
           <div style={{ display: 'flex', gap: token.sizeUnit, marginTop: token.sizeUnit }}>
             <SessionUploadControls
               connectionDisabled={connectionDisabled}
-              composerImageUploading={composerImageUploading}
-              onAttachFiles={() => imageInputRef.current?.click()}
+              composerAttachmentUploading={composerAttachmentUploading}
+              onAttachFiles={() => attachmentInputRef.current?.click()}
               onOpenAdvancedUpload={() => openAdvancedUpload()}
             />
           </div>

@@ -10,7 +10,7 @@ import {
 import { Alert, Button, Modal, Popover, Radio, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import type { UploadDestination } from '../FileUpload';
-import type { ComposerImageAttachment } from './imageAttachments';
+import type { ComposerAttachment } from './composerAttachments';
 
 const DESTINATION_HELP: Record<UploadDestination, string> = {
   branch: 'Agent-accessible, default',
@@ -34,15 +34,15 @@ function getFileIcon(file: File) {
   return FileOutlined;
 }
 
-interface SessionImageAttachmentTrayProps {
-  attachments: ComposerImageAttachment[];
+interface SessionAttachmentTrayProps {
+  attachments: ComposerAttachment[];
   destination: UploadDestination;
   disabled?: boolean;
   onDestinationChange: (destination: UploadDestination) => void;
   onRemove: (id: string) => void;
 }
 
-export const SessionImageAttachmentTray: React.FC<SessionImageAttachmentTrayProps> = ({
+export const SessionAttachmentTray: React.FC<SessionAttachmentTrayProps> = ({
   attachments,
   destination,
   disabled = false,

@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { ComposerImageAttachment } from './imageAttachments';
-import { SessionImageAttachmentTray } from './SessionImageAttachmentTray';
+import type { ComposerAttachment } from './composerAttachments';
+import { SessionAttachmentTray } from './SessionAttachmentTray';
 
-function attachment(overrides: Partial<ComposerImageAttachment> = {}): ComposerImageAttachment {
+function attachment(overrides: Partial<ComposerAttachment> = {}): ComposerAttachment {
   return {
     id: 'image-1',
     file: new File(['image'], 'chart.png', { type: 'image/png' }),
@@ -14,13 +14,13 @@ function attachment(overrides: Partial<ComposerImageAttachment> = {}): ComposerI
   };
 }
 
-describe('SessionImageAttachmentTray', () => {
+describe('SessionAttachmentTray', () => {
   it('renders thumbnails with remove controls and top-level batch settings', () => {
     const onRemove = vi.fn();
     const onDestinationChange = vi.fn();
 
     render(
-      <SessionImageAttachmentTray
+      <SessionAttachmentTray
         attachments={[attachment()]}
         destination="branch"
         onDestinationChange={onDestinationChange}
@@ -43,7 +43,7 @@ describe('SessionImageAttachmentTray', () => {
 
   it('opens and closes a larger image preview from the thumbnail', async () => {
     render(
-      <SessionImageAttachmentTray
+      <SessionAttachmentTray
         attachments={[attachment()]}
         destination="branch"
         onDestinationChange={vi.fn()}
@@ -65,7 +65,7 @@ describe('SessionImageAttachmentTray', () => {
 
   it('shows upload and failure states without dropping attachments', () => {
     render(
-      <SessionImageAttachmentTray
+      <SessionAttachmentTray
         attachments={[
           attachment({ id: 'uploading', status: 'uploading' }),
           attachment({
@@ -89,7 +89,7 @@ describe('SessionImageAttachmentTray', () => {
 
   it('renders non-image attachments inline with a file icon', () => {
     render(
-      <SessionImageAttachmentTray
+      <SessionAttachmentTray
         attachments={[
           attachment({
             id: 'text',
@@ -112,7 +112,7 @@ describe('SessionImageAttachmentTray', () => {
     const onDestinationChange = vi.fn();
 
     render(
-      <SessionImageAttachmentTray
+      <SessionAttachmentTray
         attachments={[attachment({ status: 'uploading' })]}
         destination="branch"
         disabled

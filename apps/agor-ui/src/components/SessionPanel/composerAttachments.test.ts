@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildPromptWithImageAttachments,
+  buildPromptWithAttachments,
   getLatestComposerPromptText,
-  isBlockingComposerImageAttachment,
-  isSupportedComposerImage,
+  isBlockingComposerAttachment,
+  isPreviewableComposerImage,
   isSupportedComposerUploadFile,
   summarizeComposerFileRejections,
   validateComposerFileIntake,
-} from './imageAttachments';
+} from './composerAttachments';
 
-describe('imageAttachments', () => {
+describe('composerAttachments', () => {
   it('builds a hidden file-path preamble without modifying visible text', () => {
     expect(
-      buildPromptWithImageAttachments('Compare these charts', [
+      buildPromptWithAttachments('Compare these charts', [
         '.agor/uploads/chart-a.png',
         '.agor/uploads/chart-b.png',
       ])
@@ -22,7 +22,7 @@ describe('imageAttachments', () => {
   });
 
   it('supports attachment-only prompts', () => {
-    expect(buildPromptWithImageAttachments('   ', ['.agor/uploads/chart-a.png'])).toBe(
+    expect(buildPromptWithAttachments('   ', ['.agor/uploads/chart-a.png'])).toBe(
       'Attached files:\n- .agor/uploads/chart-a.png'
     );
   });
@@ -48,12 +48,12 @@ describe('imageAttachments', () => {
   });
 
   it('matches the server image allowlist used by composer-native attachments', () => {
-    expect(isSupportedComposerImage(new File(['x'], 'chart.png', { type: 'image/png' }))).toBe(
+    expect(isPreviewableComposerImage(new File(['x'], 'chart.png', { type: 'image/png' }))).toBe(
       true
     );
-    expect(isSupportedComposerImage(new File(['x'], 'chart.svg', { type: 'image/svg+xml' }))).toBe(
-      false
-    );
+    expect(
+      isPreviewableComposerImage(new File(['x'], 'chart.svg', { type: 'image/svg+xml' }))
+    ).toBe(false);
   });
 
   it('validates composer upload file types before send', () => {
@@ -74,6 +74,42 @@ describe('imageAttachments', () => {
       expect.objectContaining({
         file: expect.objectContaining({ name: 'unsafe.svg' }),
         reason: 'Unsupported file type: image/svg+xml',
+      }),
+    ]);
+  });
+
+  it('infers supported file types from safe extensions when dropped files have empty MIME', () => {
+    expect(isSupportedComposerUploadFile(new File(['x'], 'notes.txt', { type: '' }))).toBe(true);
+    expect(isPreviewableComposerImage(new File(['x'], 'chart.png', { type: '' }))).toBe(true);
+
+    const { acceptedFiles, rejections } = validateComposerFileIntake([
+      new File(['x'], 'notes.txt', { type: '' }),
+      new File(['x'], 'report.pdf', { type: '' }),
+      new File(['<svg />'], 'unsafe.svg', { type: '' }),
+    ]);
+
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        file: expect.objectContaining({ name: 'unsafe.svg' }),
+        reason: 'Unsupported file type: unknown',
+      }),
+    ]);
+    expect(acceptedFiles.map((file) => [file.name, file.type])).toEqual([
+      ['notes.txt', 'text/plain'],
+      ['report.pdf', 'application/pdf'],
+    ]);
+  });
+
+  it('does not trust extensions when the browser reports an unsupported MIME type', () => {
+    const { acceptedFiles, rejections } = validateComposerFileIntake([
+      new File(['<script>'], 'renamed.txt', { type: 'text/html' }),
+    ]);
+
+    expect(acceptedFiles).toHaveLength(0);
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        file: expect.objectContaining({ name: 'renamed.txt' }),
+        reason: 'Unsupported file type: text/html',
       }),
     ]);
   });
@@ -156,7 +192,7 @@ describe('imageAttachments', () => {
     const text = new File(['x'], 'notes.txt', { type: 'text/plain' });
 
     expect(
-      isBlockingComposerImageAttachment({
+      isBlockingComposerAttachment({
         id: 'pending-png',
         file: png,
         previewUrl: 'blob:png',
@@ -166,7 +202,7 @@ describe('imageAttachments', () => {
     ).toBe(false);
 
     expect(
-      isBlockingComposerImageAttachment({
+      isBlockingComposerAttachment({
         id: 'failed-png',
         file: png,
         previewUrl: 'blob:png',
@@ -177,7 +213,7 @@ describe('imageAttachments', () => {
     ).toBe(true);
 
     expect(
-      isBlockingComposerImageAttachment({
+      isBlockingComposerAttachment({
         id: 'pending-text',
         file: text,
         destination: 'branch',

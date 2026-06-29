@@ -10,7 +10,7 @@ describe('SessionUploadControls', () => {
     render(
       <SessionUploadControls
         connectionDisabled={false}
-        composerImageUploading={false}
+        composerAttachmentUploading={false}
         onAttachFiles={onAttachFiles}
         onOpenAdvancedUpload={onOpenAdvancedUpload}
       />
@@ -23,11 +23,11 @@ describe('SessionUploadControls', () => {
     expect(onOpenAdvancedUpload).toHaveBeenCalledTimes(1);
   });
 
-  it('disables both upload entrypoints while composer images are uploading', () => {
+  it('disables both upload entrypoints while composer attachments are uploading', () => {
     render(
       <SessionUploadControls
         connectionDisabled={false}
-        composerImageUploading
+        composerAttachmentUploading
         onAttachFiles={vi.fn()}
         onOpenAdvancedUpload={vi.fn()}
       />

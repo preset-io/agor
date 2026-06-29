@@ -1,6 +1,6 @@
 import type { UploadDestination, UploadedFile } from '../FileUpload';
 
-export const COMPOSER_IMAGE_MIME_TYPES = new Set([
+export const COMPOSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
   'image/gif',
@@ -8,7 +8,7 @@ export const COMPOSER_IMAGE_MIME_TYPES = new Set([
 ]);
 
 export const COMPOSER_UPLOAD_MIME_TYPES = new Set([
-  ...COMPOSER_IMAGE_MIME_TYPES,
+  ...COMPOSER_PREVIEW_IMAGE_MIME_TYPES,
   'text/plain',
   'text/markdown',
   'text/csv',
@@ -21,19 +21,39 @@ export const COMPOSER_UPLOAD_MIME_TYPES = new Set([
   'application/x-tar',
 ]);
 
+const COMPOSER_UPLOAD_EXTENSION_MIME_TYPES = new Map<string, string>([
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.gif', 'image/gif'],
+  ['.webp', 'image/webp'],
+  ['.txt', 'text/plain'],
+  ['.md', 'text/markdown'],
+  ['.markdown', 'text/markdown'],
+  ['.csv', 'text/csv'],
+  ['.json', 'application/json'],
+  ['.pdf', 'application/pdf'],
+  ['.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  ['.zip', 'application/zip'],
+  ['.gz', 'application/gzip'],
+  ['.tgz', 'application/gzip'],
+  ['.tar', 'application/x-tar'],
+]);
+
 export const MAX_COMPOSER_UPLOAD_FILES = 10;
 export const MAX_COMPOSER_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
 export const MAX_COMPOSER_UPLOAD_TOTAL_SIZE = 100 * 1024 * 1024;
 export const MAX_COMPOSER_UPLOAD_FILES_MESSAGE = `Composer supports up to ${MAX_COMPOSER_UPLOAD_FILES} pending files per destination`;
 
-export type ComposerImageAttachmentStatus = 'pending' | 'uploading' | 'uploaded' | 'failed';
+export type ComposerAttachmentStatus = 'pending' | 'uploading' | 'uploaded' | 'failed';
 
-export interface ComposerImageAttachment {
+export interface ComposerAttachment {
   id: string;
   file: File;
   previewUrl?: string;
   destination: UploadDestination;
-  status: ComposerImageAttachmentStatus;
+  status: ComposerAttachmentStatus;
   uploadedFile?: UploadedFile;
   error?: string;
 }
@@ -43,12 +63,42 @@ export interface ComposerFileRejection {
   reason: string;
 }
 
-export function isSupportedComposerImage(file: File): boolean {
-  return COMPOSER_IMAGE_MIME_TYPES.has(file.type.toLowerCase());
+function normalizeMimeType(mimeType: string): string {
+  return mimeType.split(';')[0].trim().toLowerCase();
+}
+
+function inferComposerUploadMimeType(file: File): string {
+  const normalizedMime = normalizeMimeType(file.type || '');
+  if (normalizedMime) return normalizedMime;
+
+  const normalizedName = file.name.toLowerCase();
+  const matchingExtension = Array.from(COMPOSER_UPLOAD_EXTENSION_MIME_TYPES.keys())
+    .sort((a, b) => b.length - a.length)
+    .find((extension) => normalizedName.endsWith(extension));
+
+  return matchingExtension
+    ? (COMPOSER_UPLOAD_EXTENSION_MIME_TYPES.get(matchingExtension) ?? '')
+    : '';
+}
+
+function normalizeComposerUploadFile(file: File): File {
+  const inferredMime = inferComposerUploadMimeType(file);
+  const normalizedMime = normalizeMimeType(file.type || '');
+
+  if (!inferredMime || normalizedMime) return file;
+
+  // Browser drag/drop and clipboard APIs can leave File.type empty even for
+  // common safe extensions. Give FormData the inferred allowlisted MIME so the
+  // upload endpoint sees the same type the composer validated.
+  return new File([file], file.name, { type: inferredMime, lastModified: file.lastModified });
+}
+
+export function isPreviewableComposerImage(file: File): boolean {
+  return COMPOSER_PREVIEW_IMAGE_MIME_TYPES.has(inferComposerUploadMimeType(file));
 }
 
 export function isSupportedComposerUploadFile(file: File): boolean {
-  return COMPOSER_UPLOAD_MIME_TYPES.has((file.type || '').split(';')[0].trim().toLowerCase());
+  return COMPOSER_UPLOAD_MIME_TYPES.has(inferComposerUploadMimeType(file));
 }
 
 function formatBytes(bytes: number): string {
@@ -58,7 +108,7 @@ function formatBytes(bytes: number): string {
 
 export function validateComposerFileIntake(
   files: File[],
-  currentAttachments: ComposerImageAttachment[] = [],
+  currentAttachments: ComposerAttachment[] = [],
   destination: UploadDestination = 'branch'
 ): { acceptedFiles: File[]; rejections: ComposerFileRejection[] } {
   const rejections: ComposerFileRejection[] = [];
@@ -85,7 +135,7 @@ export function validateComposerFileIntake(
       continue;
     }
 
-    candidates.push(file);
+    candidates.push(normalizeComposerUploadFile(file));
   }
 
   if (currentUploadBatch.length + candidates.length > MAX_COMPOSER_UPLOAD_FILES) {
@@ -125,11 +175,11 @@ export function summarizeComposerFileRejections(rejections: ComposerFileRejectio
   return `${first.file.name}: ${first.reason}${suffix}`;
 }
 
-export function isBlockingComposerImageAttachment(attachment: ComposerImageAttachment): boolean {
+export function isBlockingComposerAttachment(attachment: ComposerAttachment): boolean {
   return attachment.status === 'failed';
 }
 
-export function getComposerImageAccept(): string {
+export function getComposerUploadAccept(): string {
   return Array.from(COMPOSER_UPLOAD_MIME_TYPES).join(',');
 }
 
@@ -147,10 +197,12 @@ export function getLatestComposerPromptText({
   return promptHandle?.getValue() ?? inputValueRefValue ?? sendStartValue;
 }
 
-export function buildPromptWithImageAttachments(text: string, imagePaths: string[]): string {
+export function buildPromptWithAttachments(text: string, attachmentPaths: string[]): string {
   const trimmedText = text.trim();
-  if (imagePaths.length === 0) return trimmedText;
+  if (attachmentPaths.length === 0) return trimmedText;
 
-  const attachmentBlock = ['Attached files:', ...imagePaths.map((path) => `- ${path}`)].join('\n');
+  const attachmentBlock = ['Attached files:', ...attachmentPaths.map((path) => `- ${path}`)].join(
+    '\n'
+  );
   return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
 }

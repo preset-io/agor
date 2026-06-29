@@ -331,7 +331,7 @@ describe('SessionPanel composer send', () => {
     expect(screen.getByLabelText('Preview preserve-chart.png')).toBeInTheDocument();
   });
 
-  it('disables fork and BTW while composer attachments are present', async () => {
+  it('disables fork, spawn, and BTW while composer attachments are present', async () => {
     const onFork = vi.fn().mockResolvedValue(undefined);
     const onBtwFork = vi.fn().mockResolvedValue(undefined);
     renderSessionPanel({ onFork, onBtwFork });
@@ -344,11 +344,14 @@ describe('SessionPanel composer send', () => {
     });
 
     const forkButton = await screen.findByLabelText('Fork session');
+    const spawnButton = screen.getByLabelText('Spawn subsession');
     const btwButton = screen.getByLabelText('Ask side question via BTW fork');
     expect(forkButton).toBeDisabled();
+    expect(spawnButton).toBeDisabled();
     expect(btwButton).toBeDisabled();
 
     fireEvent.click(forkButton);
+    fireEvent.click(spawnButton);
     fireEvent.click(btwButton);
     expect(onFork).not.toHaveBeenCalled();
     expect(onBtwFork).not.toHaveBeenCalled();
