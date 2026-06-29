@@ -1,8 +1,10 @@
-import type { BranchID, SessionID, UUID } from '@agor/core/types';
+import type { BranchID, Link, SessionID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { normalizeRefTargetKey, normalizeUrlTargetKey } from '../../types/link';
 import type { Database } from '../client';
+import { insert } from '../database-wrapper';
+import { type LinkInsert, type LinkRow, links } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { LinksRepository } from './links';
@@ -51,6 +53,42 @@ async function seedSession(db: Database, branchId: BranchID, createdBy: UUID) {
 }
 
 describe('LinksRepository', () => {
+  dbTest('preserves hidden tenant metadata on mapped link DTOs', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const rowToLink = (
+      repo as unknown as {
+        rowToLink(
+          row: LinkRow & {
+            tenant_id: string;
+          }
+        ): Link;
+      }
+    ).rowToLink.bind(repo);
+
+    const link = rowToLink({
+      tenant_id: 'tenant-a',
+      link_id: generateId(),
+      branch_id: generateId(),
+      session_id: null,
+      source_message_id: null,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/tenant',
+      ref_uri: null,
+      file_path: null,
+      target_key: normalizeUrlTargetKey('https://example.com/tenant'),
+      title: null,
+      mime_type: null,
+      metadata: null,
+      created_by: null,
+      created_at: new Date('2026-01-01T00:00:00.000Z'),
+      updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    expect(Object.keys(link)).not.toContain('tenant_id');
+    expect((link as unknown as { tenant_id?: string }).tenant_id).toBe('tenant-a');
+  });
+
   dbTest('creates branch-owned and session-owned links with exactly one owner', async ({ db }) => {
     const repo = new LinksRepository(db);
     const branch = await seedBranch(db);
@@ -157,6 +195,7 @@ describe('LinksRepository', () => {
     });
 
     const retargeted = await repo.update(created.link_id, {
+      kind: 'kb_ref',
       url: null,
       ref_uri: 'agor://kb/team/runbook.md',
       title: null,
@@ -195,6 +234,92 @@ describe('LinksRepository', () => {
       repo.update(created.link_id, { ref_uri: 'agor://kb/team/runbook.md' })
     ).rejects.toThrow(/exactly one target/);
   });
+
+  dbTest(
+    'rejects kind/source combinations that contradict the effective target',
+    async ({ db }) => {
+      const repo = new LinksRepository(db);
+      const branch = await seedBranch(db);
+      const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+      const urlLink = await repo.create({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/manual',
+      });
+      const fileLink = await repo.create({
+        session_id: session.session_id,
+        kind: 'image',
+        source: 'upload',
+        file_path: '/uploads/image.png',
+      });
+
+      await expect(
+        repo.create({
+          session_id: session.session_id,
+          kind: 'image',
+          source: 'manual',
+          url: 'https://example.com/not-an-image-file',
+        } as never)
+      ).rejects.toThrow(/requires target file_path/);
+      await expect(
+        repo.create({
+          session_id: session.session_id,
+          kind: 'kb_ref',
+          source: 'manual',
+          file_path: '/uploads/runbook.md',
+        } as never)
+      ).rejects.toThrow(/requires target ref_uri/);
+      await expect(repo.update(urlLink.link_id, { kind: 'document' })).rejects.toThrow(
+        /requires target file_path/
+      );
+      await expect(repo.update(fileLink.link_id, { source: 'parsed' })).rejects.toThrow(
+        /Parsed links cannot use file_path/
+      );
+    }
+  );
+
+  dbTest(
+    'refetches and updates the existing link when an insert loses a dedupe race',
+    async ({ db }) => {
+      const repo = new LinksRepository(db);
+      const branch = await seedBranch(db);
+      const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+      const createToInsert = (
+        repo as unknown as {
+          createToInsert(data: unknown, existing?: unknown): LinkInsert;
+        }
+      ).createToInsert.bind(repo);
+      const existingRow = createToInsert({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'parsed',
+        url: 'https://example.com/race',
+      });
+      await insert(db, links).values(existingRow).returning().one();
+
+      const findByOwnerAndTarget = repo.findByOwnerAndTarget.bind(repo);
+      let missedPreflight = false;
+      repo.findByOwnerAndTarget = async (...args) => {
+        if (!missedPreflight) {
+          missedPreflight = true;
+          return null;
+        }
+        return findByOwnerAndTarget(...args);
+      };
+
+      const deduped = await repo.create({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'parsed',
+        url: 'https://example.com/race',
+        title: 'race winner',
+      });
+
+      expect(deduped.title).toBe('race winner');
+      expect(await repo.findAll({ sessionId: session.session_id })).toHaveLength(1);
+    }
+  );
 
   dbTest('filters by session and branch owner scopes', async ({ db }) => {
     const repo = new LinksRepository(db);

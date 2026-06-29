@@ -22,7 +22,7 @@ import {
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type LinkInsert, type LinkRow, links } from '../schema';
-import { RepositoryError } from './base';
+import { attachHiddenTenant, RepositoryError } from './base';
 import {
   visibleBranchReferenceAccessExists,
   visibleSessionReferenceAccessExists,
@@ -60,28 +60,82 @@ function hasOwn<K extends PropertyKey>(data: object, key: K): boolean {
   return Object.hasOwn(data, key);
 }
 
+function isUniqueConstraintError(err: unknown): boolean {
+  if (!err) return false;
+  const e = err as { code?: string; cause?: { code?: string }; message?: string };
+  const code = e.code ?? e.cause?.code ?? '';
+  if (code === '23505') return true;
+  if (code.startsWith('SQLITE_CONSTRAINT')) return true;
+  const msg = (e.message ?? '').toLowerCase();
+  return msg.includes('unique constraint') || msg.includes('sqlite_constraint_unique');
+}
+
+function targetType(data: {
+  url?: string | null;
+  ref_uri?: string | null;
+  file_path?: string | null;
+}): 'url' | 'ref_uri' | 'file_path' | null {
+  if (data.url) return 'url';
+  if (data.ref_uri) return 'ref_uri';
+  if (data.file_path) return 'file_path';
+  return null;
+}
+
+function validateLinkSemantics(data: {
+  kind: LinkKind;
+  source: LinkSource;
+  url?: string | null;
+  ref_uri?: string | null;
+  file_path?: string | null;
+}): void {
+  const target = targetType(data);
+  const expectedTargetByKind: Record<LinkKind, 'url' | 'ref_uri' | 'file_path'> = {
+    issue: 'url',
+    pr: 'url',
+    url: 'url',
+    kb_ref: 'ref_uri',
+    image: 'file_path',
+    document: 'file_path',
+  };
+  const expectedTarget = expectedTargetByKind[data.kind];
+
+  if (target !== expectedTarget) {
+    throw new RepositoryError(`Link kind ${data.kind} requires target ${expectedTarget}`);
+  }
+
+  if (data.source === 'upload' && target !== 'file_path') {
+    throw new RepositoryError('Upload links require a file_path target');
+  }
+  if (data.source === 'parsed' && target === 'file_path') {
+    throw new RepositoryError('Parsed links cannot use file_path targets');
+  }
+}
+
 export class LinksRepository {
   constructor(private db: Database) {}
 
   private rowToLink(row: LinkRow): Link {
-    return {
-      link_id: row.link_id as LinkID,
-      branch_id: (row.branch_id as BranchID | null) ?? null,
-      session_id: (row.session_id as SessionID | null) ?? null,
-      source_message_id: (row.source_message_id as MessageID | null) ?? null,
-      kind: row.kind as LinkKind,
-      source: row.source as LinkSource,
-      url: row.url ?? null,
-      ref_uri: row.ref_uri ?? null,
-      file_path: row.file_path ?? null,
-      target_key: row.target_key,
-      title: row.title ?? null,
-      mime_type: row.mime_type ?? null,
-      metadata: row.metadata ?? null,
-      created_by: (row.created_by as UUID | null) ?? null,
-      created_at: new Date(row.created_at).toISOString(),
-      updated_at: new Date(row.updated_at).toISOString(),
-    };
+    return attachHiddenTenant(
+      {
+        link_id: row.link_id as LinkID,
+        branch_id: (row.branch_id as BranchID | null) ?? null,
+        session_id: (row.session_id as SessionID | null) ?? null,
+        source_message_id: (row.source_message_id as MessageID | null) ?? null,
+        kind: row.kind as LinkKind,
+        source: row.source as LinkSource,
+        url: row.url ?? null,
+        ref_uri: row.ref_uri ?? null,
+        file_path: row.file_path ?? null,
+        target_key: row.target_key,
+        title: row.title ?? null,
+        mime_type: row.mime_type ?? null,
+        metadata: row.metadata ?? null,
+        created_by: (row.created_by as UUID | null) ?? null,
+        created_at: new Date(row.created_at).toISOString(),
+        updated_at: new Date(row.updated_at).toISOString(),
+      },
+      row
+    );
   }
 
   private validateCreate(data: Partial<LinkCreate>): asserts data is LinkCreate {
@@ -95,9 +149,10 @@ export class LinksRepository {
       throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
     }
 
-    if (!isLinkKind(data.kind)) throw new RepositoryError(`Invalid link kind: ${data.kind}`);
-    if (!isLinkSource(data.source))
-      throw new RepositoryError(`Invalid link source: ${data.source}`);
+    const { kind, source } = data;
+    if (!isLinkKind(kind)) throw new RepositoryError(`Invalid link kind: ${kind}`);
+    if (!isLinkSource(source)) throw new RepositoryError(`Invalid link source: ${source}`);
+    validateLinkSemantics({ ...data, kind, source });
   }
 
   private validatePatch(data: LinkPatch): void {
@@ -142,8 +197,15 @@ export class LinksRepository {
     }
 
     const row = this.createToInsert(data);
-    const inserted = await insert(this.db, links).values(row).returning().one();
-    return this.rowToLink(inserted as LinkRow);
+    try {
+      const inserted = await insert(this.db, links).values(row).returning().one();
+      return this.rowToLink(inserted as LinkRow);
+    } catch (err) {
+      if (!isUniqueConstraintError(err)) throw err;
+      const racedExisting = await this.findByOwnerAndTarget(data);
+      if (!racedExisting) throw err;
+      return this.update(racedExisting.link_id, data);
+    }
   }
 
   async upsert(data: Partial<LinkCreate>): Promise<Link> {
@@ -225,10 +287,12 @@ export class LinksRepository {
       throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
     }
 
+    const nextKind = data.kind ?? existing.kind;
+    const nextSource = data.source ?? existing.source;
     const next = {
       source_message_id: sourceMessageId,
-      kind: data.kind ?? existing.kind,
-      source: data.source ?? existing.source,
+      kind: nextKind,
+      source: nextSource,
       url,
       ref_uri: refUri,
       file_path: filePath,
@@ -244,6 +308,13 @@ export class LinksRepository {
       metadata: hasOwn(data, 'metadata') ? (data.metadata ?? null) : (existing.metadata ?? null),
       updated_at: new Date(),
     } satisfies Partial<LinkInsert>;
+    validateLinkSemantics({
+      kind: nextKind,
+      source: nextSource,
+      url: next.url,
+      ref_uri: next.ref_uri,
+      file_path: next.file_path,
+    });
 
     const updated = await update(this.db, links)
       .set(next)
