@@ -11,6 +11,7 @@ import type { ExpressApplication, Service } from '@agor/core/feathers';
 import type {
   Board,
   Branch,
+  BranchEnvironmentUpdate,
   BranchID,
   CloneRepositoryResult,
   AuthenticatedParams as CoreAuthenticatedParams,
@@ -30,15 +31,6 @@ export type AuthenticatedUser = CoreAuthenticatedUser;
 export type AuthenticatedParams = CoreAuthenticatedParams;
 export type CreateHookContext<T = unknown> = CoreCreateHookContext<T>;
 export type HookContext<T = unknown> = CoreHookContext<T>;
-
-type BranchEnvironmentInstance = NonNullable<Branch['environment_instance']>;
-type BranchEnvironmentUpdate = Partial<BranchEnvironmentInstance> & {
-  process?: BranchEnvironmentInstance['process'] | null;
-  last_health_check?: BranchEnvironmentInstance['last_health_check'] | null;
-  last_error?: BranchEnvironmentInstance['last_error'] | null;
-  last_command?: BranchEnvironmentInstance['last_command'] | null;
-  logs?: BranchEnvironmentInstance['logs'] | null;
-};
 
 /**
  * Application type for the daemon

@@ -40,7 +40,7 @@ import type {
   Board,
   BoardID,
   Branch,
-  BranchEnvironmentInstance,
+  BranchEnvironmentUpdate,
   BranchID,
   KnowledgeNamespace,
   QueryParams,
@@ -48,7 +48,11 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import { getAssistantConfig, isAssistant } from '@agor/core/types';
+import {
+  BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
+  getAssistantConfig,
+  isAssistant,
+} from '@agor/core/types';
 import {
   getGidFromGroupName,
   resolveUnixUserForImpersonation,
@@ -112,21 +116,6 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
 }
 
 type EnvironmentInstance = NonNullable<Branch['environment_instance']>;
-type EnvironmentInstanceUpdate = Partial<EnvironmentInstance> & {
-  process?: EnvironmentInstance['process'] | null;
-  last_health_check?: EnvironmentInstance['last_health_check'] | null;
-  last_error?: EnvironmentInstance['last_error'] | null;
-  last_command?: EnvironmentInstance['last_command'] | null;
-  logs?: EnvironmentInstance['logs'] | null;
-};
-
-const ENVIRONMENT_INSTANCE_CLEARABLE_FIELDS = [
-  'process',
-  'last_health_check',
-  'last_error',
-  'last_command',
-  'logs',
-] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
 
 /**
  * Process tracking for environment management
@@ -1733,17 +1722,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       | {
           branch_id?: BranchID;
           branchId?: BranchID;
-          environment_update?: EnvironmentInstanceUpdate;
-          environmentUpdate?: EnvironmentInstanceUpdate;
+          environment_update?: BranchEnvironmentUpdate;
+          environmentUpdate?: BranchEnvironmentUpdate;
         },
-    environmentUpdateOrParams?: EnvironmentInstanceUpdate | BranchParams,
+    environmentUpdateOrParams?: BranchEnvironmentUpdate | BranchParams,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
     const isRpcEnvelope = typeof idOrData === 'object';
     const id = isRpcEnvelope ? (idOrData.branch_id ?? idOrData.branchId) : idOrData;
     const environmentUpdate = isRpcEnvelope
       ? (idOrData.environment_update ?? idOrData.environmentUpdate)
-      : (environmentUpdateOrParams as EnvironmentInstanceUpdate | undefined);
+      : (environmentUpdateOrParams as BranchEnvironmentUpdate | undefined);
     const resolvedParams = isRpcEnvelope
       ? (environmentUpdateOrParams as BranchParams | undefined)
       : params;
@@ -1762,7 +1751,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       ...environmentUpdate,
     } as EnvironmentInstance;
 
-    for (const key of ENVIRONMENT_INSTANCE_CLEARABLE_FIELDS) {
+    for (const key of BRANCH_ENVIRONMENT_CLEARABLE_FIELDS) {
       if (
         Object.hasOwn(environmentUpdate, key) &&
         (environmentUpdate[key] === undefined || environmentUpdate[key] === null)
