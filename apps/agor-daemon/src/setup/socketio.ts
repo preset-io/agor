@@ -57,6 +57,10 @@ interface FeathersSocket extends Socket {
     // `AuthenticatedUser` is the shape Feathers JWT strategies attach to
     // params/connections — it already carries `_isServiceAccount?: boolean`.
     user?: AuthenticatedUser;
+    authentication?: { strategy?: string; accessToken?: string; payload?: unknown };
+    session_id?: string;
+    task_id?: string;
+    branch_id?: string;
   };
   data: {
     isService?: boolean;
@@ -338,13 +342,28 @@ export function createSocketIOConfig(
         const decoded = jwt.verify(token, jwtSecret, {
           issuer: RUNTIME_JWT_ISSUER,
           audience: RUNTIME_JWT_AUDIENCE,
-        }) as { sub: string; type?: string; role?: string };
+        }) as {
+          sub: string;
+          type?: string;
+          role?: string;
+          purpose?: string;
+          session_id?: string;
+          sessionId?: string;
+          task_id?: string;
+          branch_id?: string;
+        };
 
         // Allow user tokens and service tokens (used by executor)
-        // - undefined/access: User tokens (SessionTokenService doesn't set type claim)
+        // - undefined/access: User tokens
         // - service: Executor service tokens (for terminal streaming, git ops, etc.)
+        // - executor-session: Prompt executor runtime tokens scoped to one turn
         const tokenType = decoded.type;
-        if (tokenType !== undefined && tokenType !== 'access' && tokenType !== 'service') {
+        if (
+          tokenType !== undefined &&
+          tokenType !== 'access' &&
+          tokenType !== 'service' &&
+          tokenType !== 'executor-session'
+        ) {
           return next(new Error('Invalid token type'));
         }
 
@@ -374,6 +393,7 @@ export function createSocketIOConfig(
               role: 'service',
               _isServiceAccount: true,
             },
+            authentication: { strategy: 'jwt', accessToken: token, payload: decoded },
           };
           // Keep the handshake fast-path marker too — older code and any
           // future callers that only look at socket.data still see it.
@@ -388,6 +408,45 @@ export function createSocketIOConfig(
           return next();
         }
 
+        if (tokenType === 'executor-session') {
+          if (decoded.purpose !== 'executor-task') {
+            return next(new Error('Invalid executor token purpose'));
+          }
+          const appRecord = app as unknown as {
+            sessionTokenService?: import('../services/session-token-service.js').SessionTokenService;
+          };
+          const sessionInfo = await appRecord.sessionTokenService?.validateToken(token, {
+            sessionId: decoded.session_id ?? decoded.sessionId,
+            taskId: decoded.task_id,
+            branchId: decoded.branch_id,
+          });
+          if (!sessionInfo) {
+            return next(new Error('Invalid or expired executor token'));
+          }
+
+          const user = await app.service('users').get(
+            decoded.sub as import('@agor/core/types').UUID,
+            {
+              ...(tenant ? { tenant } : {}),
+              authentication: { payload: decoded },
+            } as never
+          );
+          const fs = socket as FeathersSocket;
+          fs.feathers = {
+            user: tenant ? { ...user, tenant_id: tenant.tenant_id } : user,
+            authentication: { strategy: 'jwt', accessToken: token, payload: decoded },
+            session_id: sessionInfo.session_id,
+            task_id: sessionInfo.task_id,
+            branch_id: sessionInfo.branch_id,
+          };
+          if (tenant) {
+            (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
+            if (fs.data) fs.data.tenant = tenant;
+          }
+          console.log(`🔐 WebSocket authenticated (executor): ${socket.id}`);
+          return next();
+        }
+
         // Handle user access tokens - fetch user from database
         const user = await app.service('users').get(
           decoded.sub as import('@agor/core/types').UUID,
@@ -399,7 +458,10 @@ export function createSocketIOConfig(
 
         // Attach user to socket (FeathersJS convention)
         const fs = socket as FeathersSocket;
-        fs.feathers = { user: tenant ? { ...user, tenant_id: tenant.tenant_id } : user };
+        fs.feathers = {
+          user: tenant ? { ...user, tenant_id: tenant.tenant_id } : user,
+          authentication: { strategy: 'jwt', accessToken: token, payload: decoded },
+        };
         if (tenant) {
           (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
           if (fs.data) fs.data.tenant = tenant;

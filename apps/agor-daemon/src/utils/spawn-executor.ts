@@ -25,7 +25,15 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AgorExecutionSettings } from '@agor/core/config';
+import {
+  type AgorConfig,
+  type AgorExecutionSettings,
+  type ResolvedMultiTenancyConfig,
+  resolveMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
+} from '@agor/core/config';
+import { getCurrentTenantId } from '@agor/core/db';
 import type { AuthenticatedParams } from '@agor/core/types';
 import {
   attachEnvFileCleanup,
@@ -35,7 +43,11 @@ import {
 } from '@agor/core/unix';
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
-import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  issueRuntimeToken,
+  readRuntimeTenantClaim,
+  runtimeTenantClaims,
+} from '../auth/runtime-tokens.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
 
 let configuredDaemonUrl: string | null = null;
@@ -62,6 +74,28 @@ export function configureDaemonUrl(url: string): void {
 }
 
 let configuredExecutorDefaults: ExecutorSpawnDefaults = {};
+let configuredExecutorMultiTenancy: ResolvedMultiTenancyConfig = resolveMultiTenancyConfig({});
+
+export const EXECUTOR_TOKEN_GLOBAL_SCOPE_CLAIM = 'agor_global_scope';
+
+export function globalExecutorTokenScope(reason: string): Record<string, string> {
+  const trimmed = reason.trim();
+  if (!trimmed) {
+    throw new Error('Global executor token scope requires a reason');
+  }
+  return { [EXECUTOR_TOKEN_GLOBAL_SCOPE_CLAIM]: trimmed };
+}
+
+/** Configure tenant enforcement for executor/service tokens. Call once at daemon startup. */
+export function configureExecutorTokenTenantScoping(
+  config?: Pick<AgorConfig, 'multi_tenancy'> | ResolvedMultiTenancyConfig | null
+): void {
+  configuredExecutorMultiTenancy = config
+    ? 'static_tenant_id' in config
+      ? config
+      : resolveMultiTenancyConfig(config)
+    : resolveMultiTenancyConfig({});
+}
 
 /** Set default executor template + impersonation user from config. Call once at daemon startup. */
 export function configureExecutor(config?: ExecutorConfig | null): void {
@@ -821,6 +855,7 @@ export function createServiceToken(
   expiresIn?: SignOptions['expiresIn'],
   scope: Record<string, unknown> = {}
 ): string {
+  const resolvedScope = completeExecutorTokenTenantScope(scope);
   return issueRuntimeToken(
     {
       sub: 'executor-service',
@@ -828,10 +863,75 @@ export function createServiceToken(
       purpose: 'executor-service',
       // Service tokens can perform privileged operations
       role: 'service',
-      ...scope,
+      ...resolvedScope,
     },
     jwtSecret,
     expiresIn || '5m'
+  );
+}
+
+type ExecutorTokenTenantScopeOptions = {
+  multiTenancy?: ResolvedMultiTenancyConfig;
+  allowGlobalTenantScopeReason?: string;
+};
+
+function hasGlobalExecutorScope(scope: Record<string, unknown>): boolean {
+  return typeof scope[EXECUTOR_TOKEN_GLOBAL_SCOPE_CLAIM] === 'string';
+}
+
+function tokenScopeHasTenantClaim(
+  scope: Record<string, unknown>,
+  multiTenancy: ResolvedMultiTenancyConfig
+): boolean {
+  return readRuntimeTenantClaim(scope, multiTenancy.auth_claim ?? 'tenant_id') !== undefined;
+}
+
+function tenantClaimsForToken(
+  tenantId: string,
+  multiTenancy: ResolvedMultiTenancyConfig
+): Record<string, string> {
+  return runtimeTenantClaims(tenantId, multiTenancy.auth_claim ?? 'tenant_id');
+}
+
+function tenantIdFromParams(
+  params: Partial<AuthenticatedParams> | undefined,
+  multiTenancy: ResolvedMultiTenancyConfig
+): string | undefined {
+  if (!params) return undefined;
+
+  if (multiTenancy.mode === 'required_from_auth') {
+    try {
+      return resolveTenantContext(multiTenancy, { params }).tenant_id;
+    } catch (error) {
+      if (!(error instanceof TenantResolutionError)) throw error;
+    }
+  }
+
+  return params.tenant?.tenant_id ?? params.tenant_id ?? params.user?.tenant_id;
+}
+
+function completeExecutorTokenTenantScope(
+  scope: Record<string, unknown>,
+  options: ExecutorTokenTenantScopeOptions = {}
+): Record<string, unknown> {
+  const multiTenancy = options.multiTenancy ?? configuredExecutorMultiTenancy;
+  if (tokenScopeHasTenantClaim(scope, multiTenancy) || hasGlobalExecutorScope(scope)) {
+    return scope;
+  }
+
+  if (multiTenancy.mode !== 'required_from_auth') return scope;
+
+  const ambientTenantId = getCurrentTenantId();
+  if (ambientTenantId) {
+    return { ...scope, ...tenantClaimsForToken(ambientTenantId, multiTenancy) };
+  }
+
+  if (options.allowGlobalTenantScopeReason) {
+    return { ...scope, ...globalExecutorTokenScope(options.allowGlobalTenantScopeReason) };
+  }
+
+  throw new Error(
+    'Missing tenant context for executor service token in multi_tenancy.required_from_auth'
   );
 }
 
@@ -842,10 +942,25 @@ export function createServiceToken(
  * them as the static/default tenant.
  */
 export function serviceTokenScopeForParams(
-  params?: Partial<AuthenticatedParams>
+  params?: Partial<AuthenticatedParams>,
+  options: ExecutorTokenTenantScopeOptions = {}
 ): Record<string, unknown> {
-  const tenantId = params?.tenant?.tenant_id ?? params?.tenant_id ?? params?.user?.tenant_id;
-  return tenantId ? { tenant_id: tenantId } : {};
+  const multiTenancy = options.multiTenancy ?? configuredExecutorMultiTenancy;
+  const paramsTenantId = tenantIdFromParams(params, multiTenancy);
+  if (paramsTenantId) return tenantClaimsForToken(paramsTenantId, multiTenancy);
+
+  if (multiTenancy.mode !== 'required_from_auth') return {};
+
+  const tenantId = getCurrentTenantId();
+  if (tenantId) return tenantClaimsForToken(tenantId, multiTenancy);
+
+  if (options.allowGlobalTenantScopeReason) {
+    return globalExecutorTokenScope(options.allowGlobalTenantScopeReason);
+  }
+
+  throw new Error(
+    'Missing tenant context for executor service token in multi_tenancy.required_from_auth'
+  );
 }
 
 /**

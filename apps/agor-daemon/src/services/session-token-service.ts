@@ -13,6 +13,7 @@
 
 import { getCurrentTenantId } from '@agor/core/db';
 import jwt from 'jsonwebtoken';
+import { runtimeTenantClaims } from '../auth/runtime-tokens.js';
 
 const DEBUG_SESSION_TOKENS =
   process.env.AGOR_DEBUG_SESSION_TOKENS === '1' || process.env.DEBUG?.includes('session-token');
@@ -49,6 +50,8 @@ export class SessionTokenService {
     private config: {
       expiration_ms: number; // Default: 86400000 (24 hours)
       max_uses: number; // Default: -1 (unlimited)
+      require_tenant_scope?: boolean;
+      tenant_claim?: string;
     }
   ) {
     // Start cleanup timer (run every hour)
@@ -79,6 +82,11 @@ export class SessionTokenService {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + this.config.expiration_ms);
     const tenantId = getCurrentTenantId();
+    if (this.config.require_tenant_scope && !tenantId) {
+      throw new Error(
+        'Missing tenant context for executor session token in multi_tenancy.required_from_auth'
+      );
+    }
 
     // Create a JWT payload matching Feathers authentication format
     // This JWT will work seamlessly with the standard JWT strategy
@@ -90,7 +98,7 @@ export class SessionTokenService {
       session_id: sessionId,
       task_id: scope.taskId,
       branch_id: scope.branchId,
-      ...(tenantId ? { tenant_id: tenantId } : {}),
+      ...runtimeTenantClaims(tenantId, this.config.tenant_claim ?? 'tenant_id'),
       iat: Math.floor(now.getTime() / 1000), // Issued at
       exp: Math.floor(expiresAt.getTime() / 1000), // Expiration
       aud: 'https://agor.dev', // Must match Feathers jwtOptions.audience

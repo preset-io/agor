@@ -79,4 +79,21 @@ describe('SessionTokenService runtime scoping', () => {
 
     expect(decoded.tenant_id).toBe('tenant-a');
   });
+
+  it('fails closed when required_from_auth executor-session token issuance lacks tenant scope', async () => {
+    const service = new SessionTokenService({
+      expiration_ms: 60_000,
+      max_uses: 1,
+      require_tenant_scope: true,
+      tenant_claim: 'tenant_id',
+    });
+    service.setJwtSecret('session-token-test-secret');
+
+    await expect(
+      service.generateToken('session-1', 'user-1', {
+        taskId: 'task-1',
+        branchId: 'branch-1',
+      })
+    ).rejects.toThrow(/Missing tenant context/);
+  });
 });

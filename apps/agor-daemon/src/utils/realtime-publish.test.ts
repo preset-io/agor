@@ -293,6 +293,44 @@ describe('configureRealtimePublish', () => {
     expect(app.channel).not.toHaveBeenCalledWith('tenant:tenant-a');
   });
 
+  it('routes branch patch publishes from auth-derived tenant instead of payload tenant_id', async () => {
+    const tenantUser = user('tenant-user');
+    const otherTenantUser = user('other-tenant-user');
+    const app = makeApp(
+      [{ user: tenantUser }, { user: otherTenantUser }],
+      {},
+      {
+        authenticated: [{ user: tenantUser }, { user: otherTenantUser }],
+        'tenant:tenant-a': [{ user: tenantUser }],
+        'tenant:tenant-b': [{ user: otherTenantUser }],
+      }
+    );
+    const r = repos({ branch: branch('b1'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    const channel = await app.runPublish(
+      { branch_id: 'b1', tenant_id: 'tenant-b' },
+      {
+        path: 'branches',
+        method: 'patch',
+        event: 'patched',
+        params: { authentication: { payload: { tenant_id: 'tenant-a' } } },
+      }
+    );
+
+    expect(channel.connections).toEqual([{ user: tenantUser }]);
+    expect(app.channel).toHaveBeenCalledWith('tenant:tenant-a');
+  });
+
   it('filters branch events to users with view access when RBAC is enabled', async () => {
     const allowed = user('allowed');
     const denied = user('denied');

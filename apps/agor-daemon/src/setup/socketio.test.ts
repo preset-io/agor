@@ -322,6 +322,128 @@ describe('socket handshake tenant propagation', () => {
       })
     );
     expect(socket.feathers?.user).toMatchObject({ user_id: ALICE, tenant_id: 'tenant-a' });
+    expect(socket.feathers?.authentication?.payload).toMatchObject({ tenant_id: 'tenant-a' });
+    expect(socket.data.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
+  });
+
+  it('attaches tenant and auth payload for service-token sockets', async () => {
+    const app = {
+      service: () => ({ get: vi.fn() }),
+      on: () => {},
+    } as unknown as Application;
+    const io = makeIO();
+    const config = createSocketIOConfig(app, {
+      corsOrigin: '*',
+      jwtSecret: 'test-secret',
+      credentialsAllowed: false,
+      webTerminalEnabled: true,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    } as SocketIOOptions);
+    config.callback(io as any);
+    const socket = makeSocket('tenant-service-socket', io);
+    socket.handshake.auth = {
+      token: issueRuntimeToken(
+        {
+          sub: 'executor-service',
+          type: 'service',
+          purpose: 'executor-service',
+          role: 'service',
+          tenant_id: 'tenant-a',
+        },
+        'test-secret',
+        '5m'
+      ),
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      io.middlewares[0]?.(socket, (error?: Error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+
+    expect(socket.feathers?.user).toMatchObject({
+      user_id: 'executor-service',
+      _isServiceAccount: true,
+    });
+    expect(socket.feathers?.authentication?.payload).toMatchObject({ tenant_id: 'tenant-a' });
+    expect(socket.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
+    expect(socket.data.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
+  });
+
+  it('validates executor-session socket tokens and attaches tenant service params', async () => {
+    const usersGet = vi.fn(async () => ({ user_id: ALICE, email: 'alice@example.test' }));
+    const validateToken = vi.fn(async () => ({
+      session_id: 'session-1',
+      task_id: 'task-1',
+      branch_id: 'branch-1',
+      user_id: ALICE,
+    }));
+    const app = {
+      service: () => ({ get: usersGet }),
+      on: () => {},
+      sessionTokenService: { validateToken },
+    } as unknown as Application;
+    const io = makeIO();
+    const config = createSocketIOConfig(app, {
+      corsOrigin: '*',
+      jwtSecret: 'test-secret',
+      credentialsAllowed: false,
+      webTerminalEnabled: true,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    } as SocketIOOptions);
+    config.callback(io as any);
+    const socket = makeSocket('tenant-executor-socket', io);
+    const token = issueRuntimeToken(
+      {
+        sub: ALICE,
+        type: 'executor-session',
+        purpose: 'executor-task',
+        session_id: 'session-1',
+        task_id: 'task-1',
+        branch_id: 'branch-1',
+        tenant_id: 'tenant-a',
+      },
+      'test-secret',
+      '5m'
+    );
+    socket.handshake.auth = { token };
+
+    await new Promise<void>((resolve, reject) => {
+      io.middlewares[0]?.(socket, (error?: Error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+
+    expect(validateToken).toHaveBeenCalledWith(token, {
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      branchId: 'branch-1',
+    });
+    expect(usersGet).toHaveBeenCalledWith(
+      ALICE,
+      expect.objectContaining({
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        authentication: { payload: expect.objectContaining({ tenant_id: 'tenant-a' }) },
+      })
+    );
+    expect(socket.feathers).toMatchObject({
+      user: { user_id: ALICE, tenant_id: 'tenant-a' },
+      session_id: 'session-1',
+      task_id: 'task-1',
+      branch_id: 'branch-1',
+      authentication: { payload: { tenant_id: 'tenant-a' } },
+    });
+    expect(socket.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
     expect(socket.data.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
   });
 });

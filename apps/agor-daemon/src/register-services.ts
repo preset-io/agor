@@ -10,6 +10,7 @@ import {
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
   resolveExecutionSecurityMode,
+  resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
   and,
@@ -190,9 +191,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   // Initialize session token service
   const { SessionTokenService } = await import('./services/session-token-service.js');
+  const multiTenancy = resolveMultiTenancyConfig(config);
   const sessionTokenService = new SessionTokenService({
     expiration_ms: config.execution?.session_token_expiration_ms || 24 * 60 * 60 * 1000,
     max_uses: config.execution?.session_token_max_uses || -1,
+    require_tenant_scope: multiTenancy.mode === 'required_from_auth',
+    tenant_claim: multiTenancy.auth_claim ?? 'tenant_id',
   });
 
   const appRecord = app as unknown as Record<string, unknown>;

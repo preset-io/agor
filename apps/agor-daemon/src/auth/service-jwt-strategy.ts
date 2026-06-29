@@ -20,6 +20,8 @@ import { assertUserTokenNotInvalidated, type UserAuthTokenPayload } from './toke
 
 type JwtConnectionState = {
   authentication?: { strategy?: string; accessToken?: string; payload?: unknown };
+  tenant?: { tenant_id: string; source: 'auth_claim' };
+  data?: { tenant?: { tenant_id: string; source: 'auth_claim' } };
   feathers?: { authentication?: { strategy?: string; accessToken?: string; payload?: unknown } };
 };
 
@@ -59,10 +61,14 @@ function propagateTenantFromJwtPayload(
 ): void {
   const tenantId = readRuntimeTenantClaim(payload ?? undefined, tenantClaim);
   if (!tenantId) return;
-  const tenantParams = params as Params & {
-    tenant?: { tenant_id: string; source: 'auth_claim' };
-  };
-  tenantParams.tenant ??= { tenant_id: tenantId, source: 'auth_claim' };
+  const tenant = { tenant_id: tenantId, source: 'auth_claim' as const };
+  const tenantParams = params as Params & { tenant?: typeof tenant };
+  tenantParams.tenant ??= tenant;
+
+  const connection = (params as { connection?: JwtConnectionState } | undefined)?.connection;
+  if (!connection) return;
+  connection.tenant ??= tenant;
+  if (connection.data) connection.data.tenant ??= tenant;
 }
 
 /**

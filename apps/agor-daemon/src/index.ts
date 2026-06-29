@@ -82,7 +82,11 @@ import { runPostStartJob, startup } from './startup.js';
 import { ensureOpenSourceTelemetryEnvEnabledConfig } from './utils/open-source-telemetry-config.js';
 import { shouldEmitOpenSourceTelemetryDaemonActive } from './utils/open-source-telemetry-heartbeat.js';
 import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-source-telemetry-usage.js';
-import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
+import {
+  configureDaemonUrl,
+  configureExecutor,
+  configureExecutorTokenTenantScoping,
+} from './utils/spawn-executor.js';
 import { registerAllWidgets } from './widgets/index.js';
 
 // Load daemon version at startup
@@ -300,6 +304,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // when execution.executor_command_template is unset (no behavior change
   // for existing deployments).
   configureExecutor(config.execution);
+  configureExecutorTokenTenantScoping(config);
 
   initializeAnthropicApiKey(config, process.env.ANTHROPIC_API_KEY);
   initializeAnthropicAuthToken(config, process.env.ANTHROPIC_AUTH_TOKEN);
