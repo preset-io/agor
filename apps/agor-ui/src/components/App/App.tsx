@@ -1031,6 +1031,26 @@ export const App: React.FC<AppProps> = ({
   const stableOnStopEnvironment = useStableCallback(onStopEnvironment);
   const stableOnNukeEnvironment = useStableCallback(onNukeEnvironment);
 
+  // Stabilize the remaining passthrough props (schedule + comment actions) and
+  // the panel's inline-arrow handlers so the memoized BoardAssistantPanel's
+  // React.memo bailout holds — every prop it receives stays referentially stable
+  // across store-driven re-renders that don't change what it draws.
+  const stableOnExecuteScheduleNow = useStableCallback(onExecuteScheduleNow);
+  const stableOnReplyComment = useStableCallback(onReplyComment);
+  const stableOnResolveComment = useStableCallback(onResolveComment);
+  const stableOnToggleReaction = useStableCallback(onToggleReaction);
+  const stableOnDeleteComment = useStableCallback(onDeleteComment);
+  const handleAssistantOpenSettings = useStableCallback(
+    (branchId: string, tab?: BranchModalTab) => {
+      setBranchModalBranchId(branchId);
+      setBranchModalTab(tab);
+    }
+  );
+  const handleAssistantSendComment = useStableCallback((content: string) =>
+    onSendComment?.(currentBoardId || '', content)
+  );
+  const handleAssistantCollapse = useStableCallback(() => setCommentsPanelCollapsed(true));
+
   // Header action handlers, frozen so the memoized AppHeader's React.memo bailout
   // isn't defeated by a fresh inline-arrow identity on every App re-render. Each
   // delegates to the latest impl via useStableCallback, so they read current
@@ -1136,28 +1156,25 @@ export const App: React.FC<AppProps> = ({
                   selectedSessionId={effectiveSelectedSessionId}
                   onSessionClick={handleSessionClick}
                   onCreateSession={setNewSessionBranchId}
-                  onForkSession={onForkSession}
-                  onSpawnSession={onSpawnSession}
-                  onArchiveOrDelete={onArchiveOrDeleteBranch}
-                  onOpenSettings={(branchId, tab) => {
-                    setBranchModalBranchId(branchId);
-                    setBranchModalTab(tab);
-                  }}
+                  onForkSession={stableOnForkSession}
+                  onSpawnSession={stableOnSpawnSession}
+                  onArchiveOrDelete={stableOnArchiveOrDeleteBranch}
+                  onOpenSettings={handleAssistantOpenSettings}
                   onOpenSessionSettings={setSessionSettingsId}
                   onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
-                  onStartEnvironment={onStartEnvironment}
-                  onStopEnvironment={onStopEnvironment}
+                  onStartEnvironment={stableOnStartEnvironment}
+                  onStopEnvironment={stableOnStopEnvironment}
                   onViewLogs={setLogsModalBranchId}
-                  onNukeEnvironment={onNukeEnvironment}
-                  onExecuteScheduleNow={onExecuteScheduleNow}
-                  onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
-                  onReplyComment={onReplyComment}
-                  onResolveComment={onResolveComment}
-                  onToggleReaction={onToggleReaction}
-                  onDeleteComment={onDeleteComment}
+                  onNukeEnvironment={stableOnNukeEnvironment}
+                  onExecuteScheduleNow={stableOnExecuteScheduleNow}
+                  onSendComment={handleAssistantSendComment}
+                  onReplyComment={stableOnReplyComment}
+                  onResolveComment={stableOnResolveComment}
+                  onToggleReaction={stableOnToggleReaction}
+                  onDeleteComment={stableOnDeleteComment}
                   hoveredCommentId={hoveredCommentId}
                   selectedCommentId={selectedCommentId}
-                  onCollapse={() => setCommentsPanelCollapsed(true)}
+                  onCollapse={handleAssistantCollapse}
                 />
               )}
             </Panel>
