@@ -6,6 +6,7 @@ import {
   eq,
   gte,
   lt,
+  runWithTenantDatabaseScope,
   select,
   sessions,
   type TenantScopeAwareDatabase,
@@ -17,7 +18,7 @@ import {
   openSourceTelemetryLogger,
   pruneDefaultOpenSourceTelemetryDestination,
 } from '@agor/core/telemetry';
-import type { Session } from '@agor/core/types';
+import type { Session, TenantID } from '@agor/core/types';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
@@ -150,14 +151,22 @@ export async function flushOpenSourceTelemetryUsageSummary(
   await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
 }
 
+export interface OpenSourceTelemetryUsageSummaryIntervalOptions {
+  /** Tenant used for daemon-global telemetry scans that have no request auth context. */
+  tenantId: TenantID | string;
+}
+
 export function startOpenSourceTelemetryUsageSummaryInterval(
-  db: TenantScopeAwareDatabase
+  db: TenantScopeAwareDatabase,
+  options: OpenSourceTelemetryUsageSummaryIntervalOptions
 ): NodeJS.Timeout {
   // Check hourly, but emit at most once per UTC day. The DB query only runs
   // when the previous day has not yet been reported, keeping steady-state
   // overhead to one config read per hour.
   const run = (): void => {
-    flushOpenSourceTelemetryUsageSummary(db).catch((error) => {
+    runWithTenantDatabaseScope(db, options.tenantId, () =>
+      flushOpenSourceTelemetryUsageSummary(db)
+    ).catch((error) => {
       console.warn(
         '[telemetry] failed to emit usage summary:',
         error instanceof Error ? error.message : String(error)

@@ -1453,7 +1453,7 @@ export async function rehydrateCliWatchers(
   // Scan for active CLI sessions. We don't have a direct "give me active
   // claude-code-cli sessions" query, so do the simple thing: list all
   // sessions, filter in memory. Numbers are small (hundreds at most).
-  const all = await repo.findAll().catch(() => [] as Session[]);
+  const all = await repo.findAll();
   const reg = getCliWatcherRegistry(app);
   let rehydrated = 0;
   for (const session of all) {

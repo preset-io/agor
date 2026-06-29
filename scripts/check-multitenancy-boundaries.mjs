@@ -78,12 +78,12 @@ const checks = [
     },
   },
   {
-    name: 'raw daemon Database type imports',
+    name: 'raw daemon Database/RawDatabase imports',
     roots: ['apps/agor-daemon/src'],
     excludeTests: true,
     patterns: [
-      /import\s+type\s*{[^}]*\bDatabase\b[^}]*}\s*from\s*['"]@agor\/core\/db['"]/gs,
-      /import\s*{[^}]*\btype\s+Database\b[^}]*}\s*from\s*['"]@agor\/core\/db['"]/gs,
+      /import\s+(?:type\s+)?{[^}]*(?:\bDatabase\b|\bRawDatabase\b)[^}]*}\s*from\s*['"]@agor\/core\/db(?:\/client)?['"]/gs,
+      /import\s+\*\s+as\s+\w+\s+from\s*['"]@agor\/core\/db(?:\/client)?['"]/gs,
     ],
     baseline: {},
   },

@@ -41,7 +41,7 @@ import {
   saveConfig,
   TenantResolutionError,
 } from '@agor/core/config';
-import { getDatabaseUrl } from '@agor/core/db';
+import { getDatabaseUrl, runWithTenantDatabaseScope } from '@agor/core/db';
 import {
   authenticate,
   Forbidden,
@@ -686,7 +686,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
         },
       });
     }
-    startOpenSourceTelemetryUsageSummaryInterval(db);
+    startOpenSourceTelemetryUsageSummaryInterval(db, { tenantId: multiTenancy.static_tenant_id });
     config.telemetry = {
       ...config.telemetry,
       last_reported_version: TELEMETRY_AGOR_VERSION,
@@ -798,13 +798,15 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // --------------------------------------------------------------------------
   runPostStartJob('cli-watcher-rehydrate', async () => {
     const { rehydrateCliWatchers } = await import('./services/claude-cli-integration.js');
-    await rehydrateCliWatchers(app, async (branchId) => {
-      try {
-        const branch = (await app.service('branches').get(branchId)) as { path?: string };
-        return branch?.path ?? null;
-      } catch {
-        return null;
-      }
-    });
+    await runWithTenantDatabaseScope(db, multiTenancy.static_tenant_id, () =>
+      rehydrateCliWatchers(app, async (branchId) => {
+        try {
+          const branch = (await app.service('branches').get(branchId)) as { path?: string };
+          return branch?.path ?? null;
+        } catch {
+          return null;
+        }
+      })
+    );
   });
 }
