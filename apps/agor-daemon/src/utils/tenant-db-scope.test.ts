@@ -273,6 +273,21 @@ describe('createTenantDatabaseScopeAroundHook', () => {
     });
   });
 
+  it('fails deferred tenant-scoped work loudly when no tenant can be resolved', async () => {
+    const { db } = makePgDb();
+    const onError = vi.fn();
+    const work = vi.fn(async () => undefined);
+
+    deferWithTenantDatabaseScope(db as never, {}, work, onError);
+
+    expect(work).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'Missing tenant context for deferred tenant-scoped work',
+      })
+    );
+  });
+
   it('documents the failed startup mode when deferred work only exits ALS', async () => {
     const { db } = makePgDb();
     const missing = await runWithTenantDatabaseScope(db as never, 'tenant-a', async () => {

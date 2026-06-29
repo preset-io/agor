@@ -11,7 +11,7 @@ import {
   runWithTenantDatabaseScope,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
-import type { HookContext, TenantID } from '@agor/core/types';
+import type { HookContext, TenantContext, TenantID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 
@@ -35,7 +35,7 @@ function readHeaderValue(
   return null;
 }
 
-type TenantScopedParams = { tenant?: { tenant_id?: string } } | undefined;
+type TenantScopedParams = { tenant?: Pick<TenantContext, 'tenant_id'> } | undefined;
 
 export function resolveTenantIdForDeferredScope(params?: unknown): string | undefined {
   const scopedParams = params as TenantScopedParams;
@@ -56,6 +56,16 @@ export function deferWithTenantDatabaseScope(
   onError?: (error: unknown) => void
 ): void {
   const tenantId = resolveTenantIdForDeferredScope(params);
+  if (!tenantId) {
+    const error = new Error('Missing tenant context for deferred tenant-scoped work');
+    if (onError) {
+      onError(error);
+    } else {
+      console.error('[tenant-db-scope] Deferred tenant-scoped work skipped:', error);
+    }
+    return;
+  }
+
   runWithoutTenantDatabaseScope(() => {
     setImmediate(() => {
       void runWithTenantDatabaseScope(db, tenantId, work).catch((error) => {
