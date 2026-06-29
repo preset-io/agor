@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { extractLinksFromMessage } from './link';
+import {
+  countLinkTargets,
+  extractLinksFromMessage,
+  getLinkTargetCompatibilityError,
+  getLinkTargetField,
+  LINK_KIND_TARGET_FIELD,
+  LINK_SOURCE_TARGET_FIELDS,
+  normalizeLinkTargetKey,
+} from './link';
 import type { Message } from './message';
 
 function message(content: Message['content']): Pick<Message, 'content'> {
@@ -62,5 +70,70 @@ describe('extractLinksFromMessage', () => {
     );
 
     expect(links).toEqual([]);
+  });
+});
+
+describe('link target semantics', () => {
+  it('defines target fields for every link kind and source', () => {
+    expect(LINK_KIND_TARGET_FIELD).toMatchObject({
+      issue: 'url',
+      pr: 'url',
+      url: 'url',
+      kb_ref: 'ref_uri',
+      image: 'file_path',
+      document: 'file_path',
+    });
+    expect(LINK_SOURCE_TARGET_FIELDS).toMatchObject({
+      upload: ['file_path'],
+      parsed: ['url', 'ref_uri'],
+      manual: ['url', 'ref_uri', 'file_path'],
+    });
+  });
+
+  it('resolves the populated target field', () => {
+    expect(getLinkTargetField({ url: 'https://example.com' })).toBe('url');
+    expect(getLinkTargetField({ ref_uri: 'agor://kb/team/runbook.md' })).toBe('ref_uri');
+    expect(getLinkTargetField({ file_path: '/uploads/image.png' })).toBe('file_path');
+    expect(getLinkTargetField({})).toBeNull();
+    expect(countLinkTargets({ url: 'https://example.com', ref_uri: 'agor://kb/team/a.md' })).toBe(
+      2
+    );
+  });
+
+  it('normalizes the populated target key', () => {
+    expect(normalizeLinkTargetKey({ url: 'https://EXAMPLE.com/a#section' })).toBe(
+      'url:https://example.com/a'
+    );
+    expect(normalizeLinkTargetKey({ ref_uri: ' AGOR://KB/Team/Runbook.md ' })).toBe(
+      'ref:agor://kb/team/runbook.md'
+    );
+    expect(normalizeLinkTargetKey({ file_path: ' /uploads/image.png ' })).toBe(
+      'file:/uploads/image.png'
+    );
+    expect(normalizeLinkTargetKey({})).toBeNull();
+  });
+
+  it('describes incompatible kind/source/target combinations', () => {
+    expect(
+      getLinkTargetCompatibilityError({
+        kind: 'image',
+        source: 'manual',
+        url: 'https://example.com/image.png',
+      })
+    ).toBe('Link kind image requires target file_path');
+    expect(
+      getLinkTargetCompatibilityError({
+        kind: 'image',
+        source: 'parsed',
+        file_path: '/uploads/image.png',
+      })
+    ).toBe('Link source parsed cannot use target file_path');
+    expect(
+      getLinkTargetCompatibilityError({
+        kind: 'kb_ref',
+        source: 'parsed',
+        ref_uri: 'agor://kb/team/runbook.md',
+      })
+    ).toBeNull();
   });
 });

@@ -8,6 +8,24 @@ export type LinkKind = (typeof LINK_KINDS)[number];
 export const LINK_SOURCES = ['manual', 'parsed', 'upload'] as const;
 export type LinkSource = (typeof LINK_SOURCES)[number];
 
+export const LINK_TARGET_FIELDS = ['url', 'ref_uri', 'file_path'] as const;
+export type LinkTargetField = (typeof LINK_TARGET_FIELDS)[number];
+
+export const LINK_KIND_TARGET_FIELD = {
+  issue: 'url',
+  pr: 'url',
+  url: 'url',
+  kb_ref: 'ref_uri',
+  image: 'file_path',
+  document: 'file_path',
+} as const satisfies Record<LinkKind, LinkTargetField>;
+
+export const LINK_SOURCE_TARGET_FIELDS = {
+  upload: ['file_path'],
+  parsed: ['url', 'ref_uri'],
+  manual: LINK_TARGET_FIELDS,
+} as const satisfies Record<LinkSource, readonly LinkTargetField[]>;
+
 export interface LinkMetadata {
   [key: string]: unknown;
 }
@@ -89,6 +107,52 @@ export function isLinkSource(value: unknown): value is LinkSource {
   return typeof value === 'string' && (LINK_SOURCES as readonly string[]).includes(value);
 }
 
+export function getLinkTargetField(data: {
+  url?: string | null;
+  ref_uri?: string | null;
+  file_path?: string | null;
+}): LinkTargetField | null {
+  if (data.url) return 'url';
+  if (data.ref_uri) return 'ref_uri';
+  if (data.file_path) return 'file_path';
+  return null;
+}
+
+export function countLinkTargets(data: {
+  url?: string | null;
+  ref_uri?: string | null;
+  file_path?: string | null;
+}): number {
+  return LINK_TARGET_FIELDS.filter((field) => {
+    const value = data[field];
+    return value !== undefined && value !== null && value !== '';
+  }).length;
+}
+
+export function getLinkTargetCompatibilityError(data: {
+  kind: LinkKind;
+  source: LinkSource;
+  url?: string | null;
+  ref_uri?: string | null;
+  file_path?: string | null;
+}): string | null {
+  const target = getLinkTargetField(data);
+  if (!target) {
+    return 'Link requires a target: url, ref_uri, or file_path';
+  }
+
+  const expectedKindTarget = LINK_KIND_TARGET_FIELD[data.kind];
+  if (target !== expectedKindTarget) {
+    return `Link kind ${data.kind} requires target ${expectedKindTarget}`;
+  }
+
+  if (!LINK_SOURCE_TARGET_FIELDS[data.source].some((field) => field === target)) {
+    return `Link source ${data.source} cannot use target ${target}`;
+  }
+
+  return null;
+}
+
 export function normalizeUrlTargetKey(url: string): string {
   try {
     const parsed = new URL(url);
@@ -110,6 +174,18 @@ export function normalizeRefTargetKey(refUri: string): string {
 
 export function normalizeFileTargetKey(filePath: string): string {
   return `file:${filePath.trim()}`;
+}
+
+export function normalizeLinkTargetKey(data: {
+  url?: string | null;
+  ref_uri?: string | null;
+  file_path?: string | null;
+}): string | null {
+  const target = getLinkTargetField(data);
+  if (target === 'url' && data.url) return normalizeUrlTargetKey(data.url);
+  if (target === 'ref_uri' && data.ref_uri) return normalizeRefTargetKey(data.ref_uri);
+  if (target === 'file_path' && data.file_path) return normalizeFileTargetKey(data.file_path);
+  return null;
 }
 
 export function buildKnowledgeRefUri(

@@ -274,7 +274,7 @@ describe('LinksRepository', () => {
         /requires target file_path/
       );
       await expect(repo.update(fileLink.link_id, { source: 'parsed' })).rejects.toThrow(
-        /Parsed links cannot use file_path/
+        /source parsed cannot use target file_path/
       );
     }
   );

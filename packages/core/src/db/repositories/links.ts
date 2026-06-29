@@ -13,13 +13,14 @@ import type {
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import {
+  countLinkTargets,
+  getLinkTargetCompatibilityError,
   isLinkKind,
   isLinkSource,
-  normalizeFileTargetKey,
-  normalizeRefTargetKey,
-  normalizeUrlTargetKey,
+  normalizeLinkTargetKey,
 } from '../../types/link';
 import type { Database } from '../client';
+import { isUniqueConstraintError } from '../constraint-errors';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type LinkInsert, type LinkRow, links } from '../schema';
 import { attachHiddenTenant, RepositoryError } from './base';
@@ -48,9 +49,8 @@ function normalizeTargetKey(data: {
   ref_uri?: string | null;
   file_path?: string | null;
 }): string {
-  if (data.url) return normalizeUrlTargetKey(data.url);
-  if (data.ref_uri) return normalizeRefTargetKey(data.ref_uri);
-  if (data.file_path) return normalizeFileTargetKey(data.file_path);
+  const targetKey = normalizeLinkTargetKey(data);
+  if (targetKey) return targetKey;
   throw new RepositoryError(
     'Link target_key requires exactly one target: url, ref_uri, or file_path'
   );
@@ -60,27 +60,6 @@ function hasOwn<K extends PropertyKey>(data: object, key: K): boolean {
   return Object.hasOwn(data, key);
 }
 
-function isUniqueConstraintError(err: unknown): boolean {
-  if (!err) return false;
-  const e = err as { code?: string; cause?: { code?: string }; message?: string };
-  const code = e.code ?? e.cause?.code ?? '';
-  if (code === '23505') return true;
-  if (code.startsWith('SQLITE_CONSTRAINT')) return true;
-  const msg = (e.message ?? '').toLowerCase();
-  return msg.includes('unique constraint') || msg.includes('sqlite_constraint_unique');
-}
-
-function targetType(data: {
-  url?: string | null;
-  ref_uri?: string | null;
-  file_path?: string | null;
-}): 'url' | 'ref_uri' | 'file_path' | null {
-  if (data.url) return 'url';
-  if (data.ref_uri) return 'ref_uri';
-  if (data.file_path) return 'file_path';
-  return null;
-}
-
 function validateLinkSemantics(data: {
   kind: LinkKind;
   source: LinkSource;
@@ -88,27 +67,8 @@ function validateLinkSemantics(data: {
   ref_uri?: string | null;
   file_path?: string | null;
 }): void {
-  const target = targetType(data);
-  const expectedTargetByKind: Record<LinkKind, 'url' | 'ref_uri' | 'file_path'> = {
-    issue: 'url',
-    pr: 'url',
-    url: 'url',
-    kb_ref: 'ref_uri',
-    image: 'file_path',
-    document: 'file_path',
-  };
-  const expectedTarget = expectedTargetByKind[data.kind];
-
-  if (target !== expectedTarget) {
-    throw new RepositoryError(`Link kind ${data.kind} requires target ${expectedTarget}`);
-  }
-
-  if (data.source === 'upload' && target !== 'file_path') {
-    throw new RepositoryError('Upload links require a file_path target');
-  }
-  if (data.source === 'parsed' && target === 'file_path') {
-    throw new RepositoryError('Parsed links cannot use file_path targets');
-  }
+  const error = getLinkTargetCompatibilityError(data);
+  if (error) throw new RepositoryError(error);
 }
 
 export class LinksRepository {
@@ -144,7 +104,7 @@ export class LinksRepository {
       throw new RepositoryError('Link requires exactly one owner: branch_id XOR session_id');
     }
 
-    const targetCount = countPresent([data.url, data.ref_uri, data.file_path]);
+    const targetCount = countLinkTargets(data);
     if (targetCount !== 1) {
       throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
     }
@@ -282,7 +242,7 @@ export class LinksRepository {
     const filePath = hasOwn(data, 'file_path')
       ? (data.file_path ?? null)
       : (existing.file_path ?? null);
-    const targetCount = countPresent([url, refUri, filePath]);
+    const targetCount = countLinkTargets({ url, ref_uri: refUri, file_path: filePath });
     if (targetCount !== 1) {
       throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
     }

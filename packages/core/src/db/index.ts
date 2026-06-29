@@ -32,6 +32,7 @@ export { generateId, IdResolutionError, resolveShortId, shortId } from '../lib/i
 export { generateSlug, generateUniqueSlug, identifyUrlParam, isShortId } from '../lib/slugs';
 // Client and database
 export * from './client';
+export * from './constraint-errors';
 
 // Database wrapper utilities (type-safe operations for union Database type)
 export * from './database-wrapper';
