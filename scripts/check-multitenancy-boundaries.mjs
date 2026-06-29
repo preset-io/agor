@@ -75,6 +75,7 @@ const checks = [
     patterns: [/\bsetImmediate\s*\(/g],
     baseline: {
       'apps/agor-daemon/src/utils/tenant-db-scope.ts': 1,
+      'apps/agor-daemon/src/utils/tenant-db-scope.test.ts': 1,
     },
   },
   {
