@@ -61,6 +61,7 @@ import type {
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
+import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
 
 /**
  * Inbound message data (platform → session)
@@ -990,6 +991,25 @@ export class GatewayService {
         this.slackProgressQueues.delete(data.session_id);
       }
     }
+  }
+
+  /**
+   * Schedule Slack assistant progress/status updates after the current
+   * tenant-scoped database work commits, then update inside a fresh tenant
+   * scope. Presence/status updates are often emitted from hooks and streaming
+   * routes whose enclosing transaction is about to close.
+   */
+  updateProgressAfterCommit(data: GatewayProgressData, params?: unknown): void {
+    deferWithTenantDatabaseScope(
+      this.db,
+      params,
+      async () => {
+        await this.updateProgress(data);
+      },
+      (error) => {
+        console.warn('[gateway] Failed to update Slack progress after commit:', error);
+      }
+    );
   }
 
   wasMessageStreamedToSlack(messageId: string): boolean {
@@ -2185,7 +2205,7 @@ export class GatewayService {
           `Session is busy, message queued at position ${task.queue_position}`,
           { suppressSlack: true }
         );
-        void this.updateProgress({
+        this.updateProgressAfterCommit({
           session_id: sessionId,
           state: 'queued',
           task_id: task.task_id,
@@ -2195,7 +2215,7 @@ export class GatewayService {
         console.log(
           `[gateway] Prompt sent to session ${shortId(sessionId)} via /sessions/:id/prompt`
         );
-        void this.updateProgress({
+        this.updateProgressAfterCommit({
           session_id: sessionId,
           state: 'working',
           task_id: task.task_id,
@@ -2204,7 +2224,7 @@ export class GatewayService {
     } catch (error) {
       console.error('[gateway] Failed to send prompt to session:', error);
       this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${error}`);
-      void this.updateProgress({
+      this.updateProgressAfterCommit({
         session_id: sessionId,
         state: 'failed',
         error_message: error instanceof Error ? error.message : String(error),
@@ -2311,6 +2331,26 @@ export class GatewayService {
       routed: true,
       channelType: channel.channel_type,
     };
+  }
+
+  /**
+   * Schedule outbound routing after the current tenant-scoped database work
+   * commits, then route inside a fresh tenant scope. Message after-hooks fire
+   * while the newly-created row may still be transactional; routing immediately
+   * can inherit a stale transaction object or query before the session/message
+   * graph is visible on a new scoped connection.
+   */
+  routeMessageAfterCommit(data: RouteMessageData, params?: unknown): void {
+    deferWithTenantDatabaseScope(
+      this.db,
+      params,
+      async () => {
+        await this.routeMessage(data);
+      },
+      (error) => {
+        console.warn('[gateway] Failed to route message after commit:', error);
+      }
+    );
   }
 
   /**
