@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { ENVIRONMENT } from '@agor/core/config';
+import { getCurrentTenantId } from '@agor/core/db';
 import type { Branch } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HealthMonitor } from './health-monitor';
@@ -57,6 +58,37 @@ describe('HealthMonitor tenant context', () => {
       query: { $limit: 1000 },
       paginate: false,
     });
+    monitor.cleanup();
+  });
+
+  it('enters a tenant database scope for timer-driven health checks', async () => {
+    const observedTenantIds: Array<string | undefined> = [];
+    const branches = new BranchServiceMock();
+    branches.get.mockImplementation(async (branchId: string) => {
+      observedTenantIds.push(getCurrentTenantId());
+      return makeBranch({ branch_id: branchId, environment_instance: { status: 'running' } });
+    });
+    branches.checkHealth.mockImplementation(async () => {
+      observedTenantIds.push(getCurrentTenantId());
+    });
+
+    const monitor = new HealthMonitor(makeApp(branches) as never, {
+      db: { run: vi.fn() } as never,
+      defaultParams: { tenant: { tenant_id: 'default', source: 'static' } },
+    });
+
+    branches.emit(
+      'patched',
+      makeBranch({
+        branch_id: 'branch-default',
+        environment_instance: { status: 'running' },
+      })
+    );
+
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalled());
+    expect(observedTenantIds).toEqual(['default', 'default']);
     monitor.cleanup();
   });
 

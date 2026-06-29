@@ -12,7 +12,7 @@
  */
 
 import { ENVIRONMENT } from '@agor/core/config';
-import { shortId } from '@agor/core/db';
+import { runWithTenantDatabaseScope, shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantContext, TenantID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
@@ -37,6 +37,8 @@ export interface HealthMonitorParams {
 export interface HealthMonitorOptions {
   /** Internal params used for startup/background scans when no request context exists. */
   defaultParams?: HealthMonitorParams;
+  /** Tenant-aware database used to open fresh background DB scopes. */
+  db?: TenantScopeAwareDatabase;
 }
 
 function tenantParamsFromBranch(branch: Branch): HealthMonitorParams | undefined {
@@ -51,11 +53,27 @@ export class HealthMonitor {
   private branchParams = new Map<BranchID, HealthMonitorParams>();
   private isShuttingDown = false;
   private defaultParams?: HealthMonitorParams;
+  private db?: TenantScopeAwareDatabase;
 
   constructor(app: Application, options: HealthMonitorOptions = {}) {
     this.app = app;
     this.defaultParams = options.defaultParams;
+    this.db = options.db;
     this.setupBranchListeners();
+  }
+
+  private async runWithHealthTenantScope<T>(
+    params: HealthMonitorParams | undefined,
+    work: () => Promise<T>
+  ): Promise<T> {
+    if (!this.db) return work();
+
+    const tenantId = params?.tenant?.tenant_id;
+    if (!tenantId) {
+      throw new Error('Missing tenant context for background health check');
+    }
+
+    return runWithTenantDatabaseScope(this.db, tenantId, work);
   }
 
   /**
@@ -153,22 +171,24 @@ export class HealthMonitor {
 
       const params = this.branchParams.get(branchId) ?? this.defaultParams;
 
-      // Get current branch state
-      const branch = await branchesService.get(branchId, params as never);
+      await this.runWithHealthTenantScope(params, async () => {
+        // Get current branch state
+        const branch = await branchesService.get(branchId, params as never);
 
-      // Only check if still running or starting
-      const status = branch.environment_instance?.status;
-      if (status !== 'running' && status !== 'starting') {
-        // Silently stop monitoring (not an error - expected when env stops)
-        // Start/stop logs are already handled in handleBranchUpdate()
-        this.stopMonitoring(branchId);
-        return;
-      }
+        // Only check if still running or starting
+        const status = branch.environment_instance?.status;
+        if (status !== 'running' && status !== 'starting') {
+          // Silently stop monitoring (not an error - expected when env stops)
+          // Start/stop logs are already handled in handleBranchUpdate()
+          this.stopMonitoring(branchId);
+          return;
+        }
 
-      // Perform health check via the service method
-      // This will update environment_instance and broadcast via WebSocket
-      // Logging is handled in checkHealth() method - only logs on state changes
-      await branchesService.checkHealth(branchId, params as never);
+        // Perform health check via the service method
+        // This will update environment_instance and broadcast via WebSocket
+        // Logging is handled in checkHealth() method - only logs on state changes
+        await branchesService.checkHealth(branchId, params as never);
+      });
     } catch (error) {
       // If branch was deleted or not found, stop monitoring silently
       // This is expected when branches are deleted while health checks are in progress
@@ -199,13 +219,15 @@ export class HealthMonitor {
       const branchesService = this.app.service('branches');
 
       // Find all branches with running status
-      const result = await branchesService.find({
-        ...this.defaultParams,
-        query: {
-          $limit: 1000,
-        },
-        paginate: false,
-      } as never);
+      const result = await this.runWithHealthTenantScope(this.defaultParams, () =>
+        branchesService.find({
+          ...this.defaultParams,
+          query: {
+            $limit: 1000,
+          },
+          paginate: false,
+        } as never)
+      );
 
       // Handle both paginated and non-paginated responses
       const branches = (Array.isArray(result) ? result : result.data) as Branch[];
