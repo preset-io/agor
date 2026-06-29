@@ -1,7 +1,11 @@
 import type { AuthenticatedParams } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
-import { createServiceToken, serviceTokenScopeForParams } from './spawn-executor';
+import {
+  createServiceToken,
+  generateScopedServiceToken,
+  serviceTokenScopeForParams,
+} from './spawn-executor';
 
 describe('executor service token scoping', () => {
   it('copies tenant context into service token claims', () => {
@@ -31,5 +35,16 @@ describe('executor service token scoping', () => {
 
   it('omits tenant claim for single-tenant/internal calls without tenant context', () => {
     expect(serviceTokenScopeForParams({})).toEqual({});
+  });
+
+  it('generates tenant-scoped service tokens directly from params', () => {
+    const token = generateScopedServiceToken(
+      { settings: { authentication: { secret: 'test-secret' } } },
+      { tenant: { tenant_id: 'tenant-b' as never, source: 'auth_claim' } }
+    );
+    const decoded = jwt.decode(token) as { tenant_id?: string; type?: string };
+
+    expect(decoded.type).toBe('service');
+    expect(decoded.tenant_id).toBe('tenant-b');
   });
 });

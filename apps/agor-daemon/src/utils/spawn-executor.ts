@@ -870,6 +870,22 @@ export function generateSessionToken(
   return createServiceToken(jwtSecret, undefined, scope);
 }
 
+/**
+ * Generate a tenant-scoped executor service token from Feathers params.
+ *
+ * Prefer this over manually composing `generateSessionToken(app,
+ * serviceTokenScopeForParams(params))` so required-from-auth deployments do not
+ * accidentally drop tenant context on new executor call paths.
+ */
+export function generateScopedServiceToken(
+  app: {
+    settings: { authentication?: { secret?: string } };
+  },
+  params?: Partial<AuthenticatedParams>
+): string {
+  return generateSessionToken(app, serviceTokenScopeForParams(params));
+}
+
 // ============================================================================
 // Config-aware executor spawning
 // ============================================================================

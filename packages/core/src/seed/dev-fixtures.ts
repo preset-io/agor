@@ -12,7 +12,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import type { BranchID, RepoID, UUID } from '@agor/core/types';
-import { isUnixGroupRefreshNeeded, loadConfigSync } from '../config/config-manager';
+import { loadConfigSync, resolveExecutionSecurityMode } from '../config/config-manager';
 import { resolveMultiTenancyConfig } from '../config/multitenancy';
 import {
   BoardObjectRepository,
@@ -90,8 +90,8 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
 
     // Setup Unix integration only when filesystem isolation is enabled.
     let unixIntegrationService: UnixIntegrationService | null = null;
-    const unixGroupRefreshNeeded = isUnixGroupRefreshNeeded();
-    if (unixGroupRefreshNeeded) {
+    const unixSecurityMode = resolveExecutionSecurityMode();
+    if (unixSecurityMode.unixFsIsolationEnabled) {
       const config = loadConfigSync();
       const daemonUser = config.daemon?.unix_user || os.userInfo().username;
       console.log(`🔐 Unix integration active (daemon user: ${daemonUser})`);

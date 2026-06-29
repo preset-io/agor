@@ -11,10 +11,9 @@ import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, SessionID, UserID } from '@agor/core/types';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import {
-  generateSessionToken,
+  generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
-  serviceTokenScopeForParams,
 } from '../utils/spawn-executor.js';
 
 // Constants for file search
@@ -99,9 +98,9 @@ export class FilesService {
         return [];
       }
 
-      const sessionToken = generateSessionToken(
+      const sessionToken = generateScopedServiceToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        serviceTokenScopeForParams(params)
+        params
       );
 
       const currentUserId = params.user?.user_id as UserID | undefined;

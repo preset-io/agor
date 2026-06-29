@@ -30,6 +30,7 @@ import {
   requireDaemonUser,
   requirePublicBaseUrl,
   resolveBranchStorageConfig,
+  resolveExecutionSecurityMode,
   saveConfig,
   setConfigValue,
   unsetConfigValue,
@@ -426,6 +427,63 @@ describe('loadConfig cache', () => {
     expect(() => requireDaemonUser(loadConfigSync())).toThrow(
       /execution\.unix_user_mode is insulated or strict/
     );
+  });
+
+  it.each([
+    {
+      name: 'open access simple',
+      config: { execution: { branch_rbac: false, unix_user_mode: 'simple' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: false,
+        unixUserMode: 'simple',
+        unixImpersonationEnabled: false,
+        unixFsIsolationEnabled: false,
+        unixGroupRefreshNeeded: false,
+        requiresDaemonUnixUser: false,
+        shouldInitUnixGroups: false,
+      },
+    },
+    {
+      name: 'app RBAC simple',
+      config: { execution: { branch_rbac: true, unix_user_mode: 'simple' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: true,
+        unixUserMode: 'simple',
+        unixImpersonationEnabled: false,
+        unixFsIsolationEnabled: false,
+        unixGroupRefreshNeeded: false,
+        requiresDaemonUnixUser: false,
+        shouldInitUnixGroups: false,
+      },
+    },
+    {
+      name: 'Unix insulated without app RBAC',
+      config: { execution: { branch_rbac: false, unix_user_mode: 'insulated' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: false,
+        unixUserMode: 'insulated',
+        unixImpersonationEnabled: true,
+        unixFsIsolationEnabled: true,
+        unixGroupRefreshNeeded: true,
+        requiresDaemonUnixUser: true,
+        shouldInitUnixGroups: true,
+      },
+    },
+    {
+      name: 'Unix strict with app RBAC',
+      config: { execution: { branch_rbac: true, unix_user_mode: 'strict' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: true,
+        unixUserMode: 'strict',
+        unixImpersonationEnabled: true,
+        unixFsIsolationEnabled: true,
+        unixGroupRefreshNeeded: true,
+        requiresDaemonUnixUser: true,
+        shouldInitUnixGroups: true,
+      },
+    },
+  ])('resolves execution security mode: $name', ({ config, expected }) => {
+    expect(resolveExecutionSecurityMode(config)).toEqual(expected);
   });
 });
 

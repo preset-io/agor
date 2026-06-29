@@ -803,8 +803,7 @@ export function requireDaemonUser(config: AgorConfig): string {
   // 2. Check if Unix impersonation/isolation is enabled - if so, require explicit config.
   // Branch RBAC alone is logical app-level authorization and does not require
   // Unix users/groups in Cloud simple mode.
-  const unixIsolationEnabled =
-    config.execution?.unix_user_mode && config.execution.unix_user_mode !== 'simple';
+  const unixIsolationEnabled = resolveExecutionSecurityMode(config).requiresDaemonUnixUser;
 
   if (unixIsolationEnabled) {
     throw new Error(
@@ -827,6 +826,48 @@ export function requireDaemonUser(config: AgorConfig): string {
   return user;
 }
 
+export interface ResolvedExecutionSecurityMode {
+  /** App-layer branch ownership/visibility/action enforcement. */
+  appRbacEnabled: boolean;
+  /** Configured Unix execution mode with default applied. */
+  unixUserMode: import('./types').UnixUserMode;
+  /** Whether executors/terminals may run as non-daemon OS users. */
+  unixImpersonationEnabled: boolean;
+  /** Whether branch filesystem permissions/groups should be materialized. */
+  unixFsIsolationEnabled: boolean;
+  /** Whether git/executor spawns need fresh supplemental Unix groups. */
+  unixGroupRefreshNeeded: boolean;
+  /** Whether daemon.unix_user must be explicitly configured. */
+  requiresDaemonUnixUser: boolean;
+  /** Whether new repos/branches should initialize Unix groups. */
+  shouldInitUnixGroups: boolean;
+}
+
+/**
+ * Resolve the execution security posture from config.
+ *
+ * Keep this as the single semantic boundary between app-layer RBAC and
+ * OS/filesystem isolation:
+ * - `branch_rbac` controls Agor app permissions only.
+ * - non-`simple` `unix_user_mode` controls Unix impersonation/groups/FS ACLs.
+ */
+export function resolveExecutionSecurityMode(
+  config: AgorConfig = loadConfigSync()
+): ResolvedExecutionSecurityMode {
+  const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
+  const unixIsolationEnabled = unixUserMode !== 'simple';
+
+  return {
+    appRbacEnabled: config.execution?.branch_rbac === true,
+    unixUserMode,
+    unixImpersonationEnabled: unixIsolationEnabled,
+    unixFsIsolationEnabled: unixIsolationEnabled,
+    unixGroupRefreshNeeded: unixIsolationEnabled,
+    requiresDaemonUnixUser: unixIsolationEnabled,
+    shouldInitUnixGroups: unixIsolationEnabled,
+  };
+}
+
 /**
  * Check if logical branch RBAC is enabled.
  *
@@ -838,8 +879,7 @@ export function requireDaemonUser(config: AgorConfig): string {
  */
 export function isBranchRbacEnabled(): boolean {
   try {
-    const config = loadConfigSync();
-    return config.execution?.branch_rbac === true;
+    return resolveExecutionSecurityMode().appRbacEnabled;
   } catch {
     return false;
   }
@@ -853,9 +893,7 @@ export function isBranchRbacEnabled(): boolean {
  */
 export function isUnixImpersonationEnabled(): boolean {
   try {
-    const config = loadConfigSync();
-    const mode = config.execution?.unix_user_mode;
-    return mode !== undefined && mode !== 'simple';
+    return resolveExecutionSecurityMode().unixImpersonationEnabled;
   } catch {
     return false;
   }
@@ -924,7 +962,7 @@ export function ensureBranchStorageModeAllowed(mode: import('./types').BranchSto
  * Returns true when `unix_user_mode` is `insulated` or `strict`.
  */
 export function isUnixGroupRefreshNeeded(): boolean {
-  return isUnixImpersonationEnabled();
+  return resolveExecutionSecurityMode().unixGroupRefreshNeeded;
 }
 
 // =============================================================================

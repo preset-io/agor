@@ -9,6 +9,7 @@ import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   and,
@@ -370,7 +371,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     });
   }
 
-  if ((config.execution?.unix_user_mode ?? 'simple') !== 'simple') {
+  if (resolveExecutionSecurityMode(config).unixFsIsolationEnabled) {
     const daemonUser = config.daemon?.unix_user || 'agor';
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }

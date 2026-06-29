@@ -14,13 +14,13 @@ import path from 'node:path';
 import {
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
-  isUnixGroupRefreshNeeded,
   isValidGitUrl,
   isValidSlug,
   normalizeRepoUrl,
   PAGINATION,
   parseAgorYml,
   resolveBranchStorageConfig,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import { BranchRepository, type Database, RepoRepository, shortId } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
@@ -55,10 +55,9 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
-  generateSessionToken,
+  generateScopedServiceToken,
   getDaemonUrl,
   runExecutorCommand,
-  serviceTokenScopeForParams,
   spawnExecutorFireAndForget,
 } from '../utils/spawn-executor.js';
 
@@ -223,14 +222,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // token ensures hooks like requireAdminForEnvConfig bypass via
     // _isServiceAccount. Executor fetches per-user credentials via Feathers
     // RPC (users.getGitEnvironment) using the same service JWT.
-    const sessionToken = generateSessionToken(
+    const sessionToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      serviceTokenScopeForParams(params)
+      params
     );
 
     // Unix group initialization is a filesystem concern controlled by
     // unix_user_mode, not by app-level branch RBAC.
-    const initUnixGroup = isUnixGroupRefreshNeeded();
+    const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
 
     // Sudo wrap (asUser) is gated inside the resolver — returns undefined
     // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -912,14 +911,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Per-user credentials: Feathers RPC (users.getGitEnvironment)
     // Unix group init: Feathers RPC (branches.initializeUnixGroup) — runs daemon-side
     try {
-      const sessionToken = generateSessionToken(
+      const sessionToken = generateScopedServiceToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        serviceTokenScopeForParams(params)
+        params
       );
 
       // Unix group initialization is a filesystem concern controlled by
       // unix_user_mode, not by app-level branch RBAC.
-      const initUnixGroup = isUnixGroupRefreshNeeded();
+      const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
 
       // Sudo wrap (asUser) is gated inside the resolver — returns undefined
       // in simple/no-RBAC mode so hosts without passwordless sudoers work
@@ -1003,9 +1002,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     params: Record<string, unknown>,
     serviceParams?: RepoParams
   ) {
-    const sessionToken = generateSessionToken(
+    const sessionToken = generateScopedServiceToken(
       this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      serviceTokenScopeForParams(serviceParams)
+      serviceParams
     );
     const asUser = await resolveExecutorReadAsUser(
       this.db,
@@ -1188,9 +1187,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // If cleanup is requested and this is a remote repo, delete filesystem directories FIRST.
     // Delegate to the executor so the daemon never rm -rfs managed repo/branch dirs itself.
     if (cleanup && repo.repo_type === 'remote') {
-      const sessionToken = generateSessionToken(
+      const sessionToken = generateScopedServiceToken(
         this.app as unknown as { settings: { authentication?: { secret?: string } } },
-        serviceTokenScopeForParams(params)
+        params
       );
 
       const cleanupResult = await runExecutorCommand(

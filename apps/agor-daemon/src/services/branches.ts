@@ -11,9 +11,9 @@ import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
   ENVIRONMENT,
-  isUnixGroupRefreshNeeded,
   loadConfig,
   PAGINATION,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   BoardRepository,
@@ -1490,7 +1490,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Unix group initialization is a filesystem concern controlled by
       // unix_user_mode. Logical branch RBAC may be enabled in simple/Cloud mode
       // without creating OS groups.
-      const initUnixGroup = isUnixGroupRefreshNeeded();
+      const initUnixGroup = resolveExecutionSecurityMode().shouldInitUnixGroups;
       const { getDaemonUser } = await import('@agor/core/config');
       const daemonUser = getDaemonUser();
 

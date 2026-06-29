@@ -74,6 +74,7 @@ vi.mock('../utils/mcp-token-authorization.js', () => ({
 
 vi.mock('../utils/spawn-executor.js', () => ({
   generateSessionToken: () => 'session-token',
+  generateScopedServiceToken: () => 'session-token',
   serviceTokenScopeForParams: () => ({}),
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
