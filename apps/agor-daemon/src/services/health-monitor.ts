@@ -12,7 +12,13 @@
  */
 
 import { ENVIRONMENT } from '@agor/core/config';
-import { shortId } from '@agor/core/db';
+import {
+  BranchRepository,
+  runWithSystemDatabaseScope,
+  runWithTenantDatabaseScope,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantContext, TenantID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
@@ -34,9 +40,22 @@ export interface HealthMonitorParams {
   tenant?: TenantContext;
 }
 
+export interface ActiveEnvironmentBranchRef {
+  branchId: BranchID;
+  tenantId?: TenantID | string;
+}
+
 export interface HealthMonitorOptions {
   /** Internal params used for startup/background scans when no request context exists. */
   defaultParams?: HealthMonitorParams;
+  /** Database used for tenant-aware startup discovery. */
+  db?: TenantScopeAwareDatabase;
+  /** Static/single-tenant id used for request-less startup scans. Undefined means discover tenant metadata from branch rows. */
+  tenantId?: TenantID | string;
+  /** Fail closed for event-driven monitoring when branch events do not carry tenant metadata. */
+  requireTenantParams?: boolean;
+  /** Test seam for startup discovery. Production uses BranchRepository when db is provided. */
+  discoverActiveEnvironmentRefs?: () => Promise<ActiveEnvironmentBranchRef[]>;
 }
 
 function tenantParamsFromBranch(branch: Branch): HealthMonitorParams | undefined {
@@ -51,11 +70,30 @@ export class HealthMonitor {
   private branchParams = new Map<BranchID, HealthMonitorParams>();
   private isShuttingDown = false;
   private defaultParams?: HealthMonitorParams;
+  private db?: TenantScopeAwareDatabase;
+  private branchRepo?: BranchRepository;
+  private tenantId?: TenantID | string;
+  private requireTenantParams: boolean;
+  private discoverActiveEnvironmentRefs?: () => Promise<ActiveEnvironmentBranchRef[]>;
 
   constructor(app: Application, options: HealthMonitorOptions = {}) {
     this.app = app;
     this.defaultParams = options.defaultParams;
+    this.db = options.db;
+    this.branchRepo = options.db ? new BranchRepository(options.db) : undefined;
+    this.tenantId =
+      typeof options.tenantId === 'string' && options.tenantId.trim()
+        ? options.tenantId.trim()
+        : undefined;
+    this.requireTenantParams = options.requireTenantParams ?? false;
+    this.discoverActiveEnvironmentRefs = options.discoverActiveEnvironmentRefs;
     this.setupBranchListeners();
+  }
+
+  private paramsForBranch(branch: Branch): HealthMonitorParams | undefined {
+    return (
+      tenantParamsFromBranch(branch) ?? (this.requireTenantParams ? undefined : this.defaultParams)
+    );
   }
 
   /**
@@ -92,7 +130,13 @@ export class HealthMonitor {
     if (status === 'running' || status === 'starting') {
       // Start monitoring if not already monitored.
       // Monitor both 'running' and 'starting' - health checks will transition 'starting' → 'running'.
-      const params = tenantParamsFromBranch(branch) ?? this.defaultParams;
+      const params = this.paramsForBranch(branch);
+      if (!params && this.requireTenantParams) {
+        console.error(
+          `❌ Health monitoring skipped for branch ${shortId(branch.branch_id)}: missing tenant metadata`
+        );
+        return;
+      }
       if (params) this.branchParams.set(branch.branch_id, params);
       if (!this.intervals.has(branch.branch_id)) {
         healthMonitorDebug(`🏥 Starting health monitoring for branch: ${branch.name}`);
@@ -151,7 +195,16 @@ export class HealthMonitor {
     try {
       const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
 
-      const params = this.branchParams.get(branchId) ?? this.defaultParams;
+      const params =
+        this.branchParams.get(branchId) ??
+        (this.requireTenantParams ? undefined : this.defaultParams);
+      if (!params && this.requireTenantParams) {
+        console.error(
+          `❌ Health check skipped for branch ${shortId(branchId)}: missing tenant metadata`
+        );
+        this.stopMonitoring(branchId);
+        return;
+      }
 
       // Get current branch state
       const branch = await branchesService.get(branchId, params as never);
@@ -196,36 +249,117 @@ export class HealthMonitor {
    */
   async initialize() {
     try {
-      const branchesService = this.app.service('branches');
+      const activeBranches =
+        this.branchRepo || this.discoverActiveEnvironmentRefs
+          ? await this.initializeFromTenantAwareDiscovery()
+          : await this.initializeFromDefaultParamsScan();
 
-      // Find all branches with running status
-      const result = await branchesService.find({
-        ...this.defaultParams,
-        query: {
-          $limit: 1000,
-        },
-        paginate: false,
-      } as never);
-
-      // Handle both paginated and non-paginated responses
-      const branches = (Array.isArray(result) ? result : result.data) as Branch[];
-
-      // Start monitoring running or starting branches
-      const activeBranches = branches.filter(
-        (w) =>
-          w.environment_instance?.status === 'running' ||
-          w.environment_instance?.status === 'starting'
-      );
-
-      for (const branch of activeBranches) {
-        const params = tenantParamsFromBranch(branch) ?? this.defaultParams;
-        if (params) this.branchParams.set(branch.branch_id, params);
-        this.startMonitoring(branch.branch_id, params);
-      }
-      console.log(`🏥 Health Monitor initialized (${activeBranches.length} active environment(s))`);
+      console.log(`🏥 Health Monitor initialized (${activeBranches} active environment(s))`);
     } catch (error) {
       console.error('❌ Failed to initialize Health Monitor:', error);
     }
+  }
+
+  private async initializeFromDefaultParamsScan(): Promise<number> {
+    const branchesService = this.app.service('branches');
+
+    // Find all branches with running status in the configured static/startup tenant.
+    const result = await branchesService.find({
+      ...this.defaultParams,
+      query: {
+        $limit: 1000,
+      },
+      paginate: false,
+    } as never);
+
+    // Handle both paginated and non-paginated responses
+    const branches = (Array.isArray(result) ? result : result.data) as Branch[];
+
+    // Start monitoring running or starting branches
+    const activeBranches = branches.filter(
+      (w) =>
+        w.environment_instance?.status === 'running' ||
+        w.environment_instance?.status === 'starting'
+    );
+
+    for (const branch of activeBranches) {
+      const params = this.paramsForBranch(branch);
+      if (!params && this.requireTenantParams) {
+        console.error(
+          `❌ Health monitoring skipped for branch ${shortId(branch.branch_id)}: missing tenant metadata`
+        );
+        continue;
+      }
+      if (params) this.branchParams.set(branch.branch_id, params);
+      this.startMonitoring(branch.branch_id, params);
+    }
+
+    return activeBranches.length;
+  }
+
+  private async initializeFromTenantAwareDiscovery(): Promise<number> {
+    const refs = await this.findActiveEnvironmentRefs();
+    const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
+    let activeCount = 0;
+
+    for (const ref of refs) {
+      if (!ref.tenantId) {
+        console.error(
+          `❌ Health monitoring skipped for branch ${shortId(ref.branchId)}: missing tenant metadata`
+        );
+        continue;
+      }
+
+      const params: HealthMonitorParams = {
+        tenant: {
+          tenant_id: ref.tenantId as TenantID,
+          source: this.tenantId ? 'static' : 'explicit',
+        },
+      };
+
+      try {
+        const loadAndStart = async () => {
+          const branch = await branchesService.get(ref.branchId, params as never);
+          const status = branch.environment_instance?.status;
+          if (status !== 'running' && status !== 'starting') return;
+          this.branchParams.set(branch.branch_id, tenantParamsFromBranch(branch) ?? params);
+          this.startMonitoring(branch.branch_id, this.branchParams.get(branch.branch_id));
+          activeCount += 1;
+        };
+
+        if (this.db) {
+          await runWithTenantDatabaseScope(this.db, ref.tenantId, loadAndStart);
+        } else {
+          await loadAndStart();
+        }
+      } catch (error) {
+        console.error(
+          `❌ Failed to initialize health monitoring for branch ${shortId(ref.branchId)}:`,
+          error
+        );
+      }
+    }
+
+    return activeCount;
+  }
+
+  private async findActiveEnvironmentRefs(): Promise<ActiveEnvironmentBranchRef[]> {
+    const findRefs = async (tenantId?: TenantID | string) => {
+      const refs = this.discoverActiveEnvironmentRefs
+        ? await this.discoverActiveEnvironmentRefs()
+        : await this.branchRepo!.findActiveEnvironmentRefs();
+      return refs.map((ref) => ({ ...ref, tenantId: tenantId ?? ref.tenantId }));
+    };
+
+    if (this.tenantId) {
+      if (!this.db) return findRefs(this.tenantId);
+      return runWithTenantDatabaseScope(this.db, this.tenantId, () => findRefs(this.tenantId));
+    }
+
+    if (!this.db) return findRefs();
+    return runWithSystemDatabaseScope(this.db, 'health monitor active environment discovery', () =>
+      findRefs()
+    );
   }
 
   /**

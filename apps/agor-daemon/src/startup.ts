@@ -515,7 +515,14 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 2. Register Health Monitor listeners before serving requests. The initial
   // full scan of already-running environments is deferred until after listen.
-  const healthMonitor = new HealthMonitor(app, { defaultParams: startupTenantParams(config) });
+  const startupMultiTenancy = resolveMultiTenancyConfig(config);
+  const healthMonitor = new HealthMonitor(app, {
+    defaultParams: startupTenantParams(config),
+    db,
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    requireTenantParams: startupMultiTenancy.mode !== 'static',
+  });
 
   // 3. Validate/generate master secret for API key encryption
   await ensureMasterSecret(config);
