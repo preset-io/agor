@@ -1166,56 +1166,39 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           background: token.colorBgContainer,
         }}
       >
-        {/* Row 1: icon + title + action buttons — always unchanged */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flex: 1, minWidth: 0 }}>
-            <div style={{ flexShrink: 0 }}>
-              <ToolIcon tool={session.agentic_tool} size={40} />
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Row 1: always single row — search bar appears inline when open */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ flexShrink: 0 }}>
+            <ToolIcon tool={session.agentic_tool} size={40} />
+          </div>
+          {searchOpen ? (
+            <>
               <Typography.Text
                 strong
                 style={{
                   fontSize: 18,
-                  ...getSessionTitleStyles(2),
+                  maxWidth: 140,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  display: 'block',
+                  flexShrink: 0,
                 }}
               >
                 {getSessionDisplayTitle(session, { includeAgentFallback: true })}
               </Typography.Text>
-              {!searchOpen && (
-                <Badge
-                  status={getStatusColor()}
-                  text={session.status.toUpperCase()}
-                  style={{ marginLeft: 12 }}
-                />
-              )}
-            </div>
-          </div>
-          <Space size={4}>
-            <SessionAttachmentsDropdown items={attachmentItems} />
-            <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
-              <Tooltip title="More actions">
-                <Button type="text" icon={<EllipsisOutlined />} />
-              </Tooltip>
-            </Dropdown>
-            <Tooltip title="Search session (Cmd+F)">
-              <Button type="text" icon={<SearchOutlined />} onClick={openSearch} />
-            </Tooltip>
-            <Tooltip title="Close Panel">
-              <Button
-                type="text"
-                icon={<CloseOutlined />}
-                onClick={onClose}
-                style={{ marginLeft: token.sizeUnit }}
-              />
-            </Tooltip>
-          </Space>
-        </div>
-        {/* Row 2: search bar (when open) or created-by (when available) */}
-        {(searchOpen || session.created_by) && (
-          <div style={{ display: 'flex', alignItems: 'center', marginTop: token.sizeUnit }}>
-            {searchOpen ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+              <div
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  background: token.colorFillAlter,
+                  borderRadius: token.borderRadius,
+                  padding: '0 8px',
+                  minWidth: 0,
+                }}
+              >
                 <SearchOutlined
                   style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }}
                 />
@@ -1269,16 +1252,56 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
                 </Tooltip>
               </div>
-            ) : (
-              <div style={{ marginLeft: 52 }}>
-                <CreatedByTag
-                  createdBy={session.created_by}
-                  currentUserId={currentUserId}
-                  userById={userById}
-                  prefix="Created by"
-                />
-              </div>
-            )}
+            </>
+          ) : (
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Typography.Text
+                strong
+                style={{
+                  fontSize: 18,
+                  ...getSessionTitleStyles(2),
+                }}
+              >
+                {getSessionDisplayTitle(session, { includeAgentFallback: true })}
+              </Typography.Text>
+              <Badge
+                status={getStatusColor()}
+                text={session.status.toUpperCase()}
+                style={{ marginLeft: 12 }}
+              />
+            </div>
+          )}
+          {!searchOpen && (
+            <Space size={4}>
+              <SessionAttachmentsDropdown items={attachmentItems} />
+              <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
+                <Tooltip title="More actions">
+                  <Button type="text" icon={<EllipsisOutlined />} />
+                </Tooltip>
+              </Dropdown>
+              <Tooltip title="Search session (Cmd+F)">
+                <Button type="text" icon={<SearchOutlined />} onClick={openSearch} />
+              </Tooltip>
+            </Space>
+          )}
+          <Tooltip title="Close Panel">
+            <Button
+              type="text"
+              icon={<CloseOutlined />}
+              onClick={onClose}
+              style={{ marginLeft: searchOpen ? 0 : token.sizeUnit }}
+            />
+          </Tooltip>
+        </div>
+        {/* Row 2: created-by only when not searching */}
+        {!searchOpen && session.created_by && (
+          <div style={{ marginTop: token.sizeUnit, marginLeft: 52 }}>
+            <CreatedByTag
+              createdBy={session.created_by}
+              currentUserId={currentUserId}
+              userById={userById}
+              prefix="Created by"
+            />
           </div>
         )}
       </div>
