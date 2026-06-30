@@ -215,9 +215,9 @@ const BranchCardComponent = ({
   const isDarkMode = isDarkTheme(token);
   // AntD exposes `colorPrimaryBg` as the subtle primary surface token.
   // In dark mode it can still read a bit bright on a large card, so mix it
-  // back toward the container surface while staying in the primary token family.
+  // with the base background while staying in the primary token family.
   const runningCardBackgroundColor = isDarkMode
-    ? `color-mix(in srgb, ${token.colorPrimaryBg} 70%, ${token.colorBgContainer})`
+    ? `color-mix(in srgb, ${token.colorPrimaryBg} 50%, ${token.colorBgBase})`
     : token.colorPrimaryBg;
   const cardBackgroundColor = hasRunningSession
     ? runningCardBackgroundColor
