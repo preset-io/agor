@@ -1004,6 +1004,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       stopRequestInFlight={stopRequestInFlight}
       hasInput={hasInput || hasComposerAttachments}
       composerAttachmentsPresent={hasComposerAttachments}
+      composerAttachmentUploading={composerAttachmentUploading}
       connectionDisabled={connectionDisabled}
       toolCaps={toolCaps}
       effortLevel={effortLevel}

@@ -291,6 +291,50 @@ describe('SessionPanel composer send', () => {
     expect(screen.queryByLabelText('Preview rapid-chart.png')).not.toBeInTheDocument();
   });
 
+  it('disables footer send and upload actions while composer attachments upload', async () => {
+    localStorage.setItem('agor-footer-prefs', JSON.stringify({ pinnedItems: ['upload'] }));
+    const upload = deferred<UploadFilesToSessionResult>();
+    uploadMockState.uploadFilesToSession.mockReturnValue(upload.promise);
+    const onSendPrompt = vi.fn();
+    const { container } = renderSessionPanel({ onSendPrompt });
+
+    const dropZone = screen.getByLabelText('Composer attachments and input drop zone');
+    const file = new File(['chart'], 'uploading-chart.png', { type: 'image/png' });
+    fireEvent.drop(dropZone, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [file],
+      },
+    });
+
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'Summarize this while upload locks actions' } });
+
+    const sendButton = container.querySelector('button.ant-btn-primary');
+    expect(sendButton).toBeInstanceOf(HTMLButtonElement);
+    fireEvent.click(sendButton as HTMLButtonElement);
+
+    await waitFor(() => expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(sendButton).toBeDisabled();
+      expect(screen.getByTestId('upload-bar-btn')).toBeDisabled();
+    });
+
+    upload.resolve({
+      success: true,
+      files: [
+        {
+          filename: 'uploading-chart.png',
+          path: '.agor/uploads/uploading-chart.png',
+          size: 5,
+          mimeType: 'image/png',
+        },
+      ],
+    });
+
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
+  });
+
   it('preserves prompt and uploaded attachments when prompt submission fails after upload', async () => {
     uploadMockState.uploadFilesToSession.mockResolvedValue({
       success: true,

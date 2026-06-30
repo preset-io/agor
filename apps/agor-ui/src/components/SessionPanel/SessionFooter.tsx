@@ -65,6 +65,7 @@ export interface SessionFooterProps {
   stopRequestInFlight: boolean;
   hasInput: boolean;
   composerAttachmentsPresent?: boolean;
+  composerAttachmentUploading?: boolean;
   connectionDisabled: boolean;
   toolCaps?: { supportsSessionFork?: boolean; supportsChildSpawn?: boolean };
   // Settings state
@@ -107,6 +108,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   stopRequestInFlight,
   hasInput,
   composerAttachmentsPresent = false,
+  composerAttachmentUploading = false,
   connectionDisabled,
   toolCaps,
   queuedTasks,
@@ -186,9 +188,12 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   }, [latestContextWindow]);
   const contextWarning = contextPct > 0.8;
   const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
+  const composerUploadTooltip = 'Uploading files...';
+  const uploadDisabled = connectionDisabled || composerAttachmentUploading;
   const forkDisabled = connectionDisabled || composerAttachmentsPresent;
   const btwForkDisabled = connectionDisabled || !hasInput || composerAttachmentsPresent;
   const spawnDisabled = connectionDisabled || isRunning || composerAttachmentsPresent;
+  const sendDisabled = connectionDisabled || composerAttachmentUploading || !hasInput;
 
   const sectionHeaderStyle: React.CSSProperties = {
     padding: '6px 12px 3px',
@@ -1058,9 +1063,11 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   const sendLabel = isRunning && hasInput ? 'Queue' : 'Send';
   const sendTooltip = connectionDisabled
     ? 'Disconnected from daemon'
-    : isRunning
-      ? 'Queue Message'
-      : 'Send Prompt';
+    : composerAttachmentUploading
+      ? composerUploadTooltip
+      : isRunning
+        ? 'Queue Message'
+        : 'Send Prompt';
 
   return (
     <div
@@ -1296,13 +1303,21 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           {/* Left group */}
           <Space size={4}>
             {pinnedItems.includes('upload') && (
-              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Upload Files'}>
+              <Tooltip
+                title={
+                  connectionDisabled
+                    ? 'Disconnected from daemon'
+                    : composerAttachmentUploading
+                      ? composerUploadTooltip
+                      : 'Upload Files'
+                }
+              >
                 <Button
                   size="small"
                   type="text"
                   icon={<PaperClipOutlined />}
                   onClick={onUploadOpen}
-                  disabled={connectionDisabled}
+                  disabled={uploadDisabled}
                   data-testid="upload-bar-btn"
                 />
               </Tooltip>
@@ -1396,7 +1411,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   size="small"
                   icon={<SendOutlined />}
                   onClick={onSendPrompt}
-                  disabled={connectionDisabled || !hasInput}
+                  disabled={sendDisabled}
                 >
                   {sendLabel}
                 </Button>
