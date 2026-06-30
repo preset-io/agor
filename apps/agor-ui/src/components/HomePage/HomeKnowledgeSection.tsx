@@ -80,7 +80,10 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
   }, [docs, query]);
   useEffect(() => {
     let cancelled = false;
-    if (!client || !connected) return;
+    if (!client || !connected) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     client

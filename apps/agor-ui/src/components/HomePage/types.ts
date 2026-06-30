@@ -16,11 +16,11 @@ export interface HomePageProps {
   onBoardClick: (boardId: string) => void;
   onBranchClick: (branchId: string) => void;
   onSessionClick: (sessionId: string) => void;
-  onOpenCreateDialog?: (
+  onOpenCreateDialog: (
     tab: 'assistant' | 'branch' | 'board' | 'repository',
     boardId?: string
   ) => void;
-  onOpenSettings?: (section: 'repos' | 'mcp' | 'users') => void;
+  onOpenSettings: (section: 'repos' | 'mcp' | 'users') => void;
 }
 
 export interface KnowledgeDocument
