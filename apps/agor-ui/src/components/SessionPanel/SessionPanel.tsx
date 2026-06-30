@@ -1165,7 +1165,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           background: token.colorBgContainer,
         }}
       >
-        {/* Row 1: icon + title + action buttons — never changes */}
+        {/* Row 1: icon + title + badge + action buttons */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flex: 1, minWidth: 0 }}>
             <div style={{ flexShrink: 0 }}>
@@ -1175,6 +1175,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               <Typography.Text strong style={{ fontSize: 18, ...getSessionTitleStyles(2) }}>
                 {getSessionDisplayTitle(session, { includeAgentFallback: true })}
               </Typography.Text>
+              {!searchOpen && (
+                <Badge status={getStatusColor()} text={session.status.toUpperCase()} />
+              )}
             </div>
           </div>
           <Space size={4}>
@@ -1197,17 +1200,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
           </Space>
         </div>
-        {/* Row 2: always rendered at fixed height — status badge or search bar */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            marginTop: token.sizeUnit,
-            marginLeft: 52,
-            height: 24,
-          }}
-        >
-          {searchOpen ? (
+        {/* Row 2: search bar, only when open */}
+        {searchOpen && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              marginTop: token.sizeUnit,
+              marginLeft: 52,
+            }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
               <SearchOutlined style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }} />
               <Input
@@ -1260,10 +1262,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
               </Tooltip>
             </div>
-          ) : (
-            <Badge status={getStatusColor()} text={session.status.toUpperCase()} />
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* Body - Scrollable content */}
