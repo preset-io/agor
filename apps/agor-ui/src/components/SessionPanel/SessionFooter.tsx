@@ -219,7 +219,16 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       <div style={sectionHeaderStyle}>Settings</div>
 
       {/* Model */}
-      <div style={{ ...overflowRowStyle, height: 'auto', paddingTop: 6, paddingBottom: 6, alignItems: 'flex-start', cursor: 'default' }}>
+      <div
+        style={{
+          ...overflowRowStyle,
+          height: 'auto',
+          paddingTop: 6,
+          paddingBottom: 6,
+          alignItems: 'flex-start',
+          cursor: 'default',
+        }}
+      >
         <RobotOutlined
           style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0, marginTop: 7 }}
         />
