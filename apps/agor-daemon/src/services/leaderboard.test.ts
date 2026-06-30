@@ -584,7 +584,7 @@ describe('LeaderboardService input validation', () => {
 
     const result = await service.find({ query: { groupBy: 'user', limit: '50000', offset: '1' } });
 
-    expect(result.limit).toBe(1000);
+    expect(result.limit).toBe(10_000);
     expect(result.offset).toBe(1);
   });
 });

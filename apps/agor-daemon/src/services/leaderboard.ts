@@ -99,7 +99,7 @@ export interface LeaderboardResult {
 }
 
 const VALID_BUCKETS = new Set<DateBucket>(['hour', 'day', 'week', 'month']);
-const MAX_LIMIT = 1000;
+const MAX_LIMIT = 10_000;
 
 function parseIntegerParam(
   value: unknown,
