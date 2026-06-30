@@ -111,6 +111,44 @@ const renderMentionAutocomplete = (
 const waitForDebounce = () => new Promise((resolve) => setTimeout(resolve, 350));
 const waitForStateUpdate = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+const renderPasteHarness = (handlers: {
+  onImagePaste?: (files: File[]) => void;
+  onFilesDrop?: (files: File[]) => void;
+}) => {
+  const Harness = () => {
+    const [value, setValue] = useState('');
+    return (
+      <AutocompleteTextarea
+        value={value}
+        onChange={setValue}
+        placeholder="Prompt"
+        client={null}
+        sessionId={null}
+        userById={new Map()}
+        onImagePaste={handlers.onImagePaste}
+        onFilesDrop={handlers.onFilesDrop}
+      />
+    );
+  };
+  render(<Harness />);
+  return screen.getByPlaceholderText('Prompt') as HTMLTextAreaElement;
+};
+
+// Build a ClipboardEvent-ish init whose items mimic a pasted image (or plain text).
+const clipboardWith = (kind: 'image' | 'text') => {
+  const items =
+    kind === 'image'
+      ? [
+          {
+            kind: 'file' as const,
+            type: 'image/png',
+            getAsFile: () => new File(['fake'], 'screenshot.png', { type: 'image/png' }),
+          },
+        ]
+      : [{ kind: 'string' as const, type: 'text/plain', getAsFile: () => null }];
+  return { items };
+};
+
 describe('AutocompleteTextarea', () => {
   it('selects the default highlighted autocomplete item with Enter', async () => {
     const textarea = renderSlashAutocomplete();
@@ -242,5 +280,43 @@ describe('AutocompleteTextarea', () => {
     });
     expect(kbSearchFind).not.toHaveBeenCalled();
     expect(kbDocumentsFind).not.toHaveBeenCalled();
+  });
+
+  it('routes a pasted image to onImagePaste (inline) and not onFilesDrop', () => {
+    const onImagePaste = vi.fn();
+    const onFilesDrop = vi.fn();
+    const textarea = renderPasteHarness({ onImagePaste, onFilesDrop });
+
+    fireEvent.paste(textarea, { clipboardData: clipboardWith('image') });
+
+    expect(onImagePaste).toHaveBeenCalledTimes(1);
+    expect(onFilesDrop).not.toHaveBeenCalled();
+    const files = onImagePaste.mock.calls[0][0] as File[];
+    expect(files).toHaveLength(1);
+    // The handler renames pasted images to a friendly screenshot name.
+    expect(files[0].name).toMatch(/^pasted-screenshot-.*\.png$/);
+    expect(files[0].type).toBe('image/png');
+  });
+
+  it('falls back to onFilesDrop (modal) for a pasted image when onImagePaste is absent', () => {
+    const onFilesDrop = vi.fn();
+    const textarea = renderPasteHarness({ onFilesDrop });
+
+    fireEvent.paste(textarea, { clipboardData: clipboardWith('image') });
+
+    expect(onFilesDrop).toHaveBeenCalledTimes(1);
+    const files = onFilesDrop.mock.calls[0][0] as File[];
+    expect(files).toHaveLength(1);
+  });
+
+  it('ignores plain-text paste (no handler fired, default paste preserved)', () => {
+    const onImagePaste = vi.fn();
+    const onFilesDrop = vi.fn();
+    const textarea = renderPasteHarness({ onImagePaste, onFilesDrop });
+
+    fireEvent.paste(textarea, { clipboardData: clipboardWith('text') });
+
+    expect(onImagePaste).not.toHaveBeenCalled();
+    expect(onFilesDrop).not.toHaveBeenCalled();
   });
 });

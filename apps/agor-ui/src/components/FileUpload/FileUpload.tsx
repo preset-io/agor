@@ -4,7 +4,7 @@ import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
-import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
+import { type UploadedFile, uploadSessionFiles } from './uploadSessionFiles';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -12,12 +12,7 @@ const { Text } = Typography;
 const DEFAULT_AGENT_UPLOAD_MESSAGE =
   'Note: the user uploaded file(s): {filepath}\n\nPlease review and use them as context for this task.';
 
-export interface UploadedFile {
-  filename: string;
-  path: string;
-  size: number;
-  mimeType: string;
-}
+export type { UploadedFile } from './uploadSessionFiles';
 
 export interface FileUploadProps {
   sessionId: string;
@@ -94,69 +89,39 @@ export const FileUpload: React.FC<FileUploadProps> = ({
     setUploading(true);
 
     try {
-      const formData = new FormData();
-
+      const files: File[] = [];
       fileList.forEach((file) => {
         if (file.originFileObj) {
-          formData.append('files', file.originFileObj);
+          files.push(file.originFileObj);
         } else {
           console.warn('[FileUpload] File missing originFileObj:', file.name);
         }
       });
-      formData.append('notifyAgent', String(notifyAgent));
-      formData.append('message', agentMessage);
 
-      const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload`;
-
-      // Get JWT token from localStorage (same as Feathers client)
-      const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
-      const headers: HeadersInit = {};
-
-      if (accessToken) {
-        headers.Authorization = `Bearer ${accessToken}`;
-      } else {
-        console.warn('[FileUpload] No access token found in localStorage');
-      }
-
-      const response = await fetch(uploadUrl, {
-        method: 'POST',
-        headers,
-        body: formData,
-        // No `credentials: 'include'` — the upload endpoint is Bearer-only
-        // (cookie auth was removed to avoid CSRF). Sending credentials would
-        // also force a non-wildcard Access-Control-Allow-Origin, which the
-        // daemon's CORS layer answers with '*', breaking the preflight.
+      const uploaded = await uploadSessionFiles({
+        sessionId,
+        daemonUrl,
+        files,
+        notifyAgent,
+        message: agentMessage,
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        let error: { error?: string } = {};
-        try {
-          error = JSON.parse(errorText);
-        } catch {
-          error = { error: errorText || 'Upload failed' };
-        }
-        throw new Error(error.error || 'Upload failed');
-      }
-
-      const result = await response.json();
-
       // Show success message with final filename(s) so user knows what to reference
-      if (result.files.length === 1) {
-        showSuccess(`Uploaded as: ${result.files[0].filename}`);
+      if (uploaded.length === 1) {
+        showSuccess(`Uploaded as: ${uploaded[0].filename}`);
       } else {
-        showSuccess(`Uploaded ${result.files.length} files successfully`);
+        showSuccess(`Uploaded ${uploaded.length} files successfully`);
       }
 
       // Call completion callback
       if (onUploadComplete) {
-        onUploadComplete(result.files);
+        onUploadComplete(uploaded);
       }
 
       // If not notifying agent, optionally insert @filepath mention
-      if (!notifyAgent && onInsertMention && result.files.length > 0) {
+      if (!notifyAgent && onInsertMention && uploaded.length > 0) {
         // Insert first file path as mention
-        const firstFile = result.files[0];
+        const firstFile = uploaded[0];
         // Quote paths with spaces to prevent breaking mention parser
         const mentionPath = firstFile.path.includes(' ') ? `"${firstFile.path}"` : firstFile.path;
         onInsertMention(mentionPath);

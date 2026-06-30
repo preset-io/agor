@@ -46,12 +46,13 @@ import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import { FileUpload } from '../FileUpload';
+import { FileUpload, uploadSessionFiles } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
+import { PendingAttachments, type PendingImageAttachment } from './PendingAttachments';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionFooter } from './SessionFooter';
@@ -89,6 +90,8 @@ interface PromptInputProps {
   client: AgorClient | null;
   userById: Map<string, User>;
   onFilesDrop?: (files: File[]) => void;
+  /** Inline image paste (skips the upload modal) */
+  onImagePaste?: (files: File[]) => void;
   slashCommands?: string[];
   skills?: string[];
 }
@@ -108,6 +111,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       client,
       userById,
       onFilesDrop,
+      onImagePaste,
       slashCommands,
       skills,
     },
@@ -200,6 +204,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         sessionId={sessionId}
         userById={userById}
         onFilesDrop={onFilesDrop}
+        onImagePaste={onImagePaste}
         slashCommands={slashCommands}
         skills={skills}
         enableKnowledgeMentions
@@ -344,6 +349,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
+  // Images pasted inline into the composer (no upload modal). Uploaded on paste;
+  // their server paths are appended to the prompt as @mentions on submit.
+  const [pendingAttachments, setPendingAttachments] = React.useState<PendingImageAttachment[]>([]);
+  // Mirror in a ref so the (async) send handler reads the latest list/paths
+  // without re-creating itself, and track in-flight uploads so a fast send waits.
+  const pendingAttachmentsRef = React.useRef<PendingImageAttachment[]>([]);
+  pendingAttachmentsRef.current = pendingAttachments;
+  const uploadPromisesRef = React.useRef<Map<string, Promise<void>>>(new Map());
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
@@ -530,6 +543,86 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     setEffortLevel(session?.model_config?.effort || 'high');
   }, [session?.model_config?.effort]);
 
+  // Remove a pending inline attachment and release its preview URL.
+  const handleRemoveAttachment = React.useCallback((id: string) => {
+    setPendingAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  // Drop all pending attachments and release their preview URLs (after send or
+  // when leaving the composer).
+  const clearPendingAttachments = React.useCallback(() => {
+    for (const att of pendingAttachmentsRef.current) {
+      URL.revokeObjectURL(att.previewUrl);
+    }
+    setPendingAttachments([]);
+  }, []);
+
+  // Release preview URLs on unmount so pasted thumbnails don't leak memory.
+  React.useEffect(() => {
+    return () => {
+      for (const att of pendingAttachmentsRef.current) {
+        URL.revokeObjectURL(att.previewUrl);
+      }
+    };
+  }, []);
+
+  // Pasted attachments belong to a single session — drop them when switching to
+  // a different session so they don't bleed into the next conversation.
+  const attachmentsSessionId = session?.session_id ?? null;
+  const prevAttachmentsSessionIdRef = React.useRef(attachmentsSessionId);
+  React.useEffect(() => {
+    if (prevAttachmentsSessionIdRef.current !== attachmentsSessionId) {
+      prevAttachmentsSessionIdRef.current = attachmentsSessionId;
+      clearPendingAttachments();
+    }
+  }, [attachmentsSessionId, clearPendingAttachments]);
+
+  // Inline image paste: skip the upload modal, show a thumbnail chip, and upload
+  // immediately to the same endpoint the modal uses (notifyAgent: false). The
+  // returned path is appended to the prompt as an @mention on submit.
+  const handleImagePaste = React.useCallback(
+    (files: File[]) => {
+      const activeSession = session;
+      if (!activeSession) return;
+      for (const file of files) {
+        const id = crypto.randomUUID();
+        const previewUrl = URL.createObjectURL(file);
+        setPendingAttachments((prev) => [
+          ...prev,
+          { id, name: file.name, previewUrl, status: 'uploading' },
+        ]);
+
+        const uploadPromise = uploadSessionFiles({
+          sessionId: activeSession.session_id,
+          daemonUrl: getDaemonUrl(),
+          files: [file],
+          notifyAgent: false,
+        })
+          .then((uploaded) => {
+            const path = uploaded[0]?.path;
+            if (!path) throw new Error('Upload returned no file path');
+            setPendingAttachments((prev) =>
+              prev.map((a) => (a.id === id ? { ...a, status: 'done', path } : a))
+            );
+          })
+          .catch((error) => {
+            showError(error instanceof Error ? error.message : 'Failed to upload pasted image');
+            handleRemoveAttachment(id);
+          })
+          .finally(() => {
+            uploadPromisesRef.current.delete(id);
+          });
+
+        uploadPromisesRef.current.set(id, uploadPromise);
+      }
+    },
+    [session, showError, handleRemoveAttachment]
+  );
+
   // When there's no session, render nothing (panel is collapsed to zero).
   // When open=false, we still render the component tree (hidden) so that
   // antd's CSS-in-JS doesn't garbage-collect component styles.
@@ -608,14 +701,30 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleSendPrompt = async () => {
     const value = promptRef.current?.getValue() ?? '';
-    if (!value.trim() || connectionDisabled) return;
+    const hasAttachments = pendingAttachmentsRef.current.length > 0;
+    if ((!value.trim() && !hasAttachments) || connectionDisabled) return;
 
-    const promptToSend = value.trim();
+    // Wait for any in-flight uploads so their paths are available to mention.
+    if (uploadPromisesRef.current.size > 0) {
+      await Promise.allSettled([...uploadPromisesRef.current.values()]);
+    }
+
+    // Append uploaded image paths as @mentions, mirroring the upload modal's
+    // "insert mention" path. Quote paths with spaces to keep the mention parser
+    // from splitting them.
+    const mentions = pendingAttachmentsRef.current
+      .filter((a) => a.status === 'done' && a.path)
+      .map((a) => `@${(a.path as string).includes(' ') ? `"${a.path}"` : a.path}`)
+      .join(' ');
+    const trimmed = value.trim();
+    const promptToSend = mentions ? `${trimmed} ${mentions}`.trim() : trimmed;
+    if (!promptToSend) return;
 
     // Single entry point: /prompt. The daemon decides run-vs-queue based on
     // session state and reports it back via `task.status`. The 'queued'
     // WebSocket event populates the queue panel for queued prompts.
     promptRef.current?.clear();
+    clearPendingAttachments();
     onSendPrompt?.(session.session_id, promptToSend, permissionMode);
 
     // Re-engage the bottom lock so a scrolled-up user follows their just-sent
@@ -834,7 +943,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       isRunning={isRunning}
       isStopping={isStopping}
       stopRequestInFlight={stopRequestInFlight}
-      hasInput={hasInput}
+      hasInput={hasInput || pendingAttachments.length > 0}
       connectionDisabled={connectionDisabled}
       toolCaps={toolCaps}
       effortLevel={effortLevel}
@@ -857,36 +966,40 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onPermissionModeChange={handlePermissionModeChange}
       onCodexPermissionChange={handleCodexPermissionChange}
       promptInputSlot={
-        <PromptInput
-          ref={promptRef}
-          sessionId={session.session_id}
-          getDraft={getDraft}
-          saveDraft={saveDraft}
-          deleteDraft={deleteDraft}
-          onHasInputChange={handleHasInputChange}
-          inputValueRef={inputValueRef}
-          onSubmit={handleSendPrompt}
-          placeholder={
-            isRunning
-              ? 'Queue here… @ for mentions, : for emoji'
-              : 'Prompt here… @ for mentions, : for emoji'
-          }
-          autoSize={{ minRows: 1, maxRows: 10 }}
-          client={client}
-          userById={userById}
-          onFilesDrop={(files) => {
-            setDroppedFiles(files);
-            setUploadModalOpen(true);
-          }}
-          slashCommands={(() => {
-            const ctx = session?.custom_context as Record<string, unknown> | undefined;
-            return Array.isArray(ctx?.slash_commands) ? ctx.slash_commands : undefined;
-          })()}
-          skills={(() => {
-            const ctx = session?.custom_context as Record<string, unknown> | undefined;
-            return Array.isArray(ctx?.skills) ? ctx.skills : undefined;
-          })()}
-        />
+        <>
+          <PendingAttachments attachments={pendingAttachments} onRemove={handleRemoveAttachment} />
+          <PromptInput
+            ref={promptRef}
+            sessionId={session.session_id}
+            getDraft={getDraft}
+            saveDraft={saveDraft}
+            deleteDraft={deleteDraft}
+            onHasInputChange={handleHasInputChange}
+            inputValueRef={inputValueRef}
+            onSubmit={handleSendPrompt}
+            placeholder={
+              isRunning
+                ? 'Queue here… @ for mentions, : for emoji'
+                : 'Prompt here… @ for mentions, : for emoji'
+            }
+            autoSize={{ minRows: 1, maxRows: 10 }}
+            client={client}
+            userById={userById}
+            onFilesDrop={(files) => {
+              setDroppedFiles(files);
+              setUploadModalOpen(true);
+            }}
+            onImagePaste={handleImagePaste}
+            slashCommands={(() => {
+              const ctx = session?.custom_context as Record<string, unknown> | undefined;
+              return Array.isArray(ctx?.slash_commands) ? ctx.slash_commands : undefined;
+            })()}
+            skills={(() => {
+              const ctx = session?.custom_context as Record<string, unknown> | undefined;
+              return Array.isArray(ctx?.skills) ? ctx.skills : undefined;
+            })()}
+          />
+        </>
       }
     />
   );

@@ -96,6 +96,13 @@ interface AutocompleteTextareaProps {
     maxRows?: number;
   };
   onFilesDrop?: (files: File[]) => void;
+  /**
+   * Handle image files pasted from the clipboard. When provided, pasted images
+   * are routed here instead of `onFilesDrop`, letting the composer attach them
+   * inline (no upload modal). Falls back to `onFilesDrop` when omitted so other
+   * consumers keep their existing paste-into-modal behavior.
+   */
+  onImagePaste?: (files: File[]) => void;
   /** Available slash commands from the SDK (stored on session.custom_context) */
   slashCommands?: string[];
   /** Available skills from the SDK (stored on session.custom_context) */
@@ -365,6 +372,7 @@ export const AutocompleteTextarea = React.forwardRef<
       userById,
       autoSize,
       onFilesDrop,
+      onImagePaste,
       slashCommands = EMPTY_SLASH_COMMANDS,
       skills = EMPTY_SKILLS,
       enableKnowledgeMentions = false,
@@ -1110,7 +1118,10 @@ export const AutocompleteTextarea = React.forwardRef<
 
     const handlePaste = useCallback(
       (e: React.ClipboardEvent) => {
-        if (!onFilesDrop) return;
+        // Prefer the inline-paste handler; fall back to the drop handler (modal)
+        // for consumers that do not opt into inline attachments.
+        const pasteHandler = onImagePaste ?? onFilesDrop;
+        if (!pasteHandler) return;
 
         const imageFiles: File[] = [];
         for (const item of Array.from(e.clipboardData.items)) {
@@ -1129,9 +1140,9 @@ export const AutocompleteTextarea = React.forwardRef<
         if (imageFiles.length === 0) return;
 
         e.preventDefault();
-        onFilesDrop(imageFiles);
+        pasteHandler(imageFiles);
       },
-      [onFilesDrop]
+      [onImagePaste, onFilesDrop]
     );
 
     /**
