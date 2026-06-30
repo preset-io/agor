@@ -131,6 +131,7 @@ export function BranchHeaderPill({
         </>
       )}
       <span
+        title={branch.name}
         style={{
           fontFamily: token.fontFamilyCode,
           fontSize: token.fontSizeSM,
