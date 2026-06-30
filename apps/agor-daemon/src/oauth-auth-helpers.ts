@@ -29,9 +29,11 @@ export async function runInOAuthTenantScope<T>(
 /**
  * Resolves the effective user ID for per-user OAuth token injection.
  *
- * Only service-account callers (`_isServiceAccount === true`) and
- * executor-session token holders (`authPayloadType === 'executor-session'`)
- * are permitted to pass an explicit `forUserId` to fetch another user's token.
+ * Service-account callers (`_isServiceAccount === true`) may request another
+ * user's token. Executor-session token holders
+ * (`authPayloadType === 'executor-session'`) may only preserve an explicit
+ * `forUserId` that matches their authenticated token subject. Arbitrary
+ * cross-user lookup stays reserved for service-account callers.
  * All other callers — including regular authenticated members — are silently
  * redirected to their own user ID to prevent privilege escalation.
  */
@@ -42,6 +44,7 @@ export function resolveForUserIdWithGate(opts: {
   callerUserId: string | undefined;
 }): string | undefined {
   const canUseExplicitUser =
-    opts.isServiceAccount === true || opts.authPayloadType === 'executor-session';
+    opts.isServiceAccount === true ||
+    (opts.authPayloadType === 'executor-session' && opts.queryForUserId === opts.callerUserId);
   return opts.queryForUserId && canUseExplicitUser ? opts.queryForUserId : opts.callerUserId;
 }

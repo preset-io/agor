@@ -8,10 +8,10 @@
  *    `runWithTenantDatabaseScope` when the pending flow carries a `tenantId`,
  *    so cross-tenant token pollution is impossible under multi-tenancy.
  *
- * 2. forUserId privilege gate: regular authenticated users who pass
- *    `?forUserId=<victim>` must be silently redirected to their own user ID;
- *    only service-account callers and executor-session token holders may
- *    specify a different user ID.
+ * 2. forUserId privilege gate: regular authenticated users and executor-session
+ *    token holders who pass `?forUserId=<victim>` must be silently redirected
+ *    to their own user ID; only service-account callers may specify a different
+ *    user ID.
  */
 
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
@@ -126,17 +126,32 @@ describe('resolveForUserIdWithGate', () => {
     expect(result).toBe('task-owner-id');
   });
 
-  it('allows forUserId for executor-session token holders', () => {
+  it('preserves forUserId for executor-session token holders when it matches the caller', () => {
     // Executors authenticating with session tokens (authPayloadType === 'executor-session')
-    // must be able to request the task-creator's per-user OAuth tokens.
+    // must be able to request the authenticated task-creator's per-user OAuth tokens.
     const result = resolveForUserIdWithGate({
       queryForUserId: 'task-creator-id',
       isServiceAccount: false,
       authPayloadType: 'executor-session',
-      callerUserId: 'executor-account-id',
+      callerUserId: 'task-creator-id',
     });
 
     expect(result).toBe('task-creator-id');
+  });
+
+  it('falls back to callerUserId for executor-session token holders when forUserId differs', () => {
+    // Executor-session JWTs authenticate as the token subject. A compromised
+    // executor must not be able to choose a different user's OAuth token by
+    // passing ?forUserId=<victim>.
+    const result = resolveForUserIdWithGate({
+      queryForUserId: 'victim-user-id',
+      isServiceAccount: false,
+      authPayloadType: 'executor-session',
+      callerUserId: 'task-creator-id',
+    });
+
+    expect(result).toBe('task-creator-id');
+    expect(result).not.toBe('victim-user-id');
   });
 
   it('falls back to callerUserId when forUserId is not set, even for service accounts', () => {
