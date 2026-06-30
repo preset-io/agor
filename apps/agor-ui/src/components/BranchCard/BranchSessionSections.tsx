@@ -136,7 +136,7 @@ const SessionItemWithActions: React.FC<{
 
   return (
     <div
-      style={{ position: 'relative', minWidth: 120 }}
+      style={{ position: 'relative', minWidth: 0, width: '100%' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -519,6 +519,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           : 'transparent',
       display: 'flex',
       alignItems: 'center',
+      width: '100%',
+      boxSizing: 'border-box',
       cursor: 'pointer',
       marginBottom: 4,
       opacity: isRemoteSurrogate ? 0.78 : undefined,
@@ -716,7 +718,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const sessionListContent = (
     <ConfigProvider theme={{ components: { Tree: { colorBgContainer: 'transparent' } } }}>
       <Tree
-        className="agor-flat-tree"
+        className="agor-flat-tree agor-branch-session-tree"
         treeData={sessionTreeData}
         expandedKeys={expandedKeys}
         onExpand={(keys) => setExpandedKeys(keys as React.Key[])}

@@ -84,7 +84,6 @@ describe('BranchCard drag handle', () => {
             sessions={[runningSession]}
             userById={new Map()}
             client={null}
-            defaultExpanded={false}
           />
         </ConnectionProvider>
       </ConfigProvider>
@@ -92,6 +91,9 @@ describe('BranchCard drag handle', () => {
 
     expect(container.querySelector('.ant-card')).toHaveStyle({
       backgroundColor: 'rgb(1, 2, 3)',
+    });
+    expect(container.querySelector('.agor-branch-session-tree .ant-tree-title > div')).toHaveStyle({
+      width: '100%',
     });
   });
 });
