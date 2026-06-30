@@ -36,7 +36,6 @@ import {
   Badge,
   Button,
   Dropdown,
-  Empty,
   Input,
   Space,
   Tooltip,
@@ -1282,7 +1281,39 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               background: `${token.colorBgContainer}cc`,
             }}
           >
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`No results for "${query}"`} />
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                padding: '28px 16px',
+                gap: 6,
+              }}
+            >
+              <div
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: '50%',
+                  background: token.colorFillTertiary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginBottom: 2,
+                }}
+              >
+                <SearchOutlined style={{ fontSize: 16, color: token.colorTextTertiary }} />
+              </div>
+              <Typography.Text strong style={{ fontSize: 13 }}>
+                No results
+              </Typography.Text>
+              <Typography.Text
+                type="secondary"
+                style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.5, maxWidth: 200 }}
+              >
+                Nothing matched <Typography.Text code>{query}</Typography.Text>
+              </Typography.Text>
+            </div>
           </div>
         )}
         <SessionPanelContent
