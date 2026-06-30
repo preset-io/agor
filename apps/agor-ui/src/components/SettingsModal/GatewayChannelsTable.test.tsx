@@ -346,11 +346,20 @@ describe('GatewayChannelsTable Slack edit mode', () => {
   });
 
   it('copies the recommended manifest derived from the channel options', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, 'clipboard', {
-      value: { writeText },
-      configurable: true,
-    });
+    // Intercept the clipboard write robustly. Some jsdom builds ship a real
+    // `navigator.clipboard` whose method a `defineProperty({ value })` swap does
+    // not replace — the component then calls the real `writeText` and a fresh
+    // mock records 0 calls. Spy on whatever clipboard object exists (creating a
+    // minimal one only when the environment provides none) so OUR spy is always
+    // the function invoked. A secure context keeps the modern Clipboard path on.
+    Object.defineProperty(globalThis, 'isSecureContext', { value: true, configurable: true });
+    if (!navigator.clipboard?.writeText) {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText: () => Promise.resolve() },
+        configurable: true,
+      });
+    }
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
 
     // enable_channels: true ⇒ public-channel scopes + the app_mention event.
     renderEditTable(null, makeSlackChannel());
