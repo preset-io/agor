@@ -341,7 +341,7 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     clickButton(/Add Channel/);
 
     // Switch the channel type to GitHub via the (real) antd Select.
-    fireEvent.mouseDown(document.querySelector('.ant-select-selector') as HTMLElement);
+    fireEvent.mouseDown(screen.getByRole('combobox'));
     fireEvent.click(screen.getByText('GitHub'));
 
     // Step 0 (Channel): GitHub picks identity later, so only name + branch here.
@@ -390,7 +390,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     clickButton(/Add Channel/);
 
     // Switch the channel type to Microsoft Teams via the (real) antd Select.
-    fireEvent.mouseDown(document.querySelector('.ant-select-selector') as HTMLElement);
+    fireEvent.mouseDown(screen.getByRole('combobox'));
     fireEvent.click(screen.getByText('Microsoft Teams'));
 
     // Step 0 for Teams includes the generic "Post messages as" identity.
