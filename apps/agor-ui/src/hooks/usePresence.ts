@@ -14,6 +14,7 @@ import type {
   BoardID,
   CursorMovedEvent,
   PresenceUpdatedEvent,
+  SessionID,
   User,
 } from '@agor-live/client';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -66,7 +67,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
   >(new Map());
 
   const [presenceMap, setPresenceMap] = useState<
-    Map<string, { boardId: BoardID; x?: number; y?: number; timestamp: number }>
+    Map<string, { boardId: BoardID; x?: number; y?: number; timestamp: number; sessionId?: string }>
   >(new Map());
 
   useEffect(() => {
@@ -127,6 +128,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
           x: event.x,
           y: event.y,
           timestamp: event.timestamp,
+          sessionId: event.sessionId,
         };
 
         // Update presence map (for facepile)
@@ -175,6 +177,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       const presenceData = {
         boardId: event.boardId,
         timestamp: event.timestamp,
+        sessionId: event.sessionId,
       };
 
       setPresenceMap((prev) => {
@@ -329,6 +332,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
         user,
         lastSeen: presence.timestamp,
         boardId: presence.boardId,
+        sessionId: presence.sessionId as SessionID | undefined,
         cursor:
           typeof presence.x === 'number' && typeof presence.y === 'number'
             ? {

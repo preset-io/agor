@@ -7,7 +7,7 @@
  * so no Map lookup is needed for this component.
  */
 
-import type { ActiveUser, Board, BoardID } from '@agor-live/client';
+import type { ActiveUser, Board, BoardID, SessionID } from '@agor-live/client';
 import { Avatar, Tooltip, theme } from 'antd';
 import type { CSSProperties } from 'react';
 import { slackAvatarRadius, UserIdentityAvatar } from '../UserIdentityAvatar';
@@ -20,7 +20,8 @@ export interface FacepileProps {
   onUserClick?: (
     userId: string,
     boardId?: BoardID,
-    cursorPosition?: { x: number; y: number }
+    cursorPosition?: { x: number; y: number },
+    sessionId?: SessionID
   ) => void;
   boardById?: Map<string, Board>; // For looking up board names
   style?: CSSProperties;
@@ -49,11 +50,17 @@ export const Facepile: React.FC<FacepileProps> = ({
 
   return (
     <div className="facepile" style={style}>
-      {visibleUsers.map(({ user, cursor, boardId }) => {
+      {visibleUsers.map(({ user, cursor, boardId, sessionId }) => {
         const board = boardId && boardById ? boardById.get(boardId) : null;
         const boardName = board?.name || 'Unknown Board';
         const boardIcon = board?.icon || '📋';
         const canClick = onUserClick && boardId;
+
+        const clickHint = sessionId
+          ? 'Click to open their session'
+          : cursor
+            ? 'Click to go to their location'
+            : 'Click to go to board';
 
         return (
           <Tooltip
@@ -68,7 +75,7 @@ export const Facepile: React.FC<FacepileProps> = ({
                 )}
                 {canClick && (
                   <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '4px' }}>
-                    Click to go to board
+                    {clickHint}
                   </div>
                 )}
               </div>
@@ -82,7 +89,7 @@ export const Facepile: React.FC<FacepileProps> = ({
                 }}
                 onClick={() => {
                   if (canClick) {
-                    onUserClick(user.user_id, boardId, cursor);
+                    onUserClick(user.user_id, boardId, cursor, sessionId);
                   }
                 }}
               />

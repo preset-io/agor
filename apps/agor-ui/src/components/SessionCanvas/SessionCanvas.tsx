@@ -56,7 +56,9 @@ import { shortId } from '@agor-live/client';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import {
+  useConsumePendingPan,
   useConsumePendingRecenter,
+  useRegisterPanToPosition,
   useRegisterRecenter,
 } from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
@@ -990,12 +992,27 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     const consumePendingRecenter = useConsumePendingRecenter();
 
-    // Cursor tracking hook
+    // Register pan-to-position so callers (e.g. facepile click) can pan to
+    // arbitrary flow coordinates without going through a node id.
+    const panToPosition = useCallback((x: number, y: number): boolean => {
+      const instance = reactFlowInstanceRef.current;
+      if (!instance) return false;
+      instance.setCenter(x, y, { zoom: instance.getZoom(), duration: 400 });
+      return true;
+    }, []);
+
+    useRegisterPanToPosition(panToPosition);
+
+    const consumePendingPan = useConsumePendingPan();
+
+    // Cursor tracking hook — include selectedSessionId so observers can
+    // deep-link to the user's current session via the facepile.
     useCursorTracking({
       client,
       boardId: board?.board_id as BoardID | null,
       reactFlowInstance: reactFlowInstanceRef.current,
       enabled: !!board && !!client && !staticCursors,
+      sessionId: selectedSessionId ?? null,
     });
 
     // Create comment nodes from spatial comments
@@ -1386,6 +1403,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           lastFitBoardIdRef.current = board?.board_id ?? null;
           return;
         }
+        // Cross-board cursor pan: if a facepile click requested a pan to
+        // flow coordinates on this board, honor it instead of fitView.
+        const pendingPan = consumePendingPan();
+        if (pendingPan && panToPosition(pendingPan.x, pendingPan.y)) {
+          lastFitBoardIdRef.current = board?.board_id ?? null;
+          return;
+        }
         reactFlowInstanceRef.current?.fitView({
           padding: 0.2, // 20% padding around nodes
           minZoom: 0.1, // Allow zooming out far enough to see widely-spaced nodes
@@ -1397,7 +1421,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }, 100);
 
       return () => clearTimeout(timer);
-    }, [isReactFlowReady, nodes.length, board?.board_id, consumePendingRecenter, recenterOnNode]);
+    }, [
+      isReactFlowReady,
+      nodes.length,
+      board?.board_id,
+      consumePendingRecenter,
+      recenterOnNode,
+      consumePendingPan,
+      panToPosition,
+    ]);
 
     // Intercept onNodesChange to detect resize events
     const onNodesChange = useCallback(

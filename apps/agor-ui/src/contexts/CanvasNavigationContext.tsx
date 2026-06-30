@@ -33,9 +33,16 @@ import {
 export type RecenterMapFn = (nodeId: string) => boolean;
 export type RecenterOpts = { boardId?: string };
 export type BoardSwitcherFn = (boardId: string) => void;
+export type PanToPositionFn = (x: number, y: number) => boolean;
 
 interface PendingRecenter {
   nodeId: string;
+  expiresAt: number;
+}
+
+interface PendingPan {
+  x: number;
+  y: number;
   expiresAt: number;
 }
 
@@ -43,6 +50,8 @@ interface CanvasNavigationContextValue {
   recenterRef: React.MutableRefObject<RecenterMapFn | null>;
   boardSwitcherRef: React.MutableRefObject<BoardSwitcherFn | null>;
   pendingRef: React.MutableRefObject<PendingRecenter | null>;
+  panToPositionRef: React.MutableRefObject<PanToPositionFn | null>;
+  pendingPanRef: React.MutableRefObject<PendingPan | null>;
 }
 
 // Pending recenter has a short TTL so a stale stash doesn't fire when a user
@@ -57,7 +66,12 @@ export function CanvasNavigationProvider({ children }: { children: ReactNode }) 
   const recenterRef = useRef<RecenterMapFn | null>(null);
   const boardSwitcherRef = useRef<BoardSwitcherFn | null>(null);
   const pendingRef = useRef<PendingRecenter | null>(null);
-  const value = useMemo(() => ({ recenterRef, boardSwitcherRef, pendingRef }), []);
+  const panToPositionRef = useRef<PanToPositionFn | null>(null);
+  const pendingPanRef = useRef<PendingPan | null>(null);
+  const value = useMemo(
+    () => ({ recenterRef, boardSwitcherRef, pendingRef, panToPositionRef, pendingPanRef }),
+    []
+  );
   return (
     <CanvasNavigationContext.Provider value={value}>{children}</CanvasNavigationContext.Provider>
   );
@@ -120,6 +134,54 @@ export function useRecenterMap(): (nodeId: string, opts?: RecenterOpts) => boole
       if (opts?.boardId && ctx.boardSwitcherRef.current) {
         ctx.pendingRef.current = {
           nodeId,
+          expiresAt: Date.now() + PENDING_TTL_MS,
+        };
+        ctx.boardSwitcherRef.current(opts.boardId);
+        return true;
+      }
+      return false;
+    },
+    [ctx]
+  );
+}
+
+/** SessionCanvas registers its setCenter implementation so callers can pan to
+ *  arbitrary flow coordinates (e.g. a remote user's cursor position). */
+export function useRegisterPanToPosition(fn: PanToPositionFn): void {
+  useRegisterRef(useContext(CanvasNavigationContext)?.panToPositionRef, fn);
+}
+
+/** SessionCanvas drains a pending coordinate pan after a board switch loads. */
+export function useConsumePendingPan(): () => { x: number; y: number } | null {
+  const ctx = useContext(CanvasNavigationContext);
+  return useCallback(() => {
+    const pending = ctx?.pendingPanRef.current;
+    if (!pending) return null;
+    if (Date.now() > pending.expiresAt) {
+      ctx!.pendingPanRef.current = null;
+      return null;
+    }
+    ctx!.pendingPanRef.current = null;
+    return { x: pending.x, y: pending.y };
+  }, [ctx]);
+}
+
+/** Consumer hook — pan the canvas to flow coordinates (x, y).
+ *  Handles cross-board: if the target is on a different board, switches first
+ *  and lets SessionCanvas drain the pending pan on mount. */
+export function usePanToPosition(): (x: number, y: number, opts?: { boardId?: string }) => boolean {
+  const ctx = useContext(CanvasNavigationContext);
+  return useCallback(
+    (x: number, y: number, opts?: { boardId?: string }) => {
+      if (!ctx) return false;
+      // Try synchronous pan first (canvas is already showing the right board).
+      const sync = ctx.panToPositionRef.current?.(x, y);
+      if (sync) return true;
+      // Cross-board: stash + switch board so the new SessionCanvas drains it.
+      if (opts?.boardId && ctx.boardSwitcherRef.current) {
+        ctx.pendingPanRef.current = {
+          x,
+          y,
           expiresAt: Date.now() + PENDING_TTL_MS,
         };
         ctx.boardSwitcherRef.current(opts.boardId);

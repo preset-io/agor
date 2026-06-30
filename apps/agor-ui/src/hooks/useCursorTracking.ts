@@ -14,6 +14,9 @@ interface UseCursorTrackingOptions {
   boardId: BoardID | null;
   reactFlowInstance: ReactFlowInstance | null;
   enabled?: boolean;
+  /** Current session the user is viewing; included in cursor-move events so
+   *  other clients can deep-link to it via the facepile. */
+  sessionId?: string | null;
 }
 
 /**
@@ -23,7 +26,12 @@ interface UseCursorTrackingOptions {
  * @returns Callback to manually emit cursor position (rarely needed)
  */
 export function useCursorTracking(options: UseCursorTrackingOptions) {
-  const { client, boardId, reactFlowInstance, enabled = true } = options;
+  const { client, boardId, reactFlowInstance, enabled = true, sessionId } = options;
+  // Mirror sessionId into a ref so emitCursorPosition always reads the current
+  // value without needing it in the dependency array (which would force the
+  // callback to be recreated on every session change and tear down mousemove).
+  const sessionIdRef = useRef(sessionId ?? null);
+  sessionIdRef.current = sessionId ?? null;
 
   // Pause cursor tracking when tab is hidden to save CPU
   const [isTabVisible, setIsTabVisible] = useState(
@@ -72,6 +80,7 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
                 x: latest.x,
                 y: latest.y,
                 timestamp: Date.now(),
+                ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
               };
               client.io.emit('cursor-move', event);
               lastEmitRef.current = Date.now();
@@ -87,6 +96,7 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
         x,
         y,
         timestamp: now,
+        ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
       };
 
       client.io.emit('cursor-move', event);

@@ -14,6 +14,7 @@ import type {
   PermissionMode,
   Repo,
   Session,
+  SessionID,
   SpawnConfig,
   UpdateUserInput,
   User,
@@ -32,7 +33,7 @@ import { useLocation, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
-import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
+import { usePanToPosition, useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
@@ -564,6 +565,8 @@ export const App: React.FC<AppProps> = ({
     artifactById,
   });
 
+  const panToPosition = usePanToPosition();
+
   // Wrapper to update board ID (updates both state and URL via hook)
   // Also closes conversation panel when switching to a different board
   const setCurrentBoardId = useCallback(
@@ -1073,9 +1076,21 @@ export const App: React.FC<AppProps> = ({
   const handleOpenUserSettings = useStableCallback(() => setUserSettingsOpen(true));
   const handleOpenThemeEditor = useStableCallback(() => setThemeEditorOpen(true));
   const handleHeaderUserClick = useStableCallback(
-    (_userId: string, boardId?: BoardID, _cursor?: { x: number; y: number }) => {
-      // Navigate to the user's board (pushes history, so the back button
-      // returns to the previous board).
+    (
+      _userId: string,
+      boardId?: BoardID,
+      cursor?: { x: number; y: number },
+      sessionId?: SessionID
+    ) => {
+      // Priority: session > cursor position > board.
+      if (sessionId) {
+        navigation.goToSession(sessionId);
+        return;
+      }
+      if (cursor && boardId) {
+        panToPosition(cursor.x, cursor.y, { boardId });
+        return;
+      }
       if (boardId) {
         navigation.goToBoard(boardId);
       }
