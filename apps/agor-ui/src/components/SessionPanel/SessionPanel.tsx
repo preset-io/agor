@@ -1149,65 +1149,68 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           background: token.colorBgContainer,
         }}
       >
-        {searchOpen ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <SearchOutlined style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }} />
-            <Input
-              ref={(el) => { searchInputRef.current = el?.input ?? null; }}
-              value={query}
-              onChange={(e) => { setQuery(e.target.value); }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.shiftKey ? goPrev() : goNext();
-                if (e.key === 'Escape') closeSearch();
-              }}
-              placeholder="Search session…"
-              variant="borderless"
-              style={{ flex: 1, padding: 0 }}
-            />
-            {query && (
-              <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', minWidth: 44, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : 'no results'}
-              </Typography.Text>
-            )}
-            {!query && (
-              <Typography.Text type="secondary" style={{ fontSize: 11 }}>Esc to close</Typography.Text>
-            )}
-            {totalMatches > 1 && (
-              <Space size={2}>
-                <Tooltip title="Previous (⇧↵)">
-                  <Button type="text" size="small" icon={<UpOutlined />} onClick={goPrev} />
-                </Tooltip>
-                <Tooltip title="Next (↵)">
-                  <Button type="text" size="small" icon={<DownOutlined />} onClick={goNext} />
-                </Tooltip>
-              </Space>
-            )}
-            <Tooltip title="Close search (Esc)">
-              <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
-            </Tooltip>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <Space size={12} align="start" style={{ flex: 1 }}>
-              <ToolIcon tool={session.agentic_tool} size={40} />
-              <div style={{ flex: 1 }}>
-                <div style={{ marginBottom: 4 }}>
-                  <Typography.Text
-                    strong
-                    style={{
-                      fontSize: 18,
-                      ...getSessionTitleStyles(2),
-                    }}
-                  >
-                    {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                  </Typography.Text>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Space size={12} align="start" style={{ flex: 1 }}>
+            <ToolIcon tool={session.agentic_tool} size={40} />
+            <div style={{ flex: 1 }}>
+              <div style={{ marginBottom: 4 }}>
+                <Typography.Text
+                  strong
+                  style={{
+                    fontSize: 18,
+                    ...getSessionTitleStyles(2),
+                  }}
+                >
+                  {getSessionDisplayTitle(session, { includeAgentFallback: true })}
+                </Typography.Text>
+                {!searchOpen && (
                   <Badge
                     status={getStatusColor()}
                     text={session.status.toUpperCase()}
                     style={{ marginLeft: 12 }}
                   />
+                )}
+              </div>
+              {searchOpen ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <SearchOutlined style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }} />
+                  <Input
+                    ref={(el) => { searchInputRef.current = el?.input ?? null; }}
+                    value={query}
+                    onChange={(e) => { setQuery(e.target.value); }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.shiftKey ? goPrev() : goNext();
+                      if (e.key === 'Escape') closeSearch();
+                    }}
+                    placeholder="Search session..."
+                    variant="borderless"
+                    style={{ flex: 1, padding: 0 }}
+                    size="small"
+                  />
+                  {query && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', minWidth: 44, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : 'no results'}
+                    </Typography.Text>
+                  )}
+                  {!query && (
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>Esc to close</Typography.Text>
+                  )}
+                  {totalMatches > 1 && (
+                    <Space size={2}>
+                      <Tooltip title="Previous (Shift+Enter)">
+                        <Button type="text" size="small" icon={<UpOutlined />} onClick={goPrev} />
+                      </Tooltip>
+                      <Tooltip title="Next (Enter)">
+                        <Button type="text" size="small" icon={<DownOutlined />} onClick={goNext} />
+                      </Tooltip>
+                    </Space>
+                  )}
+                  <Tooltip title="Close search (Esc)">
+                    <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
+                  </Tooltip>
                 </div>
-                {session.created_by && (
+              ) : (
+                session.created_by && (
                   <div>
                     <CreatedByTag
                       createdBy={session.created_by}
@@ -1216,30 +1219,30 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                       prefix="Created by"
                     />
                   </div>
-                )}
-              </div>
-            </Space>
-            <Space size={4}>
-              <SessionAttachmentsDropdown items={attachmentItems} />
-              <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
-                <Tooltip title="More actions">
-                  <Button type="text" icon={<EllipsisOutlined />} />
-                </Tooltip>
-              </Dropdown>
-              <Tooltip title="Search session (⌘F)">
-                <Button type="text" icon={<SearchOutlined />} onClick={openSearch} />
+                )
+              )}
+            </div>
+          </Space>
+          <Space size={4}>
+            <SessionAttachmentsDropdown items={attachmentItems} />
+            <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
+              <Tooltip title="More actions">
+                <Button type="text" icon={<EllipsisOutlined />} />
               </Tooltip>
-              <Tooltip title="Close Panel">
-                <Button
-                  type="text"
-                  icon={<CloseOutlined />}
-                  onClick={onClose}
-                  style={{ marginLeft: token.sizeUnit }}
-                />
-              </Tooltip>
-            </Space>
-          </div>
-        )}
+            </Dropdown>
+            <Tooltip title="Search session (Cmd+F)">
+              <Button type="text" icon={<SearchOutlined />} onClick={openSearch} />
+            </Tooltip>
+            <Tooltip title="Close Panel">
+              <Button
+                type="text"
+                icon={<CloseOutlined />}
+                onClick={onClose}
+                style={{ marginLeft: token.sizeUnit }}
+              />
+            </Tooltip>
+          </Space>
+        </div>
       </div>
 
       {/* Body - Scrollable content */}
