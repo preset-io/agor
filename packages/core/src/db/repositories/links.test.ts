@@ -1,4 +1,11 @@
-import type { BranchID, Link, MessageID, SessionID, UUID } from '@agor/core/types';
+import {
+  type BranchID,
+  type Link,
+  type MessageID,
+  MessageRole,
+  type SessionID,
+  type UUID,
+} from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { normalizeRefTargetKey, normalizeUrlTargetKey } from '../../types/link';
@@ -58,7 +65,7 @@ async function seedMessage(db: Database, sessionId: SessionID) {
     message_id: generateId() as MessageID,
     session_id: sessionId,
     type: 'user',
-    role: 'user',
+    role: MessageRole.USER,
     index: 0,
     timestamp: new Date().toISOString(),
     content_preview: 'link source',
