@@ -192,11 +192,6 @@ const BranchCardComponent = ({
   // Check if this branch is a persisted agent
   const assistantConfig = useMemo(() => getAssistantConfig(branch), [branch]);
   const isAgent = isAssistant(branch);
-  const cardBackgroundColor = hasRunningSession
-    ? token.colorPrimaryBg
-    : isAgent
-      ? token.colorInfoBg
-      : undefined;
 
   // True when one of this branch's sessions is the currently opened
   // conversation. Drives the "focused" highlight on the canvas card and
@@ -218,6 +213,17 @@ const BranchCardComponent = ({
   }, [activeSessions, branch.needs_attention, isFocused]);
 
   const isDarkMode = isDarkTheme(token);
+  // AntD exposes `colorPrimaryBg` as the subtle primary surface token.
+  // In dark mode it can still read a bit bright on a large card, so mix it
+  // back toward the container surface while staying in the primary token family.
+  const runningCardBackgroundColor = isDarkMode
+    ? `color-mix(in srgb, ${token.colorPrimaryBg} 70%, ${token.colorBgContainer})`
+    : token.colorPrimaryBg;
+  const cardBackgroundColor = hasRunningSession
+    ? runningCardBackgroundColor
+    : isAgent
+      ? token.colorInfoBg
+      : undefined;
 
   // Memoize glow shadow string to avoid recomputing color normalization on every render
   const attentionGlowShadow = useMemo(() => {

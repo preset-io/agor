@@ -1,6 +1,6 @@
 import type { Branch, Repo, Session } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { ConfigProvider } from 'antd';
+import { theme as antdTheme, ConfigProvider } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import {
@@ -62,7 +62,7 @@ describe('BranchCard drag handle', () => {
     expect(onOpenTerminal).toHaveBeenCalledWith([], 'branch-1');
   });
 
-  it('uses the primary background token while a branch session is executing', () => {
+  it('uses a darker primary background surface while a branch session is executing', () => {
     const runningSession = {
       session_id: 'session-running',
       branch_id: 'branch-1',
@@ -76,7 +76,12 @@ describe('BranchCard drag handle', () => {
     } as unknown as Session;
 
     const { container } = render(
-      <ConfigProvider theme={{ token: { colorPrimaryBg: 'rgb(1, 2, 3)' } }}>
+      <ConfigProvider
+        theme={{
+          algorithm: antdTheme.darkAlgorithm,
+          token: { colorBgContainer: 'rgb(10, 11, 12)', colorPrimaryBg: 'rgb(1, 2, 3)' },
+        }}
+      >
         <ConnectionProvider value={connected}>
           <BranchCard
             branch={branch}
@@ -89,9 +94,9 @@ describe('BranchCard drag handle', () => {
       </ConfigProvider>
     );
 
-    expect(container.querySelector('.ant-card')).toHaveStyle({
-      backgroundColor: 'rgb(1, 2, 3)',
-    });
+    expect(container.querySelector('.ant-card')?.getAttribute('style')).toContain(
+      'background-color: color-mix(in srgb, rgb(1, 2, 3) 70%, rgb(10, 11, 12));'
+    );
     expect(container.querySelector('.agor-branch-session-tree .ant-tree-title > div')).toHaveStyle({
       width: '100%',
     });
