@@ -237,7 +237,7 @@ export const HomeBoardsSection: React.FC<
           size="small"
           icon={<PlusOutlined />}
           style={{ padding: 0 }}
-          onClick={() => onOpenCreateDialog?.('board')}
+          onClick={() => onOpenCreateDialog('board')}
         >
           New board
         </Button>
@@ -249,7 +249,7 @@ export const HomeBoardsSection: React.FC<
           description="No boards yet"
           style={{ padding: '24px 0' }}
         >
-          <Button type="primary" onClick={() => onOpenCreateDialog?.('board')}>
+          <Button type="primary" onClick={() => onOpenCreateDialog('board')}>
             Create your first board
           </Button>
         </Empty>

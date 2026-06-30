@@ -65,8 +65,13 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
   // Resizable sidebar
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     try {
-      const v = localStorage.getItem(SIDEBAR_STORAGE_KEY);
-      return v ? Math.max(SIDEBAR_MIN, Number(v)) : SIDEBAR_DEFAULT;
+      const stored = Number(localStorage.getItem(SIDEBAR_STORAGE_KEY));
+      if (!Number.isFinite(stored) || stored <= 0) return SIDEBAR_DEFAULT;
+      const maxW =
+        typeof window !== 'undefined'
+          ? window.innerWidth * SIDEBAR_MAX_RATIO
+          : Number.POSITIVE_INFINITY;
+      return Math.min(Math.max(SIDEBAR_MIN, stored), Math.max(SIDEBAR_MIN, maxW));
     } catch {
       return SIDEBAR_DEFAULT;
     }
@@ -78,6 +83,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartW = useRef(0);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
   const sidebarWidthRef = useRef(sidebarWidth);
   sidebarWidthRef.current = sidebarWidth;
 
@@ -102,24 +108,32 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       );
       setSidebarWidth(newW);
     };
-    const onUp = () => {
+    function teardown() {
       isDragging.current = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      dragCleanupRef.current = null;
+    }
+    function onUp() {
       setSidebarWidth((w) => {
         try {
           localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(w)));
         } catch {}
         return w;
       });
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
+      teardown();
+    }
+    dragCleanupRef.current = teardown;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   }, []);
+
+  // Tear down an in-progress drag if the page unmounts mid-drag.
+  useEffect(() => () => dragCleanupRef.current?.(), []);
 
   const waitingSessions = useMemo(
     () =>
@@ -133,9 +147,14 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
   );
 
   const defaultBoardId = useMemo(() => {
-    const firstRecent = (props.recentBoardIds ?? []).find((id) => boardById.has(id));
+    const firstRecent = (props.recentBoardIds ?? []).find(
+      (id) => boardById.get(id)?.archived === false
+    );
     if (firstRecent) return firstRecent;
-    return boardById.values().next().value?.board_id;
+    for (const board of boardById.values()) {
+      if (!board.archived) return board.board_id;
+    }
+    return undefined;
   }, [boardById, props.recentBoardIds]);
 
   const boardOptions = useMemo(
@@ -161,7 +180,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
 
   const handleConfirmCreate = useCallback(() => {
     setCreateOpen(false);
-    props.onOpenCreateDialog?.(createType, selectedBoardId);
+    props.onOpenCreateDialog(createType, selectedBoardId);
   }, [props.onOpenCreateDialog, createType, selectedBoardId]);
 
   const onboardingSteps = useMemo(() => {
@@ -178,14 +197,14 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
         label: 'Connect a repository',
         done: hasRepos,
         cta: 'Connect →',
-        onClick: () => props.onOpenSettings?.('repos'),
+        onClick: () => props.onOpenSettings('repos'),
       },
       {
         id: 'board',
         label: 'Create your first board',
         done: hasBoards,
         cta: 'Create →',
-        onClick: () => props.onOpenCreateDialog?.('board'),
+        onClick: () => props.onOpenCreateDialog('board'),
       },
       {
         id: 'session',
@@ -199,14 +218,14 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
         label: 'Configure MCP tools',
         done: hasMcp,
         cta: 'Set up →',
-        onClick: () => props.onOpenSettings?.('mcp'),
+        onClick: () => props.onOpenSettings('mcp'),
       },
       {
         id: 'invite',
         label: 'Invite a teammate',
         done: hasTeammates,
         cta: 'Invite →',
-        onClick: () => props.onOpenSettings?.('users'),
+        onClick: () => props.onOpenSettings('users'),
       },
     ];
   }, [
@@ -259,7 +278,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                       if (key === 'assistant' || key === 'branch') {
                         handleNewSession(key);
                       } else {
-                        props.onOpenCreateDialog?.(key as 'board');
+                        props.onOpenCreateDialog(key as 'board');
                       }
                     },
                   }}
@@ -424,7 +443,7 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                   type="primary"
                   onClick={() => {
                     setCreateOpen(false);
-                    props.onOpenCreateDialog?.('board');
+                    props.onOpenCreateDialog('board');
                   }}
                 >
                   Create a board first
