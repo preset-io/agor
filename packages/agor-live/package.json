@@ -1,6 +1,6 @@
 {
   "name": "agor-live",
-  "version": "0.23.0",
+  "version": "0.23.1",
   "description": "Team command center for all things agentic — shared canvas for coding agents and assistants on isolated git branches, with real-time multiplayer and an MCP surface agents drive themselves.",
   "type": "module",
   "bin": {
@@ -46,8 +46,8 @@
   },
   "dependencies": {
     "@agor-live/client": "workspace:*",
-    "@anthropic-ai/claude-agent-sdk": "^0.3.183",
-    "@anthropic-ai/sdk": "^0.105.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.197",
+    "@anthropic-ai/sdk": "^0.109.0",
     "@cursor/sdk": "^1.0.19",
     "@feathersjs/authentication": "^5.0.45",
     "@feathersjs/authentication-client": "^5.0.45",
