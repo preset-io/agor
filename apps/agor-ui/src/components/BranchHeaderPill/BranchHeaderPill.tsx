@@ -202,7 +202,7 @@ export function BranchHeaderPill({
       ? `${repo.slug} / ${branch.name} · Open branch settings`
       : 'Open branch settings';
   const identityLinkStyle: React.CSSProperties = {
-    display: 'inline-flex',
+    display: 'flex',
     alignItems: 'center',
     gap: 4,
     padding: compact ? '0 6px' : '0 8px',
@@ -228,6 +228,8 @@ export function BranchHeaderPill({
         display: 'flex',
         alignItems: 'stretch',
         cursor: 'default',
+        width: '100%',
+        minWidth: 0,
       }}
     >
       {/* Section 1: Repo + Branch — click opens either the supplied identity URL or the branch modal. */}
