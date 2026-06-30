@@ -100,6 +100,7 @@ export function useSessionSearch(
   const [totalMatches, setTotalMatches] = useState(0);
   const [currentMatch, setCurrentMatch] = useState(0);
   const marksRef = useRef<HTMLElement[]>([]);
+  const hiddenBlocksRef = useRef<HTMLElement[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resolvedColorsRef = useRef(resolvedColors);
   resolvedColorsRef.current = resolvedColors;
@@ -123,6 +124,10 @@ export function useSessionSearch(
     if (timerRef.current) clearTimeout(timerRef.current);
     if (containerRef.current) clearMarks(containerRef.current);
     marksRef.current = [];
+    hiddenBlocksRef.current.forEach((el) => {
+      el.style.display = '';
+    });
+    hiddenBlocksRef.current = [];
     setSearchOpen(false);
     setQuery('');
     setTotalMatches(0);
@@ -134,11 +139,32 @@ export function useSessionSearch(
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       if (!containerRef.current) return;
+
+      // Restore any previously hidden blocks before re-running
+      hiddenBlocksRef.current.forEach((el) => {
+        el.style.display = '';
+      });
+      hiddenBlocksRef.current = [];
+
       const marks = buildMarks(containerRef.current, query, resolvedColorsRef.current.highlight);
       marksRef.current = marks;
       setTotalMatches(marks.length);
       setCurrentMatch(0);
-      if (marks.length > 0) setCurrent(0, marks);
+
+      if (marks.length > 0) {
+        setCurrent(0, marks);
+        // Hide task blocks with no matches
+        const allBlocks = Array.from(
+          containerRef.current.querySelectorAll<HTMLElement>('[data-task-block]')
+        );
+        const matchedBlocks = new Set(
+          marks.map((m) => m.closest('[data-task-block]')).filter(Boolean)
+        );
+        hiddenBlocksRef.current = allBlocks.filter((b) => !matchedBlocks.has(b));
+        hiddenBlocksRef.current.forEach((el) => {
+          el.style.display = 'none';
+        });
+      }
     }, 160);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
