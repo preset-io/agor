@@ -426,12 +426,15 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
     textarea.style.opacity = '0';
     textarea.style.pointerEvents = 'none';
     host.appendChild(textarea);
-    textarea.focus();
-    textarea.select();
-    textarea.setSelectionRange(0, text.length);
-    const ok = document.execCommand('copy');
-    host.removeChild(textarea);
-    return ok;
+    try {
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, text.length);
+      const ok = document.execCommand('copy');
+      return ok;
+    } finally {
+      host.removeChild(textarea);
+    }
   } catch {
     return false;
   }
