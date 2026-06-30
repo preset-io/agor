@@ -22,12 +22,15 @@ import {
   AimOutlined,
   CloseOutlined,
   CodeOutlined,
+  DownOutlined,
   EllipsisOutlined,
   InboxOutlined,
+  SearchOutlined,
   SettingOutlined,
+  UpOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Alert, App, Badge, Button, Dropdown, Space, Tooltip, Typography, theme } from 'antd';
+import { Alert, App, Badge, Button, Dropdown, Input, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
@@ -65,6 +68,7 @@ import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
 import { useComposerAttachments } from './useComposerAttachments';
+import { useSessionSearch } from '../../hooks/useSessionSearch';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -393,6 +397,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const tasks = reactiveSessionState?.tasks || [];
   const attachmentInputRef = React.useRef<HTMLInputElement>(null);
+  const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+  const {
+    searchOpen,
+    query,
+    setQuery,
+    totalMatches,
+    currentMatch,
+    openSearch,
+    closeSearch,
+    goNext,
+    goPrev,
+  } = useSessionSearch(bodyRef);
   const composerSessionIdentityRef = React.useRef<{
     sessionId: SessionID | null;
     generation: number;
@@ -601,6 +618,25 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   React.useEffect(() => {
     setEffortLevel(session?.model_config?.effort || 'high');
   }, [session?.model_config?.effort]);
+
+  React.useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f' && open) {
+        e.preventDefault();
+        if (!searchOpen) openSearch();
+        else searchInputRef.current?.focus();
+      }
+      if (e.key === 'Escape' && searchOpen) closeSearch();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [searchOpen, open, openSearch, closeSearch]);
+
+  React.useEffect(() => {
+    if (searchOpen) {
+      setTimeout(() => searchInputRef.current?.focus(), 30);
+    }
+  }, [searchOpen]);
 
   // When there's no session, render nothing (panel is collapsed to zero).
   // When open=false, we still render the component tree (hidden) so that
@@ -1113,59 +1149,102 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           background: token.colorBgContainer,
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <Space size={12} align="start" style={{ flex: 1 }}>
-            <ToolIcon tool={session.agentic_tool} size={40} />
-            <div style={{ flex: 1 }}>
-              <div style={{ marginBottom: 4 }}>
-                <Typography.Text
-                  strong
-                  style={{
-                    fontSize: 18,
-                    ...getSessionTitleStyles(2),
-                  }}
-                >
-                  {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                </Typography.Text>
-                <Badge
-                  status={getStatusColor()}
-                  text={session.status.toUpperCase()}
-                  style={{ marginLeft: 12 }}
-                />
-              </div>
-              {session.created_by && (
-                <div>
-                  <CreatedByTag
-                    createdBy={session.created_by}
-                    currentUserId={currentUserId}
-                    userById={userById}
-                    prefix="Created by"
+        {searchOpen ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <SearchOutlined style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }} />
+            <Input
+              ref={(el) => { searchInputRef.current = el?.input ?? null; }}
+              value={query}
+              onChange={(e) => { setQuery(e.target.value); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.shiftKey ? goPrev() : goNext();
+                if (e.key === 'Escape') closeSearch();
+              }}
+              placeholder="Search session…"
+              variant="borderless"
+              style={{ flex: 1, padding: 0 }}
+            />
+            {query && (
+              <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', minWidth: 44, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : 'no results'}
+              </Typography.Text>
+            )}
+            {!query && (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>Esc to close</Typography.Text>
+            )}
+            {totalMatches > 1 && (
+              <Space size={2}>
+                <Tooltip title="Previous (⇧↵)">
+                  <Button type="text" size="small" icon={<UpOutlined />} onClick={goPrev} />
+                </Tooltip>
+                <Tooltip title="Next (↵)">
+                  <Button type="text" size="small" icon={<DownOutlined />} onClick={goNext} />
+                </Tooltip>
+              </Space>
+            )}
+            <Tooltip title="Close search (Esc)">
+              <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
+            </Tooltip>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <Space size={12} align="start" style={{ flex: 1 }}>
+              <ToolIcon tool={session.agentic_tool} size={40} />
+              <div style={{ flex: 1 }}>
+                <div style={{ marginBottom: 4 }}>
+                  <Typography.Text
+                    strong
+                    style={{
+                      fontSize: 18,
+                      ...getSessionTitleStyles(2),
+                    }}
+                  >
+                    {getSessionDisplayTitle(session, { includeAgentFallback: true })}
+                  </Typography.Text>
+                  <Badge
+                    status={getStatusColor()}
+                    text={session.status.toUpperCase()}
+                    style={{ marginLeft: 12 }}
                   />
                 </div>
-              )}
-            </div>
-          </Space>
-          <Space size={4}>
-            <SessionAttachmentsDropdown items={attachmentItems} />
-            <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
-              <Tooltip title="More actions">
-                <Button type="text" icon={<EllipsisOutlined />} />
+                {session.created_by && (
+                  <div>
+                    <CreatedByTag
+                      createdBy={session.created_by}
+                      currentUserId={currentUserId}
+                      userById={userById}
+                      prefix="Created by"
+                    />
+                  </div>
+                )}
+              </div>
+            </Space>
+            <Space size={4}>
+              <SessionAttachmentsDropdown items={attachmentItems} />
+              <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
+                <Tooltip title="More actions">
+                  <Button type="text" icon={<EllipsisOutlined />} />
+                </Tooltip>
+              </Dropdown>
+              <Tooltip title="Search session (⌘F)">
+                <Button type="text" icon={<SearchOutlined />} onClick={openSearch} />
               </Tooltip>
-            </Dropdown>
-            <Tooltip title="Close Panel">
-              <Button
-                type="text"
-                icon={<CloseOutlined />}
-                onClick={onClose}
-                style={{ marginLeft: token.sizeUnit }}
-              />
-            </Tooltip>
-          </Space>
-        </div>
+              <Tooltip title="Close Panel">
+                <Button
+                  type="text"
+                  icon={<CloseOutlined />}
+                  onClick={onClose}
+                  style={{ marginLeft: token.sizeUnit }}
+                />
+              </Tooltip>
+            </Space>
+          </div>
+        )}
       </div>
 
       {/* Body - Scrollable content */}
       <div
+        ref={bodyRef}
         style={{
           flex: 1,
           overflow: 'hidden',
@@ -1193,6 +1272,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           isOpen={open}
           cliViewMode={cliViewMode}
           setCliViewMode={setCliViewMode}
+          forceExpandAll={searchOpen}
         />
 
         {/* Footer — rendered outside SessionPanelContent so that

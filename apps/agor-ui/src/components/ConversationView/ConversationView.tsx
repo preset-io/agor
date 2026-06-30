@@ -117,6 +117,11 @@ export interface ConversationViewProps {
    * Emoji override for assistant avatar in message bubbles
    */
   assistantEmoji?: string;
+
+  /**
+   * When true, all task blocks are force-expanded (used by in-session search)
+   */
+  forceExpandAll?: boolean;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -136,6 +141,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     isActive = true,
     genealogy,
     assistantEmoji,
+    forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -479,7 +485,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               sessionModel={sessionModel}
               userById={userById}
               currentUserId={currentUserId}
-              isExpanded={expandedTaskIds.has(task.task_id)}
+              isExpanded={forceExpandAll || expandedTaskIds.has(task.task_id)}
               onExpandChange={handleTaskExpandChange}
               sessionId={sessionId}
               onPermissionDecision={onPermissionDecision}
