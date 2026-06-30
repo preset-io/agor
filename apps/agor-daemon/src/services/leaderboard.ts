@@ -15,6 +15,7 @@ import {
   desc,
   eq,
   gte,
+  inArray,
   jsonExtract,
   lte,
   type SQL,
@@ -37,11 +38,20 @@ export type LeaderboardDimension = 'user' | 'branch' | 'repo' | 'model' | 'tool'
 
 const ALL_DIMENSIONS: LeaderboardDimension[] = ['user', 'branch', 'repo', 'model', 'tool'];
 
+type StringFilterValue = string | string[];
+
 export interface LeaderboardQuery {
   // Filters
-  userId?: string;
-  branchId?: string;
-  repoId?: string;
+  userId?: StringFilterValue;
+  userIds?: StringFilterValue;
+  branchId?: StringFilterValue;
+  branchIds?: StringFilterValue;
+  repoId?: StringFilterValue;
+  repoIds?: StringFilterValue;
+  model?: StringFilterValue;
+  models?: StringFilterValue;
+  tool?: StringFilterValue;
+  tools?: StringFilterValue;
 
   // Time period (optional - ISO timestamps)
   startDate?: string;
@@ -112,6 +122,34 @@ function parseIntegerParam(
   return Math.min(max, Math.max(min, Math.trunc(parsed)));
 }
 
+function normalizeStringFilterValues(...values: unknown[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (typeof value !== 'string') return;
+    for (const part of value.split(',')) {
+      const trimmed = part.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      normalized.push(trimmed);
+    }
+  };
+
+  for (const value of values) visit(value);
+  return normalized;
+}
+
+function stringFilter(column: unknown, values: string[]): SQL | undefined {
+  if (values.length === 0) return undefined;
+  if (values.length === 1) return eq(column as never, values[0]);
+  return inArray(column as never, values);
+}
+
 /**
  * Parse the comma-separated groupBy string into a set of known dimensions.
  * Throws on unknown values so typos surface loudly rather than silently
@@ -155,8 +193,15 @@ export class LeaderboardService {
     // Extract query params
     const {
       userId,
+      userIds: userIdsQuery,
       branchId,
+      branchIds: branchIdsQuery,
       repoId,
+      repoIds: repoIdsQuery,
+      model,
+      models,
+      tool,
+      tools,
       startDate,
       endDate,
       groupBy = 'user,branch,repo',
@@ -179,22 +224,37 @@ export class LeaderboardService {
     const includeRepo = dims.has('repo');
     const includeModel = dims.has('model');
     const includeTool = dims.has('tool');
-    const needsBranchesJoin = includeBranch || includeRepo || Boolean(repoId);
+    const repoIds = normalizeStringFilterValues(repoId, repoIdsQuery);
+    const needsBranchesJoin = includeBranch || includeRepo || repoIds.length > 0;
+
+    const modelExpr = jsonExtract(this.db, tasks.data, 'model');
 
     // Build WHERE conditions
     const conditions: SQL[] = [];
 
-    if (userId) {
-      conditions.push(eq(tasks.created_by, userId));
-    }
+    const userFilter = stringFilter(
+      tasks.created_by,
+      normalizeStringFilterValues(userId, userIdsQuery)
+    );
+    if (userFilter) conditions.push(userFilter);
 
-    if (branchId) {
-      conditions.push(eq(sessions.branch_id, branchId));
-    }
+    const branchFilter = stringFilter(
+      sessions.branch_id,
+      normalizeStringFilterValues(branchId, branchIdsQuery)
+    );
+    if (branchFilter) conditions.push(branchFilter);
 
-    if (repoId) {
-      conditions.push(eq(branches.repo_id, repoId));
-    }
+    const repoFilter = stringFilter(branches.repo_id, repoIds);
+    if (repoFilter) conditions.push(repoFilter);
+
+    const modelFilter = stringFilter(modelExpr, normalizeStringFilterValues(model, models));
+    if (modelFilter) conditions.push(modelFilter);
+
+    const toolFilter = stringFilter(
+      sessions.agentic_tool,
+      normalizeStringFilterValues(tool, tools)
+    );
+    if (toolFilter) conditions.push(toolFilter);
 
     // Use gte/lte so drizzle encodes the bound via the column's timestamp mapper
     // (integer ms on SQLite, timestamp-with-tz on Postgres). Passing an ISO string
@@ -225,7 +285,6 @@ export class LeaderboardService {
     // back to the top-level `tasks.data.duration_ms`. Tasks without either field
     // (legacy / in-flight) contribute 0 duration, which is the same behaviour as
     // tokens/cost today.
-    const modelExpr = jsonExtract(this.db, tasks.data, 'model');
     const inputTokensExpr = jsonExtract(
       this.db,
       tasks.data,
