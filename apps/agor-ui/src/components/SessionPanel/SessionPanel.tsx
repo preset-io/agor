@@ -1154,9 +1154,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <Space size={12} align="start" style={{ flex: 1 }}>
-            <ToolIcon tool={session.agentic_tool} size={40} />
-            <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flex: 1, minWidth: 0 }}>
+            <div style={{ flexShrink: 0 }}><ToolIcon tool={session.agentic_tool} size={40} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ marginBottom: 4 }}>
                 <Typography.Text
                   strong
@@ -1226,7 +1226,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 )
               )}
             </div>
-          </Space>
+          </div>
           <Space size={4}>
             <SessionAttachmentsDropdown items={attachmentItems} />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">

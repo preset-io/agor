@@ -207,6 +207,7 @@ const EMPTY_BOARD_OBJECTS: BoardEntityObject[] = Object.freeze(
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
 const LEFT_PANEL_MIN_WIDTH_PX = 320;
 const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
+const SESSION_PANEL_MIN_WIDTH_PX = 360;
 const LEFT_PANEL_TOGGLE_HIT_SIZE_PX = 44;
 const LEFT_PANEL_TOGGLE_KNOB_SIZE_PX = 30;
 
@@ -1323,6 +1324,7 @@ export const App: React.FC<AppProps> = ({
                       defaultSize={effectiveSessionPanelSize}
                       minSize={15}
                       maxSize={75}
+                      style={{ minWidth: SESSION_PANEL_MIN_WIDTH_PX }}
                     >
                       {effectiveSelectedSessionId ? (
                         <SessionPanel
