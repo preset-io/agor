@@ -137,11 +137,11 @@ Attached files:
       expect.arrayContaining([
         expect.objectContaining({
           file: expect.objectContaining({ name: 'note-0.txt' }),
-          reason: 'Composer supports up to 10 pending files per destination',
+          reason: 'Composer supports up to 10 pending files',
         }),
         expect.objectContaining({
           file: expect.objectContaining({ name: 'note-10.txt' }),
-          reason: 'Composer supports up to 10 pending files per destination',
+          reason: 'Composer supports up to 10 pending files',
         }),
       ])
     );
@@ -161,7 +161,7 @@ Attached files:
     expect(acceptedFiles).toHaveLength(0);
     expect(rejections).toHaveLength(12);
     expect(summarizeComposerFileRejections(rejections)).toBe(
-      'note-0.txt: Composer supports up to 10 pending files per destination (+11 more)'
+      'note-0.txt: Composer supports up to 10 pending files (+11 more)'
     );
   });
 
@@ -187,11 +187,11 @@ Attached files:
     expect(rejections).toEqual([
       expect.objectContaining({
         file: expect.objectContaining({ name: 'incoming-0.txt' }),
-        reason: 'Composer supports up to 10 pending files per destination',
+        reason: 'Composer supports up to 10 pending files',
       }),
       expect.objectContaining({
         file: expect.objectContaining({ name: 'incoming-1.txt' }),
-        reason: 'Composer supports up to 10 pending files per destination',
+        reason: 'Composer supports up to 10 pending files',
       }),
     ]);
   });

@@ -1,6 +1,6 @@
 import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 
-export type UploadDestination = 'branch' | 'temp' | 'global';
+export type UploadDestination = 'branch' | 'global';
 
 export interface UploadedFile {
   filename: string;
@@ -28,7 +28,7 @@ export async function uploadFilesToSession({
   sessionId,
   daemonUrl,
   files,
-  destination = 'branch',
+  destination,
   notifyAgent = false,
   message = '',
 }: UploadFilesToSessionOptions): Promise<UploadFilesToSessionResult> {
@@ -40,7 +40,9 @@ export async function uploadFilesToSession({
   formData.append('notifyAgent', String(notifyAgent));
   formData.append('message', message);
 
-  const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload?destination=${encodeURIComponent(destination)}`;
+  const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload${
+    destination ? `?destination=${encodeURIComponent(destination)}` : ''
+  }`;
   const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
   const headers: HeadersInit = {};
 

@@ -1,28 +1,14 @@
 import {
   CloseOutlined,
-  EllipsisOutlined,
   ExclamationOutlined,
   FileOutlined,
   FilePdfOutlined,
   FileTextOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Modal, Popover, Radio, Space, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Modal, Space, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
-import type { UploadDestination } from '../FileUpload';
 import type { ComposerAttachment } from './composerAttachments';
-
-const DESTINATION_HELP: Record<UploadDestination, string> = {
-  branch: 'Agent-accessible, default',
-  temp: 'Ephemeral, not committed',
-  global: 'Shared across sessions',
-};
-
-const DESTINATION_LABEL: Record<UploadDestination, string> = {
-  branch: 'Branch (.agor/uploads/)',
-  temp: 'Temp folder',
-  global: 'Global (~/.agor/uploads/)',
-};
 
 function getFileIcon(file: File) {
   const type = file.type.toLowerCase();
@@ -36,17 +22,13 @@ function getFileIcon(file: File) {
 
 interface SessionAttachmentTrayProps {
   attachments: ComposerAttachment[];
-  destination: UploadDestination;
   disabled?: boolean;
-  onDestinationChange: (destination: UploadDestination) => void;
   onRemove: (id: string) => void;
 }
 
 export const SessionAttachmentTray: React.FC<SessionAttachmentTrayProps> = ({
   attachments,
-  destination,
   disabled = false,
-  onDestinationChange,
   onRemove,
 }) => {
   const { token } = theme.useToken();
@@ -57,36 +39,6 @@ export const SessionAttachmentTray: React.FC<SessionAttachmentTrayProps> = ({
   const failedCount = attachments.filter((attachment) => attachment.status === 'failed').length;
   const previewAttachment =
     attachments.find((attachment) => attachment.id === previewAttachmentId) ?? null;
-
-  const settings = (
-    <div style={{ minWidth: 360 }}>
-      <Typography.Text strong>Batch attachment settings</Typography.Text>
-      <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 12 }}>
-        Applies to selected/pending files before upload. Defaults to Branch (.agor/uploads/).
-      </Typography.Paragraph>
-      <Radio.Group
-        value={destination}
-        disabled={disabled}
-        onChange={(event) => onDestinationChange(event.target.value)}
-        style={{ width: '100%' }}
-      >
-        <Space orientation="vertical" style={{ width: '100%' }}>
-          {(Object.keys(DESTINATION_LABEL) as UploadDestination[]).map((value) => (
-            <Radio key={value} value={value}>
-              <span
-                style={{ display: 'inline-flex', gap: token.paddingLG, alignItems: 'baseline' }}
-              >
-                <span>{DESTINATION_LABEL[value]}</span>
-                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                  {DESTINATION_HELP[value]}
-                </Typography.Text>
-              </span>
-            </Radio>
-          ))}
-        </Space>
-      </Radio.Group>
-    </div>
-  );
 
   return (
     <>
@@ -217,15 +169,6 @@ export const SessionAttachmentTray: React.FC<SessionAttachmentTrayProps> = ({
               );
             })}
           </div>
-          <Popover content={settings} trigger="click" placement="bottomRight">
-            <Button
-              aria-label="Batch attachment settings"
-              icon={<EllipsisOutlined />}
-              disabled={disabled}
-              title={disabled ? 'Files are uploading…' : 'Batch attachment settings'}
-              style={{ flexShrink: 0, alignSelf: 'flex-start' }}
-            />
-          </Popover>
         </div>
         {failedCount > 0 && (
           <Alert

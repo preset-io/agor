@@ -17,24 +17,12 @@ function attachment(overrides: Partial<ComposerAttachment> = {}): ComposerAttach
 describe('SessionAttachmentTray', () => {
   it('renders thumbnails with remove controls and top-level batch settings', () => {
     const onRemove = vi.fn();
-    const onDestinationChange = vi.fn();
 
-    render(
-      <SessionAttachmentTray
-        attachments={[attachment()]}
-        destination="branch"
-        onDestinationChange={onDestinationChange}
-        onRemove={onRemove}
-      />
-    );
+    render(<SessionAttachmentTray attachments={[attachment()]} onRemove={onRemove} />);
 
     expect(screen.getByAltText('chart.png')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Preview chart.png' })).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Batch attachment settings'));
-    expect(screen.getByText('Batch attachment settings')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('radio', { name: /Temp folder/ }));
-    expect(onDestinationChange).toHaveBeenCalledWith('temp');
+    expect(screen.queryByLabelText('Batch attachment settings')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText('Remove chart.png'));
     expect(onRemove).toHaveBeenCalledWith('image-1');
@@ -42,14 +30,7 @@ describe('SessionAttachmentTray', () => {
   });
 
   it('opens and closes a larger image preview from the thumbnail', async () => {
-    render(
-      <SessionAttachmentTray
-        attachments={[attachment()]}
-        destination="branch"
-        onDestinationChange={vi.fn()}
-        onRemove={vi.fn()}
-      />
-    );
+    render(<SessionAttachmentTray attachments={[attachment()]} onRemove={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Preview chart.png' }));
 
@@ -75,8 +56,6 @@ describe('SessionAttachmentTray', () => {
             status: 'failed',
           }),
         ]}
-        destination="branch"
-        onDestinationChange={vi.fn()}
         onRemove={vi.fn()}
       />
     );
@@ -97,8 +76,6 @@ describe('SessionAttachmentTray', () => {
             previewUrl: undefined,
           }),
         ]}
-        destination="branch"
-        onDestinationChange={vi.fn()}
         onRemove={vi.fn()}
       />
     );
@@ -109,14 +86,11 @@ describe('SessionAttachmentTray', () => {
 
   it('locks remove and batch settings while composer files are uploading', () => {
     const onRemove = vi.fn();
-    const onDestinationChange = vi.fn();
 
     render(
       <SessionAttachmentTray
         attachments={[attachment({ status: 'uploading' })]}
-        destination="branch"
         disabled
-        onDestinationChange={onDestinationChange}
         onRemove={onRemove}
       />
     );
@@ -125,10 +99,9 @@ describe('SessionAttachmentTray', () => {
       screen.getByText('Files are uploading. Attachment changes are locked until upload finishes.')
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Remove chart.png')).toBeDisabled();
-    expect(screen.getByLabelText('Batch attachment settings')).toBeDisabled();
+    expect(screen.queryByLabelText('Batch attachment settings')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText('Remove chart.png'));
     expect(onRemove).not.toHaveBeenCalled();
-    expect(onDestinationChange).not.toHaveBeenCalled();
   });
 });

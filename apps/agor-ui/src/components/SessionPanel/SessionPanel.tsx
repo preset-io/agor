@@ -412,11 +412,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     attachments: composerAttachments,
     attachmentsRef: composerAttachmentsRef,
     clearAttachments: clearComposerAttachments,
-    destination: composerAttachmentDestination,
     hasAttachments: hasComposerAttachments,
     addAttachments: addComposerAttachments,
     removeAttachment: removeComposerAttachment,
-    setDestination: handleComposerAttachmentDestinationChange,
     uploadAttachments: uploadComposerAttachments,
     uploading: composerAttachmentUploading,
     uploadingRef: composerAttachmentUploadingRef,
@@ -1043,9 +1041,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           )}
           <SessionAttachmentTray
             attachments={composerAttachments}
-            destination={composerAttachmentDestination}
             disabled={composerAttachmentUploading}
-            onDestinationChange={handleComposerAttachmentDestinationChange}
             onRemove={removeComposerAttachment}
           />
           <PromptInput
@@ -1215,8 +1211,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         {!(session.agentic_tool === 'claude-code-cli' && cliViewMode === 'terminal') &&
           sessionFooter}
 
-        {/* Advanced upload modal — preserves the existing file upload flow for
-            non-image files and Branch/Temp/Global + notify-agent options. */}
+        {/* Advanced upload modal preserves the existing file upload flow for
+            non-image files and notify-agent options. */}
         <FileUpload
           sessionId={session.session_id}
           daemonUrl={getDaemonUrl()}

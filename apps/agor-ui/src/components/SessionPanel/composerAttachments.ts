@@ -44,7 +44,7 @@ const COMPOSER_UPLOAD_EXTENSION_MIME_TYPES = new Map<string, string>([
 export const MAX_COMPOSER_UPLOAD_FILES = 10;
 export const MAX_COMPOSER_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
 export const MAX_COMPOSER_UPLOAD_TOTAL_SIZE = 100 * 1024 * 1024;
-export const MAX_COMPOSER_UPLOAD_FILES_MESSAGE = `Composer supports up to ${MAX_COMPOSER_UPLOAD_FILES} pending files per destination`;
+export const MAX_COMPOSER_UPLOAD_FILES_MESSAGE = `Composer supports up to ${MAX_COMPOSER_UPLOAD_FILES} pending files`;
 
 export type ComposerAttachmentStatus = 'pending' | 'uploading' | 'uploaded' | 'failed';
 

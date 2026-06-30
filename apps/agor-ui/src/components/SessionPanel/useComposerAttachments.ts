@@ -1,7 +1,7 @@
 import type { SessionID } from '@agor-live/client';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
-import type { UploadDestination, UploadedFile } from '../FileUpload';
+import type { UploadedFile } from '../FileUpload';
 import { uploadFilesToSession } from '../FileUpload/upload';
 import {
   type ComposerAttachment,
@@ -17,7 +17,6 @@ interface UseComposerAttachmentsOptions {
 }
 
 export function useComposerAttachments({ sessionId, showError }: UseComposerAttachmentsOptions) {
-  const [destination, setDestination] = React.useState<UploadDestination>('branch');
   const [attachments, setAttachments] = React.useState<ComposerAttachment[]>([]);
   const [validationError, setValidationError] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
@@ -51,7 +50,6 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
     if (previousSessionIdRef.current === sessionId) return;
     clearAttachments();
     setValidationError(null);
-    setDestination('branch');
     previousSessionIdRef.current = sessionId;
   }, [sessionId, clearAttachments]);
 
@@ -62,8 +60,7 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
 
       const { acceptedFiles, rejections } = validateComposerFileIntake(
         files,
-        attachmentsRef.current,
-        destination
+        attachmentsRef.current
       );
       if (rejections.length > 0) {
         const validationMessage = summarizeComposerFileRejections(rejections);
@@ -85,13 +82,13 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
                 : `${Date.now()}-${file.name}`,
             file,
             previewUrl: supported ? URL.createObjectURL(file) : undefined,
-            destination,
+            destination: 'branch' as const,
             status: 'pending' as const,
           };
         }),
       ]);
     },
-    [destination, showError]
+    [showError]
   );
 
   const removeAttachment = React.useCallback(
@@ -107,19 +104,6 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
     },
     [revokePreview]
   );
-
-  const changeDestination = React.useCallback((nextDestination: UploadDestination) => {
-    if (uploadingRef.current) return;
-
-    setDestination(nextDestination);
-    setAttachments((prev) =>
-      prev.map((attachment) =>
-        attachment.status === 'uploaded'
-          ? attachment
-          : { ...attachment, destination: nextDestination }
-      )
-    );
-  }, []);
 
   const uploadAttachments = React.useCallback(
     async (
@@ -160,32 +144,23 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
       );
 
       const uploadedById = new Map<string, UploadedFile>();
-      const groups = new Map<UploadDestination, ComposerAttachment[]>();
-      for (const attachment of uploadable) {
-        const group = groups.get(attachment.destination) ?? [];
-        group.push(attachment);
-        groups.set(attachment.destination, group);
-      }
 
       try {
-        for (const [uploadDestination, groupedAttachments] of groups.entries()) {
-          const result = await uploadFilesToSession({
-            sessionId: uploadSessionId,
-            daemonUrl: getDaemonUrl(),
-            files: groupedAttachments.map((attachment) => attachment.file),
-            destination: uploadDestination,
-            notifyAgent: false,
-          });
+        const result = await uploadFilesToSession({
+          sessionId: uploadSessionId,
+          daemonUrl: getDaemonUrl(),
+          files: uploadable.map((attachment) => attachment.file),
+          notifyAgent: false,
+        });
 
-          if (result.files.length !== groupedAttachments.length) {
-            throw new Error('Upload response did not include every selected file');
-          }
-
-          groupedAttachments.forEach((attachment, index) => {
-            const uploaded = result.files[index];
-            if (uploaded) uploadedById.set(attachment.id, uploaded);
-          });
+        if (result.files.length !== uploadable.length) {
+          throw new Error('Upload response did not include every selected file');
         }
+
+        uploadable.forEach((attachment, index) => {
+          const uploaded = result.files[index];
+          if (uploaded) uploadedById.set(attachment.id, uploaded);
+        });
 
         setAttachments((prev) =>
           prev.map((attachment) => {
@@ -230,12 +205,10 @@ export function useComposerAttachments({ sessionId, showError }: UseComposerAtta
     attachments,
     attachmentsRef,
     clearAttachments,
-    destination,
     hasAttachments: attachments.length > 0,
     hasBlockingAttachments: attachments.some(isBlockingComposerAttachment),
     addAttachments,
     removeAttachment,
-    setDestination: changeDestination,
     uploadAttachments,
     uploading,
     uploadingRef,

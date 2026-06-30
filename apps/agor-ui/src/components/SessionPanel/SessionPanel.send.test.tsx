@@ -139,6 +139,9 @@ describe('SessionPanel composer send', () => {
 
     await waitFor(() => expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1));
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({ destination: expect.anything() })
+    );
+    expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
       expect.objectContaining({ files: [sendStartFile], notifyAgent: false })
     );
 
@@ -279,6 +282,9 @@ describe('SessionPanel composer send', () => {
       expect.any(String)
     );
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({ destination: expect.anything() })
+    );
+    expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledWith(
       expect.objectContaining({ files: [file], notifyAgent: false })
     );
     await waitFor(() => expect(textarea).toHaveValue(''));
@@ -397,7 +403,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => {
       expect(
         screen.getAllByText(
-          /pending-00.txt: Composer supports up to 10 pending files per destination \(\+10 more\)/
+          /pending-00.txt: Composer supports up to 10 pending files \(\+10 more\)/
         ).length
       ).toBeGreaterThan(0);
     });
@@ -433,7 +439,7 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => {
       expect(
         screen.getAllByText(
-          /pending-00.txt: Composer supports up to 10 pending files per destination \(\+11 more\)/
+          /pending-00.txt: Composer supports up to 10 pending files \(\+11 more\)/
         ).length
       ).toBeGreaterThan(0);
     });

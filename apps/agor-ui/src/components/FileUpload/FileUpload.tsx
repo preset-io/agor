@@ -1,10 +1,10 @@
 import { PaperClipOutlined, UploadOutlined } from '@ant-design/icons';
-import { Button, Checkbox, Input, Modal, Radio, Space, Typography, Upload } from 'antd';
+import { Button, Checkbox, Input, Modal, Space, Typography, Upload } from 'antd';
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
-import type { UploadDestination, UploadedFile } from './upload';
+import type { UploadedFile } from './upload';
 import { uploadFilesToSession } from './upload';
 
 const { TextArea } = Input;
@@ -36,7 +36,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 }) => {
   const { showSuccess, showWarning, showError } = useThemedMessage();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
-  const [destination, setDestination] = useState<UploadDestination>('branch');
   const [notifyAgent, setNotifyAgent] = useState(true);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_UPLOAD_MESSAGE);
   const [uploading, setUploading] = useState(false);
@@ -101,7 +100,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         sessionId,
         daemonUrl,
         files,
-        destination,
         notifyAgent,
         message: agentMessage,
       });
@@ -176,42 +174,10 @@ export const FileUpload: React.FC<FileUploadProps> = ({
           <Button icon={<UploadOutlined />}>Select Files</Button>
         </Upload>
 
-        {/* Destination selector */}
-        <div>
-          <Text strong>Destination:</Text>
-          <Radio.Group
-            value={destination}
-            onChange={(e) => setDestination(e.target.value)}
-            style={{ marginTop: 8, display: 'block' }}
-          >
-            <Space orientation="vertical">
-              <Radio value="branch">
-                <Space orientation="vertical" size={0}>
-                  <Text>Branch (.agor/uploads/)</Text>
-                  <Text type="secondary" style={{ fontSize: '12px' }}>
-                    Default - Agent-accessible, can be committed
-                  </Text>
-                </Space>
-              </Radio>
-              <Radio value="temp">
-                <Space orientation="vertical" size={0}>
-                  <Text>Temp folder</Text>
-                  <Text type="secondary" style={{ fontSize: '12px' }}>
-                    Ephemeral, auto-cleanup
-                  </Text>
-                </Space>
-              </Radio>
-              <Radio value="global">
-                <Space orientation="vertical" size={0}>
-                  <Text>Global (~/.agor/uploads/)</Text>
-                  <Text type="secondary" style={{ fontSize: '12px' }}>
-                    Shared across sessions
-                  </Text>
-                </Space>
-              </Radio>
-            </Space>
-          </Radio.Group>
-        </div>
+        <Text type="secondary" style={{ fontSize: '12px' }}>
+          Files are uploaded to <Text code>~/.agor/uploads/</Text>. When notified, the agent
+          receives the full file path and can copy or move it into the branch if needed.
+        </Text>
 
         {/* Notify agent option */}
         <div>
