@@ -36,6 +36,7 @@ import {
   Badge,
   Button,
   Dropdown,
+  Empty,
   Input,
   Space,
   Tooltip,
@@ -416,6 +417,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     setQuery,
     totalMatches,
     currentMatch,
+    searchPending,
     openSearch,
     closeSearch,
     goNext,
@@ -1164,101 +1166,28 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           background: token.colorBgContainer,
         }}
       >
+        {/* Row 1: icon + title + action buttons — always unchanged */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flex: 1, minWidth: 0 }}>
             <div style={{ flexShrink: 0 }}>
               <ToolIcon tool={session.agentic_tool} size={40} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ marginBottom: 4 }}>
-                <Typography.Text
-                  strong
-                  style={{
-                    fontSize: 18,
-                    ...getSessionTitleStyles(2),
-                  }}
-                >
-                  {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                </Typography.Text>
-                {!searchOpen && (
-                  <Badge
-                    status={getStatusColor()}
-                    text={session.status.toUpperCase()}
-                    style={{ marginLeft: 12 }}
-                  />
-                )}
-              </div>
-              {searchOpen ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <SearchOutlined
-                    style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }}
-                  />
-                  <Input
-                    ref={(el) => {
-                      searchInputRef.current = el?.input ?? null;
-                    }}
-                    value={query}
-                    onChange={(e) => {
-                      setQuery(e.target.value);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') e.shiftKey ? goPrev() : goNext();
-                      if (e.key === 'Escape') closeSearch();
-                    }}
-                    placeholder="Search session..."
-                    variant="borderless"
-                    style={{ flex: 1, padding: 0 }}
-                    size="small"
-                  />
-                  {query && (
-                    <Typography.Text
-                      type="secondary"
-                      style={{
-                        fontSize: 12,
-                        whiteSpace: 'nowrap',
-                        minWidth: 44,
-                        textAlign: 'right',
-                        fontVariantNumeric: 'tabular-nums',
-                      }}
-                    >
-                      {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : 'no results'}
-                    </Typography.Text>
-                  )}
-                  {!query && (
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                      Esc to close
-                    </Typography.Text>
-                  )}
-                  {totalMatches > 1 && (
-                    <Space size={2}>
-                      <Tooltip title="Previous (Shift+Enter)">
-                        <Button type="text" size="small" icon={<UpOutlined />} onClick={goPrev} />
-                      </Tooltip>
-                      <Tooltip title="Next (Enter)">
-                        <Button type="text" size="small" icon={<DownOutlined />} onClick={goNext} />
-                      </Tooltip>
-                    </Space>
-                  )}
-                  <Tooltip title="Close search (Esc)">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<CloseOutlined />}
-                      onClick={closeSearch}
-                    />
-                  </Tooltip>
-                </div>
-              ) : (
-                session.created_by && (
-                  <div>
-                    <CreatedByTag
-                      createdBy={session.created_by}
-                      currentUserId={currentUserId}
-                      userById={userById}
-                      prefix="Created by"
-                    />
-                  </div>
-                )
+              <Typography.Text
+                strong
+                style={{
+                  fontSize: 18,
+                  ...getSessionTitleStyles(2),
+                }}
+              >
+                {getSessionDisplayTitle(session, { includeAgentFallback: true })}
+              </Typography.Text>
+              {!searchOpen && (
+                <Badge
+                  status={getStatusColor()}
+                  text={session.status.toUpperCase()}
+                  style={{ marginLeft: 12 }}
+                />
               )}
             </div>
           </div>
@@ -1282,6 +1211,72 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
           </Space>
         </div>
+        {/* Row 2: full-width search bar OR indented created-by */}
+        {searchOpen ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: token.sizeUnit }}>
+            <SearchOutlined style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }} />
+            <Input
+              ref={(el) => {
+                searchInputRef.current = el?.input ?? null;
+              }}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.shiftKey ? goPrev() : goNext();
+                if (e.key === 'Escape') closeSearch();
+              }}
+              placeholder="Search session..."
+              variant="borderless"
+              style={{ flex: 1, padding: 0 }}
+              size="small"
+            />
+            {query && (
+              <Typography.Text
+                type="secondary"
+                style={{
+                  fontSize: 12,
+                  whiteSpace: 'nowrap',
+                  minWidth: 44,
+                  textAlign: 'right',
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : ''}
+              </Typography.Text>
+            )}
+            {!query && (
+              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                Esc to close
+              </Typography.Text>
+            )}
+            {totalMatches > 1 && (
+              <Space size={2}>
+                <Tooltip title="Previous (Shift+Enter)">
+                  <Button type="text" size="small" icon={<UpOutlined />} onClick={goPrev} />
+                </Tooltip>
+                <Tooltip title="Next (Enter)">
+                  <Button type="text" size="small" icon={<DownOutlined />} onClick={goNext} />
+                </Tooltip>
+              </Space>
+            )}
+            <Tooltip title="Close search (Esc)">
+              <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
+            </Tooltip>
+          </div>
+        ) : (
+          session.created_by && (
+            <div style={{ marginLeft: 52, marginTop: token.sizeUnit }}>
+              <CreatedByTag
+                createdBy={session.created_by}
+                currentUserId={currentUserId}
+                userById={userById}
+                prefix="Created by"
+              />
+            </div>
+          )
+        )}
       </div>
 
       {/* Body - Scrollable content */}
@@ -1296,23 +1291,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           position: 'relative',
         }}
       >
-        {searchOpen && query.trim() && totalMatches === 0 && (
+        {searchOpen && query.trim() && totalMatches === 0 && !searchPending && (
           <div
             style={{
               position: 'absolute',
               inset: 0,
               display: 'flex',
-              flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: token.sizeUnit * 2,
               zIndex: 10,
               pointerEvents: 'none',
               background: `${token.colorBgContainer}cc`,
             }}
           >
-            <SearchOutlined style={{ fontSize: 32, color: token.colorTextTertiary }} />
-            <Typography.Text type="secondary">No results for &ldquo;{query}&rdquo;</Typography.Text>
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`No results for "${query}"`} />
           </div>
         )}
         <SessionPanelContent

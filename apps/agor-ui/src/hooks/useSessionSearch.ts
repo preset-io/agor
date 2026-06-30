@@ -99,6 +99,7 @@ export function useSessionSearch(
   const [query, setQuery] = useState('');
   const [totalMatches, setTotalMatches] = useState(0);
   const [currentMatch, setCurrentMatch] = useState(0);
+  const [searchPending, setSearchPending] = useState(false);
   const marksRef = useRef<HTMLElement[]>([]);
   const hiddenBlocksRef = useRef<HTMLElement[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -132,11 +133,13 @@ export function useSessionSearch(
     setQuery('');
     setTotalMatches(0);
     setCurrentMatch(0);
+    setSearchPending(false);
   }, [containerRef]);
 
   useEffect(() => {
     if (!searchOpen) return;
     if (timerRef.current) clearTimeout(timerRef.current);
+    setSearchPending(true);
     timerRef.current = setTimeout(() => {
       if (!containerRef.current) return;
 
@@ -165,6 +168,7 @@ export function useSessionSearch(
           el.style.display = 'none';
         });
       }
+      setSearchPending(false);
     }, 160);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
@@ -191,6 +195,7 @@ export function useSessionSearch(
     setQuery,
     totalMatches,
     currentMatch,
+    searchPending,
     openSearch,
     closeSearch,
     goNext,
