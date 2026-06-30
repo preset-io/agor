@@ -308,22 +308,34 @@ describe('GatewayChannelsTable Slack create wizard', () => {
   });
 });
 
+/**
+ * Render the table with a single Slack channel and open its edit modal. The
+ * edit Collapse keeps inactive panels mounted (`destroyOnHidden={false}`), but
+ * children render lazily — call {@link expandPanel} to reveal a section's body.
+ */
+function renderEditTable(client: AgorClient | null, channel: GatewayChannel) {
+  const branch = makeBranch();
+  const user = makeUser();
+  renderWithProviders(
+    <GatewayChannelsTable
+      client={client}
+      gatewayChannelById={new Map([[channel.id, channel]])}
+      branchById={new Map([[branch.branch_id, branch]])}
+      userById={new Map([[user.user_id, user]])}
+      mcpServerById={new Map<string, MCPServer>()}
+    />
+  );
+  fireEvent.click(screen.getByTitle('Edit'));
+}
+
+/** Expand a Collapse section by clicking its header label. */
+function expandPanel(title: string) {
+  fireEvent.click(screen.getByText(title));
+}
+
 describe('GatewayChannelsTable Slack edit mode', () => {
   it('still renders the Collapse form (not the wizard) when editing', () => {
-    const branch = makeBranch();
-    const user = makeUser();
-    const channel = makeSlackChannel();
-    renderWithProviders(
-      <GatewayChannelsTable
-        client={null}
-        gatewayChannelById={new Map([[channel.id, channel]])}
-        branchById={new Map([[branch.branch_id, branch]])}
-        userById={new Map([[user.user_id, user]])}
-        mcpServerById={new Map<string, MCPServer>()}
-      />
-    );
-
-    fireEvent.click(screen.getByTitle('Edit'));
+    renderEditTable(null, makeSlackChannel());
 
     // Edit keeps the collapsible sections; the create-only wizard is absent.
     expect(screen.getByText('Credentials')).toBeInTheDocument();
@@ -331,6 +343,82 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     // No unified step indicator and no wizard footer in edit mode.
     expect(screen.queryByText('Tokens & test')).not.toBeInTheDocument();
     expect(queryButton(/^Continue$/)).toBeUndefined();
+  });
+
+  it('copies the recommended manifest derived from the channel options', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    // enable_channels: true ⇒ public-channel scopes + the app_mention event.
+    renderEditTable(null, makeSlackChannel());
+    expandPanel('App Manifest');
+
+    // The manifest derives from Form.useWatch, which propagates the edited
+    // values on the next tick — wait for the public-channel scope to appear.
+    await waitFor(() =>
+      expect(document.querySelector('pre')?.textContent ?? '').toContain('"channels:history"')
+    );
+    const manifest = document.querySelector('pre')?.textContent ?? '';
+    expect(manifest).toContain('"app_mention"');
+    // Channel surfaces trigger on app_mention, never message.* channel events.
+    expect(manifest).not.toContain('message.channels');
+
+    clickButton(/Copy app manifest/);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0][0]).toContain('"channels:history"');
+  });
+
+  it('tests an existing channel via gatewayChannelId (never form tokens)', async () => {
+    const result = {
+      ok: true,
+      team: { id: 'T123', name: 'Acme' },
+      appTokenValid: true,
+      failures: [],
+      notVerifiable: [],
+    };
+    const { client, testCreate } = makeClient(result);
+    renderEditTable(client, makeSlackChannel());
+    expandPanel('Credentials');
+
+    clickButton(/Test connection/);
+
+    await waitFor(() => expect(testCreate).toHaveBeenCalledTimes(1));
+    expect(testCreate.mock.calls[0][0]).toEqual({ gatewayChannelId: 'channel-1' });
+    expect(await screen.findByText('Connection succeeded')).toBeInTheDocument();
+    expect(screen.getByText('Acme')).toBeInTheDocument();
+  });
+
+  it('derives the Message Sources scope/event list (no stale message.* events)', async () => {
+    renderEditTable(null, makeSlackChannel());
+    expandPanel('Message Sources');
+
+    // Derived from requiredBotScopes/requiredBotEvents for public channels; the
+    // watched enable_channels value propagates on the next tick.
+    await waitFor(() =>
+      expect(screen.queryAllByText('channels:history').length).toBeGreaterThan(0)
+    );
+    expect(screen.queryAllByText('app_mentions:read').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('app_mention').length).toBeGreaterThan(0);
+    // Channel surfaces subscribe to app_mention, never message.* channel events.
+    expect(screen.queryByText('message.channels')).toBeNull();
+  });
+
+  it('shows stored vs not-set status for the token fields', () => {
+    // bot_token is stored (non-empty fixture value); app_token is absent.
+    renderEditTable(null, makeSlackChannel());
+    expandPanel('Credentials');
+
+    expect(screen.getByText('Stored')).toBeInTheDocument();
+    expect(screen.getByText('Not set')).toBeInTheDocument();
+    expect(
+      screen.getByText('A token is stored. Leave blank to keep it; enter a value to overwrite it.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('No token stored yet. Enter the app token (xapp-...).')
+    ).toBeInTheDocument();
   });
 });
 
