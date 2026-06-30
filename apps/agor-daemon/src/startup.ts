@@ -358,8 +358,8 @@ async function injectRestartNoticesInTenantScope(
 
   const restartType = wasGraceful ? ('daemon_restart' as const) : ('daemon_crash' as const);
   const messageText = wasGraceful
-    ? 'The Agor daemon was restarted while this session was running. Ask the agent to resume where it left off.'
-    : 'The Agor daemon restarted unexpectedly while this session was running. Ask the agent to resume where it left off.';
+    ? 'The Agor daemon was restarted while this session was running.'
+    : 'The Agor daemon restarted unexpectedly while this session was running.';
 
   // Build session → last orphaned task map so we can attach notices to a task_id.
   // Prefer orphaned tasks (they were the active tasks at shutdown); fall back to
