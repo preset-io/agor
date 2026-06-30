@@ -718,12 +718,13 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const sessionListContent = (
     <ConfigProvider theme={{ components: { Tree: { colorBgContainer: 'transparent' } } }}>
       <Tree
-        className="agor-flat-tree agor-branch-session-tree"
+        className="agor-flat-tree"
         treeData={sessionTreeData}
         expandedKeys={expandedKeys}
         onExpand={(keys) => setExpandedKeys(keys as React.Key[])}
         showLine
         showIcon={false}
+        blockNode
         selectable={false}
         style={{ background: 'transparent', borderRadius: 0, padding: 0 }}
         titleRender={renderSessionNode}

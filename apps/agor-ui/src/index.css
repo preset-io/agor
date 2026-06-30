@@ -393,20 +393,3 @@ html.dark .dark\:hidden {
   border-radius: 0;
   padding: 0;
 }
-
-/* Branch-card session rows should read as cards inside the tree: keep the
-   indentation/guides, but let the row surface stretch to the card's right edge. */
-.agor-branch-session-tree.ant-tree .ant-tree-treenode {
-  align-items: stretch;
-  width: 100%;
-}
-
-.agor-branch-session-tree.ant-tree .ant-tree-node-content-wrapper {
-  flex: 1;
-  min-width: 0;
-}
-
-.agor-branch-session-tree.ant-tree .ant-tree-title {
-  display: block;
-  width: 100%;
-}
