@@ -95,7 +95,7 @@ describe('BranchCard drag handle', () => {
     );
 
     expect(container.querySelector('.ant-card')?.getAttribute('style')).toContain(
-      'background-color: color-mix(in srgb, rgb(1, 2, 3), rgb(10, 11, 12));'
+      'background-color: color-mix(in srgb, rgb(1, 2, 3) 67%, rgb(10, 11, 12));'
     );
     expect(container.querySelector('.agor-branch-session-tree .ant-tree-title > div')).toHaveStyle({
       width: '100%',

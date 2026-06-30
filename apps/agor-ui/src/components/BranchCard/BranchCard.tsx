@@ -217,7 +217,7 @@ const BranchCardComponent = ({
   // In dark mode it can still read a bit bright on a large card, so mix it
   // with the base background while staying in the primary token family.
   const runningCardBackgroundColor = isDarkMode
-    ? `color-mix(in srgb, ${token.colorPrimaryBg} 50%, ${token.colorBgBase})`
+    ? `color-mix(in srgb, ${token.colorPrimaryBg} 67%, ${token.colorBgBase})`
     : token.colorPrimaryBg;
   const cardBackgroundColor = hasRunningSession
     ? runningCardBackgroundColor
