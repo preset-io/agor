@@ -192,6 +192,11 @@ const BranchCardComponent = ({
   // Check if this branch is a persisted agent
   const assistantConfig = useMemo(() => getAssistantConfig(branch), [branch]);
   const isAgent = isAssistant(branch);
+  const cardBackgroundColor = hasRunningSession
+    ? token.colorPrimaryBg
+    : isAgent
+      ? token.colorInfoBg
+      : undefined;
 
   // True when one of this branch's sessions is the currently opened
   // conversation. Drives the "focused" highlight on the canvas card and
@@ -306,10 +311,10 @@ const BranchCardComponent = ({
         width: panelMode ? '100%' : peekedSessions.length > 0 ? 880 : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
-          'box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
+          'background-color 0.2s ease-in-out, box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
         willChange: needsAttention && !inPopover ? 'box-shadow' : 'auto',
         ...highlightStyle,
-        ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
+        ...(cardBackgroundColor ? { backgroundColor: cardBackgroundColor } : {}),
         // Disconnected chokepoint: block all in-card interactions (clicking
         // into a session, env pill actions, modals) and dim to communicate
         // the state. Canvas pan/zoom and the slim app-shell banner remain
