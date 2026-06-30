@@ -1334,7 +1334,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           isOpen={open}
           cliViewMode={cliViewMode}
           setCliViewMode={setCliViewMode}
-          forceExpandAll={searchOpen}
+          forceExpandAll={searchOpen && query.trim().length > 0}
         />
 
         {/* Footer — rendered outside SessionPanelContent so that
