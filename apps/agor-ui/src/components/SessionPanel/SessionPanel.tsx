@@ -1211,74 +1211,76 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
           </Space>
         </div>
-        {/* Row 2: always rendered at fixed height to prevent header jump */}
-        <div
-          style={{ display: 'flex', alignItems: 'center', marginTop: token.sizeUnit, height: 24 }}
-        >
-          {searchOpen ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
-              <SearchOutlined style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }} />
-              <Input
-                ref={(el) => {
-                  searchInputRef.current = el?.input ?? null;
-                }}
-                value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.shiftKey ? goPrev() : goNext();
-                  if (e.key === 'Escape') closeSearch();
-                }}
-                placeholder="Search session..."
-                variant="borderless"
-                style={{ flex: 1, padding: 0 }}
-                size="small"
-              />
-              {query && (
-                <Typography.Text
-                  type="secondary"
-                  style={{
-                    fontSize: 12,
-                    whiteSpace: 'nowrap',
-                    minWidth: 44,
-                    textAlign: 'right',
-                    fontVariantNumeric: 'tabular-nums',
+        {/* Row 2: search bar (when open) or created-by (when available) */}
+        {(searchOpen || session.created_by) && (
+          <div style={{ display: 'flex', alignItems: 'center', marginTop: token.sizeUnit }}>
+            {searchOpen ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                <SearchOutlined
+                  style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }}
+                />
+                <Input
+                  ref={(el) => {
+                    searchInputRef.current = el?.input ?? null;
                   }}
-                >
-                  {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : ''}
-                </Typography.Text>
-              )}
-              {!query && (
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  Esc to close
-                </Typography.Text>
-              )}
-              {totalMatches > 1 && (
-                <Space size={2}>
-                  <Tooltip title="Previous (Shift+Enter)">
-                    <Button type="text" size="small" icon={<UpOutlined />} onClick={goPrev} />
-                  </Tooltip>
-                  <Tooltip title="Next (Enter)">
-                    <Button type="text" size="small" icon={<DownOutlined />} onClick={goNext} />
-                  </Tooltip>
-                </Space>
-              )}
-              <Tooltip title="Close search (Esc)">
-                <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
-              </Tooltip>
-            </div>
-          ) : session.created_by ? (
-            <div style={{ marginLeft: 52 }}>
-              <CreatedByTag
-                createdBy={session.created_by}
-                currentUserId={currentUserId}
-                userById={userById}
-                prefix="Created by"
-              />
-            </div>
-          ) : null}
-        </div>
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.shiftKey ? goPrev() : goNext();
+                    if (e.key === 'Escape') closeSearch();
+                  }}
+                  placeholder="Search session..."
+                  variant="borderless"
+                  style={{ flex: 1, padding: 0 }}
+                  size="small"
+                />
+                {query && (
+                  <Typography.Text
+                    type="secondary"
+                    style={{
+                      fontSize: 12,
+                      whiteSpace: 'nowrap',
+                      minWidth: 44,
+                      textAlign: 'right',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : ''}
+                  </Typography.Text>
+                )}
+                {!query && (
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    Esc to close
+                  </Typography.Text>
+                )}
+                {totalMatches > 1 && (
+                  <Space size={2}>
+                    <Tooltip title="Previous (Shift+Enter)">
+                      <Button type="text" size="small" icon={<UpOutlined />} onClick={goPrev} />
+                    </Tooltip>
+                    <Tooltip title="Next (Enter)">
+                      <Button type="text" size="small" icon={<DownOutlined />} onClick={goNext} />
+                    </Tooltip>
+                  </Space>
+                )}
+                <Tooltip title="Close search (Esc)">
+                  <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
+                </Tooltip>
+              </div>
+            ) : (
+              <div style={{ marginLeft: 52 }}>
+                <CreatedByTag
+                  createdBy={session.created_by}
+                  currentUserId={currentUserId}
+                  userById={userById}
+                  prefix="Created by"
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Body - Scrollable content */}
