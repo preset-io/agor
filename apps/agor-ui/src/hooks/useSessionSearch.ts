@@ -35,17 +35,23 @@ function buildMarks(container: HTMLElement, query: string, highlightColor: strin
   });
 
   const textNodes: Text[] = [];
-  let n: Text | null;
-  while ((n = walker.nextNode() as Text | null)) textNodes.push(n);
+  let next = walker.nextNode();
+  while (next) {
+    textNodes.push(next as Text);
+    next = walker.nextNode();
+  }
 
   for (const textNode of textNodes) {
     const text = textNode.textContent || '';
-    if (!regex.test(text)) { regex.lastIndex = 0; continue; }
+    if (!regex.test(text)) {
+      regex.lastIndex = 0;
+      continue;
+    }
     regex.lastIndex = 0;
     const frag = document.createDocumentFragment();
     let last = 0;
-    let m: RegExpExecArray | null;
-    while ((m = regex.exec(text)) !== null) {
+    let m = regex.exec(text);
+    while (m !== null) {
       if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
       const mark = document.createElement('mark');
       mark.className = MARK_CLASS;
@@ -54,6 +60,7 @@ function buildMarks(container: HTMLElement, query: string, highlightColor: strin
       frag.appendChild(mark);
       marks.push(mark);
       last = regex.lastIndex;
+      m = regex.exec(text);
     }
     if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
     textNode.parentNode?.replaceChild(frag, textNode);
@@ -98,7 +105,9 @@ export function useSessionSearch(
   resolvedColorsRef.current = resolvedColors;
 
   const setCurrent = useCallback((idx: number, marks: HTMLElement[]) => {
-    marks.forEach((m, i) => paintMark(m, i === idx, resolvedColorsRef.current));
+    marks.forEach((m, i) => {
+      paintMark(m, i === idx, resolvedColorsRef.current);
+    });
     marks[idx]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setCurrentMatch(idx);
   }, []);
@@ -131,7 +140,9 @@ export function useSessionSearch(
       setCurrentMatch(0);
       if (marks.length > 0) setCurrent(0, marks);
     }, 160);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, [query, searchOpen, containerRef, setCurrent]);
 
   const goNext = useCallback(() => {
@@ -148,5 +159,15 @@ export function useSessionSearch(
     setCurrent(prev, marks);
   }, [currentMatch, setCurrent]);
 
-  return { searchOpen, query, setQuery, totalMatches, currentMatch, openSearch, closeSearch, goNext, goPrev };
+  return {
+    searchOpen,
+    query,
+    setQuery,
+    totalMatches,
+    currentMatch,
+    openSearch,
+    closeSearch,
+    goNext,
+    goPrev,
+  };
 }

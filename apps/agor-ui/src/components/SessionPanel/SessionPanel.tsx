@@ -30,13 +30,25 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Alert, App, Badge, Button, Dropdown, Input, Space, Tooltip, Typography, theme } from 'antd';
+import {
+  Alert,
+  App,
+  Badge,
+  Button,
+  Dropdown,
+  Input,
+  Space,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSessionActions } from '../../hooks/useSessionActions';
+import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -68,7 +80,6 @@ import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
 import { useComposerAttachments } from './useComposerAttachments';
-import { useSessionSearch } from '../../hooks/useSessionSearch';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
@@ -1155,7 +1166,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flex: 1, minWidth: 0 }}>
-            <div style={{ flexShrink: 0 }}><ToolIcon tool={session.agentic_tool} size={40} /></div>
+            <div style={{ flexShrink: 0 }}>
+              <ToolIcon tool={session.agentic_tool} size={40} />
+            </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ marginBottom: 4 }}>
                 <Typography.Text
@@ -1177,11 +1190,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               </div>
               {searchOpen ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <SearchOutlined style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }} />
+                  <SearchOutlined
+                    style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }}
+                  />
                   <Input
-                    ref={(el) => { searchInputRef.current = el?.input ?? null; }}
+                    ref={(el) => {
+                      searchInputRef.current = el?.input ?? null;
+                    }}
                     value={query}
-                    onChange={(e) => { setQuery(e.target.value); }}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') e.shiftKey ? goPrev() : goNext();
                       if (e.key === 'Escape') closeSearch();
@@ -1192,12 +1211,23 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                     size="small"
                   />
                   {query && (
-                    <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', minWidth: 44, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    <Typography.Text
+                      type="secondary"
+                      style={{
+                        fontSize: 12,
+                        whiteSpace: 'nowrap',
+                        minWidth: 44,
+                        textAlign: 'right',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    >
                       {totalMatches > 0 ? `${currentMatch + 1} / ${totalMatches}` : 'no results'}
                     </Typography.Text>
                   )}
                   {!query && (
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>Esc to close</Typography.Text>
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                      Esc to close
+                    </Typography.Text>
                   )}
                   {totalMatches > 1 && (
                     <Space size={2}>
@@ -1210,7 +1240,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                     </Space>
                   )}
                   <Tooltip title="Close search (Esc)">
-                    <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<CloseOutlined />}
+                      onClick={closeSearch}
+                    />
                   </Tooltip>
                 </div>
               ) : (
@@ -1277,9 +1312,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             }}
           >
             <SearchOutlined style={{ fontSize: 32, color: token.colorTextTertiary }} />
-            <Typography.Text type="secondary">
-              No results for &ldquo;{query}&rdquo;
-            </Typography.Text>
+            <Typography.Text type="secondary">No results for &ldquo;{query}&rdquo;</Typography.Text>
           </div>
         )}
         <SessionPanelContent
