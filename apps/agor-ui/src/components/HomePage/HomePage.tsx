@@ -3,7 +3,7 @@ import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from 
 import type { MenuProps } from 'antd';
 import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme } from 'antd';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -43,7 +43,7 @@ const NEW_MENU_ITEMS: MenuProps['items'] = [
   { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
 ];
 
-export const HomePage: React.FC<HomePageProps> = (props) => {
+export const HomePage = memo(function HomePage(props: HomePageProps) {
   const { token } = theme.useToken();
   const homeBackground = DEFAULT_BACKGROUNDS[isDarkTheme(token) ? 'dark' : 'light'];
 
@@ -498,6 +498,6 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       </Modal>
     </>
   );
-};
+});
 
 export default HomePage;
