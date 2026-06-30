@@ -1206,7 +1206,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             style={{
               display: 'flex',
               alignItems: 'center',
-              marginTop: token.sizeUnit,
+              marginTop: 2,
               marginLeft: 52,
             }}
           >
