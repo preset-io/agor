@@ -76,11 +76,13 @@ function paintMark(
   if (current) {
     mark.style.background = colors.current;
     mark.style.color = colors.currentText;
-    mark.style.outline = `2px solid ${colors.current}`;
-    mark.style.outlineOffset = '1px';
+    mark.style.boxShadow = `0 0 0 2px ${colors.current}`;
+    mark.style.outline = 'none';
+    mark.style.outlineOffset = '0';
   } else {
     mark.style.background = colors.highlight;
     mark.style.color = 'rgba(0,0,0,0.88)';
+    mark.style.boxShadow = 'none';
     mark.style.outline = 'none';
   }
 }

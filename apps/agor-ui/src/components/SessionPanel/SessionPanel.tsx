@@ -423,7 +423,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     goNext,
     goPrev,
   } = useSessionSearch(bodyRef, {
-    highlight: `${token.colorWarning}66`,
+    highlight: token.colorWarning,
     current: token.colorWarning,
     currentText: 'rgba(0,0,0,0.88)',
   });
