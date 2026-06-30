@@ -14,6 +14,7 @@
 import { ENVIRONMENT } from '@agor/core/config';
 import {
   BranchRepository,
+  getHiddenTenantId,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   shortId,
@@ -40,7 +41,7 @@ export interface HealthMonitorParams {
   tenant?: TenantContext;
 }
 
-export interface ActiveEnvironmentBranchRef {
+export interface HealthMonitorActiveEnvironmentRef {
   branchId: BranchID;
   tenantId?: TenantID | string;
 }
@@ -55,12 +56,12 @@ export interface HealthMonitorOptions {
   /** Fail closed for event-driven monitoring when branch events do not carry tenant metadata. */
   requireTenantParams?: boolean;
   /** Test seam for startup discovery. Production uses BranchRepository when db is provided. */
-  discoverActiveEnvironmentRefs?: () => Promise<ActiveEnvironmentBranchRef[]>;
+  discoverActiveEnvironmentRefs?: () => Promise<HealthMonitorActiveEnvironmentRef[]>;
 }
 
 function tenantParamsFromBranch(branch: Branch): HealthMonitorParams | undefined {
-  const tenantId = (branch as Branch & { tenant_id?: unknown }).tenant_id;
-  if (typeof tenantId !== 'string' || tenantId.length === 0) return undefined;
+  const tenantId = getHiddenTenantId(branch);
+  if (!tenantId) return undefined;
   return { tenant: { tenant_id: tenantId as TenantID, source: 'auth_claim' } };
 }
 
@@ -74,7 +75,7 @@ export class HealthMonitor {
   private branchRepo?: BranchRepository;
   private tenantId?: TenantID | string;
   private requireTenantParams: boolean;
-  private discoverActiveEnvironmentRefs?: () => Promise<ActiveEnvironmentBranchRef[]>;
+  private discoverActiveEnvironmentRefs?: () => Promise<HealthMonitorActiveEnvironmentRef[]>;
 
   constructor(app: Application, options: HealthMonitorOptions = {}) {
     this.app = app;
@@ -343,16 +344,15 @@ export class HealthMonitor {
     return activeCount;
   }
 
-  private async findActiveEnvironmentRefs(): Promise<ActiveEnvironmentBranchRef[]> {
-    type RepositoryActiveEnvironmentBranchRef = {
-      branch_id: BranchID;
-      tenant_id?: TenantID | string;
-    };
+  private async findActiveEnvironmentRefs(): Promise<HealthMonitorActiveEnvironmentRef[]> {
+    type BranchRepositoryActiveEnvironmentRef = Awaited<
+      ReturnType<BranchRepository['findActiveEnvironmentRefs']>
+    >[number];
 
     const normalizeRef = (
-      ref: ActiveEnvironmentBranchRef | RepositoryActiveEnvironmentBranchRef,
+      ref: HealthMonitorActiveEnvironmentRef | BranchRepositoryActiveEnvironmentRef,
       tenantId?: TenantID | string
-    ): ActiveEnvironmentBranchRef => {
+    ): HealthMonitorActiveEnvironmentRef => {
       if ('branchId' in ref) {
         return { branchId: ref.branchId, tenantId: tenantId ?? ref.tenantId };
       }
@@ -360,10 +360,10 @@ export class HealthMonitor {
     };
 
     const findRefs = async (tenantId?: TenantID | string) => {
-      const refs: Array<ActiveEnvironmentBranchRef | RepositoryActiveEnvironmentBranchRef> = this
-        .discoverActiveEnvironmentRefs
-        ? await this.discoverActiveEnvironmentRefs()
-        : await this.branchRepo!.findActiveEnvironmentRefs();
+      const refs: Array<HealthMonitorActiveEnvironmentRef | BranchRepositoryActiveEnvironmentRef> =
+        this.discoverActiveEnvironmentRefs
+          ? await this.discoverActiveEnvironmentRefs()
+          : await this.branchRepo!.findActiveEnvironmentRefs();
       return refs.map((ref) => normalizeRef(ref, tenantId));
     };
 
