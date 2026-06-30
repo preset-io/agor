@@ -414,7 +414,7 @@
     "cronstrue": "^3.20.0",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
-    "js-yaml": "^4.2.0",
+    "js-yaml": "^5.2.0",
     "open": "^11.0.0",
     "postgres": "^3.4.9",
     "simple-git": "^3.36.0",
