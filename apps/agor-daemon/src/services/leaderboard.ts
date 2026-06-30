@@ -227,7 +227,9 @@ export class LeaderboardService {
     const repoIds = normalizeStringFilterValues(repoId, repoIdsQuery);
     const needsBranchesJoin = includeBranch || includeRepo || repoIds.length > 0;
 
-    const modelExpr = jsonExtract(this.db, tasks.data, 'model');
+    const taskModelExpr = jsonExtract(this.db, tasks.data, 'model');
+    const sessionModelExpr = jsonExtract(this.db, sessions.data, 'model_config.model');
+    const modelExpr = sql<string>`COALESCE(NULLIF(${taskModelExpr}, ''), ${sessionModelExpr})`;
 
     // Build WHERE conditions
     const conditions: SQL[] = [];

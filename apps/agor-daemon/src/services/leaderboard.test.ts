@@ -90,7 +90,12 @@ async function seedRepoAndBranch(
 
 async function seedSession(
   db: Database,
-  opts: { sessionId: string; branchId: string; tool: 'claude-code' | 'codex' | 'gemini' }
+  opts: {
+    sessionId: string;
+    branchId: string;
+    tool: 'claude-code' | 'codex' | 'gemini';
+    model?: string;
+  }
 ): Promise<void> {
   await insert(db, sessions)
     .values({
@@ -100,7 +105,21 @@ async function seedSession(
       agentic_tool: opts.tool,
       branch_id: opts.branchId,
       created_by: 'test-user',
-      data: { genealogy: { children: [] }, contextFiles: [], tasks: [], git_state: {} },
+      data: {
+        genealogy: { children: [] },
+        contextFiles: [],
+        tasks: [],
+        git_state: {},
+        ...(opts.model
+          ? {
+              model_config: {
+                mode: 'exact',
+                model: opts.model,
+                updated_at: new Date().toISOString(),
+              },
+            }
+          : {}),
+      },
     })
     .run();
 }
@@ -294,6 +313,40 @@ describe('LeaderboardService dimensions', () => {
     expect(sonnet?.totalInputTokens).toBe(3_000);
     expect(sonnet?.totalOutputTokens).toBe(1_500);
   });
+
+  dbTest(
+    'groupBy: "model" falls back to session model_config when task model is absent',
+    async ({ db }) => {
+      const aliceId = 'user-alice';
+      const branchId = 'wt-main';
+      const sessionId = 'sess-codex';
+
+      await seedUser(db, aliceId, 'Alice', 'alice@example.com');
+      await seedRepoAndBranch(db, {
+        slug: 'main',
+        branchId,
+        branchName: 'main-wt',
+        uniqueId: 1,
+      });
+      await seedSession(db, { sessionId, branchId, tool: 'codex', model: 'gpt-5.5' });
+      await seedTask(db, {
+        sessionId,
+        createdBy: aliceId,
+        createdAt: tsAt(),
+        model: '',
+        inputTokens: 10,
+        outputTokens: 5,
+        costUsd: 0.01,
+        durationMs: 100,
+      });
+
+      const service = new LeaderboardService(db);
+      const result = await service.find({ query: { groupBy: 'model' } });
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].model).toBe('gpt-5.5');
+    }
+  );
 
   dbTest('groupBy: "tool" returns one row per agentic tool', async ({ db }) => {
     await seedCanonicalDataset(db);
