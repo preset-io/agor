@@ -1,5 +1,8 @@
+import { getPageMap } from 'nextra/page-map';
 import { importPage } from 'nextra/pages';
+import { Layout } from 'nextra-theme-docs';
 import { DEFAULT_DESCRIPTION, getCanonicalUrl, getSocialImage } from '../lib/siteMetadata';
+import { footer, navbar, sharedLayoutProps } from './docsTheme';
 
 export async function generateMetadata() {
   const { metadata } = await importPage([]);
@@ -33,5 +36,9 @@ export async function generateMetadata() {
 export default async function HomePage() {
   const { default: MDXContent } = await importPage([]);
 
-  return <MDXContent />;
+  return (
+    <Layout navbar={navbar} pageMap={await getPageMap()} footer={footer} {...sharedLayoutProps}>
+      <MDXContent />
+    </Layout>
+  );
 }

@@ -88,8 +88,8 @@ main {
  *
  *   [Logo]  [Page items]  [Agor Cloud CTA]  [Search]  [GitHub]  [Discord]  [Hamburger]
  *
- * nextra-theme-docs@3.3.x renders these direct children of
- * `.nextra-nav-container nav` in this source order (when project.link,
+ * nextra-theme-docs@4.x renders these direct children of
+ * `.nextra-navbar nav` in this source order (when project.link,
  * chat.link, and navbar.extraContent are all set):
  *
  *   1. <a>     logo                  (mr-auto pushes it to the far left)
@@ -103,15 +103,15 @@ main {
  * If a Nextra upgrade changes that DOM shape, this block + the CTA's
  * own `order: 2` are the only places that need to be revisited.
  */
-.nextra-nav-container nav > div:nth-of-type(2) {
+.nextra-navbar nav > div:nth-of-type(2) {
   order: 3;
 }
-.nextra-nav-container nav > a:nth-of-type(2) {
+.nextra-navbar nav > a:nth-of-type(2) {
   order: 4;
 }
-.nextra-nav-container nav > a:nth-of-type(3) {
+.nextra-navbar nav > a:nth-of-type(3) {
   order: 5;
 }
-.nextra-nav-container nav > button {
+.nextra-navbar nav > button {
   order: 6;
 }
