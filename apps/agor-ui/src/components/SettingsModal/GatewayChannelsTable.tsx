@@ -403,24 +403,34 @@ const SLACK_PROBE_FIELDS = new Set<string>([
  * unavailable (e.g. non-secure origins).
  */
 async function copyTextToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    try {
       await navigator.clipboard.writeText(text);
       return true;
+    } catch {
+      // Fall through to the legacy path below.
     }
-  } catch {
-    // Fall through to the legacy path below.
   }
   try {
+    // Append inside the open antd modal so the textarea lives within the
+    // modal's focus trap — appending to document.body lets the trap steal
+    // focus and clear the selection, copying an empty string. Fall back to
+    // document.body when no modal is open (edit form / other callers).
+    const host = document.querySelector('.ant-modal-wrap') ?? document.body;
     const textarea = document.createElement('textarea');
     textarea.value = text;
+    textarea.readOnly = true;
     textarea.style.position = 'fixed';
+    textarea.style.top = '0';
+    textarea.style.left = '0';
     textarea.style.opacity = '0';
-    document.body.appendChild(textarea);
+    textarea.style.pointerEvents = 'none';
+    host.appendChild(textarea);
     textarea.focus();
     textarea.select();
+    textarea.setSelectionRange(0, text.length);
     const ok = document.execCommand('copy');
-    document.body.removeChild(textarea);
+    host.removeChild(textarea);
     return ok;
   } catch {
     return false;
