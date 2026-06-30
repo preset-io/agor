@@ -21,6 +21,8 @@ interface GlobalPresenceFacepileProps {
   staticActiveUsers?: ActiveUser[];
   /** Optional screenshot/demo composition override. Omit to preserve the product default cap. */
   maxVisible?: number;
+  /** User currently being observed in watch mode. */
+  watchedUserId?: string;
 }
 
 export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
@@ -32,6 +34,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
   onUserClick,
   staticActiveUsers,
   maxVisible = 5,
+  watchedUserId,
 }) => {
   const { activeUsers } = usePresence({
     client,
@@ -64,6 +67,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
       <Facepile
         activeUsers={allActiveUsers}
         currentUserId={currentUser?.user_id}
+        watchedUserId={watchedUserId}
         maxVisible={maxVisible}
         boardById={boardById}
         onUserClick={onUserClick}

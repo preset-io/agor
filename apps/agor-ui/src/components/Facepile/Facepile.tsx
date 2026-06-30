@@ -16,6 +16,9 @@ import './Facepile.css';
 export interface FacepileProps {
   activeUsers: ActiveUser[];
   currentUserId?: string;
+  /** User currently being observed in watch mode. When set, that avatar gets a
+   *  visual ring and the current user's avatar becomes a "return home" control. */
+  watchedUserId?: string;
   maxVisible?: number;
   onUserClick?: (
     userId: string,
@@ -32,12 +35,16 @@ export interface FacepileProps {
  */
 export const Facepile: React.FC<FacepileProps> = ({
   activeUsers,
+  currentUserId,
+  watchedUserId,
   maxVisible = 5,
   onUserClick,
   boardById,
   style,
 }) => {
   const { token } = theme.useToken();
+
+  const isWatchMode = !!watchedUserId;
 
   // Show first N users, with overflow count
   const visibleUsers = activeUsers.slice(0, maxVisible);
@@ -51,16 +58,42 @@ export const Facepile: React.FC<FacepileProps> = ({
   return (
     <div className="facepile" style={style}>
       {visibleUsers.map(({ user, cursor, boardId, sessionId }) => {
+        const isSelf = user.user_id === currentUserId;
+        const isWatched = user.user_id === watchedUserId;
         const board = boardId && boardById ? boardById.get(boardId) : null;
         const boardName = board?.name || 'Unknown Board';
         const boardIcon = board?.icon || '📋';
-        const canClick = onUserClick && boardId;
 
-        const clickHint = sessionId
-          ? 'Click to open their session'
-          : cursor
-            ? 'Click to go to their location'
-            : 'Click to go to board';
+        // Own avatar is always clickable (to exit watch mode when watching)
+        const canClick = isSelf ? isWatchMode : !!(onUserClick && boardId);
+
+        let clickHint: string;
+        if (isSelf && isWatchMode) {
+          clickHint = 'Click to return to your workspace';
+        } else if (isWatched) {
+          clickHint = 'Watching — click to stop';
+        } else if (sessionId) {
+          clickHint = 'Click to open their session';
+        } else if (cursor) {
+          clickHint = 'Click to go to their location';
+        } else {
+          clickHint = 'Click to go to board';
+        }
+
+        // Watched avatar: blue ring. Own avatar in watch mode: orange ring.
+        const ringStyle: CSSProperties = isWatched
+          ? {
+              outline: `2px solid ${token.colorPrimary}`,
+              outlineOffset: '2px',
+              borderRadius: slackAvatarRadius(40),
+            }
+          : isSelf && isWatchMode
+            ? {
+                outline: `2px solid ${token.colorWarning}`,
+                outlineOffset: '2px',
+                borderRadius: slackAvatarRadius(40),
+              }
+            : {};
 
         return (
           <Tooltip
@@ -68,7 +101,7 @@ export const Facepile: React.FC<FacepileProps> = ({
             title={
               <div>
                 <div>{user.name || user.email}</div>
-                {boardId && (
+                {boardId && !isSelf && (
                   <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '4px' }}>
                     {boardIcon} {boardName}
                   </div>
@@ -81,14 +114,18 @@ export const Facepile: React.FC<FacepileProps> = ({
               </div>
             }
           >
-            <span>
+            <span style={ringStyle}>
               <UserIdentityAvatar
                 user={user}
                 style={{
                   cursor: canClick ? 'pointer' : 'default',
+                  display: 'block',
                 }}
                 onClick={() => {
-                  if (canClick) {
+                  if (isSelf && isWatchMode) {
+                    // Self-click exits watch mode; handler checks isSelf
+                    onUserClick?.(user.user_id, boardId, cursor, sessionId);
+                  } else if (canClick && onUserClick && boardId) {
                     onUserClick(user.user_id, boardId, cursor, sessionId);
                   }
                 }}

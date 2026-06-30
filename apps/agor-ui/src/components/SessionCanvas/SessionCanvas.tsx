@@ -154,6 +154,9 @@ interface SessionCanvasProps {
   staticCursorScale?: number;
   /** Optional host-controlled height for embedded/demo canvases. Defaults to full viewport. */
   height?: React.CSSProperties['height'];
+  /** When true, suspend cursor-move emissions so watch-mode viewport changes
+   *  are not broadcast as if the user relocated to a different board. */
+  cursorTrackingPaused?: boolean;
 }
 
 export interface SessionCanvasRef {
@@ -398,6 +401,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       staticCursors,
       staticCursorScale,
       height = '100vh',
+      cursorTrackingPaused = false,
     }: SessionCanvasProps,
     ref
   ) => {
@@ -1007,11 +1011,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     // Cursor tracking hook — include selectedSessionId so observers can
     // deep-link to the user's current session via the facepile.
+    // Paused while in watch mode so the observer's presence is not broadcast
+    // on the watched user's board.
     useCursorTracking({
       client,
       boardId: board?.board_id as BoardID | null,
       reactFlowInstance: reactFlowInstanceRef.current,
-      enabled: !!board && !!client && !staticCursors,
+      enabled: !!board && !!client && !staticCursors && !cursorTrackingPaused,
       sessionId: selectedSessionId ?? null,
     });
 

@@ -29,7 +29,7 @@ import {
   PanelGroup,
   PanelResizeHandle,
 } from 'react-resizable-panels';
-import { useLocation, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
@@ -321,6 +321,7 @@ export const App: React.FC<AppProps> = ({
   const artifactById = useAgorStore(selectArtifactById);
 
   const { showWarning } = useThemedMessage();
+  const navigate = useNavigate();
   const location = useLocation();
   const routeParams = useParams<{
     sessionShortId?: string;
@@ -341,6 +342,13 @@ export const App: React.FC<AppProps> = ({
     y: number;
   } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+
+  // Watch mode: observing another user's session/cursor without relocating
+  // self-presence. `watchHomeUrl` captures the URL at entry so exit is exact.
+  const [watchedUserId, setWatchedUserId] = useState<string | null>(null);
+  const [watchHomeUrl, setWatchHomeUrl] = useState<string | null>(null);
+  const isWatchMode = watchedUserId !== null;
+
   // Active URL deep-link target (branch or artifact). Folds into the
   // unified dashed "selected" outline alongside `selectedSessionId` —
   // both answer "what am I looking at right now?" so they share one
@@ -1077,21 +1085,46 @@ export const App: React.FC<AppProps> = ({
   const handleOpenThemeEditor = useStableCallback(() => setThemeEditorOpen(true));
   const handleHeaderUserClick = useStableCallback(
     (
-      _userId: string,
+      userId: string,
       boardId?: BoardID,
       cursor?: { x: number; y: number },
       sessionId?: SessionID
     ) => {
-      // Priority: session > cursor position > board.
+      // Self-click: exit watch mode and restore home location.
+      if (userId === user?.user_id) {
+        if (isWatchMode && watchHomeUrl) {
+          navigate(watchHomeUrl);
+          setWatchedUserId(null);
+          setWatchHomeUrl(null);
+        }
+        return;
+      }
+
+      // Toggle off: clicking the already-watched user exits watch mode.
+      if (watchedUserId === userId) {
+        if (watchHomeUrl) {
+          navigate(watchHomeUrl);
+        }
+        setWatchedUserId(null);
+        setWatchHomeUrl(null);
+        return;
+      }
+
+      // Enter watch mode (or switch watch target to a different user).
+      // Snapshot home URL only if not already watching anyone — switching
+      // targets mid-watch should not overwrite the original home.
+      if (!isWatchMode) {
+        setWatchHomeUrl(location.pathname);
+      }
+      setWatchedUserId(userId);
+
+      // Navigate the viewport to where the watched user is.
+      // Priority: session they're in > cursor position > their board.
       if (sessionId) {
         navigation.goToSession(sessionId);
-        return;
-      }
-      if (cursor && boardId) {
+      } else if (cursor && boardId) {
         panToPosition(cursor.x, cursor.y, { boardId });
-        return;
-      }
-      if (boardId) {
+      } else if (boardId) {
         navigation.goToBoard(boardId);
       }
     }
@@ -1130,6 +1163,7 @@ export const App: React.FC<AppProps> = ({
           onUserClick={handleHeaderUserClick}
           instanceLabel={instanceLabel}
           instanceDescription={instanceDescription}
+          watchedUserId={watchedUserId ?? undefined}
         />
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
           <PanelGroup
@@ -1296,6 +1330,7 @@ export const App: React.FC<AppProps> = ({
                         onOpenCommentsPanel={handleOpenCommentsPanel}
                         onCommentHover={setHoveredCommentId}
                         onCommentSelect={handleCommentSelect}
+                        cursorTrackingPaused={isWatchMode}
                       />
                     )}
                     <NewSessionButton
