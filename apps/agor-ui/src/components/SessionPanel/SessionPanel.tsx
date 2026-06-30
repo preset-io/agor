@@ -409,7 +409,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     closeSearch,
     goNext,
     goPrev,
-  } = useSessionSearch(bodyRef);
+  } = useSessionSearch(bodyRef, {
+    highlight: `${token.colorWarning}66`,
+    current: token.colorWarning,
+    currentText: 'rgba(0,0,0,0.88)',
+  });
   const composerSessionIdentityRef = React.useRef<{
     sessionId: SessionID | null;
     generation: number;
@@ -1254,8 +1258,30 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           display: 'flex',
           flexDirection: 'column',
           padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px 0`,
+          position: 'relative',
         }}
       >
+        {searchOpen && query.trim() && totalMatches === 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: token.sizeUnit * 2,
+              zIndex: 10,
+              pointerEvents: 'none',
+              background: `${token.colorBgContainer}cc`,
+            }}
+          >
+            <SearchOutlined style={{ fontSize: 32, color: token.colorTextTertiary }} />
+            <Typography.Text type="secondary">
+              No results for &ldquo;{query}&rdquo;
+            </Typography.Text>
+          </div>
+        )}
         <SessionPanelContent
           client={client}
           session={session}

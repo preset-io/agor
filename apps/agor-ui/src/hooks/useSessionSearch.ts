@@ -15,7 +15,7 @@ function clearMarks(container: HTMLElement) {
   });
 }
 
-function buildMarks(container: HTMLElement, query: string): HTMLElement[] {
+function buildMarks(container: HTMLElement, query: string, highlightColor: string): HTMLElement[] {
   clearMarks(container);
   if (!query.trim()) return [];
 
@@ -50,7 +50,7 @@ function buildMarks(container: HTMLElement, query: string): HTMLElement[] {
       const mark = document.createElement('mark');
       mark.className = MARK_CLASS;
       mark.textContent = m[0];
-      mark.style.cssText = 'background:rgba(252,211,77,0.35);color:inherit;border-radius:3px;padding:0 1px;';
+      mark.style.cssText = `background:${highlightColor};color:rgba(0,0,0,0.88);border-radius:3px;padding:0 1px;`;
       frag.appendChild(mark);
       marks.push(mark);
       last = regex.lastIndex;
@@ -61,29 +61,44 @@ function buildMarks(container: HTMLElement, query: string): HTMLElement[] {
   return marks;
 }
 
-function paintMark(mark: HTMLElement, current: boolean) {
+function paintMark(
+  mark: HTMLElement,
+  current: boolean,
+  colors: { highlight: string; current: string; currentText: string }
+) {
   if (current) {
-    mark.style.background = '#f97316';
-    mark.style.color = '#fff';
-    mark.style.outline = '2px solid #f97316';
+    mark.style.background = colors.current;
+    mark.style.color = colors.currentText;
+    mark.style.outline = `2px solid ${colors.current}`;
     mark.style.outlineOffset = '1px';
   } else {
-    mark.style.background = 'rgba(252,211,77,0.35)';
-    mark.style.color = 'inherit';
+    mark.style.background = colors.highlight;
+    mark.style.color = 'rgba(0,0,0,0.88)';
     mark.style.outline = 'none';
   }
 }
 
-export function useSessionSearch(containerRef: React.RefObject<HTMLElement | null>) {
+export function useSessionSearch(
+  containerRef: React.RefObject<HTMLElement | null>,
+  colors?: { highlight: string; current: string; currentText: string }
+) {
+  const resolvedColors = colors ?? {
+    highlight: 'rgba(250,173,20,0.4)',
+    current: '#faad14',
+    currentText: 'rgba(0,0,0,0.88)',
+  };
+
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [totalMatches, setTotalMatches] = useState(0);
   const [currentMatch, setCurrentMatch] = useState(0);
   const marksRef = useRef<HTMLElement[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resolvedColorsRef = useRef(resolvedColors);
+  resolvedColorsRef.current = resolvedColors;
 
   const setCurrent = useCallback((idx: number, marks: HTMLElement[]) => {
-    marks.forEach((m, i) => paintMark(m, i === idx));
+    marks.forEach((m, i) => paintMark(m, i === idx, resolvedColorsRef.current));
     marks[idx]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setCurrentMatch(idx);
   }, []);
@@ -110,7 +125,7 @@ export function useSessionSearch(containerRef: React.RefObject<HTMLElement | nul
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       if (!containerRef.current) return;
-      const marks = buildMarks(containerRef.current, query);
+      const marks = buildMarks(containerRef.current, query, resolvedColorsRef.current.highlight);
       marksRef.current = marks;
       setTotalMatches(marks.length);
       setCurrentMatch(0);
