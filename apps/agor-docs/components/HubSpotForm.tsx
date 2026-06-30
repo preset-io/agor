@@ -1,3 +1,5 @@
+'use client';
+
 import Script from 'next/script';
 import { useEffect, useId, useState } from 'react';
 import { AGOR_CLOUD_DEMO_URL } from '../lib/links';
