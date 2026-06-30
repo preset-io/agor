@@ -1174,9 +1174,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               <Typography.Text strong style={{ fontSize: 18, ...getSessionTitleStyles(2) }}>
                 {getSessionDisplayTitle(session, { includeAgentFallback: true })}
               </Typography.Text>
-              {!searchOpen && (
-                <Badge status={getStatusColor()} text={session.status.toUpperCase()} />
-              )}
+              <Badge status={getStatusColor()} text={session.status.toUpperCase()} />
             </div>
           </div>
           <Space size={4}>
@@ -1199,9 +1197,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
           </Space>
         </div>
-        {/* Row 2: full-width search bar, only when open */}
-        {searchOpen && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+        {/* Row 2: search bar — always in DOM, animates in/out */}
+        <div
+          style={{
+            overflow: 'hidden',
+            maxHeight: searchOpen ? '36px' : '0px',
+            opacity: searchOpen ? 1 : 0,
+            marginTop: searchOpen ? '4px' : '0px',
+            transition: 'max-height 0.15s ease, opacity 0.12s ease, margin-top 0.15s ease',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <SearchOutlined style={{ color: token.colorPrimary, fontSize: 14, flexShrink: 0 }} />
             <Input
               ref={(el) => {
@@ -1253,7 +1259,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
             </Tooltip>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Body - Scrollable content */}
