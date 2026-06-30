@@ -344,11 +344,27 @@ export class HealthMonitor {
   }
 
   private async findActiveEnvironmentRefs(): Promise<ActiveEnvironmentBranchRef[]> {
+    type RepositoryActiveEnvironmentBranchRef = {
+      branch_id: BranchID;
+      tenant_id?: TenantID | string;
+    };
+
+    const normalizeRef = (
+      ref: ActiveEnvironmentBranchRef | RepositoryActiveEnvironmentBranchRef,
+      tenantId?: TenantID | string
+    ): ActiveEnvironmentBranchRef => {
+      if ('branchId' in ref) {
+        return { branchId: ref.branchId, tenantId: tenantId ?? ref.tenantId };
+      }
+      return { branchId: ref.branch_id, tenantId: tenantId ?? ref.tenant_id };
+    };
+
     const findRefs = async (tenantId?: TenantID | string) => {
-      const refs = this.discoverActiveEnvironmentRefs
+      const refs: Array<ActiveEnvironmentBranchRef | RepositoryActiveEnvironmentBranchRef> = this
+        .discoverActiveEnvironmentRefs
         ? await this.discoverActiveEnvironmentRefs()
         : await this.branchRepo!.findActiveEnvironmentRefs();
-      return refs.map((ref) => ({ ...ref, tenantId: tenantId ?? ref.tenantId }));
+      return refs.map((ref) => normalizeRef(ref, tenantId));
     };
 
     if (this.tenantId) {
