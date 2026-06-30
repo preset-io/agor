@@ -64,7 +64,6 @@ import { SessionAttachmentTray } from './SessionAttachmentTray';
 import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
-import { SessionUploadControls } from './SessionUploadControls';
 import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
@@ -1022,6 +1021,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onFork={handleFork}
       onBtwSend={handleBtwSend}
       onSpawnOpen={handleSpawnOpen}
+      onAttachFiles={() => attachmentInputRef.current?.click()}
       onUploadOpen={() => openAdvancedUpload()}
       onEffortChange={handleEffortChange}
       onPermissionModeChange={handlePermissionModeChange}
@@ -1088,14 +1088,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               event.target.value = '';
             }}
           />
-          <div style={{ display: 'flex', gap: token.sizeUnit, marginTop: token.sizeUnit }}>
-            <SessionUploadControls
-              connectionDisabled={connectionDisabled}
-              composerAttachmentUploading={composerAttachmentUploading}
-              onAttachFiles={() => attachmentInputRef.current?.click()}
-              onOpenAdvancedUpload={() => openAdvancedUpload()}
-            />
-          </div>
         </SessionComposerDropZone>
       }
     />

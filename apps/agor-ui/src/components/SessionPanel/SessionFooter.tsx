@@ -25,6 +25,7 @@ import {
   SendOutlined,
   StopOutlined,
   ToolOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Divider, Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
@@ -85,6 +86,7 @@ export interface SessionFooterProps {
   onFork: () => void;
   onBtwSend: () => void;
   onSpawnOpen: () => void;
+  onAttachFiles: () => void;
   onUploadOpen: () => void;
   onEffortChange: (v: EffortLevel) => void;
   onPermissionModeChange: (v: PermissionMode) => void;
@@ -126,6 +128,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   onFork,
   onBtwSend,
   onSpawnOpen,
+  onAttachFiles,
   onUploadOpen,
   onEffortChange,
   onPermissionModeChange,
@@ -321,38 +324,44 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       {/* === Section: Actions === */}
       <div style={sectionHeaderStyle}>Actions</div>
 
-      {/* Upload */}
+      {/* Attach files */}
       {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
       <div
         role="button"
-        tabIndex={connectionDisabled ? -1 : 0}
+        tabIndex={uploadDisabled ? -1 : 0}
         style={{
           ...overflowRowStyle,
-          opacity: connectionDisabled ? 0.4 : 1,
-          cursor: connectionDisabled ? 'not-allowed' : 'pointer',
+          opacity: uploadDisabled ? 0.4 : 1,
+          cursor: uploadDisabled ? 'not-allowed' : 'pointer',
         }}
         onClick={
-          connectionDisabled
+          uploadDisabled
             ? undefined
             : () => {
                 setMoreOpen(false);
-                onUploadOpen();
+                onAttachFiles();
               }
         }
         onKeyDown={
-          connectionDisabled
+          uploadDisabled
             ? undefined
             : (e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
                   setMoreOpen(false);
-                  onUploadOpen();
+                  onAttachFiles();
                 }
               }
         }
       >
         <Tooltip
-          title={connectionDisabled ? 'Disconnected from daemon' : 'Attach files to prompt'}
+          title={
+            composerAttachmentUploading
+              ? composerUploadTooltip
+              : connectionDisabled
+                ? 'Disconnected from daemon'
+                : 'Attach files to prompt'
+          }
           placement="left"
         >
           <span
@@ -406,6 +415,105 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             }}
           >
             {pinnedItems.includes('upload') ? (
+              <PushpinFilled style={{ fontSize: 12 }} />
+            ) : (
+              <PushpinOutlined style={{ fontSize: 12 }} />
+            )}
+          </button>
+        </Tooltip>
+      </div>
+
+      {/* Advanced upload */}
+      {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
+      <div
+        role="button"
+        tabIndex={connectionDisabled ? -1 : 0}
+        style={{
+          ...overflowRowStyle,
+          opacity: connectionDisabled ? 0.4 : 1,
+          cursor: connectionDisabled ? 'not-allowed' : 'pointer',
+        }}
+        onClick={
+          connectionDisabled
+            ? undefined
+            : () => {
+                setMoreOpen(false);
+                onUploadOpen();
+              }
+        }
+        onKeyDown={
+          connectionDisabled
+            ? undefined
+            : (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setMoreOpen(false);
+                  onUploadOpen();
+                }
+              }
+        }
+      >
+        <Tooltip
+          title={connectionDisabled ? 'Disconnected from daemon' : 'Upload files with options'}
+          placement="left"
+        >
+          <span
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <UploadOutlined
+              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+            />
+            <Typography.Text
+              style={{
+                fontSize: 13,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Advanced upload
+            </Typography.Text>
+          </span>
+        </Tooltip>
+        <Tooltip
+          title={pinnedItems.includes('advanced-upload') ? 'Unpin from bar' : 'Pin to bar'}
+          placement="right"
+        >
+          <button
+            type="button"
+            aria-label={
+              pinnedItems.includes('advanced-upload')
+                ? 'Unpin Advanced upload'
+                : 'Pin Advanced upload'
+            }
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: pinnedItems.includes('advanced-upload')
+                ? token.colorPrimary
+                : token.colorTextTertiary,
+              lineHeight: 1,
+              padding: '4px',
+              flexShrink: 0,
+              borderRadius: token.borderRadiusSM,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePin('advanced-upload');
+            }}
+          >
+            {pinnedItems.includes('advanced-upload') ? (
               <PushpinFilled style={{ fontSize: 12 }} />
             ) : (
               <PushpinOutlined style={{ fontSize: 12 }} />
@@ -1314,20 +1422,31 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             {pinnedItems.includes('upload') && (
               <Tooltip
                 title={
-                  connectionDisabled
-                    ? 'Disconnected from daemon'
-                    : composerAttachmentUploading
-                      ? composerUploadTooltip
-                      : 'Upload Files'
+                  composerAttachmentUploading
+                    ? composerUploadTooltip
+                    : connectionDisabled
+                      ? 'Disconnected from daemon'
+                      : 'Attach Files'
                 }
               >
                 <Button
                   size="small"
                   type="text"
                   icon={<PaperClipOutlined />}
-                  onClick={onUploadOpen}
+                  onClick={onAttachFiles}
                   disabled={uploadDisabled}
                   data-testid="upload-bar-btn"
+                />
+              </Tooltip>
+            )}
+            {pinnedItems.includes('advanced-upload') && (
+              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Advanced upload'}>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<UploadOutlined />}
+                  onClick={onUploadOpen}
+                  disabled={connectionDisabled}
                 />
               </Tooltip>
             )}
