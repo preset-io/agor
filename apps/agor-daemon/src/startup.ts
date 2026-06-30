@@ -8,10 +8,19 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
-import { getAgorHome, resolveExecutorHeartbeatConfig } from '@agor/core/config';
-import type { Database } from '@agor/core/db';
-import { MessagesRepository, SessionRepository, shortId } from '@agor/core/db';
-import type { Id, Paginated, Session, SessionID, Task } from '@agor/core/types';
+import {
+  getAgorHome,
+  resolveExecutorHeartbeatConfig,
+  resolveMultiTenancyConfig,
+} from '@agor/core/config';
+import {
+  MessagesRepository,
+  runWithTenantDatabaseScope,
+  SessionRepository,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
+import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
@@ -38,7 +47,7 @@ function startupDebug(...args: unknown[]): void {
 
 export interface StartupContext {
   app: Application;
-  db: Database;
+  db: TenantScopeAwareDatabase;
   config: AgorConfig;
   DAEMON_PORT: number;
   /** Bind address (default: 'localhost', use '0.0.0.0' for containers) */
@@ -106,6 +115,26 @@ async function readAndClearSentinel(): Promise<boolean> {
 // Orphan cleanup
 // ---------------------------------------------------------------------------
 
+function startupTenantParams(config: AgorConfig): { tenant: TenantContext } {
+  const multiTenancy = resolveMultiTenancyConfig(config);
+  return {
+    tenant: {
+      tenant_id: multiTenancy.static_tenant_id,
+      source: 'static',
+    },
+  };
+}
+
+async function runStartupTenantDatabaseScope<T>(
+  ctx: Pick<StartupContext, 'config' | 'db'>,
+  work: () => Promise<T>
+): Promise<T> {
+  // Startup/background daemon jobs have no request auth context. Keep the
+  // historical bootstrap/static tenant behavior explicit at the DB boundary so
+  // guarded required_from_auth databases fail closed everywhere else.
+  return runWithTenantDatabaseScope(ctx.db, startupTenantParams(ctx.config).tenant.tenant_id, work);
+}
+
 interface OrphanCleanupResult {
   wasGraceful: boolean;
   orphanedTasks: Task[];
@@ -115,25 +144,63 @@ interface OrphanCleanupResult {
   sessionsResetFromOrphanedTasks: number;
 }
 
-async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
+export async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanupResult> {
+  return runStartupTenantDatabaseScope(ctx, () => cleanupOrphanStatusesInTenantScope(ctx));
+}
+
+async function cleanupOrphanStatusesInTenantScope(
+  ctx: StartupContext
+): Promise<OrphanCleanupResult> {
   const { app, sessionsService } = ctx;
 
   // Get tasks service from the app (registered during services phase)
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
+  // Startup cleanup runs before any user request/auth context exists. In
+  // auth-resolved multi-tenant deployments, scope cleanup to the configured
+  // bootstrap/static tenant instead of failing daemon boot. Tenant-specific
+  // crash cleanup for every active tenant belongs in a later control-plane/DataPlane
+  // reconciler pass; startup must stay non-blocking for launch-auth tenants.
+  const startupParams = startupTenantParams(ctx.config);
 
   // Determine restart type before touching anything — sentinel is consumed here
   const wasGraceful = await readAndClearSentinel();
 
   // Find all orphaned executor-owned tasks (running, stopping, awaiting_permission, awaiting_input)
-  const orphanedTasks = await tasksService.getOrphaned();
+  const orphanedTasks = await tasksService.getOrphaned(startupParams as never);
 
   if (orphanedTasks.length > 0) {
     for (const task of orphanedTasks) {
-      await tasksService.patch(task.task_id, {
-        status: TaskStatus.STOPPED,
-      });
+      await tasksService.patch(
+        task.task_id,
+        {
+          status: TaskStatus.STOPPED,
+        },
+        startupParams as never
+      );
       startupDebug(
         `[startup] stopped orphaned task ${shortId(task.task_id)} (was: ${task.status})`
+      );
+    }
+  }
+
+  // Wipe the queue BEFORE making any session promptable. Running tasks are marked STOPPED above,
+  // which invalidates the ordering premise of anything waiting behind them — a queued prompt
+  // typically depends on whatever was running first. Wiping here prevents the session after-patch
+  // hook (triggered below) from draining queued tasks that should be discarded.
+  const queuedResult = (await tasksService.find({
+    query: { status: TaskStatus.QUEUED, $limit: 1000 },
+    ...startupParams,
+  })) as unknown as Paginated<Task>;
+  const queuedTasks = queuedResult.data;
+
+  if (queuedTasks.length > 0) {
+    for (const task of queuedTasks) {
+      await tasksService.patch(
+        task.task_id,
+        {
+          status: TaskStatus.STOPPED,
+        },
+        startupParams as never
       );
     }
   }
@@ -149,6 +216,7 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   ]) {
     const result = (await sessionsService.find({
       query: { status, $limit: 1000 },
+      ...startupParams,
     })) as unknown as Paginated<Session>;
     orphanedSessions.push(...result.data);
   }
@@ -163,7 +231,7 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
           status: SessionStatus.IDLE,
           ready_for_prompt: true,
         },
-        {}
+        startupParams as never
       );
       startupDebug(
         `   ✓ Marked session ${shortId(session.session_id)} as idle (was: ${session.status})`
@@ -178,7 +246,7 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   let sessionsResetFromOrphanedTasks = 0;
   if (sessionIdsWithOrphanedTasks.size > 0) {
     for (const sessionId of sessionIdsWithOrphanedTasks) {
-      const session = await sessionsService.get(sessionId as Id);
+      const session = await sessionsService.get(sessionId as Id, startupParams as never);
       // If session is still in an active state after orphaned task cleanup, set to IDLE
       if (
         session.status === SessionStatus.RUNNING ||
@@ -192,7 +260,7 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
             status: SessionStatus.IDLE,
             ready_for_prompt: true,
           },
-          {}
+          startupParams as never
         );
         sessionsResetFromOrphanedTasks++;
         startupDebug(
@@ -202,22 +270,25 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
     }
   }
 
-  // Wipe the queue. Running tasks are marked STOPPED above, which invalidates
-  // the ordering premise of anything that was waiting behind them — a queued
-  // prompt typically depends on whatever was running first. Rather than carry
-  // an ambiguous queue across the restart, mark all QUEUED tasks as STOPPED
-  // (mirroring how we treat the running task — no work was lost, the user
-  // can re-issue from `full_prompt` if they still want it).
-  const queuedResult = (await tasksService.find({
-    query: { status: TaskStatus.QUEUED, $limit: 1000 },
-  })) as unknown as Paginated<Task>;
-  const queuedTasks = queuedResult.data;
+  // Fix sessions that are IDLE but not promptable — this happens when the
+  // daemon is killed while a session is mid-execution and the stop path set
+  // status=idle without setting ready_for_prompt=true, or when the executor
+  // exit raced with the stop endpoint and left ready_for_prompt=false. IDLE +
+  // ready_for_prompt=false is never a legitimate persistent state.
+  const stuckIdleResult = (await sessionsService.find({
+    query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000 },
+    ...startupParams,
+  })) as unknown as Paginated<Session>;
+  const stuckIdleSessions = stuckIdleResult.data;
 
-  if (queuedTasks.length > 0) {
-    for (const task of queuedTasks) {
-      await tasksService.patch(task.task_id, {
-        status: TaskStatus.STOPPED,
-      });
+  if (stuckIdleSessions.length > 0) {
+    for (const session of stuckIdleSessions) {
+      await app
+        .service('sessions')
+        .patch(session.session_id, { ready_for_prompt: true }, startupParams as never);
+      startupDebug(
+        `   ✓ Unblocked stuck-idle session ${shortId(session.session_id)} (ready_for_prompt was false)`
+      );
     }
   }
 
@@ -228,6 +299,9 @@ async function cleanupOrphanStatuses(ctx: StartupContext): Promise<OrphanCleanup
   ];
   if (sessionsResetFromOrphanedTasks > 0) {
     cleanupParts.push(`${sessionsResetFromOrphanedTasks} task-owned session(s) reset`);
+  }
+  if (stuckIdleSessions.length > 0) {
+    cleanupParts.push(`${stuckIdleSessions.length} stuck-idle session(s) unblocked`);
   }
   console.log(`[startup] orphan cleanup: ${cleanupParts.join(', ')}`);
 
@@ -245,12 +319,22 @@ async function injectRestartNotices(
   ctx: StartupContext,
   cleanupResult: OrphanCleanupResult
 ): Promise<void> {
+  return runStartupTenantDatabaseScope(ctx, () =>
+    injectRestartNoticesInTenantScope(ctx, cleanupResult)
+  );
+}
+
+async function injectRestartNoticesInTenantScope(
+  ctx: StartupContext,
+  cleanupResult: OrphanCleanupResult
+): Promise<void> {
   const { app, db, sessionsService } = ctx;
   const { wasGraceful, orphanedTasks, orphanedSessions, sessionIdsWithOrphanedTasks } =
     cleanupResult;
 
   // Get tasks service from the app (registered during services phase)
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
+  const startupParams = startupTenantParams(ctx.config);
 
   // Inject a system message into every affected session so the user (and the
   // agent on resume) see an in-transcript explanation — not a toast, a
@@ -299,10 +383,10 @@ async function injectRestartNotices(
       if (!attachTask) {
         // Sessions maintain an ordered task-ID list; the last entry is the most
         // recent task without relying on TasksService.find() sort behavior.
-        const session = await sessionsService.get(sessionId as Id);
+        const session = await sessionsService.get(sessionId as Id, startupParams as never);
         const latestTaskId = session.tasks?.at(-1);
         if (latestTaskId) {
-          attachTask = await tasksService.get(latestTaskId);
+          attachTask = await tasksService.get(latestTaskId, startupParams as never);
         }
       }
       if (!attachTask) {
@@ -431,7 +515,14 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 2. Register Health Monitor listeners before serving requests. The initial
   // full scan of already-running environments is deferred until after listen.
-  const healthMonitor = new HealthMonitor(app);
+  const startupMultiTenancy = resolveMultiTenancyConfig(config);
+  const healthMonitor = new HealthMonitor(app, {
+    defaultParams: startupTenantParams(config),
+    db,
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    requireTenantParams: startupMultiTenancy.mode !== 'static',
+  });
 
   // 3. Validate/generate master secret for API key encryption
   await ensureMasterSecret(config);
@@ -456,7 +547,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // accepting requests. This is best-effort; filesystem config scrubbing
   // deliberately skips registered local repos to avoid surprising writes
   // outside Agor-managed storage.
-  runPostStartJob('git-remote-credential-scrub', () => scrubManagedGitRemoteCredentials(db));
+  runPostStartJob('git-remote-credential-scrub', () =>
+    runStartupTenantDatabaseScope(ctx, () => scrubManagedGitRemoteCredentials(db))
+  );
 
   // Log the host IP that will be frozen into env command templates as
   // {{host.ip_address}}. Explicit config overrides autodetection.
@@ -500,23 +593,28 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 6. Start scheduler service (background worker)
   let schedulerService: SchedulerService | null = null;
   if (svcEnabled('scheduler')) {
+    const multiTenancy = resolveMultiTenancyConfig(config);
     schedulerService = new SchedulerService(db, app, {
       tickInterval: 30000, // 30 seconds
       gracePeriod: 120000, // 2 minutes
       debug: process.env.NODE_ENV !== 'production',
       unixUserMode: config.execution?.unix_user_mode ?? 'simple',
+      // Static mode keeps the historical single-tenant scope. Auth-resolved
+      // multi-tenant mode leaves this undefined so the scheduler discovers due
+      // schedule tenant metadata at the DB boundary on each tick.
+      tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     });
-    schedulerService.start();
-    // Expose on app so route handlers (e.g. /branches/:id/execute-schedule-now)
-    // can reuse the scheduler's spawn code path.
     app.set('scheduler', schedulerService);
-    console.log(`🔄 Scheduler started (tick interval: 30s)`);
+    schedulerService.start();
+    console.log('🔄 Scheduler started (tick interval: 30s)');
   }
 
   // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)
   let knowledgeEmbeddingIndexer: KnowledgeEmbeddingIndexer | null = null;
   if (svcEnabled('knowledge')) {
-    knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db);
+    knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
+      tenantId: startupTenantParams(config).tenant.tenant_id,
+    });
     knowledgeEmbeddingIndexer.start();
     app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
     console.log('🧠 Knowledge embedding indexer started');
@@ -525,10 +623,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 8. Initialize gateway: refresh channel state cache, then start Socket Mode listeners
   const gatewayService = safeService('gateway') as unknown as GatewayService | undefined;
   if (gatewayService) {
-    gatewayService
-      .refreshChannelState()
+    runStartupTenantDatabaseScope(ctx, () => gatewayService.refreshChannelState())
       .then(() => {
-        return gatewayService.startListeners();
+        return runStartupTenantDatabaseScope(ctx, () => gatewayService.startListeners());
       })
       .catch((error: unknown) => {
         console.error('[gateway] Failed to start listeners:', error);

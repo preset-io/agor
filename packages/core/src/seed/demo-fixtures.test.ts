@@ -28,7 +28,12 @@ import { users } from '../db/schema';
 import { dbTest } from '../db/test-helpers';
 import { DEMO_USER_CREDENTIALS, loadDemoFixtures } from './demo-fixtures';
 
-describe('loadDemoFixtures', () => {
+// Every test here calls loadDemoFixtures, which bcrypt-hashes 4 demo users
+// (intentionally CPU-heavy). Under the full parallel suite that work can exceed
+// the 10s default timeout, so give the whole suite headroom.
+const DEMO_FIXTURES_TIMEOUT_MS = 30_000;
+
+describe('loadDemoFixtures', { timeout: DEMO_FIXTURES_TIMEOUT_MS }, () => {
   dbTest('inserts the expected demo entities on a fresh database', async ({ db }) => {
     const result = await loadDemoFixtures({ db, skipIfExists: true });
 

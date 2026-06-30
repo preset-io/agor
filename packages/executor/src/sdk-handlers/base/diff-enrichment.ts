@@ -20,9 +20,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createGit } from '@agor/core/git';
 import type { FileDiff, StructuredPatchHunk } from '@agor/core/types';
 import { structuredPatch } from 'diff';
+import { createGit } from '../../git/index.js';
 
 export type { StructuredPatchHunk } from '@agor/core/types';
 

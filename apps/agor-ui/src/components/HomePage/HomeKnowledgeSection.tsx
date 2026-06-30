@@ -1,13 +1,12 @@
 import type { AgorClient } from '@agor-live/client';
-import { BulbOutlined, FileOutlined } from '@ant-design/icons';
-import { Card, Empty, List, Space, Typography, theme } from 'antd';
+import { BulbOutlined, FileOutlined, SearchOutlined } from '@ant-design/icons';
+import { Card, Empty, Input, List, Space, Typography, theme } from 'antd';
 import type React from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { buildKnowledgeRoutePath, namespaceSlugFromUri } from '../../utils/knowledgeRoutes';
 import { formatRelativeTime } from '../../utils/time';
 import { KnowledgeNamespacePill } from '../Pill';
-import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
 import type { KnowledgeDocument } from './types';
 
@@ -69,26 +68,35 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
   const cardGlassStyle = glassCardStyle(token);
   const [docs, setDocs] = useState<KnowledgeDocument[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+
+  const filteredDocs = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return docs;
+    return docs.filter(
+      (d) => (d.title || d.path).toLowerCase().includes(q) || d.path.toLowerCase().includes(q)
+    );
+  }, [docs, query]);
   useEffect(() => {
     let cancelled = false;
-    if (!client) return;
+    if (!client || !connected) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setError(null);
     client
       .service('kb/documents')
       .find({ query: { archived: false, $limit: HOME_KNOWLEDGE_LIMIT, $sort: { updated_at: -1 } } })
       .then((result) => {
         if (cancelled) return;
-        const rows = normalizeFindResult<KnowledgeDocument>(result as KnowledgeDocument[])
-          .sort(
-            (a, b) =>
-              new Date(b.updated_at || b.created_at || 0).getTime() -
-              new Date(a.updated_at || a.created_at || 0).getTime()
-          )
-          .slice(0, HOME_KNOWLEDGE_LIMIT);
-        setDocs(rows);
+        setDocs(
+          normalizeFindResult(result as KnowledgeDocument[] | { data?: KnowledgeDocument[] })
+        );
       })
-      .catch((err) => {
-        if (!cancelled) console.error('Failed to load recent Knowledge:', err);
+      .catch(() => {
+        if (!cancelled) setError('Failed to load knowledge docs');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -96,41 +104,77 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, connected]);
   return (
-    <Card
-      loading={loading}
-      style={{ minHeight: 0, flex: 1, ...cardGlassStyle }}
-      styles={{
-        body: {
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'transparent',
-        },
-      }}
+    <section
+      aria-label="Knowledge base"
+      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
     >
-      <HomeSectionHeader
-        title="Recent Knowledge"
-        icon={<BulbOutlined />}
-        info={`Up to ${HOME_KNOWLEDGE_LIMIT} recently updated readable Knowledge documents from kb/documents. Access checks remain server-side through the existing Knowledge service.`}
-      />
-      <div style={{ overflow: 'auto', minHeight: 0 }}>
-        {!connected ? (
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 6 }}>
+        <BulbOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />
+        <Text strong style={{ fontSize: 14, flex: 1 }}>
+          Knowledge
+        </Text>
+        <Input
+          size="small"
+          placeholder="Search..."
+          prefix={<SearchOutlined style={{ color: token.colorTextQuaternary, fontSize: 11 }} />}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          allowClear
+          style={{ flex: '0 1 120px', minWidth: 80, fontSize: 12 }}
+        />
+      </div>
+      <Card
+        loading={loading}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: token.borderRadiusLG,
+          ...cardGlassStyle,
+        }}
+        styles={{
+          body: {
+            padding: 0,
+            height: '100%',
+            overflow: 'auto',
+            background: 'transparent',
+          },
+        }}
+      >
+        {error ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={error}
+            style={{ padding: '24px 0' }}
+          />
+        ) : docs.length === 0 && !connected ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description="Reconnect to refresh Knowledge"
+            style={{ padding: '24px 0' }}
           />
         ) : docs.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No Knowledge docs yet" />
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="No Knowledge docs yet"
+            style={{ padding: '24px 0' }}
+          />
+        ) : filteredDocs.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="No matching docs"
+            style={{ padding: '24px 0' }}
+          />
         ) : (
           <List
             rowKey="document_id"
-            dataSource={docs}
+            dataSource={filteredDocs}
             renderItem={(doc) => <KnowledgeDocRow doc={doc} />}
           />
         )}
-      </div>
-    </Card>
+      </Card>
+    </section>
   );
 };

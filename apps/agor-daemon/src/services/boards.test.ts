@@ -347,6 +347,76 @@ describe('BoardsService - Custom Methods', () => {
     expect(updated.objects?.['welcome-note']).toEqual(board.objects?.['welcome-note']);
   });
 
+  dbTest('find with lean omits objects/custom_css; get + full find keep them', async ({ db }) => {
+    const service = new BoardsService(db);
+
+    const board = (await service.create({
+      name: 'Lean Board',
+      slug: `lean-board-${generateId()}`,
+      created_by: TEST_USER,
+      custom_css: '.canvas { background: #000 }',
+      objects: {
+        'zone-1': { type: 'zone', x: 0, y: 0, width: 100, height: 100, label: 'Review' },
+      },
+    })) as Board;
+
+    const findBoardById = (result: Awaited<ReturnType<BoardsService['find']>>) => {
+      const list = Array.isArray(result) ? result : result.data;
+      const found = list.find((b) => b.board_id === board.board_id);
+      if (!found) throw new Error('board missing from find result');
+      return found;
+    };
+
+    // Lean list drops the heavy annotations but keeps metadata.
+    const leanBoard = findBoardById(await service.find({ query: { lean: true } } as never));
+    expect(leanBoard.name).toBe('Lean Board');
+    expect(leanBoard.objects).toBeUndefined();
+    expect(leanBoard.custom_css).toBeUndefined();
+
+    // Default (non-lean) list still carries them.
+    const fullBoard = findBoardById(await service.find({ query: {} } as never));
+    expect(fullBoard.objects).toBeDefined();
+    expect(Object.keys(fullBoard.objects ?? {})).toContain('zone-1');
+    expect(fullBoard.custom_css).toBe('.canvas { background: #000 }');
+
+    // Single-board read is always full, regardless of list leanness.
+    const got = await service.get(board.board_id);
+    expect(Object.keys(got.objects ?? {})).toContain('zone-1');
+    expect(got.custom_css).toBe('.canvas { background: #000 }');
+  });
+
+  dbTest('find with lean:false returns the same full boards as a non-lean find', async ({ db }) => {
+    const service = new BoardsService(db);
+
+    const board = (await service.create({
+      name: 'Lean False Board',
+      slug: `lean-false-board-${generateId()}`,
+      created_by: TEST_USER,
+      custom_css: '.canvas { background: #111 }',
+      objects: {
+        'zone-1': { type: 'zone', x: 0, y: 0, width: 100, height: 100, label: 'Review' },
+      },
+    })) as Board;
+
+    const findBoardById = (result: Awaited<ReturnType<BoardsService['find']>>) => {
+      const list = Array.isArray(result) ? result : result.data;
+      const found = list.find((b) => b.board_id === board.board_id);
+      if (!found) throw new Error('board missing from find result');
+      return found;
+    };
+
+    // `lean: false` is a valid whitelisted query value — it must NOT leak into
+    // the adapter's field filtering (boards have no `lean` column) and empty the
+    // result. It returns the same full boards as a plain non-lean find.
+    const leanFalseBoard = findBoardById(await service.find({ query: { lean: false } } as never));
+    const fullBoard = findBoardById(await service.find({ query: {} } as never));
+
+    expect(leanFalseBoard.objects).toBeDefined();
+    expect(Object.keys(leanFalseBoard.objects ?? {})).toContain('zone-1');
+    expect(leanFalseBoard.custom_css).toBe('.canvas { background: #111 }');
+    expect(leanFalseBoard).toEqual(fullBoard);
+  });
+
   dbTest('should have all custom methods defined', async ({ db }) => {
     const service = new BoardsService(db);
 
@@ -472,5 +542,57 @@ describe('BoardsService.find SQL pushdown', () => {
     } as BoardParams);
 
     expect(repoFindAll).toHaveBeenCalledWith({ visibleToUserId: TEST_USER });
+  });
+
+  dbTest('lean list still enforces board RBAC visibility', async ({ db }) => {
+    const OTHER_USER = 'other-user' as UUID;
+    const service = new BoardsService(db);
+
+    // Visible: a board the viewer created, carrying the heavy annotations the
+    // lean projection is expected to drop.
+    const visible = (await service.create({
+      name: 'Visible Board',
+      slug: `visible-${generateId()}`,
+      created_by: TEST_USER,
+      access_mode: 'shared',
+      custom_css: '.canvas { background: #111 }',
+      objects: {
+        'zone-1': { type: 'zone', x: 0, y: 0, width: 100, height: 100, label: 'Review' },
+      },
+    })) as Board;
+
+    // Hidden: a private board owned by someone else — never visible to the viewer.
+    const hidden = (await service.create({
+      name: 'Hidden Board',
+      slug: `hidden-${generateId()}`,
+      created_by: OTHER_USER,
+      access_mode: 'private',
+      objects: {
+        'zone-2': { type: 'zone', x: 0, y: 0, width: 10, height: 10, label: 'Secret' },
+      },
+    })) as Board;
+
+    const repoFindAll = vi.spyOn(
+      (service as unknown as { boardRepo: BoardRepository }).boardRepo,
+      'findAll'
+    );
+
+    const result = (await service.find({
+      _agorSqlBoardAccessUserId: TEST_USER as UUID,
+      query: { lean: true },
+    } as BoardParams)) as { data: Board[]; total: number };
+
+    // RBAC visibility and the lean projection ride the SAME repository read, so
+    // the lean list can never widen visibility past the SQL RBAC predicate.
+    expect(repoFindAll).toHaveBeenCalledWith({ visibleToUserId: TEST_USER, lean: true });
+
+    const ids = result.data.map((b) => b.board_id);
+    expect(ids).toContain(visible.board_id);
+    expect(ids).not.toContain(hidden.board_id);
+
+    // The surviving board is genuinely lean (heavy annotations dropped).
+    const visibleRow = result.data.find((b) => b.board_id === visible.board_id);
+    expect(visibleRow?.objects).toBeUndefined();
+    expect(visibleRow?.custom_css).toBeUndefined();
   });
 });

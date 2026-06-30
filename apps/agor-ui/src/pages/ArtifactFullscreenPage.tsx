@@ -15,7 +15,7 @@ import {
   ArtifactConsoleReporter,
   ArtifactRuntimeBridge,
   ArtifactSandpackErrorReporter,
-  renderArtifactTrustBadge,
+  ArtifactTrustStatusIcon,
 } from '@/components/artifacts/ArtifactRenderSupport';
 import { getDaemonUrl } from '@/config/daemon';
 import { getAuthHeaders } from '@/utils/authHeaders';
@@ -65,8 +65,6 @@ function ArtifactFullscreenNavbar({
   onLogout,
 }: ArtifactFullscreenNavbarProps) {
   const { token } = theme.useToken();
-  const trustBadge = payload ? renderArtifactTrustBadge(payload, onTrustClick) : null;
-
   return (
     <Header
       style={{
@@ -106,6 +104,7 @@ function ArtifactFullscreenNavbar({
           >
             {title}
           </Title>
+          {payload && <ArtifactTrustStatusIcon payload={payload} onTrustClick={onTrustClick} />}
           <Tooltip title="Hide navbar">
             <Button
               type="text"
@@ -122,7 +121,6 @@ function ArtifactFullscreenNavbar({
             />
           </Tooltip>
         </div>
-        {trustBadge}
       </Space>
       <Space style={{ flexShrink: 0 }}>
         {(payload?.source_session_id || artifact?.source_session_id) && (

@@ -448,7 +448,7 @@ export function resolveSecurity(
 // ============================================================================
 // Git config hardening (security.git_config_parameters)
 // ============================================================================
-// Defaults + resolver semantics; the env-var encoding lives in @agor/core/git.
+// Defaults + resolver semantics; the env-var encoding lives in @agor/core/git/pure.
 // Design: docs/internal/credential-leak-defenses-2026-05-11.md.
 
 /**

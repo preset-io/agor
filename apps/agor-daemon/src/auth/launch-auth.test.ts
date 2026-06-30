@@ -3,7 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
-import { createDatabase, eq, initializeDatabase, select, update, users } from '@agor/core/db';
+import {
+  createDatabase,
+  eq,
+  hash,
+  initializeDatabase,
+  insert,
+  select,
+  update,
+  users,
+} from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { InternalUser, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
@@ -64,7 +73,7 @@ async function makeDb(): Promise<{ db: Database; cleanup: () => void }> {
 
 function makeUsersService(db: Database) {
   return {
-    async get(id: UserID): Promise<InternalUser> {
+    async get(id: UserID, _params?: unknown): Promise<InternalUser> {
       const row = await select(db).from(users).where(eq(users.user_id, id)).one();
       if (!row) throw new Error('missing user');
       return {
@@ -100,14 +109,14 @@ describe('one-time launch auth service', () => {
     cleanup?.();
   });
 
-  function service(config = baseConfig()) {
+  function service(config = baseConfig(), usersService = makeUsersService(db)) {
     return createLaunchAuthService({
       db,
       config,
       jwtSecret: RUNTIME_JWT_SECRET,
       accessTokenTtl: '15m',
       refreshTokenTtl: '30d',
-      usersService: makeUsersService(db),
+      usersService,
     });
   }
 
@@ -212,6 +221,38 @@ describe('one-time launch auth service', () => {
     expect(decoded.type).toBe('access');
   });
 
+  it('scopes launch auth with the configured tenant claim', async () => {
+    const usersService = makeUsersService(db);
+    const getSpy = vi.spyOn(usersService, 'get');
+    mockExchange(
+      signClaims({
+        sub: 'tenant-launch-user',
+        email: 'tenant-launch@example.test',
+        tenant_id: 'tenant-a',
+      })
+    );
+    const result = await service(
+      {
+        ...baseConfig(),
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      },
+      usersService
+    ).create({ launchCode: 'tenant-code' });
+
+    expect(getSpy).toHaveBeenCalledWith(
+      result.user.user_id,
+      expect.objectContaining({
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      })
+    );
+    const decoded = jwt.verify(result.accessToken, RUNTIME_JWT_SECRET, {
+      issuer: 'agor',
+      audience: 'https://agor.dev',
+    }) as { tenant_id?: string };
+    expect(decoded.tenant_id).toBe('tenant-a');
+  });
+
   it('maps admin roles only when explicitly allowed', async () => {
     mockExchange(
       signClaims({ sub: 'role-user-default', email: 'role-default@example.test', role: 'admin' })
@@ -257,6 +298,39 @@ describe('one-time launch auth service', () => {
       audience: 'https://agor.dev',
     }) as jwt.JwtPayload;
     expect(decoded.auth_time_ms).toBe(marker.getTime() + 1);
+  });
+
+  it('links to an existing local user by verified email when explicitly trusted', async () => {
+    const now = new Date();
+    await insert(db, users)
+      .values({
+        user_id: 'local-user-1',
+        created_at: now,
+        updated_at: now,
+        email: 'person@example.test',
+        password: await hash('local-password', 10),
+        name: 'Existing Local User',
+        emoji: '👤',
+        role: 'member',
+        onboarding_completed: false,
+        must_change_password: false,
+        data: { preferences: {} },
+      })
+      .run();
+
+    mockExchange(signClaims({ email_verified: true }));
+    const result = await service({
+      external_launch: {
+        ...baseConfig().external_launch,
+        trust_verified_email_for_linking: true,
+      },
+    }).create({ launchCode: 'trusted-email' });
+
+    expect(result.user.user_id).toBe('local-user-1');
+    expect(result.user.email).toBe('person@example.test');
+
+    const row = await select(db).from(users).where(eq(users.user_id, 'local-user-1')).one();
+    expect((row?.data as { external_identities?: unknown[] }).external_identities).toHaveLength(1);
   });
 
   it('does not merge a new external identity by email alone', async () => {

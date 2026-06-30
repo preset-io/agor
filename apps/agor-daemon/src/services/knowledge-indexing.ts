@@ -1,11 +1,11 @@
 import { loadConfig } from '@agor/core/config';
 import {
   AppVariableRepository,
-  type Database,
   isPostgresDatabase,
   kbDocumentUnits,
   select,
   sql,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -37,7 +37,7 @@ export class KnowledgeIndexingStatusService {
   private variables: AppVariableRepository;
 
   constructor(
-    private db: Database,
+    private db: TenantScopeAwareDatabase,
     private app?: Application
   ) {
     this.variables = new AppVariableRepository(db);
@@ -103,7 +103,7 @@ export class KnowledgeIndexingStatusService {
 }
 
 export function createKnowledgeIndexingStatusService(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   app?: Application
 ): KnowledgeIndexingStatusService {
   return new KnowledgeIndexingStatusService(db, app);

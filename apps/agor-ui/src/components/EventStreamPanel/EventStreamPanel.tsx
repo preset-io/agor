@@ -15,8 +15,15 @@ import {
 import { Badge, Button, Checkbox, Empty, Select, Space, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppLiveData, useAppRepoData, useAppUserData } from '../../contexts/AppDataContext';
 import type { SocketEvent } from '../../hooks/useEventStream';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectBranchById,
+  selectRepoById,
+  selectSessionById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
 import { Tag } from '../Tag';
 import { type BranchActions, EventItem } from './EventItem';
 
@@ -50,12 +57,14 @@ export const EventStreamPanel: React.FC<EventStreamPanelProps> = ({
   const { token } = theme.useToken();
 
   // EventStreamPanel inherently shows live socket activity, so subscribing
-  // to AppLiveDataContext is correct — we *want* re-renders on session /
-  // branch mutations. Repo/user data are split so edits in one entity
-  // family don't invalidate the other.
-  const { branchById, sessionById, sessionsByBranch } = useAppLiveData();
-  const { repoById } = useAppRepoData();
-  const { userById } = useAppUserData();
+  // to these store slices is correct — we *want* re-renders on session /
+  // branch mutations. Each slice is a separate subscription so edits in one
+  // entity family don't invalidate consumers of the others.
+  const branchById = useAgorStore(selectBranchById);
+  const sessionById = useAgorStore(selectSessionById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const repoById = useAgorStore(selectRepoById);
+  const userById = useAgorStore(selectUserById);
   const repos = useMemo(() => Array.from(repoById.values()), [repoById]);
 
   // Get actions from context

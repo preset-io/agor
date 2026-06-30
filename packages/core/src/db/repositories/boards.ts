@@ -35,6 +35,7 @@ import {
 } from '../schema';
 import {
   AmbiguousIdError,
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
@@ -79,8 +80,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    *
    * @param row - Database row
    * @param baseUrl - Base URL for generating board URLs
+   * @param options.lean - Omit the heavy `objects` / `custom_css` annotations
+   *   (used by the boards list path; single-board reads always stay full).
    */
-  private rowToBoard(row: BoardRow, baseUrl?: string): Board {
+  private rowToBoard(row: BoardRow, baseUrl?: string, options?: { lean?: boolean }): Board {
     const data = row.data as {
       description?: string;
       color?: string;
@@ -99,29 +102,38 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     const slug = row.slug !== null ? row.slug : undefined;
     const url = baseUrl ? getBoardUrl(boardId, slug, baseUrl) : '';
 
-    return {
-      board_id: boardId,
-      name: row.name,
-      slug,
-      primary_assistant_id:
-        (row.primary_assistant_id as Board['primary_assistant_id']) ?? undefined,
-      created_at: new Date(row.created_at).toISOString(),
-      last_updated: row.updated_at
-        ? new Date(row.updated_at).toISOString()
-        : new Date(row.created_at).toISOString(),
-      created_by: row.created_by,
-      url,
-      archived: Boolean(row.archived),
-      archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
-      archived_by: row.archived_by ?? undefined,
-      ...data,
-      icon: normalizeExactEmojiShortcode(data.icon),
-      access_mode: data.access_mode ?? 'shared',
-      default_others_can: data.default_others_can ?? 'session',
-      default_others_fs_access: data.default_others_fs_access ?? 'read',
-      default_dangerously_allow_session_sharing:
-        data.default_dangerously_allow_session_sharing ?? false,
-    };
+    // Lean projection drops the two heavy JSON fields nested in `data` (zones /
+    // text / markdown annotations + per-board CSS). A client `$select` can't do
+    // this — they live inside the `data` column, not as top-level columns.
+    const { objects: _objects, custom_css: _customCss, ...leanData } = data;
+    const effectiveData = options?.lean ? leanData : data;
+
+    return attachHiddenTenant(
+      {
+        board_id: boardId,
+        name: row.name,
+        slug,
+        primary_assistant_id:
+          (row.primary_assistant_id as Board['primary_assistant_id']) ?? undefined,
+        created_at: new Date(row.created_at).toISOString(),
+        last_updated: row.updated_at
+          ? new Date(row.updated_at).toISOString()
+          : new Date(row.created_at).toISOString(),
+        created_by: row.created_by,
+        url,
+        archived: Boolean(row.archived),
+        archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+        archived_by: row.archived_by ?? undefined,
+        ...effectiveData,
+        icon: normalizeExactEmojiShortcode(data.icon),
+        access_mode: data.access_mode ?? 'shared',
+        default_others_can: data.default_others_can ?? 'session',
+        default_others_fs_access: data.default_others_fs_access ?? 'read',
+        default_dangerously_allow_session_sharing:
+          data.default_dangerously_allow_session_sharing ?? false,
+      },
+      row
+    );
   }
 
   /**
@@ -327,29 +339,34 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     return this.findById(param);
   }
 
+  private visibleBoardCondition(userId: UUID): SQL {
+    return visibleBoardAccessCondition(this.db, userId);
+  }
+
   /**
-   * Find all boards (with optional filters).
+   * Find all boards (with optional filters and projection).
    *
-   * The `board_id`, `archived`, and `visibleToUserId` filters let the list read
-   * path (`BoardsService.find`) push high-selectivity predicates — including
-   * board RBAC visibility — into SQL so it no longer materializes the whole
-   * table before filtering in memory.
+   * The `boardIds`, `archived`, and `visibleToUserId` filters let the list read
+   * path (`BoardsService.find` via the adapter's `fetchData`) push
+   * high-selectivity predicates — including board RBAC visibility — into SQL so
+   * it no longer materializes the whole table before filtering in memory.
    *
-   * @param filter - Optional filters
+   * @param filter - Optional filters and projection
    * @param filter.archived - Filter to an exact archived state
    * @param filter.boardIds - Restrict to a set of board IDs (empty set yields no
    *   rows, matching an `{ $in: [] }` filter)
    * @param filter.visibleToUserId - Restrict to boards visible to this user
    *   under branch RBAC.
+   * @param filter.lean - Omit each board's heavy `objects` / `custom_css`
+   *   annotations from the result. The displayed board's full record is fetched
+   *   separately via `findById`, so the list path never needs them. RBAC and
+   *   the id pushdown stay in force, so the lean list can never widen visibility.
    */
-  private visibleBoardCondition(userId: UUID): SQL {
-    return visibleBoardAccessCondition(this.db, userId);
-  }
-
   async findAll(filter?: {
     archived?: boolean;
     boardIds?: BoardID[];
     visibleToUserId?: UUID;
+    lean?: boolean;
   }): Promise<Board[]> {
     try {
       // An explicit empty id set can never match a row; short-circuit so we skip
@@ -373,7 +390,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       const query = select(this.db).from(boards);
       const rows =
         conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
-      return rows.map((row: BoardRow) => this.rowToBoard(row, baseUrl));
+      return rows.map((row: BoardRow) => this.rowToBoard(row, baseUrl, { lean: filter?.lean }));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all boards: ${error instanceof Error ? error.message : String(error)}`,

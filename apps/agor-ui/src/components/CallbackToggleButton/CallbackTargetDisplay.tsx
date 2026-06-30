@@ -4,7 +4,8 @@ import { DisconnectOutlined, LinkOutlined } from '@ant-design/icons';
 import { Badge, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppLiveData } from '../../contexts/AppDataContext';
+import { useAgorStore } from '../../store/agorStore';
+import { selectSessionById } from '../../store/selectors';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 
 interface CallbackTargetDisplayProps {
@@ -41,7 +42,7 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { onSessionClick } = useAppActions();
-  const { sessionById } = useAppLiveData();
+  const sessionById = useAgorStore(selectSessionById);
 
   const remoteRelationship = session.remote_relationships?.as_target?.find(
     (relationship) => relationship.relationship_type === 'remote_create'

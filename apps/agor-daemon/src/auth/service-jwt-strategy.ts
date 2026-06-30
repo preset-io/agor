@@ -12,8 +12,10 @@
 
 import { JWTStrategy } from '@agor/core/feathers';
 import type { Params, UserAuthMetadata } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import type { SessionTokenService } from '../services/session-token-service.js';
 import { markAuthenticationUserLookup } from '../services/users.js';
+import { readRuntimeTenantClaim } from './runtime-tokens.js';
 import { assertUserTokenNotInvalidated, type UserAuthTokenPayload } from './token-invalidation.js';
 
 type JwtConnectionState = {
@@ -50,6 +52,19 @@ function persistExecutorJwtPayloadOnConnection(
   };
 }
 
+function propagateTenantFromJwtPayload(
+  params: Params,
+  payload: UserAuthTokenPayload | null | undefined,
+  tenantClaim?: string
+): void {
+  const tenantId = readRuntimeTenantClaim(payload ?? undefined, tenantClaim);
+  if (!tenantId) return;
+  const tenantParams = params as Params & {
+    tenant?: { tenant_id: string; source: 'auth_claim' };
+  };
+  tenantParams.tenant ??= { tenant_id: tenantId, source: 'auth_claim' };
+}
+
 /**
  * Extended JWT Strategy that handles service tokens
  *
@@ -57,7 +72,10 @@ function persistExecutorJwtPayloadOnConnection(
  * for privileged operations (unix.sync-*, git.*, etc.)
  */
 export class ServiceJWTStrategy extends JWTStrategy {
-  constructor(private sessionTokenService?: SessionTokenService) {
+  constructor(
+    private sessionTokenService?: SessionTokenService,
+    private tenantClaim?: string
+  ) {
     super();
   }
   /**
@@ -79,7 +97,16 @@ export class ServiceJWTStrategy extends JWTStrategy {
       };
     }
 
-    // Regular user token validation needs backend-only auth metadata.
+    // Regular user token validation needs backend-only auth metadata. In
+    // required_from_auth mode the Users service is tenant-scoped, so propagate
+    // the tenant claim from the already-verified JWT payload before the
+    // strategy asks the service to load the user entity.
+    propagateTenantFromJwtPayload(
+      params,
+      (params.authentication as { payload?: UserAuthTokenPayload } | undefined)?.payload,
+      this.tenantClaim
+    );
+
     markAuthenticationUserLookup(params);
     return super.getEntity(id, params);
   }
@@ -92,6 +119,9 @@ export class ServiceJWTStrategy extends JWTStrategy {
    */
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
   async authenticate(authentication: any, params: any): Promise<any> {
+    const decoded = jwt.decode(authentication?.accessToken) as UserAuthTokenPayload | null;
+    propagateTenantFromJwtPayload(params, decoded, this.tenantClaim);
+
     // Call parent to verify JWT signature and get payload
     const result = (await super.authenticate(authentication, params)) as {
       accessToken?: string;

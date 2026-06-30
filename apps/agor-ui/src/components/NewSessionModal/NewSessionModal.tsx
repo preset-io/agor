@@ -5,7 +5,6 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
-  MCPServer,
   PermissionMode,
   User,
 } from '@agor-live/client';
@@ -13,6 +12,8 @@ import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live
 import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { AgenticToolConfigForm, getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
   type AgenticToolOption,
@@ -51,10 +52,8 @@ export interface NewSessionModalProps {
   availableAgents: AgenticToolOption[];
   branchId: string; // Required - the branch to create the session in
   branch?: Branch; // Optional - branch details for display
-  mcpServerById?: Map<string, MCPServer>;
   currentUser?: User | null; // Optional - current user for default settings
   client: AgorClient | null;
-  userById: Map<string, User>;
 }
 
 export const NewSessionModal: React.FC<NewSessionModalProps> = ({
@@ -64,11 +63,13 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   availableAgents,
   branchId,
   branch,
-  mcpServerById = new Map(),
   currentUser,
   client,
-  userById,
 }) => {
+  // Entity maps are read from the store rather than drilled through props so
+  // the App shell doesn't have to forward them into every modal.
+  const mcpServerById = useAgorStore(selectMcpServerById);
+  const userById = useAgorStore(selectUserById);
   const [form] = Form.useForm();
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
   const [isCreating, setIsCreating] = useState(false);

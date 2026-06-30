@@ -81,6 +81,12 @@ export default defineConfig({
     // Bind to 0.0.0.0 for Docker accessibility
     host: '0.0.0.0',
     port: 5173,
+    // Proxy API and socket traffic to the daemon
+    proxy: {
+      '/authentication': { target: `http://localhost:${daemonPort}`, changeOrigin: true },
+      '/socket.io': { target: `http://localhost:${daemonPort}`, changeOrigin: true, ws: true },
+      '/api': { target: `http://localhost:${daemonPort}`, changeOrigin: true },
+    },
     // Watch for changes in workspace packages
     watch: {
       // Watch the @agor-live/client package for changes

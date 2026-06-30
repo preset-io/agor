@@ -34,7 +34,7 @@ const agenticToolConfigSchema = z
       .object({
         mode: z.enum(['alias', 'exact']).optional(),
         model: mcpOptionalString('model_config.model', 'Model name override.'),
-        effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+        effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
         advisorModel: mcpOptionalString(
           'model_config.advisorModel',
           "Claude Code advisor model override (e.g. 'opus', 'sonnet', 'fable')."
@@ -149,7 +149,9 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
         allow_concurrent_runs: z
           .boolean()
           .optional()
-          .describe('Allow runs to overlap (default: false)'),
+          .describe(
+            'Allow overlapping runs from this schedule (default: false). Sibling schedules on the same branch are independent.'
+          ),
         retention: mcpOptionalNonNegativeInt(
           'retention',
           'Number of sessions to keep; 0 = keep all (default: 5)'

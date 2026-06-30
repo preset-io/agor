@@ -5,7 +5,6 @@ import type {
   EnvVarScope,
   Group,
   GroupMembership,
-  MCPServer,
   UpdateUserInput,
   User,
 } from '@agor-live/client';
@@ -40,6 +39,8 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import { selectMcpServerById } from '../../store/selectors';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import {
@@ -76,7 +77,6 @@ export interface UserSettingsModalProps {
   open: boolean;
   onClose: () => void;
   user: User | null;
-  mcpServerById: Map<string, MCPServer>;
   client: AgorClient | null;
   currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
@@ -87,12 +87,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   open,
   onClose,
   user,
-  mcpServerById,
   client,
   currentUser,
   onUpdate,
   onRestartOnboarding,
 }) => {
+  // Entity maps are read from the store rather than drilled through props so
+  // the App shell doesn't have to forward them into every modal.
+  const mcpServerById = useAgorStore(selectMcpServerById);
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState<string>('general');
   const initializedUserIdRef = useRef<string | null>(null);

@@ -1,7 +1,7 @@
 import {
   AppVariableRepository,
-  type Database,
   GatewayChannelRepository,
+  type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { type Application, Forbidden } from '@agor/core/feathers';
@@ -62,7 +62,7 @@ export class UserAvatarSyncManager {
   private users: UsersRepository;
 
   constructor(
-    db: Database,
+    db: TenantScopeAwareDatabase,
     private app: Application
   ) {
     this.variables = new AppVariableRepository(db);

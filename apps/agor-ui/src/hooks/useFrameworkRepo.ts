@@ -57,7 +57,7 @@ export function useFrameworkRepo(repos: Repo[]): Repo | undefined {
  */
 export function findFrameworkRepo(
   repos: Iterable<[string, Repo]>,
-  options?: { readyOnly?: boolean }
+  options?: { readyOnly?: boolean; excludeFailed?: boolean }
 ): [string, Repo] | undefined {
   const repoArray: Repo[] = [];
   const entryMap = new Map<string, [string, Repo]>();
@@ -65,6 +65,9 @@ export function findFrameworkRepo(
   for (const entry of repos) {
     const repo = entry[1];
     if (options?.readyOnly && repo.clone_status !== 'ready' && repo.clone_status !== undefined) {
+      continue;
+    }
+    if (options?.excludeFailed && repo.clone_status === 'failed') {
       continue;
     }
     repoArray.push(repo);

@@ -1,6 +1,8 @@
 /**
- * Git helpers that may spawn git or touch managed repo/worktree directories.
- * Daemon code should not import this module for managed-dir operations; route
- * those through packages/executor instead.
+ * Compatibility export for daemon-local operational git helpers.
+ *
+ * The implementation lives in @agor/git so daemon and executor callers do not
+ * drift on ref validation, credential scrubbing, safe-directory handling, or
+ * clone/worktree behavior.
  */
-export * from './index';
+export * from '@agor/git';

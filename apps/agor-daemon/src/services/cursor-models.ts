@@ -8,7 +8,7 @@
  */
 
 import { resolveApiKey } from '@agor/core/config';
-import { type Database, shortId } from '@agor/core/db';
+import { shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { CURSOR_MODEL_METADATA, DEFAULT_CURSOR_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import { Cursor, type SDKModel } from '@cursor/sdk';
@@ -69,7 +69,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, message: string):
 }
 
 export class CursorModelsService {
-  constructor(private db: Database) {}
+  constructor(private db: TenantScopeAwareDatabase) {}
 
   async find(params?: AuthenticatedParams): Promise<CursorModelsResult> {
     const userId = params?.user?.user_id;
@@ -110,6 +110,6 @@ export class CursorModelsService {
   }
 }
 
-export function createCursorModelsService(db: Database): CursorModelsService {
+export function createCursorModelsService(db: TenantScopeAwareDatabase): CursorModelsService {
   return new CursorModelsService(db);
 }

@@ -30,8 +30,8 @@ import {
   ArtifactTrustGrantRepository,
   BoardRepository,
   BranchRepository,
-  type Database,
   shortId,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
@@ -225,7 +225,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   private boardRepo: BoardRepository;
   private app: Application;
   /** Held for `resolveUserEnvironment` (scope-aware env-var resolution). */
-  private dbRef: Database;
+  private dbRef: TenantScopeAwareDatabase;
 
   /**
    * In-memory ring buffer for console logs.
@@ -336,7 +336,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return { folderPath: validated.folderPath, matchedBranchId: branchId };
   }
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const artifactRepo = new ArtifactRepository(db);
     super(artifactRepo, {
       id: 'artifact_id',
@@ -2558,6 +2558,9 @@ function escapeEnvValue(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 }
 
-export function createArtifactsService(db: Database, app: Application): ArtifactsService {
+export function createArtifactsService(
+  db: TenantScopeAwareDatabase,
+  app: Application
+): ArtifactsService {
   return new ArtifactsService(db, app);
 }

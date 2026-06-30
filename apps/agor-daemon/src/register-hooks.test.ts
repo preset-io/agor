@@ -26,6 +26,7 @@ import {
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
+  TENANT_OWNED_SERVICE_PATHS,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
 
@@ -45,6 +46,12 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('tenant-owned service registration', () => {
+  it('wraps gateway inbound routing in tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
+  });
+});
 
 describe('shouldValidateRepoEnvironmentPayload', () => {
   it('skips absent repo environment payloads', () => {

@@ -237,11 +237,14 @@ export const useBoardObjects = ({
 
         // Artifact node (filesystem-backed Sandpack preview)
         if (objectData.type === 'artifact') {
+          const isLocked = objectData.locked ?? false;
           return {
             id: objectId,
             type: 'artifactNode',
             position: { x: objectData.x, y: objectData.y },
-            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+            // Locked artifacts are never draggable. Unlocked artifacts inherit
+            // from canvas-level nodesDraggable (mutationGate.canMutate).
+            ...(isLocked ? { draggable: false } : {}),
             selectable: true,
             zIndex: 400,
             className: eraserMode ? 'eraser-mode' : undefined,
@@ -250,6 +253,9 @@ export const useBoardObjects = ({
               artifactId: objectData.artifact_id,
               width: objectData.width,
               height: objectData.height,
+              locked: isLocked,
+              x: objectData.x,
+              y: objectData.y,
               isActiveUrlTarget: objectData.artifact_id === activeUrlTargetArtifactId,
               onUpdate: handleUpdateObject,
               onDeleteArtifact: deleteArtifact,

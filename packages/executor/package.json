@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@agor/core": "workspace:*",
+    "@agor/git": "workspace:*",
     "@cursor/sdk": "^1.0.19",
     "@github/copilot-sdk": "^0.2.2",
     "@opencode-ai/sdk": "^1.2.20",

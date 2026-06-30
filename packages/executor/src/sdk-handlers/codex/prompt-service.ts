@@ -54,18 +54,17 @@ import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 /**
- * Map Agor's effort level (`low`/`medium`/`high`/`max`) to Codex SDK's
+ * Map Agor's effort level (`low`/`medium`/`high`/`xhigh`/`max`) to Codex SDK's
  * `ModelReasoningEffort` (`minimal`/`low`/`medium`/`high`/`xhigh`).
  *
- * Agor has no equivalent for `minimal`, and Codex has no equivalent for `max`
- * — `max` is the user's "go as deep as possible" intent, which on Codex maps
- * to `xhigh`.
+ * Agor has no equivalent for `minimal`. Codex has no `max` — both Agor `max`
+ * and Agor `xhigh` map to Codex `xhigh` (the Codex ceiling).
  */
 function toCodexReasoningEffort(
   effort: EffortLevel | undefined
 ): 'low' | 'medium' | 'high' | 'xhigh' | undefined {
   if (!effort) return undefined;
-  return effort === 'max' ? 'xhigh' : effort;
+  return effort === 'max' || effort === 'xhigh' ? 'xhigh' : effort;
 }
 
 /**

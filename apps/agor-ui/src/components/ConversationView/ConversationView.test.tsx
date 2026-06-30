@@ -222,6 +222,57 @@ describe('ConversationView auto-scroll integration', () => {
     expect(mockScrollToBottom).not.toHaveBeenCalled();
   });
 
+  it('lands at the bottom only once content arrives after loading', () => {
+    // Cold open: still loading with no tasks → ConversationView renders <Spin/>
+    // and the scroll container is unmounted, so the landing effect must NOT fire
+    // (firing here would be a no-op that never re-runs).
+    let state = makeState({ loading: true, tasks: [] });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    const { rerender } = render(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="loading" />
+    );
+    expect(mockScrollToBottom).not.toHaveBeenCalled();
+
+    // Content arrives → the container mounts and the landing fires exactly once.
+    state = makeState({ loading: false, tasks: [makeTask('task-1', 'first task')] });
+    rerender(
+      <ConversationView client={null} sessionId={'session-1' as any} sessionModel="loaded" />
+    );
+    expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the escape lock when the exposed scrollToBottom is invoked', () => {
+    // An explicit go-to-bottom intent (FAB / send) must clear a prior scroll-up's
+    // escape so the library can re-pin to streamed content.
+    const tasks = [makeTask('task-1', 'first task')];
+    const state = makeState({ loading: false, tasks });
+    mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
+
+    let exposedScrollToBottom: (() => void) | null = null;
+    const onScrollRef = (scrollToBottom: () => void) => {
+      exposedScrollToBottom = scrollToBottom;
+    };
+
+    render(
+      <ConversationView
+        client={null}
+        sessionId={'session-1' as any}
+        sessionModel="loaded"
+        onScrollRef={onScrollRef}
+      />
+    );
+
+    // Escape AFTER the mount landing (which also clears it) so the assertion
+    // proves the exposed call — not the landing — did the clearing.
+    mockScrollToBottom.mockClear();
+    mockState.escapedFromLock = true;
+    act(() => exposedScrollToBottom?.());
+
+    expect(mockState.escapedFromLock).toBe(false);
+    expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
   it('collapses older tasks and focuses the new one when the user is at bottom', () => {
     mockState.escapedFromLock = false;
     let tasks = [makeTask('task-1', 'first task')];
@@ -245,7 +296,6 @@ describe('ConversationView auto-scroll integration', () => {
   });
 
   it('keeps older tasks expanded when the user has scrolled away', () => {
-    mockState.escapedFromLock = true;
     let tasks = [makeTask('task-1', 'first task')];
     let state = makeState({ loading: false, tasks });
     mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
@@ -254,6 +304,10 @@ describe('ConversationView auto-scroll integration', () => {
       <ConversationView client={null} sessionId={'session-1' as any} sessionModel="one-task" />
     );
     expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
+
+    // The user scrolls up after the view has landed — escape the bottom lock
+    // only now, so the mount landing (which clears it) doesn't clobber the setup.
+    mockState.escapedFromLock = true;
 
     tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'new task')];
     state = makeState({ loading: false, tasks });
@@ -272,9 +326,8 @@ describe('ConversationView auto-scroll integration', () => {
   // returned/async `isAtBottom` were still stale-true, the escaped flag wins:
   // older tasks stay expanded and no auto-scroll fires.
   it('does not collapse expanded tasks or scroll when an escaped user gets a new task', () => {
-    // Escaped from the lock, but the async/near-bottom value still reads true —
-    // exactly the race the synchronous read defends against.
-    mockState.escapedFromLock = true;
+    // The async/near-bottom value still reads true — exactly the race the
+    // synchronous read defends against.
     mockState.isAtBottom = true;
 
     let tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'second task')];
@@ -290,6 +343,10 @@ describe('ConversationView auto-scroll integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'toggle task-1' }));
     expect(screen.getByTestId('task-task-1')).toHaveAttribute('data-expanded', 'true');
     mockScrollToBottom.mockClear();
+
+    // The user scrolls up after landing — escape only now so the mount landing
+    // (which clears the escape) doesn't clobber the setup.
+    mockState.escapedFromLock = true;
 
     tasks = [
       makeTask('task-1', 'first task'),

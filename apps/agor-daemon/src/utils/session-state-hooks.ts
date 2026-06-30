@@ -9,7 +9,7 @@
  * register-services.ts and operate on the daemon's DB + filesystem directly.
  */
 
-import { type Database, SerializedSessionRepository, shortId } from '@agor/core/db';
+import { SerializedSessionRepository, shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { AgenticToolName } from '@agor/core/types';
 import {
   computeFileHash,
@@ -23,7 +23,7 @@ import {
 const STALE_PROCESSING_THRESHOLD_MS = 30_000; // 30 seconds
 
 interface PullContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   sessionId: string;
   sdkSessionId: string;
   branchPath: string;
@@ -33,7 +33,7 @@ interface PullContext {
 }
 
 interface PushContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   sessionId: string;
   branchId: string;
   taskId: string;

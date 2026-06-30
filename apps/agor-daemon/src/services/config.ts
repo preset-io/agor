@@ -12,7 +12,7 @@ import {
   resolveApiKey,
   saveConfig,
 } from '@agor/core/config';
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   type AgenticToolName,
@@ -22,6 +22,7 @@ import {
   TOOL_API_KEY_NAMES,
   type UserID,
 } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import type { SessionTokenService } from './session-token-service.js';
 
 const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
@@ -41,7 +42,10 @@ function isResolvableApiKeyName(value: string): value is ApiKeyName {
 type ExecutorTokenPayload = {
   type?: string;
   purpose?: string;
+  session_id?: string;
+  sessionId?: string;
   task_id?: string;
+  branch_id?: string;
 };
 
 function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefined {
@@ -53,16 +57,34 @@ function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefi
     return payload;
   }
 
+  // Feathers transports do not consistently preserve the decoded JWT payload
+  // on params.authentication. The token was already verified by requireAuth
+  // before this service method runs, so decoding here is only to recover
+  // trusted scope claims for executor-session JWTs.
+  const accessToken = (params as AuthenticatedParams | undefined)?.authentication?.accessToken;
+  if (typeof accessToken === 'string') {
+    const decoded = jwt.decode(accessToken) as ExecutorTokenPayload | null;
+    if (decoded?.type === 'executor-session' && decoded.purpose === 'executor-task') {
+      return decoded;
+    }
+  }
+
   // Socket.io executor logins may preserve auth-result scope fields on the
   // connection even when the decoded JWT payload is not carried forward into
   // later service params. Keep the secret resolver restricted to task-scoped
   // executor JWTs by only accepting this fallback for JWT-authenticated
   // connections that have a task claim minted by ServiceJWTStrategy.
   if (authParams?.authentication?.strategy === 'jwt' && authParams.task_id) {
+    const scopedParams = params as
+      | (Params & { session_id?: string; sessionId?: string; task_id?: string; branch_id?: string })
+      | undefined;
     return {
       type: 'executor-session',
       purpose: 'executor-task',
       task_id: authParams.task_id,
+      session_id: scopedParams?.session_id,
+      sessionId: scopedParams?.sessionId,
+      branch_id: scopedParams?.branch_id,
     };
   }
 
@@ -100,11 +122,11 @@ function maskCredentials(config: AgorConfig): AgorConfig {
  * Config service class
  */
 export class ConfigService {
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
   /** App reference injected after registration for cross-service calls */
   app?: Application;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     this.db = db;
   }
 
@@ -368,6 +390,6 @@ export class ConfigService {
 /**
  * Service factory function
  */
-export function createConfigService(db: Database): ConfigService {
+export function createConfigService(db: TenantScopeAwareDatabase): ConfigService {
   return new ConfigService(db);
 }

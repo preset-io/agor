@@ -274,7 +274,12 @@ export function sessionRemoved(session: Session) {
 }
 
 // ── Boards ──────────────────────────────────────────────────────────────────
+// Boards are background-hydrated WITH their full `objects`/`custom_css` (the
+// gated list fetch is lean), so every board write bumps the `boards` revision —
+// otherwise an in-flight boards hydration whose (full) snapshot predates a zone
+// create/move/delete could clobber the live change with the pre-edit board.
 export function boardCreated(board: Board) {
+  bumpRevision('boards');
   setMap('boardById', (prev) => {
     if (prev.has(board.board_id)) return prev; // Already exists, shouldn't happen
     const next = new Map(prev);
@@ -283,9 +288,11 @@ export function boardCreated(board: Board) {
   });
 }
 export function boardPatched(board: Board) {
+  bumpRevision('boards');
   setMap('boardById', (prev) => replaceIfChanged(prev, board.board_id, board));
 }
 export function boardRemoved(board: Board) {
+  bumpRevision('boards');
   setMap('boardById', (prev) => {
     if (!prev.has(board.board_id)) return prev; // Doesn't exist, nothing to remove
     const next = new Map(prev);

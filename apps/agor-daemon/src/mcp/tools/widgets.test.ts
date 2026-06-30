@@ -232,6 +232,88 @@ describe('agor_widgets_request_env_vars', () => {
     expect(patchBody.message_range.end_index).toBe(0); // index of the appended widget
   });
 
+  it('normalizes requested names before storing widget metadata and preview text', async () => {
+    const { app } = makeApp({ sessionCreator: 'user-creator' });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+    });
+
+    const handler = captured.agor_widgets_request_env_vars.cb;
+    await handler({
+      names: ['STRIPE_SECRET_KEY', 'HUBSPOT_API_KEY'],
+      reason: 'two integrations',
+      auto_resume: true,
+    });
+
+    const appendArgs = appendStub.mock.calls[0][0];
+    expect(appendArgs.metadata.widget.params.names).toEqual([
+      'HUBSPOT_API_KEY',
+      'STRIPE_SECRET_KEY',
+    ]);
+    expect(appendArgs.content).toContain('HUBSPOT_API_KEY, STRIPE_SECRET_KEY');
+    expect(appendArgs.contentPreview).toBe('Widget: env_vars (HUBSPOT_API_KEY, STRIPE_SECRET_KEY)');
+  });
+
+  it('does not persist server-derived availability in widget params', async () => {
+    const { app } = makeApp({
+      sessionCreator: 'user-creator',
+      creatorEnvVars: { HUBSPOT_API_KEY: { set: true, scope: 'global' } },
+    });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+    });
+
+    const handler = captured.agor_widgets_request_env_vars.cb;
+    await handler({
+      names: ['STRIPE_SECRET_KEY', 'HUBSPOT_API_KEY'],
+      reason: 'two integrations',
+      auto_resume: true,
+    });
+
+    const appendArgs = appendStub.mock.calls[0][0];
+    expect(appendArgs.metadata.widget.status).toBe('pending');
+    expect(appendArgs.metadata.widget.params.existing).toBeUndefined();
+    expect(JSON.stringify(appendArgs.metadata.widget.params)).not.toContain('secret');
+  });
+
+  it('stores safe per-variable display metadata in widget params', async () => {
+    const { app } = makeApp({ sessionCreator: 'user-creator' });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-creator',
+      sessionId: 'sess-1',
+    });
+
+    const handler = captured.agor_widgets_request_env_vars.cb;
+    await handler({
+      names: ['API_TOKEN'],
+      reason: 'call api',
+      variable_metadata: {
+        API_TOKEN: {
+          description: 'From the API dashboard.',
+          placeholder: 'Paste token',
+          format_hint: 'Starts with tok_',
+          input_type: 'text',
+        },
+      },
+      auto_resume: true,
+    });
+
+    const appendArgs = appendStub.mock.calls[0][0];
+    expect(appendArgs.metadata.widget.params.variable_metadata).toEqual({
+      API_TOKEN: {
+        description: 'From the API dashboard.',
+        placeholder: 'Paste token',
+        format_hint: 'Starts with tok_',
+        input_type: 'text',
+      },
+    });
+  });
+
   it('gracefully omits taskId when no task exists yet (e.g. brand-new session)', async () => {
     const { app, calls } = makeApp({
       sessionCreator: 'user-creator',

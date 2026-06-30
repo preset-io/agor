@@ -9,12 +9,12 @@ import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   and,
   BoardRepository,
   BranchRepository,
-  type Database,
   eq,
   inArray,
   MCPServerRepository,
@@ -23,6 +23,7 @@ import {
   select,
   sessionMcpServers,
   shortId,
+  type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
@@ -43,6 +44,7 @@ import {
   AGENTIC_TOOL_CAPABILITIES,
   isSessionExecuting,
   isTaskExecuting,
+  ROLES,
   SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
@@ -80,6 +82,7 @@ import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
+import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
@@ -100,6 +103,7 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
+import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
@@ -115,6 +119,7 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
+import { requireMinimumRole } from './utils/authorization.js';
 import { escapeHtml } from './utils/html.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -133,7 +138,7 @@ import { spawnExecutor } from './utils/spawn-executor.js';
  * Interface for dependencies needed by service registration.
  */
 export interface RegisterServicesContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   svcEnabled: (group: string) => boolean;
@@ -359,14 +364,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     !app.services['branches/:id/owners/:userId']
   ) {
     const branchRepo = new BranchRepository(db);
+    const executionMode = resolveExecutionSecurityMode(config);
     setupBranchOwnersService(app, branchRepo, {
       jwtSecret,
       daemonUser: config.daemon?.unix_user,
+      unixFsIsolationEnabled: executionMode.unixFsIsolationEnabled,
       allowSuperadmin,
     });
   }
 
-  if (branchRbacEnabled) {
+  if (resolveExecutionSecurityMode(config).unixFsIsolationEnabled) {
     const daemonUser = config.daemon?.unix_user || 'agor';
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
@@ -460,6 +467,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   if (svcEnabled('gateway')) {
     app.use('/gateway-channels', createGatewayChannelsService(db));
+
+    // Sub-path service for the connection probe. A sub-path does NOT inherit
+    // the parent gateway-channels admin gating / redaction hooks, so it carries
+    // its own requireAuth + admin gate. It reads decrypted tokens via the
+    // repository and returns no token values.
+    app.use('/gateway-channels/test', createGatewayChannelsTestService(db));
+    app.service('gateway-channels/test').hooks({
+      before: {
+        create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'test gateway channels')],
+      },
+    });
+
     app.use('/thread-session-map', createThreadSessionMapService(db));
     app.use('/gateway', createGatewayService(db, app), {
       // Only expose the inbound gateway entrypoint and existing route hook
@@ -479,6 +498,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const configService = createConfigService(db);
   configService.app = app;
+  app.use('/admin/local-actions', createLocalActionsService());
+
   app.use('/config', configService);
 
   app.use('/config/resolve-api-key', {

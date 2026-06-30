@@ -1,7 +1,9 @@
 import type { Board, Branch, Repo, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { FRAMEWORK_REPO_SLUG } from '../../hooks/useFrameworkRepo';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
 import { OnboardingWizard } from './OnboardingWizard';
 
 vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
@@ -58,13 +60,36 @@ function makeBranch(overrides: Partial<Branch> = {}): Branch {
   } as Branch;
 }
 
-function renderWizard(overrides: Partial<ComponentProps<typeof OnboardingWizard>> = {}) {
+// The wizard now self-subscribes to repoById / branchById / boardById from the
+// store instead of receiving them as props, so the harness seeds those slices
+// into the store rather than passing them through. Map seeds may be supplied
+// alongside the component-prop overrides; they're split out here.
+function renderWizard(
+  overrides: Partial<ComponentProps<typeof OnboardingWizard>> & {
+    repoById?: Map<string, Repo>;
+    branchById?: Map<string, Branch>;
+    boardById?: Map<string, Board>;
+  } = {}
+) {
+  const { repoById, branchById, boardById, ...componentOverrides } = overrides;
+  agorStore.setState({
+    ...EMPTY_MAPS,
+    ...(repoById ? { repoById } : {}),
+    ...(branchById ? { branchById } : {}),
+    ...(boardById ? { boardById } : {}),
+  });
+
   const boardsService = {
     create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
     setPrimaryAssistant: vi.fn(async () => undefined),
     ensureAssistantWelcomeNote: vi.fn(async () => undefined),
   };
-  const reposService = { on: vi.fn(), removeListener: vi.fn() };
+  const reposService = {
+    find: vi.fn(async () => ({ data: [] })),
+    get: vi.fn(async () => undefined),
+    on: vi.fn(),
+    removeListener: vi.fn(),
+  };
   const client = {
     io: { on: vi.fn(), off: vi.fn() },
     service: vi.fn((name: string) => (name === 'boards' ? boardsService : reposService)),
@@ -72,9 +97,6 @@ function renderWizard(overrides: Partial<ComponentProps<typeof OnboardingWizard>
   const props = {
     open: true,
     onComplete: vi.fn(),
-    repoById: new Map<string, Repo>(),
-    branchById: new Map<string, Branch>(),
-    boardById: new Map<string, Board>(),
     user: makeUser(),
     client,
     onCreateRepo: vi.fn(async () => undefined),
@@ -82,7 +104,7 @@ function renderWizard(overrides: Partial<ComponentProps<typeof OnboardingWizard>
     onCreateBranch: vi.fn(async () => makeBranch()),
     onCreateSession: vi.fn(async () => 'session-1'),
     onUpdateUser: vi.fn(async () => undefined),
-    ...overrides,
+    ...componentOverrides,
   } satisfies ComponentProps<typeof OnboardingWizard>;
 
   return { ...render(<OnboardingWizard {...props} />), props, client, boardsService };
@@ -233,7 +255,7 @@ describe('OnboardingWizard', () => {
       ],
     ]);
     const onCreateRepo = vi.fn(async () => undefined);
-    const view = renderWizard({ repoById, onCreateRepo });
+    renderWizard({ repoById, onCreateRepo });
 
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
     fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
@@ -252,10 +274,147 @@ describe('OnboardingWizard', () => {
         clone_error: { message: 'new failure', exit_code: 1 },
       })
     );
-    view.rerender(<OnboardingWizard {...view.props} repoById={nextRepoById} />);
+    act(() => {
+      agorStore.setState({ repoById: nextRepoById });
+    });
 
     expect(await screen.findByText(/Setup failed/i)).toBeInTheDocument();
     expect(screen.getByText(/new failure/i)).toBeInTheDocument();
+  });
+
+  it('continues when clone returns an existing ready framework repo not yet in local state', async () => {
+    const readyRepo = makeRepo({ repo_id: 'repo-existing' });
+    const reposService = {
+      get: vi.fn(async () => readyRepo),
+      find: vi.fn(async () => ({ data: [readyRepo] })),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+      setPrimaryAssistant: vi.fn(async () => undefined),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'repos') return reposService;
+        return { find: vi.fn(async () => ({ data: [] })) };
+      }),
+    };
+    const onCreateRepo = vi.fn(async () => ({
+      status: 'exists' as const,
+      slug: FRAMEWORK_REPO_SLUG,
+      repo_id: 'repo-existing',
+    }));
+    const onCreateBranch = vi.fn(async () => makeBranch({ repo_id: 'repo-existing' }));
+
+    renderWizard({ client, onCreateRepo, onCreateBranch });
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+
+    await waitFor(() =>
+      expect(onCreateRepo).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: FRAMEWORK_REPO_SLUG }),
+        { silent: true }
+      )
+    );
+    await waitFor(() => expect(reposService.get).toHaveBeenCalledWith('repo-existing'));
+    await waitFor(() => expect(onCreateBranch).toHaveBeenCalled());
+    expect(onCreateBranch.mock.calls[0]?.[0]).toBe('repo-existing');
+  });
+
+  it('reuses an existing framework repo when duplicate clone returns no repo id', async () => {
+    const readyRepo = makeRepo({ repo_id: 'repo-existing', default_branch: 'develop' });
+    const reposService = {
+      find: vi.fn(async () => ({ data: [readyRepo] })),
+      get: vi.fn(async () => undefined),
+      on: vi.fn(),
+      removeListener: vi.fn(),
+    };
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+      setPrimaryAssistant: vi.fn(async () => undefined),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'repos') return reposService;
+        return { find: vi.fn(async () => ({ data: [] })) };
+      }),
+    };
+    const onCreateRepo = vi.fn(async () => ({
+      status: 'exists' as const,
+      slug: FRAMEWORK_REPO_SLUG,
+    }));
+    const onCreateBranch = vi.fn(async () => makeBranch({ repo_id: 'repo-existing' }));
+    const onComplete = vi.fn();
+
+    renderWizard({ client, onCreateRepo, onCreateBranch, onComplete });
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+
+    await waitFor(() => expect(reposService.find).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(onCreateBranch).toHaveBeenCalledWith(
+        'repo-existing',
+        expect.objectContaining({ sourceBranch: 'develop' })
+      )
+    );
+    expect(screen.queryByText(/Cloning assistant framework/i)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith({
+        branchId: 'branch-1',
+        sessionId: 'session-1',
+        boardId: 'board-1',
+        path: 'assistant',
+      })
+    );
+  });
+
+  it('reuses an existing assistant branch and session when retrying setup', async () => {
+    const repoById = new Map<string, Repo>([['repo-1', makeRepo()]]);
+    const existingBranch = makeBranch({ board_id: 'board-existing' } as Partial<Branch>);
+    const branchesService = { find: vi.fn(async () => ({ data: [existingBranch] })) };
+    const sessionsService = {
+      find: vi.fn(async () => ({ data: [{ session_id: 'session-existing' }] })),
+    };
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+      setPrimaryAssistant: vi.fn(async () => undefined),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'branches') return branchesService;
+        if (name === 'sessions') return sessionsService;
+        return { on: vi.fn(), removeListener: vi.fn() };
+      }),
+    };
+    const onCreateBranch = vi.fn(async () => makeBranch());
+    const onCreateSession = vi.fn(async () => 'session-new');
+    const onComplete = vi.fn();
+
+    renderWizard({ repoById, client, onCreateBranch, onCreateSession, onComplete });
+
+    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
+
+    await waitFor(() => expect(branchesService.find).toHaveBeenCalled());
+    expect(onCreateBranch).not.toHaveBeenCalled();
+    expect(onCreateSession).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith({
+        branchId: 'branch-1',
+        sessionId: 'session-existing',
+        boardId: 'board-existing',
+        path: 'assistant',
+      })
+    );
   });
 
   it('uses an existing ready framework repo without cloning it again', async () => {
@@ -271,10 +430,10 @@ describe('OnboardingWizard', () => {
     expect(onCreateRepo).not.toHaveBeenCalled();
   });
 
-  it('creates setup resources with the default assistant branch name and preserves model defaults', async () => {
+  it('creates setup resources with a user-suffixed assistant branch name and preserves model defaults', async () => {
     const repoById = new Map<string, Repo>();
     const onCreateBranch = vi.fn(async () =>
-      makeBranch({ name: 'private-scout', ref: 'private-scout' })
+      makeBranch({ name: 'private-scout-user1', ref: 'private-scout-user1' })
     );
     const onCreateSession = vi.fn(async () => 'session-1');
     const onComplete = vi.fn();
@@ -302,16 +461,17 @@ describe('OnboardingWizard', () => {
     fireEvent.click(await screen.findByRole('button', { name: /continue with codex cli auth/i }));
 
     expect(await screen.findByText(/Cloning assistant framework/i)).toBeInTheDocument();
-    repoById.set('repo-1', makeRepo());
-    const readyRepoById = new Map(repoById);
-    view.rerender(<OnboardingWizard {...view.props} repoById={readyRepoById} />);
+    const readyRepoById = new Map(repoById).set('repo-1', makeRepo());
+    act(() => {
+      agorStore.setState({ repoById: readyRepoById });
+    });
 
     await waitFor(() => {
       expect(onCreateBranch).toHaveBeenCalledWith(
         'repo-1',
         expect.objectContaining({
-          name: 'private-scout',
-          ref: 'private-scout',
+          name: 'private-scout-user1',
+          ref: 'private-scout-user1',
           sourceBranch: 'main',
           createBranch: true,
           pullLatest: true,

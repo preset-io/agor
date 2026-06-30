@@ -40,6 +40,11 @@ describe('resolveModelConfig', () => {
     expect(withoutEffort).not.toHaveProperty('effort');
   });
 
+  it('round-trips xhigh effort through resolveModelConfig', () => {
+    const result = resolveModelConfig({ model: 'x', effort: 'xhigh' }, { now });
+    expect(result).toHaveProperty('effort', 'xhigh');
+  });
+
   it('includes advisorModel only when defined (omits the key otherwise)', () => {
     const withAdvisor = resolveModelConfig({ model: 'x', advisorModel: 'opus' }, { now });
     expect(withAdvisor).toHaveProperty('advisorModel', 'opus');

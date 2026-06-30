@@ -2,11 +2,11 @@
  * Regression test for #1140 — `repo clone fails when user is not sudoer` —
  * and its sister bug #1143 — same failure mode in `git.branch.remove`.
  *
- * In the open-access default (`branch_rbac: false`, `unix_user_mode:
- * simple`) no supplemental Unix groups are ever created, so wrapping git
- * operations in `sudo -u` is pure overhead. Worse: it breaks for users
- * who never configured passwordless sudoers, with the daemon failing to
- * clone repos (or remove branches) against `user not in sudoers`.
+ * In simple Unix mode no supplemental Unix groups are created, even when
+ * app-level `branch_rbac` is enabled, so wrapping git operations in
+ * `sudo -u` is pure overhead. Worse: it breaks for users who never configured
+ * passwordless sudoers, with the daemon failing to clone repos (or remove
+ * branches) against `user not in sudoers`.
  *
  * The gate must live INSIDE the resolver — not at the call site — so every
  * caller is covered uniformly. #1141 fixed clone + branch.add + (later)
@@ -60,7 +60,7 @@ describe('resolveGitImpersonationForUser', () => {
     expect(result).toBeUndefined();
   });
 
-  it('returns daemon user when group refresh is needed (RBAC or insulated/strict)', async () => {
+  it('returns daemon user when group refresh is needed (insulated/strict)', async () => {
     mockIsUnixGroupRefreshNeeded.mockReturnValue(true);
     const result = await resolveGitImpersonationForUser(fakeDb, fakeUserId);
     expect(result).toBe('agorpg');

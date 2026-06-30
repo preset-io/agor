@@ -6,11 +6,20 @@
  * managed branch checkout.
  */
 
-import { BranchRepository, type Database, SessionRepository, UsersRepository } from '@agor/core/db';
+import {
+  BranchRepository,
+  SessionRepository,
+  type TenantScopeAwareDatabase,
+  UsersRepository,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, SessionID, UserID } from '@agor/core/types';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
-import { generateSessionToken, getDaemonUrl, runExecutorCommand } from '../utils/spawn-executor.js';
+import {
+  generateScopedServiceToken,
+  getDaemonUrl,
+  runExecutorCommand,
+} from '../utils/spawn-executor.js';
 
 // Constants for file search
 const MAX_FILE_RESULTS = 10;
@@ -54,7 +63,7 @@ export class FilesService {
   private usersRepo: UsersRepository;
 
   constructor(
-    private db: Database,
+    private db: TenantScopeAwareDatabase,
     private app: Application
   ) {
     this.sessionRepo = new SessionRepository(db);
@@ -94,8 +103,9 @@ export class FilesService {
         return [];
       }
 
-      const sessionToken = generateSessionToken(
-        this.app as unknown as { settings: { authentication?: { secret?: string } } }
+      const sessionToken = generateScopedServiceToken(
+        this.app as unknown as { settings: { authentication?: { secret?: string } } },
+        params
       );
 
       const currentUserId = params.user?.user_id as UserID | undefined;
@@ -140,6 +150,6 @@ export class FilesService {
 /**
  * Service factory function
  */
-export function createFilesService(db: Database, app: Application): FilesService {
+export function createFilesService(db: TenantScopeAwareDatabase, app: Application): FilesService {
   return new FilesService(db, app);
 }

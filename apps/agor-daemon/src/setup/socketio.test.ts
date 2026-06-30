@@ -23,13 +23,17 @@
 
 import type { Application } from '@agor/core/feathers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import {
   boardPresenceRoomName,
+  configureChannels,
   createSocketIOConfig,
   createTokenBucket,
   getSocketAuthState,
   parseTerminalChannel,
   type SocketIOOptions,
+  tenantChannelName,
+  tenantUserChannelName,
 } from './socketio';
 
 // ---------------------------------------------------------------------------
@@ -267,6 +271,58 @@ describe('createTokenBucket', () => {
     expect(limit()).toBe(true);
     expect(limit()).toBe(true);
     expect(limit()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Handshake authentication
+// ---------------------------------------------------------------------------
+
+describe('socket handshake tenant propagation', () => {
+  it('passes resolved JWT tenant context into the user lookup', async () => {
+    const usersGet = vi.fn(async () => ({ user_id: ALICE, email: 'alice@example.test' }));
+    const app = {
+      service: () => ({ get: usersGet }),
+      on: () => {},
+    } as unknown as Application;
+    const io = makeIO();
+    const config = createSocketIOConfig(app, {
+      corsOrigin: '*',
+      jwtSecret: 'test-secret',
+      credentialsAllowed: false,
+      webTerminalEnabled: true,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    } as SocketIOOptions);
+    config.callback(io as any);
+    const socket = makeSocket('tenant-user-socket', io);
+    socket.handshake.auth = {
+      token: issueRuntimeToken(
+        { sub: ALICE, type: 'access', tenant_id: 'tenant-a' },
+        'test-secret',
+        '5m'
+      ),
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      io.middlewares[0]?.(socket, (error?: Error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+
+    expect(usersGet).toHaveBeenCalledWith(
+      ALICE,
+      expect.objectContaining({
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        authentication: { payload: expect.objectContaining({ tenant_id: 'tenant-a' }) },
+      })
+    );
+    expect(socket.feathers?.user).toMatchObject({ user_id: ALICE, tenant_id: 'tenant-a' });
+    expect(socket.data.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
   });
 });
 
@@ -598,5 +654,77 @@ describe('terminal:* handler authorization', () => {
         )
       ).toHaveLength(2);
     });
+  });
+});
+
+describe('configureChannels tenant isolation', () => {
+  function makeChannelHarness() {
+    const handlers = new Map<string, (...args: any[]) => void>();
+    const joins = new Map<string, unknown[]>();
+    const leaves = new Map<string, unknown[]>();
+    const app = {
+      on(event: string, fn: (...args: any[]) => void) {
+        handlers.set(event, fn);
+      },
+      channel(name: string) {
+        return {
+          join(connection: unknown) {
+            const list = joins.get(name) ?? [];
+            list.push(connection);
+            joins.set(name, list);
+          },
+          leave(connection: unknown) {
+            const list = leaves.get(name) ?? [];
+            list.push(connection);
+            leaves.set(name, list);
+          },
+        };
+      },
+    };
+    return { app: app as unknown as Application, handlers, joins, leaves };
+  }
+
+  it('joins authenticated sockets to tenant-scoped channels on login', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    });
+    const connection = { data: {} } as any;
+
+    handlers.get('login')?.(
+      {
+        user: { user_id: ALICE, email: 'alice@example.test' },
+        authentication: { payload: { tenant_id: 'tenant-a' } },
+      },
+      { connection }
+    );
+
+    expect(connection.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
+    expect(connection.data.tenant).toEqual({ tenant_id: 'tenant-a', source: 'auth_claim' });
+    expect(joins.get('authenticated')).toEqual([connection]);
+    expect(joins.get(tenantChannelName('tenant-a'))).toEqual([connection]);
+    expect(joins.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
+    expect(joins.has(tenantChannelName('tenant-b'))).toBe(false);
+  });
+
+  it('leaves tenant-scoped channels on logout', () => {
+    const { app, handlers, leaves } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const connection = {
+      data: { tenant: { tenant_id: 'tenant-a', source: 'static' } },
+      feathers: { user: { user_id: ALICE } },
+    } as any;
+
+    handlers.get('logout')?.({}, { connection });
+
+    expect(leaves.get('authenticated')).toEqual([connection]);
+    expect(leaves.get(tenantChannelName('tenant-a'))).toEqual([connection]);
+    expect(leaves.get(tenantUserChannelName('tenant-a', ALICE))).toEqual([connection]);
   });
 });

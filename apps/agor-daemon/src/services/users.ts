@@ -16,8 +16,8 @@ import {
   validateEnvVar,
 } from '@agor/core/config';
 import {
+  and,
   compare,
-  type Database,
   decryptApiKey,
   deleteFrom,
   encryptApiKey,
@@ -25,11 +25,12 @@ import {
   hash,
   insert,
   select,
+  type TenantScopeAwareDatabase,
   update,
   users,
 } from '@agor/core/db';
 import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { isLikelyGitToken } from '@agor/core/git';
+import { isLikelyGitToken } from '@agor/core/git/pure';
 import type {
   AgenticToolName,
   AgenticToolsConfig,
@@ -68,6 +69,26 @@ function queryString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function usersTableHasTenantColumn(): boolean {
+  return 'tenant_id' in (users as unknown as object);
+}
+
+function tenantPredicate(params?: Params) {
+  const tenantId = (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id;
+  if (!tenantId || !usersTableHasTenantColumn()) return undefined;
+  return eq((users as never as { tenant_id: never }).tenant_id, tenantId);
+}
+
+function withTenantPredicate(params: Params | undefined, predicate: unknown) {
+  const tenant = tenantPredicate(params);
+  return tenant ? and(predicate as never, tenant) : predicate;
+}
+
+function tenantInsertValues(params?: Params): { tenant_id?: string } {
+  const tenantId = (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id;
+  return tenantId && usersTableHasTenantColumn() ? { tenant_id: tenantId } : {};
 }
 
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
@@ -236,7 +257,7 @@ export class UsersService {
   private avatarSync?: UserAvatarSyncManager;
 
   constructor(
-    protected db: Database,
+    protected db: TenantScopeAwareDatabase,
     app?: Application
   ) {
     if (app) {
@@ -276,11 +297,16 @@ export class UsersService {
     if (email) {
       ensureCanExactEmailLookup(params, email);
       // Find by email (for LocalStrategy / authorized exact lookup)
-      const row = await select(this.db).from(users).where(eq(users.email, email)).one();
+      const row = await select(this.db)
+        .from(users)
+        .where(withTenantPredicate(params, eq(users.email, email)))
+        .one();
       rows = row ? [row] : [];
     } else {
       // Find all
-      rows = await select(this.db).from(users).all();
+      rows = tenantPredicate(params)
+        ? await select(this.db).from(users).where(tenantPredicate(params)).all()
+        : await select(this.db).from(users).all();
     }
 
     rows = rows.sort(
@@ -327,7 +353,10 @@ export class UsersService {
    * Get user by ID
    */
   async get(id: UserID, params?: Params): Promise<User> {
-    const row = await select(this.db).from(users).where(eq(users.user_id, id)).one();
+    const row = await select(this.db)
+      .from(users)
+      .where(withTenantPredicate(params, eq(users.user_id, id)))
+      .one();
 
     if (!row) {
       throw new Error(`User not found: ${id}`);
@@ -344,7 +373,10 @@ export class UsersService {
    */
   async create(data: CreateUserData, params?: Params): Promise<User> {
     // Check if email already exists
-    const existing = await select(this.db).from(users).where(eq(users.email, data.email)).one();
+    const existing = await select(this.db)
+      .from(users)
+      .where(withTenantPredicate(params, eq(users.email, data.email)))
+      .one();
 
     if (existing) {
       throw new Error(`User with email ${data.email} already exists`);
@@ -372,6 +404,7 @@ export class UsersService {
         must_change_password: data.must_change_password ?? false,
         created_at: now,
         updated_at: now,
+        ...tenantInsertValues(params),
         data: {
           avatar_url: data.avatar_url ?? data.avatar ?? undefined,
           avatar_source:
@@ -431,8 +464,11 @@ export class UsersService {
       data.env_var_scopes ||
       data.default_agentic_config
     ) {
-      const current = await this.get(id);
-      const currentRow = await select(this.db).from(users).where(eq(users.user_id, id)).one();
+      const current = await this.get(id, params);
+      const currentRow = await select(this.db)
+        .from(users)
+        .where(withTenantPredicate(params, eq(users.user_id, id)))
+        .one();
       const currentData = currentRow?.data as {
         avatar_url?: string;
         avatar?: string;
@@ -835,6 +871,9 @@ export class UsersService {
     if (includeAuthMetadata && row.tokens_valid_after) {
       (user as InternalUser).tokens_valid_after = new Date(row.tokens_valid_after);
     }
+    if (includeAuthMetadata && 'tenant_id' in row) {
+      (user as InternalUser).tenant_id = row.tenant_id;
+    }
 
     // Include password for authentication (FeathersJS LocalStrategy needs this)
     if (includePassword) {
@@ -917,6 +956,9 @@ class UsersServiceWithAuth extends UsersService {
 /**
  * Create users service
  */
-export function createUsersService(db: Database, app?: Application): UsersServiceWithAuth {
+export function createUsersService(
+  db: TenantScopeAwareDatabase,
+  app?: Application
+): UsersServiceWithAuth {
   return new UsersServiceWithAuth(db, app);
 }

@@ -27,8 +27,8 @@ import { shallowEqualEntity } from '../utils/shallowEqual';
 /**
  * All server-backed data maps held in a single state object.
  *
- * Adding a new map here + to EMPTY_MAPS is all that's required —
- * `setMaps(EMPTY_MAPS)` in the reset effect covers every field automatically.
+ * Adding a new map here + to `EMPTY_MAPS` is all that's required — resetting
+ * the store covers every field automatically.
  */
 export type DataMaps = {
   sessionById: Map<string, Session>;
@@ -117,7 +117,7 @@ export function replaceIfChanged<T extends object>(
 
 // Build a plain `byId` Map from a fetched list. Used by the background
 // (non-gated) fetches whose results land via their own setter rather than the
-// single atomic setMaps the essential gate performs.
+// single atomic map-apply the essential gate performs.
 export function buildById<T>(list: readonly T[], key: keyof T): Map<string, T> {
   const map = new Map<string, T>();
   for (const item of list) {

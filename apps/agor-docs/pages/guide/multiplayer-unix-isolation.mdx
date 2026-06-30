@@ -214,14 +214,15 @@ agor ALL=(ALL) NOPASSWD: /usr/bin/readlink *
 - The file includes extensive comments and troubleshooting tips
 - Read the full file before deploying to production
 
-### 4. Enable RBAC and Unix Isolation
+### 4. Enable app RBAC and/or Unix Isolation
 
 Configure Agor's execution mode via config:
 
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  # Enable RBAC system (default: false)
+  # Enable app-level branch ownership/visibility (default: false).
+  # This does not create Unix groups or require sudoers by itself.
   branch_rbac: true
 
   # Unix user mode (default: simple)
@@ -248,6 +249,10 @@ execution:
 - **`simple`** - Default, single user or fully trusted team, no setup required
 - **`insulated`** - Recommended for shared development, isolates daemon from executors
 - **`strict`** - Production environments, compliance requirements, full audit trail
+
+`branch_rbac` and `unix_user_mode` are intentionally independent: RBAC controls
+Agor app permissions; non-`simple` Unix modes control OS identities, Unix groups,
+and filesystem permissions.
 
 ### 4b. (Optional) Disable the Web Terminal
 

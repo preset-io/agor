@@ -25,8 +25,8 @@ import {
   BOOTSTRAP_ADMIN_EMAIL,
   bootstrapFirstRunAdmin,
   createUser,
-  type Database,
   generateAdminPassword,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 
 const openP = promisify(open);
@@ -145,7 +145,7 @@ export interface DaemonBootstrapResult extends AdminBootstrapResult {
  * accept the `~/.agor` default.
  */
 export async function runFirstRunAdminBootstrap(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   options: { credentialsBaseDir?: string } = {}
 ): Promise<DaemonBootstrapResult> {
   const credentialsPath = getAdminCredentialsPath(options.credentialsBaseDir);

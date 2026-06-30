@@ -15,10 +15,6 @@ const renderPanel = (props: Partial<ComponentProps<typeof BoardAssistantPanel>> 
         activeTab="comments"
         onTabChange={vi.fn()}
         primaryAssistantInaccessible={false}
-        sessionsByBranch={new Map()}
-        branchById={new Map()}
-        repoById={new Map()}
-        userById={new Map()}
         onSessionClick={vi.fn()}
         client={null}
         {...props}

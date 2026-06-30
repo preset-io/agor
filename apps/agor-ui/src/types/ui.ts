@@ -13,3 +13,11 @@ export interface AgenticToolOption {
   description?: string;
   beta?: boolean; // Show beta badge for experimental features
 }
+
+/**
+ * UI-level clone behavior options for shared repository creation handlers.
+ */
+export interface CreateRepoOptions {
+  /** Suppress shared toast side effects when the caller owns progress/error UI. */
+  silent?: boolean;
+}

@@ -222,9 +222,11 @@ export async function handleEnvironmentLifecycle(
           ...(branch.environment_instance?.process ?? {}),
           started_at: startedAt,
         },
-        last_health_check: undefined,
-        last_error: undefined,
-        last_command: undefined,
+        // This update crosses the Feathers/WebSocket JSON boundary; use null
+        // as an explicit clear sentinel because JSON drops undefined values.
+        last_health_check: null,
+        last_error: null,
+        last_command: null,
         ...(payload.params.appUrl
           ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
           : {}),
@@ -269,7 +271,9 @@ export async function handleEnvironmentLifecycle(
 
     await updateBranchEnvironment(client, branchId, {
       status: 'stopped',
-      process: undefined,
+      // This update crosses the Feathers/WebSocket JSON boundary; use null
+      // as an explicit clear sentinel because JSON drops undefined values.
+      process: null,
       last_health_check: {
         timestamp: new Date().toISOString(),
         status: 'unknown',
@@ -278,7 +282,7 @@ export async function handleEnvironmentLifecycle(
             ? 'Environment nuked - all data and volumes destroyed'
             : 'Environment stopped',
       },
-      last_error: undefined,
+      last_error: null,
       last_command: {
         action: payload.params.action,
         status: 'succeeded',

@@ -9,7 +9,7 @@
  * from the browser.
  */
 
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 export const load = yaml.load;
 export const dump = yaml.dump;

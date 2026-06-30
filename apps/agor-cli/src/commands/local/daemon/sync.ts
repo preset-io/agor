@@ -1,5 +1,5 @@
 /**
- * `agor daemon sync` - Sync declared resources from config.yml into database and filesystem
+ * `agor local daemon sync` - Sync declared resources from config.yml into local database and filesystem
  *
  * Reads the `resources:` section of config.yml and ensures all declared repos,
  * branches, and users exist in the database and on disk. Idempotent — running
@@ -31,7 +31,8 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { autoAssignBranchUniqueId } from '@agor/core/environment/variable-resolver';
-import { cloneRepo, createBranch, getBranchesDir } from '@agor/core/git';
+import { cloneRepo, createBranch } from '@agor/core/git/exec';
+import { getBranchesDir } from '@agor/core/git/pure';
 import type { User, UUID } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -43,12 +44,12 @@ interface SyncCounts {
 }
 
 export default class DaemonSync extends Command {
-  static description = 'Sync resources from config.yml into database and filesystem';
+  static description = 'Locally sync resources from config.yml into database and filesystem';
 
   static examples = [
-    '<%= config.bin %> daemon sync',
-    '<%= config.bin %> daemon sync --dry-run',
-    '<%= config.bin %> daemon sync --config /path/to/config.yml',
+    '<%= config.bin %> local daemon sync',
+    '<%= config.bin %> local daemon sync --dry-run',
+    '<%= config.bin %> local daemon sync --config /path/to/config.yml',
   ];
 
   static flags = {

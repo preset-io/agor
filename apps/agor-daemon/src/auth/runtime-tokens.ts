@@ -18,6 +18,25 @@ export interface RuntimeTokenPair {
   refreshToken: string;
 }
 
+export function runtimeTenantClaims(
+  tenantId: string | undefined,
+  claimName = 'tenant_id'
+): Record<string, string> {
+  if (!tenantId) return {};
+  if (claimName === 'tenant_id') return { tenant_id: tenantId };
+  return { tenant_id: tenantId, [claimName]: tenantId };
+}
+
+export function readRuntimeTenantClaim(
+  payload: unknown,
+  claimName = 'tenant_id'
+): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const record = payload as Record<string, unknown>;
+  const value = record[claimName] ?? record.tenant_id;
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 export function issueRuntimeToken(
   payload: RuntimeTokenPayload,
   jwtSecret: string,
