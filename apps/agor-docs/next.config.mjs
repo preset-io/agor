@@ -12,6 +12,7 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH
 // Deployed to custom domain agor.live (no base path needed)
 export default withNextra({
   reactStrictMode: true,
+  devIndicators: false,
   output: 'export',
   images: {
     unoptimized: true,

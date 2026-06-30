@@ -44,5 +44,5 @@ export const sharedLayoutProps = {
   toc: { backToTop: true },
   editLink: <>Edit this page on GitHub →</>,
   feedback: { content: 'Question? Give us feedback →', labels: 'feedback' },
-  nextThemes: { defaultTheme: 'dark', forcedTheme: 'dark' },
+  nextThemes: { defaultTheme: 'dark' },
 };

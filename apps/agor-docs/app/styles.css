@@ -115,3 +115,35 @@ main {
 .nextra-navbar nav > button {
   order: 6;
 }
+
+/* The landing page keeps Agor's dark hero treatment even when a reader has
+ * selected the light docs theme. Keep the shared navbar dark there so toggling
+ * light mode for docs doesn't leave a pale bar floating over the dark hero. */
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar {
+  color: #f8fafc;
+}
+
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar-blur {
+  background: rgba(17, 17, 17, 0.72);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https://github.com"],
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https://discord.gg"] {
+  color: var(--agor-teal-light);
+}
+
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar .nextra-search input {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+}
+
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar .nextra-search input::placeholder {
+  color: #9ca3af;
+}
+
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar .nextra-search kbd {
+  background: rgba(17, 17, 17, 0.9);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #cbd5e1;
+}
