@@ -88,6 +88,25 @@ export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
 }
 
 /**
+ * Task states owned by an active executor turn. These block starting another
+ * task in the same session and should be stopped/failed before queue drain can
+ * continue. CREATED and QUEUED are intentionally excluded: CREATED is a
+ * pre-executor row and QUEUED is waiting for a future turn.
+ */
+export const EXECUTING_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  TaskStatus.RUNNING,
+  TaskStatus.STOPPING,
+  TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.AWAITING_INPUT,
+]);
+
+export type TaskExecutionState = Pick<Task, 'status'>;
+
+export function isTaskExecuting(task: TaskExecutionState): boolean {
+  return EXECUTING_TASK_STATUSES.has(task.status);
+}
+
+/**
  * Authoritative context-window snapshot captured at task completion.
  *
  * Source depends on the agentic tool:

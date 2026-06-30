@@ -1,7 +1,14 @@
-import { UI_MOUNT_PATH } from '@agor-live/client';
+import { resolveUiRuntime, routerBasenameForRuntime } from '../config/urlRuntime';
 
-export function getRouterBasename(baseUrl = import.meta.env.BASE_URL): string {
-  return baseUrl === `${UI_MOUNT_PATH}/` ? UI_MOUNT_PATH : '';
+function currentPathname(): string {
+  return typeof window === 'undefined' ? '/' : window.location.pathname;
+}
+
+export function getRouterBasename(
+  baseUrl = import.meta.env.BASE_URL,
+  pathname = currentPathname()
+): string {
+  return routerBasenameForRuntime(resolveUiRuntime({ baseUrl, pathname }));
 }
 
 export function uiRouteHref(path: string, baseUrl = import.meta.env.BASE_URL): string {

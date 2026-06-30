@@ -4,63 +4,90 @@ import { canControlCliSession, canReceiveMcpTokenForSession } from './mcp-token-
 const creatorId = 'user-creator';
 
 describe('session actor authorization', () => {
-  it('allows the creator when they are a member or higher', () => {
-    const params = {
-      callerUserId: creatorId,
-      callerRole: 'member',
-      sessionCreatedBy: creatorId,
-    };
-    expect(canReceiveMcpTokenForSession(params)).toBe(true);
-    expect(canControlCliSession(params)).toBe(true);
-  });
-
-  it('denies the creator if they are not a member', () => {
-    const params = {
-      callerUserId: creatorId,
-      callerRole: 'viewer',
-      sessionCreatedBy: creatorId,
-    };
-    expect(canReceiveMcpTokenForSession(params)).toBe(false);
-    expect(canControlCliSession(params)).toBe(false);
-  });
-
-  it('denies other members even when they can access the branch', () => {
+  it('allows a member caller to receive an MCP token as the acting user', () => {
     const params = {
       callerUserId: 'user-collaborator',
       callerRole: 'member',
-      sessionCreatedBy: creatorId,
     };
-    expect(canReceiveMcpTokenForSession(params)).toBe(false);
-    expect(canControlCliSession(params)).toBe(false);
+    expect(canReceiveMcpTokenForSession(params)).toBe(true);
   });
 
-  it('allows superadmins to receive tokens and control CLI sessions', () => {
+  it('denies MCP tokens to viewers even when they created the session', () => {
+    const params = {
+      callerUserId: creatorId,
+      callerRole: 'viewer',
+    };
+    expect(canReceiveMcpTokenForSession(params)).toBe(false);
+  });
+
+  it('allows superadmins to receive caller-scoped MCP tokens', () => {
     const params = {
       callerUserId: 'user-admin',
       callerRole: 'superadmin',
-      sessionCreatedBy: creatorId,
     };
     expect(canReceiveMcpTokenForSession(params)).toBe(true);
-    expect(canControlCliSession(params)).toBe(true);
   });
 
-  it('allows the internal service identity', () => {
+  it('allows the internal service identity to receive MCP tokens', () => {
     const params = {
       callerUserId: undefined,
       callerRole: 'service',
-      sessionCreatedBy: creatorId,
     };
     expect(canReceiveMcpTokenForSession(params)).toBe(true);
-    expect(canControlCliSession(params)).toBe(true);
   });
 
   it('denies unauthenticated or role-less callers', () => {
     const params = {
       callerUserId: undefined,
       callerRole: undefined,
-      sessionCreatedBy: creatorId,
     };
     expect(canReceiveMcpTokenForSession(params)).toBe(false);
-    expect(canControlCliSession(params)).toBe(false);
+  });
+
+  it('denies MCP tokens when a caller id is present but role is missing', () => {
+    expect(
+      canReceiveMcpTokenForSession({
+        callerUserId: creatorId,
+        callerRole: undefined,
+      })
+    ).toBe(false);
+  });
+
+  it('keeps CLI control limited to the creator, superadmin, or service identity', () => {
+    expect(
+      canControlCliSession({
+        callerUserId: creatorId,
+        callerRole: 'member',
+        sessionCreatedBy: creatorId,
+      })
+    ).toBe(true);
+    expect(
+      canControlCliSession({
+        callerUserId: 'user-collaborator',
+        callerRole: 'member',
+        sessionCreatedBy: creatorId,
+      })
+    ).toBe(false);
+    expect(
+      canControlCliSession({
+        callerUserId: 'user-admin',
+        callerRole: 'superadmin',
+        sessionCreatedBy: creatorId,
+      })
+    ).toBe(true);
+    expect(
+      canControlCliSession({
+        callerUserId: undefined,
+        callerRole: 'service',
+        sessionCreatedBy: creatorId,
+      })
+    ).toBe(true);
+    expect(
+      canControlCliSession({
+        callerUserId: creatorId,
+        callerRole: undefined,
+        sessionCreatedBy: creatorId,
+      })
+    ).toBe(false);
   });
 });

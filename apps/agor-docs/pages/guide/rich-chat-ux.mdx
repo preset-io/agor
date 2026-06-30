@@ -254,13 +254,7 @@ See **[Security](/security)** for the trust boundary on per-user secrets.
 
 ## 📎 File Uploads
 
-**Drop files into the agent's context with one click.** The upload modal lets you choose where the file lands — committable inside the branch, ephemeral in a temp folder, or shared across sessions in `~/.agor/uploads/`. A toggle auto-prompts the agent with a templated message referencing the file path.
-
-<img
-  src="/screenshots/upload-modal.png"
-  alt="Upload modal with three destination options (branch, temp folder, global) and a 'Notify the agent about this file' toggle with a templated message using {filepath}"
-  style={{ maxWidth: '500px' }}
-/>
+**Drop files into the agent's context with one click.** Uploads are stored under `~/.agor/uploads/`, and the agent receives that file path. A checked-by-default toggle auto-prompts the agent with a templated message referencing the path; the agent can copy or move the file into a branch if needed.
 
 Useful for handing screenshots, designs, error logs, or test fixtures to the agent without leaving the chat.
 

@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { shortId, UserApiKeysRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { DaemonServicesConfig, ServiceGroupName, SessionID, UserID } from '@agor/core/types';
@@ -36,6 +36,7 @@ import { registerBranchTools } from './tools/branches.js';
 import { registerCardTypeTools } from './tools/card-types.js';
 import { registerCardTools } from './tools/cards.js';
 import { registerEnvironmentTools } from './tools/environment.js';
+import { registerGatewayChannelTools } from './tools/gateway-channels.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
 import { registerMessageTools } from './tools/messages.js';
@@ -62,7 +63,7 @@ function mcpRequestDebug(...args: unknown[]): void {
  */
 export interface McpContext {
   app: Application;
-  db: Database;
+  db: TenantScopeAwareDatabase;
   userId: UserID;
   /** Current Agor session context, when the caller supplied or authenticated with one. */
   sessionId?: SessionID;
@@ -209,6 +210,7 @@ const DOMAIN_TOOL_REGISTRARS: DomainToolRegistrar[] = [
   { domain: 'users', register: registerUserTools },
   { domain: 'analytics', register: registerAnalyticsTools },
   { domain: 'mcp-servers', register: registerMcpServerTools },
+  { domain: 'gateway', register: registerGatewayChannelTools },
   { domain: 'knowledge', register: registerKnowledgeTools },
   { domain: 'schedules', register: registerScheduleTools },
 ];
@@ -403,7 +405,7 @@ function createMcpServer(
  */
 export function setupMCPRoutes(
   app: Application,
-  db: Database,
+  db: TenantScopeAwareDatabase,
   toolSearchEnabled = true,
   servicesConfig?: DaemonServicesConfig
 ): void {

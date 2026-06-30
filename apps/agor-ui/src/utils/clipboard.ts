@@ -78,7 +78,7 @@ export function useCopyToClipboard(
   resetDelay = 2000
 ): [boolean, (text: string) => Promise<boolean>] {
   const [copied, setCopied] = React.useState(false);
-  const timeoutRef = React.useRef<NodeJS.Timeout>();
+  const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const copy = async (text: string): Promise<boolean> => {
     // Clear any existing timeout

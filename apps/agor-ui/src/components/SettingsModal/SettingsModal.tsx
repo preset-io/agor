@@ -64,7 +64,6 @@ export interface SettingsModalProps {
   boardObjects: BoardEntityObject[];
   repoById: Map<string, Repo>;
   branchById: Map<string, Branch>;
-  sessionById: Map<string, Session>; // O(1) ID lookups - efficient, stable references
   sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
@@ -77,7 +76,7 @@ export interface SettingsModalProps {
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
   onUnarchiveBoard?: (boardId: string) => void;
-  onCreateRepo?: (data: CreateRepoRequest) => void | Promise<void>;
+  onCreateRepo?: (data: CreateRepoRequest) => unknown;
   onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
@@ -461,7 +460,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         return (
           <UsersTable
             userById={userById}
-            mcpServerById={mcpServerById}
+            gatewayChannelById={gatewayChannelById}
             client={client}
             currentUser={currentUser}
             onCreate={onCreateUser}
@@ -557,9 +556,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         branch={selectedBranch}
         repo={selectedRepo}
         sessions={branchSessions}
-        boardById={boardById}
         boardObjects={boardObjects}
-        mcpServerById={mcpServerById}
         client={client}
         currentUser={currentUser}
         onUpdateBranch={onUpdateBranch}

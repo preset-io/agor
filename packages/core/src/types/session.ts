@@ -4,7 +4,7 @@
  * Effort level controls how much reasoning Claude applies.
  * Maps to Claude API's output_config.effort and the Claude Code CLI's --effort flag.
  */
-export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 import type {
   AgenticToolName,
@@ -17,7 +17,7 @@ import type {
   OpenCodePermissionMode,
 } from './agentic-tool';
 import type { ContextFilePath } from './context';
-import type { BoardID, BranchID, SessionID, TaskID } from './id';
+import type { BoardID, BranchID, SessionID, SessionRelationshipID, TaskID, UserID } from './id';
 import type { ScheduleID } from './schedule';
 
 export const SessionStatus = {
@@ -481,6 +481,92 @@ export interface Session {
    * - 'btw_completed': Ephemeral btw fork auto-archived after task completion
    */
   archived_reason?: 'branch_archived' | 'manual' | 'btw_completed';
+
+  /**
+   * Durable non-genealogy relationships involving this session.
+   *
+   * These are separate from genealogy.parent_session_id/forked_from_session_id.
+   * For example, a session in branch A can create a remote session in branch B;
+   * branch B keeps its own genealogy shape, while branch A can still render a
+   * muted/surrogate child card for track-record and navigation purposes.
+   */
+  remote_relationships?: {
+    as_source?: SessionRelationship[];
+    as_target?: SessionRelationship[];
+  };
+
+  /**
+   * UI-only marker for a remote-created session rendered as a surrogate in the
+   * source branch tree. The canonical session still lives in `target_branch_id`;
+   * clicking the surrogate should navigate to/open that real session.
+   */
+  remote_surrogate?: {
+    relationship: SessionRelationship;
+    source_session_id: SessionID;
+    source_branch_id: BranchID;
+    target_branch_id: BranchID;
+  };
+}
+
+/**
+ * Minimal persisted session state needed to decide whether a new task can
+ * start immediately.
+ *
+ * `ready_for_prompt` is intentionally not equivalent to promptability: the UI
+ * also uses it as an attention/acknowledgement flag (for example timed-out
+ * permission requests can set it true). Use this helper instead of checking
+ * either field directly at task-execution boundaries.
+ */
+export type SessionPromptState = Pick<Session, 'status' | 'ready_for_prompt'>;
+
+export type PromptableSessionState =
+  | { status: typeof SessionStatus.IDLE; ready_for_prompt: boolean }
+  | { status: typeof SessionStatus.FAILED; ready_for_prompt: true };
+
+export function sessionCanStartTask(status: Session['status'], readyForPrompt?: boolean): boolean {
+  return (
+    status === SessionStatus.IDLE || (status === SessionStatus.FAILED && readyForPrompt === true)
+  );
+}
+
+export function isSessionPromptable<T extends SessionPromptState>(
+  session: T
+): session is T & PromptableSessionState {
+  return sessionCanStartTask(session.status, session.ready_for_prompt);
+}
+
+export const EXECUTING_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set<SessionStatus>([
+  SessionStatus.RUNNING,
+  SessionStatus.STOPPING,
+  SessionStatus.AWAITING_PERMISSION,
+  SessionStatus.AWAITING_INPUT,
+]);
+
+export type SessionExecutionState = Pick<Session, 'status'>;
+
+export function isSessionExecuting(session: SessionExecutionState): boolean {
+  return EXECUTING_SESSION_STATUSES.has(session.status);
+}
+
+export type SessionRelationshipType = 'remote_create';
+
+/**
+ * Durable links between sessions that are not necessarily canonical
+ * branch-local genealogy. Cross-branch delegation uses this instead of
+ * genealogy.parent_session_id so the local session tree, recursive delete,
+ * and fork/spawn semantics remain branch-local.
+ */
+export interface SessionRelationship {
+  relationship_id: SessionRelationshipID;
+  source_session_id: SessionID;
+  target_session_id: SessionID;
+  relationship_type: SessionRelationshipType;
+  created_by: UserID;
+  created_at: string;
+  updated_at?: string | null;
+  callback_enabled: boolean;
+  callback_session_id?: SessionID | null;
+  data?: Record<string, unknown> | null;
 }
 
 /**
@@ -500,6 +586,12 @@ export interface GatewaySource {
   github_issue_number?: number;
   /** GitHub-specific: only post last message */
   last_message_only?: boolean;
+  /** Slack-specific provenance */
+  slack_team_id?: string;
+  slack_channel_id?: string;
+  slack_channel_name?: string;
+  slack_root_ts?: string;
+  slack_trigger_ts?: string;
 }
 
 /**

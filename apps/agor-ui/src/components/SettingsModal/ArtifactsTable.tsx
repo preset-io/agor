@@ -15,13 +15,16 @@ import {
   Tag,
   Tooltip,
   Typography,
+  theme,
 } from 'antd';
+import type { CSSProperties } from 'react';
 import { useCallback, useMemo, useState } from 'react';
 import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { HighlightMatch } from '../HighlightMatch';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface ArtifactsTableProps {
   artifactById: Map<string, Artifact>;
@@ -41,6 +44,11 @@ const templateColors: Record<string, string> = {
   'vanilla-ts': 'geekblue',
 };
 
+const artifactTextStyle: CSSProperties = {
+  display: 'block',
+  maxWidth: '100%',
+};
+
 export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   artifactById,
   branchById,
@@ -53,6 +61,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   const [editingArtifact, setEditingArtifact] = useState<Artifact | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
+  const { token } = theme.useToken();
 
   // Reuses the `artifactById` prop so we don't read the same data via
   // both props and context. Only goToArtifact is used from this table.
@@ -116,36 +125,35 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
-      render: (name: string, artifact: Artifact) => (
-        <Space orientation="vertical" size={0}>
-          <Typography.Text strong>
-            <HighlightMatch text={name} query={searchTerm} />
-          </Typography.Text>
-          {artifact.description && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              <HighlightMatch text={artifact.description} query={searchTerm} />
+      width: '38%',
+      render: (name: string, artifact: Artifact) => {
+        const displayName = name || shortId(artifact.artifact_id);
+        return (
+          <Space orientation="vertical" size={0} style={{ width: '100%' }}>
+            <Typography.Text strong ellipsis={{ tooltip: displayName }} style={artifactTextStyle}>
+              <HighlightMatch text={displayName} query={searchTerm} />
             </Typography.Text>
-          )}
-        </Space>
-      ),
+            {artifact.description && (
+              <Typography.Text
+                type="secondary"
+                ellipsis={{ tooltip: artifact.description }}
+                style={{ ...artifactTextStyle, fontSize: token.fontSizeSM }}
+              >
+                <HighlightMatch text={artifact.description} query={searchTerm} />
+              </Typography.Text>
+            )}
+            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              Created {new Date(artifact.created_at).toLocaleDateString()}
+            </Typography.Text>
+          </Space>
+        );
+      },
     },
     {
-      title: 'Template',
-      dataIndex: 'template',
-      key: 'template',
-      width: 120,
-      render: (template: string) => (
-        <Tag color={templateColors[template] || 'default'}>
-          <HighlightMatch text={template} query={searchTerm} />
-        </Tag>
-      ),
-    },
-    {
-      title: 'Build',
-      dataIndex: 'build_status',
-      key: 'build_status',
-      width: 110,
-      render: (status: Artifact['build_status']) => {
+      title: 'Status',
+      key: 'status',
+      width: 150,
+      render: (_: unknown, artifact: Artifact) => {
         const map: Record<
           string,
           { status: 'success' | 'error' | 'processing' | 'default'; text: string }
@@ -155,55 +163,57 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
           checking: { status: 'processing', text: 'Checking' },
           unknown: { status: 'default', text: 'Unknown' },
         };
-        const info = map[status] || map.unknown;
-        return <Badge status={info.status} text={info.text} />;
-      },
-    },
-    {
-      title: 'Branch',
-      dataIndex: 'branch_id',
-      key: 'branch_id',
-      width: 160,
-      render: (branchId: string | null) => {
-        if (!branchId) return <Typography.Text type="secondary">—</Typography.Text>;
-        const branch = branchById.get(branchId);
+        const info = map[artifact.build_status] || map.unknown;
         return (
-          <Typography.Text type="secondary">
-            <HighlightMatch text={branch?.name || shortId(branchId)} query={searchTerm} />
-          </Typography.Text>
+          <Space orientation="vertical" size={0}>
+            <Badge status={info.status} text={info.text} />
+            <Tag
+              color={templateColors[artifact.template] || 'default'}
+              style={{ marginInlineEnd: 0 }}
+            >
+              <HighlightMatch text={artifact.template} query={searchTerm} />
+            </Tag>
+          </Space>
         );
       },
     },
     {
-      title: 'Board',
-      dataIndex: 'board_id',
-      key: 'board_id',
-      width: 160,
-      render: (boardId: string) => {
-        const board = boardById.get(boardId);
+      title: 'Location',
+      key: 'location',
+      width: '32%',
+      render: (_: unknown, artifact: Artifact) => {
+        const branch = artifact.branch_id ? branchById.get(artifact.branch_id) : undefined;
+        const branchText = artifact.branch_id ? branch?.name || shortId(artifact.branch_id) : '—';
+        const board = boardById.get(artifact.board_id);
+        const boardText = board
+          ? `${board.icon || ''} ${board.name}`.trim()
+          : shortId(artifact.board_id);
         return (
-          <Typography.Text type="secondary">
-            <HighlightMatch
-              text={board ? `${board.icon || ''} ${board.name}`.trim() : shortId(boardId)}
-              query={searchTerm}
-            />
-          </Typography.Text>
+          <Space orientation="vertical" size={0} style={{ width: '100%' }}>
+            <Typography.Text
+              type="secondary"
+              ellipsis={{ tooltip: `Board: ${boardText}` }}
+              style={artifactTextStyle}
+            >
+              Board: <HighlightMatch text={boardText} query={searchTerm} />
+            </Typography.Text>
+            <Typography.Text
+              type="secondary"
+              ellipsis={{ tooltip: `Branch: ${branchText}` }}
+              style={artifactTextStyle}
+            >
+              Branch: <HighlightMatch text={branchText} query={searchTerm} />
+            </Typography.Text>
+          </Space>
         );
       },
-    },
-    {
-      title: 'Created',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 110,
-      render: (date: string) => new Date(date).toLocaleDateString(),
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 150,
+      width: 124,
       render: (_: unknown, artifact: Artifact) => (
-        <Space size="small">
+        <SettingsActionGroup>
           {artifact.board_id && (
             <Tooltip title="Center map on artifact">
               <Button
@@ -248,7 +258,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
               <Button type="text" size="small" icon={<DeleteOutlined />} danger />
             </Tooltip>
           </Popconfirm>
-        </Space>
+        </SettingsActionGroup>
       ),
     },
   ];
@@ -319,6 +329,8 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
           rowKey="artifact_id"
           pagination={false}
           size="small"
+          tableLayout="fixed"
+          scroll={{ x: 760 }}
         />
       )}
 

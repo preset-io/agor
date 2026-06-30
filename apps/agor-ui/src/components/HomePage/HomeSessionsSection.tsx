@@ -17,7 +17,7 @@ import { BoardPill, BranchPill } from '../Pill';
 import { SessionSearchToolbar } from '../SessionSearchControls';
 import { glassCardStyle } from './homeStyles';
 import { StatusDot } from './StatusDot';
-import type { HomePageProps } from './types';
+import type { HomeSectionProps } from './types';
 
 const { Text } = Typography;
 
@@ -79,7 +79,7 @@ const HomeSessionRow: React.FC<{
 
 export const HomeSessionsSection: React.FC<
   Pick<
-    HomePageProps,
+    HomeSectionProps,
     'sessionById' | 'branchById' | 'boardById' | 'currentUserId' | 'onSessionClick'
   >
 > = ({ sessionById, branchById, boardById, currentUserId, onSessionClick }) => {

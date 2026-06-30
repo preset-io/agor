@@ -29,6 +29,37 @@ vi.mock('../../utils/branch-authorization.js', () => ({
 
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class FakeBranchRepository {},
+  SessionRelationshipRepository: class FakeSessionRelationshipRepository {
+    create = vi.fn(async (data: Record<string, unknown>) => ({
+      relationship_id: 'rel-1',
+      ...data,
+      created_at: new Date(0).toISOString(),
+    }));
+    get = vi.fn(async (relationshipId: string) => ({
+      relationship_id: relationshipId,
+      source_session_id: 'sess-source',
+      target_session_id: 'sess-target',
+      relationship_type: 'remote_create',
+      created_by: 'user-1',
+      created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString(),
+      callback_enabled: false,
+      callback_session_id: null,
+      data: null,
+    }));
+    setCallbackEnabled = vi.fn(async (relationshipId: string, callbackEnabled: boolean) => ({
+      relationship_id: relationshipId,
+      source_session_id: 'sess-source',
+      target_session_id: 'sess-target',
+      relationship_type: 'remote_create',
+      created_by: 'user-1',
+      created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString(),
+      callback_enabled: callbackEnabled,
+      callback_session_id: null,
+      data: null,
+    }));
+  },
   UserApiKeysRepository: class FakeUserApiKeysRepository {},
   shortId: (id: string) => id,
 }));
@@ -67,6 +98,7 @@ async function registerAndCaptureTools(
     app: unknown;
     userId: string;
     sessionId?: string;
+    baseServiceParams?: Record<string, unknown>;
   },
   toolNames: string[]
 ): Promise<Record<string, CapturedTool>> {
@@ -86,7 +118,7 @@ async function registerAndCaptureTools(
     userId: ctx.userId as any,
     sessionId: ctx.sessionId as any,
     authenticatedUser: { user_id: ctx.userId, role: 'member' } as any,
-    baseServiceParams: {},
+    baseServiceParams: (ctx.baseServiceParams ?? {}) as any,
   });
 
   for (const name of toolNames) {
@@ -96,7 +128,12 @@ async function registerAndCaptureTools(
 }
 
 async function registerAndCaptureHandlers(
-  ctx: { app: unknown; userId: string; sessionId?: string },
+  ctx: {
+    app: unknown;
+    userId: string;
+    sessionId?: string;
+    baseServiceParams?: Record<string, unknown>;
+  },
   toolNames: string[]
 ): Promise<Record<string, ToolHandler>> {
   const tools = await registerAndCaptureTools(ctx, toolNames);
@@ -328,6 +365,12 @@ describe('agor_sessions_create', () => {
             ...(data as Record<string, unknown>),
           };
         },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': { create: async () => ({}) },
     });
@@ -356,6 +399,116 @@ describe('agor_sessions_create', () => {
     expect(parsed.session).not.toHaveProperty('mcp_token');
   });
 
+  it('accepts effort: xhigh and threads it through to session.model_config', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return {
+            session_id: 'sess-xhigh',
+            mcp_token: 'secret-token',
+            ...(data as Record<string, unknown>),
+          };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+      modelConfig: { model: 'claude-sonnet-4-6', mode: 'alias', effort: 'xhigh' },
+    });
+
+    expect(sessionCreates).toHaveLength(1);
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.model_config.effort).toBe('xhigh');
+  });
+
+  it("attributes sessions created from another user's session context to the acting MCP user and uses their defaults", async () => {
+    const sessionCreates: unknown[] = [];
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-b', role: 'member' },
+    };
+    const actingUser = {
+      user_id: 'user-b',
+      unix_username: 'bob',
+      default_agentic_config: {
+        'claude-code': {
+          permissionMode: 'acceptEdits',
+          modelConfig: { model: 'claude-sonnet-4-6', mode: 'alias', effort: 'high' },
+        },
+      },
+    };
+    const app = makeFakeApp({
+      users: {
+        get: vi.fn(async (id: string) => {
+          expect(id).toBe('user-b');
+          return actingUser;
+        }),
+      },
+      branches: {
+        get: vi.fn(async (_id: string, params: unknown) => {
+          expect(params).toBe(baseServiceParams);
+          return { ...baseBranch, branch_id: 'wt-1', mcp_server_ids: [] };
+        }),
+      },
+      sessions: {
+        create: vi.fn(async (data: unknown, params: unknown) => {
+          expect(params).toBe(baseServiceParams);
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        }),
+        get: vi.fn(async (id: string, params: unknown) => {
+          expect(params).toBe(baseServiceParams);
+          return {
+            session_id: id,
+            branch_id: 'wt-1',
+            created_by: 'user-a',
+            unix_username: 'alice',
+            model_config: { model: 'claude-parent' },
+            permission_config: { mode: 'ask' },
+            genealogy: { children: [] },
+          };
+        }),
+        patch: vi.fn(async () => ({})),
+      },
+      '/sessions/:id/mcp-servers': { create: vi.fn(async () => ({})) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-b', sessionId: 'sess-owned-by-a', baseServiceParams },
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({ branchId: 'wt-1', agenticTool: 'claude-code' });
+
+    expect(sessionCreates).toHaveLength(1);
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.created_by).toBe('user-b');
+    expect(created.unix_username).toBe('bob');
+    expect(created.permission_config.mode).toBe('acceptEdits');
+    expect(created.model_config.model).toBe('claude-sonnet-4-6');
+    expect(created.model_config.effort).toBe('high');
+    expect(created.model_config.model).not.toBe('claude-parent');
+  });
+
   it('falls back to user default modelConfig when none is explicitly provided', async () => {
     const sessionCreates: unknown[] = [];
     const app = makeFakeApp({
@@ -366,6 +519,12 @@ describe('agor_sessions_create', () => {
           sessionCreates.push(data);
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': { create: async () => ({}) },
     });
@@ -401,6 +560,12 @@ describe('agor_sessions_create', () => {
           session_id: 'sess-new',
           ...(data as Record<string, unknown>),
         }),
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': {
         create: async (data: unknown, params: unknown) => {
@@ -437,6 +602,12 @@ describe('agor_sessions_create', () => {
       branches: { get: async () => baseBranch },
       sessions: {
         create: async () => ({ session_id: 'sess-new' }),
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': {
         create: async () => {
@@ -472,6 +643,12 @@ describe('agor_sessions_create', () => {
       branches: { get: async () => branchWithMcps },
       sessions: {
         create: async () => ({ session_id: 'sess-new' }),
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': {
         create: async () => {
@@ -493,6 +670,303 @@ describe('agor_sessions_create', () => {
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.mcpAttachFailures).toBeUndefined();
+  });
+
+  it('auto-links to calling session when ctx.sessionId is set', async () => {
+    const patchCalls: Array<{ id: unknown; data: unknown }> = [];
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: ['existing-child'] },
+        }),
+        patch: async (id: unknown, data: unknown) => {
+          patchCalls.push({ id, data });
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+    });
+
+    // New session genealogy should reference the calling session as parent
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.genealogy.parent_session_id).toBe('sess-caller');
+
+    // Parent's children list should be updated to include the new session
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0].id).toBe('sess-caller');
+    const patchData = patchCalls[0].data as Record<string, any>;
+    expect(patchData.genealogy.children).toContain('sess-new');
+    expect(patchData.genealogy.children).toContain('existing-child');
+
+    // Note in response should mention the parent link
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.note).toContain('sess-caller');
+  });
+
+  it('does not set parent_session_id when called without session context', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        patch: async (id: unknown, data: unknown) => {
+          patchCalls.push({ id, data });
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1' }, // no sessionId
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.genealogy.parent_session_id).toBeUndefined();
+    expect(created.callback_config).toBeUndefined();
+    expect(patchCalls).toHaveLength(0);
+  });
+
+  it('respects explicit parentSessionId when provided', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: Array<{ id: unknown; data: unknown }> = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async (id: unknown, data: unknown) => {
+          patchCalls.push({ id, data });
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+      parentSessionId: 'sess-explicit-parent',
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    // Explicit value overrides ctx.sessionId
+    expect(created.genealogy.parent_session_id).toBe('sess-explicit-parent');
+    expect(patchCalls[0].id).toBe('sess-explicit-parent');
+  });
+
+  it('creates root session (no parent) when parentSessionId: null is passed', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+      parentSessionId: null,
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.genealogy.parent_session_id).toBeUndefined();
+    // No patch to update a parent's children list
+    expect(patchCalls).toHaveLength(0);
+  });
+
+  it('does not auto-link to the calling session when creating in a different branch', async () => {
+    const sessionCreates: unknown[] = [];
+    const patchCalls: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-caller',
+          genealogy: { children: ['existing-child'] },
+        }),
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    const result = await agor_sessions_create({
+      branchId: 'wt-target',
+      agenticTool: 'claude-code',
+    });
+
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.genealogy.parent_session_id).toBeUndefined();
+    expect(created.callback_config).toMatchObject({
+      enabled: false,
+      callback_session_id: 'sess-caller',
+      callback_created_by: 'user-1',
+    });
+    expect(patchCalls).toHaveLength(0);
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.note).toContain('target branch differs');
+    expect(parsed.remoteRelationship).toMatchObject({
+      source_session_id: 'sess-caller',
+      target_session_id: 'sess-new',
+      relationship_type: 'remote_create',
+      callback_enabled: false,
+      callback_session_id: 'sess-caller',
+    });
+  });
+
+  it('enables remote relationship callbacks using the source session as fallback target', async () => {
+    const patchCalls: unknown[] = [];
+    const getCalls: string[] = [];
+    const app = makeFakeApp({
+      sessions: {
+        get: async (id: string) => {
+          getCalls.push(id);
+          return {
+            session_id: id,
+            branch_id: id === 'sess-source' ? 'wt-source' : 'wt-target',
+            callback_config: {},
+          };
+        },
+        patch: async (...args: unknown[]) => {
+          patchCalls.push(args);
+          return {};
+        },
+      },
+    });
+
+    const { agor_session_relationships_set_callback } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_session_relationships_set_callback']
+    );
+
+    await agor_session_relationships_set_callback({
+      relationshipId: 'rel-1',
+      callbackEnabled: true,
+    });
+
+    expect(getCalls).toEqual(['sess-source', 'sess-target']);
+    expect(patchCalls).toHaveLength(1);
+    expect(patchCalls[0]).toMatchObject([
+      'sess-target',
+      {
+        callback_config: {
+          enabled: true,
+          callback_session_id: 'sess-source',
+        },
+      },
+      {
+        _skipRelationshipCallbackSync: true,
+      },
+    ]);
+  });
+
+  it('rejects explicit parentSessionId from a different branch', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => ({ ...baseBranch, branch_id: 'wt-target' }) },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-other',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await expect(
+      agor_sessions_create({
+        branchId: 'wt-target',
+        agenticTool: 'claude-code',
+        parentSessionId: 'sess-explicit-parent',
+      })
+    ).rejects.toThrow(/target branch/i);
+    expect(sessionCreates).toHaveLength(0);
   });
 });
 
@@ -769,10 +1243,16 @@ describe('modelConfig schema (string shorthand coercion)', () => {
           sessionCreates.push(data);
           return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
         },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
       },
       '/sessions/:id/mcp-servers': { create: async () => ({}) },
     });
-    vi.doMock('@agor/core/git', () => ({
+    vi.doMock('@agor/core/git/exec', () => ({
       getGitState: async () => 'sha',
       getCurrentBranch: async () => 'main',
     }));
@@ -848,6 +1328,13 @@ describe('agor_models_list', () => {
       displayName: expect.any(String),
       description: expect.any(String),
     });
+    expect(parsed.codex.note).toContain('omit modelConfig');
+
+    const codexIds = parsed.codex.models.map((m: { id: string }) => m.id);
+    expect(codexIds).toContain('gpt-5.5');
+    expect(codexIds).toContain('gpt-5.4-mini');
+    expect(codexIds).not.toContain('gpt-5.4');
+    expect(codexIds).not.toContain('gpt-5-codex');
   });
 });
 

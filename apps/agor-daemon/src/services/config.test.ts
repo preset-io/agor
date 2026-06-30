@@ -10,6 +10,7 @@ vi.mock('@agor/core/config', () => configMocks);
 
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { TaskID, UserID } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { ConfigService } from './config.js';
 
 describe('ConfigService.resolveApiKey', () => {
@@ -117,6 +118,132 @@ describe('ConfigService.resolveApiKey', () => {
         authentication: {
           payload: { type: 'executor-session', purpose: 'executor-task', task_id: 'task-1' },
         },
+      } as never
+    );
+
+    expect(result).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
+    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
+      userId: 'creator-1',
+      db: {},
+      tool: 'codex',
+    });
+  });
+
+  it('allows executor runtime tokens passed as explicit session-token proof', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      sessionTokenService: {
+        validateToken: vi.fn(async () => ({ task_id: 'task-1' })),
+      },
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'creator-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    const result = await service.resolveApiKey(
+      {
+        taskId: 'task-1' as TaskID,
+        keyName: 'OPENAI_API_KEY',
+        tool: 'codex',
+        executorSessionToken: 'executor-jwt',
+      },
+      {
+        provider: 'socketio',
+        user: { user_id: 'creator-1' },
+      } as never
+    );
+
+    expect(result).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
+    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
+      userId: 'creator-1',
+      db: {},
+      tool: 'codex',
+    });
+  });
+
+  it('recovers executor runtime scope from the verified access token when payload is absent', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'creator-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const accessToken = jwt.sign(
+      {
+        type: 'executor-session',
+        purpose: 'executor-task',
+        task_id: 'task-1',
+      },
+      'test-secret'
+    );
+
+    const result = await service.resolveApiKey(
+      { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+      {
+        provider: 'socketio',
+        authentication: { accessToken },
+        user: { user_id: 'creator-1' },
+      } as never
+    );
+
+    expect(result).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
+    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {
+      userId: 'creator-1',
+      db: {},
+      tool: 'codex',
+    });
+  });
+
+  it('allows executor runtime tokens when Socket.io preserved scope fields without payload', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'creator-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    const result = await service.resolveApiKey(
+      { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+      {
+        provider: 'socketio',
+        authentication: { strategy: 'jwt' },
+        user: { user_id: 'creator-1' },
+        task_id: 'task-1',
+        session_id: 'session-1',
+        branch_id: 'branch-1',
       } as never
     );
 

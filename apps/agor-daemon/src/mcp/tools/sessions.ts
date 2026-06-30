@@ -1,4 +1,9 @@
-import { BranchRepository, type BranchWithZoneAndSessions, shortId } from '@agor/core/db';
+import {
+  BranchRepository,
+  type BranchWithZoneAndSessions,
+  SessionRelationshipRepository,
+  shortId,
+} from '@agor/core/db';
 import {
   AVAILABLE_CLAUDE_MODEL_ALIASES,
   CODEX_MODEL_METADATA,
@@ -28,6 +33,7 @@ import type { SessionParams } from '../../services/sessions.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
 import { inspectBranchViaExecutor } from '../../utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
+import { serviceTokenScopeForParams } from '../../utils/spawn-executor.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -85,7 +91,7 @@ const modelConfigObjectSchema = z.object({
     "Model identifier (e.g. 'claude-opus-4-6', 'claude-sonnet-4-6')"
   ),
   effort: z
-    .enum(['low', 'medium', 'high', 'max'])
+    .enum(['low', 'medium', 'high', 'xhigh', 'max'])
     .optional()
     .describe('Reasoning effort level (default: high)'),
   advisorModel: mcpOptionalString(
@@ -808,12 +814,95 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
+  // Tool 5b: agor_session_relationships_list
+  server.registerTool(
+    'agor_session_relationships_list',
+    {
+      description:
+        'List durable non-genealogy relationships for a session, including cross-branch remote-created child/parent links. Defaults to the current session.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        sessionId: mcpOptionalId(
+          'sessionId',
+          'Session',
+          'Session ID to inspect (defaults to current session)'
+        ),
+      }),
+    },
+    async (args) => {
+      const sessionId = args.sessionId
+        ? await resolveSessionId(ctx, args.sessionId)
+        : ctx.sessionId;
+      if (!sessionId) return sessionContextRequiredResult();
+
+      // Validate normal session access/RBAC before returning links.
+      await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
+
+      const relationships = await new SessionRelationshipRepository(ctx.db).findForSession(
+        sessionId
+      );
+      return textResult({ relationships });
+    }
+  );
+
+  // Tool 5c: agor_session_relationships_set_callback
+  server.registerTool(
+    'agor_session_relationships_set_callback',
+    {
+      description:
+        'Enable or disable callback/report-back delivery for a durable session relationship without deleting the relationship itself.',
+      inputSchema: z.object({
+        relationshipId: mcpRequiredString(
+          'relationshipId',
+          'Session relationship ID returned by agor_session_relationships_list'
+        ),
+        callbackEnabled: z.boolean().describe('Whether the remote child should report back.'),
+      }),
+    },
+    async (args) => {
+      const repo = new SessionRelationshipRepository(ctx.db);
+      const relationshipId =
+        args.relationshipId as import('@agor/core/types').SessionRelationshipID;
+      const existingRelationship = await repo.get(relationshipId);
+
+      // Authorize visibility/access before mutating the durable relationship.
+      // Reading both sides through the sessions service keeps this tool aligned
+      // with normal session RBAC instead of treating relationship IDs as ambient
+      // authority.
+      await ctx.app
+        .service('sessions')
+        .get(existingRelationship.source_session_id, ctx.baseServiceParams);
+      const targetSession = await ctx.app
+        .service('sessions')
+        .get(existingRelationship.target_session_id, ctx.baseServiceParams);
+
+      const relationship = await repo.setCallbackEnabled(relationshipId, args.callbackEnabled);
+      const callbackSessionId = relationship.callback_session_id ?? relationship.source_session_id;
+      await ctx.app.service('sessions').patch(
+        relationship.target_session_id,
+        {
+          callback_config: {
+            ...(targetSession.callback_config ?? {}),
+            enabled: args.callbackEnabled,
+            callback_session_id: callbackSessionId,
+          },
+        },
+        {
+          ...ctx.baseServiceParams,
+          _skipRelationshipCallbackSync: true,
+        } as typeof ctx.baseServiceParams
+      );
+
+      return textResult({ relationship });
+    }
+  );
+
   // Tool 6: agor_sessions_create
   server.registerTool(
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing branch. Use for starting fresh work on a new task in the same codebase (e.g., new feature branch, separate investigation). Unlike spawn, this creates an independent session with no parent-child relationship. MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing branch. When called from an MCP session context in the same target branch (the default for branch-local orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Cross-branch sessions are not genealogy-linked automatically; use callbacks for remote completion routing. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
@@ -860,6 +949,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .describe(
             'Callback firing mode: "once" (default) fires on first completion then auto-disables, "persistent" fires on every completion'
           ),
+        parentSessionId: z
+          .string()
+          .min(1, 'parentSessionId cannot be empty when provided.')
+          .nullish()
+          .describe(
+            'Parent session ID to link this session to in the branch-local genealogy tree. Must be in the target branch. When omitted and called from a session MCP context in the same branch, automatically defaults to the calling session. Pass null to explicitly create a root session with no parent; use callbackSessionId for cross-branch routing.'
+          ),
         mcpServerIds: z
           .array(mcpRequiredId('mcpServerIds[]', 'MCP server'))
           .optional()
@@ -882,6 +978,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const { currentSha, currentRef } = await inspectBranchViaExecutor(ctx.app, branch.branch_id, {
         asUser: await resolveExecutorReadAsUser(ctx.db, user),
         logPrefix: `[mcp.sessions.create ${branch.name}]`,
+        serviceTokenScope: serviceTokenScopeForParams(ctx.baseServiceParams),
       });
 
       // Resolve permission_config / model_config / inherited mcp_server_ids
@@ -948,6 +1045,61 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         callbackConfig.callback_mode = args.callbackMode ?? 'once';
       }
 
+      // Determine the parent session to link to in the genealogy.
+      //
+      // `parent_session_id` is the canonical branch-local session tree used by
+      // fork/spawn UI and recursive delete semantics. A session created in a
+      // different target branch is remote provenance/callback state, not a
+      // tree child of the caller. Keep the implicit convenience branch-local:
+      // - explicit string: resolve (supports short IDs), require same branch, and use
+      // - explicit null: opt out — create a root session with no parent
+      // - undefined (omitted): auto-link to the calling session only when the
+      //   calling session lives in the same branch as the new session
+      let resolvedParentSessionId: string | undefined;
+      let parentSessionForPatch: Session | undefined;
+      let skippedAutoParentDueToBranchMismatch = false;
+      let remoteRelationshipSourceSessionId: string | undefined;
+      let remoteRelationshipSourceBranchId: string | undefined;
+
+      if (args.parentSessionId !== undefined) {
+        if (args.parentSessionId !== null) {
+          resolvedParentSessionId = await resolveSessionId(ctx, args.parentSessionId);
+          parentSessionForPatch = (await ctx.app
+            .service('sessions')
+            .get(resolvedParentSessionId, ctx.baseServiceParams)) as Session;
+
+          if (parentSessionForPatch.branch_id !== branch.branch_id) {
+            throw new Error(
+              `parentSessionId must reference a session in the target branch (${shortId(branch.branch_id)}). ` +
+                'For cross-branch completion routing, use enableCallback/callbackSessionId instead of genealogy.'
+            );
+          }
+        }
+      } else if (ctx.sessionId) {
+        const callingSession = (await ctx.app
+          .service('sessions')
+          .get(ctx.sessionId, ctx.baseServiceParams)) as Session;
+
+        if (callingSession.branch_id === branch.branch_id) {
+          resolvedParentSessionId = callingSession.session_id;
+          parentSessionForPatch = callingSession;
+        } else {
+          skippedAutoParentDueToBranchMismatch = true;
+          remoteRelationshipSourceSessionId = callingSession.session_id;
+          remoteRelationshipSourceBranchId = callingSession.branch_id;
+        }
+      }
+
+      if (remoteRelationshipSourceSessionId && effectiveCallbackSessionId) {
+        // For remote-created sessions, keep the callback endpoint durable even
+        // when delivery is muted. `enabled` / relationship.callback_enabled are
+        // the switches; callback_session_id is needed for generic session
+        // settings/update paths to re-enable callbacks later.
+        callbackConfig.enabled ??= Boolean(wantsCallback);
+        callbackConfig.callback_session_id ??= effectiveCallbackSessionId;
+        callbackConfig.callback_created_by ??= ctx.userId;
+      }
+
       const sessionData: Record<string, unknown> = {
         branch_id: branch.branch_id,
         agentic_tool: agenticTool,
@@ -965,11 +1117,55 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           base_sha: currentSha,
           current_sha: currentSha,
         },
-        genealogy: { children: [] },
+        genealogy: {
+          ...(resolvedParentSessionId && { parent_session_id: resolvedParentSessionId }),
+          children: [],
+        },
         tasks: [],
       };
 
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);
+
+      const remoteRelationship = remoteRelationshipSourceSessionId
+        ? await new SessionRelationshipRepository(ctx.db).create({
+            source_session_id: remoteRelationshipSourceSessionId as Session['session_id'],
+            target_session_id: session.session_id,
+            relationship_type: 'remote_create',
+            created_by: ctx.userId,
+            callback_enabled: Boolean(wantsCallback),
+            // Keep the durable relationship target even when callbacks are
+            // muted. callback_enabled/callback_config.enabled are the delivery
+            // switches; callback_session_id is the stable endpoint to re-enable.
+            callback_session_id: effectiveCallbackSessionId
+              ? (effectiveCallbackSessionId as Session['session_id'])
+              : null,
+            data: {
+              source_branch_id: remoteRelationshipSourceBranchId,
+              target_branch_id: branch.branch_id,
+            },
+          })
+        : null;
+
+      if (remoteRelationship && remoteRelationshipSourceSessionId) {
+        const sourceSession = await ctx.app
+          .service('sessions')
+          .get(remoteRelationshipSourceSessionId, ctx.baseServiceParams);
+        ctx.app.service('sessions').emit?.('patched', sourceSession, ctx.baseServiceParams);
+      }
+
+      // Update the parent session's children list to include the new session.
+      if (resolvedParentSessionId && parentSessionForPatch) {
+        await ctx.app.service('sessions').patch(
+          resolvedParentSessionId,
+          {
+            genealogy: {
+              ...parentSessionForPatch.genealogy,
+              children: [...(parentSessionForPatch.genealogy?.children ?? []), session.session_id],
+            },
+          },
+          ctx.baseServiceParams
+        );
+      }
 
       // Attach MCP servers (inherited from branch or user defaults, or
       // explicitly requested via args.mcpServerIds). Explicit failures are
@@ -1018,6 +1214,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ? ` Callback will be sent to session ${shortId(callbackConfig.callback_session_id as string)} on completion.`
         : '';
 
+      const parentNote = resolvedParentSessionId
+        ? ` Linked to parent session ${shortId(resolvedParentSessionId)}.`
+        : skippedAutoParentDueToBranchMismatch
+          ? ' Not genealogy-linked because the target branch differs from the calling session branch.'
+          : '';
+
       const mcpFailureNote =
         mcpAttachFailures.length > 0
           ? ` Warning: ${mcpAttachFailures.length} requested MCP server(s) failed to attach — see mcpAttachFailures.`
@@ -1027,8 +1229,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         session: redactSessionForMcp(session),
         taskId: initialTask?.task_id,
         note: args.initialPrompt
-          ? `Session created and initial prompt execution started.${callbackNote}${mcpFailureNote}`
-          : `Session created successfully.${callbackNote}${mcpFailureNote}`,
+          ? `Session created and initial prompt execution started.${parentNote}${callbackNote}${mcpFailureNote}`
+          : `Session created successfully.${parentNote}${callbackNote}${mcpFailureNote}`,
+        ...(remoteRelationship && { remoteRelationship }),
         ...(mcpAttachFailures.length > 0 && { mcpAttachFailures }),
       });
     }
@@ -1362,7 +1565,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_stop',
     {
       description:
-        'Stop a running session. Kills the executor process and sets the session to idle. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, awaiting_permission, stopping).',
+        'Stop a running session. Kills the executor process and sets the session to idle. Use this for emergency stops, timeout-based cancellation, or human-in-the-loop gates. Only works on sessions in active states (running, stopping, awaiting_permission, awaiting_input).',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId('sessionId', 'Session', 'Session ID to stop (UUIDv7 or short ID)'),
@@ -1479,6 +1682,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codex: {
           default: DEFAULT_CODEX_MODEL,
           models: codexModels,
+          note: 'Codex defaults to gpt-5.5; omit modelConfig unless a specific model is required. Use gpt-5.4-mini for lighter subagents. Legacy Codex aliases are intentionally omitted from this selectable list.',
         },
         copilot: {
           default: DEFAULT_COPILOT_MODEL,

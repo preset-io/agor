@@ -36,4 +36,44 @@ describe('getMcpServersForSession', () => {
       { server: sessionServer, source: 'session-assigned' },
     ]);
   });
+
+  it('returns deterministic effective ordering', async () => {
+    const zSession = makeServer('session-z', 'session', 'zeta');
+    const bGlobal = makeServer('global-b', 'global', 'beta');
+    const aSession = makeServer('session-a', 'session', 'alpha');
+    const aGlobal = makeServer('global-a', 'global', 'alpha');
+    const listEffectiveServers = vi.fn().mockResolvedValue([zSession, bGlobal, aSession, aGlobal]);
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: { listEffectiveServers } as never,
+    });
+
+    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual([
+      'global-a',
+      'global-b',
+      'session-a',
+      'session-z',
+    ]);
+  });
+
+  it('uses server IDs as a deterministic tie-breaker when names collide', async () => {
+    const sessionA = makeServer('session-a', 'session', 'shared');
+    const globalB = makeServer('global-b', 'global', 'shared');
+    const sessionB = makeServer('session-b', 'session', 'shared');
+    const globalA = makeServer('global-a', 'global', 'shared');
+    const listEffectiveServers = vi.fn().mockResolvedValue([sessionB, globalB, sessionA, globalA]);
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: { listEffectiveServers } as never,
+    });
+
+    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual([
+      'global-a',
+      'global-b',
+      'session-a',
+      'session-b',
+    ]);
+  });
 });

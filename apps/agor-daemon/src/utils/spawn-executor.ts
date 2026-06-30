@@ -26,6 +26,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgorExecutionSettings } from '@agor/core/config';
+import type { AuthenticatedParams } from '@agor/core/types';
 import {
   attachEnvFileCleanup,
   buildSpawnArgs,
@@ -172,6 +173,14 @@ export function generateTaskId(): string {
 }
 
 export function findExecutorPath(): string {
+  const configuredPath = process.env.AGOR_EXECUTOR_PATH;
+  if (configuredPath) {
+    if (!existsSync(configuredPath)) {
+      throw new Error(`Configured AGOR_EXECUTOR_PATH does not exist: ${configuredPath}`);
+    }
+    return configuredPath;
+  }
+
   const dirname =
     typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
@@ -350,6 +359,13 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     return;
   }
 
+  let reportedExit = false;
+  const reportExit = (code: number | null): void => {
+    if (reportedExit) return;
+    reportedExit = true;
+    options.onExit?.(code);
+  };
+
   const executorProcess = spawn(cmd, args, {
     cwd,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
@@ -367,6 +383,11 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
+    // child_process may emit `error` without a following `exit` when the
+    // executable itself cannot be spawned (for example, missing sudo in a dev
+    // image). Surface that through the normal onExit safety net so callers do
+    // not leave persistent rows stuck in in-progress states.
+    reportExit(127);
   });
 
   executorProcess.on('exit', (code) => {
@@ -375,7 +396,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     } else {
       console.error(`${logPrefix} Executor exited with code ${code}`);
     }
-    options.onExit?.(code);
+    reportExit(code);
   });
 
   executorProcess.stdin?.write(JSON.stringify(payload));
@@ -399,6 +420,13 @@ function spawnExecutorWithTemplate(
   console.log(`${logPrefix} Command: ${payload.command}`);
   console.log(`${logPrefix} Template command (first 200 chars): ${command.slice(0, 200)}...`);
 
+  let reportedExit = false;
+  const reportExit = (code: number | null): void => {
+    if (reportedExit) return;
+    reportedExit = true;
+    options.onExit?.(code);
+  };
+
   const executorProcess = spawn('sh', ['-c', command], {
     env: { ...process.env, LOG_LEVEL: logLevel },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -416,6 +444,7 @@ function spawnExecutorWithTemplate(
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
+    reportExit(127);
   });
 
   executorProcess.on('exit', (code) => {
@@ -428,7 +457,7 @@ function spawnExecutorWithTemplate(
         `${logPrefix} Executor exited with code ${code} (task: ${templateVariables.task_id})`
       );
     }
-    options.onExit?.(code);
+    reportExit(code);
   });
 
   executorProcess.stdin?.write(JSON.stringify(payload));
@@ -807,6 +836,19 @@ export function createServiceToken(
 }
 
 /**
+ * Build extra JWT claims for executor/service tokens from authenticated service
+ * params. In Cloud required-from-auth mode, executor RPCs must carry the same
+ * tenant claim as the request that spawned them; otherwise the daemon handles
+ * them as the static/default tenant.
+ */
+export function serviceTokenScopeForParams(
+  params?: Partial<AuthenticatedParams>
+): Record<string, unknown> {
+  const tenantId = params?.tenant?.tenant_id ?? params?.tenant_id ?? params?.user?.tenant_id;
+  return tenantId ? { tenant_id: tenantId } : {};
+}
+
+/**
  * Generate a session token from the Feathers app
  *
  * Convenience function that extracts the JWT secret from the app
@@ -815,14 +857,33 @@ export function createServiceToken(
  * @param app - FeathersJS application with sessionTokenService
  * @returns JWT access token
  */
-export function generateSessionToken(app: {
-  settings: { authentication?: { secret?: string } };
-}): string {
+export function generateSessionToken(
+  app: {
+    settings: { authentication?: { secret?: string } };
+  },
+  scope: Record<string, unknown> = {}
+): string {
   const jwtSecret = app.settings.authentication?.secret;
   if (!jwtSecret) {
     throw new Error('JWT secret not configured in app settings');
   }
-  return createServiceToken(jwtSecret);
+  return createServiceToken(jwtSecret, undefined, scope);
+}
+
+/**
+ * Generate a tenant-scoped executor service token from Feathers params.
+ *
+ * Prefer this over manually composing `generateSessionToken(app,
+ * serviceTokenScopeForParams(params))` so required-from-auth deployments do not
+ * accidentally drop tenant context on new executor call paths.
+ */
+export function generateScopedServiceToken(
+  app: {
+    settings: { authentication?: { secret?: string } };
+  },
+  params?: Partial<AuthenticatedParams>
+): string {
+  return generateSessionToken(app, serviceTokenScopeForParams(params));
 }
 
 // ============================================================================

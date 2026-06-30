@@ -5,7 +5,7 @@ import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatRelativeTime } from '../../utils/time';
 import { glassCardStyle } from './homeStyles';
-import type { HomePageProps } from './types';
+import type { HomeSectionProps } from './types';
 
 const { Text } = Typography;
 
@@ -153,7 +153,7 @@ const BoardHomeCard: React.FC<{
 
 export const HomeBoardsSection: React.FC<
   Pick<
-    HomePageProps,
+    HomeSectionProps,
     | 'boardById'
     | 'recentBoardIds'
     | 'branchById'

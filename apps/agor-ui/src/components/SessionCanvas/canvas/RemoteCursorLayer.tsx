@@ -4,12 +4,25 @@ import { useMemo } from 'react';
 import { useViewport } from 'reactflow';
 import { useBoardPresenceRoom } from '../../../hooks/useBoardPresenceRoom';
 import { usePresence } from '../../../hooks/usePresence';
+import { UserIdentityAvatar } from '../../UserIdentityAvatar';
+
+export interface StaticRemoteCursor {
+  userId: string;
+  x: number;
+  y: number;
+  user: User;
+  color?: string;
+}
 
 interface RemoteCursorLayerProps {
   client: AgorClient | null;
   boardId: BoardID | null;
   users: User[];
   enabled?: boolean;
+  /** Demo/screenshot-only override: render fixed cursors without socket presence. */
+  staticCursors?: StaticRemoteCursor[];
+  /** Demo/screenshot-only scale boost for static cursors. Live cursors default to 1. */
+  staticCursorScale?: number;
 }
 
 export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
@@ -17,6 +30,8 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
   boardId,
   users,
   enabled = true,
+  staticCursors,
+  staticCursorScale = 1,
 }) => {
   const { token } = theme.useToken();
   const viewport = useViewport();
@@ -24,17 +39,23 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
   useBoardPresenceRoom({
     client,
     boardId,
-    enabled,
+    enabled: enabled && !staticCursors,
   });
 
   const { remoteCursors } = usePresence({
     client,
     boardId,
     users,
-    enabled,
+    enabled: enabled && !staticCursors,
   });
 
-  const cursors = useMemo(() => Array.from(remoteCursors.entries()), [remoteCursors]);
+  const cursors = useMemo(
+    () =>
+      staticCursors
+        ? staticCursors.map((cursor) => [cursor.userId, cursor] as const)
+        : Array.from(remoteCursors.entries()),
+    [remoteCursors, staticCursors]
+  );
   if (cursors.length === 0) return null;
 
   return (
@@ -46,7 +67,9 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
         zIndex: 2000,
       }}
     >
-      {cursors.map(([userId, { x, y, user }]) => {
+      {cursors.map(([userId, cursor]) => {
+        const { x, y, user } = cursor;
+        const color = 'color' in cursor ? cursor.color : undefined;
         const screenX = x * viewport.zoom + viewport.x;
         const screenY = y * viewport.zoom + viewport.y;
 
@@ -55,7 +78,8 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
             key={userId}
             style={{
               position: 'absolute',
-              transform: `translate3d(${screenX}px, ${screenY}px, 0)`,
+              transform: `translate3d(${screenX}px, ${screenY}px, 0) scale(${staticCursorScale})`,
+              transformOrigin: 'top left',
               willChange: 'transform',
             }}
           >
@@ -74,7 +98,7 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
                 fill="none"
                 xmlns="http://www.w3.org/2000/svg"
                 style={{
-                  color: token.colorPrimary,
+                  color: color ?? token.colorPrimary,
                   filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3))',
                 }}
               >
@@ -100,12 +124,12 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
                   borderRadius: '4px',
                   fontSize: '12px',
                   whiteSpace: 'nowrap',
-                  background: token.colorBgElevated,
-                  color: token.colorText,
+                  background: color ? color : token.colorBgElevated,
+                  color: color ? '#ffffff' : token.colorText,
                   boxShadow: token.boxShadowSecondary,
                 }}
               >
-                <span style={{ fontSize: '14px' }}>{user.emoji || '👤'}</span>
+                <UserIdentityAvatar user={user} size={18} fontSize="14px" />
                 <span style={{ fontWeight: 500 }}>{user.name || user.email}</span>
               </div>
             </div>

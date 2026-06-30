@@ -15,6 +15,8 @@ export default class DaemonStatus extends Command {
   static examples = ['<%= config.bin %> <%= command.id %>'];
 
   async run(): Promise<void> {
+    await this.parse(DaemonStatus);
+
     // Check if Agor is initialized
     const initialized = await isAgorInitialized();
 

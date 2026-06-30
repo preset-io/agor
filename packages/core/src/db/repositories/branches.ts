@@ -15,7 +15,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
-import { and, desc, eq, getTableColumns, inArray, like, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, getTableColumns, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getBranchUrl } from '../../utils/url';
@@ -23,6 +23,7 @@ import type { Database } from '../client';
 import {
   deleteFrom,
   insert,
+  isPostgresDatabase,
   jsonExtract,
   lockRowForUpdate,
   select,
@@ -41,8 +42,10 @@ import {
   branchOwners,
   groupMemberships,
   groups,
+  schedules,
 } from '../schema';
 import {
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
@@ -63,6 +66,7 @@ const FS_ACCESS_RANK: Record<BranchFsAccessLevel, number> = {
 };
 const VIEW_OR_BETTER_BRANCH_PERMISSIONS = ['view', 'session', 'prompt', 'all'] as const;
 const BRANCH_PERMISSION_SOURCES = ['board', 'override'] as const;
+const FS_ACCESS_BRANCH_PERMISSIONS = ['read', 'write'] as const;
 
 /**
  * Session activity summary for a branch
@@ -94,6 +98,11 @@ export interface BranchWithZoneAndSessions extends BranchWithZone {
   sessions?: BranchSessionActivity[];
 }
 
+export interface ActiveEnvironmentBranchRef {
+  branch_id: BranchID;
+  tenant_id?: string;
+}
+
 /**
  * Branch repository implementation
  */
@@ -112,42 +121,45 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   private rowToBranch(row: BranchRow, baseUrl?: string): Branch {
     const branchId = row.branch_id as BranchID;
     const url = baseUrl && row.board_id ? getBranchUrl(branchId, baseUrl) : null;
-    return {
-      branch_id: branchId,
-      repo_id: row.repo_id as UUID,
-      created_at: new Date(row.created_at).toISOString(),
-      updated_at: row.updated_at
-        ? new Date(row.updated_at).toISOString()
-        : new Date(row.created_at).toISOString(),
-      created_by: row.created_by as UUID,
-      name: row.name,
-      ref: row.ref,
-      ref_type: row.ref_type ?? 'branch',
-      branch_unique_id: row.branch_unique_id,
-      start_command: row.start_command ?? undefined, // Static environment fields
-      stop_command: row.stop_command ?? undefined,
-      nuke_command: row.nuke_command ?? undefined,
-      health_check_url: row.health_check_url ?? undefined,
-      app_url: row.app_url ?? undefined,
-      logs_command: row.logs_command ?? undefined,
-      environment_variant: row.environment_variant ?? undefined,
-      board_id: (row.board_id as BoardID | null) ?? undefined, // Top-level column
-      needs_attention: Boolean(row.needs_attention), // Convert SQLite integer (0/1) to boolean
-      archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
-      archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
-      archived_by: (row.archived_by as UUID | null) ?? undefined,
-      filesystem_status: row.filesystem_status ?? undefined,
-      // RBAC fields
-      permission_source: row.permission_source ?? 'override',
-      others_can: row.others_can ?? undefined,
-      others_fs_access: row.others_fs_access ?? undefined,
-      unix_group: row.unix_group ?? undefined,
-      // Branch storage mode
-      storage_mode: row.storage_mode ?? 'worktree',
-      clone_depth: row.clone_depth ?? undefined,
-      ...row.data,
-      url,
-    };
+    return attachHiddenTenant(
+      {
+        branch_id: branchId,
+        repo_id: row.repo_id as UUID,
+        created_at: new Date(row.created_at).toISOString(),
+        updated_at: row.updated_at
+          ? new Date(row.updated_at).toISOString()
+          : new Date(row.created_at).toISOString(),
+        created_by: row.created_by as UUID,
+        name: row.name,
+        ref: row.ref,
+        ref_type: row.ref_type ?? 'branch',
+        branch_unique_id: row.branch_unique_id,
+        start_command: row.start_command ?? undefined, // Static environment fields
+        stop_command: row.stop_command ?? undefined,
+        nuke_command: row.nuke_command ?? undefined,
+        health_check_url: row.health_check_url ?? undefined,
+        app_url: row.app_url ?? undefined,
+        logs_command: row.logs_command ?? undefined,
+        environment_variant: row.environment_variant ?? undefined,
+        board_id: (row.board_id as BoardID | null) ?? undefined, // Top-level column
+        needs_attention: Boolean(row.needs_attention), // Convert SQLite integer (0/1) to boolean
+        archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
+        archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+        archived_by: (row.archived_by as UUID | null) ?? undefined,
+        filesystem_status: row.filesystem_status ?? undefined,
+        // RBAC fields
+        permission_source: row.permission_source ?? 'override',
+        others_can: row.others_can ?? undefined,
+        others_fs_access: row.others_fs_access ?? undefined,
+        unix_group: row.unix_group ?? undefined,
+        // Branch storage mode
+        storage_mode: row.storage_mode ?? 'worktree',
+        clone_depth: row.clone_depth ?? undefined,
+        ...row.data,
+        url,
+      },
+      row
+    );
   }
 
   /**
@@ -335,11 +347,36 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * Callers that explicitly want to exclude archived branches should pass
    * `{ includeArchived: false }`.
    *
-   * @param filter - Optional filters (repo_id, includeArchived)
+   * The `board_id`, `archived`, and `branchIds` filters let the list read path
+   * (`BranchesService.find`) push its high-selectivity predicates into SQL so it
+   * no longer materializes the whole table before filtering in memory.
+   *
+   * @param filter - Optional filters
    * @param filter.repo_id - Filter by repository ID
    * @param filter.includeArchived - Include archived branches (default: true)
+   * @param filter.board_id - Filter to a single board
+   * @param filter.archived - Filter to an exact archived state (takes precedence
+   *   over `includeArchived`)
+   * @param filter.branchIds - Restrict to a set of branch IDs (empty set yields
+   *   no rows, matching an `{ $in: [] }` filter)
+   * @param filter.visibleToUserId - Restrict to branches visible to this user
+   *   under branch RBAC, pushed down as a SQL predicate instead of a preloaded
+   *   `branch_id IN (...)` list.
    */
-  async findAll(filter?: { repo_id?: UUID; includeArchived?: boolean }): Promise<Branch[]> {
+  async findAll(filter?: {
+    repo_id?: UUID;
+    includeArchived?: boolean;
+    board_id?: BoardID;
+    archived?: boolean;
+    branchIds?: BranchID[];
+    visibleToUserId?: UUID;
+  }): Promise<Branch[]> {
+    // An explicit empty id set can never match a row; short-circuit so we skip
+    // the read entirely and avoid emitting an empty `IN ()` predicate.
+    if (filter?.branchIds !== undefined && filter.branchIds.length === 0) {
+      return [];
+    }
+
     const includeArchived = filter?.includeArchived ?? true;
 
     // Build where conditions
@@ -347,16 +384,129 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (filter?.repo_id) {
       conditions.push(eq(branches.repo_id, filter.repo_id));
     }
-    if (!includeArchived) {
+    if (filter?.board_id) {
+      conditions.push(eq(branches.board_id, filter.board_id));
+    }
+    if (filter?.archived !== undefined) {
+      conditions.push(eq(branches.archived, filter.archived));
+    } else if (!includeArchived) {
       conditions.push(eq(branches.archived, false));
     }
+    if (filter?.branchIds !== undefined) {
+      conditions.push(inArray(branches.branch_id, filter.branchIds));
+    }
+    if (filter?.visibleToUserId) {
+      conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+    }
 
-    const query = select(this.db).from(branches);
+    // The join shape differs only when RBAC SQL scoping is active. Keep the
+    // execution below uniform; Drizzle's cross-dialect builder types are more
+    // precise than this conditional can express.
+    // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+    const baseQuery: any = filter?.visibleToUserId
+      ? select(this.db, getTableColumns(branches))
+          .from(branches)
+          .leftJoin(
+            branchOwners,
+            and(
+              eq(branchOwners.branch_id, branches.branch_id),
+              eq(branchOwners.user_id, filter.visibleToUserId)
+            )
+          )
+      : select(this.db).from(branches);
     const rows =
-      conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
+      conditions.length > 0
+        ? await baseQuery.where(and(...conditions)).all()
+        : await baseQuery.all();
 
     const baseUrl = await getBaseUrl();
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
+  }
+
+  /**
+   * Health-monitor discovery query. Returns only routing metadata so the
+   * background monitor can enter the correct tenant DB scope before loading
+   * branch contents or patching health state.
+   */
+  async findActiveEnvironmentRefs(): Promise<ActiveEnvironmentBranchRef[]> {
+    const tenantColumn = (branches as unknown as { tenant_id?: unknown }).tenant_id;
+    const columns =
+      isPostgresDatabase(this.db) && tenantColumn
+        ? { branch_id: branches.branch_id, tenant_id: tenantColumn }
+        : { branch_id: branches.branch_id };
+
+    const statusExpr = sql`${jsonExtract(this.db, branches.data, 'environment_instance.status')}`;
+    const rows = await select(this.db, columns)
+      .from(branches)
+      .where(or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+      .all();
+
+    return (rows as Array<{ branch_id: string; tenant_id?: unknown }>).map((row) => ({
+      branch_id: row.branch_id as BranchID,
+      ...(typeof row.tenant_id === 'string' && row.tenant_id.length > 0
+        ? { tenant_id: row.tenant_id }
+        : {}),
+    }));
+  }
+
+  /**
+   * Find active assistant branches without paginating the whole branch list first.
+   *
+   * A branch is discoverable as an assistant when it has the canonical assistant
+   * marker in custom_context (new or legacy key), or as a read-time backfill for
+   * older hand-bootstrapped assistants, when it has at least one enabled
+   * first-class schedule.
+   */
+  async findAssistantBranches(filter?: {
+    repo_id?: UUID;
+    archived?: boolean;
+    userId?: UUID;
+    limit?: number;
+  }): Promise<Branch[]> {
+    const assistantKindConditions = [
+      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`, 'assistant'),
+      eq(
+        sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`,
+        'persisted-agent'
+      ),
+      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.agent.kind')}`, 'assistant'),
+      eq(
+        sql`${jsonExtract(this.db, branches.data, 'custom_context.agent.kind')}`,
+        'persisted-agent'
+      ),
+    ];
+
+    const hasEnabledSchedule = exists(
+      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
+      (this.db as any)
+        .select({ _: sql`1` })
+        .from(schedules)
+        .where(and(eq(schedules.branch_id, branches.branch_id), eq(schedules.enabled, true)))
+    );
+
+    const conditions = [or(...assistantKindConditions, hasEnabledSchedule) ?? sql`false`];
+    if (filter?.repo_id) conditions.push(eq(branches.repo_id, filter.repo_id));
+    if (filter?.archived !== undefined) conditions.push(eq(branches.archived, filter.archived));
+    if (filter?.userId) conditions.push(visibleBranchAccessCondition(this.db, filter.userId));
+
+    const baseQuery = select(this.db, getTableColumns(branches)).from(branches);
+    const query = filter?.userId
+      ? baseQuery.leftJoin(
+          branchOwners,
+          and(
+            eq(branchOwners.branch_id, branches.branch_id),
+            eq(branchOwners.user_id, filter.userId)
+          )
+        )
+      : baseQuery;
+
+    const rows = await query
+      .where(and(...conditions))
+      .limit(filter?.limit ?? 200)
+      .all();
+
+    const baseUrl = await getBaseUrl();
+    return (rows as BranchRow[]).map((row) => this.rowToBranch(row, baseUrl));
   }
 
   /**
@@ -751,6 +901,118 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       userIds.add(row.user_id as UUID);
     }
     return Array.from(userIds);
+  }
+
+  /**
+   * Find users whose explicit branch or aligned-board grants should materialize
+   * into filesystem access for the branch.
+   *
+   * This intentionally excludes ambient "others" access because there is no
+   * bounded user set to expand. Board owners apply whenever the branch is
+   * explicitly aligned to board permissions (`permission_source = 'board'`);
+   * board group grants additionally require a shared board. Override branches
+   * must not inherit board grants.
+   */
+  async findExplicitFsAccessUserIds(branchId: BranchID): Promise<UUID[]> {
+    const branchRow = await select(this.db, {
+      board_id: branches.board_id,
+      permission_source: branches.permission_source,
+    })
+      .from(branches)
+      .where(eq(branches.branch_id, branchId))
+      .one();
+
+    const ownerRows = await select(this.db, { user_id: branchOwners.user_id })
+      .from(branchOwners)
+      .where(eq(branchOwners.branch_id, branchId))
+      .all();
+
+    const groupRows = await select(this.db, { user_id: groupMemberships.user_id })
+      .from(branchGroupGrants)
+      .innerJoin(groupMemberships, eq(groupMemberships.group_id, branchGroupGrants.group_id))
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .where(
+        and(
+          eq(branchGroupGrants.branch_id, branchId),
+          inArray(
+            sql`coalesce(${branchGroupGrants.fs_access}, 'read')`,
+            FS_ACCESS_BRANCH_PERMISSIONS
+          )
+        )
+      )
+      .all();
+
+    const isBoardAligned = branchRow?.permission_source === 'board' && branchRow.board_id;
+    const boardOwnerRows = isBoardAligned
+      ? await select(this.db, { user_id: boardOwners.user_id })
+          .from(boardOwners)
+          .where(eq(boardOwners.board_id, branchRow.board_id))
+          .all()
+      : [];
+
+    const boardGroupRows = isBoardAligned
+      ? await select(this.db, { user_id: groupMemberships.user_id })
+          .from(boardGroupGrants)
+          .innerJoin(groupMemberships, eq(groupMemberships.group_id, boardGroupGrants.group_id))
+          .innerJoin(
+            groups,
+            and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
+          )
+          .innerJoin(
+            boards,
+            and(
+              eq(boards.board_id, boardGroupGrants.board_id),
+              eq(
+                sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared')`,
+                'shared'
+              )
+            )
+          )
+          .where(
+            and(
+              eq(boardGroupGrants.board_id, branchRow.board_id),
+              inArray(
+                sql`coalesce(${boardGroupGrants.fs_access}, 'read')`,
+                FS_ACCESS_BRANCH_PERMISSIONS
+              )
+            )
+          )
+          .all()
+      : [];
+
+    const userIds = new Set<UUID>();
+    for (const row of ownerRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    for (const row of groupRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    for (const row of boardOwnerRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    for (const row of boardGroupRows as Array<{ user_id: string }>) {
+      userIds.add(row.user_id as UUID);
+    }
+    return Array.from(userIds);
+  }
+
+  async findBoardAlignedBranches(boardId: BoardID): Promise<Branch[]> {
+    const rows = await select(this.db)
+      .from(branches)
+      .where(
+        and(
+          eq(branches.board_id, boardId),
+          eq(branches.permission_source, 'board'),
+          eq(branches.archived, false)
+        )
+      )
+      .all();
+
+    const baseUrl = await getBaseUrl();
+    return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
   }
 
   /**

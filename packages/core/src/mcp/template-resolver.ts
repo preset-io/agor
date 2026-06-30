@@ -106,12 +106,6 @@ export function buildMCPTemplateContextFromEnv(
     }
   }
 
-  if (allowedKeys.size > 0) {
-    console.log(
-      `   🔐 MCP template context: ${allowedKeys.size} user env var(s) available for templates`
-    );
-  }
-
   return {
     user: {
       env: userEnv,

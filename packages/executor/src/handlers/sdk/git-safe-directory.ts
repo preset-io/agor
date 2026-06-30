@@ -1,5 +1,5 @@
-import { buildGitConfigParameters } from '@agor/core/git';
 import type { SessionID } from '@agor/core/types';
+import { buildGitConfigParameters } from '../../git/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 
 type BranchForSafeDirectory = {

@@ -112,29 +112,20 @@ export function extractCodexTokenUsage(raw: unknown): TokenUsage | undefined {
 }
 
 /**
- * Last-resort context-window estimate from a `turn.completed.usage` payload.
+ * Extract a context-window estimate from an explicit context payload.
  *
- * PREFER `extractCodexContextSnapshotFromEvent` (`event_msg/token_count.last_token_usage`)
- * when available — that comes from Codex CLI itself and is authoritative.
+ * IMPORTANT: `turn.completed.usage.input_tokens` is NOT used here. For Codex
+ * that field is per model request/turn accounting, includes cached prefixes,
+ * may include tool/system/context replay, and can be much larger than the
+ * model context window on observed first turns. It is useful for token/cost
+ * accounting, but it is not a reliable current context-window occupancy.
  *
- * This helper is only useful when no `token_count` events were seen (legacy
- * Codex CLI versions, or tasks where the stream ended before any event_msg
- * arrived). It treats per-turn `input_tokens` as a rough proxy for current
- * occupancy, which is approximately correct for a turn that contains a single
- * model API call but UNDER-counts for turns with internal tool loops (each
- * subsequent internal API call sees more context than the previous one).
- *
- * Semantics from OpenAI usage schema:
- * - `input_tokens` already includes cached input tokens.
- * - `cached_input_tokens` is a subset detail, not an additive field.
- * - `output_tokens` are completion tokens and should not count toward
- *   context-window occupancy.
- *
- * Fallback chain:
- * 1) input_tokens / prompt_tokens (preferred)
- * 2) total_tokens - output_tokens (when both are available)
- * 3) total_tokens (legacy fallback)
- * 4) undefined (no usable data)
+ * The only Codex context-window source Agor currently trusts is
+ * `event_msg` / `token_count` via `extractCodexContextSnapshotFromEvent()`.
+ * This helper is deliberately narrow and only accepts future/legacy payloads
+ * that name context tokens explicitly. When no explicit context field exists,
+ * return undefined so the UI can hide context percentage instead of showing
+ * a bogus 100% bar.
  */
 export function extractCodexContextWindowUsage(raw: unknown): number | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -147,26 +138,14 @@ export function extractCodexContextWindowUsage(raw: unknown): number | undefined
       ? (payload.usage as Record<string, unknown>)
       : payload;
 
-  const inputTokens = sanitizeTokenCount(
-    normalizeNumber(usage.input_tokens ?? usage.inputTokens ?? usage.prompt_tokens)
+  return sanitizeTokenCount(
+    normalizeNumber(
+      usage.context_tokens ??
+        usage.contextTokens ??
+        usage.current_context_tokens ??
+        usage.currentContextTokens
+    )
   );
-
-  if (inputTokens !== undefined) {
-    return inputTokens;
-  }
-
-  const fallbackTotalTokens = sanitizeTokenCount(
-    normalizeNumber(usage.total_tokens ?? usage.totalTokens)
-  );
-  const outputTokens = sanitizeTokenCount(
-    normalizeNumber(usage.output_tokens ?? usage.outputTokens ?? usage.completion_tokens)
-  );
-
-  if (fallbackTotalTokens !== undefined && outputTokens !== undefined) {
-    return Math.max(0, fallbackTotalTokens - outputTokens);
-  }
-
-  return fallbackTotalTokens;
 }
 
 /**

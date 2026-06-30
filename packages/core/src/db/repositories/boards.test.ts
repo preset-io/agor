@@ -5,10 +5,13 @@
  * board object management (zones/text), and JSON field handling.
  */
 
-import type { Board, BoardObject, UUID } from '@agor/core/types';
+import type { Board, BoardID, BoardObject, UUID } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
+import { select, update } from '../database-wrapper';
+import { boards as boardsTable } from '../schema';
 import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardRepository } from './boards';
@@ -95,6 +98,11 @@ async function createBranchForBoard(
           }
         : undefined),
   });
+}
+
+async function getStoredBoardIcon(db: Database, boardId: UUID): Promise<string | undefined> {
+  const row = await select(db).from(boardsTable).where(eq(boardsTable.board_id, boardId)).one();
+  return (row?.data as { icon?: string } | undefined)?.icon;
 }
 
 // ============================================================================
@@ -220,6 +228,38 @@ describe('BoardRepository.create', () => {
       sprint: 42,
       deadline: '2025-03-15',
     });
+  });
+
+  dbTest('should normalize exact emoji shortcodes before storing board icons', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const created = await repo.create(createBoardData({ icon: '  :compass:  ' }));
+
+    expect(created.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, created.board_id)).resolves.toBe('🧭');
+  });
+
+  dbTest('should preserve unicode emoji board icons', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const created = await repo.create(createBoardData({ icon: '🧭' }));
+
+    expect(created.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, created.board_id)).resolves.toBe('🧭');
+  });
+
+  dbTest('should trim but preserve unknown board icon text and shortcodes', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const unknownShortcode = await repo.create(createBoardData({ icon: '  :not_real:  ' }));
+    const textIcon = await repo.create(
+      createBoardData({ name: 'Text Icon Board', icon: '  Team Icon  ' })
+    );
+
+    expect(unknownShortcode.icon).toBe(':not_real:');
+    await expect(getStoredBoardIcon(db, unknownShortcode.board_id)).resolves.toBe(':not_real:');
+    expect(textIcon.icon).toBe('Team Icon');
+    await expect(getStoredBoardIcon(db, textIcon.board_id)).resolves.toBe('Team Icon');
   });
 
   dbTest('should preserve timestamps if provided', async ({ db }) => {
@@ -371,6 +411,24 @@ describe('BoardRepository.findById', () => {
     expect(found?.objects).toEqual(data.objects);
     expect(found?.custom_context).toEqual(data.custom_context);
   });
+
+  dbTest('should normalize legacy shortcode board icons when reading rows', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const created = await repo.create(createBoardData({ icon: '🧭' }));
+    const row = await select(db)
+      .from(boardsTable)
+      .where(eq(boardsTable.board_id, created.board_id))
+      .one();
+    await update(db, boardsTable)
+      .set({ data: { ...(row?.data as Record<string, unknown>), icon: ':compass:' } })
+      .where(eq(boardsTable.board_id, created.board_id))
+      .run();
+
+    const found = await repo.findById(created.board_id);
+
+    expect(found?.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, created.board_id)).resolves.toBe(':compass:');
+  });
 });
 
 // ============================================================================
@@ -483,6 +541,65 @@ describe('BoardRepository.findAll', () => {
     expect(found.created_at).toBeDefined();
     expect(found.last_updated).toBeDefined();
   });
+
+  dbTest('should filter by exact archived state', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const active = await repo.create(createBoardData({ name: 'Active', slug: 'active' }));
+    const archived = await repo.create(createBoardData({ name: 'Archived', slug: 'archived' }));
+    await repo.update(archived.board_id, { archived: true });
+
+    const activeOnly = await repo.findAll({ archived: false });
+    expect(activeOnly.map((b) => b.board_id)).toEqual([active.board_id]);
+
+    const archivedOnly = await repo.findAll({ archived: true });
+    expect(archivedOnly.map((b) => b.board_id)).toEqual([archived.board_id]);
+  });
+
+  dbTest('should restrict to an explicit boardIds set', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const b1 = await repo.create(createBoardData({ name: 'B1', slug: 'b1' }));
+    const b2 = await repo.create(createBoardData({ name: 'B2', slug: 'b2' }));
+    await repo.create(createBoardData({ name: 'B3', slug: 'b3' }));
+
+    const scoped = await repo.findAll({
+      boardIds: [b1.board_id as BoardID, b2.board_id as BoardID],
+    });
+    expect(scoped.map((b) => b.name).sort()).toEqual(['B1', 'B2']);
+  });
+
+  dbTest('should return no rows for an empty boardIds set', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    await repo.create(createBoardData({ name: 'B1', slug: 'b1' }));
+
+    expect(await repo.findAll({ boardIds: [] })).toEqual([]);
+  });
+
+  dbTest('should push board visibility directly into findAll SQL', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const viewerId = generateId() as UUID;
+
+    const ownedPrivate = await repo.create(
+      createBoardData({
+        name: 'Owned private',
+        slug: 'owned-private',
+        access_mode: 'private',
+        created_by: viewerId,
+      })
+    );
+    await repo.create(
+      createBoardData({
+        name: 'Other private',
+        slug: 'other-private',
+        access_mode: 'private',
+        created_by: generateId() as UUID,
+      })
+    );
+
+    const visible = await repo.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((b) => b.board_id)).toEqual([ownedPrivate.board_id]);
+  });
 });
 
 // ============================================================================
@@ -534,6 +651,16 @@ describe('BoardRepository.update', () => {
     expect(updated.description).toBe('New description');
     expect(updated.color).toBe('#ff4d4f');
     expect(updated.icon).toBe('⚡');
+  });
+
+  dbTest('should normalize exact emoji shortcodes when updating board icons', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData({ icon: '📋' }));
+
+    const updated = await repo.update(board.board_id, { icon: ':compass:' });
+
+    expect(updated.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, board.board_id)).resolves.toBe('🧭');
   });
 
   dbTest('should update JSON fields (objects and custom_context)', async ({ db }) => {
@@ -1174,6 +1301,42 @@ describe('BoardRepository.deleteZone', () => {
     const result = await repo.deleteZone(board.board_id, 'zone-1', true);
 
     expect(result.affectedSessions).toEqual([]);
+  });
+});
+
+// ============================================================================
+// Import/export
+// ============================================================================
+
+describe('BoardRepository import/export', () => {
+  dbTest('should normalize exact emoji shortcodes when importing board blobs', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const imported = await repo.fromBlob(
+      {
+        name: 'Imported Blob Board',
+        slug: 'imported-blob-board',
+        icon: ':compass:',
+      },
+      'test-user'
+    );
+
+    expect(imported.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, imported.board_id)).resolves.toBe('🧭');
+  });
+
+  dbTest('should normalize exact emoji shortcodes when importing board YAML', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const imported = await repo.fromYaml(
+      ['name: Imported YAML Board', 'slug: imported-yaml-board', 'icon: ":compass:"', ''].join(
+        '\n'
+      ),
+      'test-user'
+    );
+
+    expect(imported.icon).toBe('🧭');
+    await expect(getStoredBoardIcon(db, imported.board_id)).resolves.toBe('🧭');
   });
 });
 

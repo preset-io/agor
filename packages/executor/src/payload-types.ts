@@ -708,6 +708,29 @@ export const UnixSyncBranchPayloadSchema = BasePayloadSchema.extend({
 export type UnixSyncBranchPayload = z.infer<typeof UnixSyncBranchPayloadSchema>;
 
 /**
+ * Unix sync-board payload - Sync Unix state for every branch aligned with a board.
+ *
+ * The executor resolves board-aligned branches through the daemon, then reuses
+ * unix.sync-branch semantics for each branch in the same executor process.
+ */
+export const UnixSyncBoardPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('unix.sync-board'),
+
+  /** JWT for Feathers authentication */
+  sessionToken: z.string(),
+
+  params: z.object({
+    /** Board ID whose aligned branches should be synced */
+    boardId: z.string().uuid(),
+
+    /** Daemon Unix user (added to all groups for daemon access) */
+    daemonUser: z.string().optional(),
+  }),
+});
+
+export type UnixSyncBoardPayload = z.infer<typeof UnixSyncBoardPayloadSchema>;
+
+/**
  * Unix sync-repo payload - Sync all Unix state for a repo
  *
  * This handles:
@@ -895,6 +918,7 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   GitRepoRealignOriginPayloadSchema,
   GitRepoDeletePayloadSchema,
   UnixSyncBranchPayloadSchema,
+  UnixSyncBoardPayloadSchema,
   UnixSyncRepoPayloadSchema,
   UnixSyncUserPayloadSchema,
   ZellijAttachPayloadSchema,
@@ -959,6 +983,7 @@ export function getSupportedCommands(): string[] {
     'git.repo.realign-origin',
     'git.repo.delete',
     'unix.sync-branch',
+    'unix.sync-board',
     'unix.sync-repo',
     'unix.sync-user',
     'zellij.attach',
@@ -1012,6 +1037,13 @@ export function isUnixSyncBranchPayload(
   payload: ExecutorPayload
 ): payload is UnixSyncBranchPayload {
   return payload.command === 'unix.sync-branch';
+}
+
+/**
+ * Type guard for UnixSyncBoardPayload
+ */
+export function isUnixSyncBoardPayload(payload: ExecutorPayload): payload is UnixSyncBoardPayload {
+  return payload.command === 'unix.sync-board';
 }
 
 /**

@@ -42,7 +42,7 @@ interface MessageContentProps {
 const MessageContent: React.FC<MessageContentProps> = ({ children, textContent }) => {
   const { token } = theme.useToken();
   const [copyState, setCopyState] = React.useState<'idle' | 'copied' | 'failed'>('idle');
-  const timeoutRef = React.useRef<ReturnType<typeof setTimeout>>();
+  const timeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
     return () => {
@@ -121,7 +121,7 @@ function extractTextContent(content: React.ReactNode): string {
   if (typeof content === 'number') {
     return String(content);
   }
-  if (React.isValidElement(content)) {
+  if (React.isValidElement<{ children?: React.ReactNode }>(content)) {
     // Try to extract text from React elements
     if (content.props.children) {
       return extractTextContent(content.props.children);

@@ -1,0 +1,35 @@
+.marketing-product-page {
+  min-height: 100vh;
+  overflow: hidden;
+  background: #07111d;
+}
+
+.marketing-product-page .ant-layout-header {
+  height: 64px;
+  box-shadow: 0 18px 70px rgba(0, 0, 0, 0.28);
+  z-index: 20;
+}
+
+.marketing-product-canvas {
+  position: relative;
+  height: calc(100vh - 64px);
+  overflow: hidden;
+}
+
+.marketing-product-page .react-flow__controls,
+.marketing-product-page .react-flow__minimap {
+  opacity: 0.92;
+}
+
+.marketing-product-page .react-flow__node-branchNode,
+.marketing-product-page .react-flow__node-cardNode,
+.marketing-product-page .react-flow__node-markdown,
+.marketing-product-page .react-flow__node-comment {
+  filter: drop-shadow(0 22px 45px rgba(0, 0, 0, 0.28));
+}
+
+/* Marketing capture: remove secondary canvas chrome that competes with the artifact. */
+.marketing-product-page .react-flow__minimap,
+.marketing-product-page .react-flow__attribution {
+  display: none;
+}

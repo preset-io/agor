@@ -276,7 +276,7 @@ const CommentThread: React.FC<{
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDelete?: (commentId: string) => void;
   isHighlighted?: boolean;
-  scrollRef?: React.RefObject<HTMLDivElement>;
+  scrollRef?: React.RefObject<HTMLDivElement | null>;
   client: AgorClient | null;
 }> = ({
   comment,
@@ -597,7 +597,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   const currentUserEmail = currentUser?.email;
 
   // Create refs for scroll-to-view
-  const commentRefs = React.useRef<Record<string, React.RefObject<HTMLDivElement>>>({});
+  const commentRefs = React.useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
 
   // Separate thread roots from replies
   const threadRoots = useMemo(() => comments.filter((c) => isThreadRoot(c)), [comments]);

@@ -5,7 +5,6 @@ import type {
   EnvVarScope,
   Group,
   GroupMembership,
-  MCPServer,
   UpdateUserInput,
   User,
 } from '@agor-live/client';
@@ -39,7 +38,9 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import { selectMcpServerById } from '../../store/selectors';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import {
@@ -67,6 +68,8 @@ const AGENTIC_TOOL_TABS = [
   'cursor',
 ] as const satisfies readonly AgenticToolName[];
 
+type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1];
+
 const isAgenticToolTab = (value: string): value is AgenticToolName =>
   AGENTIC_TOOL_TABS.includes(value as AgenticToolName);
 
@@ -74,7 +77,6 @@ export interface UserSettingsModalProps {
   open: boolean;
   onClose: () => void;
   user: User | null;
-  mcpServerById: Map<string, MCPServer>;
   client: AgorClient | null;
   currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
@@ -85,14 +87,17 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   open,
   onClose,
   user,
-  mcpServerById,
   client,
   currentUser,
   onUpdate,
   onRestartOnboarding,
 }) => {
+  // Entity maps are read from the store rather than drilled through props so
+  // the App shell doesn't have to forward them into every modal.
+  const mcpServerById = useAgorStore(selectMcpServerById);
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState<string>('general');
+  const initializedUserIdRef = useRef<string | null>(null);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Separate forms for each agentic tool tab
@@ -155,11 +160,28 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     copilot: false,
     cursor: false,
   });
+  const [dirtyAgenticConfigTools, setDirtyAgenticConfigTools] = useState<Set<AgenticToolName>>(
+    () => new Set()
+  );
+  const [agenticConfigDraftByTool, setAgenticConfigDraftByTool] = useState<
+    Partial<Record<AgenticToolName, AgenticConfigFormValues>>
+  >({});
+
+  const markAgenticConfigDirty = useCallback((tool: AgenticToolName) => {
+    setDirtyAgenticConfigTools((prev) => {
+      if (prev.has(tool)) return prev;
+      const next = new Set(prev);
+      next.add(tool);
+      return next;
+    });
+  }, []);
 
   // Initialize forms when user changes or modal opens
   const initializeForms = useCallback(
     (userData: User) => {
       setActiveTab('general');
+      setDirtyAgenticConfigTools(new Set());
+      setAgenticConfigDraftByTool({});
 
       form.setFieldsValue({
         email: userData.email,
@@ -169,6 +191,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         unix_username: userData.unix_username,
         groupIds: [],
         eventStreamEnabled: userData.preferences?.eventStream?.enabled ?? true,
+        useSlackAvatar: userData.preferences?.use_slack_avatar !== false,
         must_change_password: userData.must_change_password ?? false,
       });
     },
@@ -176,7 +199,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   );
 
   const loadUserGroups = useCallback(async () => {
-    if (!client || !user || !isAdmin) {
+    const userId = user?.user_id;
+    if (!client || !userId || !isAdmin) {
       setAvailableGroups([]);
       setUserGroupIds([]);
       setGroupsLoaded(false);
@@ -189,7 +213,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     try {
       const [groups, memberships] = await Promise.all([
         client.service('groups').findAll({ query: { archived: false } }),
-        client.service('group-memberships').findAll({ query: { user_id: user.user_id } }),
+        client.service('group-memberships').findAll({ query: { user_id: userId } }),
       ]);
       const nextGroupIds = (memberships as GroupMembership[]).map(
         (membership) => membership.group_id
@@ -203,14 +227,21 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     } finally {
       setLoadingGroups(false);
     }
-  }, [client, form, isAdmin, user]);
+  }, [client, form, isAdmin, user?.user_id]);
 
   // Initialize when modal opens with user data
   useEffect(() => {
-    if (open && user) {
-      initializeForms(user);
-      void loadUserGroups();
+    if (!open) {
+      initializedUserIdRef.current = null;
+      return;
     }
+
+    const userId = user?.user_id;
+    if (!user || !userId || initializedUserIdRef.current === userId) return;
+
+    initializedUserIdRef.current = userId;
+    initializeForms(user);
+    void loadUserGroups();
   }, [open, user, initializeForms, loadUserGroups]);
 
   // Hydrate tab-specific forms only after that tab has rendered its
@@ -221,7 +252,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     if (isAgenticToolTab(activeTab)) {
       agenticFormByTool[activeTab].setFieldsValue(
-        getFormValuesFromConfig(activeTab, user.default_agentic_config?.[activeTab])
+        agenticConfigDraftByTool[activeTab] ??
+          getFormValuesFromConfig(activeTab, user.default_agentic_config?.[activeTab])
       );
       return;
     }
@@ -236,7 +268,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
       });
     }
-  }, [activeTab, audioForm, agenticFormByTool, open, user]);
+  }, [activeTab, agenticConfigDraftByTool, audioForm, agenticFormByTool, open, user]);
 
   // Rehydrate per-tool credential presence and env-var metadata from the
   // server every time the modal opens, so flags reflect the latest patch.
@@ -275,6 +307,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     setAvailableGroups([]);
     setUserGroupIds([]);
     setGroupsLoaded(false);
+    setDirtyAgenticConfigTools(new Set());
+    setAgenticConfigDraftByTool({});
     setActiveTab('general');
     onClose();
   };
@@ -285,43 +319,92 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     setUserGroupIds(nextGroupIds);
   };
 
-  const handleUpdate = () => {
+  const getAgenticConfigToolsToSave = (activeTool?: AgenticToolName): AgenticToolName[] => [
+    ...new Set([
+      ...dirtyAgenticConfigTools,
+      ...(activeTool ? [activeTool] : []),
+    ] satisfies AgenticToolName[]),
+  ];
+
+  const saveAgenticConfigs = async (tools: AgenticToolName[]) => {
+    if (!user || tools.length === 0) return;
+
+    const nextConfig: NonNullable<UpdateUserInput['default_agentic_config']> = {
+      ...(user.default_agentic_config ?? {}),
+    };
+
+    for (const tool of tools) {
+      const values: AgenticConfigFormValues =
+        agenticConfigDraftByTool[tool] ??
+        (agenticFormByTool[tool].getFieldsValue() as AgenticConfigFormValues);
+      nextConfig[tool] = buildConfigFromFormValues(tool, values);
+    }
+
+    await onUpdate?.(user.user_id, {
+      default_agentic_config: nextConfig,
+    });
+
+    setDirtyAgenticConfigTools((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set(prev);
+      for (const tool of tools) {
+        next.delete(tool);
+      }
+      return next;
+    });
+    setAgenticConfigDraftByTool((prev) => {
+      const next = { ...prev };
+      for (const tool of tools) {
+        delete next[tool];
+      }
+      return next;
+    });
+  };
+
+  const saveDirtyAgenticConfigs = async () => {
+    await saveAgenticConfigs(getAgenticConfigToolsToSave());
+  };
+
+  const handleUpdate = async () => {
     if (!user) return;
 
-    form
-      .validateFields(['email', 'name', 'emoji', 'role', 'unix_username'])
-      .then(async () => {
-        const values = form.getFieldsValue();
-        const updates: UpdateUserInput = {
-          email: values.email,
-          name: values.name,
-          emoji: values.emoji,
-          role: values.role,
-          unix_username: values.unix_username,
-          preferences: {
-            ...user.preferences,
-            eventStream: {
-              enabled: values.eventStreamEnabled ?? true,
-            },
-          },
-        };
-        if (values.password?.trim()) {
-          updates.password = values.password;
-        }
-        // Only admins can set must_change_password, and only for other users
-        if (
-          hasMinimumRole(currentUser?.role, ROLES.ADMIN) &&
-          user.user_id !== currentUser?.user_id
-        ) {
-          updates.must_change_password = values.must_change_password;
-        }
-        await onUpdate?.(user.user_id, updates);
-        await syncUserGroups(values.groupIds || []);
-        handleClose();
-      })
-      .catch((err) => {
-        console.error('Validation failed:', err);
-      });
+    try {
+      await form.validateFields(['email', 'name', 'emoji', 'role', 'unix_username']);
+      const values = form.getFieldsValue();
+      const nextPreferences: NonNullable<UpdateUserInput['preferences']> = {
+        ...user.preferences,
+        eventStream: {
+          enabled: values.eventStreamEnabled ?? true,
+        },
+      };
+      if (values.useSlackAvatar === false) {
+        nextPreferences.use_slack_avatar = false;
+      } else {
+        delete nextPreferences.use_slack_avatar;
+      }
+
+      const updates: UpdateUserInput = {
+        email: values.email,
+        name: values.name,
+        emoji: values.emoji,
+        role: values.role,
+        unix_username: values.unix_username,
+        preferences: nextPreferences,
+      };
+      if (values.password?.trim()) {
+        updates.password = values.password;
+      }
+      // Only admins can set must_change_password, and only for other users
+      if (hasMinimumRole(currentUser?.role, ROLES.ADMIN) && user.user_id !== currentUser?.user_id) {
+        updates.must_change_password = values.must_change_password;
+      }
+      await onUpdate?.(user.user_id, updates);
+      form.setFieldValue('password', '');
+      await syncUserGroups(values.groupIds || []);
+      await saveDirtyAgenticConfigs();
+    } catch (err) {
+      console.error('Validation failed:', err);
+    }
   };
 
   // Persist a per-tool credential field. Patch is shaped as
@@ -447,33 +530,34 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const handleAgenticConfigSave = async (tool: AgenticToolName) => {
     if (!user) return;
 
+    const toolsToSave = getAgenticConfigToolsToSave(tool);
+
     try {
-      setSavingAgenticConfig((prev) => ({ ...prev, [tool]: true }));
-
-      const values = agenticFormByTool[tool].getFieldsValue() as Parameters<
-        typeof buildConfigFromFormValues
-      >[1];
-      const newConfig = {
-        ...user.default_agentic_config,
-        [tool]: buildConfigFromFormValues(tool, values),
-      };
-
-      await onUpdate?.(user.user_id, {
-        default_agentic_config: newConfig,
+      setSavingAgenticConfig((prev) => {
+        const next = { ...prev };
+        for (const toolName of toolsToSave) next[toolName] = true;
+        return next;
       });
 
-      handleClose();
+      await saveAgenticConfigs(toolsToSave);
     } catch (err) {
       console.error(`Failed to save ${tool} config:`, err);
       throw err;
     } finally {
-      setSavingAgenticConfig((prev) => ({ ...prev, [tool]: false }));
+      setSavingAgenticConfig((prev) => {
+        const next = { ...prev };
+        for (const toolName of toolsToSave) next[toolName] = false;
+        return next;
+      });
     }
   };
 
   // Handle agentic tool config clear
   const handleAgenticConfigClear = (tool: AgenticToolName) => {
-    agenticFormByTool[tool].setFieldsValue(getClearedFormValues(tool));
+    const clearedValues = getClearedFormValues(tool);
+    agenticFormByTool[tool].setFieldsValue(clearedValues);
+    setAgenticConfigDraftByTool((prev) => ({ ...prev, [tool]: clearedValues }));
+    markAgenticConfigDirty(tool);
   };
 
   const handleAudioSave = async () => {
@@ -491,11 +575,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         },
       };
 
-      onUpdate(user.user_id, {
+      await onUpdate(user.user_id, {
         preferences: updatedPreferences,
       });
 
-      handleClose();
+      await saveDirtyAgenticConfigs();
     } catch (error) {
       console.error('Failed to save audio settings:', error);
     }
@@ -507,16 +591,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     switch (activeTab) {
       case 'general':
-        handleUpdate();
+        await handleUpdate();
         break;
       case 'env-vars':
       case 'personal-api-keys':
-        // These tabs save individually, just close
-        handleClose();
+        // These tabs save inline; keep the user on the current section.
+        await saveDirtyAgenticConfigs();
         break;
       case 'groups':
         await syncUserGroups(form.getFieldValue('groupIds') || []);
-        handleClose();
+        await saveDirtyAgenticConfigs();
         break;
       case 'audio':
         await handleAudioSave();
@@ -689,6 +773,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               </Form.Item>
 
               <Form.Item
+                label="Use Slack avatar when available"
+                name="useSlackAvatar"
+                valuePropName="checked"
+                tooltip="When enabled, Agor shows your Slack-synced profile image. Turn this off to keep using your emoji tile."
+              >
+                <Switch />
+              </Form.Item>
+
+              <Form.Item
                 label="Role"
                 name="role"
                 rules={[{ required: true, message: 'Please select a role' }]}
@@ -852,7 +945,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               Configure default settings for {displayNames[toolName]}. These will prepopulate
               session creation forms.
             </Typography.Paragraph>
-            <Form form={currentForm} layout="vertical">
+            <Form
+              key={toolName}
+              form={currentForm}
+              layout="vertical"
+              onValuesChange={(_, allValues) => {
+                setAgenticConfigDraftByTool((prev) => ({ ...prev, [toolName]: allValues }));
+                markAgenticConfigDirty(toolName);
+              }}
+            >
               <AgenticToolConfigForm
                 agenticTool={toolName}
                 mcpServerById={mcpServerById}

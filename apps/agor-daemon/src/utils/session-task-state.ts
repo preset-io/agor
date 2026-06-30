@@ -1,13 +1,24 @@
-import type { Session, Task } from '@agor/core/types';
-import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
+import type { Params, Session, Task } from '@agor/core/types';
+import {
+  isTerminalTaskStatus,
+  SessionStatus,
+  sessionCanStartTask,
+  TaskStatus,
+} from '@agor/core/types';
 
 export function isTaskBlockingPrompt(task: Task): boolean {
   return task.status !== TaskStatus.QUEUED && !isTerminalTaskStatus(task.status);
 }
 
-export function sessionCanStartTask(status: Session['status'], readyForPrompt?: boolean): boolean {
+export { sessionCanStartTask };
+
+export type TerminalQueueProcessingParams = Params & {
+  suppressTerminalQueueProcessing?: boolean;
+};
+
+export function isTerminalQueueProcessingSuppressed(params?: Params): boolean {
   return (
-    status === SessionStatus.IDLE || (status === SessionStatus.FAILED && readyForPrompt === true)
+    (params as TerminalQueueProcessingParams | undefined)?.suppressTerminalQueueProcessing === true
   );
 }
 

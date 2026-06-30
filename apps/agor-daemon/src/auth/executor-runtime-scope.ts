@@ -17,14 +17,32 @@ type Scope = {
 };
 
 function scopedPayload(context: HookContext): ExecutorTokenPayload | null {
-  const payload = (context.params as AuthenticatedParams).authentication?.payload as
-    | ExecutorTokenPayload
-    | undefined;
-  if (payload?.type !== 'executor-session') return null;
-  if (payload.purpose !== 'executor-task') {
-    throw new Forbidden('Executor token is not valid for this request');
+  const params = context.params as AuthenticatedParams & ExecutorTokenPayload;
+  const payload = params.authentication?.payload as ExecutorTokenPayload | undefined;
+  if (payload?.type === 'executor-session') {
+    if (payload.purpose !== 'executor-task') {
+      throw new Forbidden('Executor token is not valid for this request');
+    }
+    return payload;
   }
-  return payload;
+
+  // Socket.io can preserve custom auth-result fields (`task_id`, `session_id`)
+  // on the connection while dropping the decoded JWT payload. Treat those
+  // fields as executor scope only when they came from JWT auth and carry a task
+  // claim; normal user/API-key auth must continue through unscoped.
+  if (params.authentication?.strategy === 'jwt' && params.task_id) {
+    return {
+      type: 'executor-session',
+      purpose: 'executor-task',
+      task_id: params.task_id,
+      session_id: params.session_id,
+      sessionId: params.sessionId,
+      branch_id: params.branch_id,
+    };
+  }
+
+  if (payload?.type !== undefined) return null;
+  return null;
 }
 
 function expectClaim(claim: string | undefined, label: string): string {

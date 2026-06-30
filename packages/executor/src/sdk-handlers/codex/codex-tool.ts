@@ -888,16 +888,12 @@ export class CodexTool implements ITool {
    * extractCodexContextSnapshotFromEvent). When that snapshot is present,
    * base-executor uses it directly and this method is never called.
    *
-   * This method only runs when no token_count events were captured (rare —
-   * legacy Codex CLI versions, very short turns, or stream errors). In that
-   * case we try two things in order:
-   *
-   *   1) If the rawSdkResponse happens to be the token_count event itself,
-   *      pull last_token_usage.total_tokens straight out of it.
-   *   2) Otherwise fall back to turn.completed.usage.input_tokens — a per-turn
-   *      proxy that approximates occupancy for a single-step turn but
-   *      under-counts for tool-heavy turns where each internal API call sees
-   *      more context. Better than nothing; we log a warning.
+   * This method only runs when no token_count events were captured (legacy
+   * Codex CLI versions, stream omissions, or stream errors). In that case we
+   * only trust explicit context-token fields. We deliberately DO NOT fall back
+   * to `turn.completed.usage.input_tokens`: observed Codex events can report
+   * >1M input tokens with most of them cached on a first visible prompt, and
+   * the SDK/CLI does not document that value as current context occupancy.
    *
    * @param sessionId - Session ID to compute context for
    * @param currentTaskId - Unused; kept for interface consistency
@@ -929,19 +925,20 @@ export class CodexTool implements ITool {
       return snapshot.totalTokens;
     }
 
-    // Fallback: per-turn input_tokens. Approximate for single-step turns,
-    // under-counts on multi-step tool loops.
+    // Future/legacy explicit context-token payloads are OK. Plain
+    // turn.completed.usage.input_tokens is intentionally ignored by
+    // extractCodexContextWindowUsage().
     const contextWindow = extractCodexContextWindowUsage(currentRawSdkResponse);
     if (contextWindow !== undefined) {
       console.warn(
-        `⚠️  Codex context window for session ${sessionId} estimated from per-turn input_tokens (${contextWindow}). ` +
-          'No token_count event_msg was captured; value will under-count tool-heavy turns.'
+        `⚠️  Codex context window for session ${sessionId} came from an explicit context token field (${contextWindow}), ` +
+          'not from the authoritative token_count event_msg.'
       );
       return contextWindow;
     }
 
     console.warn(
-      `⚠️  Could not derive Codex context window for session ${sessionId} from rawSdkResponse; returning 0`
+      `⚠️  Codex context window unavailable for session ${sessionId}: no token_count event_msg or explicit context-token field. Returning 0 so Agor hides context percentage instead of showing per-turn usage as context.`
     );
     return 0;
   }

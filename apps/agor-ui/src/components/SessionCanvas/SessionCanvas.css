@@ -60,7 +60,7 @@
   cursor: pointer;
 }
 
-.react-flow.tool-mode-eraser .react-flow__node.zone {
+.react-flow.tool-mode-eraser .react-flow__node-zone {
   cursor: pointer;
 }
 
@@ -79,4 +79,32 @@
 .nodrag,
 .nodrag * {
   cursor: auto;
+}
+
+/* Widen the resize hit-area on board items (zones, artifacts, apps) so the
+   resize cursor is easy to grab (#1547). reactflow centers each line control
+   on the node edge (translate(-50%/-50%)), so widening the box keeps it
+   centered. Each node's visible 2px border is drawn separately by its own
+   container and is unaffected; border-width:0 keeps these grab strips invisible.
+   Scoped to these node types — other nodes' resize handles are untouched. */
+.react-flow__node-zone .react-flow__resize-control.line,
+.react-flow__node-artifactNode .react-flow__resize-control.line,
+.react-flow__node-appNode .react-flow__resize-control.line {
+  border-width: 0;
+}
+.react-flow__node-zone .react-flow__resize-control.line.left,
+.react-flow__node-zone .react-flow__resize-control.line.right,
+.react-flow__node-artifactNode .react-flow__resize-control.line.left,
+.react-flow__node-artifactNode .react-flow__resize-control.line.right,
+.react-flow__node-appNode .react-flow__resize-control.line.left,
+.react-flow__node-appNode .react-flow__resize-control.line.right {
+  width: 12px;
+}
+.react-flow__node-zone .react-flow__resize-control.line.top,
+.react-flow__node-zone .react-flow__resize-control.line.bottom,
+.react-flow__node-artifactNode .react-flow__resize-control.line.top,
+.react-flow__node-artifactNode .react-flow__resize-control.line.bottom,
+.react-flow__node-appNode .react-flow__resize-control.line.top,
+.react-flow__node-appNode .react-flow__resize-control.line.bottom {
+  height: 12px;
 }

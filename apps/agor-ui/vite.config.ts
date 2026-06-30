@@ -70,6 +70,7 @@ export default defineConfig({
           if (id.includes('@tsparticles/')) return 'particles';
           if (id.includes('@xterm/')) return 'xterm';
           if (id.includes('@codesandbox/sandpack')) return 'sandpack';
+          if (id.includes('streamdown')) return 'streamdown';
           return undefined;
         },
       },

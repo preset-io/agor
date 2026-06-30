@@ -7,9 +7,11 @@ import {
   buildKnowledgeQueryString,
   buildKnowledgeSearchResultKey,
   isKnowledgeDocumentContentReady,
+  isKnowledgeDocumentsResponseCurrent,
   matchesKnowledgeSidebarFilter,
   resolveActiveKnowledgeDocument,
   resolveKnowledgeSpaceAfterNamespacesLoad,
+  resolveKnowledgeSpaceAfterRouteOrNamespacesLoad,
   shouldDeferKnowledgeUrlMirrorForRoute,
   shouldShowKnowledgeGraphView,
   shouldShowKnowledgeRouteDocumentLoading,
@@ -237,6 +239,61 @@ describe('KnowledgePage namespace select helpers', () => {
         },
       ])
     ).toBe('all');
+  });
+
+  it('does not let namespace refresh fallback override an explicit route namespace', () => {
+    const namespaces = [
+      {
+        namespace_id: 'ns-global',
+        slug: 'global',
+        display_name: 'Global',
+      },
+      {
+        namespace_id: 'ns-team',
+        slug: 'team',
+        display_name: 'Team',
+      },
+    ];
+
+    expect(
+      resolveKnowledgeSpaceAfterRouteOrNamespacesLoad({
+        activeSpace: 'global',
+        routeNamespaceSlug: 'team',
+        namespaces,
+      })
+    ).toBe('team');
+
+    expect(
+      resolveKnowledgeSpaceAfterRouteOrNamespacesLoad({
+        activeSpace: 'global',
+        routeNamespaceSlug: 'missing-space',
+        namespaces,
+      })
+    ).toBe('missing-space');
+  });
+
+  it('rejects stale document loads from the previous namespace', () => {
+    expect(
+      isKnowledgeDocumentsResponseCurrent({
+        requestId: 1,
+        currentRequestId: 2,
+        requestedActiveSpace: 'global',
+        currentActiveSpace: 'team',
+        requestedKindFilter: 'All',
+        currentKindFilter: 'All',
+      })
+    ).toBe(false);
+
+    expect(
+      isKnowledgeDocumentsResponseCurrent({
+        requestId: 2,
+        currentRequestId: 2,
+        requestedActiveSpace: 'team',
+        currentActiveSpace: 'team',
+        requestedKindFilter: 'All',
+        currentKindFilter: 'All',
+      })
+    ).toBe(true);
   });
 
   it('sorts namespace options by display name with slug fallback and searchable text', () => {

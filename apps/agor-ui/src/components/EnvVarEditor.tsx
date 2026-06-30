@@ -1,7 +1,7 @@
 import { ENV_VAR_SCOPES_V05, type EnvVarMetadata, type EnvVarScope } from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, Input, Select, Space, Table, Tooltip, Typography } from 'antd';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Tag } from './Tag';
 
 const { Text } = Typography;
@@ -232,14 +232,20 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
     },
   ];
 
-  const dataSource: Row[] = Object.entries(envVars).map(([key, entry]) => {
-    const meta = entryToMetadata(entry);
-    return {
-      key,
-      isSet: meta.set,
-      scope: meta.scope,
-    };
-  });
+  const dataSource: Row[] = useMemo(
+    () =>
+      Object.entries(envVars)
+        .map(([key, entry]) => {
+          const meta = entryToMetadata(entry);
+          return {
+            key,
+            isSet: meta.set,
+            scope: meta.scope,
+          };
+        })
+        .sort((a, b) => a.key.localeCompare(b.key, undefined, { sensitivity: 'base' })),
+    [envVars]
+  );
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>

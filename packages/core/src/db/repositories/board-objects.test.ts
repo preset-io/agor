@@ -54,17 +54,101 @@ function createBranchData(overrides?: { branch_id?: BranchID; repo_id?: UUID; na
 /**
  * Create test board
  */
-async function createBoard(db: Database, overrides?: { board_id?: BoardID; name?: string }) {
+async function createBoard(
+  db: Database,
+  overrides?: { board_id?: BoardID; name?: string; access_mode?: 'private' | 'shared' }
+) {
   const boardId = (overrides?.board_id ?? generateId()) as BoardID;
   await (db as any).insert(boards).values({
     board_id: boardId,
     created_at: new Date(),
     created_by: 'test-user',
     name: overrides?.name ?? 'Test Board',
-    data: {},
+    data: { access_mode: overrides?.access_mode ?? 'shared' },
   });
   return boardId;
 }
+
+// ============================================================================
+// RBAC visibility
+// ============================================================================
+
+describe('BoardObjectRepository.findVisibleToUser', () => {
+  dbTest(
+    'should require board visibility for loose objects but branch visibility for branch objects',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const boRepo = new BoardObjectRepository(db);
+      const userId = generateId() as UUID;
+      const privateBoardId = await createBoard(db, {
+        name: 'Private Board',
+        access_mode: 'private',
+      });
+
+      const gitRepo = await repoRepo.create(
+        createRepoData({ slug: `board-object-rbac-${Date.now()}` })
+      );
+      const visibleBranch = await branchRepo.create({
+        ...createBranchData({ repo_id: gitRepo.repo_id, name: 'visible-branch' }),
+        board_id: privateBoardId,
+        permission_source: 'override',
+        others_can: 'view',
+      });
+      const hiddenBranch = await branchRepo.create({
+        ...createBranchData({ repo_id: gitRepo.repo_id, name: 'hidden-branch' }),
+        branch_unique_id: 2,
+        board_id: privateBoardId,
+        permission_source: 'override',
+        others_can: 'none',
+      });
+
+      const looseObjectId = generateId();
+      await (db as any).insert(boardObjects).values({
+        object_id: looseObjectId,
+        board_id: privateBoardId,
+        branch_id: null,
+        card_id: null,
+        created_at: new Date(),
+        data: { position: { x: 0, y: 0 } },
+      });
+      const visibleBranchObject = await boRepo.create({
+        board_id: privateBoardId,
+        branch_id: visibleBranch.branch_id,
+        position: { x: 100, y: 100 },
+      });
+      await boRepo.create({
+        board_id: privateBoardId,
+        branch_id: hiddenBranch.branch_id,
+        position: { x: 200, y: 200 },
+      });
+
+      const visible = await boRepo.findVisibleToUser(userId, { board_id: privateBoardId });
+      expect(visible.map((object) => object.object_id).sort()).toEqual(
+        [looseObjectId, visibleBranchObject.object_id].sort()
+      );
+      await expect(boRepo.countVisibleToUser(userId, { board_id: privateBoardId })).resolves.toBe(
+        2
+      );
+
+      const isolatedPrivateBoardId = await createBoard(db, {
+        name: 'Isolated Private Board',
+        access_mode: 'private',
+      });
+      await (db as any).insert(boardObjects).values({
+        object_id: generateId(),
+        board_id: isolatedPrivateBoardId,
+        branch_id: null,
+        card_id: null,
+        created_at: new Date(),
+        data: { position: { x: 0, y: 0 } },
+      });
+      await expect(
+        boRepo.countVisibleToUser(userId, { board_id: isolatedPrivateBoardId })
+      ).resolves.toBe(0);
+    }
+  );
+});
 
 // ============================================================================
 // Create

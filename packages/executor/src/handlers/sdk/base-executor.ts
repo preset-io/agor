@@ -7,7 +7,6 @@
 
 import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
 import { generateId, shortId } from '@agor/core/db';
-import { getCurrentBranch, getGitState } from '@agor/core/git';
 import type {
   AgenticToolName,
   ContextUsageSnapshot,
@@ -21,6 +20,7 @@ import type {
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
+import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -354,10 +354,13 @@ export async function resolveApiKeyForTask(
   // `tool` scopes the per-user lookup to the calling SDK's bucket so a Codex spawn
   // never resolves a key stored under `agentic_tools['claude-code']`, and vice versa.
   try {
+    const executorSessionToken = (client as AgorClient & { executorSessionToken?: string })
+      .executorSessionToken;
     const result = (await client.service('config/resolve-api-key').create({
       taskId,
       keyName,
       tool,
+      ...(executorSessionToken ? { executorSessionToken } : {}),
     })) as import('@agor/core/config').KeyResolutionResult;
     sdkDebug(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
     return result;

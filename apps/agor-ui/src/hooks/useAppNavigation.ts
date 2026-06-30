@@ -32,14 +32,11 @@ import { useRecenterMap } from '../contexts/CanvasNavigationContext';
 import { buildBoardPath } from './useUrlState';
 
 interface UseAppNavigationOptions {
-  /** Boards aren't exposed via AppDataContext yet — App.tsx passes its
-   *  local `boardById` so URL building can prefer slugs. */
+  /** App.tsx passes its local `boardById` so URL building can prefer slugs. */
   boardById: Map<string, { board_id: string; slug?: string }>;
-  /** Sessions, branches, and artifacts are passed in (rather than read
-   *  from `useAppLiveData`) because this hook is called from App's own
-   *  body, which renders the AppLiveDataProvider — so the provider
-   *  isn't yet mounted when the hook runs. Matches `useUrlState`'s
-   *  arg-passing pattern.
+  /** Sessions, branches, and artifacts are passed in as args (rather than
+   *  read from the store) to keep this navigation hook decoupled from store
+   *  wiring and to mirror `useUrlState`'s arg-passing pattern.
    *
    *  Each map is optional: callers only pass what their methods need
    *  (e.g. a Settings table that only uses `goToBranch` can omit

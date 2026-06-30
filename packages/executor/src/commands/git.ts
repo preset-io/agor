@@ -37,7 +37,7 @@ import {
   removeGitWorktree,
   restoreBranchFilesystem,
   stripGitUrlCredentials,
-} from '@agor/core/git';
+} from '../git/index.js';
 import type {
   BranchAgorYmlExportPayload,
   BranchAgorYmlImportPayload,

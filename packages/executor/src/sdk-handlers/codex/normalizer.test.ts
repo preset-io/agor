@@ -90,6 +90,36 @@ describe('CodexNormalizer', () => {
     expect(result.tokenUsage.cacheReadTokens).toBe(100);
   });
 
+  it('estimates cost from LiteLLM pricing when the model is known', () => {
+    const normalizer = new CodexNormalizer();
+    const event = buildTurnCompletedEvent({
+      usage: buildUsage({
+        input_tokens: 10_000,
+        output_tokens: 1_000,
+        cached_input_tokens: 4_000,
+      }),
+    });
+
+    const result = normalizer.normalize(event, { modelHint: 'gpt-5.5' });
+
+    expect(result.costUsd).toBeCloseTo(0.062, 8);
+  });
+
+  it('leaves estimated cost unavailable for unknown explicit models', () => {
+    const normalizer = new CodexNormalizer();
+    const event = buildTurnCompletedEvent({
+      usage: buildUsage({
+        input_tokens: 10_000,
+        output_tokens: 1_000,
+        cached_input_tokens: 4_000,
+      }),
+    });
+
+    const result = normalizer.normalize(event, { modelHint: 'future-model-not-in-pricing-map' });
+
+    expect(result.costUsd).toBeUndefined();
+  });
+
   it('defaults missing usage fields to zero', () => {
     const normalizer = new CodexNormalizer();
     const event = buildTurnCompletedEvent({

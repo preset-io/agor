@@ -5,7 +5,6 @@
 import { getBaseUrl, loadConfig } from '@agor/core/config';
 import {
   AppVariableRepository,
-  type Database,
   executeRaw,
   isPostgresDatabase,
   KnowledgeDocumentRepository,
@@ -13,6 +12,7 @@ import {
   type KnowledgeSearchQuery,
   KnowledgeSearchRepository,
   sql,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import {
@@ -48,7 +48,7 @@ export class KnowledgeSearchService {
   private variables: AppVariableRepository;
   private embeddingProvider = new OpenAIEmbeddingProvider();
 
-  constructor(private db: Database) {
+  constructor(private db: TenantScopeAwareDatabase) {
     this.repo = new KnowledgeSearchRepository(db);
     this.documents = new KnowledgeDocumentRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
@@ -411,6 +411,6 @@ export class KnowledgeSearchService {
   }
 }
 
-export function createKnowledgeSearchService(db: Database): KnowledgeSearchService {
+export function createKnowledgeSearchService(db: TenantScopeAwareDatabase): KnowledgeSearchService {
   return new KnowledgeSearchService(db);
 }

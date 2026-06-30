@@ -1,6 +1,6 @@
 /**
- * Helpers for finding "active" tasks for a session — RUNNING /
- * AWAITING_PERMISSION / STOPPING — sorted by recency.
+ * Helpers for finding "active" tasks for a session — RUNNING / STOPPING / AWAITING_PERMISSION /
+ * AWAITING_INPUT — sorted by recency.
  *
  * Background: `TasksService.find()` short-circuits on `session_id: string`
  * (see `services/tasks.ts:65-110`) and returns ALL session tasks in
@@ -16,14 +16,10 @@
 
 import type { Application } from '@agor/core/feathers';
 import type { Paginated, Params, SessionID, Task } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { EXECUTING_TASK_STATUSES, isTaskExecuting } from '@agor/core/types';
 
 /** Statuses considered "active" — an executor may still be doing work. */
-export const ACTIVE_TASK_STATUSES: ReadonlySet<string> = new Set<string>([
-  TaskStatus.RUNNING,
-  TaskStatus.AWAITING_PERMISSION,
-  TaskStatus.STOPPING,
-]);
+export const ACTIVE_TASK_STATUSES = EXECUTING_TASK_STATUSES;
 
 function recencyKey(t: Task): number {
   return new Date(t.started_at || t.created_at).getTime();
@@ -53,7 +49,7 @@ export async function findTasksForSession(
 }
 
 /**
- * The session's active tasks (RUNNING / AWAITING_PERMISSION / STOPPING),
+ * The session's active/executor-owned tasks,
  * recency-DESC. Empty when nothing is active.
  */
 export async function findActiveTasksForSession(
@@ -62,7 +58,7 @@ export async function findActiveTasksForSession(
   params?: Params
 ): Promise<Task[]> {
   const all = await findTasksForSession(app, sessionId, params);
-  return all.filter((t) => ACTIVE_TASK_STATUSES.has(t.status));
+  return all.filter((t) => isTaskExecuting(t));
 }
 
 /**
@@ -81,5 +77,5 @@ export async function findHostTaskForSession(
 ): Promise<Task | undefined> {
   const all = await findTasksForSession(app, sessionId, params);
   if (all.length === 0) return undefined;
-  return all.find((t) => ACTIVE_TASK_STATUSES.has(t.status)) ?? all[0];
+  return all.find((t) => isTaskExecuting(t)) ?? all[0];
 }

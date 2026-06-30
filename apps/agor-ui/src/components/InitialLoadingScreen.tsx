@@ -15,8 +15,6 @@ const PRIMARY_INITIAL_LOAD_ITEMS = new Set<InitialLoadItemKey>([
   'boards',
   'repos',
   'users',
-  'mcp-servers',
-  'artifacts',
 ]);
 
 interface Props {

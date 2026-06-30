@@ -4,5 +4,6 @@ export { CloudInviteCTA } from './CloudInviteCTA';
 export { DocsBackground } from './DocsBackground';
 export { GifGallery } from './GifGallery';
 export { Hero } from './Hero';
+export { LandingPage } from './LandingPage';
 export { NavbarCloudCTA } from './NavbarCloudCTA';
 export { ParticleBackground } from './ParticleBackground';

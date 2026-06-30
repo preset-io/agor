@@ -10,14 +10,17 @@ import { humanizeCron, shortId } from '@agor-live/client';
 import {
   DeleteOutlined,
   EditOutlined,
+  HistoryOutlined,
+  InfoCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Popconfirm, Space, Spin, Switch, Table, Typography } from 'antd';
+import type { TableColumnsType } from 'antd';
+import { Button, Empty, Popconfirm, Space, Spin, Switch, Table, Tooltip, Typography } from 'antd';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
-import { UserAvatar } from '../../metadata/UserAvatar';
 import { ScheduleModal } from '../../ScheduleModal';
 import { ScheduleRunsPanel } from '../../ScheduleRunsPanel';
 
@@ -42,6 +45,76 @@ const formatHumanizedCron = (cron: string): string => {
     return cron;
   }
 };
+
+const ellipsisStyle = {
+  display: 'block',
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+} as const;
+
+const CompactTooltipText: React.FC<{
+  children: ReactNode;
+  title: ReactNode;
+  type?: 'secondary';
+  code?: boolean;
+  ariaLabel?: string;
+}> = ({ children, title, type, code, ariaLabel }) => (
+  <Tooltip title={title} mouseEnterDelay={0.4}>
+    <Text
+      aria-label={ariaLabel}
+      code={code}
+      type={type}
+      style={ellipsisStyle}
+      title={typeof children === 'string' ? children : undefined}
+    >
+      {children}
+    </Text>
+  </Tooltip>
+);
+
+const userLabel = (
+  userId: string | null | undefined,
+  userById: Map<string, User>,
+  currentUser?: User | null
+) => {
+  if (!userId) return '—';
+  const user = userById.get(userId);
+  const label = user?.email ?? user?.name ?? shortId(userId);
+  return currentUser?.user_id === userId ? `${label} (you)` : label;
+};
+
+const ScheduleDetails: React.FC<{
+  schedule: Schedule;
+  humanizedCron: string;
+  userById: Map<string, User>;
+  currentUser?: User | null;
+}> = ({ schedule, humanizedCron, userById, currentUser }) => (
+  <Space direction="vertical" size={2} style={{ maxWidth: 360 }}>
+    <Text strong>{schedule.name || 'Untitled schedule'}</Text>
+    {schedule.description ? <Text>{schedule.description}</Text> : null}
+    <Text>
+      <Text strong>Schedule:</Text> {humanizedCron}
+    </Text>
+    <Text>
+      <Text strong>Cron:</Text> <Text code>{schedule.cron_expression}</Text>
+    </Text>
+    <Text>
+      <Text strong>Timezone:</Text>{' '}
+      {schedule.timezone_mode === 'utc' ? 'UTC' : schedule.timezone || 'local'}
+    </Text>
+    <Text>
+      <Text strong>Next:</Text> {formatTimestamp(schedule.next_run_at)}
+    </Text>
+    <Text>
+      <Text strong>Last:</Text> {formatTimestamp(schedule.last_run_at)}
+    </Text>
+    <Text>
+      <Text strong>Runs as:</Text> {userLabel(schedule.created_by, userById, currentUser)}
+    </Text>
+  </Space>
+);
 
 export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   branch,
@@ -151,86 +224,156 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     }
   };
 
-  const columns = [
+  const renderScheduleDetails = useCallback(
+    (schedule: Schedule, humanizedCron: string) => (
+      <ScheduleDetails
+        schedule={schedule}
+        humanizedCron={humanizedCron}
+        userById={userById}
+        currentUser={currentUser}
+      />
+    ),
+    [currentUser, userById]
+  );
+
+  const columns: TableColumnsType<Schedule> = [
     {
       title: 'On',
       key: 'enabled',
-      width: 60,
-      render: (s: Schedule) => (
-        <Switch checked={s.enabled} onChange={(v) => handleToggleEnabled(s, v)} size="small" />
+      width: 50,
+      render: (_, s) => (
+        <Tooltip title={s.enabled ? 'Disable schedule' : 'Enable schedule'}>
+          <Switch
+            aria-label={`${s.enabled ? 'Disable' : 'Enable'} schedule ${s.name}`}
+            checked={s.enabled}
+            onChange={(v) => handleToggleEnabled(s, v)}
+            size="small"
+          />
+        </Tooltip>
       ),
     },
     {
-      title: 'Name',
+      title: 'Title',
       key: 'name',
-      render: (s: Schedule) => (
-        <Button type="link" onClick={() => setRunsPanelSchedule(s)} style={{ padding: 0 }}>
-          {s.name}
-        </Button>
-      ),
-    },
-    {
-      title: 'When',
-      key: 'cron',
-      render: (s: Schedule) => <Text>{formatHumanizedCron(s.cron_expression)}</Text>,
-    },
-    {
-      title: 'Scheduled by / run as',
-      key: 'created_by',
-      render: (s: Schedule) => {
-        const user = userById.get(s.created_by);
-        if (user) {
-          return (
-            <Space size={4}>
-              <UserAvatar user={user} showName size="small" />
-              {currentUser?.user_id === s.created_by && <Text type="secondary">(you)</Text>}
-            </Space>
-          );
-        }
-        return <Text type="secondary">{s.created_by ? shortId(s.created_by) : '—'}</Text>;
+      width: 220,
+      render: (_, s) => {
+        const humanizedCron = formatHumanizedCron(s.cron_expression);
+        const tooltip = renderScheduleDetails(s, humanizedCron);
+        return (
+          <Space direction="vertical" size={0} style={{ display: 'flex', minWidth: 0 }}>
+            <CompactTooltipText title={tooltip} ariaLabel={`Schedule title: ${s.name}`}>
+              {s.name || 'Untitled schedule'}
+            </CompactTooltipText>
+            {s.description ? (
+              <CompactTooltipText title={tooltip} type="secondary">
+                {s.description}
+              </CompactTooltipText>
+            ) : null}
+          </Space>
+        );
       },
     },
     {
-      title: 'Last run',
-      key: 'last_run_at',
-      render: (s: Schedule) =>
-        s.last_run_session_id && onOpenSession ? (
-          <Button type="link" size="small" onClick={() => onOpenSession(s.last_run_session_id!)}>
-            {formatTimestamp(s.last_run_at)}
-          </Button>
-        ) : (
-          formatTimestamp(s.last_run_at)
-        ),
+      title: 'Schedule',
+      key: 'cron',
+      width: 240,
+      render: (_, s) => {
+        const humanizedCron = formatHumanizedCron(s.cron_expression);
+        const tooltip = renderScheduleDetails(s, humanizedCron);
+        return (
+          <Space direction="vertical" size={0} style={{ display: 'flex', minWidth: 0 }}>
+            <CompactTooltipText title={tooltip}>{humanizedCron}</CompactTooltipText>
+            <CompactTooltipText title={tooltip} type="secondary" code>
+              {s.cron_expression}
+            </CompactTooltipText>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Next',
+      key: 'next_run_at',
+      width: 130,
+      render: (_, s) => (
+        <CompactTooltipText
+          title={
+            <Space direction="vertical" size={2}>
+              <Text strong>Next run</Text>
+              <Text>{formatTimestamp(s.next_run_at)}</Text>
+              <Text type="secondary">
+                {s.timezone_mode === 'utc' ? 'UTC' : s.timezone || 'local'}
+              </Text>
+            </Space>
+          }
+        >
+          {formatTimestamp(s.next_run_at)}
+        </CompactTooltipText>
+      ),
+    },
+    {
+      title: '',
+      key: 'details',
+      width: 32,
+      render: (_, s) => {
+        const humanizedCron = formatHumanizedCron(s.cron_expression);
+        return (
+          <Tooltip title={renderScheduleDetails(s, humanizedCron)}>
+            <Button
+              type="text"
+              size="small"
+              icon={<InfoCircleOutlined />}
+              aria-label={`Details for schedule ${s.name}`}
+            />
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 160,
-      render: (s: Schedule) => (
-        <Space size="small">
-          <Button
-            type="text"
-            size="small"
-            icon={<PlayCircleOutlined />}
-            loading={runningId === s.schedule_id}
-            disabled={runningId === s.schedule_id}
-            onClick={() => handleRunNow(s)}
-            title="Run now"
-          />
-          <Button
-            type="text"
-            size="small"
-            icon={<UnorderedListOutlined />}
-            onClick={() => setRunsPanelSchedule(s)}
-            title="View runs"
-          />
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(s)}
-            title="Edit"
-          />
+      width: 150,
+      render: (_, s) => (
+        <Space size={2} wrap={false}>
+          <Tooltip title="Run now">
+            <Button
+              type="text"
+              size="small"
+              icon={<PlayCircleOutlined />}
+              loading={runningId === s.schedule_id}
+              disabled={runningId === s.schedule_id}
+              onClick={() => handleRunNow(s)}
+              aria-label={`Run schedule ${s.name} now`}
+            />
+          </Tooltip>
+          {s.last_run_session_id && onOpenSession ? (
+            <Tooltip title={`View last run — ${formatTimestamp(s.last_run_at)}`}>
+              <Button
+                type="text"
+                size="small"
+                icon={<HistoryOutlined />}
+                onClick={() => onOpenSession(s.last_run_session_id!)}
+                aria-label={`View last run for schedule ${s.name}`}
+              />
+            </Tooltip>
+          ) : null}
+          <Tooltip title="View runs">
+            <Button
+              type="text"
+              size="small"
+              icon={<UnorderedListOutlined />}
+              onClick={() => setRunsPanelSchedule(s)}
+              aria-label={`View runs for schedule ${s.name}`}
+            />
+          </Tooltip>
+          <Tooltip title="Edit">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => handleEdit(s)}
+              aria-label={`Edit schedule ${s.name}`}
+            />
+          </Tooltip>
           <Popconfirm
             title="Delete schedule?"
             description={`Are you sure you want to delete "${s.name}"?`}
@@ -239,7 +382,15 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
             cancelText="Cancel"
             okButtonProps={{ danger: true }}
           >
-            <Button type="text" size="small" icon={<DeleteOutlined />} danger title="Delete" />
+            <Tooltip title="Delete">
+              <Button
+                type="text"
+                size="small"
+                icon={<DeleteOutlined />}
+                danger
+                aria-label={`Delete schedule ${s.name}`}
+              />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
@@ -247,10 +398,28 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   ];
 
   return (
-    <div style={{ padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-        <Text strong>Schedules for {branch.name}</Text>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleNew}>
+    <div style={{ padding: 16, minWidth: 0 }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 12,
+          marginBottom: 12,
+          minWidth: 0,
+        }}
+      >
+        <CompactTooltipText
+          title={`Schedules for ${branch.name}`}
+          ariaLabel={`Schedules for ${branch.name}`}
+        >
+          Schedules for {branch.name}
+        </CompactTooltipText>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={handleNew}
+          style={{ flex: '0 0 auto' }}
+        >
           New
         </Button>
       </div>
@@ -270,12 +439,14 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
           </Button>
         </Empty>
       ) : (
-        <Table
+        <Table<Schedule>
           rowKey="schedule_id"
           dataSource={schedules}
           columns={columns}
           pagination={false}
           size="small"
+          tableLayout="fixed"
+          style={{ width: '100%' }}
         />
       )}
 

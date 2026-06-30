@@ -45,13 +45,7 @@ vi.mock('./GlobalPresenceFacepile', () => ({
 function renderHeader() {
   return render(
     <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <AppHeader
-        branchById={new Map()}
-        boardById={new Map()}
-        sessionById={new Map()}
-        artifactById={new Map()}
-        mcpServerById={new Map()}
-      />
+      <AppHeader />
     </MemoryRouter>
   );
 }

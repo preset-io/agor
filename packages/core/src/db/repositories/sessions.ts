@@ -293,14 +293,33 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * LEFT JOINs with branches to populate board_id and url in a single query.
    */
-  async findAll(): Promise<Session[]> {
+  async findAll(filter?: { visibleToUserId?: UUID }): Promise<Session[]> {
     try {
       const baseUrl = await getBaseUrl();
 
-      const results = await select(this.db)
-        .from(sessions)
-        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
-        .all();
+      const conditions = [];
+      if (filter?.visibleToUserId) {
+        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+      }
+
+      // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+      const query: any = filter?.visibleToUserId
+        ? select(this.db)
+            .from(sessions)
+            .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+            .leftJoin(
+              branchOwners,
+              and(
+                eq(branchOwners.branch_id, branches.branch_id),
+                eq(branchOwners.user_id, filter.visibleToUserId)
+              )
+            )
+        : select(this.db)
+            .from(sessions)
+            .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
+
+      const results =
+        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
 
       return results.map(
         (result: {
@@ -358,19 +377,39 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /**
    * Find sessions by board ID
    *
-   * Uses materialized board_id column for O(1) indexed lookup.
-   * LEFT JOINs with branches to populate url (board_id already known from filter).
+   * A session relates to a board through its branch (session.branch_id →
+   * branch.board_id), so we filter on the JOINed `branches.board_id`. The
+   * `sessions.board_id` column is intentionally never populated (see
+   * `sessionToInsert`), so filtering on it would always return zero rows —
+   * the branch join is the authoritative source. This still pushes the
+   * filter down to SQL (one indexed JOIN), not an in-memory scan.
    */
-  async findByBoard(boardId: string): Promise<Session[]> {
+  async findByBoard(boardId: string, filter?: { visibleToUserId?: UUID }): Promise<Session[]> {
     try {
       const baseUrl = await getBaseUrl();
 
-      // Use materialized board_id column for indexed lookup
-      const results = await select(this.db)
-        .from(sessions)
-        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
-        .where(eq(sessions.board_id, boardId))
-        .all();
+      const conditions = [eq(branches.board_id, boardId)];
+      if (filter?.visibleToUserId) {
+        conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
+      }
+
+      // Filter on the branch's board_id via the JOIN (sessions.board_id is dead).
+      // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+      const query: any = filter?.visibleToUserId
+        ? select(this.db)
+            .from(sessions)
+            .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
+            .leftJoin(
+              branchOwners,
+              and(
+                eq(branchOwners.branch_id, branches.branch_id),
+                eq(branchOwners.user_id, filter.visibleToUserId)
+              )
+            )
+        : select(this.db)
+            .from(sessions)
+            .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      const results = await query.where(and(...conditions)).all();
 
       return results.map(
         (result: {
@@ -387,6 +426,99 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     } catch (error) {
       throw new RepositoryError(
         `Failed to find sessions by board: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Paginated session listing with SQL-side filtering, recency sort, and
+   * limit/offset. Powers the bounded first-paint slices (recent-N and the
+   * board-scoped set) so the cap, the recency ordering, and the board filter all
+   * run in SQL.
+   *
+   * Why SQL and not the generic in-memory path: the Session object exposes its
+   * last-updated time as `last_updated`, but callers sort by the DB column name
+   * `updated_at`. `DrizzleService.sortData` / `paginateClientSide` would look up
+   * `item.updated_at` (undefined) and no-op the sort, then slice an arbitrary
+   * page. Ordering here on the real `sessions.updated_at` column makes the
+   * recent-N slice actually recent. board_id is matched via the branches JOIN
+   * (`sessions.board_id` is never populated — see `sessionToInsert`).
+   *
+   * @returns `{ data, total }` where `total` is the full match count (so Feathers
+   *          pagination and the client `findAll` loop behave correctly).
+   */
+  async findPage(opts: {
+    boardId?: string;
+    archived?: boolean;
+    sortUpdatedAt?: 1 | -1;
+    limit?: number;
+    skip?: number;
+    visibleToUserId?: UUID;
+  }): Promise<{ data: Session[]; total: number }> {
+    try {
+      const baseUrl = await getBaseUrl();
+
+      const conditions = [];
+      if (opts.boardId !== undefined) conditions.push(eq(branches.board_id, opts.boardId));
+      if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
+      if (opts.visibleToUserId) {
+        conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
+      }
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+      // Total matching rows — drives Feathers pagination + the findAll loop.
+      // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+      let countQuery: any = select(this.db, { count: sql<number>`count(*)` })
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      if (opts.visibleToUserId) {
+        countQuery = countQuery.leftJoin(
+          branchOwners,
+          and(
+            eq(branchOwners.branch_id, branches.branch_id),
+            eq(branchOwners.user_id, opts.visibleToUserId)
+          )
+        );
+      }
+      const countRow = await (whereClause ? countQuery.where(whereClause) : countQuery).one();
+      const total = Number(countRow?.count ?? 0);
+
+      // Page of rows, recency-sorted in SQL on the real `updated_at` column.
+      // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
+      let dataQuery: any = select(this.db)
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      if (opts.visibleToUserId) {
+        dataQuery = dataQuery.leftJoin(
+          branchOwners,
+          and(
+            eq(branchOwners.branch_id, branches.branch_id),
+            eq(branchOwners.user_id, opts.visibleToUserId)
+          )
+        );
+      }
+      if (whereClause) dataQuery = dataQuery.where(whereClause);
+      if (opts.sortUpdatedAt !== undefined) {
+        dataQuery = dataQuery.orderBy(
+          opts.sortUpdatedAt === -1 ? desc(sessions.updated_at) : sessions.updated_at
+        );
+      }
+      if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
+      if (opts.skip) dataQuery = dataQuery.offset(opts.skip);
+
+      const results = await dataQuery.all();
+      const data = results.map(
+        (result: { sessions: SessionRow; branches?: { board_id?: string } | null }) => {
+          const boardId = (result.branches?.board_id ?? null) as UUID | null;
+          return this.rowToSession(result.sessions, boardId, baseUrl);
+        }
+      );
+
+      return { data, total };
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find sessions page: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -760,6 +892,30 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }
 
   /**
+   * True iff at least one session for this schedule has a status in the
+   * given set. Used by the scheduler's per-schedule concurrency guard.
+   */
+  async existsInScheduleWithStatuses(
+    scheduleId: import('@agor/core/types').ScheduleID,
+    statuses: ReadonlyArray<Session['status']>
+  ): Promise<boolean> {
+    if (statuses.length === 0) return false;
+    try {
+      const row = await select(this.db, { one: sql<number>`1` })
+        .from(sessions)
+        .where(and(eq(sessions.schedule_id, scheduleId), inArray(sessions.status, [...statuses])))
+        .limit(1)
+        .one();
+      return row != null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to probe sessions in schedule: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find all sessions in branches accessible to a user (optimized RBAC query)
    *
    * Uses INNER JOIN + LEFT JOIN to filter sessions by branch access in one query
@@ -773,13 +929,20 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * (which returns all sessions without filtering).
    *
    * @param userId - User ID to check access for
+   * @param boardId - Optional board filter, pushed down to SQL via the branch
+   *                  join (session → branch → board). Lets callers scope to a
+   *                  single board without an in-memory pass.
    * @returns Array of accessible sessions with urls populated
    */
-  async findAccessibleSessions(userId: UUID): Promise<Session[]> {
+  async findAccessibleSessions(userId: UUID, boardId?: UUID): Promise<Session[]> {
     const baseUrl = await getBaseUrl();
 
     // Join branches for board_id (exposed as Session.branch_board_id).
     // No boards join needed — flat `/s/<short>/` URLs don't carry a slug.
+    const accessCondition = visibleBranchAccessCondition(this.db, userId);
+    const whereCondition = boardId
+      ? and(accessCondition, eq(branches.board_id, boardId))
+      : accessCondition;
     const results = await select(this.db)
       .from(sessions)
       .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
@@ -787,7 +950,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         branchOwners,
         and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
       )
-      .where(visibleBranchAccessCondition(this.db, userId))
+      .where(whereCondition)
       .all();
 
     const seen = new Set<string>();

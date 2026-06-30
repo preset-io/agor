@@ -10,7 +10,6 @@ import type {
   Branch,
   BranchID,
   CardWithType,
-  MCPServer,
   Repo,
   Session,
   SpawnConfig,
@@ -62,6 +61,18 @@ import {
 } from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  makeBoardObjectsForBoardSelector,
+  makeSessionsForBranchSelector,
+  selectBranchById,
+  selectCardById,
+  selectCommentById,
+  selectMcpServerById,
+  selectRepoById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
 import { REACT_FLOW_DRAG_HANDLE_SELECTOR } from '../../utils/reactFlowDragClasses';
 import { sanitizeBoardCss } from '../../utils/sanitizeCss';
@@ -73,11 +84,11 @@ import type { CardNodeData } from '../CardNode';
 import CardNode from '../CardNode';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
-import { AppNode } from './canvas/AppNode';
-import { ArtifactNode } from './canvas/ArtifactNode';
+import { AppNode } from './canvas/AppNodeLazy';
+import { ArtifactNode } from './canvas/ArtifactNodeLazy';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
 import { MarkdownNode } from './canvas/MarkdownNode';
-import { RemoteCursorLayer } from './canvas/RemoteCursorLayer';
+import { RemoteCursorLayer, type StaticRemoteCursor } from './canvas/RemoteCursorLayer';
 import { useBoardObjects } from './canvas/useBoardObjects';
 import { findIntersectingObjects, findZoneAtPosition } from './canvas/utils/collisionDetection';
 import { getBranchParentInfo, getZoneParentInfo } from './canvas/utils/commentUtils';
@@ -94,17 +105,12 @@ import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
 interface SessionCanvasProps {
   board: Board | null;
   client: AgorClient | null;
-  sessionById: Map<string, Session>; // O(1) ID lookups
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
-  userById: Map<string, User>; // Map-based user storage
-  repoById: Map<string, Repo>; // Map-based repo storage
+  // Entity maps (sessions, branches, repos, users, board objects, comments,
+  // cards, MCP servers) are read from the zustand store via narrow selector
+  // subscriptions rather than props — the canvas re-renders only for the slices
+  // it actually consumes.
   branches: Branch[];
   primaryAssistantId?: string | null;
-  branchById: Map<string, Branch>;
-  boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
-  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
-  commentById: Map<string, BoardComment>; // Map-based comment storage
-  cardById: Map<string, CardWithType>; // Map-based card storage for this board
   currentUserId?: string;
   selectedSessionId?: string | null;
   /** Branch currently targeted by a `/w/<…>/` deep link — folds into
@@ -114,8 +120,6 @@ interface SessionCanvasProps {
    *  ArtifactNode's dashed "selected" outline. */
   activeUrlTargetArtifactId?: string | null;
   availableAgents?: AgenticToolOption[];
-  mcpServerById?: Map<string, MCPServer>; // Map-based MCP server storage
-  sessionMcpServerIds?: Map<string, string[]>; // Map sessionId -> mcpServerIds[]
   onSessionClick?: (sessionId: string) => void;
   onTaskClick?: (taskId: string) => void;
   onSessionUpdate?: (sessionId: string, updates: Partial<Session>) => void;
@@ -142,6 +146,12 @@ interface SessionCanvasProps {
   onOpenCommentsPanel?: () => void;
   onCommentHover?: (commentId: string | null) => void;
   onCommentSelect?: (commentId: string | null) => void;
+  /** Demo/screenshot-only fixture: render static cursors while keeping the product canvas. */
+  staticCursors?: StaticRemoteCursor[];
+  /** Demo/screenshot-only scale boost for static cursors. */
+  staticCursorScale?: number;
+  /** Optional host-controlled height for embedded/demo canvases. Defaults to full viewport. */
+  height?: React.CSSProperties['height'];
 }
 
 export interface SessionCanvasRef {
@@ -164,10 +174,10 @@ interface SessionNodeData {
   zoneColor?: string;
 }
 
-// Shared empty array for branches that have no sessions. Without this,
-// `sessionsByBranch.get(id) || []` produces a new `[]` on every render,
-// breaking referential equality and forcing memoized children to re-render
-// on every unrelated socket event.
+// Shared empty array for branches that have no sessions. Without this, a
+// per-branch session selector returning `undefined` would fall back to a fresh
+// `[]` on every render, breaking referential equality and forcing memoized
+// children to re-render on every unrelated socket event.
 const EMPTY_SESSIONS: Session[] = [];
 
 // Custom node component that renders SessionCard (memoized to prevent re-renders on unrelated node changes)
@@ -195,7 +205,6 @@ const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
 interface BranchNodeData {
   branch: Branch;
   repo: Repo;
-  sessions: Session[];
   userById: Map<string, User>;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
@@ -247,17 +256,29 @@ const CardNodeWrapper = React.memo(({ data }: { data: CardNodeData }) => {
 // — even unrelated ones. We supply a custom areEqual that compares the
 // individual fields of `data` shallowly so unrelated socket events don't
 // invalidate this node. This is the primary fix for board jank during
-// streaming socket traffic. (The empty-sessions array is stabilized in
-// `initialNodes` via EMPTY_SESSIONS so unrelated patches keep
-// `data.sessions` referentially equal too.)
+// streaming socket traffic.
+//
+// This branch's session list — the highest-frequency entity read (a
+// `session:patched` arrives on every streaming token batch) — is sourced
+// directly from the store by branch id rather than carried in `data`. A patch
+// to another branch's sessions leaves this branch's array reference untouched,
+// so this card's subscription stays quiet; a patch to this branch re-renders
+// only this card without rebuilding (and re-allocating) every branch's node
+// `data` in the parent `initialNodes` memo. EMPTY_SESSIONS keeps the prop
+// referentially stable for branches with no sessions.
 const BranchNode = React.memo(
   ({ data }: { data: BranchNodeData }) => {
+    const sessionsSelector = useMemo(
+      () => makeSessionsForBranchSelector(data.branch.branch_id),
+      [data.branch.branch_id]
+    );
+    const sessions = useAgorStore(sessionsSelector) ?? EMPTY_SESSIONS;
     return (
       <div className="branch-node">
         <BranchCard
           branch={data.branch}
           repo={data.repo}
-          sessions={data.sessions}
+          sessions={sessions}
           userById={data.userById}
           currentUserId={data.currentUserId}
           selectedSessionId={data.selectedSessionId}
@@ -296,7 +317,6 @@ const BranchNode = React.memo(
     return (
       p.branch === n.branch &&
       p.repo === n.repo &&
-      p.sessions === n.sessions &&
       p.userById === n.userById &&
       p.currentUserId === n.currentUserId &&
       p.selectedSessionId === n.selectedSessionId &&
@@ -341,28 +361,18 @@ const EMPTY_BOARD_ENTITY_OBJECTS: BoardEntityObject[] = Object.freeze(
   [] as BoardEntityObject[]
 ) as BoardEntityObject[];
 
-const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
+const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   (
     {
       board,
       client,
-      sessionById,
-      sessionsByBranch,
-      repoById,
       branches,
       primaryAssistantId,
-      branchById,
-      boardObjectsByBoardId,
-      commentById,
-      cardById,
-      userById,
       currentUserId,
       selectedSessionId,
       activeUrlTargetBranchId,
       activeUrlTargetArtifactId,
       availableAgents = [],
-      mcpServerById = new Map(),
-      sessionMcpServerIds = new Map(),
       onSessionClick,
       onTaskClick,
       onSessionUpdate,
@@ -383,11 +393,26 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onOpenCommentsPanel,
       onCommentHover,
       onCommentSelect,
+      staticCursors,
+      staticCursorScale,
+      height = '100vh',
     }: SessionCanvasProps,
     ref
   ) => {
     const { token } = theme.useToken();
     const mutationGate = useMutationGate();
+
+    // Entity state via narrow store subscriptions. Each whole-map selector is a
+    // stable module-level reference, so a slice only re-renders the canvas when
+    // its own reference changes (idempotent writes are short-circuited upstream).
+    const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+    const repoById = useAgorStore(selectRepoById);
+    const branchById = useAgorStore(selectBranchById);
+    const commentById = useAgorStore(selectCommentById);
+    const cardById = useAgorStore(selectCardById);
+    const userById = useAgorStore(selectUserById);
+    const mcpServerById = useAgorStore(selectMcpServerById);
+
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
     const hasCustomCss = Boolean(board?.custom_css?.trim());
@@ -410,17 +435,15 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return sanitizeBoardCss(bgRule + (board?.custom_css || ''), `.${boardCssClass}`);
     }, [board?.custom_css, board?.background_color, boardCssClass, hasUserStyling, hasUserBg]);
 
-    // Note: sessionsByBranch is now passed as prop (no longer computed locally)
-    // This enables efficient O(1) lookups and stable references across re-renders
-
+    // Board-scoped board objects: subscribe to only THIS board's bucket so
+    // other boards' object churn never re-renders the canvas. The factory is
+    // memoized per boardId so the selector reference is stable across renders.
     const boardId = board?.board_id;
-    const boardObjectsForBoard = useMemo(
-      () =>
-        boardId
-          ? boardObjectsByBoardId.get(boardId) || EMPTY_BOARD_ENTITY_OBJECTS
-          : EMPTY_BOARD_ENTITY_OBJECTS,
-      [boardId, boardObjectsByBoardId]
+    const boardObjectsSelector = useMemo(
+      () => makeBoardObjectsForBoardSelector(boardId),
+      [boardId]
     );
+    const boardObjectsForBoard = useAgorStore(boardObjectsSelector) || EMPTY_BOARD_ENTITY_OBJECTS;
 
     // Board-scoped placement maps: rebuild only when this board's object array
     // changes. This replaces the old global scan + JSON.stringify stabilizer.
@@ -443,9 +466,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Card modal state
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
     const [cardModalOpen, setCardModalOpen] = useState(false);
-
-    // Note: branchById is now passed as prop from parent (no longer computed locally)
-    // This enables efficient O(1) lookups and stable references across re-renders
 
     // Tool state for canvas annotations
     const [activeTool, setActiveTool] = useState<
@@ -712,11 +732,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             ? zoneObj.borderColor || zoneObj.color // Backwards compat: borderColor first, then fall back to deprecated color
             : undefined;
 
-        // Get sessions for this branch. Use EMPTY_SESSIONS (shared
-        // constant) instead of inline `|| []` so branches without sessions
-        // keep a referentially stable `sessions` prop across renders.
-        const branchSessions = sessionsByBranch.get(branch.branch_id) || EMPTY_SESSIONS;
-
         // Get repo for this branch
         const repo = repoById.get(branch.repo_id);
         if (!repo) {
@@ -741,7 +756,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           data: {
             branch,
             repo,
-            sessions: branchSessions,
             userById,
             currentUserId,
             selectedSessionId,
@@ -777,7 +791,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       primaryAssistantId,
       boardObjectByBranch,
       repoById,
-      sessionsByBranch,
       currentUserId,
       selectedSessionId,
       activeUrlTargetBranchId,
@@ -982,7 +995,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       client,
       boardId: board?.board_id as BoardID | null,
       reactFlowInstance: reactFlowInstanceRef.current,
-      enabled: !!board && !!client,
+      enabled: !!board && !!client && !staticCursors,
     });
 
     // Create comment nodes from spatial comments
@@ -1249,7 +1262,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           .filter((n) => n.type === 'zone' && !deletedObjectsRef.current.has(n.id))
           .map((newZone) => {
             const existingZone = currentNodes.find((n) => n.id === newZone.id);
-            return { ...newZone, selected: existingZone?.selected };
+            return {
+              ...newZone,
+              selected: existingZone?.selected,
+              // Preserve runtime zIndex (e.g. 101 when selected) so board data
+              // updates don't reset it to the base value of 100.
+              zIndex: existingZone?.zIndex ?? newZone.zIndex,
+            };
           });
 
         const markdown = boardObjectNodes
@@ -1384,11 +1403,33 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const onNodesChange = useCallback(
       // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
       (changes: any) => {
+        // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+        const selectChanges = changes.filter((c: any) => c.type === 'select');
+        if (selectChanges.length > 0) {
+          setNodes((currentNodes) => {
+            // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+            const zoneIds = new Set(selectChanges.map((c: any) => c.id));
+            const hasZoneChange = currentNodes.some((n) => n.type === 'zone' && zoneIds.has(n.id));
+            if (!hasZoneChange) return currentNodes;
+            return currentNodes.map((n) => {
+              if (n.type !== 'zone') return n;
+              // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+              const change = selectChanges.find((c: any) => c.id === n.id);
+              if (change) return { ...n, zIndex: change.selected ? 101 : 100 };
+              return n;
+            });
+          });
+        }
+
         // Detect resize by checking for dimensions changes
         // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
         changes.forEach((change: any) => {
           if (change.type === 'dimensions' && change.dimensions) {
-            const node = nodes.find((n) => n.id === change.id);
+            // O(1) lookup against React Flow's internal node map. Avoids both the
+            // old per-event `nodes.find()` scan AND a per-nodes-change Map rebuild:
+            // `getNode` is a stable reference and only runs inside this dimensions
+            // branch, so the hot drag/position path does zero O(n) work.
+            const node = reactFlowInstanceRef.current?.getNode(change.id);
             if (node?.type === 'zone') {
               // Check if dimensions actually changed (to avoid infinite loop from React Flow emitting unchanged dimensions)
               const currentWidth = node.style?.width;
@@ -1453,7 +1494,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Call the original handler
         onNodesChangeInternal(changes);
       },
-      [nodes, board, client, onNodesChangeInternal]
+      [board, client, onNodesChangeInternal, setNodes]
     );
 
     // Handle node drag start
@@ -2321,7 +2362,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       <div
         style={{
           width: '100%',
-          height: '100vh',
+          height,
           position: 'relative',
         }}
         onPointerDown={handlePointerDown}
@@ -2580,6 +2621,8 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               boardId={(board?.board_id as BoardID | null) ?? null}
               users={mapToArray(userById)}
               enabled={!!board && !!client}
+              staticCursors={staticCursors}
+              staticCursorScale={staticCursorScale}
             />
           </ReactFlow>
         </div>
@@ -2884,6 +2927,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   }
 );
 
-SessionCanvas.displayName = 'SessionCanvas';
+SessionCanvasInner.displayName = 'SessionCanvas';
+
+// Memoized so the canvas is insulated from its parent's top-down re-renders:
+// AgorApp re-renders on every live store patch, but SessionCanvas re-renders only
+// when one of its own props actually changes OR one of its `useAgorStore`
+// selector slices fires. The bailout holds only while the parent keeps every
+// prop referentially stable (see the stabilized handlers at the App render site).
+const SessionCanvas = React.memo(SessionCanvasInner);
 
 export default SessionCanvas;

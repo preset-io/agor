@@ -9,12 +9,12 @@ import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   and,
   BoardRepository,
   BranchRepository,
-  type Database,
   eq,
   inArray,
   MCPServerRepository,
@@ -23,7 +23,9 @@ import {
   select,
   sessionMcpServers,
   shortId,
+  type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
+  visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
@@ -36,8 +38,16 @@ import type {
   Params,
   SessionID,
   UserID,
+  UUID,
 } from '@agor/core/types';
-import { AGENTIC_TOOL_CAPABILITIES, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  AGENTIC_TOOL_CAPABILITIES,
+  isSessionExecuting,
+  isTaskExecuting,
+  ROLES,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -72,12 +82,15 @@ import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
+import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
   createGroupsService,
+  setupBoardAlignedBranchesService,
   setupBoardGroupGrantsService,
   setupBranchEffectiveAccessService,
+  setupBranchFsAccessUsersService,
   setupBranchGroupGrantsService,
 } from './services/groups.js';
 import { createKnowledgeDocumentEditsService } from './services/knowledge-document-edits.js';
@@ -90,6 +103,7 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
+import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
@@ -105,6 +119,7 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
+import { requireMinimumRole } from './utils/authorization.js';
 import { escapeHtml } from './utils/html.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -123,7 +138,7 @@ import { spawnExecutor } from './utils/spawn-executor.js';
  * Interface for dependencies needed by service registration.
  */
 export interface RegisterServicesContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   svcEnabled: (group: string) => boolean;
@@ -349,14 +364,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     !app.services['branches/:id/owners/:userId']
   ) {
     const branchRepo = new BranchRepository(db);
+    const executionMode = resolveExecutionSecurityMode(config);
     setupBranchOwnersService(app, branchRepo, {
       jwtSecret,
       daemonUser: config.daemon?.unix_user,
+      unixFsIsolationEnabled: executionMode.unixFsIsolationEnabled,
       allowSuperadmin,
     });
   }
 
-  if (branchRbacEnabled) {
+  if (resolveExecutionSecurityMode(config).unixFsIsolationEnabled) {
     const daemonUser = config.daemon?.unix_user || 'agor';
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
@@ -368,6 +385,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: ['find', 'create', 'remove'],
   });
   setupBranchEffectiveAccessService(app, new BranchRepository(db));
+  setupBoardAlignedBranchesService(app, new BranchRepository(db));
+  setupBranchFsAccessUsersService(app, new BranchRepository(db));
   if (branchRbacEnabled) {
     setupBoardOwnersService(app, new BoardRepository(db));
     setupBoardGroupGrantsService(app, db);
@@ -448,8 +467,24 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   if (svcEnabled('gateway')) {
     app.use('/gateway-channels', createGatewayChannelsService(db));
+
+    // Sub-path service for the connection probe. A sub-path does NOT inherit
+    // the parent gateway-channels admin gating / redaction hooks, so it carries
+    // its own requireAuth + admin gate. It reads decrypted tokens via the
+    // repository and returns no token values.
+    app.use('/gateway-channels/test', createGatewayChannelsTestService(db));
+    app.service('gateway-channels/test').hooks({
+      before: {
+        create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'test gateway channels')],
+      },
+    });
+
     app.use('/thread-session-map', createThreadSessionMapService(db));
     app.use('/gateway', createGatewayService(db, app), {
+      // Only expose the inbound gateway entrypoint and existing route hook
+      // externally. Proactive outbound emits are intentionally invoked through
+      // the authenticated Agor MCP tool surface; exposing emitMessage here would
+      // bypass the gateway service's normal channel_key auth model.
       methods: ['create', 'routeMessage'],
     });
 
@@ -463,6 +498,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const configService = createConfigService(db);
   configService.app = app;
+  app.use('/admin/local-actions', createLocalActionsService());
+
   app.use('/config', configService);
 
   app.use('/config/resolve-api-key', {
@@ -557,10 +594,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           mcp_server_id?: string;
           enabled?: boolean;
         };
+        _agorSqlSessionAccessUserId?: UUID;
       }) {
         const conditions: ReturnType<typeof eq>[] = [];
-        // session_id may be a scalar string or `{ $in: [...] }` — the latter is
-        // injected by the RBAC scoping hook to restrict rows to accessible sessions.
+        // session_id may be a scalar string or `{ $in: [...] }` from callers.
+        // RBAC scoping is composed below via `_agorSqlSessionAccessUserId`.
         const sessionIdFilter = params?.query?.session_id;
         if (typeof sessionIdFilter === 'string') {
           conditions.push(eq(sessionMcpServers.session_id, sessionIdFilter));
@@ -579,6 +617,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         }
         if (params?.query?.enabled !== undefined) {
           conditions.push(eq(sessionMcpServers.enabled, params.query.enabled));
+        }
+        if (params?._agorSqlSessionAccessUserId) {
+          conditions.push(
+            visibleSessionReferenceAccessExists(
+              db,
+              params._agorSqlSessionAccessUserId,
+              sessionMcpServers.session_id
+            )
+          );
         }
         let query = select(db).from(sessionMcpServers);
         if (conditions.length > 0) {
@@ -599,12 +646,22 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Users service
   // ============================================================================
 
-  const usersService = createUsersService(db);
+  const usersService = createUsersService(db, app);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
-  // the custom `getGitEnvironment`. Listing `update` here makes Feathers' hook
+  // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
   app.use('/users', usersService, {
-    methods: ['find', 'get', 'create', 'patch', 'remove', 'getGitEnvironment'],
+    methods: [
+      'find',
+      'get',
+      'create',
+      'patch',
+      'remove',
+      'getGitEnvironment',
+      'getAvatarSettings',
+      'updateAvatarSettings',
+      'syncAvatars',
+    ],
   });
 
   // Bootstrap superadmin users
@@ -723,13 +780,6 @@ function createExecuteHandler(
     const configExecutorUser = config.execution?.executor_unix_user;
     const sessionUnixUser = session.unix_username;
 
-    console.log('[Daemon] Determining executor Unix user:', {
-      sessionId: shortId(session.session_id),
-      unixUserMode,
-      sessionUnixUser,
-      configExecutorUser,
-    });
-
     const impersonationResult = resolveUnixUserForImpersonation({
       mode: unixUserMode,
       userUnixUsername: sessionUnixUser,
@@ -737,8 +787,6 @@ function createExecuteHandler(
     });
 
     const executorUnixUser = impersonationResult.unixUser;
-    console.log(`[Daemon] Executor impersonation: ${impersonationResult.reason}`);
-
     const effectivePermissionMode =
       data.permissionMode || session.permission_config?.mode || undefined;
     const permissionModeForPayload =
@@ -908,22 +956,12 @@ function createExecuteHandler(
               `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
             );
           } else if (
-            currentSession.status === SessionStatus.RUNNING ||
-            currentSession.status === SessionStatus.AWAITING_PERMISSION ||
-            currentSession.status === SessionStatus.AWAITING_INPUT ||
-            currentSession.status === SessionStatus.STOPPING ||
+            isSessionExecuting(currentSession) ||
             currentSession.status === SessionStatus.TIMED_OUT
           ) {
             try {
               const currentTask = await app.service('tasks').get(taskId, params);
-              const isTaskStillActive =
-                currentTask.status === TaskStatus.RUNNING ||
-                currentTask.status === 'awaiting_permission' ||
-                currentTask.status === 'awaiting_input' ||
-                currentTask.status === 'stopping' ||
-                currentTask.status === 'timed_out';
-
-              if (isTaskStillActive) {
+              if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
                 await app.service('tasks').patch(
                   taskId,
                   {

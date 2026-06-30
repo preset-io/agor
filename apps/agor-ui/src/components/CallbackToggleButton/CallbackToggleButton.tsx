@@ -1,37 +1,64 @@
 import type { Session } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
-import { PhoneOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined, LinkOutlined } from '@ant-design/icons';
 import { Badge, Button, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppLiveData } from '../../contexts/AppDataContext';
+import { useAgorStore } from '../../store/agorStore';
+import { selectSessionById } from '../../store/selectors';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 
 interface CallbackToggleButtonProps {
   session: Session;
 }
 
+function getRemoteCreateRelationship(session: Session) {
+  return session.remote_relationships?.as_target?.find(
+    (relationship) => relationship.relationship_type === 'remote_create'
+  );
+}
+
+function getRemoteParentSessionId(session: Session): string | undefined {
+  return getRemoteCreateRelationship(session)?.source_session_id;
+}
+
+function getCallbackTargetSessionId(session: Session): string | undefined {
+  const relationship = getRemoteCreateRelationship(session);
+  return (
+    session.callback_config?.callback_session_id ??
+    relationship?.callback_session_id ??
+    getRemoteParentSessionId(session) ??
+    session.genealogy?.parent_session_id
+  );
+}
+
+function getCallbackEnabled(session: Session): boolean {
+  return (
+    session.callback_config?.enabled ??
+    getRemoteCreateRelationship(session)?.callback_enabled ??
+    true
+  );
+}
+
 /**
- * Phone-icon toggle in the conversation footer that shows ONLY when this
+ * Link-icon toggle in the conversation footer that shows ONLY when this
  * session has callbacks enabled. Clicking disables callbacks (one click,
  * no confirmation — re-enable lives in Session Settings).
  *
- * Lives in its own component so the `useAppLiveData()` subscription needed
+ * Lives in its own component so the `sessionById` store subscription needed
  * to look up the callback-target session's title doesn't pull SessionPanel
- * into the live-data subscription graph (see AppDataContext docs).
+ * into the live-data subscription graph.
  */
 export const CallbackToggleButton: React.FC<CallbackToggleButtonProps> = ({ session }) => {
   const { token } = theme.useToken();
   const { onUpdateSession, onSessionClick } = useAppActions();
-  const { sessionById } = useAppLiveData();
+  const sessionById = useAgorStore(selectSessionById);
 
-  const targetId =
-    session.callback_config?.callback_session_id ?? session.genealogy?.parent_session_id;
+  const targetId = getCallbackTargetSessionId(session);
   // Default in core: spawned sessions (have parent_session_id) have callbacks
   // implicitly ON unless explicitly disabled. Only treat as enabled if there's
   // an actual target — there's nothing to call back to otherwise.
-  const explicitlyDisabled = session.callback_config?.enabled === false;
-  const enabled = !explicitlyDisabled && !!targetId;
+  const enabled = getCallbackEnabled(session) && !!targetId;
 
   if (!enabled) return null;
 
@@ -85,7 +112,8 @@ export const CallbackToggleButton: React.FC<CallbackToggleButtonProps> = ({ sess
       ) : (
         <strong>{targetTitle}</strong>
       )}{' '}
-      {statusBadge} on completion. Click to disable. Also accessible in session settings.
+      {statusBadge} on completion. Click to unlink callbacks while keeping the relationship. Also
+      accessible in session settings.
     </span>
   );
 
@@ -94,9 +122,41 @@ export const CallbackToggleButton: React.FC<CallbackToggleButtonProps> = ({ sess
       <Button
         size="small"
         type="text"
-        icon={<PhoneOutlined style={{ color: token.colorPrimary }} />}
+        icon={<LinkOutlined style={{ color: token.colorPrimary }} />}
         onClick={handleDisable}
-        aria-label="Callbacks on — click to disable"
+        aria-label="Callbacks linked — click to unlink"
+      />
+    </Tooltip>
+  );
+};
+
+export const RemoteParentButton: React.FC<CallbackToggleButtonProps> = ({ session }) => {
+  const { token } = theme.useToken();
+  const { onSessionClick } = useAppActions();
+  const sessionById = useAgorStore(selectSessionById);
+
+  const remoteParentId = getRemoteParentSessionId(session);
+  if (!remoteParentId || !onSessionClick) return null;
+
+  const remoteParent = sessionById.get(remoteParentId);
+  const remoteParentTitle = remoteParent
+    ? getSessionDisplayTitle(remoteParent, { includeAgentFallback: true, includeIdFallback: true })
+    : shortId(remoteParentId);
+
+  const handleOpenRemoteParent = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onSessionClick(remoteParentId);
+  };
+
+  return (
+    <Tooltip title={`Open remote parent session: ${remoteParentTitle}`}>
+      <Button
+        size="small"
+        type="text"
+        icon={<ArrowUpOutlined style={{ color: token.colorTextSecondary }} />}
+        onClick={handleOpenRemoteParent}
+        aria-label={`Open remote parent session ${remoteParentTitle}`}
       />
     </Tooltip>
   );

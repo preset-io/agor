@@ -25,6 +25,26 @@ describe('UsersService.find', () => {
     expect(page.data[0].email).toBe('bravo@example.com');
   });
 
+  dbTest('ignores tenant scope safely on SQLite users table', async ({ db }) => {
+    const service = new UsersService(db);
+
+    const created = await service.create(
+      { email: 'tenant-safe@example.com', password: 'password-123', name: 'Tenant Safe' },
+      { tenant: { tenant_id: 'default', source: 'static' } } as never
+    );
+
+    const page = await service.find({
+      tenant: { tenant_id: 'default', source: 'static' },
+      query: { $limit: 10 },
+    } as never);
+    const fetched = await service.get(created.user_id, {
+      tenant: { tenant_id: 'default', source: 'static' },
+    } as never);
+
+    expect(page.data.map((user) => user.email)).toContain('tenant-safe@example.com');
+    expect(fetched.email).toBe('tenant-safe@example.com');
+  });
+
   dbTest('supports offset alias for pagination', async ({ db }) => {
     const service = new UsersService(db);
 

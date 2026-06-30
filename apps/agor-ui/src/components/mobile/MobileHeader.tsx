@@ -2,6 +2,7 @@ import type { User } from '@agor-live/client';
 import { UnorderedListOutlined } from '@ant-design/icons';
 import { Button, Layout, Space, Typography, theme } from 'antd';
 import { BRAND, brandMarkHref } from '../../branding/brand';
+import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -65,16 +66,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       </Space>
 
       <Space size={12} align="center">
-        {user && (
-          <div
-            style={{
-              fontSize: 20,
-              lineHeight: 1,
-            }}
-          >
-            {user.emoji || '👤'}
-          </div>
-        )}
+        {user && <UserIdentityAvatar user={user} size={28} fontSize="20px" />}
 
         {showMenu && (
           <Button

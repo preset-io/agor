@@ -11,7 +11,12 @@ import {
   renderChildCompletionCallback,
 } from '@agor/core/callbacks/child-completion-template';
 import { PAGINATION, resolveExecutorHeartbeatConfig } from '@agor/core/config';
-import { type Database, shortId, TaskRepository } from '@agor/core/db';
+import {
+  enqueueTenantDatabasePostCommitCallback,
+  shortId,
+  TaskRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type {
   ContentBlock,
@@ -21,6 +26,7 @@ import type {
   SessionID,
   Task,
   TaskID,
+  UUID,
 } from '@agor/core/types';
 import {
   isTerminalTaskStatus,
@@ -28,13 +34,14 @@ import {
   type TaskMetadata,
   TaskStatus,
 } from '@agor/core/types';
-import { DrizzleService } from '../adapters/drizzle';
+import { DrizzleService, type Query } from '../adapters/drizzle';
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import {
   type ExecutorHeartbeatCallbackPayload,
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
+import type { TerminalQueueProcessingParams } from '../utils/session-task-state.js';
 import type { SessionsService } from './sessions';
 
 /**
@@ -60,14 +67,27 @@ export type TaskParams = QueryParams<{
 }> & {
   /**
    * Internal-only: terminal task patches normally transition the owning session
-   * back to idle. Heartbeat-loss handling marks the session failed instead.
+   * back to a promptable terminal state. Heartbeat-loss handling marks the session failed instead.
    */
-  suppressTerminalSessionIdle?: boolean;
+  suppressTerminalSessionStateUpdate?: boolean;
   /**
    * Internal-only: terminal task patches normally drain queued work for the
    * owning session. Heartbeat-loss handling must not auto-start queued prompts.
    */
   suppressTerminalQueueProcessing?: boolean;
+  /**
+   * Internal-only: skip parent callback dispatch for terminal transitions that
+   * are administrative cancellation, not agent output. Does not disable BTW
+   * fork archival; those ephemeral sessions should still be cleaned up.
+   */
+  suppressCompletionCallbacks?: boolean;
+  /**
+   * Internal-only escape hatch for preserving an ephemeral BTW fork after
+   * terminal transition. Most callers should leave this unset.
+   */
+  suppressBtwCleanup?: boolean;
+  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+  _agorSqlSessionAccessUserId?: UUID;
 };
 
 interface CompletionCallbackDispatchResult {
@@ -80,14 +100,14 @@ interface CompletionCallbackDispatchResult {
 export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams> {
   private taskRepo: TaskRepository;
   private app: Application;
-  private db: Database;
+  private db: TenantScopeAwareDatabase;
   private heartbeatCallbackRunner: ExecutorHeartbeatCallbackRunner;
   private completionCallbackDispatches = new Map<
     string,
     Promise<CompletionCallbackDispatchResult>
   >();
 
-  constructor(db: Database, app: Application) {
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
       id: 'task_id',
@@ -110,6 +130,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    * Override find to support session-based filtering
    */
   async find(params?: TaskParams): Promise<Task[] | Paginated<Task>> {
+    if (params?._agorSqlSessionAccessUserId) {
+      return super.find(params);
+    }
+
     // If filtering by session_id as a scalar string, use repository shortcut.
     // Note: `session_id` may be injected as `{ $in: [...] }` by the RBAC scoping
     // hook — in that case we fall through to `super.find`, whose adapter's
@@ -154,6 +178,28 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     // Otherwise use default find
     return super.find(params);
+  }
+
+  protected async fetchData(query: Query, params?: TaskParams): Promise<Task[]> {
+    const sessionId = query.session_id;
+    const filter: Parameters<TaskRepository['findAll']>[0] = {};
+
+    if (typeof sessionId === 'string') {
+      filter.sessionId = sessionId as SessionID;
+    } else if (
+      sessionId &&
+      typeof sessionId === 'object' &&
+      Array.isArray(sessionId.$in) &&
+      sessionId.$in.every((el: unknown) => typeof el === 'string')
+    ) {
+      filter.sessionIds = sessionId.$in as SessionID[];
+    }
+    if (typeof query.status === 'string') filter.status = query.status as Task['status'];
+    if (params?._agorSqlSessionAccessUserId) {
+      filter.visibleToUserId = params._agorSqlSessionAccessUserId;
+    }
+
+    return this.taskRepo.findAll(filter);
   }
 
   /**
@@ -270,8 +316,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       },
       {
         ...params,
-        suppressTerminalSessionIdle: true,
+        suppressTerminalSessionStateUpdate: true,
         suppressTerminalQueueProcessing: true,
+        // Suppress callbacks here — dispatchCompletionCallbacks runs inside the
+        // tenantDatabaseScopeAround transaction (it does SELECT session_relationships +
+        // INSERT callback task), extending the transaction's idle time between statements.
+        // This triggered write CONNECTION_CLOSED + zombie idle-in-transaction connections.
+        // We dispatch manually below, after both patches commit, in their own transactions.
+        suppressCompletionCallbacks: true,
       }
     );
     const failedTask = result as Task;
@@ -286,19 +338,42 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
       return failedTask;
     }
+    const sessionPatchParams: TerminalQueueProcessingParams = {
+      ...params,
+      suppressTerminalQueueProcessing: true,
+    };
+    let updatedSession: Session | undefined;
     await this.app
       .service('sessions')
       .patch(
         failedTask.session_id,
-        { status: SessionStatus.FAILED, ready_for_prompt: true },
-        params
+        {
+          status: SessionStatus.FAILED,
+          ready_for_prompt: true,
+        },
+        sessionPatchParams
       )
+      .then((s) => {
+        updatedSession = s as Session;
+      })
       .catch((error: unknown) => {
         console.warn(
           `[executor-heartbeat] Failed to mark session ${shortId(failedTask.session_id)} failed after stale heartbeat:`,
           error instanceof Error ? error.message : String(error)
         );
       });
+    // Dispatch completion callbacks outside the task-patch transaction.
+    // Both patches have committed at this point, so callbacks run in fresh transactions.
+    if (updatedSession) {
+      void this.dispatchCompletionCallbacksAfterCommit(failedTask, updatedSession, params).catch(
+        (error: unknown) => {
+          console.warn(
+            `[executor-heartbeat] Failed to dispatch completion callbacks for task ${shortId(failedTask.task_id)}:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      );
+    }
     return failedTask;
   }
 
@@ -325,6 +400,50 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.heartbeatCallbackRunner.run(payload);
   }
 
+  private async runAfterTenantDatabaseCommit(
+    label: string,
+    work: () => Promise<void>
+  ): Promise<void> {
+    const run = async () => {
+      try {
+        await work();
+      } catch (error) {
+        console.warn(
+          `⚠️  [TasksService] ${label} failed:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    };
+
+    if (enqueueTenantDatabasePostCommitCallback(run)) {
+      return;
+    }
+
+    await run();
+  }
+
+  private async triggerQueueProcessingAfterCommit(
+    sessionId: string,
+    params?: TaskParams
+  ): Promise<void> {
+    const sessionsService = this.app.service('sessions') as unknown as SessionsService;
+    const sessionParams = params as Parameters<SessionsService['triggerQueueProcessing']>[1];
+
+    await this.runAfterTenantDatabaseCommit('triggerQueueProcessing', () =>
+      sessionsService.triggerQueueProcessing(sessionId, sessionParams)
+    );
+  }
+
+  private async dispatchCompletionCallbacksAfterCommit(
+    task: Task,
+    session: Session,
+    params?: TaskParams
+  ): Promise<void> {
+    await this.runAfterTenantDatabaseCommit('dispatchCompletionCallbacks', () =>
+      this.dispatchCompletionCallbacks(task, session, params)
+    );
+  }
+
   /**
    * Override patch to detect task completion and:
    * 1. Atomically update session status to IDLE when task reaches terminal state
@@ -335,16 +454,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const nextStatus = data.status;
-    const mayTransitionStatus =
-      nextStatus === TaskStatus.RUNNING || isAnalyticsTerminalTaskStatus(nextStatus);
-    const currentTask = mayTransitionStatus ? await this.get(id, params) : undefined;
-    if (
-      currentTask &&
-      isTerminalTaskStatus(currentTask.status) &&
-      isTerminalTaskStatus(nextStatus)
-    ) {
+    const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
+    if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
       console.warn(
-        `⏭️ [TasksService] Ignoring terminal status rewrite for task ${shortId(currentTask.task_id)} ` +
+        `⏭️ [TasksService] Ignoring status rewrite for terminal task ${shortId(currentTask.task_id)} ` +
           `(${currentTask.status} → ${nextStatus})`
       );
       return currentTask;
@@ -432,7 +545,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     // Run completion side effects only for statuses that historically completed
     // executor turns. Timeout paths patch session state separately and should not
-    // enqueue callbacks, mark sessions idle, archive forks, or drain queues here.
+    // enqueue callbacks, mark sessions promptable, archive forks, or drain queues here.
     if (isCompletionSideEffectTransition) {
       // Since tasks are patched one at a time, result is always a single Task (not an array)
       const task = result as Task;
@@ -452,7 +565,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
               .then((branch) => {
                 const repoId = branch?.repo_id;
                 if (!repoId) return;
-                return ensureRepoOriginAlignedById(this.app, repoId);
+                return ensureRepoOriginAlignedById(this.app, repoId, params);
               })
               .catch((err: unknown) => {
                 const message = err instanceof Error ? err.message : String(err);
@@ -464,75 +577,93 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
           const latestTaskId = session.tasks?.[session.tasks.length - 1];
 
+          const suppressCompletionCallbacks = params?.suppressCompletionCallbacks === true;
+          const suppressBtwCleanup = params?.suppressBtwCleanup === true;
+
+          // STOPPED tasks (user-cancelled or daemon-shutdown cleanup) never notify
+          // parent sessions. A stopped child represents abandoned work — the parent
+          // should not resume or be informed; it has its own lifecycle.
+          const isStop = data.status === TaskStatus.STOPPED;
+
           if (latestTaskId && latestTaskId !== task.task_id) {
             console.log(
-              `⏭️ [TasksService] Skipping session IDLE update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
+              `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
             );
-            // Still process completion callbacks (task completed, callback target needs to know).
-            // Route through the same centralized/idempotent dispatcher used by the normal
-            // completion path so races cannot enqueue duplicate parent callbacks.
-            await this.dispatchCompletionCallbacks(task, session, params);
+            // Process completion callbacks only for naturally-terminal tasks (COMPLETED/FAILED).
+            // STOPPED means the work was abandoned — don't notify the parent.
+            if (!suppressCompletionCallbacks && !isStop) {
+              await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
+            }
             return result;
           }
 
-          // For STOPPED tasks: The stop endpoint directly patches session → IDLE with
-          // ready_for_prompt=false. Skip the session update here to avoid racing with it.
-          //
-          // For other terminal tasks: Normal completion - set ready_for_prompt=true
-          // to allow auto-queue-processing of any pending messages.
-          const isUserInitiatedStop = data.status === TaskStatus.STOPPED;
-
-          if (isUserInitiatedStop) {
+          // For stop-route/admin cleanup paths that explicitly suppress queue processing,
+          // the caller owns the follow-up session patch/drain. For an ordinary STOPPED
+          // terminal patch, still make the session promptable so queued work can drain.
+          if (isStop && params?.suppressTerminalQueueProcessing) {
             console.log(
-              `⏭️ [TasksService] Skipping session IDLE update for STOPPED task ${shortId(task.task_id)} — stop endpoint handles session state`
+              `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — caller suppresses terminal queue processing`
             );
-          } else if (params?.suppressTerminalSessionIdle) {
+          } else if (params?.suppressTerminalSessionStateUpdate) {
             console.log(
-              `⏭️ [TasksService] Skipping session IDLE update for task ${shortId(task.task_id)} (${data.status}) due to internal patch params`
+              `⏭️ [TasksService] Skipping session terminal-state update for task ${shortId(task.task_id)} (${data.status}) due to internal patch params`
             );
           } else {
             await this.app.service('sessions').patch(
               task.session_id,
               {
-                status: 'idle',
+                status:
+                  data.status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
                 ready_for_prompt: true,
               },
               params
             );
 
             console.log(
-              `✅ [TasksService] Session ${shortId(task.session_id)} status updated to IDLE (task ${shortId(task.task_id)} ${data.status})`
+              `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${data.status})`
             );
           }
 
-          await this.dispatchCompletionCallbacks(task, session, params);
+          if (!suppressCompletionCallbacks && !isStop) {
+            await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
+          }
 
           // "btw" fork origin: auto-archive the ephemeral fork after task completion.
           // Runs regardless of callback success — btw forks should always be cleaned up.
+          // Administrative terminal patches may suppress parent callbacks/result injection,
+          // but still archive the ephemeral session unless explicitly told not to.
           if (session.fork_origin === 'btw') {
-            try {
-              await this.app.service('sessions').patch(session.session_id, {
-                archived: true,
-                archived_reason: 'btw_completed',
-              });
-              console.log(
-                `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
-              );
-            } catch (error) {
-              console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
+            if (!suppressBtwCleanup) {
+              try {
+                await this.app.service('sessions').patch(session.session_id, {
+                  archived: true,
+                  archived_reason: 'btw_completed',
+                });
+                console.log(
+                  `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
+                );
+              } catch (error) {
+                console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
+              }
             }
 
-            // Inject a result message into the parent session's conversation.
-            // This is a non-prompt system message — it shows up in the UI but doesn't
-            // trigger a new prompt cycle. The parent's agent never sees it.
-            await this.injectBtwResultMessage(task, session, params);
+            if (!suppressCompletionCallbacks && !isStop) {
+              // Inject a result message into the parent session's conversation.
+              // This is a non-prompt system message — it shows up in the UI but doesn't
+              // trigger a new prompt cycle. The parent's agent never sees it.
+              await this.injectBtwResultMessage(task, session, params);
+            }
           }
 
-          // IMPORTANT: Now that session is idle, process any queued tasks (including callbacks)
-          // This handles the case where callbacks were queued while this session was running
-          const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-          if (!params?.suppressTerminalQueueProcessing && sessionsService.triggerQueueProcessing) {
-            await sessionsService.triggerQueueProcessing(task.session_id);
+          // Fire queue processing after the outer transaction commits. spawnTaskExecutor
+          // (called inside the queue processor) does significant I/O that would otherwise
+          // extend this transaction and cause proxy CONNECTION_CLOSED kills.
+          if (!params?.suppressTerminalQueueProcessing) {
+            await this.triggerQueueProcessingAfterCommit(task.session_id, params);
+          } else if (params?.suppressTerminalQueueProcessing) {
+            console.log(
+              `⏭️  [TasksService] Queue trigger suppressed for session ${shortId(task.session_id)} (suppressTerminalQueueProcessing)`
+            );
           }
         } catch (error) {
           console.error('❌ [TasksService] Failed to process task completion:', error);
@@ -700,21 +831,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // CRITICAL: After queuing callback, ALWAYS trigger target's queue processing.
       // The queue processor uses a promise-based lock that will:
       // - If target is busy: wait for current processing, then retry (self-healing)
-      // - If target is idle: immediately process the callback
-      // - If target becomes idle while waiting: the retry will catch it
+      // - If target is promptable: immediately process the callback
+      // - If target becomes promptable while waiting: the retry will catch it
       //
       // DO NOT check target status before triggering - let the queue processor handle it.
       // This ensures callbacks are never missed due to timing issues.
       try {
-        const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-        if (sessionsService.triggerQueueProcessing) {
-          console.log(
-            `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
-          );
-          // Pass empty params to avoid leaking child's auth context to target.
-          // The queue processor reconstructs target auth from queued task metadata.
-          await sessionsService.triggerQueueProcessing(targetSessionId, {});
-        }
+        console.log(
+          `🔄 [TasksService] Triggering callback target queue processing for ${shortId(targetSessionId)} (callback queued)`
+        );
+        // Pass empty params to avoid leaking child's auth context to target.
+        // The queue processor reconstructs target auth from queued task metadata.
+        await this.triggerQueueProcessingAfterCommit(targetSessionId, {});
       } catch (error) {
         // Don't throw - target issues shouldn't break child queue processing.
         console.warn(
@@ -1109,6 +1237,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 /**
  * Service factory function
  */
-export function createTasksService(db: Database, app: Application): TasksService {
+export function createTasksService(db: TenantScopeAwareDatabase, app: Application): TasksService {
   return new TasksService(db, app);
 }

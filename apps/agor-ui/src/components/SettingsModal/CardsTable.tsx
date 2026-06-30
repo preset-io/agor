@@ -30,6 +30,7 @@ import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { MetaRow } from '../MetaRow';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 const { Sider, Content } = Layout;
 
@@ -397,7 +398,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
                     </Typography.Text>
                   }
                 />
-                <Space size="small" onClick={(e) => e.stopPropagation()}>
+                <SettingsActionGroup onClick={(e) => e.stopPropagation()}>
                   <Button
                     type="text"
                     size="small"
@@ -424,7 +425,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
                       onClick={(e) => e.stopPropagation()}
                     />
                   </Popconfirm>
-                </Space>
+                </SettingsActionGroup>
               </div>
             ))
           )}

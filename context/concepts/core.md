@@ -1,6 +1,6 @@
 # Core primitives
 
-> For the marketing-grade pitch, voice, and tagline: read [`context/messaging-and-positioning.md`](../messaging-and-positioning.md). This file is for agents who need a quick mental model.
+> For the marketing-grade pitch, voice, and tagline: read the **Messaging & Positioning** doc in the Agor team Knowledge base ([`marketing/messaging-and-positioning`](https://agor.sandbox.preset.zone/kb/agor-cloud-team/marketing/messaging-and-positioning.md)) — it is intentionally kept out of this repo. This file is for agents who need a quick mental model.
 
 Agor has **five primitives**. Almost everything in the codebase is one of these or a relationship between them.
 

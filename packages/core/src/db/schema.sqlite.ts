@@ -221,6 +221,7 @@ export const sessions = sqliteTable(
   },
   (table) => ({
     statusIdx: index('sessions_status_idx').on(table.status),
+    statusReadyIdx: index('sessions_status_ready_idx').on(table.status, table.ready_for_prompt),
     agenticToolIdx: index('sessions_agentic_tool_idx').on(table.agentic_tool),
     boardIdx: index('sessions_board_idx').on(table.board_id),
     branchIdx: index('sessions_branch_idx').on(table.branch_id),
@@ -241,6 +242,51 @@ export const sessions = sqliteTable(
       // both are set. Non-scheduled sessions (schedule_id NULL) must
       // coexist freely.
       .where(sql`${table.schedule_id} IS NOT NULL AND ${table.scheduled_run_at} IS NOT NULL`),
+  })
+);
+
+/**
+ * Session Relationships table
+ *
+ * Durable cross-session links that are not necessarily canonical genealogy.
+ * Used for cross-branch remote-create provenance while keeping
+ * sessions.genealogy.parent_session_id branch-local.
+ */
+export const sessionRelationships = sqliteTable(
+  'session_relationships',
+  {
+    relationship_id: text('relationship_id', { length: 36 }).primaryKey(),
+    source_session_id: text('source_session_id', { length: 36 })
+      .notNull()
+      .references(() => sessions.session_id, { onDelete: 'cascade' }),
+    target_session_id: text('target_session_id', { length: 36 })
+      .notNull()
+      .references(() => sessions.session_id, { onDelete: 'cascade' }),
+    relationship_type: text('relationship_type', { enum: ['remote_create'] }).notNull(),
+    created_by: text('created_by', { length: 36 }).notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at'),
+    callback_enabled: t.bool('callback_enabled').notNull().default(false),
+    callback_session_id: text('callback_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+    data: t.json<Record<string, unknown>>('data'),
+  },
+  (table) => ({
+    sourceIdx: index('session_relationships_source_idx').on(table.source_session_id),
+    targetIdx: index('session_relationships_target_idx').on(table.target_session_id),
+    callbackIdx: index('session_relationships_callback_idx').on(table.callback_session_id),
+    // Note: no tenant_source/tenant_target composite indexes here — SQLite schema
+    // has no tenant column on this table (RLS is Postgres-only). The standalone
+    // source/target indexes above are sufficient for SQLite.
+    sourceTargetTypeUnique: uniqueIndex('session_relationships_source_target_type_unique').on(
+      table.source_session_id,
+      table.target_session_id,
+      table.relationship_type
+    ),
   })
 );
 
@@ -432,6 +478,11 @@ export const messages = sqliteTable(
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
     sessionIndexIdx: index('messages_session_index_idx').on(table.session_id, table.index),
+    timestampIdx: index('messages_timestamp_idx').on(table.timestamp),
+    sessionTimestampIdx: index('messages_session_timestamp_idx').on(
+      table.session_id,
+      table.timestamp
+    ),
   })
 );
 
@@ -870,11 +921,19 @@ export const users = sqliteTable(
     // Force password change flag (admin-settable, auto-cleared on password change)
     must_change_password: t.bool('must_change_password').notNull().default(false),
 
+    // Auth invalidation marker. Password changes set this timestamp so any
+    // previously issued browser access or refresh token is rejected.
+    tokens_valid_after: t.timestamp('tokens_valid_after'),
+
     // JSON blob for profile/preferences
     data: t
       .json<unknown>('data')
       .$type<{
         avatar?: string;
+        avatar_url?: string;
+        avatar_source?: string;
+        avatar_source_id?: string;
+        avatar_synced_at?: string;
         preferences?: Record<string, unknown>;
         // Stable external-auth identity mappings used by generic launch-code auth.
         external_identities?: UserExternalIdentity[];
@@ -1725,6 +1784,84 @@ export const threadSessionMap = sqliteTable(
 );
 
 /**
+ * Gateway Outbound Messages table - Durable audit/seed rows for proactive outbound messages.
+ *
+ * Proactive emits seed external platform threads. They intentionally do NOT create
+ * thread_session_map rows until a human replies, preserving the invariant that one
+ * external conversation maps to one Agor session.
+ */
+export const gatewayOutboundMessages = sqliteTable(
+  'gateway_outbound_messages',
+  {
+    id: text('id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+
+    gateway_channel_id: text('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    channel_type: text('channel_type', {
+      enum: ['slack', 'discord', 'whatsapp', 'telegram', 'github', 'teams'],
+    }).notNull(),
+
+    platform_channel_id: text('platform_channel_id').notNull(),
+    platform_message_id: text('platform_message_id').notNull(),
+    platform_thread_id: text('platform_thread_id').notNull(),
+    platform_permalink: text('platform_permalink'),
+
+    target_branch_id: text('target_branch_id', { length: 36 })
+      .notNull()
+      .references(() => branches.branch_id),
+    emitted_by_user_id: text('emitted_by_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id),
+    emitted_by_session_id: text('emitted_by_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+    emitted_by_task_id: text('emitted_by_task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
+    emitted_by_schedule_id: text('emitted_by_schedule_id', { length: 36 }).references(
+      () => schedules.schedule_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+
+    message_text: text('message_text').notNull(),
+    message_preview: text('message_preview').notNull(),
+    metadata: t.json<Record<string, unknown> | null>('metadata'),
+    consumed_by_session_id: text('consumed_by_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
+    consumed_at: t.timestamp('consumed_at'),
+  },
+  (table) => ({
+    uniqueChannelThread: uniqueIndex('uniq_gateway_outbound_channel_thread').on(
+      table.gateway_channel_id,
+      table.platform_thread_id
+    ),
+    emittedSessionIdx: index('idx_gateway_outbound_emitted_session').on(
+      table.emitted_by_session_id
+    ),
+    emittedScheduleIdx: index('idx_gateway_outbound_emitted_schedule').on(
+      table.emitted_by_schedule_id
+    ),
+    targetBranchCreatedIdx: index('idx_gateway_outbound_branch_created').on(
+      table.target_branch_id,
+      table.created_at
+    ),
+    consumedIdx: index('idx_gateway_outbound_consumed').on(table.consumed_at),
+  })
+);
+
+/**
  * Session Env Selections - Many-to-many between sessions and session-scope env vars.
  *
  * Records which of a user's scope='session' env vars are exposed to a given session
@@ -2152,6 +2289,8 @@ export const kbGraphEdges = sqliteTable(
  */
 export type SessionRow = typeof sessions.$inferSelect;
 export type SessionInsert = typeof sessions.$inferInsert;
+export type SessionRelationshipRow = typeof sessionRelationships.$inferSelect;
+export type SessionRelationshipInsert = typeof sessionRelationships.$inferInsert;
 export type TaskRow = typeof tasks.$inferSelect;
 export type TaskInsert = typeof tasks.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
@@ -2196,6 +2335,8 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
+export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
+export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type SerializedSessionRow = typeof serializedSessions.$inferSelect;
 export type SerializedSessionInsert = typeof serializedSessions.$inferInsert;
 export type KBNamespaceRow = typeof kbNamespaces.$inferSelect;
@@ -2221,7 +2362,7 @@ export type KBGraphEdgeInsert = typeof kbGraphEdges.$inferInsert;
  * These enable automatic JOINs using db.query.sessions.findFirst({ with: { branch: true } })
  */
 
-export const sessionsRelations = relations(sessions, ({ one }) => ({
+export const sessionsRelations = relations(sessions, ({ one, many }) => ({
   branch: one(branches, {
     fields: [sessions.branch_id],
     references: [branches.branch_id],
@@ -2229,6 +2370,25 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
   schedule: one(schedules, {
     fields: [sessions.schedule_id],
     references: [schedules.schedule_id],
+  }),
+  outboundRelationships: many(sessionRelationships, { relationName: 'relationshipSource' }),
+  inboundRelationships: many(sessionRelationships, { relationName: 'relationshipTarget' }),
+}));
+
+export const sessionRelationshipsRelations = relations(sessionRelationships, ({ one }) => ({
+  sourceSession: one(sessions, {
+    fields: [sessionRelationships.source_session_id],
+    references: [sessions.session_id],
+    relationName: 'relationshipSource',
+  }),
+  targetSession: one(sessions, {
+    fields: [sessionRelationships.target_session_id],
+    references: [sessions.session_id],
+    relationName: 'relationshipTarget',
+  }),
+  callbackSession: one(sessions, {
+    fields: [sessionRelationships.callback_session_id],
+    references: [sessions.session_id],
   }),
 }));
 

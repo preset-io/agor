@@ -2,33 +2,71 @@
 /**
  * React hook for fetching and subscribing to Agor data
  *
- * Manages sessions, tasks, boards with real-time WebSocket updates
+ * Manages sessions, tasks, boards with real-time WebSocket updates.
+ *
+ * State ownership lives in the zustand store (`agorStore`); this hook is the
+ * single DRIVER of that store — the fetch effect and socket subscriptions
+ * dispatch store actions. It returns only load-state (`UseAgorDataResult`) and
+ * subscribes narrowly to the store's load-state fields, so its owner re-renders
+ * on load progress rather than on every entity patch; entity-map consumers
+ * subscribe to the store directly via their own selectors. The realtime entity
+ * reducers + index/merge helpers live in `../store/agorRealtimeActions` and
+ * `../store/agorMaps`, and the background-hydration bookkeeping (per-collection
+ * revision counters, generation tokens, `runHydration`) in
+ * `../store/agorHydration`.
  */
 
 import type {
   AgorClient,
-  Artifact,
   Board,
   BoardComment,
-  BoardEntityObject,
   Branch,
   CardType,
   CardWithType,
-  GatewayChannel,
   MCPServer,
   Repo,
   Session,
   User,
 } from '@agor-live/client';
-import { findByShortIdPrefix, PAGINATION } from '@agor-live/client';
+import { ENTITY_PATH_SEGMENTS, findByShortIdPrefix, PAGINATION } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  bumpFirstPaintMergeRevisions,
+  bumpRevision,
+  cancelAllHydrations,
+  cancelAndFailAllHydrations,
+  resetHydrationRevisions,
+  runHydration,
+} from '../store/agorHydration';
+import {
+  buildBoardObjectMaps,
+  buildById,
+  buildSessionMaps,
+  buildSessionMcpMap,
+  replaceIfChanged,
+} from '../store/agorMaps';
+import * as realtime from '../store/agorRealtimeActions';
+import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
-import { shallowEqualEntity } from '../utils/shallowEqual';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
+import {
+  resolveBoardFromUrlPure,
+  resolveBranchFromShortIdPure,
+  resolveSessionFromShortIdPure,
+} from '../utils/urlResolution';
 
-// Canonical list of initial-load items tracked by the loading checklist.
-// Internal only — consumers receive the derived `initialLoadItems` array
-// (each entry carries label/done/count) rather than the raw key list.
+// Canonical list of initial-load items tracked by the loading checklist —
+// the ESSENTIAL set the first-paint gate blocks on. Internal only; consumers
+// receive the derived `initialLoadItems` array (each entry carries
+// label/done/count) rather than the raw key list.
+//
+// The first paint only needs what's required to render the canvas (branch
+// cards, their sessions, cards, comments, zones). Collections that aren't
+// needed to paint — mcp-servers, session-mcp-servers, gateway-channels,
+// artifacts, and the oauth-status probe — are fetched in the BACKGROUND
+// (see `fetchData`) and intentionally absent here so the gate never waits on
+// them. Their realtime subscriptions are still attached immediately in the
+// subscribe effect, so live updates land even before their fetch resolves.
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
@@ -39,13 +77,18 @@ const INITIAL_LOAD_ITEMS = [
   { key: 'users', label: 'Users' },
   { key: 'cards', label: 'Cards' },
   { key: 'card-types', label: 'Card types' },
-  { key: 'mcp-servers', label: 'MCP servers' },
-  { key: 'session-mcp-servers', label: 'Session MCP links' },
-  { key: 'gateway-channels', label: 'Gateway channels' },
-  { key: 'artifacts', label: 'Artifacts' },
 ] as const;
 
 export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
+
+// First-paint bound for the global (non-board-scoped) sessions slice. Covers
+// Home's "My Sessions" + "Team activity" feeds (both show only recent items)
+// and seeds enough of `sessionById` to resolve `/s/<id>` deep links. The FULL
+// session set is background-hydrated a beat later (see `fetchData`), so
+// genealogy / GlobalSearch / per-board counts converge without blocking the
+// gate. Sessions are the unbounded-with-activity collection, so this is the
+// single most important cap for first-paint latency on a busy workspace.
+const RECENT_SESSIONS_LIMIT = 50;
 
 // One row in the loading checklist. `count` is captured atomically with
 // `done` when each tracked fetch resolves — readers never see a green row
@@ -59,60 +102,7 @@ export interface InitialLoadItem {
 
 export type InitialLoadingStage = 'idle' | 'fetching' | 'indexing';
 
-/**
- * All server-backed data maps held in a single state object.
- *
- * Adding a new map here + to EMPTY_MAPS is all that's required —
- * `setMaps(EMPTY_MAPS)` in the reset effect covers every field automatically.
- */
-type DataMaps = {
-  sessionById: Map<string, Session>;
-  sessionsByBranch: Map<string, Session[]>;
-  boardById: Map<string, Board>;
-  boardObjectById: Map<string, BoardEntityObject>;
-  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
-  // Global placement lookup. Branch placements are unique because a branch can
-  // only have one board-object row at a time.
-  boardObjectByBranchId: Map<string, BoardEntityObject>;
-  // Global placement lookup. Cards follow the same one-row-per-card service
-  // contract as branches; callers needing board-scoped iteration should use
-  // boardObjectsByBoardId instead.
-  boardObjectByCardId: Map<string, BoardEntityObject>;
-  commentById: Map<string, BoardComment>;
-  cardById: Map<string, CardWithType>;
-  cardTypeById: Map<string, CardType>;
-  repoById: Map<string, Repo>;
-  branchById: Map<string, Branch>;
-  userById: Map<string, User>;
-  mcpServerById: Map<string, MCPServer>;
-  gatewayChannelById: Map<string, GatewayChannel>;
-  artifactById: Map<string, Artifact>;
-  sessionMcpServerIds: Map<string, string[]>;
-  userAuthenticatedMcpServerIds: Set<string>;
-};
-
-const EMPTY_MAPS: DataMaps = {
-  sessionById: new Map(),
-  sessionsByBranch: new Map(),
-  boardById: new Map(),
-  boardObjectById: new Map(),
-  boardObjectsByBoardId: new Map(),
-  boardObjectByBranchId: new Map(),
-  boardObjectByCardId: new Map(),
-  commentById: new Map(),
-  cardById: new Map(),
-  cardTypeById: new Map(),
-  repoById: new Map(),
-  branchById: new Map(),
-  userById: new Map(),
-  mcpServerById: new Map(),
-  gatewayChannelById: new Map(),
-  artifactById: new Map(),
-  sessionMcpServerIds: new Map(),
-  userAuthenticatedMcpServerIds: new Set(),
-};
-
-interface UseAgorDataResult extends DataMaps {
+interface UseAgorDataResult {
   initialLoadItems: InitialLoadItem[];
   initialLoadComplete: boolean;
   loadingStage: InitialLoadingStage;
@@ -121,147 +111,88 @@ interface UseAgorDataResult extends DataMaps {
   refetch: () => Promise<void>;
 }
 
-// Generic byId-map replacer used by the per-entity `*Patched` handlers below.
-// Returns `prev` unchanged when the incoming entity is shallow-equal to what
-// we already hold — combined with the wrapper-level no-op short-circuit in
-// `setMapSlice`, idempotent server-side patches become true no-ops. The
-// per-entity handlers stay responsible for archive / branch-migration /
-// cross-map cleanup; this helper only covers the plain "replace one entry"
-// case.
-function replaceIfChanged<T extends object>(
-  prev: Map<string, T>,
-  id: string,
-  entity: T
-): Map<string, T> {
-  const existing = prev.get(id);
-  if (existing && shallowEqualEntity(existing, entity)) return prev;
-  const next = new Map(prev);
-  next.set(id, entity);
-  return next;
+// Parse the leading entity segment out of the current pathname, e.g.
+// `/ui/b/my-board/` → { kind: 'board', token: 'my-board' }. The regex is
+// built from ENTITY_PATH_SEGMENTS so it stays in lockstep with the route
+// table and tolerates the optional `/ui` basename. Returns null for Home (`/`)
+// or any non-entity path.
+const ENTITY_PATH_RE = new RegExp(
+  `/(${ENTITY_PATH_SEGMENTS.board}|${ENTITY_PATH_SEGMENTS.session}|${ENTITY_PATH_SEGMENTS.branch}|${ENTITY_PATH_SEGMENTS.artifact})/([^/]+)`
+);
+type ParsedEntityPath = { kind: 'board' | 'session' | 'branch' | 'artifact'; token: string } | null;
+function parseEntityPath(pathname: string): ParsedEntityPath {
+  const match = pathname.match(ENTITY_PATH_RE);
+  if (!match) return null;
+  const [, segment, token] = match;
+  const kind =
+    segment === ENTITY_PATH_SEGMENTS.board
+      ? 'board'
+      : segment === ENTITY_PATH_SEGMENTS.session
+        ? 'session'
+        : segment === ENTITY_PATH_SEGMENTS.branch
+          ? 'branch'
+          : 'artifact';
+  return { kind, token };
 }
 
-function removeBoardObjectFromBoardBucket(
-  buckets: Map<string, BoardEntityObject[]>,
-  boardObject: BoardEntityObject
-): Map<string, BoardEntityObject[]> {
-  const bucket = buckets.get(boardObject.board_id);
-  if (!bucket?.some((item) => item.object_id === boardObject.object_id)) return buckets;
+// The mobile comments deep link (`/m/comments/<board_id>`) lives OUTSIDE the
+// main entity route table (ENTITY_PATH_SEGMENTS) but still displays a single
+// board's annotations (zones drive comment anchoring) at first paint. Match it
+// here so a cold deep-link resolves its board scope and triggers the targeted
+// full-board `get` — otherwise `board.objects` stays undefined until the boards
+// background hydration lands. The `:boardId` is a full board_id.
+const MOBILE_COMMENTS_PATH_RE = /\/m\/comments\/([^/]+)/;
 
-  const next = new Map(buckets);
-  const filtered = bucket.filter((item) => item.object_id !== boardObject.object_id);
-  if (filtered.length > 0) next.set(boardObject.board_id, filtered);
-  else next.delete(boardObject.board_id);
-  return next;
-}
-
-function upsertBoardObjectInMaps(
-  prev: DataMaps,
-  boardObject: BoardEntityObject,
-  mode: 'create' | 'patch'
-): DataMaps {
-  const existing = prev.boardObjectById.get(boardObject.object_id);
-  if (mode === 'create' && existing) return prev;
-  if (mode === 'patch' && existing && shallowEqualEntity(existing, boardObject)) return prev;
-
-  const boardObjectById = new Map(prev.boardObjectById);
-  boardObjectById.set(boardObject.object_id, boardObject);
-
-  let boardObjectsByBoardId = prev.boardObjectsByBoardId;
-  if (existing && existing.board_id !== boardObject.board_id) {
-    boardObjectsByBoardId = removeBoardObjectFromBoardBucket(boardObjectsByBoardId, existing);
+// Resolve the board the app will ACTUALLY display on first paint from the
+// current URL, reusing the same slug/short-id resolvers `useUrlState` uses.
+// First-paint scoping MUST target this board (never the stored one) so the
+// displayed board renders fully. Returns null → caller falls back to a GLOBAL
+// (unscoped) first paint, which is always correct:
+//   - Home (`/`) or any non-entity path: no board shown.
+//   - `/a/<artifact>/`: artifacts aren't in the gated light batch (they load
+//     in the background), so the board can't be resolved synchronously here.
+//   - Unresolvable / ambiguous short id or a board_id we can't chain to.
+function resolveDisplayedBoardId(
+  pathname: string,
+  boardById: Map<string, { board_id: string; slug?: string }>,
+  branchById: Map<string, { branch_id: string; board_id?: string | null }>,
+  sessionById: Map<
+    string,
+    { session_id: string; branch_id?: string; branch_board_id?: string | null }
+  >
+): string | null {
+  const mobileComments = pathname.match(MOBILE_COMMENTS_PATH_RE);
+  if (mobileComments) {
+    return resolveBoardFromUrlPure(mobileComments[1], boardById);
   }
 
-  const bucket = boardObjectsByBoardId.get(boardObject.board_id) ?? [];
-  const bucketIndex = bucket.findIndex((item) => item.object_id === boardObject.object_id);
-  if (
-    bucketIndex === -1 ||
-    bucket[bucketIndex] !== boardObject ||
-    !shallowEqualEntity(bucket[bucketIndex], boardObject)
-  ) {
-    const nextBuckets = new Map(boardObjectsByBoardId);
-    if (bucketIndex === -1) {
-      nextBuckets.set(boardObject.board_id, [...bucket, boardObject]);
-    } else {
-      const updatedBucket = [...bucket];
-      updatedBucket[bucketIndex] = boardObject;
-      nextBuckets.set(boardObject.board_id, updatedBucket);
+  const parsed = parseEntityPath(pathname);
+  if (!parsed) return null;
+
+  switch (parsed.kind) {
+    case 'board':
+      return resolveBoardFromUrlPure(parsed.token, boardById);
+    case 'session': {
+      const sessionId = resolveSessionFromShortIdPure(parsed.token, sessionById);
+      if (!sessionId) return null;
+      const session = sessionById.get(sessionId);
+      if (!session) return null;
+      // Prefer the board id carried on the session itself (`branch_board_id`,
+      // populated from the branch join server-side). First-paint only holds a
+      // bounded `branchById`, so the session's branch may not be present yet —
+      // but the session row always knows its board. Fall back to the branch
+      // lookup for older payloads that predate the field.
+      if (session.branch_board_id) return session.branch_board_id;
+      const branchId = session.branch_id;
+      return branchId ? (branchById.get(branchId)?.board_id ?? null) : null;
     }
-    boardObjectsByBoardId = nextBuckets;
-  }
-
-  let boardObjectByBranchId = prev.boardObjectByBranchId;
-  if (existing?.branch_id && existing.branch_id !== boardObject.branch_id) {
-    boardObjectByBranchId = new Map(boardObjectByBranchId);
-    boardObjectByBranchId.delete(existing.branch_id);
-  }
-  if (boardObject.branch_id) {
-    const existingByBranch = boardObjectByBranchId.get(boardObject.branch_id);
-    if (!existingByBranch || !shallowEqualEntity(existingByBranch, boardObject)) {
-      boardObjectByBranchId =
-        boardObjectByBranchId === prev.boardObjectByBranchId
-          ? new Map(boardObjectByBranchId)
-          : boardObjectByBranchId;
-      boardObjectByBranchId.set(boardObject.branch_id, boardObject);
+    case 'branch': {
+      const branchId = resolveBranchFromShortIdPure(parsed.token, branchById);
+      return branchId ? (branchById.get(branchId)?.board_id ?? null) : null;
     }
+    default:
+      return null;
   }
-
-  let boardObjectByCardId = prev.boardObjectByCardId;
-  if (existing?.card_id && existing.card_id !== boardObject.card_id) {
-    boardObjectByCardId = new Map(boardObjectByCardId);
-    boardObjectByCardId.delete(existing.card_id);
-  }
-  if (boardObject.card_id) {
-    const existingByCard = boardObjectByCardId.get(boardObject.card_id);
-    if (!existingByCard || !shallowEqualEntity(existingByCard, boardObject)) {
-      boardObjectByCardId =
-        boardObjectByCardId === prev.boardObjectByCardId
-          ? new Map(boardObjectByCardId)
-          : boardObjectByCardId;
-      boardObjectByCardId.set(boardObject.card_id, boardObject);
-    }
-  }
-
-  return {
-    ...prev,
-    boardObjectById,
-    boardObjectsByBoardId,
-    boardObjectByBranchId,
-    boardObjectByCardId,
-  };
-}
-
-function removeBoardObjectFromMaps(prev: DataMaps, boardObject: BoardEntityObject): DataMaps {
-  const existing = prev.boardObjectById.get(boardObject.object_id);
-  if (!existing) return prev;
-
-  const boardObjectById = new Map(prev.boardObjectById);
-  boardObjectById.delete(existing.object_id);
-
-  let boardObjectByBranchId = prev.boardObjectByBranchId;
-  if (
-    existing.branch_id &&
-    boardObjectByBranchId.get(existing.branch_id)?.object_id === existing.object_id
-  ) {
-    boardObjectByBranchId = new Map(boardObjectByBranchId);
-    boardObjectByBranchId.delete(existing.branch_id);
-  }
-
-  let boardObjectByCardId = prev.boardObjectByCardId;
-  if (
-    existing.card_id &&
-    boardObjectByCardId.get(existing.card_id)?.object_id === existing.object_id
-  ) {
-    boardObjectByCardId = new Map(boardObjectByCardId);
-    boardObjectByCardId.delete(existing.card_id);
-  }
-
-  return {
-    ...prev,
-    boardObjectById,
-    boardObjectsByBoardId: removeBoardObjectFromBoardBucket(prev.boardObjectsByBoardId, existing),
-    boardObjectByBranchId,
-    boardObjectByCardId,
-  };
 }
 
 function hasIdMatchingPrefix<T>(
@@ -294,48 +225,40 @@ export function useAgorData(
 ): UseAgorDataResult {
   const enabled = options?.enabled ?? true;
   const directSessionId = options?.directSessionId ?? null;
-  // Single state for all server-backed maps — reset is setMaps(EMPTY_MAPS), one call, can't miss a field.
-  const [maps, setMaps] = useState<DataMaps>(EMPTY_MAPS);
 
-  // Per-field setter factory. Returns a setter with the same functional-update
-  // API as `useState`, with a no-op short-circuit: when the inner update
-  // returns the same reference for its slice, we preserve the outer `maps`
-  // reference too. Without this, `{ ...m, key: same }` would always allocate
-  // a fresh `maps` and force every `useAppLiveData()` / `useAppRepoData()`
-  // consumer to re-render on socket events the handler decided to discard.
-  const setMapSlice =
-    <K extends keyof DataMaps>(key: K) =>
-    (value: DataMaps[K] | ((prev: DataMaps[K]) => DataMaps[K])) =>
-      setMaps((prev) => {
-        const next =
-          typeof value === 'function'
-            ? (value as (p: DataMaps[K]) => DataMaps[K])(prev[key])
-            : value;
-        return Object.is(next, prev[key]) ? prev : { ...prev, [key]: next };
-      });
-  const setSessionById = setMapSlice('sessionById');
-  const setSessionsByBranch = setMapSlice('sessionsByBranch');
-  const setBoardById = setMapSlice('boardById');
-  const setCommentById = setMapSlice('commentById');
-  const setCardById = setMapSlice('cardById');
-  const setCardTypeById = setMapSlice('cardTypeById');
-  const setRepoById = setMapSlice('repoById');
-  const setBranchById = setMapSlice('branchById');
-  const setUserById = setMapSlice('userById');
-  const setMcpServerById = setMapSlice('mcpServerById');
-  const setGatewayChannelById = setMapSlice('gatewayChannelById');
-  const setArtifactById = setMapSlice('artifactById');
-  const setSessionMcpServerIds = setMapSlice('sessionMcpServerIds');
-  const setUserAuthenticatedMcpServerIds = setMapSlice('userAuthenticatedMcpServerIds');
-  const [loading, setLoading] = useState(true);
-  const [loadingStage, setLoadingStage] = useState<InitialLoadingStage>('idle');
-  const [error, setError] = useState<string | null>(null);
-  // Per-item counts captured at fetch-resolution time. Presence in this
-  // record means the item is "done"; the value is the size of the fetched
-  // list. Done flag and count flip atomically so a row never shows a green
-  // ✓ next to a stale 0 (the byId maps below are only populated after the
-  // full Promise.all resolves).
-  const [itemCounts, setItemCounts] = useState<Partial<Record<InitialLoadItemKey, number>>>({});
+  // Reset the shared singleton store once per hook (re)mount, synchronously
+  // BEFORE the first store-subscription read below. This mirrors the old per-mount
+  // `useState(EMPTY_MAPS)` / `useState(true)` semantics: the store is a module
+  // singleton (so a remount — and each test's `renderHook` — would otherwise
+  // inherit stale state), and `useAgorData` is its sole owner (mounted once in
+  // App.tsx). The `useState` initializer runs exactly once per instance.
+  //
+  // `resetHydrationRevisions()` zeroes the per-collection live-write baseline
+  // (fresh-`useRef` semantics); `cancelAllHydrations()` supersedes any straggler
+  // loop from a prior mount of the singleton (generations stay monotonic so a
+  // stale loop can never collide with this instance's fresh generation).
+  useState(() => {
+    agorStore.getState().reset();
+    resetHydrationRevisions();
+    cancelAllHydrations();
+    return null;
+  });
+
+  // Narrow selective subscription so the bootstrap owner re-renders only on a
+  // load-state change — not on every entity patch. The fetch effect and socket
+  // subscriptions still drive the full store; map consumers subscribe to it via
+  // their own `useAgorStore` selectors, and the few reads in this hook that need
+  // an entity map reach for it imperatively through `agorStore.getState()`.
+  const storeState = useStoreWithEqualityFn(
+    agorStore,
+    (s) => ({
+      loadingStage: s.loadingStage,
+      loading: s.loading,
+      error: s.error,
+      itemCounts: s.itemCounts,
+    }),
+    shallow
+  );
 
   // Track if we've done initial fetch. The initial fetch happens once on mount;
   // socket reconnects after that re-trigger fetchData() to recover any events
@@ -353,8 +276,8 @@ export function useAgorData(
 
   // Tracks whether the most recent silent refetch failed. Set by the silent
   // catch branch in `fetchData`, cleared on success. Read by the
-  // TOKENS_REFRESHED_EVENT listener below so a token refresh that lands AFTER
-  // a failed reconnect refetch (auth race during socket re-auth) gets to
+  // TOKENS_REFRESHED_EVENT listener below so a token replacement that lands
+  // AFTER a failed reconnect refetch (auth race during socket re-auth) gets to
   // retry — without this, the byId maps would stay stale until the next
   // physical reconnect or page refresh. We use a ref rather than state since
   // we only consume it in event handlers, never in render.
@@ -369,7 +292,7 @@ export function useAgorData(
   // reconnect-time 401 (auth race with the re-auth handler in useAgorClient)
   // bubbled up. Silent failures are logged for observability; the UI continues
   // to render whatever byId state was last successfully fetched, and the next
-  // reconnect or token refresh gets another shot.
+  // reconnect or token replacement gets another shot.
   const fetchData = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
       if (!client || !enabled) {
@@ -385,11 +308,11 @@ export function useAgorData(
 
       try {
         if (!silent) {
-          setLoading(true);
-          setLoadingStage('fetching');
+          agorStore.getState().setLoading(true);
+          agorStore.getState().setLoadingStage('fetching');
           debugTimer?.markStage('fetching');
-          setError(null);
-          setItemCounts({});
+          agorStore.getState().setError(null);
+          agorStore.getState().setItemCounts({});
         }
 
         // Marks a tracked item complete (and captures its count from the
@@ -401,94 +324,62 @@ export function useAgorData(
         ): Promise<T> => {
           const timedPromise = debugTimer?.track(key, p) ?? p;
           return timedPromise.then((r) => {
-            if (!silent) setItemCounts((prev) => ({ ...prev, [key]: r.length }));
+            if (!silent)
+              agorStore.getState().setItemCounts((prev) => ({ ...prev, [key]: r.length }));
             return r;
           });
         };
 
-        // Fetch sessions, boards, board-objects, comments, repos, branches, users, mcp servers, session-mcp relationships in parallel.
-        // Task/message detail now comes from per-session reactive state in conversation components.
-        debugTimer?.startFetchPhase();
-        const [
-          sessionsList,
-          boardsList,
-          boardObjectsList,
-          commentsList,
-          cardsList,
-          cardTypesList,
-          reposList,
-          branchesList,
-          usersList,
-          mcpServersList,
-          sessionMcpList,
-          gatewayChannelsList,
-          artifactsList,
-          oauthStatusResult,
-        ] = await Promise.all([
-          track(
-            'sessions',
-            client.service('sessions').findAll({
-              query: {
-                archived: false,
-                $limit: PAGINATION.DEFAULT_LIMIT,
-                $sort: { updated_at: -1 },
-              },
-            })
-          ),
-          track(
-            'boards',
-            client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'board-objects',
-            client.service('board-objects').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'board-comments',
-            client
-              .service('board-comments')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'cards',
-            client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'card-types',
-            client.service('card-types').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'repos',
-            client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'branches',
-            client
-              .service('branches')
-              .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'users',
-            client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'mcp-servers',
-            client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'session-mcp-servers',
+        // ── Background (non-gated) fetches ──────────────────────────────
+        // These collections are NOT needed to paint the canvas, so they must
+        // never block the first-paint gate. Fire-and-forget: each populates its
+        // own map slice on resolve. Their realtime subscriptions are attached in
+        // the subscribe effect BEFORE this fetch runs, so live events land even
+        // while these fetches are in flight — and `runHydration` only applies a
+        // snapshot when no live write to that collection raced (else it refetches
+        // a fresh one). We deliberately do NOT `track()` them — they're absent
+        // from INITIAL_LOAD_ITEMS, so the loading checklist / `initialLoadComplete`
+        // gate ignores them. We apply through the store's `applyMaps` (not the
+        // per-entity setters), keeping fetchData's deps stable so the subscribe
+        // effect doesn't re-fire.
+        void runHydration(
+          'mcp-servers',
+          ['mcpServers'],
+          () =>
+            client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) =>
+            agorStore
+              .getState()
+              .applyMaps((prev) => ({ ...prev, mcpServerById: buildById(list, 'mcp_server_id') }))
+        );
+        void runHydration(
+          'session-mcp-servers',
+          ['sessionMcp'],
+          () =>
             client
               .service('session-mcp-servers')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'gateway-channels',
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) =>
+            agorStore
+              .getState()
+              .applyMaps((prev) => ({ ...prev, sessionMcpServerIds: buildSessionMcpMap(list) }))
+        );
+        void runHydration(
+          'gateway-channels',
+          ['gatewayChannels'],
+          () =>
             client
               .service('gateway-channels')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
-          ),
-          track(
-            'artifacts',
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) =>
+            agorStore
+              .getState()
+              .applyMaps((prev) => ({ ...prev, gatewayChannelById: buildById(list, 'id') }))
+        );
+        void runHydration(
+          'artifacts',
+          ['artifacts'],
+          () =>
             client.service('artifacts').findAll({
               query: {
                 $limit: PAGINATION.DEFAULT_LIMIT,
@@ -514,20 +405,103 @@ export function useAgorData(
                   'url',
                 ],
               },
+            }),
+          (list) =>
+            agorStore
+              .getState()
+              .applyMaps((prev) => ({ ...prev, artifactById: buildById(list, 'artifact_id') }))
+        );
+        void runHydration(
+          'oauth-status',
+          ['oauth'],
+          () => client.service('mcp-servers/oauth-status').find(),
+          (res) => {
+            const ids =
+              (res as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
+            agorStore
+              .getState()
+              .applyMaps((prev) => ({ ...prev, userAuthenticatedMcpServerIds: new Set(ids) }));
+          }
+        );
+
+        // ── Essential gated fetches — LIGHT batch ───────────────────────
+        // Tiny global collections (boards / users / repos / card-types stay
+        // global — bounded and small) plus a BOUNDED recent slice of sessions.
+        // Awaited first so we can resolve the first-paint board scope BEFORE the
+        // board-scoped heavy batch. Sessions and branches are the two that scale
+        // (sessions unbounded with activity; hundreds of branches on a real
+        // workspace), so they are NOT fetched in full here: sessions are capped
+        // at recent-N, branches are deferred to the board-scoped heavy batch, and
+        // BOTH full sets are background-hydrated after the gate opens.
+        debugTimer?.startFetchPhase();
+        const [sessionsList, boardsList, cardTypesList, reposList, usersList] = await Promise.all([
+          track(
+            'sessions',
+            silent
+              ? // Reconnect resyncs must fully repopulate every board, so they stay
+                // GLOBAL/full (mirrors the heavy + hydration paths below).
+                client.service('sessions').findAll({
+                  query: {
+                    archived: false,
+                    $limit: PAGINATION.DEFAULT_LIMIT,
+                    $sort: { updated_at: -1 },
+                  },
+                })
+              : // Bounded recent slice for first paint. Use find() (a SINGLE page),
+                // NOT findAll(): findAll loops until it has `total` rows, so a small
+                // $limit would still walk the whole table and defeat the cap. The
+                // daemon orders by `updated_at` in SQL (findPage), so this is the
+                // genuinely most-recent N. The FULL set is hydrated below.
+                client
+                  .service('sessions')
+                  .find({
+                    query: {
+                      archived: false,
+                      $limit: RECENT_SESSIONS_LIMIT,
+                      $sort: { updated_at: -1 },
+                    },
+                  })
+                  .then((result) => (Array.isArray(result) ? result : result.data))
+          ),
+          track(
+            'boards',
+            // First paint: LEAN list — omit each board's heavy `objects` /
+            // `custom_css` annotations (68% of the boards payload — only the
+            // displayed board needs them to paint). Metadata still covers the
+            // switcher, Home, and `resolveDisplayedBoardId` scope resolution. The
+            // displayed board's full record is fetched below; all boards' objects
+            // backfill via the `boards` background hydration. Silent reconnect
+            // resyncs FULL (mirrors sessions/branches) so the displayed board's
+            // zones never flash off while re-syncing.
+            client.service('boards').findAll({
+              query: { ...(silent ? {} : { lean: true }), $limit: PAGINATION.DEFAULT_LIMIT },
             })
           ),
-          client
-            .service('mcp-servers/oauth-status')
-            .find()
-            .catch(() => ({ authenticated_server_ids: [] })),
+          track(
+            'card-types',
+            client.service('card-types').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
+          track(
+            'repos',
+            client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
+          track(
+            'users',
+            client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+          ),
         ]);
-        debugTimer?.endFetchPhase();
+
+        // Branches healed into first paint by a direct deep link — the URL
+        // session's branch, or a `/w/<id>` branch link. They seed `branchById`
+        // ahead of the board-scoped branch fetch so the displayed board can be
+        // resolved and its target card paints immediately.
+        const healedBranches: Branch[] = [];
 
         // Direct /s/<id>/ opens should work for archived sessions without broadening
-        // the default active-session list. If the active query missed the URL target,
-        // fetch just that session by ID/short ID. Its branch is only hydrated when
-        // it is still active; adding archived branches to `branchById` would make
-        // board-object joins render archived cards back onto active boards.
+        // the recent-session slice. If it missed the URL target, fetch just that
+        // session by ID/short ID. Its branch is only hydrated when it is still
+        // active; adding archived branches to `branchById` would make board-object
+        // joins render archived cards back onto active boards.
         if (
           directSessionId &&
           !hasIdMatchingPrefix(directSessionId, sessionsList, (s) => s.session_id)
@@ -539,17 +513,13 @@ export function useAgorData(
             if (!sessionsList.some((s) => s.session_id === directSession.session_id)) {
               sessionsList.push(directSession);
             }
-            if (
-              !directSession.archived &&
-              directSession.branch_id &&
-              !branchesList.some((branch) => branch.branch_id === directSession.branch_id)
-            ) {
+            if (!directSession.archived && directSession.branch_id) {
               try {
                 const directBranch = (await client
                   .service('branches')
                   .get(directSession.branch_id)) as Branch;
                 if (!directBranch.archived) {
-                  branchesList.push(directBranch);
+                  healedBranches.push(directBranch);
                 }
               } catch {
                 // The session can still open; it just won't be able to switch/recenter
@@ -561,8 +531,155 @@ export function useAgorData(
           }
         }
 
+        // The board the app will ACTUALLY display, resolved from the current URL
+        // with the same slug/short-id resolvers `useUrlState` uses (NOT
+        // localStorage — the displayed board can differ from the stored one, e.g.
+        // a `/b/<other>/` deep link). undefined → GLOBAL (unscoped) first paint,
+        // always correct: Home, `/a/` artifact links, or any unresolvable target.
+        // Silent reconnect refetches always go GLOBAL so they fully resync.
+        const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
+
+        // Direct /w/<id>/ branch opens: heal that branch so the board chains
+        // through it (branch → board_id). Sessions carry `branch_board_id` so
+        // session links resolve without this, but a branch link has nothing else
+        // to chain from until the board-scoped branch fetch (which needs the board
+        // we're trying to resolve — hence the targeted get here).
         if (!silent) {
-          setLoadingStage('indexing');
+          const parsedPath = parseEntityPath(pathname);
+          if (
+            parsedPath?.kind === 'branch' &&
+            !hasIdMatchingPrefix(parsedPath.token, healedBranches, (b) => b.branch_id)
+          ) {
+            try {
+              const directBranch = (await client
+                .service('branches')
+                .get(parsedPath.token)) as Branch;
+              if (!directBranch.archived) healedBranches.push(directBranch);
+            } catch {
+              // Unresolvable branch link → fall back to a GLOBAL first paint.
+            }
+          }
+        }
+
+        // Build the light global Maps + interim session/branch lookups used to
+        // resolve the board scope. `interimBranchById` holds only healed branches;
+        // the board-scoped set lands in the heavy batch below.
+        const boardsMap = new Map<string, Board>();
+        for (const board of boardsList) {
+          boardsMap.set(board.board_id, board);
+        }
+        const cardTypesMap = new Map<string, CardType>();
+        for (const cardType of cardTypesList) {
+          cardTypesMap.set(cardType.card_type_id, cardType);
+        }
+        const reposMap = new Map<string, Repo>();
+        for (const repo of reposList) {
+          reposMap.set(repo.repo_id, repo);
+        }
+        const usersMap = new Map<string, User>();
+        for (const user of usersList) {
+          usersMap.set(user.user_id, user);
+        }
+
+        const interimBranchById = new Map<string, Branch>();
+        for (const branch of healedBranches) {
+          interimBranchById.set(branch.branch_id, branch);
+        }
+        const interimSessionById = buildSessionMaps(sessionsList).sessionById;
+
+        const boardScope = silent
+          ? undefined
+          : (resolveDisplayedBoardId(pathname, boardsMap, interimBranchById, interimSessionById) ??
+            undefined);
+
+        // ── Essential gated fetches — HEAVY + board-scoped batch ────────
+        // Scoped to the first-paint board when resolved (board_id pushes to SQL
+        // for sessions / board-objects / board-comments; cards filter it
+        // server-side). On a real workspace this trims thousands of rows to one
+        // board's. Silent reconnect (boardScope undefined) fetches branches
+        // GLOBAL/full to resync; sessions were already fetched full in the silent
+        // light batch above, so the extra board-session fetch is skipped there.
+        const [
+          branchesList,
+          boardSessionsList,
+          boardObjectsList,
+          commentsList,
+          cardsList,
+          displayedBoardFull,
+        ] = await Promise.all([
+          track(
+            'branches',
+            silent
+              ? client.service('branches').findAll({
+                  query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT },
+                })
+              : boardScope
+                ? client.service('branches').findAll({
+                    query: {
+                      archived: false,
+                      board_id: boardScope,
+                      $limit: PAGINATION.DEFAULT_LIMIT,
+                    },
+                  })
+                : Promise.resolve([] as Branch[])
+          ),
+          // Board-scoped sessions: only when a board is displayed and we didn't
+          // already fetch the full set (silent path). Merged with the recent
+          // slice below. Not tracked — not part of the loading checklist.
+          !silent && boardScope
+            ? client.service('sessions').findAll({
+                query: {
+                  archived: false,
+                  board_id: boardScope,
+                  $limit: PAGINATION.DEFAULT_LIMIT,
+                  $sort: { updated_at: -1 },
+                },
+              })
+            : Promise.resolve([] as Session[]),
+          track(
+            'board-objects',
+            client.service('board-objects').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                ...(boardScope ? { board_id: boardScope } : {}),
+              },
+            })
+          ),
+          track(
+            'board-comments',
+            client.service('board-comments').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                ...(boardScope ? { board_id: boardScope } : {}),
+              },
+            })
+          ),
+          track(
+            'cards',
+            client.service('cards').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                ...(boardScope ? { board_id: boardScope } : {}),
+              },
+            })
+          ),
+          // Displayed board's FULL record (with objects/custom_css) so its
+          // zones/text/markdown paint at first load — the gated boards fetch
+          // above is lean. Only when a board is actually displayed; Home and
+          // silent reconnect (boardScope undefined) skip it and let the boards
+          // hydration restore objects. Not tracked — not a loading-checklist item.
+          !silent && boardScope
+            ? // A failed get degrades gracefully rather than blocking first paint:
+              // the displayed board's objects backfill via the boards background
+              // hydration a beat later, so one board's annotation fetch failing
+              // must not fail or stall the whole load.
+              (client.service('boards').get(boardScope) as Promise<Board>).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        debugTimer?.endFetchPhase();
+
+        if (!silent) {
+          agorStore.getState().setLoadingStage('indexing');
           debugTimer?.markStage('indexing');
           debugTimer?.startIndexing();
           // Give the browser one paint opportunity so large instances can
@@ -580,53 +697,14 @@ export function useAgorData(
           });
         }
 
-        // Build session Maps for efficient lookups
-        const sessionsById = new Map<string, Session>();
-        const sessionsByBranchId = new Map<string, Session[]>();
-
-        for (const session of sessionsList) {
-          // sessionById: O(1) ID lookups
-          sessionsById.set(session.session_id, session);
-
-          // sessionsByBranch: O(1) branch-scoped filtering. Keep this as the
-          // active board/session list: a direct archived-session URL may add
-          // the archived session to sessionById so the drawer can open, but it
-          // must not reappear in branch cards or board assistants.
-          if (session.archived) continue;
-          const branchId = session.branch_id;
-          if (!sessionsByBranchId.has(branchId)) {
-            sessionsByBranchId.set(branchId, []);
-          }
-          sessionsByBranchId.get(branchId)!.push(session);
-        }
-
-        // Build board Map for efficient lookups
-        const boardsMap = new Map<string, Board>();
-        for (const board of boardsList) {
-          boardsMap.set(board.board_id, board);
-        }
-        // Build board object Maps for efficient lookups
-        const boardObjectsMap = new Map<string, BoardEntityObject>();
-        const boardObjectsByBoardMap = new Map<string, BoardEntityObject[]>();
-        const boardObjectByBranchMap = new Map<string, BoardEntityObject>();
-        const boardObjectByCardMap = new Map<string, BoardEntityObject>();
-        for (const boardObject of boardObjectsList) {
-          boardObjectsMap.set(boardObject.object_id, boardObject);
-
-          const boardObjectsForBoard = boardObjectsByBoardMap.get(boardObject.board_id);
-          if (boardObjectsForBoard) {
-            boardObjectsForBoard.push(boardObject);
-          } else {
-            boardObjectsByBoardMap.set(boardObject.board_id, [boardObject]);
-          }
-
-          if (boardObject.branch_id) {
-            boardObjectByBranchMap.set(boardObject.branch_id, boardObject);
-          }
-          if (boardObject.card_id) {
-            boardObjectByCardMap.set(boardObject.card_id, boardObject);
-          }
-        }
+        // Build board object Maps for efficient lookups (shared with the
+        // background full-hydration pass so the two index builds stay identical)
+        const {
+          boardObjectById: boardObjectsMap,
+          boardObjectsByBoardId: boardObjectsByBoardMap,
+          boardObjectByBranchId: boardObjectByBranchMap,
+          boardObjectByCardId: boardObjectByCardMap,
+        } = buildBoardObjectMaps(boardObjectsList);
         // Build comment Map for efficient lookups
         const commentsMap = new Map<string, BoardComment>();
         for (const comment of commentsList) {
@@ -637,54 +715,49 @@ export function useAgorData(
         for (const card of cardsList) {
           cardsMap.set(card.card_id, card);
         }
-        // Build card type Map for efficient lookups
-        const cardTypesMap = new Map<string, CardType>();
-        for (const cardType of cardTypesList) {
-          cardTypesMap.set(cardType.card_type_id, cardType);
+
+        // Replace the displayed board's LEAN row with its FULL record so the
+        // visible canvas paints zones/text/markdown at first paint (no flash).
+        // Other boards stay lean until the boards background hydration lands.
+        if (displayedBoardFull) {
+          boardsMap.set(displayedBoardFull.board_id, displayedBoardFull);
         }
-        // Build repo Map for efficient lookups
-        const reposMap = new Map<string, Repo>();
-        for (const repo of reposList) {
-          reposMap.set(repo.repo_id, repo);
+
+        // Merge the recent session slice with the board-scoped sessions (dedup by
+        // id) for first paint, then build both session lookups (incl. remote
+        // surrogates). The FULL session set is background-hydrated below.
+        const firstPaintSessions = new Map<string, Session>();
+        for (const session of sessionsList) {
+          firstPaintSessions.set(session.session_id, session);
         }
-        // Build branch Map for efficient lookups
+        for (const session of boardSessionsList) {
+          if (!firstPaintSessions.has(session.session_id)) {
+            firstPaintSessions.set(session.session_id, session);
+          }
+        }
+        const { sessionById: sessionsById, sessionsByBranch: sessionsByBranchId } =
+          buildSessionMaps([...firstPaintSessions.values()]);
+
+        // Branch map for first paint: the board-scoped (or silent-global) set,
+        // plus any deep-link-healed branches. The FULL set is hydrated below.
         const branchesMap = new Map<string, Branch>();
         for (const branch of branchesList) {
           branchesMap.set(branch.branch_id, branch);
         }
-        // Build user Map for efficient lookups
-        const usersMap = new Map<string, User>();
-        for (const user of usersList) {
-          usersMap.set(user.user_id, user);
-        }
-        // Build MCP server Map for efficient lookups
-        const mcpServersMap = new Map<string, MCPServer>();
-        for (const mcpServer of mcpServersList) {
-          mcpServersMap.set(mcpServer.mcp_server_id, mcpServer);
-        }
-        // Build gateway channel Map for efficient lookups
-        const gatewayChannelsMap = new Map<string, GatewayChannel>();
-        for (const channel of gatewayChannelsList) {
-          gatewayChannelsMap.set(channel.id, channel);
-        }
-        // Build artifact Map for efficient lookups
-        const artifactsMap = new Map<string, Artifact>();
-        for (const artifact of artifactsList) {
-          artifactsMap.set(artifact.artifact_id, artifact);
-        }
-        // Group session-MCP relationships by session_id
-        const sessionMcpMap = new Map<string, string[]>();
-        for (const relationship of sessionMcpList) {
-          if (!sessionMcpMap.has(relationship.session_id)) {
-            sessionMcpMap.set(relationship.session_id, []);
+        for (const branch of healedBranches) {
+          if (!branchesMap.has(branch.branch_id)) {
+            branchesMap.set(branch.branch_id, branch);
           }
-          sessionMcpMap.get(relationship.session_id)!.push(relationship.mcp_server_id);
         }
-        // Set per-user OAuth auth status
-        const oauthStatus = oauthStatusResult as { authenticated_server_ids?: string[] };
-        const userAuthenticatedMcpServerIds = new Set(oauthStatus?.authenticated_server_ids ?? []);
 
-        setMaps({
+        // Merge the essential slices in one atomic update. We spread `prev`
+        // (rather than replacing the whole object) so the BACKGROUND-managed
+        // slices — mcpServerById / gatewayChannelById / artifactById /
+        // sessionMcpServerIds / userAuthenticatedMcpServerIds — survive even if
+        // their fire-and-forget fetches resolved before this gate did. Those
+        // slices are owned by their background setters + realtime handlers.
+        agorStore.getState().applyMaps((prev) => ({
+          ...prev,
           sessionById: sessionsById,
           sessionsByBranch: sessionsByBranchId,
           boardById: boardsMap,
@@ -698,14 +771,165 @@ export function useAgorData(
           repoById: reposMap,
           branchById: branchesMap,
           userById: usersMap,
-          mcpServerById: mcpServersMap,
-          gatewayChannelById: gatewayChannelsMap,
-          artifactById: artifactsMap,
-          sessionMcpServerIds: sessionMcpMap,
-          userAuthenticatedMcpServerIds,
-        });
+        }));
+        // This wholesale replace is NOT a `runHydration` apply, so it must bump
+        // the revisions of every collection it overwrites — exactly like the
+        // per-mutation realtime handlers do. Critical on the SILENT reconnect
+        // resync: an in-flight hydration whose snapshot predates the disconnect
+        // would otherwise pass its quiet check and clobber this newer reconnect
+        // snapshot (resurrecting data that changed while we were disconnected).
+        // The background hydrations kicked off below re-snapshot AFTER this bump,
+        // so they're unaffected.
+        bumpFirstPaintMergeRevisions();
         debugTimer?.endIndexing();
         debugFinishStatus = 'success';
+
+        // ── Background full hydration (skip-apply-on-race) ──────────────
+        // First paint is now open with ONLY the recent sessions + the displayed
+        // board's branches/sessions/objects/cards/comments. Pull the FULL sets so
+        // per-board counts, the board switcher, GlobalSearch, the branch-list
+        // drawer, facepiles and session genealogy (which can span boards) see
+        // everything a beat later.
+        //
+        // Correctness: this runs WHILE the app is interactive, so a realtime
+        // create/patch/remove can land during a global fetch. `runHydration`
+        // applies the fetched snapshot WHOLESALE only when no live write to the
+        // listed collection(s) raced the fetch (revision counters unchanged) —
+        // a wholesale apply of a quiet snapshot can neither clobber a live
+        // create/patch (none happened) nor resurrect a live remove (a remove
+        // would have bumped the counter → no apply). If a write raced, the
+        // snapshot is discarded and refetched; we never overlay a racy snapshot.
+
+        // Sessions + branches: now ALWAYS bounded at first paint (recent-N /
+        // board-scoped), so hydrate them on every non-silent load (silent
+        // reconnect already fetched them full above). repos / users / boards /
+        // card-types stay global at first paint, so they need no top-up.
+        //
+        // Sessions and branches hydrate on INDEPENDENT loops (separate fetches,
+        // separate revision guards, separate generation tokens). Coupling them
+        // in a single runHydration would let high-frequency session-write churn
+        // (common when agents stream) starve the branch apply indefinitely — and
+        // on Home, branches start empty and are filled ONLY by this hydration, so
+        // coupling could leave the board empty forever. On independent loops,
+        // branches apply on their own quiet window (almost immediately)
+        // regardless of session churn.
+        if (!silent) {
+          void runHydration(
+            'sessions',
+            ['sessions'],
+            () =>
+              client.service('sessions').findAll({
+                query: {
+                  archived: false,
+                  $limit: PAGINATION.DEFAULT_LIMIT,
+                  $sort: { updated_at: -1 },
+                },
+              }),
+            (allSessions) =>
+              agorStore.getState().applyMaps((prev) => {
+                // The hydration fetches active sessions only. Deep-link-healed
+                // archived sessions (added to `sessionById` so a direct /s/<id>
+                // archived link can open the drawer) are OUT of that query's
+                // domain — never in branch buckets, so they don't affect board
+                // rendering — so carry them over rather than dropping them. This
+                // is domain-completion, NOT race reconciliation: the race
+                // correctness comes entirely from the quiet-window guarantee.
+                const sessions = new Map<string, Session>();
+                for (const session of allSessions) sessions.set(session.session_id, session);
+                for (const [id, session] of prev.sessionById) {
+                  if (session.archived && !sessions.has(id)) sessions.set(id, session);
+                }
+                const { sessionById, sessionsByBranch } = buildSessionMaps([...sessions.values()]);
+                return { ...prev, sessionById, sessionsByBranch };
+              })
+          );
+          void runHydration(
+            'branches',
+            ['branches'],
+            () =>
+              client
+                .service('branches')
+                .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allBranches) =>
+              // Quiet window proven by runHydration → apply wholesale. Branches
+              // are active-only (the snapshot query is archived:false and the
+              // handlers never keep an archived branch), so a wholesale replace
+              // is complete.
+              agorStore
+                .getState()
+                .applyMaps((prev) => ({ ...prev, branchById: buildById(allBranches, 'branch_id') }))
+          );
+        }
+
+        // Board objects / cards / comments: only board-scoped at first paint when
+        // a board was resolved (`boardScope` set, non-silent only — silent
+        // reconnect already refetches everything global). Top up to the global set.
+        //
+        // Board objects / cards / comments also hydrate on INDEPENDENT loops so
+        // churn in one (e.g. rapid card moves) can't starve another's apply. Each
+        // global snapshot is a superset of its board-scoped first-paint slice, so
+        // no overlay is needed; the quiet-window guard prevents clobber/resurrect.
+        if (boardScope) {
+          void runHydration(
+            'board-objects',
+            ['boardObjects'],
+            () =>
+              client
+                .service('board-objects')
+                .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allBoardObjects) =>
+              agorStore.getState().applyMaps((prev) => {
+                const base = buildBoardObjectMaps(allBoardObjects);
+                return {
+                  ...prev,
+                  boardObjectById: base.boardObjectById,
+                  boardObjectsByBoardId: base.boardObjectsByBoardId,
+                  boardObjectByBranchId: base.boardObjectByBranchId,
+                  boardObjectByCardId: base.boardObjectByCardId,
+                };
+              })
+          );
+          void runHydration(
+            'cards',
+            ['cards'],
+            () => client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allCards) =>
+              agorStore
+                .getState()
+                .applyMaps((prev) => ({ ...prev, cardById: buildById(allCards, 'card_id') }))
+          );
+          void runHydration(
+            'board-comments',
+            ['comments'],
+            () =>
+              client
+                .service('board-comments')
+                .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allComments) =>
+              agorStore.getState().applyMaps((prev) => ({
+                ...prev,
+                commentById: buildById(allComments, 'comment_id'),
+              }))
+          );
+        }
+
+        // Boards: the gated first-paint list is LEAN (no objects/custom_css) and
+        // board switching never refetches — so every OTHER board's annotations
+        // must be backfilled here, exactly like sessions/branches. Only on the
+        // non-silent first load: silent reconnect already refetched boards FULL
+        // above. The displayed board already carries its objects from the
+        // targeted get; the full set is a superset of it.
+        if (!silent) {
+          void runHydration(
+            'boards',
+            ['boards'],
+            () => client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+            (allBoards) =>
+              agorStore
+                .getState()
+                .applyMaps((prev) => ({ ...prev, boardById: buildById(allBoards, 'board_id') }))
+          );
+        }
 
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.
@@ -723,12 +947,14 @@ export function useAgorData(
         } else {
           debugFinishStatus = 'error';
           debugFinishError = err;
-          setError(err instanceof Error ? err.message : 'Failed to fetch data');
+          agorStore
+            .getState()
+            .setError(err instanceof Error ? err.message : 'Failed to fetch data');
         }
       } finally {
         if (!silent) {
-          setLoading(false);
-          setLoadingStage('idle');
+          agorStore.getState().setLoading(false);
+          agorStore.getState().setLoadingStage('idle');
           debugTimer?.markStage('idle');
           if (debugFinishStatus) {
             debugTimer?.finish(debugFinishStatus, debugFinishError);
@@ -749,21 +975,34 @@ export function useAgorData(
   // board (and downstream, the URL) — see the comment on the useAgorData
   // call in App.tsx for the full failure chain.
   //
-  // EMPTY_MAPS covers every field — adding a new map to DataMaps automatically
-  // includes it here without any extra code.
+  // `resetMaps()` clears every data map (EMPTY_MAPS covers every field) while
+  // leaving the meta fields alone — matching the old `setMaps(EMPTY_MAPS)`.
+  // `cancelAndFailAllHydrations()` cancels every in-flight hydration loop (bump
+  // generations) AND fails any quiet check it might still reach (bump revisions)
+  // so an unresolved hydration can't repopulate the Maps AFTER logout (post-logout
+  // data leak). Bumping the generation is the real stop — without it, a revision
+  // bump alone would only make the loop discard-and-RE-FETCH from the stale client
+  // and eventually apply into freshly-cleared Maps.
   useEffect(() => {
     if (client) return;
-    setMaps(EMPTY_MAPS);
+    cancelAndFailAllHydrations();
+    agorStore.getState().resetMaps();
     setHasInitiallyFetched(false);
   }, [client]);
+
+  // On unmount, supersede every in-flight per-collection hydration loop so it
+  // stops retrying and never applies a snapshot (or schedules another timer)
+  // after teardown. Generation bump = cancellation; see `runHydration`.
+  useEffect(() => () => cancelAllHydrations(), []);
 
   // If the user navigates to /s/<id>/ after the initial active-session fetch,
   // load that one session by ID as well. This keeps direct links to archived
   // sessions openable without changing the default list query.
   useEffect(() => {
     if (!client || !enabled || !hasInitiallyFetched || !directSessionId) return;
-    if (maps.sessionById.has(directSessionId)) return;
-    if (hasIdMatchingPrefix(directSessionId, maps.sessionById.values(), (s) => s.session_id)) {
+    const { sessionById } = agorStore.getState();
+    if (sessionById.has(directSessionId)) return;
+    if (hasIdMatchingPrefix(directSessionId, sessionById.values(), (s) => s.session_id)) {
       return;
     }
 
@@ -773,14 +1012,18 @@ export function useAgorData(
         const directSession = (await client.service('sessions').get(directSessionId)) as Session;
         if (cancelled) return;
 
-        setSessionById((prev) => {
+        // This is a live write to the sessions maps — bump so a sessions
+        // hydration in flight discards its (session-missing) snapshot rather
+        // than clobbering this deep-link heal.
+        bumpRevision('sessions');
+        agorStore.getState().setMap('sessionById', (prev) => {
           if (prev.has(directSession.session_id)) return prev;
           const next = new Map(prev);
           next.set(directSession.session_id, directSession);
           return next;
         });
         if (!directSession.archived) {
-          setSessionsByBranch((prev) => {
+          agorStore.getState().setMap('sessionsByBranch', (prev) => {
             const branchSessions = prev.get(directSession.branch_id) || [];
             if (branchSessions.some((s) => s.session_id === directSession.session_id)) return prev;
             const next = new Map(prev);
@@ -792,14 +1035,15 @@ export function useAgorData(
         if (
           !directSession.archived &&
           directSession.branch_id &&
-          !maps.branchById.has(directSession.branch_id)
+          !agorStore.getState().branchById.has(directSession.branch_id)
         ) {
           try {
             const directBranch = (await client
               .service('branches')
               .get(directSession.branch_id)) as Branch;
             if (cancelled) return;
-            setBranchById((prev) => {
+            bumpRevision('branches');
+            agorStore.getState().setMap('branchById', (prev) => {
               if (directBranch.archived) return prev;
               if (prev.has(directBranch.branch_id)) return prev;
               const next = new Map(prev);
@@ -819,485 +1063,100 @@ export function useAgorData(
     return () => {
       cancelled = true;
     };
-  }, [
-    client,
-    directSessionId,
-    enabled,
-    hasInitiallyFetched,
-    maps.branchById,
-    maps.sessionById,
-    setBranchById,
-    setSessionById,
-    setSessionsByBranch,
-  ]);
+  }, [client, directSessionId, enabled, hasInitiallyFetched]);
 
   // Subscribe to real-time updates
-  // biome-ignore lint/correctness/useExhaustiveDependencies: setter helpers only close over stable setMaps; listing them would add noise without preventing stale closures
+  //
+  // Every socket event is wired straight to the matching store action in
+  // `agorRealtimeActions` (module singletons → stable references, so cleanup
+  // `removeListener` matches). The store action does the
+  // `replaceIfChanged` / cascade / index-rebuild + per-collection `bumpRevision`.
+  // OAuth + agor-query handlers stay local: they need `client` (async refetch)
+  // or are pure window side-effects.
   useEffect(() => {
     if (!client || !enabled) {
       // No client or disabled = not ready for data fetch, set loading to false
-      setLoading(false);
-      setLoadingStage('idle');
+      agorStore.getState().setLoading(false);
+      agorStore.getState().setLoadingStage('idle');
       return;
-    }
-
-    // Initial fetch (only once - WebSocket events keep us synced after that)
-    if (!hasInitiallyFetched) {
-      fetchData().then(() => setHasInitiallyFetched(true));
     }
 
     // Subscribe to session events
     const sessionsService = client.service('sessions');
-    const handleSessionCreated = (session: Session) => {
-      if (session.archived) return;
-
-      // Update sessionById - only create new Map if session doesn't exist
-      setSessionById((prev) => {
-        if (prev.has(session.session_id)) return prev; // Already exists, shouldn't happen
-        const next = new Map(prev);
-        next.set(session.session_id, session);
-        return next;
-      });
-
-      // Update sessionsByBranch - only create new Map when adding new session
-      setSessionsByBranch((prev) => {
-        const branchSessions = prev.get(session.branch_id) || [];
-        // Check if session already exists in this branch (duplicate event)
-        if (branchSessions.some((s) => s.session_id === session.session_id)) return prev;
-
-        const next = new Map(prev);
-        next.set(session.branch_id, [...branchSessions, session]);
-        return next;
-      });
-    };
-    const handleSessionPatched = (session: Session) => {
-      const isArchived = session.archived === true;
-      // Track old branch_id for migration detection
-      let oldBranchId: string | null = null;
-
-      // Update sessionById - add/update active sessions, remove archived sessions
-      setSessionById((prev) => {
-        const existing = prev.get(session.session_id);
-
-        // Capture old branch_id before updating
-        oldBranchId = existing?.branch_id || null;
-
-        if (isArchived) {
-          if (!existing) return prev;
-          const next = new Map(prev);
-          next.delete(session.session_id);
-          return next;
-        }
-
-        // Bail out on no-op patches. Feathers always emits a fresh object so
-        // `existing === session` never holds, but the daemon does emit
-        // idempotent patches (e.g. callback bookkeeping that lands at the same
-        // status). Shallow-equal misses nested fields the daemon reserializes
-        // — that's a safe false negative.
-        if (existing && shallowEqualEntity(existing, session)) return prev;
-
-        const next = new Map(prev);
-        next.set(session.session_id, session);
-        return next;
-      });
-
-      // Update sessionsByBranch - keep active sessions only
-      setSessionsByBranch((prev) => {
-        let changed = false;
-        const next = new Map(prev);
-        const newBranchId = session.branch_id;
-
-        const removeFromBranch = (branchId: string) => {
-          const bucket = next.get(branchId) || [];
-          const filtered = bucket.filter((s) => s.session_id !== session.session_id);
-          if (filtered.length !== bucket.length) {
-            changed = true;
-            if (filtered.length > 0) {
-              next.set(branchId, filtered);
-            } else {
-              next.delete(branchId);
-            }
-          }
-        };
-
-        if (isArchived) {
-          if (oldBranchId) {
-            removeFromBranch(oldBranchId);
-          }
-          removeFromBranch(newBranchId);
-          return changed ? next : prev;
-        }
-
-        // Session moved between branches - remove from old bucket first
-        const branchMigrated = oldBranchId && oldBranchId !== newBranchId;
-        if (branchMigrated) {
-          removeFromBranch(oldBranchId!);
-        }
-
-        const branchSessions = next.get(newBranchId) || [];
-        const index = branchSessions.findIndex((s) => s.session_id === session.session_id);
-
-        if (index === -1) {
-          next.set(newBranchId, [...branchSessions, session]);
-          return next;
-        }
-
-        // Bail out when the session is content-equal to what we already hold.
-        // Mirrors the sessionById bailout above so an idempotent patch doesn't
-        // produce a fresh branch-bucket array (which would invalidate
-        // `data.sessions === n.sessions` in BranchNode's custom areEqual and
-        // re-render every BranchCard on the affected branch).
-        if (
-          branchSessions[index] === session ||
-          shallowEqualEntity(branchSessions[index], session)
-        ) {
-          return changed ? next : prev;
-        }
-
-        const updatedSessions = [...branchSessions];
-        updatedSessions[index] = session;
-        next.set(newBranchId, updatedSessions);
-        return next;
-      });
-    };
-    const handleSessionRemoved = (session: Session) => {
-      // Update sessionById — bail out when the id isn't tracked so the
-      // wrapper short-circuit prevents the spurious `maps` update.
-      setSessionById((prev) => {
-        if (!prev.has(session.session_id)) return prev;
-        const next = new Map(prev);
-        next.delete(session.session_id);
-        return next;
-      });
-
-      // Update sessionsByBranch — same bail when the session isn't in the
-      // branch's bucket.
-      setSessionsByBranch((prev) => {
-        const branchSessions = prev.get(session.branch_id);
-        if (!branchSessions?.some((s) => s.session_id === session.session_id)) {
-          return prev;
-        }
-        const next = new Map(prev);
-        const filtered = branchSessions.filter((s) => s.session_id !== session.session_id);
-        if (filtered.length > 0) {
-          next.set(session.branch_id, filtered);
-        } else {
-          // Clean up empty arrays
-          next.delete(session.branch_id);
-        }
-        return next;
-      });
-    };
-
-    sessionsService.on('created', handleSessionCreated);
-    sessionsService.on('patched', handleSessionPatched);
-    sessionsService.on('updated', handleSessionPatched);
-    sessionsService.on('removed', handleSessionRemoved);
+    sessionsService.on('created', realtime.sessionCreated);
+    sessionsService.on('patched', realtime.sessionPatched);
+    sessionsService.on('updated', realtime.sessionPatched);
+    sessionsService.on('removed', realtime.sessionRemoved);
 
     // Subscribe to board events
     const boardsService = client.service('boards');
-    const handleBoardCreated = (board: Board) => {
-      setBoardById((prev) => {
-        if (prev.has(board.board_id)) return prev; // Already exists, shouldn't happen
-        const next = new Map(prev);
-        next.set(board.board_id, board);
-        return next;
-      });
-    };
-    const handleBoardPatched = (board: Board) => {
-      setBoardById((prev) => replaceIfChanged(prev, board.board_id, board));
-    };
-    const handleBoardRemoved = (board: Board) => {
-      setBoardById((prev) => {
-        if (!prev.has(board.board_id)) return prev; // Doesn't exist, nothing to remove
-        const next = new Map(prev);
-        next.delete(board.board_id);
-        return next;
-      });
-    };
-
-    boardsService.on('created', handleBoardCreated);
-    boardsService.on('patched', handleBoardPatched);
-    boardsService.on('updated', handleBoardPatched);
-    boardsService.on('removed', handleBoardRemoved);
+    boardsService.on('created', realtime.boardCreated);
+    boardsService.on('patched', realtime.boardPatched);
+    boardsService.on('updated', realtime.boardPatched);
+    boardsService.on('removed', realtime.boardRemoved);
 
     // Subscribe to board object events
     const boardObjectsService = client.service('board-objects');
-    const handleBoardObjectCreated = (boardObject: BoardEntityObject) => {
-      setMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'create'));
-    };
-    const handleBoardObjectPatched = (boardObject: BoardEntityObject) => {
-      setMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'patch'));
-    };
-    const handleBoardObjectRemoved = (boardObject: BoardEntityObject) => {
-      setMaps((prev) => removeBoardObjectFromMaps(prev, boardObject));
-    };
-
-    boardObjectsService.on('created', handleBoardObjectCreated);
-    boardObjectsService.on('patched', handleBoardObjectPatched);
-    boardObjectsService.on('updated', handleBoardObjectPatched);
-    boardObjectsService.on('removed', handleBoardObjectRemoved);
+    boardObjectsService.on('created', realtime.boardObjectCreated);
+    boardObjectsService.on('patched', realtime.boardObjectPatched);
+    boardObjectsService.on('updated', realtime.boardObjectPatched);
+    boardObjectsService.on('removed', realtime.boardObjectRemoved);
 
     // Subscribe to repo events
     const reposService = client.service('repos');
-    const handleRepoCreated = (repo: Repo) => {
-      setRepoById((prev) => {
-        if (prev.has(repo.repo_id)) return prev; // Already exists, shouldn't happen
-        const next = new Map(prev);
-        next.set(repo.repo_id, repo);
-        return next;
-      });
-    };
-    const handleRepoPatched = (repo: Repo) => {
-      setRepoById((prev) => replaceIfChanged(prev, repo.repo_id, repo));
-    };
-    const handleRepoRemoved = (repo: Repo) => {
-      setRepoById((prev) => {
-        if (!prev.has(repo.repo_id)) return prev; // Doesn't exist, nothing to remove
-        const next = new Map(prev);
-        next.delete(repo.repo_id);
-        return next;
-      });
-    };
-
-    reposService.on('created', handleRepoCreated);
-    reposService.on('patched', handleRepoPatched);
-    reposService.on('updated', handleRepoPatched);
-    reposService.on('removed', handleRepoRemoved);
+    reposService.on('created', realtime.repoCreated);
+    reposService.on('patched', realtime.repoPatched);
+    reposService.on('updated', realtime.repoPatched);
+    reposService.on('removed', realtime.repoRemoved);
 
     // Subscribe to branch events
     const branchesService = client.service('branches');
-    const handleBranchCreated = (branch: Branch) => {
-      if (branch.archived) return;
-
-      setBranchById((prev) => {
-        if (prev.has(branch.branch_id)) return prev; // Already exists, shouldn't happen
-        const next = new Map(prev);
-        next.set(branch.branch_id, branch);
-        return next;
-      });
-    };
-    // Drop a branch from `branchById` and prune every session that lived on
-    // it from `sessionById` / `sessionsByBranch`. Shared between the
-    // `archived: true` patch path and the hard-delete `removed` path —
-    // either way we never want an orphan session card to linger.
-    const evictBranchAndSessions = (branchId: string) => {
-      setBranchById((prev) => {
-        if (!prev.has(branchId)) return prev;
-        const next = new Map(prev);
-        next.delete(branchId);
-        return next;
-      });
-      setSessionsByBranch((prev) => {
-        if (!prev.has(branchId)) return prev;
-        const next = new Map(prev);
-        next.delete(branchId);
-        return next;
-      });
-      setSessionById((prev) => {
-        let changed = false;
-        const next = new Map(prev);
-        for (const [sessionId, session] of prev.entries()) {
-          if (session.branch_id === branchId) {
-            next.delete(sessionId);
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
-    };
-
-    const handleBranchPatched = (branch: Branch) => {
-      if (branch.archived) {
-        evictBranchAndSessions(branch.branch_id);
-        return;
-      }
-
-      setBranchById((prev) => replaceIfChanged(prev, branch.branch_id, branch));
-    };
-    const handleBranchRemoved = (branch: Branch) => {
-      // Mirror the archive path: a hard delete should also evict any
-      // sessions we still track on that branch.
-      evictBranchAndSessions(branch.branch_id);
-    };
-
-    branchesService.on('created', handleBranchCreated);
-    branchesService.on('patched', handleBranchPatched);
-    branchesService.on('updated', handleBranchPatched);
-    branchesService.on('removed', handleBranchRemoved);
+    branchesService.on('created', realtime.branchCreated);
+    branchesService.on('patched', realtime.branchPatched);
+    branchesService.on('updated', realtime.branchPatched);
+    branchesService.on('removed', realtime.branchRemoved);
 
     // Subscribe to user events
     const usersService = client.service('users');
-    const handleUserCreated = (user: User) => {
-      setUserById((prev) => {
-        if (prev.has(user.user_id)) return prev; // Already exists, shouldn't happen
-        const next = new Map(prev);
-        next.set(user.user_id, user);
-        return next;
-      });
-    };
-    const handleUserPatched = (user: User) => {
-      setUserById((prev) => replaceIfChanged(prev, user.user_id, user));
-    };
-    const handleUserRemoved = (user: User) => {
-      setUserById((prev) => {
-        if (!prev.has(user.user_id)) return prev; // Doesn't exist, nothing to remove
-        const next = new Map(prev);
-        next.delete(user.user_id);
-        return next;
-      });
-    };
-
-    usersService.on('created', handleUserCreated);
-    usersService.on('patched', handleUserPatched);
-    usersService.on('updated', handleUserPatched);
-    usersService.on('removed', handleUserRemoved);
+    usersService.on('created', realtime.userCreated);
+    usersService.on('patched', realtime.userPatched);
+    usersService.on('updated', realtime.userPatched);
+    usersService.on('removed', realtime.userRemoved);
 
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
-    const handleMCPServerCreated = (server: MCPServer) => {
-      setMcpServerById((prev) => {
-        if (prev.has(server.mcp_server_id)) return prev; // Already exists, shouldn't happen
-        const next = new Map(prev);
-        next.set(server.mcp_server_id, server);
-        return next;
-      });
-    };
-    const handleMCPServerPatched = (server: MCPServer) => {
-      setMcpServerById((prev) => replaceIfChanged(prev, server.mcp_server_id, server));
-    };
-    const handleMCPServerRemoved = (server: MCPServer) => {
-      setMcpServerById((prev) => {
-        if (!prev.has(server.mcp_server_id)) return prev; // Doesn't exist, nothing to remove
-        const next = new Map(prev);
-        next.delete(server.mcp_server_id);
-        return next;
-      });
-    };
-
-    mcpServersService.on('created', handleMCPServerCreated);
-    mcpServersService.on('patched', handleMCPServerPatched);
-    mcpServersService.on('updated', handleMCPServerPatched);
-    mcpServersService.on('removed', handleMCPServerRemoved);
+    mcpServersService.on('created', realtime.mcpServerCreated);
+    mcpServersService.on('patched', realtime.mcpServerPatched);
+    mcpServersService.on('updated', realtime.mcpServerPatched);
+    mcpServersService.on('removed', realtime.mcpServerRemoved);
 
     // Subscribe to gateway channel events
     const gatewayChannelsService = client.service('gateway-channels');
-    const handleGatewayChannelCreated = (channel: GatewayChannel) => {
-      setGatewayChannelById((prev) => {
-        if (prev.has(channel.id)) return prev;
-        const next = new Map(prev);
-        next.set(channel.id, channel);
-        return next;
-      });
-    };
-    const handleGatewayChannelPatched = (channel: GatewayChannel) => {
-      setGatewayChannelById((prev) => replaceIfChanged(prev, channel.id, channel));
-    };
-    const handleGatewayChannelRemoved = (channel: GatewayChannel) => {
-      setGatewayChannelById((prev) => {
-        if (!prev.has(channel.id)) return prev;
-        const next = new Map(prev);
-        next.delete(channel.id);
-        return next;
-      });
-    };
-
-    gatewayChannelsService.on('created', handleGatewayChannelCreated);
-    gatewayChannelsService.on('patched', handleGatewayChannelPatched);
-    gatewayChannelsService.on('updated', handleGatewayChannelPatched);
-    gatewayChannelsService.on('removed', handleGatewayChannelRemoved);
+    gatewayChannelsService.on('created', realtime.gatewayChannelCreated);
+    gatewayChannelsService.on('patched', realtime.gatewayChannelPatched);
+    gatewayChannelsService.on('updated', realtime.gatewayChannelPatched);
+    gatewayChannelsService.on('removed', realtime.gatewayChannelRemoved);
 
     // Subscribe to card events
     const cardsService = client.service('cards');
-    const handleCardCreated = (card: CardWithType) => {
-      setCardById((prev) => {
-        if (prev.has(card.card_id)) return prev; // Duplicate event — bail.
-        const next = new Map(prev);
-        next.set(card.card_id, card);
-        return next;
-      });
-    };
-    const handleCardPatched = (card: CardWithType) => {
-      setCardById((prev) => replaceIfChanged(prev, card.card_id, card));
-    };
-    const handleCardRemoved = (card: CardWithType) => {
-      setCardById((prev) => {
-        if (!prev.has(card.card_id)) return prev;
-        const next = new Map(prev);
-        next.delete(card.card_id);
-        return next;
-      });
-    };
-
-    cardsService.on('created', handleCardCreated);
-    cardsService.on('patched', handleCardPatched);
-    cardsService.on('updated', handleCardPatched);
-    cardsService.on('removed', handleCardRemoved);
+    cardsService.on('created', realtime.cardCreated);
+    cardsService.on('patched', realtime.cardPatched);
+    cardsService.on('updated', realtime.cardPatched);
+    cardsService.on('removed', realtime.cardRemoved);
 
     // Subscribe to card type events
     const cardTypesService = client.service('card-types');
-    const handleCardTypeCreated = (cardType: CardType) => {
-      setCardTypeById((prev) => {
-        if (prev.has(cardType.card_type_id)) return prev; // Duplicate event — bail.
-        const next = new Map(prev);
-        next.set(cardType.card_type_id, cardType);
-        return next;
-      });
-    };
-    const handleCardTypePatched = (cardType: CardType) => {
-      setCardTypeById((prev) => replaceIfChanged(prev, cardType.card_type_id, cardType));
-    };
-    const handleCardTypeRemoved = (cardType: CardType) => {
-      setCardTypeById((prev) => {
-        if (!prev.has(cardType.card_type_id)) return prev;
-        const next = new Map(prev);
-        next.delete(cardType.card_type_id);
-        return next;
-      });
-    };
-
-    cardTypesService.on('created', handleCardTypeCreated);
-    cardTypesService.on('patched', handleCardTypePatched);
-    cardTypesService.on('updated', handleCardTypePatched);
-    cardTypesService.on('removed', handleCardTypeRemoved);
+    cardTypesService.on('created', realtime.cardTypeCreated);
+    cardTypesService.on('patched', realtime.cardTypePatched);
+    cardTypesService.on('updated', realtime.cardTypePatched);
+    cardTypesService.on('removed', realtime.cardTypeRemoved);
 
     // Subscribe to artifact events
     const artifactsService = client.service('artifacts');
-    const handleArtifactCreated = (artifact: Artifact) => {
-      setArtifactById((prev) => {
-        if (prev.has(artifact.artifact_id)) return prev;
-        const next = new Map(prev);
-        next.set(artifact.artifact_id, artifact);
-        return next;
-      });
-    };
-    const handleArtifactPatched = (artifact: Artifact) => {
-      setArtifactById((prev) => replaceIfChanged(prev, artifact.artifact_id, artifact));
-      // Notify ArtifactNode components that payload may have changed. The
-      // consumer (apps/agor-ui/src/components/SessionCanvas/canvas/ArtifactNode.tsx)
-      // already filters by `contentHash !== lastHashRef.current`, so an
-      // idempotent dispatch is a cheap no-op there — no need to mirror the
-      // shallow-equal bailout from a state-updater side effect (which would
-      // not be pure under StrictMode anyway).
-      window.dispatchEvent(
-        new CustomEvent('agor:artifact-patched', {
-          detail: { artifactId: artifact.artifact_id, contentHash: artifact.content_hash },
-        })
-      );
-    };
-    const handleArtifactRemoved = (artifact: Artifact) => {
-      setArtifactById((prev) => {
-        if (!prev.has(artifact.artifact_id)) return prev;
-        const next = new Map(prev);
-        next.delete(artifact.artifact_id);
-        return next;
-      });
-    };
-
-    artifactsService.on('created', handleArtifactCreated);
-    artifactsService.on('patched', handleArtifactPatched);
-    artifactsService.on('updated', handleArtifactPatched);
-    artifactsService.on('removed', handleArtifactRemoved);
+    artifactsService.on('created', realtime.artifactCreated);
+    artifactsService.on('patched', realtime.artifactPatched);
+    artifactsService.on('updated', realtime.artifactPatched);
+    artifactsService.on('removed', realtime.artifactRemoved);
 
     // Agent-driven runtime queries: daemon emits when an MCP tool wants to
     // introspect the iframe DOM. ArtifactNode components listen for the
@@ -1316,71 +1175,15 @@ export function useAgorData(
 
     // Subscribe to session-MCP server relationship events
     const sessionMcpService = client.service('session-mcp-servers');
-    const handleSessionMcpCreated = (relationship: {
-      session_id: string;
-      mcp_server_id: string;
-    }) => {
-      setSessionMcpServerIds((prev) => {
-        const sessionMcpIds = prev.get(relationship.session_id) || [];
-        // Check if relationship already exists (duplicate event)
-        if (sessionMcpIds.includes(relationship.mcp_server_id)) return prev;
-
-        const next = new Map(prev);
-        next.set(relationship.session_id, [...sessionMcpIds, relationship.mcp_server_id]);
-        return next;
-      });
-    };
-    const handleSessionMcpRemoved = (relationship: {
-      session_id: string;
-      mcp_server_id: string;
-    }) => {
-      setSessionMcpServerIds((prev) => {
-        const sessionMcpIds = prev.get(relationship.session_id) || [];
-        const filtered = sessionMcpIds.filter((id) => id !== relationship.mcp_server_id);
-
-        // No change if MCP server wasn't in the list
-        if (filtered.length === sessionMcpIds.length) return prev;
-
-        const next = new Map(prev);
-        if (filtered.length > 0) {
-          next.set(relationship.session_id, filtered);
-        } else {
-          // Clean up empty arrays
-          next.delete(relationship.session_id);
-        }
-        return next;
-      });
-    };
-
-    sessionMcpService.on('created', handleSessionMcpCreated);
-    sessionMcpService.on('removed', handleSessionMcpRemoved);
+    sessionMcpService.on('created', realtime.sessionMcpCreated);
+    sessionMcpService.on('removed', realtime.sessionMcpRemoved);
 
     // Subscribe to board comment events
     const commentsService = client.service('board-comments');
-    const handleCommentCreated = (comment: BoardComment) => {
-      setCommentById((prev) => {
-        if (prev.has(comment.comment_id)) return prev; // Already exists, shouldn't happen
-        const next = new Map(prev);
-        next.set(comment.comment_id, comment);
-        return next;
-      });
-    };
-    const handleCommentPatched = (comment: BoardComment) => {
-      setCommentById((prev) => replaceIfChanged(prev, comment.comment_id, comment));
-    };
-    const handleCommentRemoved = (comment: BoardComment) => {
-      setCommentById((prev) => {
-        if (!prev.has(comment.comment_id)) return prev; // Doesn't exist, nothing to remove
-        const next = new Map(prev);
-        next.delete(comment.comment_id);
-        return next;
-      });
-    };
-
-    commentsService.on('created', handleCommentCreated);
-    commentsService.on('patched', handleCommentPatched);
-    commentsService.on('updated', handleCommentPatched);
-    commentsService.on('removed', handleCommentRemoved);
+    commentsService.on('created', realtime.commentCreated);
+    commentsService.on('patched', realtime.commentPatched);
+    commentsService.on('updated', realtime.commentPatched);
+    commentsService.on('removed', realtime.commentRemoved);
 
     // Listen for OAuth completion events to update per-user token state in real-time.
     // Only update the per-user set when oauth_mode is 'per_user' (or unset, which defaults
@@ -1396,9 +1199,10 @@ export function useAgorData(
       oauth_mode?: string;
     }) => {
       if (!event.success || !event.mcp_server_id) return;
+      bumpRevision('oauth');
       const mode = event.oauth_mode || 'per_user';
       if (mode === 'per_user') {
-        setUserAuthenticatedMcpServerIds((prev) => {
+        agorStore.getState().setMap('userAuthenticatedMcpServerIds', (prev) => {
           if (prev.has(event.mcp_server_id!)) return prev;
           const next = new Set(prev);
           next.add(event.mcp_server_id!);
@@ -1415,7 +1219,10 @@ export function useAgorData(
       // `apps/agor-daemon/src/register-hooks.ts`), so a single `get` is enough.
       try {
         const fresh = (await client.service('mcp-servers').get(event.mcp_server_id)) as MCPServer;
-        setMcpServerById((prev) => replaceIfChanged(prev, fresh.mcp_server_id, fresh));
+        bumpRevision('mcpServers');
+        agorStore
+          .getState()
+          .setMap('mcpServerById', (prev) => replaceIfChanged(prev, fresh.mcp_server_id, fresh));
       } catch (err) {
         console.warn('[OAuth] Failed to refetch MCP server after re-auth:', err);
       }
@@ -1428,7 +1235,9 @@ export function useAgorData(
     // reload.
     const handleOAuthDisconnected = async (event: { mcp_server_id: string }) => {
       if (!event.mcp_server_id) return;
-      setUserAuthenticatedMcpServerIds((prev) => {
+      bumpRevision('oauth');
+      bumpRevision('mcpServers');
+      agorStore.getState().setMap('userAuthenticatedMcpServerIds', (prev) => {
         if (!prev.has(event.mcp_server_id)) return prev;
         const next = new Set(prev);
         next.delete(event.mcp_server_id);
@@ -1441,7 +1250,7 @@ export function useAgorData(
       // `userAuthenticatedMcpServerIds` check — and for tokens with no
       // expiry (e.g. Notion), `isExpired` is always false, so the pill
       // stays purple forever even though the Set was updated above.
-      setMcpServerById((prev) => {
+      agorStore.getState().setMap('mcpServerById', (prev) => {
         const existing = prev.get(event.mcp_server_id);
         if (!existing?.auth?.oauth_access_token) return prev;
         const next = new Map(prev);
@@ -1459,7 +1268,9 @@ export function useAgorData(
       // Still refetch to get the canonical server state from the daemon.
       try {
         const fresh = (await client.service('mcp-servers').get(event.mcp_server_id)) as MCPServer;
-        setMcpServerById((prev) => replaceIfChanged(prev, fresh.mcp_server_id, fresh));
+        agorStore
+          .getState()
+          .setMap('mcpServerById', (prev) => replaceIfChanged(prev, fresh.mcp_server_id, fresh));
       } catch (err) {
         console.warn('[OAuth] Failed to refetch MCP server after disconnect:', err);
       }
@@ -1495,15 +1306,24 @@ export function useAgorData(
 
     // If the prior reconnect refetch failed silently — typical scenario: the
     // socket reconnected, the around-hook hadn't refreshed the access token
-    // yet, fetchData hit a 401 that bubbled up — retry once a token refresh
-    // lands. Without this, byId state stays stale until the next physical
-    // reconnect or a page refresh. We gate on the latch so we don't refetch
-    // 14 services on every routine token rotation.
+    // yet, fetchData hit a 401 that bubbled up — retry once a token
+    // replacement lands. Without this, byId state stays stale until the next
+    // physical reconnect or a page refresh. We gate on the latch so we don't
+    // refetch 14 services on every routine token rotation.
     const handleTokensRefreshed = () => {
       if (!lastSilentFetchFailedRef.current) return;
       void refetchSilently();
     };
     window.addEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
+
+    // Initial fetch (only once — WebSocket events keep us synced after that).
+    // Kicked off AFTER every `.on()` above is attached so realtime
+    // created/patched/removed events that fire while fetchData's requests are
+    // in flight are captured (and bump the per-collection revision counters)
+    // instead of being dropped in the gap between fetch-start and listener-attach.
+    if (!hasInitiallyFetched) {
+      fetchData().then(() => setHasInitiallyFetched(true));
+    }
 
     // Cleanup listeners on unmount
     return () => {
@@ -1511,68 +1331,68 @@ export function useAgorData(
       client.io.off('oauth:disconnected', handleOAuthDisconnected);
       client.io.off('connect', refetchSilently);
       window.removeEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
-      sessionsService.removeListener('created', handleSessionCreated);
-      sessionsService.removeListener('patched', handleSessionPatched);
-      sessionsService.removeListener('updated', handleSessionPatched);
-      sessionsService.removeListener('removed', handleSessionRemoved);
+      sessionsService.removeListener('created', realtime.sessionCreated);
+      sessionsService.removeListener('patched', realtime.sessionPatched);
+      sessionsService.removeListener('updated', realtime.sessionPatched);
+      sessionsService.removeListener('removed', realtime.sessionRemoved);
 
-      boardsService.removeListener('created', handleBoardCreated);
-      boardsService.removeListener('patched', handleBoardPatched);
-      boardsService.removeListener('updated', handleBoardPatched);
-      boardsService.removeListener('removed', handleBoardRemoved);
+      boardsService.removeListener('created', realtime.boardCreated);
+      boardsService.removeListener('patched', realtime.boardPatched);
+      boardsService.removeListener('updated', realtime.boardPatched);
+      boardsService.removeListener('removed', realtime.boardRemoved);
 
-      boardObjectsService.removeListener('created', handleBoardObjectCreated);
-      boardObjectsService.removeListener('patched', handleBoardObjectPatched);
-      boardObjectsService.removeListener('updated', handleBoardObjectPatched);
-      boardObjectsService.removeListener('removed', handleBoardObjectRemoved);
+      boardObjectsService.removeListener('created', realtime.boardObjectCreated);
+      boardObjectsService.removeListener('patched', realtime.boardObjectPatched);
+      boardObjectsService.removeListener('updated', realtime.boardObjectPatched);
+      boardObjectsService.removeListener('removed', realtime.boardObjectRemoved);
 
-      reposService.removeListener('created', handleRepoCreated);
-      reposService.removeListener('patched', handleRepoPatched);
-      reposService.removeListener('updated', handleRepoPatched);
-      reposService.removeListener('removed', handleRepoRemoved);
+      reposService.removeListener('created', realtime.repoCreated);
+      reposService.removeListener('patched', realtime.repoPatched);
+      reposService.removeListener('updated', realtime.repoPatched);
+      reposService.removeListener('removed', realtime.repoRemoved);
 
-      branchesService.removeListener('created', handleBranchCreated);
-      branchesService.removeListener('patched', handleBranchPatched);
-      branchesService.removeListener('updated', handleBranchPatched);
-      branchesService.removeListener('removed', handleBranchRemoved);
+      branchesService.removeListener('created', realtime.branchCreated);
+      branchesService.removeListener('patched', realtime.branchPatched);
+      branchesService.removeListener('updated', realtime.branchPatched);
+      branchesService.removeListener('removed', realtime.branchRemoved);
 
-      usersService.removeListener('created', handleUserCreated);
-      usersService.removeListener('patched', handleUserPatched);
-      usersService.removeListener('updated', handleUserPatched);
-      usersService.removeListener('removed', handleUserRemoved);
+      usersService.removeListener('created', realtime.userCreated);
+      usersService.removeListener('patched', realtime.userPatched);
+      usersService.removeListener('updated', realtime.userPatched);
+      usersService.removeListener('removed', realtime.userRemoved);
 
-      mcpServersService.removeListener('created', handleMCPServerCreated);
-      mcpServersService.removeListener('patched', handleMCPServerPatched);
-      mcpServersService.removeListener('updated', handleMCPServerPatched);
-      mcpServersService.removeListener('removed', handleMCPServerRemoved);
+      mcpServersService.removeListener('created', realtime.mcpServerCreated);
+      mcpServersService.removeListener('patched', realtime.mcpServerPatched);
+      mcpServersService.removeListener('updated', realtime.mcpServerPatched);
+      mcpServersService.removeListener('removed', realtime.mcpServerRemoved);
 
-      sessionMcpService.removeListener('created', handleSessionMcpCreated);
-      sessionMcpService.removeListener('removed', handleSessionMcpRemoved);
+      sessionMcpService.removeListener('created', realtime.sessionMcpCreated);
+      sessionMcpService.removeListener('removed', realtime.sessionMcpRemoved);
 
-      commentsService.removeListener('created', handleCommentCreated);
-      commentsService.removeListener('patched', handleCommentPatched);
-      commentsService.removeListener('updated', handleCommentPatched);
-      commentsService.removeListener('removed', handleCommentRemoved);
+      commentsService.removeListener('created', realtime.commentCreated);
+      commentsService.removeListener('patched', realtime.commentPatched);
+      commentsService.removeListener('updated', realtime.commentPatched);
+      commentsService.removeListener('removed', realtime.commentRemoved);
 
-      gatewayChannelsService.removeListener('created', handleGatewayChannelCreated);
-      gatewayChannelsService.removeListener('patched', handleGatewayChannelPatched);
-      gatewayChannelsService.removeListener('updated', handleGatewayChannelPatched);
-      gatewayChannelsService.removeListener('removed', handleGatewayChannelRemoved);
+      gatewayChannelsService.removeListener('created', realtime.gatewayChannelCreated);
+      gatewayChannelsService.removeListener('patched', realtime.gatewayChannelPatched);
+      gatewayChannelsService.removeListener('updated', realtime.gatewayChannelPatched);
+      gatewayChannelsService.removeListener('removed', realtime.gatewayChannelRemoved);
 
-      cardsService.removeListener('created', handleCardCreated);
-      cardsService.removeListener('patched', handleCardPatched);
-      cardsService.removeListener('updated', handleCardPatched);
-      cardsService.removeListener('removed', handleCardRemoved);
+      cardsService.removeListener('created', realtime.cardCreated);
+      cardsService.removeListener('patched', realtime.cardPatched);
+      cardsService.removeListener('updated', realtime.cardPatched);
+      cardsService.removeListener('removed', realtime.cardRemoved);
 
-      cardTypesService.removeListener('created', handleCardTypeCreated);
-      cardTypesService.removeListener('patched', handleCardTypePatched);
-      cardTypesService.removeListener('updated', handleCardTypePatched);
-      cardTypesService.removeListener('removed', handleCardTypeRemoved);
+      cardTypesService.removeListener('created', realtime.cardTypeCreated);
+      cardTypesService.removeListener('patched', realtime.cardTypePatched);
+      cardTypesService.removeListener('updated', realtime.cardTypePatched);
+      cardTypesService.removeListener('removed', realtime.cardTypeRemoved);
 
-      artifactsService.removeListener('created', handleArtifactCreated);
-      artifactsService.removeListener('patched', handleArtifactPatched);
-      artifactsService.removeListener('updated', handleArtifactPatched);
-      artifactsService.removeListener('removed', handleArtifactRemoved);
+      artifactsService.removeListener('created', realtime.artifactCreated);
+      artifactsService.removeListener('patched', realtime.artifactPatched);
+      artifactsService.removeListener('updated', realtime.artifactPatched);
+      artifactsService.removeListener('removed', realtime.artifactRemoved);
       artifactsService.removeListener('agor-query', handleAgorQuery);
     };
   }, [client, enabled, fetchData, hasInitiallyFetched]);
@@ -1582,21 +1402,22 @@ export function useAgorData(
   const initialLoadItems = useMemo<InitialLoadItem[]>(
     () =>
       INITIAL_LOAD_ITEMS.map(({ key, label }) => {
-        const count = itemCounts[key];
+        const count = storeState.itemCounts[key];
         return { key, label, done: count !== undefined, count: count ?? 0 };
       }),
-    [itemCounts]
+    [storeState.itemCounts]
   );
 
-  const initialLoadComplete = INITIAL_LOAD_ITEMS.every(({ key }) => itemCounts[key] !== undefined);
+  const initialLoadComplete = INITIAL_LOAD_ITEMS.every(
+    ({ key }) => storeState.itemCounts[key] !== undefined
+  );
 
   return {
-    ...maps,
     initialLoadItems,
     initialLoadComplete,
-    loadingStage,
-    loading,
-    error,
+    loadingStage: storeState.loadingStage,
+    loading: storeState.loading,
+    error: storeState.error,
     refetch: fetchData,
   };
 }

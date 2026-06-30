@@ -1,8 +1,8 @@
 import {
   BranchRepository,
-  type Database,
   KnowledgeNamespaceRepository,
   shortId,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type {
   AssistantKnowledgeConfig,
@@ -62,7 +62,7 @@ async function uniqueAssistantNamespaceSlug(
 }
 
 export async function ensureAssistantKnowledgeNamespace(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   branchId: BranchID,
   userId?: UserID | null
 ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }> {

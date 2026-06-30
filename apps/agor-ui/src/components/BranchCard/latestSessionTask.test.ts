@@ -70,4 +70,37 @@ describe('chooseLatestSessionTask', () => {
 
     expect(chooseLatestSessionTask([queued, queued])?.task_id).toBe(queued.task_id);
   });
+
+  it('prefers a task that ran over an unstarted terminal task', () => {
+    const stoppedRunning = task({
+      task_id: 'task-running',
+      session_id: 'session-a',
+      status: 'stopped',
+      started_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:00:05.000Z',
+      created_at: '2026-01-01T00:00:00.000Z',
+      message_range: {
+        start_index: 0,
+        end_index: 1,
+        start_timestamp: '2026-01-01T00:00:00.000Z',
+        end_timestamp: '2026-01-01T00:00:05.000Z',
+      },
+    });
+    const unstartedTerminal = task({
+      task_id: 'task-unstarted-terminal',
+      session_id: 'session-a',
+      status: 'stopped',
+      completed_at: '2026-01-01T00:00:05.000Z',
+      created_at: '2026-01-01T00:00:01.000Z',
+      message_range: {
+        start_index: -1,
+        end_index: -1,
+        start_timestamp: '2026-01-01T00:00:01.000Z',
+      },
+    });
+
+    expect(chooseLatestSessionTask([unstartedTerminal, stoppedRunning])?.task_id).toBe(
+      stoppedRunning.task_id
+    );
+  });
 });

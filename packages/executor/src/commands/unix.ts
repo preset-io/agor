@@ -34,6 +34,7 @@ import {
 } from '@agor/core/unix';
 import type {
   ExecutorResult,
+  UnixSyncBoardPayload,
   UnixSyncBranchPayload,
   UnixSyncRepoPayload,
   UnixSyncUserPayload,
@@ -118,6 +119,39 @@ async function checkCommand(command: string): Promise<boolean> {
 async function runCommands(commands: string[]): Promise<void> {
   for (const command of commands) {
     await runCommand(command);
+  }
+}
+
+function parseGroupMembers(output: string): string[] {
+  return output.trim().split(',').filter(Boolean);
+}
+
+async function addUsersToGroup(usernames: Iterable<string>, groupName: string): Promise<number> {
+  let added = 0;
+  for (const username of usernames) {
+    const inGroup = await checkCommand(UnixGroupCommands.isUserInGroup(username, groupName));
+    if (!inGroup) {
+      await runCommand(UnixGroupCommands.addUserToGroup(username, groupName));
+      added++;
+    }
+  }
+  return added;
+}
+
+async function reconcileGroupMembers(
+  groupName: string,
+  allowedUsernames: Set<string>,
+  logPrefix: string
+): Promise<void> {
+  const currentMembers = parseGroupMembers(
+    await runCommand(UnixGroupCommands.listGroupMembers(groupName))
+  );
+  for (const username of currentMembers) {
+    if (allowedUsernames.has(username)) continue;
+    await runCommand(UnixGroupCommands.removeUserFromGroup(username, groupName), {
+      ignoreErrors: true,
+    });
+    console.log(`${logPrefix} Removed stale group member ${username} from ${groupName}`);
   }
 }
 
@@ -407,6 +441,30 @@ export async function handleUnixSyncBranch(
       console.log(`[unix.sync-branch] Could not fetch owners, skipping user sync`);
     }
 
+    // Fetch and add all users with explicit filesystem access. This expands
+    // branch groups plus board owners/groups for board-aligned branches.
+    const explicitFsUsernames = new Set(ownerUsernames);
+    let fsAccessUsersAdded = 0;
+    let explicitFsUsersFetched = false;
+    try {
+      const fsUsersResult = await client.service(`branches/${branchId}/fs-access-users`).find({});
+      const fsUsers = Array.isArray(fsUsersResult) ? fsUsersResult : fsUsersResult.data || [];
+      for (const user of fsUsers as Array<{ unix_username?: string | null }>) {
+        if (user.unix_username) {
+          explicitFsUsernames.add(user.unix_username);
+        }
+      }
+      explicitFsUsersFetched = true;
+      fsAccessUsersAdded = await addUsersToGroup(explicitFsUsernames, groupName);
+      if (fsAccessUsersAdded > 0) {
+        console.log(
+          `[unix.sync-branch] Added ${fsAccessUsersAdded} explicit filesystem access user(s) to branch group`
+        );
+      }
+    } catch (_error) {
+      console.log(`[unix.sync-branch] Could not fetch filesystem access users, skipping`);
+    }
+
     // When others_fs_access is 'write', non-owner session users need branch group
     // membership for full read-write access. For 'read' mode, they rely on ACL "others"
     // bits (o::rX) on the branch directory — adding them to the branch group would
@@ -429,7 +487,7 @@ export async function handleUnixSyncBranch(
         // Collect unique non-owner unix_usernames from sessions
         const sessionUsernames = new Set<string>();
         for (const session of sessions as Array<{ unix_username?: string | null }>) {
-          if (session.unix_username && !ownerUsernames.has(session.unix_username)) {
+          if (session.unix_username && !explicitFsUsernames.has(session.unix_username)) {
             sessionUsernames.add(session.unix_username);
           }
         }
@@ -449,6 +507,33 @@ export async function handleUnixSyncBranch(
       }
     }
 
+    const allowedBranchMembers = new Set(explicitFsUsernames);
+    if (payload.params.daemonUser) allowedBranchMembers.add(payload.params.daemonUser);
+    if (othersAccess === 'write') {
+      try {
+        const sessionsResult = await client.service('sessions').find({
+          query: {
+            branch_id: branchId,
+            $select: ['unix_username'],
+            $limit: 500,
+          },
+        });
+        const sessions = Array.isArray(sessionsResult) ? sessionsResult : sessionsResult.data || [];
+        for (const session of sessions as Array<{ unix_username?: string | null }>) {
+          if (session.unix_username) allowedBranchMembers.add(session.unix_username);
+        }
+      } catch {
+        // Best-effort stale-member cleanup only.
+      }
+    }
+    if (explicitFsUsersFetched) {
+      await reconcileGroupMembers(groupName, allowedBranchMembers, '[unix.sync-branch]');
+    } else {
+      console.log(
+        '[unix.sync-branch] Skipping stale branch group member cleanup because explicit filesystem access users could not be fetched'
+      );
+    }
+
     // Also sync repo group (ensure owners and authorized session users have .git/ access)
     if (branch.repo_id) {
       try {
@@ -466,6 +551,9 @@ export async function handleUnixSyncBranch(
               console.log(`[unix.sync-branch] Added daemon user to repo group ${repo.unix_group}`);
             }
           }
+
+          // Add all explicit filesystem access users to repo group (for .git/ access)
+          await addUsersToGroup(explicitFsUsernames, repo.unix_group);
 
           // Add all branch owners to repo group (for .git/ access)
           // This ensures owners can run git commands which need .git/ access
@@ -510,7 +598,7 @@ export async function handleUnixSyncBranch(
 
               const sessionUsernames = new Set<string>();
               for (const session of sessions as Array<{ unix_username?: string | null }>) {
-                if (session.unix_username && !ownerUsernames.has(session.unix_username)) {
+                if (session.unix_username && !explicitFsUsernames.has(session.unix_username)) {
                   sessionUsernames.add(session.unix_username);
                 }
               }
@@ -568,6 +656,7 @@ export async function handleUnixSyncBranch(
         branchId,
         groupName,
         ownersAdded,
+        fsAccessUsersAdded,
         sessionUsersAdded,
       },
     };
@@ -577,6 +666,97 @@ export async function handleUnixSyncBranch(
     return {
       success: false,
       error: { code: 'UNIX_SYNC_BRANCH_FAILED', message: errorMessage },
+    };
+  } finally {
+    if (client) {
+      try {
+        client.io.disconnect();
+      } catch {
+        // Ignore
+      }
+    }
+  }
+}
+
+// ============================================================
+// BOARD SYNC OPERATIONS
+// ============================================================
+
+/**
+ * Sync Unix state for every branch currently aligned with a board.
+ *
+ * This keeps board permission propagation in one executor process while
+ * preserving the branch-level sync semantics and no-overgrant alignment gate.
+ */
+export async function handleUnixSyncBoard(
+  payload: UnixSyncBoardPayload,
+  options: CommandOptions
+): Promise<ExecutorResult> {
+  if (options.dryRun) {
+    return {
+      success: true,
+      data: { dryRun: true, command: 'unix.sync-board', boardId: payload.params.boardId },
+    };
+  }
+
+  let client: AgorClient | null = null;
+
+  try {
+    const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
+    client = await createExecutorClient(daemonUrl, payload.sessionToken);
+    console.log('[unix.sync-board] Connected to daemon');
+
+    const boardId = payload.params.boardId;
+    const branchesResult = await client.service(`boards/${boardId}/aligned-branches`).find({});
+    const branches = Array.isArray(branchesResult) ? branchesResult : branchesResult.data || [];
+
+    console.log(
+      `[unix.sync-board] Syncing ${branches.length} board-aligned branch(es) for board ${shortId(boardId)}`
+    );
+
+    // Keep this authenticated client open while nested branch syncs run.
+    // Branch syncs currently open their own daemon clients, but all work still
+    // runs inside this one executor process. Disconnecting here can race the
+    // auth client's async re-auth/logout bookkeeping while the nested syncs
+    // start. The finally block below closes the board client after all branch
+    // work finishes.
+
+    const results: Array<{ branchId: string; success: boolean; error?: unknown }> = [];
+    for (const branch of branches as Array<{ branch_id?: string }>) {
+      if (!branch.branch_id) continue;
+      const result = await handleUnixSyncBranch(
+        {
+          ...payload,
+          command: 'unix.sync-branch',
+          params: {
+            branchId: branch.branch_id,
+            daemonUser: payload.params.daemonUser,
+          },
+        },
+        options
+      );
+      results.push({ branchId: branch.branch_id, success: result.success, error: result.error });
+    }
+
+    const failed = results.filter((result) => !result.success);
+    if (failed.length > 0) {
+      return {
+        success: false,
+        data: { boardId, synced: results.length, failed },
+        error: {
+          code: 'UNIX_SYNC_BOARD_PARTIAL_FAILURE',
+          message: `Failed to sync ${failed.length} of ${results.length} board-aligned branch(es)`,
+        },
+      };
+    }
+
+    return { success: true, data: { boardId, synced: results.length } };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[unix.sync-board] Failed:', errorMessage);
+    return {
+      success: false,
+      error: { code: 'UNIX_SYNC_BOARD_FAILED', message: errorMessage },
     };
   } finally {
     if (client) {

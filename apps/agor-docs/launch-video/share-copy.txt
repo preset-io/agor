@@ -1,0 +1,1 @@
+Break out of the terminal. agor is the team command center for all things agentic — Claude Code, Codex & Gemini side by side on one live, multiplayer canvas, with shared memory, skills, and team assistants you can reach from Slack. Open source. → agor.live

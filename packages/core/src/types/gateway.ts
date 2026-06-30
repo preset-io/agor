@@ -6,7 +6,8 @@
  */
 
 import type { AgenticToolName, CodexApprovalPolicy, CodexSandboxMode } from './agentic-tool';
-import type { BranchID, SessionID, UserID, UUID } from './id';
+import type { BranchID, SessionID, TaskID, UserID, UUID } from './id';
+import type { ScheduleID } from './schedule';
 import type { PermissionMode } from './session';
 import type { DefaultModelConfig } from './user';
 
@@ -20,6 +21,9 @@ export type GatewayChannelID = UUID;
 /** Thread-session mapping identifier */
 export type ThreadSessionMapID = UUID;
 
+/** Gateway outbound seed/audit message identifier */
+export type GatewayOutboundMessageID = UUID;
+
 // ============================================================================
 // Enums
 // ============================================================================
@@ -29,6 +33,57 @@ export type ChannelType = 'slack' | 'discord' | 'whatsapp' | 'telegram' | 'githu
 
 /** Thread lifecycle status */
 export type ThreadStatus = 'active' | 'archived' | 'paused';
+
+/** Sensitive gateway config fields that must be encrypted at rest and redacted in responses. */
+export const GATEWAY_SENSITIVE_CONFIG_FIELDS = [
+  'bot_token',
+  'app_token',
+  'signing_secret',
+  'private_key',
+  'webhook_secret',
+  'app_password',
+] as const;
+
+/** Sentinel value used by gateway APIs/tools to represent a redacted secret. */
+export const GATEWAY_REDACTED_SENTINEL = '••••••••';
+
+// ============================================================================
+// Connection Probe Results
+// ============================================================================
+
+/**
+ * A single capability that a connection probe could not establish.
+ *
+ * `capability` names the thing that failed (e.g. `bot_token`, `app_token`,
+ * `channel_access`). `needed`/`provided` carry Slack's verbatim
+ * `missing_scope` detail when present so the UI can tell the operator exactly
+ * which OAuth scope to add rather than a generic "permission denied".
+ */
+export interface SlackTestFailure {
+  capability: string;
+  reason: string;
+  slackError?: string;
+  needed?: string;
+  provided?: string;
+}
+
+/**
+ * Result of a best-effort Slack connection probe.
+ *
+ * The probe exercises real Slack API calls (bot token auth, app-token Socket
+ * Mode handshake, sampled channel access) but cannot prove everything about a
+ * working installation — `notVerifiable` enumerates what green does NOT
+ * guarantee so the result is never read as "fully verified".
+ */
+export interface SlackTestResult {
+  ok: boolean;
+  team?: { id: string; name: string };
+  bot?: { userId: string; name: string };
+  appTokenValid?: boolean;
+  channelAccess?: { channelId: string; ok: boolean }[];
+  failures: SlackTestFailure[];
+  notVerifiable: string[];
+}
 
 // ============================================================================
 // Agentic Tool Configuration
@@ -117,4 +172,36 @@ export interface ThreadSessionMap {
   last_message_at: string;
   status: ThreadStatus;
   metadata: Record<string, unknown> | null;
+}
+
+/**
+ * Gateway outbound message - durable seed/audit record for proactive emits.
+ *
+ * These rows intentionally do not imply a thread-session mapping. The mapping is
+ * created only when a human replies to the seeded external thread.
+ */
+export interface GatewayOutboundMessage {
+  id: GatewayOutboundMessageID;
+  gateway_channel_id: GatewayChannelID;
+  channel_type: ChannelType;
+
+  platform_channel_id: string;
+  platform_message_id: string;
+  platform_thread_id: string;
+  platform_permalink: string | null;
+
+  target_branch_id: BranchID;
+  emitted_by_user_id: UserID;
+  emitted_by_session_id: SessionID | null;
+  emitted_by_task_id: TaskID | null;
+  emitted_by_schedule_id: ScheduleID | null;
+
+  message_text: string;
+  message_preview: string;
+  metadata: Record<string, unknown> | null;
+  consumed_by_session_id: SessionID | null;
+  consumed_at: string | null;
+
+  created_at: string;
+  updated_at: string;
 }

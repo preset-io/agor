@@ -72,7 +72,7 @@ describe('extractCodexTokenUsage', () => {
 });
 
 describe('extractCodexContextWindowUsage', () => {
-  it('uses input tokens directly (cached tokens are already included)', () => {
+  it('does not treat turn.completed input_tokens as context-window occupancy', () => {
     const result = extractCodexContextWindowUsage({
       type: 'turn.completed',
       usage: {
@@ -82,60 +82,34 @@ describe('extractCodexContextWindowUsage', () => {
       },
     });
 
-    expect(result).toBe(42_000);
+    expect(result).toBeUndefined();
   });
 
-  it('supports direct usage payloads and camelCase keys', () => {
-    const result = extractCodexContextWindowUsage({
-      inputTokens: 10_000,
-      cachedInputTokens: 2_000,
-      outputTokens: 900,
-    });
-
-    expect(result).toBe(10_000);
-  });
-
-  it('matches observed Codex payloads without double-counting cache', () => {
+  it('treats the reported bad Codex sample as unavailable for context accounting', () => {
     const result = extractCodexContextWindowUsage({
       type: 'turn.completed',
       usage: {
-        input_tokens: 30_918,
-        cached_input_tokens: 15_488,
-        output_tokens: 184,
+        input_tokens: 1_696_260,
+        output_tokens: 5_211,
+        cached_input_tokens: 1_566_464,
+        reasoning_output_tokens: 604,
       },
     });
 
-    expect(result).toBe(30_918);
+    expect(result).toBeUndefined();
   });
 
-  it('falls back to total - output when input is unavailable', () => {
-    const result = extractCodexContextWindowUsage({
-      type: 'turn.completed',
-      usage: {
-        total_tokens: 65_432,
-        output_tokens: 1_432,
-      },
-    });
-
-    expect(result).toBe(64_000);
+  it('supports explicit future context token fields', () => {
+    expect(extractCodexContextWindowUsage({ usage: { context_tokens: 10_000 } })).toBe(10_000);
+    expect(extractCodexContextWindowUsage({ currentContextTokens: 12_345 })).toBe(12_345);
   });
 
-  it('falls back to total tokens when only total is available (legacy)', () => {
-    const result = extractCodexContextWindowUsage({
-      type: 'turn.completed',
-      usage: {
-        total_tokens: 65_432,
-      },
-    });
-
-    expect(result).toBe(65_432);
-  });
-
-  it('returns undefined for invalid payloads', () => {
+  it('returns undefined for invalid or non-context payloads', () => {
     expect(extractCodexContextWindowUsage(undefined)).toBeUndefined();
     expect(extractCodexContextWindowUsage(null)).toBeUndefined();
     expect(extractCodexContextWindowUsage('bad')).toBeUndefined();
     expect(extractCodexContextWindowUsage({ usage: { output_tokens: 123 } })).toBeUndefined();
+    expect(extractCodexContextWindowUsage({ usage: { total_tokens: 65_432 } })).toBeUndefined();
   });
 });
 

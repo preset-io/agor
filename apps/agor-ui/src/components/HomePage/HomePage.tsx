@@ -5,6 +5,16 @@ import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme }
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectBoardById,
+  selectBranchById,
+  selectMcpServerById,
+  selectRepoById,
+  selectSessionById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
 import { isDarkTheme } from '../../utils/theme';
 import { HomeActivitySection } from './HomeActivitySection';
 import { HomeBoardsSection } from './HomeBoardsSection';
@@ -37,11 +47,19 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
   const { token } = theme.useToken();
   const homeBackground = DEFAULT_BACKGROUNDS[isDarkTheme(token) ? 'dark' : 'light'];
 
+  const boardById = useAgorStore(selectBoardById);
+  const branchById = useAgorStore(selectBranchById);
+  const repoById = useAgorStore(selectRepoById);
+  const sessionById = useAgorStore(selectSessionById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const userById = useAgorStore(selectUserById);
+  const mcpServerById = useAgorStore(selectMcpServerById);
+
   const [onboardingHidden, setOnboardingHidden] = useState(
     () => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === 'true'
   );
 
-  const currentUser = props.currentUserId ? props.userById.get(props.currentUserId) : null;
+  const currentUser = props.currentUserId ? userById.get(props.currentUserId) : null;
   const username = currentUser?.name || 'there';
 
   // Resizable sidebar
@@ -105,27 +123,27 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
 
   const waitingSessions = useMemo(
     () =>
-      Array.from(props.sessionById.values()).filter(
+      Array.from(sessionById.values()).filter(
         (s) =>
           !s.archived &&
           AWAITING_STATUSES.has(s.status) &&
           (!props.currentUserId || s.created_by === props.currentUserId)
       ),
-    [props.sessionById, props.currentUserId]
+    [sessionById, props.currentUserId]
   );
 
   const defaultBoardId = useMemo(() => {
-    const firstRecent = (props.recentBoardIds ?? []).find((id) => props.boardById.has(id));
+    const firstRecent = (props.recentBoardIds ?? []).find((id) => boardById.has(id));
     if (firstRecent) return firstRecent;
-    return props.boardById.values().next().value?.board_id;
-  }, [props.boardById, props.recentBoardIds]);
+    return boardById.values().next().value?.board_id;
+  }, [boardById, props.recentBoardIds]);
 
   const boardOptions = useMemo(
     () =>
-      Array.from(props.boardById.values())
+      Array.from(boardById.values())
         .filter((b) => !b.archived)
         .map((b) => ({ value: b.board_id, label: `${b.icon || '📋'} ${b.name}` })),
-    [props.boardById]
+    [boardById]
   );
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -147,11 +165,11 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
   }, [props.onOpenCreateDialog, createType, selectedBoardId]);
 
   const onboardingSteps = useMemo(() => {
-    const hasBoards = props.boardById.size > 0;
-    const hasRepos = props.repoById.size > 0;
-    const hasMcp = (props.mcpServerById?.size ?? 0) > 0;
-    const hasTeammates = props.userById.size > 1;
-    const hasSessions = Array.from(props.sessionById.values()).some(
+    const hasBoards = boardById.size > 0;
+    const hasRepos = repoById.size > 0;
+    const hasMcp = (mcpServerById?.size ?? 0) > 0;
+    const hasTeammates = userById.size > 1;
+    const hasSessions = Array.from(sessionById.values()).some(
       (s) => !s.archived && (!props.currentUserId || s.created_by === props.currentUserId)
     );
     return [
@@ -192,11 +210,11 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
       },
     ];
   }, [
-    props.boardById,
-    props.sessionById,
-    props.repoById,
-    props.userById,
-    props.mcpServerById,
+    boardById,
+    sessionById,
+    repoById,
+    userById,
+    mcpServerById,
     props.currentUserId,
     props.onOpenCreateDialog,
     props.onOpenSettings,
@@ -274,16 +292,16 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
 
               {/* Workspace stats */}
               <HomeStatsBar
-                sessionById={props.sessionById}
+                sessionById={sessionById}
                 currentUserId={props.currentUserId}
-                teamSize={props.userById.size}
+                teamSize={userById.size}
               />
 
               {/* My Sessions — flex: 1 fills remaining viewport height */}
               <HomeSessionsSection
-                sessionById={props.sessionById}
-                branchById={props.branchById}
-                boardById={props.boardById}
+                sessionById={sessionById}
+                branchById={branchById}
+                boardById={boardById}
                 currentUserId={props.currentUserId}
                 onSessionClick={props.onSessionClick}
               />
@@ -291,10 +309,10 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
               {/* Boards grid */}
               <div style={{ marginTop: 24 }}>
                 <HomeBoardsSection
-                  boardById={props.boardById}
+                  boardById={boardById}
                   recentBoardIds={props.recentBoardIds}
-                  branchById={props.branchById}
-                  sessionsByBranch={props.sessionsByBranch}
+                  branchById={branchById}
+                  sessionsByBranch={sessionsByBranch}
                   onBoardClick={props.onBoardClick}
                   onOpenCreateDialog={props.onOpenCreateDialog}
                 />
@@ -375,10 +393,10 @@ export const HomePage: React.FC<HomePageProps> = (props) => {
                 }}
               >
                 <HomeActivitySection
-                  branchById={props.branchById}
-                  boardById={props.boardById}
-                  sessionById={props.sessionById}
-                  userById={props.userById}
+                  branchById={branchById}
+                  boardById={boardById}
+                  sessionById={sessionById}
+                  userById={userById}
                   onBoardClick={props.onBoardClick}
                   onBranchClick={props.onBranchClick}
                   onSessionClick={props.onSessionClick}

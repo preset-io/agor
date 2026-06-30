@@ -8,8 +8,10 @@
 import {
   buildKnowledgeDocumentUri,
   KNOWLEDGE_DOCUMENT_URI_PREFIX,
+  type KnowledgeDocument,
   type KnowledgeDocumentID,
 } from '@agor/core/types';
+import { buildKnowledgeRoutePath, namespaceSlugFromUri } from '@/utils/knowledgeRoutes';
 
 export interface KbDocMention {
   /** Display title, used as the dropdown label and the markdown link text. */
@@ -26,10 +28,50 @@ export interface KbDocMention {
 
 export const MAX_KB_DOC_RESULTS = 8;
 
+// Non-throwing leaf title used only as a fallback when a doc has no title.
+export const leafTitleFromPath = (path: string): string => {
+  const leaf = path.split('/').filter(Boolean).pop() ?? path;
+  return (
+    leaf
+      .replace(/\.(md|markdown)$/i, '')
+      .replace(/[-_]+/g, ' ')
+      .trim() || path
+  );
+};
+
+/** Convert a readable Knowledge document row into the mention view model. */
+export function kbMentionFromDocument(
+  doc: Pick<KnowledgeDocument, 'document_id' | 'path' | 'uri' | 'title'>,
+  routeBasePath = '/kb'
+): KbDocMention | null {
+  const path = doc.path?.trim();
+  if (!path) return null;
+  const slug = namespaceSlugFromUri(doc.uri);
+  if (!slug) return null;
+  return {
+    title: doc.title?.trim() || leafTitleFromPath(path),
+    documentId: doc.document_id,
+    path,
+    uri: doc.uri,
+    routePath: buildKnowledgeRoutePath(routeBasePath, slug, path),
+  };
+}
+
+export const uniqueKbMentions = (docs: KbDocMention[]): KbDocMention[] => {
+  const seen = new Set<string>();
+  const unique: KbDocMention[] = [];
+  for (const doc of docs) {
+    if (seen.has(doc.documentId)) continue;
+    seen.add(doc.documentId);
+    unique.push(doc);
+  }
+  return unique;
+};
+
 /**
- * Filter and rank KB docs for the typed query. Matches against title and path,
- * preferring title prefix matches. With an empty query, returns the first
- * `limit` docs so the dropdown is useful immediately after typing `@`.
+ * Filter and rank a caller-provided KB doc set for the typed query. Matches
+ * against title and path, preferring title prefix matches. With an empty query,
+ * returns the first `limit` docs from that bounded local set.
  */
 export function filterKbDocs(
   docs: KbDocMention[],
@@ -58,14 +100,17 @@ export function filterKbDocs(
 }
 
 /**
- * Build a markdown link to a KB doc. The href is the rename-proof
- * `agor://kb/document/<uuid>` URI (hydrated to a clickable route at render time);
- * the label is the doc title with `[` / `]` escaped so it can't break out of the
- * link syntax.
+ * Build a markdown link with a KB document title as the label. Escapes square
+ * brackets so the title can't break out of link syntax.
  */
-export function buildKbDocLink(title: string, documentId: KnowledgeDocumentID): string {
+export function buildKbMarkdownLink(title: string, href: string): string {
   const label = title.replace(/[[\]]/g, '\\$&').trim() || 'Untitled';
-  return `[${label}](${buildKnowledgeDocumentUri(documentId)})`;
+  return `[${label}](${href})`;
+}
+
+/** Build the internal rename-proof KB document URI form for persisted Knowledge docs. */
+export function buildKbDocLink(title: string, documentId: KnowledgeDocumentID): string {
+  return buildKbMarkdownLink(title, buildKnowledgeDocumentUri(documentId));
 }
 
 const KB_DOC_URI_RE = new RegExp(

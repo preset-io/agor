@@ -33,6 +33,7 @@ import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { CodexSandboxMode, ContextUsageSnapshot, EffortLevel } from '@agor/core/types';
+import { isGatewaySession } from '@agor/core/types';
 import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -53,18 +54,17 @@ import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 /**
- * Map Agor's effort level (`low`/`medium`/`high`/`max`) to Codex SDK's
+ * Map Agor's effort level (`low`/`medium`/`high`/`xhigh`/`max`) to Codex SDK's
  * `ModelReasoningEffort` (`minimal`/`low`/`medium`/`high`/`xhigh`).
  *
- * Agor has no equivalent for `minimal`, and Codex has no equivalent for `max`
- * — `max` is the user's "go as deep as possible" intent, which on Codex maps
- * to `xhigh`.
+ * Agor has no equivalent for `minimal`. Codex has no `max` — both Agor `max`
+ * and Agor `xhigh` map to Codex `xhigh` (the Codex ceiling).
  */
 function toCodexReasoningEffort(
   effort: EffortLevel | undefined
 ): 'low' | 'medium' | 'high' | 'xhigh' | undefined {
   if (!effort) return undefined;
-  return effort === 'max' ? 'xhigh' : effort;
+  return effort === 'max' || effort === 'xhigh' ? 'xhigh' : effort;
 }
 
 /**
@@ -89,6 +89,7 @@ type CodexConfigValue = CodexConfigObject[string];
  * clears the prompt.
  */
 const MCP_AUTO_APPROVE: CodexConfigObject = { default_tools_approval_mode: 'approve' };
+const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
 
 const DEBUG_CODEX = process.env.AGOR_DEBUG_CODEX === '1' || process.env.DEBUG?.includes('codex');
 
@@ -96,6 +97,73 @@ function codexDebug(...args: unknown[]): void {
   if (DEBUG_CODEX) {
     console.debug(...args);
   }
+}
+
+function applyGatewayMcpStartupGuard(config: CodexConfigObject, requireMcpServers: boolean): void {
+  if (!requireMcpServers) return;
+  config.required = true;
+  config.startup_timeout_ms = GATEWAY_MCP_STARTUP_TIMEOUT_MS;
+}
+
+function getCodexHome(): string {
+  return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+}
+
+async function findCodexRolloutFile(threadId: string): Promise<string | undefined> {
+  if (!threadId) return undefined;
+
+  const sessionsDir = path.join(getCodexHome(), 'sessions');
+
+  async function walk(dir: string): Promise<string | undefined> {
+    let entries: Array<import('node:fs').Dirent>;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return undefined;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes(threadId)) {
+        return fullPath;
+      }
+      if (entry.isDirectory()) {
+        const found = await walk(fullPath);
+        if (found) return found;
+      }
+    }
+
+    return undefined;
+  }
+
+  return walk(sessionsDir);
+}
+
+async function extractLatestContextUsageFromRollout(
+  threadId: string
+): Promise<ContextUsageSnapshot | undefined> {
+  const rolloutPath = await findCodexRolloutFile(threadId);
+  if (!rolloutPath) return undefined;
+
+  let contents: string;
+  try {
+    contents = await fs.readFile(rolloutPath, 'utf8');
+  } catch {
+    return undefined;
+  }
+
+  let latest: ContextUsageSnapshot | undefined;
+  for (const line of contents.split('\n')) {
+    if (!line.includes('token_count')) continue;
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      latest = extractCodexContextSnapshotFromEvent(parsed) ?? latest;
+    } catch {
+      // Ignore malformed / partially-written JSONL lines.
+    }
+  }
+
+  return latest;
 }
 
 export interface CodexPromptResult {
@@ -182,7 +250,7 @@ export type CodexStreamEvent =
     };
 
 export class CodexPromptService {
-  private codex: InstanceType<typeof Codex.Codex>;
+  private codex?: InstanceType<typeof Codex.Codex>;
   private lastApiKey: string | null = null;
   private lastBaseUrl: string | null = null;
   private lastClientFingerprint: string | null = null;
@@ -211,10 +279,10 @@ export class CodexPromptService {
     private sessionsRepo: SessionRepository,
     private sessionMCPServerRepo?: SessionMCPServerRepository,
     private branchesRepo?: BranchRepository,
-    private reposRepo?: RepoRepository,
+    _reposRepo?: RepoRepository,
     apiKey?: string,
     private mcpServerRepo?: MCPServerRepository,
-    private usersRepo?: UsersRepository,
+    _usersRepo?: UsersRepository,
     useNativeAuth: boolean = false,
     private tasksService?: TasksService
   ) {
@@ -243,10 +311,11 @@ export class CodexPromptService {
       codexDebug(`🔗 [Codex] Using custom OPENAI_BASE_URL`);
     }
 
-    // Bootstrap Codex SDK without per-session config (rebuilt lazily in
-    // promptSessionStreaming once we know the session's instructions file +
-    // MCP servers).
-    this.codex = new Codex.Codex(this.buildCodexOptions(this.apiKey, baseUrl, undefined));
+    // Do not construct the Codex SDK client until promptSessionStreaming has
+    // resolved the session-scoped config (instructions file + MCP servers).
+    // Constructing here with no MCP config and then replacing it moments later
+    // makes the SDK/app-server briefly start with the wrong lifecycle, which is
+    // visible as MCP disconnect/reconnect waves in gateway-driven turns.
     this.lastClientFingerprint = null;
 
     // Best-effort sweep of orphaned per-session instructions files in
@@ -362,16 +431,13 @@ export class CodexPromptService {
     const baseUrlChanged = (this.lastBaseUrl ?? null) !== (currentBaseUrl ?? null);
     if (this.lastApiKey !== currentApiKey || baseUrlChanged) {
       console.log(
-        `🔄 [Codex] ${this.lastApiKey !== currentApiKey ? 'API key' : 'Base URL'} changed, reinitializing SDK...`
-      );
-      this.codex = new Codex.Codex(
-        this.buildCodexOptions(currentApiKey, currentBaseUrl, undefined)
+        `🔄 [Codex] ${this.lastApiKey !== currentApiKey ? 'API key' : 'Base URL'} changed, invalidating SDK client...`
       );
       this.apiKey = currentApiKey;
       this.lastApiKey = currentApiKey;
       this.lastBaseUrl = currentBaseUrl ?? null;
       this.lastClientFingerprint = null;
-      console.log('✅ [Codex] SDK reinitialized');
+      console.log('✅ [Codex] SDK configuration invalidated');
     }
   }
 
@@ -406,7 +472,7 @@ export class CodexPromptService {
    * rotated MCP bearer tokens invalidate the cache even when the config
    * shape stays the same — see `snapshotMcpEnvValues()`.
    */
-  private ensureCodexClient(config: CodexConfigObject): void {
+  private async ensureCodexClient(config: CodexConfigObject): Promise<void> {
     const baseUrl = this.resolveBaseUrl();
     const fingerprint = JSON.stringify({
       apiKey: this.apiKey || '',
@@ -423,14 +489,55 @@ export class CodexPromptService {
     codexDebug(
       `🔄 [Codex] Per-session config changed, reinitializing SDK (apiKey=${this.apiKey ? 'set' : 'unset'}, useNativeAuth=${this.useNativeAuth})`
     );
-    this.codex = new Codex.Codex(this.buildCodexOptions(this.apiKey, baseUrl, config));
+    await this.replaceCodexClient(this.buildCodexOptions(this.apiKey, baseUrl, config));
     this.lastApiKey = this.apiKey || null;
     this.lastBaseUrl = baseUrl ?? null;
     this.lastClientFingerprint = fingerprint;
   }
 
   /**
-   * Write the rendered Agor session-context prompt to a single file under
+   * Best-effort close for SDK clients that expose a lifecycle method. The
+   * current Codex SDK API has changed over time, so probe common method names
+   * rather than depending on one concrete type. Awaiting close before replacement
+   * keeps abandoned app-server/MCP transports from overlapping the new client.
+   */
+  private async closeCodexClient(
+    client: InstanceType<typeof Codex.Codex> | undefined
+  ): Promise<void> {
+    if (!client) return;
+    const candidate = client as unknown as {
+      close?: () => void | Promise<void>;
+      dispose?: () => void | Promise<void>;
+      shutdown?: () => void | Promise<void>;
+    };
+    const close = candidate.close ?? candidate.dispose ?? candidate.shutdown;
+    if (!close) return;
+
+    try {
+      await Promise.resolve(close.call(candidate));
+    } catch (error) {
+      console.warn('⚠️  [Codex] Failed to close previous SDK client:', error);
+    }
+  }
+
+  private async replaceCodexClient(
+    options: ConstructorParameters<typeof Codex.Codex>[0]
+  ): Promise<void> {
+    const previous = this.codex;
+    this.codex = undefined;
+    await this.closeCodexClient(previous);
+    this.codex = new Codex.Codex(options);
+  }
+
+  private getCodexClient(): InstanceType<typeof Codex.Codex> {
+    if (!this.codex) {
+      throw new Error('Codex SDK client was not initialized before use');
+    }
+    return this.codex;
+  }
+
+  /**
+   * Write the rendered static Agor orientation prompt to a single file under
    * `os.tmpdir()` and return its absolute path.
    *
    * Replaces the per-session CODEX_HOME directory + AGENTS.md mechanism — we
@@ -441,12 +548,7 @@ export class CodexPromptService {
    * config.toml stay where they are.
    */
   private async ensureCodexInstructionsFile(sessionId: SessionID): Promise<string> {
-    const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-      sessions: this.sessionsRepo,
-      branches: this.branchesRepo,
-      repos: this.reposRepo,
-      users: this.usersRepo,
-    });
+    const agorSystemPrompt = await renderAgorSystemPrompt();
 
     const fileName = `agor-codex-instructions-${sessionId}.md`;
 
@@ -524,7 +626,8 @@ export class CodexPromptService {
   private async buildMcpServersConfig(
     sessionId: SessionID,
     mcpToken: string | undefined,
-    forUserId: UserID | undefined
+    forUserId: UserID | undefined,
+    requireMcpServers = false
   ): Promise<{ servers: CodexConfigObject; total: number }> {
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
     codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
@@ -563,9 +666,9 @@ export class CodexPromptService {
       result.agor = {
         url: `${daemonUrl}/mcp`,
         bearer_token_env_var: agorBearerEnvVar,
-        required: false,
         ...MCP_AUTO_APPROVE,
       };
+      applyGatewayMcpStartupGuard(result.agor as CodexConfigObject, requireMcpServers);
       codexDebug(
         `   📝 [Codex MCP] Configuring built-in Agor MCP server (HTTP) at ${daemonUrl}/mcp`
       );
@@ -579,6 +682,7 @@ export class CodexPromptService {
       );
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
+      applyGatewayMcpStartupGuard(serverConfig, requireMcpServers);
       codexDebug(`   📝 [Codex MCP] Configuring STDIO server: ${server.name} -> ${serverName}`);
       if (server.command) {
         serverConfig.command = server.command;
@@ -604,6 +708,7 @@ export class CodexPromptService {
       );
 
       const serverConfig: CodexConfigObject = { ...MCP_AUTO_APPROVE };
+      let canRequireServer = requireMcpServers;
       codexDebug(`   📝 [Codex MCP] Configuring HTTP server: ${server.name} -> ${serverName}`);
       if (server.url) {
         serverConfig.url = server.url;
@@ -620,6 +725,7 @@ export class CodexPromptService {
         const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
         const authHeader = headers?.Authorization;
+        const missingRequiredAuth = !!server.auth && server.auth.type !== 'none' && !authHeader;
         const customHeaders = headers ? { ...headers } : undefined;
         if (customHeaders) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
@@ -634,25 +740,31 @@ export class CodexPromptService {
             serverConfig.bearer_token_env_var = envVarName;
             codexDebug(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
           } else {
+            canRequireServer = false;
             console.warn(
               `      ⚠️  auth: resolved Authorization header for "${server.name}" is not a Bearer scheme (Codex CLI only supports bearer); skipping injection`
             );
           }
-        } else if (server.auth?.type === 'oauth') {
+        } else if (missingRequiredAuth) {
+          canRequireServer = false;
           console.warn(
-            `   ⚠️  [Codex MCP] Server "${server.name}" requires OAuth but no valid token found.`
+            `   ⚠️  [Codex MCP] Server "${server.name}" has configured auth but no valid token found.`
           );
-          console.warn(
-            `      💡 Go to Settings → MCP Servers → ${server.name} → Start OAuth Flow to authenticate.`
-          );
+          const action =
+            server.auth?.type === 'oauth'
+              ? `Start OAuth Flow for ${server.name}`
+              : `check credentials for ${server.name}`;
+          console.warn(`      💡 Go to Settings → MCP Servers → ${action}.`);
         }
       } catch (error) {
         console.warn(
           `   ⚠️  [Codex MCP] Failed to resolve auth headers for "${server.name}":`,
           error instanceof Error ? error.message : String(error)
         );
+        canRequireServer = false;
       }
 
+      applyGatewayMcpStartupGuard(serverConfig, canRequireServer);
       result[serverName] = serverConfig;
     }
 
@@ -922,10 +1034,12 @@ export class CodexPromptService {
       taskId,
       tasksService: this.tasksService,
     });
+    const requireMcpServers = isGatewaySession(session);
     const { servers: mcpServersConfig, total: mcpServerCount } = await this.buildMcpServersConfig(
       sessionId,
       mcpToken,
-      forUserId
+      forUserId,
+      requireMcpServers
     );
 
     const codexConfigPayload: CodexConfigObject = {
@@ -935,7 +1049,7 @@ export class CodexPromptService {
 
     // Recreate Codex instance only if the per-session config payload (or
     // apiKey/baseUrl) actually changed — issue #133 protection.
-    this.ensureCodexClient(codexConfigPayload);
+    await this.ensureCodexClient(codexConfigPayload);
 
     codexDebug(
       `   Configured: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}, ${mcpServerCount} MCP server(s)`
@@ -1024,7 +1138,7 @@ export class CodexPromptService {
     if (session.sdk_session_id) {
       codexDebug(`🔄 [Codex] Resuming thread: ${session.sdk_session_id}`);
 
-      thread = this.codex.resumeThread(session.sdk_session_id, threadOptions);
+      thread = this.getCodexClient().resumeThread(session.sdk_session_id, threadOptions);
 
       // If approval policy changed, send slash command to update thread settings
       if (approvalPolicyChanged) {
@@ -1054,7 +1168,7 @@ export class CodexPromptService {
           `✅ [Codex MCP] New thread will have ${mcpServerCount} MCP server(s) available via --config flags`
         );
       }
-      thread = this.codex.startThread(threadOptions);
+      thread = this.getCodexClient().startThread(threadOptions);
     }
 
     try {
@@ -1264,6 +1378,8 @@ export class CodexPromptService {
             // Turn complete, emit final message
             threadId = thread.id || '';
             const mappedUsage = extractCodexTokenUsage((event as { usage?: unknown }).usage);
+            const contextUsage =
+              latestContextUsage ?? (await extractLatestContextUsageFromRollout(thread.id || ''));
 
             // Yield complete message with all tool uses
             yield {
@@ -1274,7 +1390,7 @@ export class CodexPromptService {
               resolvedModel,
               usage: mappedUsage,
               rawSdkEvent: event, // Pass through the actual SDK event (UNMUTATED)
-              rawContextUsage: latestContextUsage,
+              rawContextUsage: contextUsage,
             };
 
             // Exit the event loop after turn completion

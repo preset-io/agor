@@ -47,7 +47,6 @@ const JWT_SECRET = 'test-jwt-secret-do-not-use-in-production';
  * Build a minimal `app` stub that exposes `settings.authentication.secret` —
  * the only thing the token module reads off the Feathers application.
  */
-// biome-ignore lint/suspicious/noExplicitAny: test harness
 function makeApp(): any {
   return { settings: { authentication: { secret: JWT_SECRET } } };
 }

@@ -1,31 +1,11 @@
-/**
- * Admin Command: Delete Branch Unix Group
- *
- * PRIVILEGED OPERATION - Must be called via sudo
- *
- * Deletes a Unix group for branch isolation.
- * This command is designed to be called by the daemon via `sudo agor admin delete-branch-group`.
- *
- * @see context/guides/rbac-and-unix-isolation.md
- */
+import { Flags } from '@oclif/core';
+import { BaseCommand } from '../../base-command.js';
 
-import { createAdminExecutor, UnixGroupCommands } from '@agor/core/unix';
-import { Command, Flags } from '@oclif/core';
-
-export default class DeleteBranchGroup extends Command {
-  static override description = 'Delete a branch Unix group (admin only)';
-
-  static override examples = [
-    '<%= config.bin %> <%= command.id %> --group agor_wt_03b62447',
-    '<%= config.bin %> <%= command.id %> --group agor_wt_03b62447 --dry-run',
-  ];
+export default class DeleteBranchGroup extends BaseCommand {
+  static override description = 'Delete a branch Unix group via the daemon';
 
   static override flags = {
-    group: Flags.string({
-      char: 'g',
-      description: 'Unix group name to delete (e.g., agor_wt_03b62447)',
-      required: true,
-    }),
+    group: Flags.string({ char: 'g', description: 'Unix group name', required: true }),
     'dry-run': Flags.boolean({
       char: 'n',
       description: 'Show what would be done without making changes',
@@ -40,30 +20,17 @@ export default class DeleteBranchGroup extends Command {
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(DeleteBranchGroup);
-    const { group, verbose } = flags;
-    const dryRun = flags['dry-run'];
-
-    // Create executor with dry-run and verbose support
-    const executor = createAdminExecutor({ 'dry-run': dryRun, verbose });
-
-    if (dryRun) {
-      this.log('🔍 Dry run mode - no changes will be made\n');
-    }
-
-    // Check if group exists
-    const groupExists = await executor.check(UnixGroupCommands.groupExists(group));
-
-    if (!groupExists) {
-      this.log(`✅ Group ${group} doesn't exist (nothing to do)`);
-      return;
-    }
-
-    // Delete the group
+    const client = await this.connectToDaemon();
     try {
-      await executor.exec(UnixGroupCommands.deleteGroup(group));
-      this.log(`✅ Deleted Unix group: ${group}`);
-    } catch (error) {
-      this.error(`Failed to delete group ${group}: ${error}`);
+      const result = await client.service('admin/local-actions').create({
+        action: 'unix.group.deleteBranch',
+        params: { group: flags.group },
+        dryRun: flags['dry-run'],
+        verbose: flags.verbose,
+      });
+      for (const line of (result as { logs?: string[] }).logs ?? []) this.log(line);
+    } finally {
+      await this.cleanupClient(client);
     }
   }
 }

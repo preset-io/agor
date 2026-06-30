@@ -12,7 +12,6 @@ import type {
   UUID,
 } from '@agor-live/client';
 import {
-  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   GithubOutlined,
@@ -40,8 +39,8 @@ import {
   Modal,
   Popconfirm,
   Radio,
-  Result,
   Select,
+  type SelectProps,
   Space,
   Spin,
   Steps,
@@ -55,7 +54,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getDaemonUrl } from '@/config/daemon';
-import { copyToClipboard } from '@/utils/clipboard';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
@@ -66,6 +64,7 @@ import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BranchSelect } from './BranchSelect';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
@@ -139,11 +138,12 @@ const SectionLabel: React.FC<{ icon: React.ReactNode; title: string; subtitle?: 
   </Space>
 );
 
-const UserSelect: React.FC<{ userById: Map<string, User>; placeholder?: string }> = ({
+const UserSelect: React.FC<SelectProps<string> & { userById: Map<string, User> }> = ({
   userById,
   placeholder = 'Select a user',
+  ...selectProps
 }) => (
-  <Select placeholder={placeholder} showSearch optionFilterProp="children">
+  <Select {...selectProps} placeholder={placeholder} showSearch optionFilterProp="children">
     {Array.from(userById.values())
       .sort((a, b) =>
         (a.name || a.email || a.user_id).localeCompare(b.name || b.email || b.user_id)
@@ -353,7 +353,6 @@ const ChannelFormFields: React.FC<{
   selectedAgent: string;
   onAgentChange: (agent: string) => void;
   editingChannel?: GatewayChannel | null;
-  onCopyKey?: (key: string) => void;
   /** GitHub setup wizard state (managed by parent) */
   githubStep: number;
   onGithubStepChange: (step: number) => void;
@@ -371,7 +370,6 @@ const ChannelFormFields: React.FC<{
   selectedAgent,
   onAgentChange,
   editingChannel,
-  onCopyKey,
   githubStep,
   onGithubStepChange,
   githubSetupParams,
@@ -384,7 +382,6 @@ const ChannelFormFields: React.FC<{
   const enableChannels = Form.useWatch('enable_channels', form) ?? false;
   const enableGroups = Form.useWatch('enable_groups', form) ?? false;
   const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
-  const requireMention = Form.useWatch('require_mention', form) ?? true;
   const alignSlackUsers = Form.useWatch('align_slack_users', form) ?? false;
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
 
@@ -892,23 +889,6 @@ const ChannelFormFields: React.FC<{
               ),
               children: (
                 <>
-                  {mode === 'edit' && editingChannel && (
-                    <Form.Item label="Channel Key">
-                      <Input.Search
-                        value={editingChannel.channel_key}
-                        readOnly
-                        enterButton={<CopyOutlined />}
-                        onSearch={() => onCopyKey?.(editingChannel.channel_key)}
-                      />
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: 12, marginTop: 4, display: 'block' }}
-                      >
-                        Use this key to authenticate inbound messages from the platform.
-                      </Typography.Text>
-                    </Form.Item>
-                  )}
-
                   <Form.Item
                     label="App ID"
                     name="teams_app_id"
@@ -1167,23 +1147,6 @@ const ChannelFormFields: React.FC<{
               ),
               children: (
                 <>
-                  {mode === 'edit' && editingChannel && (
-                    <Form.Item label="Channel Key">
-                      <Input.Search
-                        value={editingChannel.channel_key}
-                        readOnly
-                        enterButton={<CopyOutlined />}
-                        onSearch={() => onCopyKey?.(editingChannel.channel_key)}
-                      />
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: 12, marginTop: 4, display: 'block' }}
-                      >
-                        Use this key to authenticate inbound messages from the platform.
-                      </Typography.Text>
-                    </Form.Item>
-                  )}
-
                   <Form.Item
                     label="Bot Token"
                     name="bot_token"
@@ -1270,21 +1233,12 @@ const ChannelFormFields: React.FC<{
                     <Switch />
                   </Form.Item>
 
-                  <Form.Item
-                    label="Require @mention"
-                    name="require_mention"
-                    valuePropName="checked"
-                    initialValue={true}
-                    tooltip="When enabled, bot only responds when explicitly @mentioned (recommended for channels)"
-                  >
-                    <Switch />
-                  </Form.Item>
-
-                  {sourcesEnabled && !requireMention && (
+                  {sourcesEnabled && (
                     <Alert
-                      type="warning"
+                      type="info"
                       showIcon
-                      title="Bot will respond to ALL messages in enabled channels. This can be noisy and expensive."
+                      title="Slack mentions are always required"
+                      description="Agor only starts or continues Slack channel threads when this bot is explicitly @mentioned. Missed thread replies are included as catch-up context on the next mention."
                       style={{ marginBottom: 12 }}
                     />
                   )}
@@ -1324,6 +1278,61 @@ const ChannelFormFields: React.FC<{
                       style={{ fontSize: 12 }}
                     />
                   )}
+                </>
+              ),
+            },
+
+            // ── Outbound ──
+            {
+              key: 'outbound',
+              label: (
+                <SectionLabel
+                  icon={<MessageOutlined />}
+                  title="Outbound"
+                  subtitle="proactive sends"
+                />
+              ),
+              children: (
+                <>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+                  >
+                    Allow authorized agents to send proactive Slack messages through this gateway.
+                    Targets can be Slack channel IDs, channel names, or Slack user emails.
+                  </Typography.Text>
+
+                  <Form.Item
+                    label="Enable outbound sends"
+                    name="outbound_enabled"
+                    valuePropName="checked"
+                    initialValue={false}
+                    tooltip="When enabled, branch admins/owners with full branch access can send proactive Slack messages through this gateway."
+                  >
+                    <Switch />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Default outbound target"
+                    name="default_outbound_target"
+                    tooltip="Optional. Used when the agent omits a target. Examples: #project-updates, channel:C01ABC123, user@example.com."
+                  >
+                    <Input placeholder="#project-updates, channel:C01ABC123, or user@example.com" />
+                  </Form.Item>
+
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="Slack scopes"
+                    description={
+                      <span>
+                        Channel-name targets require <code>channels:read</code> and, for private
+                        channels, <code>groups:read</code>. Email targets require{' '}
+                        <code>users:read.email</code> and open a DM with that Slack user.
+                      </span>
+                    }
+                    style={{ fontSize: 12 }}
+                  />
                 </>
               ),
             },
@@ -1445,8 +1454,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
   const [channelType, setChannelType] = useState<ChannelType>('slack');
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
-  const [createdChannelKey, setCreatedChannelKey] = useState<string | null>(null);
-  const [createdChannelType, setCreatedChannelType] = useState<ChannelType | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
@@ -1633,9 +1640,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.enable_channels = values.enable_channels ?? false;
       config.enable_groups = values.enable_groups ?? false;
       config.enable_mpim = values.enable_mpim ?? false;
-      config.require_mention = values.require_mention ?? true;
+      config.require_mention = true;
       config.align_slack_users = values.align_slack_users ?? false;
       config.allowed_channel_ids = values.allowed_channel_ids ?? [];
+      config.outbound_enabled = values.outbound_enabled ?? false;
+      config.default_outbound_target = values.default_outbound_target || null;
     }
 
     // Build agentic config from form values
@@ -1695,10 +1704,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         return;
       }
 
-      const created = (await client.service('gateway-channels').create(data)) as GatewayChannel;
+      await client.service('gateway-channels').create(data);
       showSuccess('Gateway channel created!');
-      setCreatedChannelType(values.channel_type);
-      setCreatedChannelKey(created.channel_key);
       createForm.resetFields();
       setCreateModalOpen(false);
       setChannelType('slack');
@@ -1745,9 +1752,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.enable_channels = config?.enable_channels ?? false;
       formValues.enable_groups = config?.enable_groups ?? false;
       formValues.enable_mpim = config?.enable_mpim ?? false;
-      formValues.require_mention = config?.require_mention ?? true;
+      formValues.require_mention = true;
       formValues.align_slack_users = config?.align_slack_users ?? false;
       formValues.allowed_channel_ids = (config?.allowed_channel_ids as string[]) ?? [];
+      formValues.outbound_enabled = config?.outbound_enabled ?? false;
+      formValues.default_outbound_target = config?.default_outbound_target;
     } else if (channel.channel_type === 'github') {
       formValues.github_app_id = config?.app_id;
       formValues.github_installation_id = config?.installation_id;
@@ -1805,15 +1814,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   const handleDelete = (channelId: string) => {
     onDelete?.(channelId);
-  };
-
-  const handleCopyKey = async (key: string) => {
-    const success = await copyToClipboard(key);
-    if (success) {
-      showSuccess('Channel key copied to clipboard');
-    } else {
-      showError('Failed to copy to clipboard');
-    }
   };
 
   const columns = [
@@ -1886,9 +1886,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 140,
+      width: 96,
       render: (_: unknown, channel: GatewayChannel) => (
-        <Space size="small">
+        <SettingsActionGroup>
           <Button
             type="text"
             size="small"
@@ -1912,7 +1912,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           >
             <Button type="text" size="small" icon={<DeleteOutlined />} danger title="Delete" />
           </Popconfirm>
-        </Space>
+        </SettingsActionGroup>
       ),
     },
   ];
@@ -2076,7 +2076,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             selectedAgent={selectedAgent}
             onAgentChange={setSelectedAgent}
             editingChannel={editingChannel}
-            onCopyKey={handleCopyKey}
             githubStep={2}
             onGithubStepChange={() => {}}
             githubSetupParams={null}
@@ -2084,140 +2083,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             githubError={null}
           />
         </Form>
-      </Modal>
-
-      {/* Post-Create Success Modal */}
-      <Modal
-        title={null}
-        open={createdChannelKey !== null}
-        footer={[
-          <Button
-            key="done"
-            type="primary"
-            onClick={() => {
-              setCreatedChannelKey(null);
-              setCreatedChannelType(null);
-            }}
-          >
-            Done
-          </Button>,
-        ]}
-        onCancel={() => {
-          setCreatedChannelKey(null);
-          setCreatedChannelType(null);
-        }}
-        width={560}
-      >
-        <Result
-          status="success"
-          title="Channel Created"
-          subTitle="Your gateway channel has been created. Use the channel key below to configure your platform integration."
-        />
-        {createdChannelKey && createdChannelKey !== 'pending' && (
-          <div style={{ padding: '0 24px 16px' }}>
-            <Alert
-              title="Channel Key"
-              description={
-                <Space orientation="vertical" style={{ width: '100%' }}>
-                  <Input.Search
-                    value={createdChannelKey}
-                    readOnly
-                    enterButton={<CopyOutlined />}
-                    onSearch={() => handleCopyKey(createdChannelKey)}
-                    style={{ fontFamily: 'monospace' }}
-                  />
-                  <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                    Keep this key secret — it authenticates messages from the platform to Agor.
-                  </Typography.Text>
-                </Space>
-              }
-              type="warning"
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
-            {createdChannelType === 'slack' && (
-              <Alert
-                title="Slack Setup"
-                description={
-                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
-                    <li>Install the Slack app to your workspace</li>
-                    <li>Enable Socket Mode in your Slack app settings</li>
-                    <li>
-                      Add required OAuth scopes: <code>chat:write</code> (and others based on
-                      enabled message sources)
-                    </li>
-                    <li>
-                      Subscribe to bot events: <code>message.im</code> (and others based on enabled
-                      message sources)
-                    </li>
-                    <li>The gateway will automatically connect when the channel is enabled</li>
-                  </ol>
-                }
-                type="info"
-                showIcon
-              />
-            )}
-            {createdChannelType === 'github' && (
-              <Alert
-                title="GitHub Channel Ready"
-                description={
-                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
-                    <li>The GitHub App is connected and polling will begin automatically</li>
-                    <li>
-                      Use <code>@agor</code> (or your configured mention name) in PR or issue
-                      comments to trigger the bot
-                    </li>
-                    <li>
-                      Agor will create a session for each conversation and respond in-line on GitHub
-                    </li>
-                    <li>
-                      No webhooks needed — Agor polls the GitHub API on the configured interval
-                    </li>
-                  </ol>
-                }
-                type="info"
-                showIcon
-              />
-            )}
-            {createdChannelType === 'teams' && (
-              <Alert
-                message="Microsoft Teams Channel Ready"
-                description={
-                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
-                    <li>
-                      Ensure your Azure Bot&apos;s messaging endpoint points to this Agor
-                      instance&apos;s webhook URL (e.g.{' '}
-                      <code>https://your-domain:3978/api/messages</code>)
-                    </li>
-                    <li>
-                      Sideload the bot as a Teams app via a custom manifest (manifest.json + icons
-                      zip)
-                    </li>
-                    <li>
-                      Send a message to the bot in 1:1 chat or @mention it in a channel to create a
-                      session
-                    </li>
-                    <li>
-                      The app registration must be <strong>multi-tenant</strong> for outbound
-                      replies to work
-                    </li>
-                  </ol>
-                }
-                type="info"
-                showIcon
-              />
-            )}
-          </div>
-        )}
-        {createdChannelKey === 'pending' && (
-          <div style={{ padding: '0 24px 16px' }}>
-            <Alert
-              title="Channel key will appear here after the server processes the request."
-              type="info"
-              showIcon
-            />
-          </div>
-        )}
       </Modal>
     </div>
   );

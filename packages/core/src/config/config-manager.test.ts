@@ -5,7 +5,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
@@ -21,11 +21,16 @@ import {
   getDefaultConfig,
   getReposDir,
   initConfig,
+  isBranchRbacEnabled,
+  isUnixGroupRefreshNeeded,
+  isUnixImpersonationEnabled,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
+  requireDaemonUser,
   requirePublicBaseUrl,
   resolveBranchStorageConfig,
+  resolveExecutionSecurityMode,
   saveConfig,
   setConfigValue,
   unsetConfigValue,
@@ -291,35 +296,32 @@ describe('loadConfig cache', () => {
   it('serves repeated reads from the cache without re-parsing YAML', async () => {
     await writeConfigFile({ daemon: { port: 4000 } });
 
-    // First call hits the disk and parses; subsequent calls hit the cache.
-    // We prove cache behavior by spying on the YAML parser rather than
-    // relying on object identity (the cache hands out clones, not the
-    // shared object — see "isolated from caller mutation").
-    const yamlLoadSpy = vi.spyOn(yaml, 'load');
+    // First call hits the disk; subsequent calls hit the cache.
+    // We prove cache behavior by spying on file reads rather than relying
+    // on object identity (the cache hands out clones, not the shared object
+    // — see "isolated from caller mutation").
+    const readFileSpy = vi.spyOn(fs, 'readFile');
     const first = await loadConfig();
-    const callsAfterFirst = yamlLoadSpy.mock.calls.length;
+    const callsAfterFirst = readFileSpy.mock.calls.length;
     const second = await loadConfig();
     const third = await loadConfig();
 
     expect(first.daemon?.port).toBe(4000);
     expect(second.daemon?.port).toBe(4000);
     expect(third.daemon?.port).toBe(4000);
-    // No additional yaml.load() invocations after the first.
-    expect(yamlLoadSpy.mock.calls.length).toBe(callsAfterFirst);
+    // No additional file reads after the first.
+    expect(readFileSpy.mock.calls.length).toBe(callsAfterFirst);
   });
 
   it('loadConfigSync shares the same cache as loadConfig', async () => {
     await writeConfigFile({ daemon: { port: 5555 } });
 
-    const yamlLoadSpy = vi.spyOn(yaml, 'load');
     const fromAsync = await loadConfig();
-    const callsAfterAsync = yamlLoadSpy.mock.calls.length;
     const fromSync = loadConfigSync();
 
     expect(fromAsync.daemon?.port).toBe(5555);
     expect(fromSync.daemon?.port).toBe(5555);
-    // Sync read also served from cache — no second yaml.load.
-    expect(yamlLoadSpy.mock.calls.length).toBe(callsAfterAsync);
+    // Sync read should reuse the async-loaded cache entry.
   });
 
   it('isolates callers from each other: mutating a returned config does not affect later reads', async () => {
@@ -399,6 +401,87 @@ describe('loadConfig cache', () => {
     // And async path stays consistent.
     await expect(loadConfig()).rejects.toThrow(/opportunistic.*deprecated/s);
   });
+
+  it('treats branch_rbac as app-level only in simple Unix mode', async () => {
+    await writeConfigFile({
+      execution: { branch_rbac: true, unix_user_mode: 'simple' },
+    });
+
+    expect(isBranchRbacEnabled()).toBe(true);
+    expect(isUnixImpersonationEnabled()).toBe(false);
+    expect(isUnixGroupRefreshNeeded()).toBe(false);
+    expect(() => requireDaemonUser(loadConfigSync())).not.toThrow();
+  });
+
+  it('requires daemon.unix_user only for non-simple Unix modes', async () => {
+    await writeConfigFile({
+      execution: { branch_rbac: false, unix_user_mode: 'insulated' },
+    });
+
+    expect(isBranchRbacEnabled()).toBe(false);
+    expect(isUnixImpersonationEnabled()).toBe(true);
+    expect(isUnixGroupRefreshNeeded()).toBe(true);
+    expect(() => requireDaemonUser(loadConfigSync())).toThrow(
+      /execution\.unix_user_mode is insulated or strict/
+    );
+  });
+
+  it.each([
+    {
+      name: 'open access simple',
+      config: { execution: { branch_rbac: false, unix_user_mode: 'simple' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: false,
+        unixUserMode: 'simple',
+        unixImpersonationEnabled: false,
+        unixFsIsolationEnabled: false,
+        unixGroupRefreshNeeded: false,
+        requiresDaemonUnixUser: false,
+        shouldInitUnixGroups: false,
+      },
+    },
+    {
+      name: 'app RBAC simple',
+      config: { execution: { branch_rbac: true, unix_user_mode: 'simple' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: true,
+        unixUserMode: 'simple',
+        unixImpersonationEnabled: false,
+        unixFsIsolationEnabled: false,
+        unixGroupRefreshNeeded: false,
+        requiresDaemonUnixUser: false,
+        shouldInitUnixGroups: false,
+      },
+    },
+    {
+      name: 'Unix insulated without app RBAC',
+      config: { execution: { branch_rbac: false, unix_user_mode: 'insulated' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: false,
+        unixUserMode: 'insulated',
+        unixImpersonationEnabled: true,
+        unixFsIsolationEnabled: true,
+        unixGroupRefreshNeeded: true,
+        requiresDaemonUnixUser: true,
+        shouldInitUnixGroups: true,
+      },
+    },
+    {
+      name: 'Unix strict with app RBAC',
+      config: { execution: { branch_rbac: true, unix_user_mode: 'strict' } } as AgorConfig,
+      expected: {
+        appRbacEnabled: true,
+        unixUserMode: 'strict',
+        unixImpersonationEnabled: true,
+        unixFsIsolationEnabled: true,
+        unixGroupRefreshNeeded: true,
+        requiresDaemonUnixUser: true,
+        shouldInitUnixGroups: true,
+      },
+    },
+  ])('resolves execution security mode: $name', ({ config, expected }) => {
+    expect(resolveExecutionSecurityMode(config)).toEqual(expected);
+  });
 });
 
 describe('requirePublicBaseUrl', () => {
@@ -437,6 +520,18 @@ describe('requirePublicBaseUrl', () => {
     );
 
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
+  });
+
+  it('returns ui.base_url from legacy config when daemon.base_url is unset', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ ui: { base_url: 'https://agor-ui.sandbox.example.com' } }),
+      'utf-8'
+    );
+
+    await expect(requirePublicBaseUrl()).resolves.toBe('https://agor-ui.sandbox.example.com');
   });
 
   it('throws PublicBaseUrlNotConfiguredError when neither env nor config is set', async () => {

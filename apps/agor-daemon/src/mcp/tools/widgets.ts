@@ -29,7 +29,11 @@ import { MessageRole } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { findHostTaskForSession } from '../../utils/session-tasks.js';
-import { type EnvVarsParams, envVarsParamsSchema } from '../../widgets/env-vars/index.js';
+import {
+  type EnvVarsParams,
+  envVarsParamsSchema,
+  normalizeEnvVarsParams,
+} from '../../widgets/env-vars/index.js';
 import type { McpContext } from '../server.js';
 import { sessionContextRequiredResult, textResult } from '../server.js';
 
@@ -78,8 +82,10 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       if (!ctx.sessionId) return sessionContextRequiredResult();
       const currentSessionId = ctx.sessionId;
-      // Validated by Zod via the SDK; `args` has Zod defaults applied.
-      const params: EnvVarsParams = args as EnvVarsParams;
+      // Validated by Zod via the SDK; parse here too so defaults are applied
+      // in direct callers and tests. Keep ordering normalization outside the
+      // schema because Zod transforms degrade MCP JSON Schema discovery.
+      const toolParams = normalizeEnvVarsParams(envVarsParamsSchema.parse(args));
 
       // Look up the host session + its creator. The session creator is the
       // identity whose env vars get written and read by the executor — this
@@ -91,6 +97,8 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       const creator = (await ctx.app
         .service('users')
         .get(sessionCreatorId, ctx.baseServiceParams)) as User;
+
+      const params: EnvVarsParams = toolParams;
 
       // `already_present` short-circuit: if every requested name is already
       // set globally for this user, skip the form entirely and auto-resume

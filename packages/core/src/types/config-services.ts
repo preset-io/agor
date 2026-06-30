@@ -132,6 +132,7 @@ export const SERVICE_GROUP_TO_MCP_DOMAINS: Partial<Record<ServiceGroupName, stri
   cards: ['cards'],
   artifacts: ['artifacts', 'proxies'],
   mcp_servers: ['mcp-servers'],
+  gateway: ['gateway'],
   leaderboard: ['analytics'],
   scheduler: ['schedules'],
   knowledge: ['knowledge'],

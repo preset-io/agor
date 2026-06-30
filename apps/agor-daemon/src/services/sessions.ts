@@ -8,15 +8,21 @@
 import { PAGINATION } from '@agor/core/config';
 import {
   BranchRepository,
-  type Database,
   SessionEnvSelectionRepository,
   SessionMCPServerRepository,
+  SessionRelationshipRepository,
   SessionRepository,
   type SessionWithLastMessage,
+  type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, Forbidden } from '@agor/core/feathers';
-import { formatModelToolMismatchWarning, lintModelToolMatch } from '@agor/core/models';
+import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
+import {
+  formatModelToolMismatchWarning,
+  formatUnsupportedAgorCodexModelMessage,
+  isUnsupportedAgorCodexModel,
+  lintModelToolMatch,
+} from '@agor/core/models';
 import { resolveChildSessionConfig } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
@@ -30,7 +36,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { ROLES, SessionStatus } from '@agor/core/types';
-import { DrizzleService } from '../adapters/drizzle';
+import { DrizzleService, type Query } from '../adapters/drizzle';
 import {
   determineSpawnIdentity,
   isSuperAdmin,
@@ -85,7 +91,53 @@ export type SessionParams = QueryParams<{
   InternalEnrichmentParams & {
     /** Root-level include_last_message flag (bypasses Feathers query filtering, used by internal service calls) */
     _include_last_message?: boolean | 'true' | 'false';
+    /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+    _agorSqlSessionAccessUserId?: UUID;
   };
+
+/**
+ * Whether a sessions `find` query should be served by `SessionRepository.findPage`
+ * (SQL board filter + recency sort + limit/offset) rather than the generic
+ * in-memory path. We only divert the loader's bounded list queries — those that
+ * sort by `updated_at` and/or scope to a `board_id` — and only when the rest of
+ * the query is a shape findPage fully models (archived + pagination). Anything
+ * with extra filters, operators, or `$select` falls through to the existing path
+ * so we never silently drop semantics findPage doesn't implement.
+ */
+function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = false): boolean {
+  if (!query) return forcePage;
+
+  const sort = query.$sort as Record<string, unknown> | undefined;
+  const wantsRecency = !!sort && sort.updated_at !== undefined;
+  const wantsBoard = query.board_id !== undefined;
+  if (!wantsRecency && !wantsBoard && !forcePage) return false;
+
+  const allowedKeys = new Set(['archived', 'board_id', '$sort', '$limit', '$skip']);
+  for (const key of Object.keys(query)) {
+    if (!allowedKeys.has(key)) return false;
+  }
+  if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (wantsBoard && typeof query.board_id !== 'string') return false;
+  if (sort) {
+    const sortKeys = Object.keys(sort);
+    if (sortKeys.length !== 1 || sortKeys[0] !== 'updated_at') return false;
+    if (sort.updated_at !== 1 && sort.updated_at !== -1) return false;
+  }
+  return true;
+}
+
+const remoteRelationshipsEnrichedResults = new WeakSet<object>();
+
+export function markRemoteRelationshipsEnrichedResult<T extends object>(result: T): T {
+  remoteRelationshipsEnrichedResults.add(result);
+  return result;
+}
+
+export function isRemoteRelationshipsEnrichedResult(result: unknown): boolean {
+  return (
+    typeof result === 'object' && result !== null && remoteRelationshipsEnrichedResults.has(result)
+  );
+}
 
 /**
  * Execute task data payload
@@ -106,11 +158,25 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private sessionRepo: SessionRepository;
   private app: Application;
   private sessionMCPRepo: SessionMCPServerRepository;
+  private sessionRelationshipRepo: SessionRelationshipRepository;
   private sessionEnvSelectionRepo: SessionEnvSelectionRepository;
   private usersRepo: UsersRepository;
   private branchRepo: BranchRepository;
 
-  constructor(db: Database, app: Application) {
+  private assertSupportedModelConfig(
+    agenticTool: Session['agentic_tool'],
+    modelConfig: Session['model_config'] | undefined
+  ): void {
+    if (
+      agenticTool === 'codex' &&
+      modelConfig?.model &&
+      isUnsupportedAgorCodexModel(modelConfig.model)
+    ) {
+      throw new BadRequest(formatUnsupportedAgorCodexModelMessage(modelConfig.model));
+    }
+  }
+
+  constructor(db: TenantScopeAwareDatabase, app: Application) {
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
       id: 'session_id',
@@ -125,12 +191,49 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     this.sessionRepo = sessionRepo;
     this.app = app;
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
+    this.sessionRelationshipRepo = new SessionRelationshipRepository(db);
     this.sessionEnvSelectionRepo = new SessionEnvSelectionRepository(db);
     this.branchRepo = new BranchRepository(db);
     // Used by resolveChildIdentity to stamp unix_username on fork/spawn children
     // without going through app.service('users') — matches the convention used
     // by scheduler.ts / gateway.ts / terminals.ts.
     this.usersRepo = new UsersRepository(db);
+  }
+
+  protected async fetchData(_query: Query, params?: SessionParams): Promise<Session[]> {
+    return this.sessionRepo.findAll({
+      visibleToUserId: params?._agorSqlSessionAccessUserId,
+    });
+  }
+
+  async enrichRemoteRelationships(sessionList: Session[]): Promise<Session[]> {
+    const sessionIds = sessionList.map((session) => session.session_id);
+    if (sessionIds.length === 0) return sessionList;
+
+    const relationships = await this.sessionRelationshipRepo.findForSessions(sessionIds);
+    if (relationships.length === 0) return sessionList;
+
+    const bySessionId = new Map<SessionID, NonNullable<Session['remote_relationships']>>();
+
+    for (const relationship of relationships) {
+      const sourceBucket =
+        bySessionId.get(relationship.source_session_id) ??
+        ({ as_source: [], as_target: [] } satisfies NonNullable<Session['remote_relationships']>);
+      sourceBucket.as_source?.push(relationship);
+      bySessionId.set(relationship.source_session_id, sourceBucket);
+
+      const targetBucket =
+        bySessionId.get(relationship.target_session_id) ??
+        ({ as_source: [], as_target: [] } satisfies NonNullable<Session['remote_relationships']>);
+      targetBucket.as_target?.push(relationship);
+      bySessionId.set(relationship.target_session_id, targetBucket);
+    }
+
+    return sessionList.map((session) => {
+      const remoteRelationships = bySessionId.get(session.session_id);
+      if (!remoteRelationships) return session;
+      return { ...session, remote_relationships: remoteRelationships };
+    });
   }
 
   /**
@@ -301,6 +404,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // parent owner. Legacy parent-inheriting "identity borrowing" is preserved
     // only when the branch opts in via dangerously_allow_session_sharing.
     const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
+    const inheritableConfig = getInheritableConfig(parent);
+    this.assertSupportedModelConfig(parent.agentic_tool, inheritableConfig.model_config);
 
     const forkedSession = await this.create(
       {
@@ -321,7 +426,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
           children: [],
         },
         contextFiles: [...(parent.contextFiles || [])],
-        ...getInheritableConfig(parent),
+        ...inheritableConfig,
         tasks: [],
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
@@ -449,6 +554,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     if (lintWarning) {
       console.warn(`[SessionsService.spawn] ${lintWarning}`);
     }
+
+    this.assertSupportedModelConfig(targetTool, modelConfig);
 
     // callback_session_id is the single source of truth for where to deliver
     // callbacks. Default to parent session when callbacks are enabled (which
@@ -698,6 +805,35 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /**
+   * Override patch to keep durable relationship callback state synchronized
+   * with the existing callback_config.enabled execution switch.
+   */
+  async patch(
+    id: import('@agor/core/types').NullableId,
+    data: Partial<Session>,
+    params?: SessionParams
+  ): Promise<Session | Session[]> {
+    const result = (await super.patch(id, data, params)) as Session | Session[];
+
+    const callbackEnabled = data.callback_config?.enabled;
+    if (
+      typeof callbackEnabled === 'boolean' &&
+      !(params as (SessionParams & { _skipRelationshipCallbackSync?: boolean }) | undefined)
+        ?._skipRelationshipCallbackSync
+    ) {
+      const sessionsToSync = Array.isArray(result) ? result : [result];
+      for (const session of sessionsToSync) {
+        await this.sessionRelationshipRepo.setCallbackEnabledForTargetSession(
+          session.session_id as SessionID,
+          callbackEnabled
+        );
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Override get to optionally enrich with last message
    *
    * Last message enrichment is opt-in via include_last_message query parameter
@@ -709,6 +845,8 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const includeLastMessage = includeLastMessageRoot ?? includeLastMessageQuery;
 
     const session = await super.get(id, params);
+    const [enrichedSession] = await this.enrichRemoteRelationships([session]);
+    const sessionWithRelationships = enrichedSession ?? session;
 
     // Only enrich with last message if explicitly requested
     if (includeLastMessage === true || includeLastMessage === 'true') {
@@ -718,29 +856,99 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         truncationLengthRoot ?? truncationLengthQuery
       );
       const result = await this.sessionRepo.enrichWithLastMessage(
-        session as Session,
+        sessionWithRelationships as Session,
         truncationLength
       );
       return result;
     }
 
-    return session as SessionWithLastMessage;
+    return sessionWithRelationships as SessionWithLastMessage;
   }
 
   /**
-   * Override find - no custom logic, just use default find
-   *
-   * Note: Last message is NOT included in list operations - only on single GET
+   * Override find to include durable remote relationships in list results.
+   * Note: Last message is NOT included in list operations - only on single GET.
    */
   async find(params?: SessionParams): Promise<Paginated<Session> | Session[]> {
-    // Use default find to ensure all hooks and scoping are applied
-    return super.find(params);
+    // SQL-pushdown path for the recency-sorted / board-scoped list queries the
+    // first-paint loader issues. In RBAC mode the before-hook stamps a marker
+    // here so the same SQL path can compose branch visibility into the query;
+    // in open-access mode this path still handles board_id + `$sort:{updated_at}`.
+    //
+    // We can't lean on DrizzleService's generic path: (1) its filter matches
+    // `item.board_id`, but sessions expose the board as `branch_board_id`, so a
+    // board_id filter would wipe every row; (2) its sort looks up `item.updated_at`
+    // (the field is `last_updated`), so a `$sort:{updated_at}` is a silent no-op
+    // and the bounded slice wouldn't be ordered by recency. findPage does the
+    // filter + recency sort + limit/offset in SQL instead.
+    const query = params?.query as Record<string, unknown> | undefined;
+    if (shouldSqlPageSessionQuery(query, !!params?._agorSqlSessionAccessUserId)) {
+      const sortSpec = query?.$sort as { updated_at?: 1 | -1 } | undefined;
+      const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
+      const skip = (query?.$skip as number | undefined) ?? 0;
+      const { data, total } = await this.sessionRepo.findPage({
+        boardId: query?.board_id as string | undefined,
+        archived: query?.archived as boolean | undefined,
+        sortUpdatedAt: sortSpec?.updated_at,
+        limit,
+        skip,
+        visibleToUserId: params?._agorSqlSessionAccessUserId,
+      });
+      const enriched = await this.enrichRemoteRelationships(data);
+      return markRemoteRelationshipsEnrichedResult({ total, limit, skip, data: enriched });
+    }
+
+    // board_id present but with a shape findPage doesn't model (Feathers
+    // operators like $in/$ne/$gt, $select, extra filters): push the board filter
+    // to SQL via the branch join, then run the FULL generic DrizzleService
+    // pipeline on the board-scoped rows so operators / $select / $sort / pagination
+    // all behave exactly as on the unscoped path. (paginateClientSide would only
+    // do strict equality and silently mishandle operators.)
+    const boardId = params?.query?.board_id;
+    if (boardId) {
+      const { board_id: _scopedBoardId, ...residualQuery } = (params?.query ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const residual = residualQuery as Query;
+      const rows = await this.sessionRepo.findByBoard(boardId as string, {
+        visibleToUserId: params?._agorSqlSessionAccessUserId,
+      });
+      const filtered = this.filterData(rows, residual);
+      const total = filtered.length;
+      const sorted = this.sortData(filtered, residual.$sort);
+      const selected = this.selectFields(sorted, residual.$select);
+      const paged = this.paginateData(selected as Session[], residual, total);
+
+      if (Array.isArray(paged)) {
+        const enriched = await this.enrichRemoteRelationships(paged);
+        return markRemoteRelationshipsEnrichedResult(enriched);
+      }
+      const enrichedData = await this.enrichRemoteRelationships(paged.data);
+      return markRemoteRelationshipsEnrichedResult({ ...paged, data: enrichedData });
+    }
+
+    const result = await super.find(params);
+
+    if (Array.isArray(result)) {
+      const enriched = await this.enrichRemoteRelationships(result);
+      return markRemoteRelationshipsEnrichedResult(enriched);
+    }
+
+    const enrichedData = await this.enrichRemoteRelationships(result.data);
+    return markRemoteRelationshipsEnrichedResult({
+      ...result,
+      data: enrichedData,
+    });
   }
 }
 
 /**
  * Service factory function
  */
-export function createSessionsService(db: Database, app: Application): SessionsService {
+export function createSessionsService(
+  db: TenantScopeAwareDatabase,
+  app: Application
+): SessionsService {
   return new SessionsService(db, app);
 }

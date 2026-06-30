@@ -5,10 +5,12 @@
  */
 
 import type { BranchRepository } from '@agor/core/db';
-import { BoardRepository, type Database, GroupRepository } from '@agor/core/db';
+import { BoardRepository, GroupRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   BoardGroupGrantWithGroup,
+  BoardID,
+  Branch,
   BranchGroupGrantWithGroup,
   BranchID,
   BranchPermissionLevel,
@@ -17,6 +19,7 @@ import type {
   GroupMembership,
   HookContext,
   Params,
+  User,
   UserID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
@@ -74,7 +77,7 @@ export function branchGroupGrantPermissionLevelOrDefault(value: unknown): Branch
   return nextCan;
 }
 
-export function createGroupsService(db: Database) {
+export function createGroupsService(db: TenantScopeAwareDatabase) {
   const repo = new GroupRepository(db);
   return {
     async find(params?: Params): Promise<Group[]> {
@@ -108,7 +111,7 @@ export function createGroupsService(db: Database) {
   };
 }
 
-export function createGroupMembershipsService(db: Database) {
+export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
   const repo = new GroupRepository(db);
   return {
     async find(params?: Params): Promise<GroupMembership[]> {
@@ -186,7 +189,7 @@ export async function requireBranchGrantManager(
 
 export function setupBranchGroupGrantsService(
   app: import('@agor/core/feathers').Application,
-  db: Database,
+  db: TenantScopeAwareDatabase,
   branchRepo: BranchRepository
 ) {
   const repo = new GroupRepository(db);
@@ -258,7 +261,10 @@ export function setupBranchGroupGrantsService(
   });
 }
 
-async function requireBoardGrantViewer(db: Database, context: HookContext): Promise<HookContext> {
+async function requireBoardGrantViewer(
+  db: TenantScopeAwareDatabase,
+  context: HookContext
+): Promise<HookContext> {
   if (!context.params.provider) return context;
   if (context.params.user?._isServiceAccount) return context;
   const user = context.params.user;
@@ -273,7 +279,10 @@ async function requireBoardGrantViewer(db: Database, context: HookContext): Prom
   return context;
 }
 
-async function requireBoardGrantManager(db: Database, context: HookContext): Promise<HookContext> {
+async function requireBoardGrantManager(
+  db: TenantScopeAwareDatabase,
+  context: HookContext
+): Promise<HookContext> {
   if (!context.params.provider) return context;
   if (context.params.user?._isServiceAccount) return context;
   const user = context.params.user;
@@ -290,7 +299,7 @@ async function requireBoardGrantManager(db: Database, context: HookContext): Pro
 
 export function setupBoardGroupGrantsService(
   app: import('@agor/core/feathers').Application,
-  db: Database
+  db: TenantScopeAwareDatabase
 ) {
   const repo = new GroupRepository(db);
   app.use(
@@ -402,6 +411,74 @@ export function setupBranchEffectiveAccessService(
         }
 
         return effective;
+      },
+    },
+    { methods: ['find'] }
+  );
+}
+
+export function setupBoardAlignedBranchesService(
+  app: import('@agor/core/feathers').Application,
+  branchRepo: BranchRepository
+) {
+  app.use(
+    'boards/:id/aligned-branches',
+    {
+      async find(params?: Params): Promise<Branch[]> {
+        const authParams = params as
+          | (Params & { user?: { user_id: string; role: string; _isServiceAccount?: boolean } })
+          | undefined;
+        if (authParams?.provider && !authParams.user?._isServiceAccount) {
+          const user = authParams.user;
+          if (!user) throw new NotAuthenticated('Authentication required');
+          if (!hasMinimumRole(user.role, ROLES.ADMIN)) {
+            throw new Forbidden('Only admins can list board-aligned branches');
+          }
+        }
+
+        const boardId = paramsRoute(params)?.id;
+        if (!boardId) throw new BadRequest('Board ID is required');
+        return branchRepo.findBoardAlignedBranches(boardId as BoardID);
+      },
+    },
+    { methods: ['find'] }
+  );
+}
+
+export function setupBranchFsAccessUsersService(
+  app: import('@agor/core/feathers').Application,
+  branchRepo: BranchRepository
+) {
+  app.use(
+    'branches/:id/fs-access-users',
+    {
+      async find(params?: Params): Promise<User[]> {
+        const authParams = params as
+          | (Params & { user?: { user_id: string; role: string; _isServiceAccount?: boolean } })
+          | undefined;
+        if (authParams?.provider && !authParams.user?._isServiceAccount) {
+          const user = authParams.user;
+          if (!user) throw new NotAuthenticated('Authentication required');
+          if (!hasMinimumRole(user.role, ROLES.ADMIN)) {
+            throw new Forbidden('Only admins can list branch filesystem access users');
+          }
+        }
+
+        const branchId = paramsRoute(params)?.id;
+        if (!branchId) throw new BadRequest('Branch ID is required');
+        const userIds = await branchRepo.findExplicitFsAccessUserIds(branchId as BranchID);
+        const usersService = app.service('users');
+        const users = await Promise.all(
+          userIds.map(async (userId): Promise<User | null> => {
+            try {
+              return (await usersService.get(userId)) as User;
+            } catch (error) {
+              console.error(`Failed to fetch branch filesystem access user ${userId}:`, error);
+              return null;
+            }
+          })
+        );
+        return users.filter((user): user is User => user !== null);
       },
     },
     { methods: ['find'] }

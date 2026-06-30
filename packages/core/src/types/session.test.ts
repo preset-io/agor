@@ -15,7 +15,41 @@
 
 import { describe, expect, it } from 'vitest';
 import type { AgenticToolName } from './agentic-tool';
-import { getDefaultPermissionMode } from './session';
+import {
+  getDefaultPermissionMode,
+  isSessionExecuting,
+  isSessionPromptable,
+  sessionCanStartTask,
+} from './session';
+
+describe('session promptability helpers', () => {
+  it('treats idle sessions as promptable regardless of the attention flag', () => {
+    expect(sessionCanStartTask('idle', false)).toBe(true);
+    expect(sessionCanStartTask('idle', true)).toBe(true);
+    expect(isSessionPromptable({ status: 'idle', ready_for_prompt: false })).toBe(true);
+  });
+
+  it('treats failed sessions as promptable only after the terminal task made them ready', () => {
+    expect(sessionCanStartTask('failed', true)).toBe(true);
+    expect(sessionCanStartTask('failed', false)).toBe(false);
+    expect(isSessionPromptable({ status: 'failed', ready_for_prompt: true })).toBe(true);
+    expect(isSessionPromptable({ status: 'failed', ready_for_prompt: false })).toBe(false);
+  });
+
+  it('does not confuse ready_for_prompt attention state with promptability', () => {
+    expect(sessionCanStartTask('timed_out', true)).toBe(false);
+    expect(sessionCanStartTask('running', true)).toBe(false);
+    expect(isSessionPromptable({ status: 'timed_out', ready_for_prompt: true })).toBe(false);
+  });
+
+  it('identifies execution states separately from promptability', () => {
+    expect(isSessionExecuting({ status: 'running' })).toBe(true);
+    expect(isSessionExecuting({ status: 'stopping' })).toBe(true);
+    expect(isSessionExecuting({ status: 'awaiting_permission' })).toBe(true);
+    expect(isSessionExecuting({ status: 'idle' })).toBe(false);
+    expect(isSessionExecuting({ status: 'failed' })).toBe(false);
+  });
+});
 
 describe('getDefaultPermissionMode', () => {
   it('returns "allow-all" for codex (Agor MCP-heavy default)', () => {

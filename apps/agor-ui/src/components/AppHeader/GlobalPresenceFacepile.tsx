@@ -1,4 +1,4 @@
-import type { AgorClient, Board, BoardID, User } from '@agor-live/client';
+import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
 import { Divider } from 'antd';
 import { useMemo } from 'react';
 import { PRESENCE_CONFIG } from '../../config/presence';
@@ -16,6 +16,10 @@ interface GlobalPresenceFacepileProps {
     boardId?: BoardID,
     cursorPosition?: { x: number; y: number }
   ) => void;
+  /** Demo/screenshot-only override: render a fixed facepile without live socket presence. */
+  staticActiveUsers?: ActiveUser[];
+  /** Optional screenshot/demo composition override. Omit to preserve the product default cap. */
+  maxVisible?: number;
 }
 
 export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
@@ -25,17 +29,20 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
   currentUser,
   boardById,
   onUserClick,
+  staticActiveUsers,
+  maxVisible = 5,
 }) => {
   const { activeUsers } = usePresence({
     client,
     boardId: currentBoardId ?? null,
     users,
-    enabled: !!client,
+    enabled: !!client && !staticActiveUsers,
     globalPresence: true,
     presenceMinUpdateIntervalMs: PRESENCE_CONFIG.FACEPILE_REFRESH_MS,
   });
 
   const allActiveUsers = useMemo(() => {
+    if (staticActiveUsers) return staticActiveUsers;
     if (!currentUser) return activeUsers;
 
     return [
@@ -47,7 +54,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
       },
       ...activeUsers.filter((activeUser) => activeUser.user.user_id !== currentUser.user_id),
     ];
-  }, [activeUsers, currentBoardId, currentUser]);
+  }, [activeUsers, currentBoardId, currentUser, staticActiveUsers]);
 
   if (allActiveUsers.length === 0) return null;
 
@@ -56,7 +63,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
       <Facepile
         activeUsers={allActiveUsers}
         currentUserId={currentUser?.user_id}
-        maxVisible={5}
+        maxVisible={maxVisible}
         boardById={boardById}
         onUserClick={onUserClick}
         style={{

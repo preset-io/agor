@@ -11,7 +11,7 @@ function formatDate(dateStr: string): string {
   });
 }
 
-const DEFAULT_IMAGE = '/screenshots/board.png';
+const DEFAULT_IMAGE = '/screenshots/board-hero.png';
 
 export function BlogCard({ post }: { post: BlogPost }) {
   const imageSrc = post.image || DEFAULT_IMAGE;

@@ -27,12 +27,13 @@
  *    reconnect fallback in useAgorClient and the 401-retry hook on the
  *    same client. Extracted here so the two paths stay in lockstep.
  *
- * The single-flight helper also emits a `TOKENS_REFRESHED_EVENT` on `window`
- * after a successful refresh so that React state (useAuth) can sync even when
- * the refresh was initiated by a non-React code path (e.g. the Feathers hook).
- * On unrecoverable failure it emits `TOKENS_REFRESH_UNRECOVERABLE_EVENT` so
- * useAuth can clear tokens and bounce the user to login exactly once,
- * instead of every call site duplicating that cleanup.
+ * Successful token replacement emits `TOKENS_REFRESHED_EVENT` on `window` so
+ * React state (useAuth), socket clients, and data hooks can sync even when the
+ * token replacement was initiated by a non-React code path (e.g. the Feathers
+ * hook). Refresh failures that make the session unrecoverable emit
+ * `TOKENS_REFRESH_UNRECOVERABLE_EVENT` so useAuth can clear tokens and bounce
+ * the user to login exactly once, instead of every call site duplicating that
+ * cleanup.
  */
 
 import type { AgorClient } from '@agor-live/client';
@@ -41,6 +42,16 @@ import { getStoredRefreshToken, type RefreshResult, refreshAndStoreTokens } from
 
 /** Custom DOM event fired after tokens have been successfully refreshed. */
 export const TOKENS_REFRESHED_EVENT = 'agor:tokens-refreshed';
+
+/**
+ * Notify long-lived clients and React listeners that the browser has fresh
+ * auth tokens. Use this for every successful auth path that stores or rotates
+ * tokens while the page may already have socket/service clients alive.
+ */
+export function dispatchTokensRefreshed(result: RefreshResult): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent<RefreshResult>(TOKENS_REFRESHED_EVENT, { detail: result }));
+}
 
 /**
  * Custom DOM event fired when the refresh endpoint returned a definite auth
@@ -118,12 +129,9 @@ export function refreshTokensSingleFlight(
       // the user logged out and back in, or a transient failure was
       // misclassified, resume normal operation.
       unrecoverable = false;
-      // Notify listeners (useAuth) that tokens have rotated.
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent<RefreshResult>(TOKENS_REFRESHED_EVENT, { detail: result })
-        );
-      }
+      // Notify listeners (useAuth, socket clients, data hooks) that tokens
+      // have rotated.
+      dispatchTokensRefreshed(result);
       return result;
     })
     .catch((err) => {

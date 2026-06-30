@@ -1,10 +1,11 @@
 import type { Session } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
-import { LinkOutlined, PhoneOutlined } from '@ant-design/icons';
+import { DisconnectOutlined, LinkOutlined } from '@ant-design/icons';
 import { Badge, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppLiveData } from '../../contexts/AppDataContext';
+import { useAgorStore } from '../../store/agorStore';
+import { selectSessionById } from '../../store/selectors';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 
 interface CallbackTargetDisplayProps {
@@ -41,17 +42,24 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { onSessionClick } = useAppActions();
-  const { sessionById } = useAppLiveData();
+  const sessionById = useAgorStore(selectSessionById);
 
+  const remoteRelationship = session.remote_relationships?.as_target?.find(
+    (relationship) => relationship.relationship_type === 'remote_create'
+  );
+  const remoteParentId = remoteRelationship?.source_session_id;
   const targetId =
-    session.callback_config?.callback_session_id ?? session.genealogy?.parent_session_id;
+    session.callback_config?.callback_session_id ??
+    remoteRelationship?.callback_session_id ??
+    remoteParentId ??
+    session.genealogy?.parent_session_id;
 
   if (!targetId) return null;
 
   const target = sessionById.get(targetId);
   // Mirror CallbackToggleButton's resolution: spawned sessions default to
   // enabled unless explicitly disabled.
-  const enabled = session.callback_config?.enabled !== false;
+  const enabled = session.callback_config?.enabled ?? remoteRelationship?.callback_enabled ?? true;
   const archived = target?.archived === true;
 
   const targetTitle = target
@@ -90,7 +98,11 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
       }}
     >
       <Space size={6} wrap>
-        <PhoneOutlined style={{ color: iconColor }} />
+        {enabled ? (
+          <LinkOutlined style={{ color: iconColor }} />
+        ) : (
+          <DisconnectOutlined style={{ color: iconColor }} />
+        )}
         <Typography.Text strong style={{ color: iconColor }}>
           Callbacks {enabled ? 'ON' : 'OFF'}
         </Typography.Text>

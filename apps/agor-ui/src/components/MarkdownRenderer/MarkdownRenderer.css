@@ -73,3 +73,41 @@
   max-width: 100%;
   max-height: 150px;
 }
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  scroll-margin-top: 24px;
+}
+
+.markdown-heading-anchor {
+  margin-left: 0.35em;
+  color: inherit;
+  font-size: 0.82em;
+  opacity: 0;
+  text-decoration: none;
+  transition: opacity 120ms ease;
+}
+
+.markdown-content h1:hover .markdown-heading-anchor,
+.markdown-content h2:hover .markdown-heading-anchor,
+.markdown-content h3:hover .markdown-heading-anchor,
+.markdown-content h4:hover .markdown-heading-anchor,
+.markdown-content h5:hover .markdown-heading-anchor,
+.markdown-content h6:hover .markdown-heading-anchor,
+.markdown-heading-anchor:focus {
+  opacity: 0.55;
+}
+
+.markdown-content h1 .markdown-heading-anchor:hover,
+.markdown-content h2 .markdown-heading-anchor:hover,
+.markdown-content h3 .markdown-heading-anchor:hover,
+.markdown-content h4 .markdown-heading-anchor:hover,
+.markdown-content h5 .markdown-heading-anchor:hover,
+.markdown-content h6 .markdown-heading-anchor:hover {
+  opacity: 0.85;
+  text-decoration: none;
+}

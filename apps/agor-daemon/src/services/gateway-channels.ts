@@ -6,7 +6,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, GatewayChannelRepository } from '@agor/core/db';
+import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { GatewayChannel } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
@@ -14,7 +14,7 @@ export class GatewayChannelsService extends DrizzleService<
   GatewayChannel,
   Partial<GatewayChannel>
 > {
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const repo = new GatewayChannelRepository(db);
     super(repo, {
       id: 'id',
@@ -30,6 +30,6 @@ export class GatewayChannelsService extends DrizzleService<
 /**
  * Service factory function
  */
-export function createGatewayChannelsService(db: Database): GatewayChannelsService {
+export function createGatewayChannelsService(db: TenantScopeAwareDatabase): GatewayChannelsService {
   return new GatewayChannelsService(db);
 }

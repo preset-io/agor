@@ -1,13 +1,6 @@
+import { isTaskExecuting } from '@agor/core/types';
 import type { Task } from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
-
-const ACTIVE_TASK_STATUSES = new Set<Task['status']>([
-  TaskStatus.CREATED,
-  TaskStatus.RUNNING,
-  TaskStatus.STOPPING,
-  TaskStatus.AWAITING_PERMISSION,
-  TaskStatus.AWAITING_INPUT,
-]);
 
 function timestamp(value: string | undefined): number {
   if (!value) return 0;
@@ -27,13 +20,20 @@ function taskActivityTimestamp(task: Task): number {
 }
 
 function compareLatestTasks(a: Task, b: Task): number {
-  const aActive = ACTIVE_TASK_STATUSES.has(a.status);
-  const bActive = ACTIVE_TASK_STATUSES.has(b.status);
+  const aActive = a.status === TaskStatus.CREATED || isTaskExecuting(a);
+  const bActive = b.status === TaskStatus.CREATED || isTaskExecuting(b);
   if (aActive !== bActive) return aActive ? 1 : -1;
 
   const aQueued = a.status === TaskStatus.QUEUED;
   const bQueued = b.status === TaskStatus.QUEUED;
   if (aQueued !== bQueued) return aQueued ? -1 : 1;
+
+  // Unstarted terminal tasks (legacy/admin cleanup rows with sentinel
+  // start_index=-1) were never added to the transcript. Do not let them steal
+  // the "latest task" peek from a task that actually ran.
+  const aPinnedToTranscript = Boolean(a.started_at) || (a.message_range?.start_index ?? -1) >= 0;
+  const bPinnedToTranscript = Boolean(b.started_at) || (b.message_range?.start_index ?? -1) >= 0;
+  if (aPinnedToTranscript !== bPinnedToTranscript) return aPinnedToTranscript ? 1 : -1;
 
   const activityDiff = taskActivityTimestamp(a) - taskActivityTimestamp(b);
   if (activityDiff !== 0) return activityDiff;

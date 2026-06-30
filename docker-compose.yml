@@ -64,8 +64,8 @@
 #   AGOR_DB_DIALECT              - 'sqlite' (default) or 'postgresql'
 #   DATABASE_URL                 - Full PostgreSQL connection URL (when using PostgreSQL)
 #   POSTGRES_DB                  - Database name (default: agor)
-#   POSTGRES_USER                - Database user (default: agor)
-#   POSTGRES_PASSWORD            - Database password (default: agor_dev_secret)
+#   POSTGRES_SUPERUSER           - Bootstrap-only Postgres superuser (default: agor_bootstrap)
+#   POSTGRES_SUPERUSER_PASSWORD  - Bootstrap superuser password (default: agor_bootstrap_secret)
 #
 #
 # ==============================================================================
@@ -106,8 +106,18 @@ services:
 
       # UI configuration
       - UI_PORT=${UI_PORT:-5173}
-      # UI connects to daemon via localhost (inside container)
+      # Daemon port the browser-side SPA derives its API origin from when no
+      # explicit VITE_DAEMON_URL is given (root-vite-dev resolution).
       - VITE_DAEMON_PORT=${DAEMON_PORT:-3030}
+      # Browser-facing daemon URL. In a split-port branch env the UI is served
+      # by vite-dev on UI_PORT while the daemon API listens on DAEMON_PORT, so
+      # the SPA must POST /authentication to the daemon — not its own origin.
+      # When set (see .agor.yml dev variants) getDaemonUrl() returns this
+      # verbatim, short-circuiting the same-origin assumption. Left empty for
+      # production, which serves UI + API from one origin under /ui.
+      - VITE_DAEMON_URL=${VITE_DAEMON_URL:-}
+      # Public, browser-facing base URL used in Slack/GitHub/email links.
+      - AGOR_BASE_URL=${AGOR_BASE_URL:-}
 
       # Database configuration
       # AUTO-DETECT: If postgres container is running, use PostgreSQL; otherwise SQLite
@@ -118,6 +128,12 @@ services:
       # Seed development fixtures (optional, set SEED=true to populate test data)
       # Creates: Agor repo (https://github.com/preset-io/agor.git) + test-branch
       - SEED=${SEED:-false}
+
+      # Load demo fixtures (optional, set LOAD_FIXTURES=true for hardcoded fake
+      # data: users, branches, sessions+transcripts, boards/zones, cards,
+      # artifacts). Pure DB inserts (no git/network). Composes with SEED; the
+      # recommended combo for instant E2E testing is SEED=true LOAD_FIXTURES=true
+      - LOAD_FIXTURES=${LOAD_FIXTURES:-false}
 
       # Pass through API keys from host (if set)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -165,6 +181,7 @@ services:
       - /app/packages/core/node_modules
       - /app/packages/executor/node_modules
       - /app/packages/client/node_modules
+      - /app/packages/git/node_modules
       - /app/apps/agor-daemon/node_modules
       - /app/apps/agor-cli/node_modules
       - /app/apps/agor-ui/node_modules
@@ -180,12 +197,17 @@ services:
   postgres:
     profiles: ['postgres'] # Optional service - only runs when profile is specified
     # pgvector image tracks upstream Postgres and preinstalls the vector extension.
-    # Keep this on PG16 to match existing dev volumes and DATABASE_URL defaults.
-    image: pgvector/pgvector:0.8.2-pg16-trixie
+    # The dev image creates a non-superuser app role (agor_app) so local Postgres
+    # exercises RLS instead of bypassing it through POSTGRES_USER superuser.
+    build:
+      context: .
+      dockerfile: docker/postgres-dev.Dockerfile
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-agor}
-      POSTGRES_USER: ${POSTGRES_USER:-agor}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agor_dev_secret}
+      # Bootstrap-only superuser managed by the official image. Do not use this
+      # role for Agor runtime connections; DATABASE_URL points at agor_app.
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-agor_bootstrap}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-agor_bootstrap_secret}
       # Performance tuning for development
       POSTGRES_INITDB_ARGS: '-E UTF8 --locale=C'
     # NOTE: No external port exposure - postgres is only accessed via Docker internal network
@@ -193,14 +215,15 @@ services:
     # This avoids port conflicts when running multiple docker-compose instances
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # Init script to grant permissions (runs only on first startup)
-      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      # Init SQL is baked into docker/postgres-dev.Dockerfile rather than
+      # bind-mounted because branch worktrees may be group/private under Unix
+      # isolation, making host files unreadable to the postgres container.
     healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'pg_isready -U ${POSTGRES_USER:-agor} -d ${POSTGRES_DB:-agor} && psql -U ${POSTGRES_USER:-agor} -d ${POSTGRES_DB:-agor} -tAc "SELECT 1 FROM information_schema.schemata WHERE schema_name=''drizzle''" | grep -q 1',
-        ]
+      # Only gate on PostgreSQL accepting connections. Agor owns schema creation
+      # through Drizzle migrations during daemon startup; checking for the
+      # drizzle schema here can deadlock fresh environments before the daemon has
+      # a chance to create it.
+      test: ['CMD-SHELL', 'pg_isready -h localhost -d ${POSTGRES_DB:-agor}']
       interval: 2s
       timeout: 3s
       retries: 10

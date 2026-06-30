@@ -13,31 +13,27 @@ import { ParticleBackground } from './ParticleBackground';
 
 const { Text } = Typography;
 
-const ADMIN_SETUP_COMMAND = 'agor user create-admin';
+function currentReturnToPath(): string | null {
+  if (typeof window === 'undefined') return null;
 
-function AdminSetupHint() {
-  const { token } = theme.useToken();
+  // Send only a relative Agor route to the external launcher. Avoiding an
+  // absolute URL keeps this from becoming an open-redirect primitive if the
+  // launcher blindly follows `return_to`.
+  const pathname = window.location.pathname.startsWith('//') ? '/' : window.location.pathname;
+  return `${pathname}${window.location.search}${window.location.hash}`;
+}
 
-  return (
-    <Space orientation="vertical" size={4} style={{ width: '100%' }}>
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        First-time server setup? Create the initial admin account:
-      </Text>
-      <Text
-        code
-        copyable={{ text: ADMIN_SETUP_COMMAND }}
-        style={{
-          fontSize: 12,
-          background: token.colorFillTertiary,
-          border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: token.borderRadiusSM,
-          padding: '2px 6px',
-        }}
-      >
-        {ADMIN_SETUP_COMMAND}
-      </Text>
-    </Space>
-  );
+function addReturnToParam(loginRedirectUrl: string): string {
+  const returnTo = currentReturnToPath();
+  if (!returnTo) return loginRedirectUrl;
+
+  try {
+    const url = new URL(loginRedirectUrl);
+    url.searchParams.set('return_to', returnTo);
+    return url.toString();
+  } catch {
+    return loginRedirectUrl;
+  }
 }
 
 interface LoginPageProps {
@@ -58,6 +54,9 @@ export function LoginPage({
   const [showLocalLogin, setShowLocalLogin] = useState(false);
   const { token } = theme.useToken();
   const useExternalLaunch = !!externalLaunchLoginRedirectUrl;
+  const externalLaunchHref = externalLaunchLoginRedirectUrl
+    ? addReturnToParam(externalLaunchLoginRedirectUrl)
+    : undefined;
   const showLoginForm = !useExternalLaunch || showLocalLogin;
   const isLaunchError = error?.startsWith('Launch sign-in failed') ?? false;
 
@@ -155,22 +154,7 @@ export function LoginPage({
           <Alert
             type="error"
             title={isLaunchError ? 'Launch sign-in failed' : 'Login Failed'}
-            description={
-              <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-                <div>{error}</div>
-                {!isLaunchError && (
-                  <div
-                    style={{
-                      marginTop: 8,
-                      paddingTop: 8,
-                      borderTop: `1px solid ${token.colorBorderSecondary}`,
-                    }}
-                  >
-                    <AdminSetupHint />
-                  </div>
-                )}
-              </Space>
-            }
+            description={error}
             showIcon
             closable
             style={{ marginBottom: 24 }}
@@ -189,7 +173,7 @@ export function LoginPage({
             )}
             <Button
               type="primary"
-              href={externalLaunchLoginRedirectUrl}
+              href={externalLaunchHref}
               block
               data-testid="external-launch-return"
             >
@@ -246,13 +230,6 @@ export function LoginPage({
               </Form.Item>
             </Form>
           </>
-        )}
-
-        {/* Footer */}
-        {showLoginForm && !error && (
-          <div style={{ textAlign: 'center', marginTop: 24 }}>
-            <AdminSetupHint />
-          </div>
         )}
       </Card>
     </div>

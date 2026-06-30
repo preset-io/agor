@@ -92,29 +92,29 @@ Terms you'll see across the codebase, UI, and docs:
 | **Unix user mode** | `simple` / `insulated` / `strict` — progressive OS-level isolation tiers. See "Feature Flags" below.                                                                                            |
 | **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                             |
 | **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).              |
-| **Effort**         | Reasoning depth knob (`low`/`medium`/`high`/`max`) on `model_config`. Maps to Claude API `output_config.effort`.                                                                                |
+| **Effort**         | Reasoning depth knob (`low`/`medium`/`high`/`xhigh`/`max`) on `model_config`. Maps to Claude API `output_config.effort`.                                                                        |
 
 ## Where to look first
 
-| Tasked with...                  | Open this                                                                                                                                                                                                           |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Mental model                    | [`context/concepts/core.md`](context/concepts/core.md)                                                                                                                                                              |
-| System shape                    | [`context/concepts/architecture.md`](context/concepts/architecture.md) → [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx)                                               |
-| Boards / branches               | [`context/concepts/branches.md`](context/concepts/branches.md) → [`apps/agor-docs/pages/guide/branches.mdx`](apps/agor-docs/pages/guide/branches.mdx) and [`boards.mdx`](apps/agor-docs/pages/guide/boards.mdx)     |
-| Sessions / fork-spawn           | [`apps/agor-docs/pages/guide/sessions.mdx`](apps/agor-docs/pages/guide/sessions.mdx)                                                                                                                                |
-| Tasks / queue                   | [`context/concepts/task-queueing.md`](context/concepts/task-queueing.md)                                                                                                                                            |
-| RBAC / Unix isolation           | [`context/guides/rbac-and-unix-isolation.md`](context/guides/rbac-and-unix-isolation.md) → [`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`](apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx) |
-| MCP server / tools              | [`context/concepts/mcp-session-tools.md`](context/concepts/mcp-session-tools.md) → [`apps/agor-docs/pages/guide/internal-mcp.mdx`](apps/agor-docs/pages/guide/internal-mcp.mdx)                                     |
-| Real-time UI                    | [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx) (Real-time Data Sync)                                                                                                  |
-| Multiplayer / presence          | [`apps/agor-docs/pages/guide/multiplayer-social.mdx`](apps/agor-docs/pages/guide/multiplayer-social.mdx)                                                                                                            |
-| Adding a service                | [`context/guides/extending-feathers-services.md`](context/guides/extending-feathers-services.md)                                                                                                                    |
-| Adding a migration              | [`context/guides/creating-database-migrations.md`](context/guides/creating-database-migrations.md)                                                                                                                  |
-| Testing                         | [`context/guidelines/testing.md`](context/guidelines/testing.md)                                                                                                                                                    |
-| IDs / short IDs / branded types | [`context/concepts/id-management.md`](context/concepts/id-management.md)                                                                                                                                            |
-| Web-layer security (CSP/CORS)   | [`context/concepts/security.md`](context/concepts/security.md)                                                                                                                                                      |
-| Executor isolation              | [`context/explorations/executor-isolation.md`](context/explorations/executor-isolation.md)                                                                                                                          |
-| Session sharing security flag   | [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md)                                                                                                                                |
-| Product copy / voice / taglines | [`context/messaging-and-positioning.md`](context/messaging-and-positioning.md) — **do not paraphrase from code**                                                                                                    |
+| Tasked with...                  | Open this                                                                                                                                                                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mental model                    | [`context/concepts/core.md`](context/concepts/core.md)                                                                                                                                                                                                  |
+| System shape                    | [`context/concepts/architecture.md`](context/concepts/architecture.md) → [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx)                                                                                   |
+| Boards / branches               | [`context/concepts/branches.md`](context/concepts/branches.md) → [`apps/agor-docs/pages/guide/branches.mdx`](apps/agor-docs/pages/guide/branches.mdx) and [`boards.mdx`](apps/agor-docs/pages/guide/boards.mdx)                                         |
+| Sessions / fork-spawn           | [`apps/agor-docs/pages/guide/sessions.mdx`](apps/agor-docs/pages/guide/sessions.mdx)                                                                                                                                                                    |
+| Tasks / queue                   | [`context/concepts/task-queueing.md`](context/concepts/task-queueing.md)                                                                                                                                                                                |
+| RBAC / Unix isolation           | [`context/guides/rbac-and-unix-isolation.md`](context/guides/rbac-and-unix-isolation.md) → [`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`](apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx)                                     |
+| MCP server / tools              | [`context/concepts/mcp-session-tools.md`](context/concepts/mcp-session-tools.md) → [`apps/agor-docs/pages/guide/internal-mcp.mdx`](apps/agor-docs/pages/guide/internal-mcp.mdx)                                                                         |
+| Real-time UI                    | [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx) (Real-time Data Sync)                                                                                                                                      |
+| Multiplayer / presence          | [`apps/agor-docs/pages/guide/multiplayer-social.mdx`](apps/agor-docs/pages/guide/multiplayer-social.mdx)                                                                                                                                                |
+| Adding a service                | [`context/guides/extending-feathers-services.md`](context/guides/extending-feathers-services.md)                                                                                                                                                        |
+| Adding a migration              | [`context/guides/creating-database-migrations.md`](context/guides/creating-database-migrations.md)                                                                                                                                                      |
+| Testing                         | [`context/guidelines/testing.md`](context/guidelines/testing.md)                                                                                                                                                                                        |
+| IDs / short IDs / branded types | [`context/concepts/id-management.md`](context/concepts/id-management.md)                                                                                                                                                                                |
+| Web-layer security (CSP/CORS)   | [`context/concepts/security.md`](context/concepts/security.md)                                                                                                                                                                                          |
+| Executor isolation              | [`context/explorations/executor-isolation.md`](context/explorations/executor-isolation.md)                                                                                                                                                              |
+| Session sharing security flag   | [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md)                                                                                                                                                                    |
+| Product copy / voice / taglines | **Messaging & Positioning** lives in the Agor team Knowledge base, not this repo: [`marketing/messaging-and-positioning`](https://agor.sandbox.preset.zone/kb/agor-cloud-team/marketing/messaging-and-positioning.md) — **do not paraphrase from code** |
 
 ---
 
@@ -412,16 +412,19 @@ security toggles stored alongside permissions:
 
 ## Effort Level (Reasoning Depth)
 
-Agor exposes Claude's `effort` parameter to control how much reasoning Claude applies to responses. This maps directly to the Claude API's `output_config.effort` and the Claude Code CLI's `--effort` flag.
+Agor exposes the `effort` parameter to control how much reasoning the agent applies to responses. This maps directly to the Claude API's `output_config.effort` and the Claude Code CLI's `--effort` flag.
 
 ### Levels
 
-| Level    | Description                    | Use case                         |
-| -------- | ------------------------------ | -------------------------------- |
-| `low`    | Minimal thinking, fastest      | Simple tasks, quick lookups      |
-| `medium` | Moderate thinking              | Balanced speed/quality           |
-| `high`   | Deep reasoning (default)       | Complex coding, reviews          |
-| `max`    | Maximum effort (Opus 4.6 only) | Critical decisions, architecture |
+| Level    | Description                      | Use case                         |
+| -------- | -------------------------------- | -------------------------------- |
+| `low`    | Minimal thinking, fastest        | Simple tasks, quick lookups      |
+| `medium` | Moderate thinking                | Balanced speed/quality           |
+| `high`   | Deep reasoning (default)         | Complex coding, reviews          |
+| `xhigh`  | Extra reasoning depth            | Demanding tasks before max       |
+| `max`    | Highest effort (model-dependent) | Critical decisions, architecture |
+
+On Codex, both `xhigh` and `max` map to Codex's `xhigh` (its ceiling). Codex `minimal` is not exposed by Agor.
 
 ### Extended Context (1M tokens)
 
@@ -573,7 +576,7 @@ cd apps/agor-daemon && pnpm dev
 - Branches are the primary card on boards — not sessions.
 - Never subprocess for git. Always `simple-git` via `packages/core/src/git/index.ts`.
 - Don't run `pnpm build` unless asked. Watch mode is running.
-- Read [`context/messaging-and-positioning.md`](context/messaging-and-positioning.md) before writing any user-facing copy.
+- Read the **Messaging & Positioning** doc in the Agor team Knowledge base ([`marketing/messaging-and-positioning`](https://agor.sandbox.preset.zone/kb/agor-cloud-team/marketing/messaging-and-positioning.md)) before writing any user-facing copy.
 
 ---
 

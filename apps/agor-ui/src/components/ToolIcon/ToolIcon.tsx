@@ -9,6 +9,7 @@ import ccLogo from '../../assets/tools/cc.png';
 import claudeCodeCliLogo from '../../assets/tools/claude-code-cli.png';
 import codexLogo from '../../assets/tools/codex.png';
 import copilotLogo from '../../assets/tools/copilot.png';
+import cursorLogo from '../../assets/tools/cursor.png';
 import geminiLogo from '../../assets/tools/gemini.png';
 import opencodeLogo from '../../assets/tools/opencode.png';
 
@@ -30,6 +31,7 @@ const toolLogos: Record<string, string> = {
   gemini: geminiLogo,
   opencode: opencodeLogo,
   copilot: copilotLogo,
+  cursor: cursorLogo,
 };
 
 // Tools whose logos are drawn on a transparent / light background and need

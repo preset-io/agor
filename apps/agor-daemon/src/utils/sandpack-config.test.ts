@@ -125,7 +125,6 @@ describe('effectiveTemplateForArtifact', () => {
     expect(
       effectiveTemplateForArtifact({
         template: 'react',
-        // biome-ignore lint/suspicious/noExplicitAny: simulating an invalid runtime value
         sandpack_config: { template: 'totally-not-a-template' as any },
       })
     ).toBe('react');
@@ -138,9 +137,7 @@ describe('envVarPrefixForTemplate runtime guard', () => {
     // runtime callers can hand us anything. The helper must not return
     // `undefined` — synth would then write the literal string
     // "undefined" into `.env` lines.
-    // biome-ignore lint/suspicious/noExplicitAny: simulating an invalid runtime value
     expect(envVarPrefixForTemplate('bogus' as any)).toBeNull();
-    // biome-ignore lint/suspicious/noExplicitAny: simulating an invalid runtime value
     expect(envVarPrefixForTemplate('' as any)).toBeNull();
   });
 });

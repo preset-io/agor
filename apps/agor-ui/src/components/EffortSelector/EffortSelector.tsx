@@ -1,14 +1,15 @@
 /**
- * EffortSelector - Compact selector for Claude's effort level
+ * EffortSelector - Compact selector for reasoning effort level
  *
- * Effort controls how much reasoning Claude applies to responses.
+ * Effort controls how much reasoning the agent applies to responses.
  * Maps to the SDK's effort parameter (output_config.effort in the API).
  *
  * Levels:
  * - Low: Minimal thinking, fastest responses
  * - Medium: Moderate thinking
  * - High: Deep reasoning (default)
- * - Max: Maximum effort (Opus only)
+ * - X-High: Extra reasoning depth, below maximum
+ * - Max: Highest effort level (model-dependent)
  */
 
 import type { EffortLevel } from '@agor-live/client';
@@ -39,7 +40,18 @@ const EFFORT_OPTIONS: {
   },
   { value: 'medium', shortLabel: 'Md', label: 'Medium', description: 'Moderate thinking' },
   { value: 'high', shortLabel: 'Hi', label: 'High', description: 'Deep reasoning (default)' },
-  { value: 'max', shortLabel: 'Mx', label: 'Max', description: 'Maximum effort (Opus only)' },
+  {
+    value: 'xhigh',
+    shortLabel: 'Xh',
+    label: 'X-High',
+    description: 'Extra reasoning depth, below maximum',
+  },
+  {
+    value: 'max',
+    shortLabel: 'Mx',
+    label: 'Max',
+    description: 'Highest effort level (model-dependent)',
+  },
 ];
 
 /**

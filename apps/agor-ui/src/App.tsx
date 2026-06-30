@@ -23,7 +23,6 @@ import {
   ENTITY_PATH_SEGMENTS,
   getRepoReferenceOptions,
   sessionPath,
-  UI_MOUNT_PATH,
 } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider } from 'antd';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
@@ -50,6 +49,17 @@ import {
   useSessionActions,
 } from './hooks';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
+import { useAgorStore } from './store/agorStore';
+import {
+  selectBoardById,
+  selectBranchById,
+  selectCommentById,
+  selectRepoById,
+  selectSessionById,
+  selectSessionMcpServerIds,
+  selectSessionsByBranch,
+  selectUserById,
+} from './store/selectors';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
@@ -58,9 +68,12 @@ import {
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
+import type { CreateRepoOptions } from './types';
 import { isMobileDevice } from './utils/deviceDetection';
+import { completeForcedPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
+import { getRouterBasename } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
 
@@ -120,6 +133,11 @@ const loadStreamdownDemoPage = cacheRouteLoader(
   'demo',
   () => import('./pages/StreamdownDemoPage'),
   (module) => ({ default: module.StreamdownDemoPage })
+);
+const MarketingScreenshotPage = lazy(() =>
+  import('./pages/MarketingScreenshotPage').then((module) => ({
+    default: module.MarketingScreenshotPage,
+  }))
 );
 
 const AgorApp = lazy(loadAgorApp);
@@ -318,22 +336,6 @@ function AppContent() {
   // failure chain we're avoiding.
   // Skip data fetch if user needs to change password — the ForcePasswordChangeModal handles that.
   const {
-    sessionById,
-    sessionsByBranch,
-    boardById,
-    boardObjectById,
-    boardObjectsByBoardId,
-    commentById,
-    cardById,
-    cardTypeById,
-    repoById,
-    branchById,
-    userById,
-    mcpServerById,
-    gatewayChannelById,
-    artifactById,
-    sessionMcpServerIds,
-    userAuthenticatedMcpServerIds,
     initialLoadItems,
     initialLoadComplete,
     loadingStage,
@@ -343,6 +345,18 @@ function AppContent() {
     enabled: workspaceSurfaceShouldRun && !user?.must_change_password,
     directSessionId: directSessionIdFromPath,
   });
+
+  // Entity maps are read directly from the store rather than the useAgorData
+  // return so each map is its own narrow subscription — the surface only
+  // re-renders for the slices it actually consumes, not on every entity write.
+  const sessionById = useAgorStore(selectSessionById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const boardById = useAgorStore(selectBoardById);
+  const commentById = useAgorStore(selectCommentById);
+  const repoById = useAgorStore(selectRepoById);
+  const branchById = useAgorStore(selectBranchById);
+  const userById = useAgorStore(selectUserById);
+  const sessionMcpServerIds = useAgorStore(selectSessionMcpServerIds);
 
   // Session actions
   const { createSession, forkSession, btwForkSession, spawnSession, updateSession, deleteSession } =
@@ -764,8 +778,8 @@ function AppContent() {
     sessionId: string,
     prompt: string,
     permissionMode?: PermissionMode
-  ) => {
-    if (!client) return;
+  ): Promise<boolean> => {
+    if (!client) return false;
 
     try {
       await client.sessions.prompt(sessionId, prompt, {
@@ -775,9 +789,11 @@ function AppContent() {
 
       // Clear the draft after sending
       handleClearDraft(sessionId);
+      return true;
     } catch (error) {
       showError(`Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`);
       console.error('Prompt error:', error);
+      return false;
     }
   };
 
@@ -868,12 +884,22 @@ function AppContent() {
   // Handle forced password change (from ForcePasswordChangeModal)
   const handleForcePasswordChange = async (userId: string, newPassword: string) => {
     if (!client) throw new Error('Not connected');
-    // This will auto-clear must_change_password flag on the backend
-    await client.service('users').patch(userId, { password: newPassword } as Partial<User>);
-    showSuccess('Password changed successfully!');
-    // Re-authenticate to refresh user state with must_change_password: false
-    // This will dismiss the modal and allow the user to continue
-    await reAuthenticate();
+    if (!currentUser?.email) throw new Error('Current user is unavailable');
+
+    const signedIn = await completeForcedPasswordChange({
+      client,
+      userId,
+      email: currentUser.email,
+      newPassword,
+      login,
+      logout,
+    });
+
+    showSuccess(
+      signedIn
+        ? 'Password changed successfully!'
+        : 'Password changed successfully. Please sign in again.'
+    );
   };
 
   // Handle board CRUD
@@ -920,7 +946,7 @@ function AppContent() {
   };
 
   // Handle repo CRUD
-  const handleCreateRepo = async (data: CreateRepoRequest) => {
+  const handleCreateRepo = async (data: CreateRepoRequest, options: CreateRepoOptions = {}) => {
     if (!client) {
       showError('Not connected to daemon — cannot clone repository');
       return;
@@ -935,7 +961,7 @@ function AppContent() {
     // executors that don't patch still surface failures.
     const toastKey = `clone-repo-${data.slug}`;
     const CLONE_TIMEOUT_MS = 120_000;
-    showLoading(`Cloning ${data.slug}...`, { key: toastKey });
+    if (!options.silent) showLoading(`Cloning ${data.slug}...`, { key: toastKey });
 
     const reposService = client.service('repos');
     let settled = false;
@@ -953,14 +979,14 @@ function AppContent() {
       // and any direct executor-path that bypasses the placeholder.
       if (repo.clone_status === 'cloning') return;
       settled = true;
-      showSuccess(`Cloned ${data.slug}`, { key: toastKey });
+      if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
       cleanup();
     };
     const handlePatched = (repo: Repo) => {
       if (settled || repo.slug !== data.slug) return;
       if (repo.clone_status === 'ready') {
         settled = true;
-        showSuccess(`Cloned ${data.slug}`, { key: toastKey });
+        if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
         cleanup();
       } else if (repo.clone_status === 'failed') {
         settled = true;
@@ -972,9 +998,11 @@ function AppContent() {
           err?.category === 'auth_failed'
             ? ' — configure GITHUB_TOKEN in Settings → API Keys for private repos'
             : '';
-        showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
-          key: toastKey,
-        });
+        if (!options.silent) {
+          showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
+            key: toastKey,
+          });
+        }
         cleanup();
       }
     };
@@ -982,17 +1010,21 @@ function AppContent() {
       if (settled) return;
       if (payload.slug !== data.slug && payload.url !== data.url) return;
       settled = true;
-      showError(`Failed to clone ${data.slug}: ${payload.error ?? 'unknown error'}`, {
-        key: toastKey,
-      });
+      if (!options.silent) {
+        showError(`Failed to clone ${data.slug}: ${payload.error ?? 'unknown error'}`, {
+          key: toastKey,
+        });
+      }
       cleanup();
     };
     const timeoutHandle = setTimeout(() => {
       if (settled) return;
       settled = true;
-      showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
-        key: toastKey,
-      });
+      if (!options.silent) {
+        showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
+          key: toastKey,
+        });
+      }
       cleanup();
     }, CLONE_TIMEOUT_MS);
 
@@ -1012,16 +1044,21 @@ function AppContent() {
       // resolve the loading toast here instead of waiting for the timeout.
       if (result?.status === 'exists' && !settled) {
         settled = true;
-        showWarning(`Repository "${data.slug}" is already added`, { key: toastKey });
+        if (!options.silent) {
+          showWarning(`Repository "${data.slug}" is already added`, { key: toastKey });
+        }
         cleanup();
       }
+      return result;
     } catch (error) {
       if (!settled) {
         settled = true;
-        showError(
-          `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
-          { key: toastKey }
-        );
+        if (!options.silent) {
+          showError(
+            `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
+            { key: toastKey }
+          );
+        }
         cleanup();
       }
       throw error;
@@ -1532,21 +1569,7 @@ function AppContent() {
       user={currentUser}
       connected={connected}
       connecting={connecting}
-      sessionById={sessionById}
-      sessionsByBranch={sessionsByBranch}
       availableAgents={AVAILABLE_AGENTS}
-      boardById={boardById}
-      boardObjectById={boardObjectById}
-      boardObjectsByBoardId={boardObjectsByBoardId}
-      commentById={commentById}
-      cardById={cardById}
-      cardTypeById={cardTypeById}
-      repoById={repoById}
-      branchById={branchById}
-      userById={userById}
-      mcpServerById={mcpServerById}
-      sessionMcpServerIds={sessionMcpServerIds}
-      userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
       openSettingsTab={settingsTabToOpen}
       onSettingsClose={handleSettingsClose}
       openUserSettings={openUserSettings}
@@ -1583,11 +1606,9 @@ function AppContent() {
       onDeleteUser={handleDeleteUser}
       onCreateMCPServer={handleCreateMCPServer}
       onDeleteMCPServer={handleDeleteMCPServer}
-      gatewayChannelById={gatewayChannelById}
       onCreateGatewayChannel={handleCreateGatewayChannel}
       onUpdateGatewayChannel={handleUpdateGatewayChannel}
       onDeleteGatewayChannel={handleDeleteGatewayChannel}
-      artifactById={artifactById}
       onUpdateArtifact={handleUpdateArtifact}
       onDeleteArtifact={handleDeleteArtifact}
       onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
@@ -1628,7 +1649,6 @@ function AppContent() {
             onClose={() => setOpenUserSettings(false)}
             user={currentUser}
             client={client}
-            mcpServerById={mcpServerById}
             onUpdateUser={handleUpdateUser}
             onRefreshCurrentUser={reAuthenticate}
             onRestartOnboarding={handleRestartOnboarding}
@@ -1682,8 +1702,9 @@ function AppContent() {
         <DeviceRouter />
         <Suspense fallback={routeFallback}>
           <Routes>
-            {/* Demo route */}
+            {/* Demo routes */}
             <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
+            <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />
 
             {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
             {KNOWLEDGE_ROUTE_PATHS.map((path) => (
@@ -1760,6 +1781,8 @@ function AppContent() {
 
 function AppWrapper() {
   const { getCurrentThemeConfig } = useTheme();
+  const location = useLocation();
+  const isMarketingScreenshotRoute = location.pathname === '/demo/marketing-screenshots';
 
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
@@ -1770,7 +1793,13 @@ function AppWrapper() {
               read the canvas-nav context. The inner App component used to
               wrap its own JSX in this provider; that's been removed. */}
           <CanvasNavigationProvider>
-            <AppContent />
+            {isMarketingScreenshotRoute ? (
+              <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
+                <MarketingScreenshotPage />
+              </Suspense>
+            ) : (
+              <AppContent />
+            )}
           </CanvasNavigationProvider>
         </ErrorBoundary>
       </AntApp>
@@ -1779,11 +1808,9 @@ function AppWrapper() {
 }
 
 function App() {
-  // Determine base path: UI_MOUNT_PATH ('/ui') in production (served by
-  // daemon at that prefix), '' in dev mode (vite serves at /). Pulled
-  // from the shared core constant so this stays consistent with the
-  // daemon's static-serving block and the server-side URL builders.
-  const basename = import.meta.env.BASE_URL === `${UI_MOUNT_PATH}/` ? UI_MOUNT_PATH : '';
+  // Determine base path: '/ui' in production (served by daemon at that prefix)
+  // and for branch-dev direct canonical links; '' for normal root-mounted Vite.
+  const basename = getRouterBasename();
 
   return (
     <BrowserRouter basename={basename}>

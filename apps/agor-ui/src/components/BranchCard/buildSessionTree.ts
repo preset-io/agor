@@ -8,7 +8,7 @@
 import type { Session } from '@agor-live/client';
 import type { DataNode } from 'antd/es/tree';
 
-export type SessionRelationshipType = 'root' | 'spawn' | 'fork';
+export type SessionRelationshipType = 'root' | 'spawn' | 'fork' | 'remote';
 
 export interface SessionTreeNode extends DataNode {
   key: string;
@@ -58,7 +58,9 @@ export function buildSessionTree(sessions: Session[]): SessionTreeNode[] {
 
     // Determine relationship type
     let relationshipType: SessionRelationshipType = 'root';
-    if (!isRoot) {
+    if (session.remote_surrogate) {
+      relationshipType = 'remote';
+    } else if (!isRoot) {
       if (session.genealogy?.parent_session_id) {
         relationshipType = 'spawn';
       } else if (session.genealogy?.forked_from_session_id) {

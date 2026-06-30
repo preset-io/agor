@@ -1,0 +1,18 @@
+# Heavy / re-creatable assets — restored by ./recreate-assets.sh (see README.md)
+composition/node_modules/
+composition/.hyperframes/
+composition/snapshots/
+
+# Screenshot + logo copies — sourced from ../public on demand
+composition/assets/screenshots/
+composition/assets/tools/
+
+# Music binaries — download from Pixabay (link in README), bed is baked by recreate-assets.sh
+composition/assets/music/*.mp3
+composition/assets/music/*.wav
+
+# Regenerable dup (audio-data.js is committed; the .json is not needed at runtime)
+composition/assets/music/audio-data.json
+
+# Final renders live on YouTube, not in git
+*.mp4

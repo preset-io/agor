@@ -5,7 +5,7 @@
  * Provides API for adding/removing/toggling MCP servers for sessions.
  */
 
-import { type Database, SessionMCPServerRepository } from '@agor/core/db';
+import { SessionMCPServerRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { MCPServer, MCPServerID, QueryParams, SessionID } from '@agor/core/types';
 
 /**
@@ -24,7 +24,7 @@ export type SessionMCPParams = QueryParams<{
 export class SessionMCPServersService {
   private sessionMCPRepo: SessionMCPServerRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
   }
 
@@ -99,6 +99,8 @@ export class SessionMCPServersService {
 /**
  * Service factory function
  */
-export function createSessionMCPServersService(db: Database): SessionMCPServersService {
+export function createSessionMCPServersService(
+  db: TenantScopeAwareDatabase
+): SessionMCPServersService {
   return new SessionMCPServersService(db);
 }

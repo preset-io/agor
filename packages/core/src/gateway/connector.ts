@@ -5,7 +5,7 @@
  * sending messages to and receiving messages from messaging platforms.
  */
 
-import type { ChannelType } from '../types/gateway';
+import type { ChannelType, SlackTestResult } from '../types/gateway';
 
 /**
  * Inbound message from a messaging platform
@@ -65,6 +65,27 @@ export interface GatewayConnector {
   }): Promise<string>;
 
   /**
+   * Delete a previously sent platform message when supported.
+   *
+   * Used for temporary UX affordances (for example, Slack progress rows) that
+   * should disappear once the durable assistant response has arrived.
+   */
+  deleteMessage?(req: { threadId: string; messageId: string }): Promise<void>;
+
+  /**
+   * Set platform-native thread status when supported.
+   *
+   * Slack exposes this via assistant.threads.setStatus; unlike a mutable chat
+   * message, the status is rendered by Slack as assistant chrome.
+   */
+  setThreadStatus?(req: {
+    threadId: string;
+    status: string;
+    loadingMessages?: string[];
+    iconEmoji?: string;
+  }): Promise<void>;
+
+  /**
    * Start listening for inbound messages (e.g., via Socket Mode or webhooks)
    */
   startListening?(callback: (msg: InboundMessage) => void): Promise<void>;
@@ -82,4 +103,14 @@ export interface GatewayConnector {
    * own `sendMessage` will interpret. Callers should accept either shape.
    */
   formatMessage?(markdown: string): string | OutboundPayload;
+
+  /**
+   * Best-effort probe of the connector's credentials and reachability.
+   *
+   * Implementations exercise real platform API calls to verify what they can
+   * (token validity, Socket Mode handshake, sampled channel access) and return
+   * a structured report. `result.notVerifiable` lists what the probe cannot
+   * prove, so a green result is never mistaken for full verification.
+   */
+  testConnection?(): Promise<SlackTestResult>;
 }

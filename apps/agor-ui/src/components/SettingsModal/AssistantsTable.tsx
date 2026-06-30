@@ -9,6 +9,7 @@ import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
+import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface AssistantsTableProps {
   branchById: Map<string, Branch>;
@@ -186,9 +187,9 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 130,
+      width: 104,
       render: (_: unknown, record: Branch) => (
-        <Space size="small">
+        <SettingsActionGroup>
           {record.board_id && (
             <Tooltip title="Center map on assistant">
               <Button
@@ -220,7 +221,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
               setArchiveDeleteModalOpen(true);
             }}
           />
-        </Space>
+        </SettingsActionGroup>
       ),
     },
   ];

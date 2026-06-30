@@ -33,6 +33,10 @@ function mcpDebug(...args: unknown[]): void {
   }
 }
 
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /**
  * MCP server with source metadata
  */
@@ -209,6 +213,20 @@ export async function getMcpServersForSession(
         `   ⚠️  Skipped ${serversSkipped} MCP server(s) due to unresolved required templates`
       );
     }
+
+    // Keep MCP config order stable across turns. Provider SDKs serialize MCP
+    // tools into the prompt prefix, so DB/default ordering drift can reduce
+    // server-side prompt-cache hits even when the effective server set is the
+    // same. Global servers stay before session-assigned servers to preserve the
+    // historical scoping precedence; names and IDs make the ordering total.
+    servers.sort((a, b) => {
+      const sourceRank = (source: MCPServerWithSource['source']) => (source === 'global' ? 0 : 1);
+      return (
+        sourceRank(a.source) - sourceRank(b.source) ||
+        compareStrings(a.server.name, b.server.name) ||
+        compareStrings(String(a.server.mcp_server_id), String(b.server.mcp_server_id))
+      );
+    });
   } catch (error) {
     console.warn(
       `⚠️  Failed to resolve MCP servers: ${error instanceof Error ? error.message : String(error)}`

@@ -119,6 +119,37 @@ export class UnixIntegrationService {
     this.repoRepo = new RepoRepository(db);
   }
 
+  private async getUnixUsernamesForUsers(userIds: Iterable<UUID>): Promise<Set<string>> {
+    const unixUsernames = new Set<string>();
+    for (const userId of userIds) {
+      const user = await this.usersRepo.findById(userId as UserID);
+      if (user?.unix_username) {
+        unixUsernames.add(user.unix_username);
+      }
+    }
+    return unixUsernames;
+  }
+
+  private async reconcileUnixGroupMembers(
+    groupName: string,
+    allowedUnixUsernames: Set<string>,
+    options: { label: string }
+  ): Promise<void> {
+    if (this.config.daemonUser) {
+      allowedUnixUsernames.add(this.config.daemonUser);
+    }
+
+    const result = await this.executor.exec(UnixGroupCommands.listGroupMembers(groupName));
+    const currentMembers = result.stdout.trim().split(',').filter(Boolean);
+    for (const unixUsername of currentMembers) {
+      if (allowedUnixUsernames.has(unixUsername)) continue;
+      console.log(
+        `[UnixIntegration] Removing stale ${options.label} group member ${unixUsername} from ${groupName}`
+      );
+      await this.executor.exec(UnixGroupCommands.removeUserFromGroup(unixUsername, groupName));
+    }
+  }
+
   /**
    * Get the configured daemon user
    *
@@ -414,21 +445,29 @@ export class UnixIntegrationService {
   /**
    * Initialize Unix group for an existing branch
    *
-   * Creates group and adds all current owners.
+   * Creates group and adds all users with explicit filesystem access.
    *
    * @param branchId - Branch ID
    */
   async initializeBranchGroup(branchId: BranchID): Promise<void> {
     const groupName = await this.createBranchGroup(branchId);
 
-    const ownerIds = await this.branchRepo.getOwners(branchId);
-    for (const ownerId of ownerIds) {
-      await this.addUserToBranchGroup(branchId, ownerId);
+    const userIds = await this.branchRepo.findExplicitFsAccessUserIds(branchId);
+    for (const userId of userIds) {
+      await this.addUserToBranchGroup(branchId, userId);
     }
+    await this.reconcileUnixGroupMembers(groupName, await this.getUnixUsernamesForUsers(userIds), {
+      label: 'branch',
+    });
 
     console.log(
-      `[UnixIntegration] Initialized group ${groupName} with ${ownerIds.length} owner(s)`
+      `[UnixIntegration] Initialized group ${groupName} with ${userIds.length} explicit filesystem user(s)`
     );
+
+    const branch = await this.branchRepo.findById(branchId);
+    if (branch?.repo_id) {
+      await this.syncRepo(branch.repo_id as RepoID);
+    }
   }
 
   // ============================================================
@@ -712,8 +751,8 @@ export class UnixIntegrationService {
   /**
    * Check if a user should be in a repo's Unix group
    *
-   * A user should be in the repo group if they have ownership
-   * of ANY branch in that repo.
+   * A user should be in the repo group if they have explicit filesystem access
+   * to ANY branch in that repo.
    *
    * @param repoId - Repo ID
    * @param userId - User ID to check
@@ -723,10 +762,9 @@ export class UnixIntegrationService {
     // Get all branches for this repo
     const branches = await this.branchRepo.findAll({ repo_id: repoId });
 
-    // Check if user is owner of any branch in this repo
     for (const wt of branches) {
-      const isOwner = await this.branchRepo.isOwner(wt.branch_id, userId as UserID);
-      if (isOwner) {
+      const userIds = await this.branchRepo.findExplicitFsAccessUserIds(wt.branch_id);
+      if (userIds.includes(userId)) {
         return true;
       }
     }
@@ -737,32 +775,34 @@ export class UnixIntegrationService {
   /**
    * Initialize Unix group for an existing repo
    *
-   * Creates group, sets .git permissions, and adds all users who
-   * own any branch in the repo.
+   * Creates group, sets .git permissions, and adds all users who have explicit
+   * filesystem access to any branch in the repo.
    *
    * @param repoId - Repo ID
    */
   async initializeRepoGroup(repoId: RepoID): Promise<void> {
     const groupName = await this.createRepoGroup(repoId);
 
-    // Find all unique owners across all branches in this repo
     const branches = await this.branchRepo.findAll({ repo_id: repoId });
-    const ownerIds = new Set<string>();
+    const userIds = new Set<UUID>();
 
     for (const wt of branches) {
-      const wtOwners = await this.branchRepo.getOwners(wt.branch_id);
-      for (const ownerId of wtOwners) {
-        ownerIds.add(ownerId);
+      const branchUserIds = await this.branchRepo.findExplicitFsAccessUserIds(wt.branch_id);
+      for (const userId of branchUserIds) {
+        userIds.add(userId);
       }
     }
 
-    // Add each unique owner to the repo group
-    for (const ownerId of ownerIds) {
-      await this.addUserToRepoGroup(repoId, ownerId as UUID);
+    // Add each unique filesystem-access user to the repo group
+    for (const userId of userIds) {
+      await this.addUserToRepoGroup(repoId, userId);
     }
+    await this.reconcileUnixGroupMembers(groupName, await this.getUnixUsernamesForUsers(userIds), {
+      label: 'repo',
+    });
 
     console.log(
-      `[UnixIntegration] Initialized repo group ${groupName} with ${ownerIds.size} unique owner(s)`
+      `[UnixIntegration] Initialized repo group ${groupName} with ${userIds.size} unique filesystem user(s)`
     );
   }
 
@@ -770,7 +810,7 @@ export class UnixIntegrationService {
    * Full sync for a repo
    *
    * Ensures repo group exists, .git permissions are set, and all
-   * branch owners are in the repo group.
+   * branch filesystem-access users are in the repo group.
    *
    * @param repoId - Repo ID
    */
@@ -780,20 +820,27 @@ export class UnixIntegrationService {
     // Ensure repo group exists and .git permissions are set
     await this.createRepoGroup(repoId);
 
-    // Get all unique owners across all branches
     const branches = await this.branchRepo.findAll({ repo_id: repoId });
-    const ownerIds = new Set<string>();
+    const userIds = new Set<UUID>();
 
     for (const wt of branches) {
-      const wtOwners = await this.branchRepo.getOwners(wt.branch_id);
-      for (const ownerId of wtOwners) {
-        ownerIds.add(ownerId);
+      const branchUserIds = await this.branchRepo.findExplicitFsAccessUserIds(wt.branch_id);
+      for (const userId of branchUserIds) {
+        userIds.add(userId);
       }
     }
 
-    // Add each unique owner to repo group
-    for (const ownerId of ownerIds) {
-      await this.addUserToRepoGroup(repoId, ownerId as UUID);
+    // Add each unique filesystem-access user to repo group
+    for (const userId of userIds) {
+      await this.addUserToRepoGroup(repoId, userId);
+    }
+    const repo = await this.repoRepo.findById(repoId);
+    if (repo?.unix_group) {
+      await this.reconcileUnixGroupMembers(
+        repo.unix_group,
+        await this.getUnixUsernamesForUsers(userIds),
+        { label: 'repo' }
+      );
     }
   }
 
@@ -1149,7 +1196,8 @@ export class UnixIntegrationService {
   /**
    * Full sync for a branch
    *
-   * Ensures group exists, all owners are in group, and symlinks are created.
+   * Ensures group exists, all explicit filesystem-access users are in group,
+   * and symlinks are created.
    *
    * @param branchId - Branch ID
    */
@@ -1160,10 +1208,21 @@ export class UnixIntegrationService {
     // Note: createBranchGroup() handles setting directory permissions internally
     await this.createBranchGroup(branchId);
 
-    // Add all owners to group and create symlinks
-    const ownerIds = await this.branchRepo.getOwners(branchId);
-    for (const ownerId of ownerIds) {
-      await this.addUserToBranchGroup(branchId, ownerId);
+    // Add all explicit filesystem-access users to group and create symlinks
+    const userIds = await this.branchRepo.findExplicitFsAccessUserIds(branchId);
+    for (const userId of userIds) {
+      await this.addUserToBranchGroup(branchId, userId);
+    }
+    const branch = await this.branchRepo.findById(branchId);
+    if (branch?.unix_group) {
+      await this.reconcileUnixGroupMembers(
+        branch.unix_group,
+        await this.getUnixUsernamesForUsers(userIds),
+        { label: 'branch' }
+      );
+    }
+    if (branch?.repo_id) {
+      await this.syncRepo(branch.repo_id as RepoID);
     }
   }
 

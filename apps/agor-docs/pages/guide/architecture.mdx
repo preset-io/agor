@@ -382,7 +382,7 @@ $ agor session list | grep running | wc -l
 | `agor_branches_get` | Get branch details | `{ branchId: '...' }` |
 | `agor_branches_list` | List branches, including zone metadata and optional zone filtering | `{ limit: 10, zoneId: 'zone-review' }` |
 | `agor_branches_create` | Create a branch with optional issue/PR links | `{ repoId: '019a...', branchName: 'feat-x', issueUrl: 'https://...' }` |
-| `agor_branches_update` | Update branch metadata (issue/PR URLs, notes) | `{ branchId: '019a...', pullRequestUrl: 'https://...', notes: 'Ready for review' }` |
+| `agor_branches_update` | Update branch metadata (issue/PR URLs, notes, attention state) | `{ branchId: '019a...', pullRequestUrl: 'https://...', notes: 'Ready for review', needsAttention: false }` |
 | `agor_branches_set_zone` | Pin a branch to a board zone, or clear its zone pin with `zoneId: null` | `{ branchId: '019a...', zoneId: null }` |
 
 **Board Tools:**

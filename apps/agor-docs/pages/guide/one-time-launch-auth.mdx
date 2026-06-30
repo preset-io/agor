@@ -64,8 +64,11 @@ one-time code from the URL and shows a clear failure message.
 
 If `external_launch.login_redirect_url` is configured, the unauthenticated
 screen makes **Return to workspace** the primary action so the user can open a
-fresh launch link from the external workspace. Local username/password login is
-still available as a secondary fallback.
+fresh launch link from the external workspace. The button appends a `return_to`
+query parameter containing the current Agor path, allowing the launcher to
+preserve deep links such as `/ui/s/<session>/` when it issues a fresh
+`launch_code`. Local username/password login is still available as a secondary
+fallback.
 
 If `login_redirect_url` is omitted, the normal local login screen is unchanged.
 

@@ -58,9 +58,9 @@ Designs that are referenced from code or in flight. Anything here is either stil
 - [`session-sharing.md`](explorations/session-sharing.md) — `dangerously_allow_session_sharing` security contract (referenced from `AGENTS.md` and `apps/agor-docs/pages/security.mdx`).
 - [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
 
-### `messaging-and-positioning.md`
+### Messaging & positioning (now in the Knowledge base)
 
-Internal source of truth for product copy (taglines, hero, package descriptions, blog voice). Read this before writing user-facing prose; do **not** paraphrase the codebase to invent new framing.
+The source of truth for product copy (taglines, hero, package descriptions, blog voice) lives in the Agor team Knowledge base, **not** this repo: [`marketing/messaging-and-positioning`](https://agor.sandbox.preset.zone/kb/agor-cloud-team/marketing/messaging-and-positioning.md). Read it before writing user-facing prose; do **not** paraphrase the codebase to invent new framing.
 
 ### `images/`
 

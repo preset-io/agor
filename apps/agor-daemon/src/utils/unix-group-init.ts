@@ -14,7 +14,7 @@
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getDaemonUser } from '@agor/core/config';
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { shortId, UsersRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, RepoID } from '@agor/core/types';
@@ -53,7 +53,7 @@ async function runCommands(commands: string[]): Promise<void> {
 // ── Repo group init ──────────────────────────────────────────────────────
 
 export async function initializeRepoUnixGroup(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   app: Application,
   repoId: string,
   userId?: string
@@ -132,7 +132,7 @@ export async function initializeRepoUnixGroup(
 // ── Branch group init ──────────────────────────────────────────────────
 
 export async function initializeBranchUnixGroup(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   app: Application,
   branchId: string,
   othersAccess: 'none' | 'read' | 'write'

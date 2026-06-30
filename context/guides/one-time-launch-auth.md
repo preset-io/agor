@@ -15,8 +15,11 @@ If the launch code is missing, expired, already used, invalid, or the daemon
 cannot complete a non-transient exchange, the UI shows a clear failure message.
 When `external_launch.login_redirect_url` is configured, the unauthenticated
 screen makes that URL the primary action so users can return to the external
-workspace and open a fresh launch link. If the field is omitted, the normal
-local username/password login screen remains unchanged.
+workspace and open a fresh launch link. The UI appends a `return_to` query
+parameter containing the current Agor path, so launch providers can preserve
+deep links such as `/ui/s/<session>/` when issuing a fresh launch code. If the
+field is omitted, the normal local username/password login screen remains
+unchanged.
 
 ## Configuration
 

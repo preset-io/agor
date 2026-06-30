@@ -52,6 +52,7 @@ export const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   users: 'User accounts, profiles, preferences, and administration',
   analytics: 'Usage and cost tracking leaderboard',
   'mcp-servers': 'External MCP server configuration and OAuth management',
+  gateway: 'Gateway channels for Slack, GitHub, Teams, and other message integrations',
   proxies: 'Configured HTTP proxies for third-party APIs (Shortcut, Linear, Jira, etc.)',
   widgets:
     'In-conversation interactive widgets — agents render small forms/buttons inline in the transcript to capture user input that never enters the LLM context',

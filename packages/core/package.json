@@ -64,6 +64,12 @@
       "import": "./dist/analytics/index.js",
       "require": "./dist/analytics/index.cjs"
     },
+    "./telemetry": {
+      "source": "./src/telemetry/index.ts",
+      "types": "./dist/telemetry/index.d.ts",
+      "import": "./dist/telemetry/index.js",
+      "require": "./dist/telemetry/index.cjs"
+    },
     "./config": {
       "source": "./src/config/index.ts",
       "types": "./dist/config/index.d.ts",
@@ -214,6 +220,12 @@
       "import": "./dist/seed/dev-fixtures.js",
       "require": "./dist/seed/dev-fixtures.cjs"
     },
+    "./seed/demo-fixtures": {
+      "source": "./src/seed/demo-fixtures.ts",
+      "types": "./dist/seed/demo-fixtures.d.ts",
+      "import": "./dist/seed/demo-fixtures.js",
+      "require": "./dist/seed/demo-fixtures.cjs"
+    },
     "./callbacks/child-completion-template": {
       "source": "./src/callbacks/child-completion-template.ts",
       "types": "./dist/callbacks/child-completion-template.d.ts",
@@ -345,6 +357,12 @@
       "types": "./dist/environment/webhook.d.ts",
       "import": "./dist/environment/webhook.js",
       "require": "./dist/environment/webhook.cjs"
+    },
+    "./local-actions": {
+      "source": "./src/local-actions/index.ts",
+      "types": "./dist/local-actions/index.d.ts",
+      "import": "./dist/local-actions/index.js",
+      "require": "./dist/local-actions/index.cjs"
     }
   },
   "scripts": {
@@ -365,6 +383,7 @@
     "db:migrate:mcp": "tsx src/db/scripts/migrate-add-mcp-tables.ts"
   },
   "dependencies": {
+    "@agor/git": "workspace:*",
     "@anthropic-ai/claude-agent-sdk": "^0.3.183",
     "@anthropic-ai/sdk": "^0.105.0",
     "@feathersjs/authentication": "^5.0.45",
@@ -380,7 +399,7 @@
     "@feathersjs/typebox": "^5.0.45",
     "@google/gemini-cli-core": "^0.31.0",
     "@google/genai": "^1.43.0",
-    "@libsql/client": "^0.17.3",
+    "@libsql/client": "^0.17.4",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
     "@openai/codex-sdk": "^0.141.0",
@@ -392,9 +411,10 @@
     "bcryptjs": "^2.4.3",
     "botbuilder": "^4.23.3",
     "cron-parser": "^5.5.0",
-    "cronstrue": "^3.14.0",
+    "cronstrue": "^3.20.0",
     "drizzle-orm": "^0.45.2",
-    "js-yaml": "^4.2.0",
+    "emojibase-data": "^17.0.0",
+    "js-yaml": "^5.2.0",
     "open": "^11.0.0",
     "postgres": "^3.4.9",
     "simple-git": "^3.36.0",

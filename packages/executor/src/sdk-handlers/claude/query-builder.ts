@@ -12,6 +12,7 @@ import { Claude } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
+import { isGatewaySession } from '@agor/core/types';
 
 const { query } = Claude;
 type PermissionMode = Claude.PermissionMode;
@@ -37,22 +38,35 @@ import { parseModelWithBetas } from './model-utils.js';
 import { DEFAULT_CLAUDE_MODEL } from './models.js';
 import { createCanUseToolCallback } from './permissions/permission-hooks.js';
 
-/**
- * Summarize MCP config for logging without exposing sensitive env values.
- * Returns a safe object showing server names and transport types only.
- */
-function summarizeMcpConfig(
-  config: unknown
-): Record<string, { type: string; hasEnv: boolean }> | undefined {
-  if (!config || typeof config !== 'object') return undefined;
-  const summary: Record<string, { type: string; hasEnv: boolean }> = {};
-  for (const [name, server] of Object.entries(config as MCPServersConfig)) {
-    summary[name] = {
-      type: server.type || 'stdio',
-      hasEnv: !!(server.env && Object.keys(server.env).length > 0),
-    };
+function summarizeMcpConfigCounts(config: unknown): string {
+  if (!config || typeof config !== 'object') return 'none';
+
+  let total = 0;
+  let remote = 0;
+  let stdio = 0;
+  let withEnv = 0;
+
+  for (const server of Object.values(config as MCPServersConfig)) {
+    total += 1;
+    const type = server.type || 'stdio';
+    if (type === 'stdio') {
+      stdio += 1;
+    } else {
+      remote += 1;
+    }
+    if (server.env && Object.keys(server.env).length > 0) {
+      withEnv += 1;
+    }
   }
-  return summary;
+
+  return `total=${total} remote=${remote} stdio=${stdio} with_env=${withEnv}`;
+}
+
+export function formatListForLog(items: string[], maxItems = 5): string {
+  if (items.length <= maxItems) {
+    return items.join(', ');
+  }
+  return `${items.slice(0, maxItems).join(', ')} +${items.length - maxItems} more`;
 }
 
 /**
@@ -162,6 +176,7 @@ export async function setupQuery(
   if (!session) {
     throw new Error(`Session not found: ${sessionId}`);
   }
+  const shouldBlockOnMcpStartup = isGatewaySession(session);
 
   // Determine which user's context to use for environment variables and API
   // keys: the task creator (prompter) when known, else the session owner.
@@ -244,20 +259,15 @@ export async function setupQuery(
   // Buffer to capture stderr for better error messages
   let stderrBuffer = '';
 
-  // Render Agor system prompt with full session/branch/repo context
-  const agorSystemPrompt = await renderAgorSystemPrompt(sessionId, {
-    sessions: deps.sessionsRepo,
-    branches: deps.branchesRepo,
-    repos: deps.reposRepo,
-    users: deps.usersRepo,
-  });
+  // Append static Agor orientation. Dynamic context is available through Agor MCP.
+  const agorSystemPrompt = await renderAgorSystemPrompt();
 
   const queryOptions: Record<string, unknown> = {
     cwd,
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
-      append: agorSystemPrompt, // Append rich Agor context (session, branch, repo)
+      append: agorSystemPrompt,
     },
     settingSources: ['user', 'project', 'local'], // Load user + project + local permissions, auto-loads CLAUDE.md
     // Defensive copy — the const is readonly but the SDK option is typed `string[]`.
@@ -529,6 +539,7 @@ export async function setupQuery(
           headers: {
             Authorization: `Bearer ${mcpToken}`,
           },
+          ...(shouldBlockOnMcpStartup ? { alwaysLoad: true } : {}),
         },
       };
       queryOptions.mcpServers = mcpConfig;
@@ -554,16 +565,27 @@ export async function setupQuery(
         // Convert to SDK format
         const mcpConfig: MCPServersConfig = {};
         const allowedTools: string[] = [];
+        let remoteServerCount = 0;
+        let stdioServerCount = 0;
+        let serversWithHeaders = 0;
+        const missingAuthServers: string[] = [];
+        const unresolvedAuthServers: string[] = [];
 
         for (const { server } of serversWithSource) {
           // Infer transport if missing (backwards compatibility)
           const transport = server.transport || (server.url ? 'sse' : 'stdio');
+          if (transport === 'stdio') {
+            stdioServerCount += 1;
+          } else {
+            remoteServerCount += 1;
+          }
 
           // Build server config (convert 'transport' field to 'type' for Claude Code)
           const serverConfig: Record<string, unknown> = {
             type: transport,
             env: server.env,
           };
+          let canAlwaysLoad = shouldBlockOnMcpStartup;
 
           // Add transport-specific fields
           if (transport === 'stdio') {
@@ -577,26 +599,29 @@ export async function setupQuery(
           try {
             // Pass mcpUrl for OAuth token cache lookup
             const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            const missingRequiredAuth =
+              !!server.auth &&
+              server.auth.type !== 'none' &&
+              transport !== 'stdio' &&
+              !authHeaders?.Authorization;
             const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (headers && transport !== 'stdio') {
               serverConfig.headers = headers;
-              console.log(
-                `     🔐 Added ${Object.keys(headers).length} HTTP header(s) for ${server.name}`
-              );
-            } else if (server.auth?.type === 'oauth' && transport !== 'stdio') {
-              // OAuth server but no token - track for notification
-              console.warn(
-                `   ⚠️  MCP server "${server.name}" requires OAuth authentication but no valid token found`
-              );
-              console.warn(
-                `      💡 Go to Settings → MCP Servers → ${server.name} → Start OAuth Flow to authenticate`
-              );
+              serversWithHeaders += 1;
+            }
+            if (missingRequiredAuth) {
+              // Auth-backed remote server but no usable token. Track one concise summary below.
+              missingAuthServers.push(server.name);
+              canAlwaysLoad = false;
             }
           } catch (error) {
-            console.warn(
-              `   ⚠️  Failed to resolve MCP auth headers for ${server.name}:`,
-              error instanceof Error ? error.message : String(error)
-            );
+            const message = error instanceof Error ? error.message : String(error);
+            unresolvedAuthServers.push(`${server.name}: ${message}`);
+            canAlwaysLoad = false;
+          }
+
+          if (canAlwaysLoad) {
+            serverConfig.alwaysLoad = true;
           }
 
           mcpConfig[server.name] = serverConfig;
@@ -614,14 +639,27 @@ export async function setupQuery(
           ...(queryOptions.mcpServers || {}),
           ...mcpConfig,
         };
-        // Log summary only (env values may contain secrets after template resolution)
+        // Log one safe summary line. Env/header values may contain secrets after template resolution.
         console.log(
-          `   🔧 MCP servers configured:`,
-          JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers), null, 2)
+          `   🔧 MCP servers configured: total=${serversWithSource.length} remote=${remoteServerCount} ` +
+            `stdio=${stdioServerCount} headers=${serversWithHeaders} missing_auth=${missingAuthServers.length} ` +
+            `auth_errors=${unresolvedAuthServers.length}`
         );
+        if (missingAuthServers.length > 0) {
+          console.warn(
+            `   ⚠️  ${missingAuthServers.length} MCP server(s) have configured auth but no valid token: ` +
+              `${formatListForLog(missingAuthServers)}. Check Settings → MCP Servers.`
+          );
+        }
+        if (unresolvedAuthServers.length > 0) {
+          console.warn(
+            `   ⚠️  Failed to resolve MCP auth for ${unresolvedAuthServers.length} server(s): ` +
+              formatListForLog(unresolvedAuthServers, 3)
+          );
+        }
         if (allowedTools.length > 0) {
           queryOptions.allowedTools = allowedTools;
-          console.log(`   🔧 Allowing ${allowedTools.length} MCP tools`);
+          console.log(`   🔧 MCP tools allowlist: ${allowedTools.length} tool(s)`);
         }
       }
     } catch (error) {
@@ -633,11 +671,8 @@ export async function setupQuery(
   console.log('📤 Calling query() with:');
   console.log(`   prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
   console.log(`   queryOptions keys: ${Object.keys(queryOptions).join(', ')}`);
-  // Log MCP summary only (env values may contain secrets)
-  console.log(
-    `   MCP servers:`,
-    queryOptions.mcpServers ? JSON.stringify(summarizeMcpConfig(queryOptions.mcpServers)) : 'none'
-  );
+  // Log safe MCP counts only. Per-server names/details are intentionally omitted from this per-query log.
+  console.log(`   MCP servers: ${summarizeMcpConfigCounts(queryOptions.mcpServers)}`);
 
   // Wrap the string prompt in an AsyncIterable so the SDK treats this as a
   // streaming-input query.  When a plain string is passed, the SDK sets

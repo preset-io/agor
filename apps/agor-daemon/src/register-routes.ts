@@ -6,10 +6,14 @@
  * Extracted from index.ts for maintainability.
  */
 
-import { type AgorConfig, loadConfig, resolveBranchStorageConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  loadConfig,
+  resolveBranchStorageConfig,
+  resolveMultiTenancyConfig,
+} from '@agor/core/config';
 import {
   BranchRepository,
-  type Database,
   generateId,
   MCPServerRepository,
   MessagesRepository,
@@ -19,6 +23,7 @@ import {
   SessionRepository,
   shortId,
   TaskRepository,
+  type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { MANAGED_ENV_EXECUTION_MODE_DEFAULT } from '@agor/core/environment/webhook';
@@ -67,14 +72,17 @@ import {
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
-import jwt from 'jsonwebtoken';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
+import { createRefreshTokenService } from './auth/refresh-token-service.js';
 import {
   issueRuntimeToken,
   issueRuntimeTokenPair,
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
+  runtimeTenantClaims,
 } from './auth/runtime-tokens.js';
+import { authTokenIssuedAtClaim } from './auth/token-invalidation.js';
+import { redactUserAuthMetadata } from './auth/user-redaction.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
@@ -84,6 +92,7 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
+import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -91,14 +100,14 @@ import {
 } from './services/scheduler.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
-import { markLocalAuthenticationLookup } from './services/users.js';
+import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
 import { registerProxies } from './setup/proxies.js';
 import { applyTierHooks } from './setup/service-tiers.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
   ensureMinimumRole,
-  registerAuthenticatedRoute,
+  registerAuthenticatedRoute as registerAuthenticatedRouteBase,
   requireMinimumRole,
 } from './utils/authorization.js';
 import {
@@ -117,13 +126,17 @@ import {
 } from './utils/mcp-header-secrets.js';
 import { canControlCliSession } from './utils/mcp-token-authorization.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
+import { stopSessionPreserveQueue } from './utils/session-stop.js';
 import {
   sessionCanStartTask,
   shouldReconcileSessionPromptState,
 } from './utils/session-task-state.js';
-import { findActiveTasksForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
+import {
+  createTenantDatabaseScopeAroundHook,
+  deferWithTenantDatabaseScope,
+} from './utils/tenant-db-scope.js';
 import {
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
@@ -154,6 +167,14 @@ export class AgorLocalStrategy extends LocalStrategy {
     markLocalAuthenticationLookup(params);
     return super.findEntity(username, params);
   }
+
+  async getEntity(result: unknown, params: Params) {
+    // Local login's final entity lookup also needs backend-only auth metadata
+    // so freshly issued tokens can be bumped past a just-written invalidation
+    // marker. The authentication hook redacts the metadata before returning.
+    markAuthenticationUserLookup(params);
+    return super.getEntity(result, params);
+  }
 }
 
 /**
@@ -169,6 +190,10 @@ interface RouteParams extends Params {
   user?: User;
 }
 
+function isServiceAccountRoute(params: RouteParams): boolean {
+  return (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
+}
+
 /**
  * Type guard to check if result is paginated
  */
@@ -180,7 +205,7 @@ function isPaginated<T>(result: T[] | Paginated<T>): result is Paginated<T> {
  * Interface for dependencies needed by route registration.
  */
 export interface RegisterRoutesContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   svcEnabled: (group: string) => boolean;
@@ -257,6 +282,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const usersService = app.service('users');
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
   const reposService = app.service('repos') as unknown as ReposServiceImpl;
+  const tenantDatabaseScopeAround = createTenantDatabaseScopeAroundHook({ db, config, jwtSecret });
+
+  /**
+   * Schedule fn in a new event-loop tick with a fresh tenant DB scope.
+   * Always use this instead of bare setImmediate inside route/service code —
+   * bare setImmediate inherits the active transaction ALS store, while a plain
+   * ALS exit loses Postgres RLS tenant context for session/task lookups.
+   */
+  function deferInFreshTenantScope(params: RouteParams, fn: () => Promise<void>): void {
+    deferWithTenantDatabaseScope(db, params, fn);
+  }
+
+  const registerAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (
+    routeApp,
+    path,
+    service,
+    authConfig,
+    routeRequireAuth,
+    options = {}
+  ) =>
+    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
+      ...options,
+      around: [tenantDatabaseScopeAround, ...(options.around ?? [])],
+    });
 
   // Helper: safely get a service (returns undefined if not registered due to tier=off)
   const safeService = (path: string) => {
@@ -278,6 +327,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   const authStrategiesArray = ['api-key', 'jwt', 'local'];
+  const multiTenancy = resolveMultiTenancyConfig(config);
+  const tenantTokenClaim = multiTenancy.auth_claim ?? 'tenant_id';
   if (sessionTokenService) {
     authStrategiesArray.push('session-token');
   }
@@ -317,7 +368,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const { ServiceJWTStrategy } = await import('./auth/service-jwt-strategy.js');
 
   // Register authentication strategies
-  authentication.register('jwt', new ServiceJWTStrategy(sessionTokenService));
+  authentication.register('jwt', new ServiceJWTStrategy(sessionTokenService, tenantTokenClaim));
   authentication.register('local', new AgorLocalStrategy());
 
   // Register API key authentication strategy
@@ -384,7 +435,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     security: [],
   };
 
-  // Hook: Add refresh token to authentication response.
+  // Hook: Issue browser access + refresh tokens with millisecond issue time.
   // Rate limiting is enforced by express-rate-limit middleware mounted on
   // `/authentication` above — by the time we reach this hook the limiter
   // has already 429'd any over-quota request.
@@ -401,11 +452,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           });
 
           if (context.result?.user) {
-            context.result.refreshToken = issueRuntimeToken(
-              { sub: context.result.user.user_id, type: 'refresh' },
+            const tenantId =
+              context.params?.tenant?.tenant_id ??
+              (context.result.user as { tenant_id?: string }).tenant_id;
+            const tokens = issueRuntimeTokenPair(
+              context.result.user,
               jwtSecret,
-              REFRESH_TOKEN_TTL
+              ACCESS_TOKEN_TTL,
+              REFRESH_TOKEN_TTL,
+              {
+                ...authTokenIssuedAtClaim(Date.now(), context.result.user),
+                ...runtimeTenantClaims(tenantId, tenantTokenClaim),
+              }
             );
+            context.result.accessToken = tokens.accessToken;
+            context.result.refreshToken = tokens.refreshToken;
+            context.result.user = redactUserAuthMetadata(context.result.user);
           }
           return context;
         },
@@ -442,51 +504,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Refresh token endpoint
   // ============================================================================
 
-  app.use('/authentication/refresh', {
-    async create(data: { refreshToken: string }, _params?: Params) {
-      // Rate limiting handled by express-rate-limit at the
-      // /authentication mount point (path-prefix match catches /refresh).
-      try {
-        const decoded = jwt.verify(data.refreshToken, jwtSecret, {
-          issuer: RUNTIME_JWT_ISSUER,
-          audience: RUNTIME_JWT_AUDIENCE,
-        }) as { sub: string; type: string };
-
-        if (decoded.type !== 'refresh') {
-          throw new Error('Invalid token type');
-        }
-
-        const user = await usersService.get(decoded.sub as import('@agor/core/types').UUID);
-
-        // Use the SAME ACCESS_TOKEN_TTL as the auth-service config above —
-        // otherwise this endpoint silently downgrades the access-token
-        // hardening. Refresh tokens get the standard 30-day TTL.
-        const tokens = issueRuntimeTokenPair(user, jwtSecret, ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL);
-
-        // Return the full user object — matches what POST /authentication
-        // returns via the FeathersJS auth service. Stripping fields here
-        // (previously: only user_id/email/name/emoji/role) silently dropped
-        // `must_change_password` after every token refresh, breaking the
-        // forced-password-change UI guard in App.tsx and showing the user a
-        // black page with "Failed to load data — Password change required."
-        // instead of the change-password modal. `usersService.get` already
-        // omits secrets (password hash, raw API keys, raw env var values)
-        // via rowToUser — see services/users.ts.
-        return {
-          accessToken: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-          user,
-        };
-      } catch (_error) {
-        // Must throw NotAuthenticated (not plain Error) so the UI's
-        // isDefiniteAuthFailure classifier (apps/agor-ui/src/utils/authErrors.ts)
-        // recognizes a dead refresh token as a 401-class failure and clears
-        // session state. A plain Error has no status/name and gets treated as
-        // transient, leading the single-flight refresh loop to keep retrying.
-        throw new NotAuthenticated('Invalid or expired refresh token');
-      }
-    },
-  });
+  app.use(
+    '/authentication/refresh',
+    createRefreshTokenService({
+      jwtSecret,
+      accessTokenTtl: ACCESS_TOKEN_TTL,
+      refreshTokenTtl: REFRESH_TOKEN_TTL,
+      tenantClaim: tenantTokenClaim,
+      usersService,
+    })
+  );
 
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
   const refreshService = app.service('authentication/refresh') as any;
@@ -564,6 +591,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           impersonated_by: caller.user_id,
           is_impersonated: true,
           jti,
+          ...authTokenIssuedAtClaim(Date.now(), targetUser),
         },
         jwtSecret,
         Math.ceil(expiryMs / 1000)
@@ -652,6 +680,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         params: RouteParams
       ) {
         app.service('messages').emit(data.event, data.data);
+        if (isServiceAccountRoute(params)) {
+          const gatewayStreamingEvent =
+            data.event === 'streaming:start' ||
+            data.event === 'streaming:chunk' ||
+            data.event === 'streaming:end' ||
+            data.event === 'streaming:error'
+              ? data.event
+              : null;
+
+          if (gatewayStreamingEvent) {
+            deferInFreshTenantScope(params, async () => {
+              await (
+                app.service('gateway') as unknown as GatewayService
+              ).handleMessageStreamingEvent(gatewayStreamingEvent, data.data);
+            });
+          }
+        }
         return { success: true };
       },
     },
@@ -672,8 +717,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         },
         params: RouteParams
       ) {
-        const _ = params;
         app.service('tasks').emit(data.event, data.data);
+        if (isServiceAccountRoute(params) && data.event === 'tool:start') {
+          const sessionId =
+            typeof data.data.session_id === 'string' ? data.data.session_id : undefined;
+          const toolName =
+            typeof data.data.tool_name === 'string' ? data.data.tool_name : undefined;
+          if (sessionId) {
+            deferInFreshTenantScope(params, async () => {
+              await (app.service('gateway') as unknown as GatewayService).updateProgress({
+                session_id: sessionId,
+                state: 'working',
+                task_id: typeof data.data.task_id === 'string' ? data.data.task_id : undefined,
+                tool_name: toolName,
+              });
+            });
+          }
+        }
         return { success: true };
       },
     },
@@ -1121,7 +1181,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const { setPendingCliTask } = await import('./services/claude-cli-integration.js');
       setPendingCliTask(sessionId as SessionID, taskId as TaskID, messageStartIndex);
 
-      setImmediate(async () => {
+      deferInFreshTenantScope(params, async () => {
         try {
           const targetUserId = session.created_by;
           if (!targetUserId) {
@@ -1193,7 +1253,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // Background spawn + failure handling. Returning the patched Task to the
     // caller before this resolves matches the previous behavior — the HTTP
     // response should not block on the executor process being live.
-    setImmediate(async () => {
+    // deferInFreshTenantScope uses a fresh DB connection and tenant RLS scope
+    // instead of inheriting a stale committed transaction.
+    deferInFreshTenantScope(params, async () => {
       try {
         console.log(
           `🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor (task ${shortId(taskId)})`
@@ -1370,94 +1432,103 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         const createdBy = params.user.user_id;
 
-        return await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
-          let lockedSession = await sessionsService.get(id, params);
-          if (lockedSession.status === SessionStatus.STOPPING) {
-            // The earlier STOPPING check was against pre-lock state — re-check
-            // here so a session that entered STOPPING while we waited for our
-            // turn doesn't accept a prompt.
-            throw new Error('Cannot send prompt: session is currently stopping');
-          }
-          lockedSession = await reconcileSessionPromptStateIfStuck(lockedSession, taskRepo, params);
-          const queuedTasks = await taskRepo.findQueued(id as SessionID);
-          const shouldQueue =
-            !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
-            queuedTasks.length > 0;
+        return await withSessionTurnLock(
+          sessionTurnLocks,
+          id as SessionID,
+          async () => {
+            let lockedSession = await sessionsService.get(id, params);
+            if (lockedSession.status === SessionStatus.STOPPING) {
+              // The earlier STOPPING check was against pre-lock state — re-check
+              // here so a session that entered STOPPING while we waited for our
+              // turn doesn't accept a prompt.
+              throw new Error('Cannot send prompt: session is currently stopping');
+            }
+            lockedSession = await reconcileSessionPromptStateIfStuck(
+              lockedSession,
+              taskRepo,
+              params
+            );
+            const queuedTasks = await taskRepo.findQueued(id as SessionID);
+            const shouldQueue =
+              !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
+              queuedTasks.length > 0;
 
-          if (shouldQueue) {
-            const queuedTask = await taskRepo.createPending({
+            if (shouldQueue) {
+              const queuedTask = await taskRepo.createPending({
+                session_id: id as SessionID,
+                full_prompt: data.prompt,
+                created_by: createdBy,
+                status: TaskStatus.QUEUED,
+                metadata: {
+                  ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
+                  ...(messageSource ? { source: messageSource } : {}),
+                  ...(data.metadata ?? {}),
+                },
+              });
+
+              console.log(
+                `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
+                  `(session status: ${lockedSession.status}, existing queue items: ${queuedTasks.length})`
+              );
+
+              app.service('tasks').emit('queued', queuedTask);
+
+              if (sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)) {
+                deferInFreshTenantScope(params, async () => {
+                  try {
+                    await sessionsService.triggerQueueProcessing(id as SessionID, params);
+                  } catch (error) {
+                    console.error(
+                      `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
+                      error
+                    );
+                  }
+                });
+              }
+
+              // Uniform response: the entity is always a Task. Caller inspects
+              // `task.status` (`'queued'` here) and `task.queue_position` to know
+              // what happened.
+              return queuedTask;
+            }
+
+            console.log(`   Session agent: ${lockedSession.agentic_tool}`);
+            console.log(
+              `   Session permission_config.mode: ${lockedSession.permission_config?.mode || 'not set'}`
+            );
+
+            // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
+            // which is the sole place that populates message_range / git_state,
+            // writes the user-message row, and spawns the executor. Both this
+            // path and processNextQueuedTask go through that helper so behavior
+            // stays in lockstep.
+            const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
+              ...(messageSource ? { source: messageSource } : {}),
+              ...(data.metadata ?? {}),
+            };
+            const task = await taskRepo.createPending({
               session_id: id as SessionID,
               full_prompt: data.prompt,
               created_by: createdBy,
-              status: TaskStatus.QUEUED,
-              metadata: {
-                ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
-                ...(messageSource ? { source: messageSource } : {}),
-                ...(data.metadata ?? {}),
-              },
+              status: TaskStatus.CREATED,
+              metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
             });
+            // Bypassing the service means no native 'created' emit; do it here
+            // so reactive clients see the new task before the executor spawns.
+            app.service('tasks').emit('created', task);
 
-            console.log(
-              `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
-                `(session status: ${lockedSession.status}, existing queue items: ${queuedTasks.length})`
+            return await spawnTaskExecutor(
+              task,
+              {
+                permissionMode: data.permissionMode,
+                stream: data.stream !== false,
+                messageSource,
+              },
+              params
             );
-
-            app.service('tasks').emit('queued', queuedTask);
-
-            if (sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)) {
-              setImmediate(async () => {
-                try {
-                  await sessionsService.triggerQueueProcessing(id as SessionID, params);
-                } catch (error) {
-                  console.error(
-                    `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
-                    error
-                  );
-                }
-              });
-            }
-
-            // Uniform response: the entity is always a Task. Caller inspects
-            // `task.status` (`'queued'` here) and `task.queue_position` to know
-            // what happened.
-            return queuedTask;
-          }
-
-          console.log(`   Session agent: ${lockedSession.agentic_tool}`);
-          console.log(
-            `   Session permission_config.mode: ${lockedSession.permission_config?.mode || 'not set'}`
-          );
-
-          // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
-          // which is the sole place that populates message_range / git_state,
-          // writes the user-message row, and spawns the executor. Both this
-          // path and processNextQueuedTask go through that helper so behavior
-          // stays in lockstep.
-          const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
-            ...(messageSource ? { source: messageSource } : {}),
-            ...(data.metadata ?? {}),
-          };
-          const task = await taskRepo.createPending({
-            session_id: id as SessionID,
-            full_prompt: data.prompt,
-            created_by: createdBy,
-            status: TaskStatus.CREATED,
-            metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
-          });
-          // Bypassing the service means no native 'created' emit; do it here
-          // so reactive clients see the new task before the executor spawns.
-          app.service('tasks').emit('created', task);
-
-          return await spawnTaskExecutor(
-            task,
-            {
-              permissionMode: data.permissionMode,
-              stream: data.stream !== false,
-              messageSource,
-            },
-            params
-          );
-        });
+          },
+          { waiterTimeoutMs: 30_000 }
+        );
       },
     },
     {
@@ -1576,41 +1647,46 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // /tasks/:id/run on different tasks of the same session, against
         // /sessions/:id/prompt's idle branch, and against the queue
         // drainer — they all serialize through `sessionTurnLocks`.
-        return await withSessionTurnLock(sessionTurnLocks, task.session_id, async () => {
-          // Re-read session state inside the lock — it may have flipped to
-          // RUNNING while we waited for our turn.
-          const session = await reconcileSessionPromptStateIfStuck(
-            await sessionsService.get(task.session_id, params),
-            taskRepo,
-            params,
-            { ignoredTaskIds: [task.task_id] }
-          );
-
-          if (session.status === SessionStatus.STOPPING) {
-            throw new BadRequest('Cannot run task: session is currently stopping');
-          }
-          if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
-            throw new Conflict(
-              `Cannot run task ${shortId(taskId)}: session is '${session.status}'. ` +
-                `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
-                `it creates and queues a task atomically.`
+        return await withSessionTurnLock(
+          sessionTurnLocks,
+          task.session_id,
+          async () => {
+            // Re-read session state inside the lock — it may have flipped to
+            // RUNNING while we waited for our turn.
+            const session = await reconcileSessionPromptStateIfStuck(
+              await sessionsService.get(task.session_id, params),
+              taskRepo,
+              params,
+              { ignoredTaskIds: [task.task_id] }
             );
-          }
 
-          return await runExistingTask(
-            task,
-            {
-              permissionMode: data.permissionMode,
-              stream: data.stream !== false,
-              messageSource: normalizeMessageSource(data.messageSource, params),
-            },
-            params,
-            {
-              findTaskById: (id) => taskRepo.findById(id),
-              spawnFn: spawnTaskExecutor,
+            if (session.status === SessionStatus.STOPPING) {
+              throw new BadRequest('Cannot run task: session is currently stopping');
             }
-          );
-        });
+            if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
+              throw new Conflict(
+                `Cannot run task ${shortId(taskId)}: session is '${session.status}'. ` +
+                  `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
+                  `it creates and queues a task atomically.`
+              );
+            }
+
+            return await runExistingTask(
+              task,
+              {
+                permissionMode: data.permissionMode,
+                stream: data.stream !== false,
+                messageSource: normalizeMessageSource(data.messageSource, params),
+              },
+              params,
+              {
+                findTaskById: (id) => taskRepo.findById(id),
+                spawnFn: spawnTaskExecutor,
+              }
+            );
+          },
+          { waiterTimeoutMs: 30_000 }
+        );
       },
     },
     {
@@ -1764,50 +1840,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // File upload endpoint
   // ============================================================================
 
-  const sessionRepo = new SessionRepository(db);
   const branchRepo = new BranchRepository(db);
-  const uploadMiddleware = createUploadMiddleware(sessionRepo, branchRepo);
+  const uploadMiddleware = createUploadMiddleware();
   const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
-  // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
-  const uploadHandler: any = async (req: any, res: any, next: any) => {
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
+  const authorizeUpload: any = async (req: any, res: any, next: any) => {
     try {
-      if (DEBUG_UPLOAD) {
-        console.log('🚀 [Upload Handler] Request received');
-        console.log('   Headers:', {
-          contentType: req.headers['content-type'],
-          authorization: req.headers.authorization ? 'present' : 'missing',
-          cookie: req.headers.cookie ? 'present' : 'missing',
-        });
-      }
-
       const { sessionId } = req.params;
-      const { destination, notifyAgent, message } = req.body;
-      const files = req.files as Express.Multer.File[];
-
-      if (DEBUG_UPLOAD) {
-        console.log(
-          `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
-        );
-        console.log(`   Destination: ${destination || 'branch'}`);
-        console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
-        console.log(`   Files received: ${files?.length || 0}`);
-      }
-
       const params = req.feathers as AuthenticatedParams;
-      if (DEBUG_UPLOAD) {
-        console.log(`   Auth params:`, {
-          hasUser: !!params?.user,
-          userId: params?.user?.user_id ? shortId(params.user.user_id) : undefined,
-          provider: params?.provider,
-        });
-      }
 
       ensureMinimumRole(params, ROLES.MEMBER, 'upload files');
 
       const session = await sessionsService.get(sessionId, params);
       if (!session) {
-        console.error(`❌ [Upload Handler] Session not found: ${shortId(sessionId)}`);
+        console.error(`❌ [Upload Authz] Session not found: ${shortId(sessionId)}`);
         return res.status(404).json({ error: 'Session not found' });
       }
 
@@ -1843,10 +1890,49 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         if (!canUpload) {
           console.error(
-            `❌ [Upload Handler] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
+            `❌ [Upload Authz] User ${shortId(userId)} has '${effectiveLevel}' permission, cannot upload to branch ${shortId(wt.branch_id)}`
           );
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
+      }
+
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
+  const uploadHandler: any = async (req: any, res: any, next: any) => {
+    try {
+      if (DEBUG_UPLOAD) {
+        console.log('🚀 [Upload Handler] Request received');
+        console.log('   Headers:', {
+          contentType: req.headers['content-type'],
+          authorization: req.headers.authorization ? 'present' : 'missing',
+          cookie: req.headers.cookie ? 'present' : 'missing',
+        });
+      }
+
+      const { sessionId } = req.params;
+      const { notifyAgent, message } = req.body;
+      const files = req.files as Express.Multer.File[];
+
+      if (DEBUG_UPLOAD) {
+        console.log(
+          `📎 [Upload Handler] Processing for session ${sessionId ? shortId(sessionId) : 'unknown'}`
+        );
+        console.log(`   Notify agent: ${notifyAgent === 'true' || notifyAgent === true}`);
+        console.log(`   Files received: ${files?.length || 0}`);
+      }
+
+      const params = req.feathers as AuthenticatedParams;
+      if (DEBUG_UPLOAD) {
+        console.log(`   Auth params:`, {
+          hasUser: !!params?.user,
+          userId: params?.user?.user_id ? shortId(params.user.user_id) : undefined,
+          provider: params?.provider,
+        });
       }
 
       if (!files || files.length === 0) {
@@ -1854,23 +1940,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(400).json({ error: 'No files uploaded' });
       }
 
-      let branch: Awaited<ReturnType<typeof branchRepo.findById>> | undefined;
-      if (session.branch_id) {
-        branch = await branchRepo.findById(session.branch_id);
-      }
-
-      const uploadedFiles = files.map((f) => {
-        let relativePath = f.path;
-        if (branch && f.path.startsWith(branch.path)) {
-          relativePath = f.path.substring(branch.path.length + 1);
-        }
-        return {
-          filename: f.filename,
-          path: relativePath,
-          size: f.size,
-          mimeType: f.mimetype,
-        };
-      });
+      const uploadedFiles = files.map((f) => ({
+        filename: f.filename,
+        path: f.path,
+        size: f.size,
+        mimeType: f.mimetype,
+      }));
 
       if (DEBUG_UPLOAD) {
         console.log(`   Uploaded ${uploadedFiles.length} file(s):`);
@@ -1998,6 +2073,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // time writing oversize uploads to disk.
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     enforceTotalUploadSize() as any,
+    authorizeUpload,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
     uploadMiddleware.array('files', 10) as any,
     // Defence-in-depth aggregate-size check using the actual file sizes that
@@ -2042,86 +2118,37 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             ? data.reason
             : undefined;
 
-        const session = await sessionsService.get(id, params);
+        const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
 
-        const activeStates: SessionStatus[] = [
-          SessionStatus.RUNNING,
-          SessionStatus.AWAITING_PERMISSION,
-          SessionStatus.STOPPING,
-        ];
-        if (!activeStates.includes(session.status as SessionStatus)) {
-          return {
-            success: false,
-            reason: `Session cannot be stopped (status: ${session.status})`,
-          };
-        }
-
-        // `TasksService.find()` short-circuits on session_id and silently
-        // ignores the status filter; use the shared helper that filters in
-        // process. Already recency-DESC sorted.
-        const targetTasksArray = await findActiveTasksForSession(app as never, id as SessionID);
-
-        if (targetTasksArray.length === 0) {
-          console.warn(
-            `⚠️  [Stop] No active tasks for session ${shortId(id)}, resetting to IDLE${stopReason ? ` (reason: ${stopReason})` : ''}`
-          );
-          // ready_for_prompt: true so the post-patch hook drains any QUEUED tasks.
-          // Stop is "skip current", not "wipe everything" — queued prompts represent
-          // user intent and should still execute.
-          await app.service('sessions').patch(
-            id,
+        const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
+          stopSessionPreserveQueue(
             {
-              status: SessionStatus.IDLE,
-              ready_for_prompt: true,
+              app,
+              taskRepo: new TaskRepository(db),
+              sessionsService: sessionsServiceWithHooks,
+              tasksService,
+              killExecutorProcess,
             },
-            params
-          );
-          return {
-            success: true,
-            status: SessionStatus.IDLE,
-            reason: 'No active tasks found, session reset to idle',
-          };
-        }
-
-        const latestTask = targetTasksArray[0];
-
-        console.log(
-          `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(id)}${stopReason ? ` (reason: ${stopReason})` : ''}`
+            id as SessionID,
+            params,
+            { reason: stopReason }
+          )
         );
 
-        const processKilled = killExecutorProcess(id);
-        if (!processKilled) {
-          console.warn(
-            `⚠️  [Stop] No tracked process for session ${shortId(id)} — executor may have already exited`
-          );
-        }
-
-        try {
-          await tasksService.patch(latestTask.task_id, {
-            status: TaskStatus.STOPPED,
-            completed_at: new Date().toISOString(),
+        if (result.success) {
+          deferInFreshTenantScope(params, async () => {
+            try {
+              await sessionsServiceWithHooks.triggerQueueProcessing(id as SessionID, params);
+            } catch (error) {
+              console.error(
+                `❌ [Stop] Failed to process queue after stopping session ${shortId(id)}:`,
+                error
+              );
+            }
           });
-        } catch (error) {
-          console.error(`❌ [Stop] Failed to patch task to STOPPED:`, error);
         }
 
-        try {
-          // ready_for_prompt: true so the post-patch hook drains any QUEUED tasks.
-          // Stop is "skip current", not "wipe everything" — queued prompts represent
-          // user intent and should still execute.
-          await app.service('sessions').patch(
-            id,
-            {
-              status: SessionStatus.IDLE,
-              ready_for_prompt: true,
-            },
-            params
-          );
-        } catch (error) {
-          console.error(`❌ [Stop] Failed to patch session to IDLE:`, error);
-        }
-
-        return { success: true, status: SessionStatus.IDLE };
+        return result;
       },
     },
     {
@@ -2178,10 +2205,31 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const existingLock = sessionTurnLocks.get(sessionId);
     if (existingLock) {
       console.log(`⏳ [Queue] Session turn in progress for ${shortId(sessionId)}, waiting...`);
-      await existingLock.catch(() => undefined);
+
+      // Race the lock against a timeout. A half-open TCP connection can leave
+      // a DB query pending forever, which holds the lock indefinitely and
+      // deadlocks all subsequent prompts for this session. statement_timeout
+      // (60s) handles normal cases; this is the client-side backstop.
+      const LOCK_WAIT_TIMEOUT_MS = 65_000;
+      const outcome = await Promise.race([
+        existingLock.catch(() => undefined).then(() => 'released' as const),
+        new Promise<'timeout'>((resolve) =>
+          setTimeout(() => resolve('timeout'), LOCK_WAIT_TIMEOUT_MS)
+        ),
+      ]);
+
+      if (outcome === 'timeout') {
+        console.error(
+          `❌ [Queue] Session ${shortId(sessionId)}: turn lock held >${LOCK_WAIT_TIMEOUT_MS / 1000}s — ` +
+            `holder may be stuck on a broken DB connection. Skipping this drain trigger; ` +
+            `the next natural trigger (user prompt or task completion) will retry.`
+        );
+        return;
+      }
+
       if (!queueRetryScheduled.has(sessionId)) {
         queueRetryScheduled.add(sessionId);
-        setImmediate(async () => {
+        deferInFreshTenantScope(params, async () => {
           queueRetryScheduled.delete(sessionId);
           try {
             await processNextQueuedTask(sessionId, params);
@@ -2189,6 +2237,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
           }
         });
+      } else {
+        console.log(
+          `⏭️  [Queue] Retry already scheduled for session ${shortId(sessionId)}, not queueing another`
+        );
       }
       return;
     }
@@ -2199,8 +2251,33 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     });
     sessionTurnLocks.set(sessionId, lockPromise);
 
+    // Race the drain against a holder timeout. A half-open TCP connection can
+    // keep spawnTaskExecutor waiting indefinitely on a DB query that never
+    // completes on the Node.js side (statement_timeout only fires if Postgres
+    // actually received the query). Releasing the lock after 30s lets waiting
+    // prompts make progress; the background drain will eventually fail and DB
+    // state will be reconciled by reconcileSessionPromptStateIfStuck.
+    const HOLDER_TIMEOUT_MS = 30_000;
     try {
-      await processNextQueuedTaskInternal(sessionId, params);
+      await Promise.race([
+        processNextQueuedTaskInternal(sessionId, params),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `processNextQueuedTaskInternal timed out for ${shortId(sessionId)} after ${HOLDER_TIMEOUT_MS / 1000}s`
+                )
+              ),
+            HOLDER_TIMEOUT_MS
+          )
+        ),
+      ]);
+    } catch (err) {
+      console.error(
+        `❌ [Queue] processNextQueuedTask holder error for ${shortId(sessionId)}:`,
+        err instanceof Error ? err.message : err
+      );
     } finally {
       sessionTurnLocks.delete(sessionId);
       resolveLock();
@@ -2980,6 +3057,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/schedules/:id/run-now').hooks({
+    around: { all: [tenantDatabaseScopeAround] },
     before: {
       create: [
         requireAuth,
@@ -3071,6 +3149,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/execute-schedule-now').hooks({
+    around: { all: [tenantDatabaseScopeAround] },
     before: {
       create: [
         requireAuth,

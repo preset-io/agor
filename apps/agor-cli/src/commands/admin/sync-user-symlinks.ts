@@ -1,41 +1,10 @@
-/**
- * Admin Command: Sync User Symlinks
- *
- * PRIVILEGED OPERATION - Must be called via sudo
- *
- * Cleans up broken symlinks in a user's ~/agor/worktrees directory.
- * This command is designed to be called by the daemon via `sudo agor admin sync-user-symlinks`.
- *
- * @see context/guides/rbac-and-unix-isolation.md
- */
+import { Flags } from '@oclif/core';
+import { BaseCommand } from '../../base-command.js';
 
-import {
-  AGOR_HOME_BASE,
-  createAdminExecutor,
-  getUserBranchesDir,
-  isValidUnixUsername,
-  SymlinkCommands,
-} from '@agor/core/unix';
-import { Command, Flags } from '@oclif/core';
-
-export default class SyncUserSymlinks extends Command {
-  static override description = 'Clean up broken symlinks in user branches directory (admin only)';
-
-  static override examples = [
-    '<%= config.bin %> <%= command.id %> --username alice',
-    '<%= config.bin %> <%= command.id %> --username alice --dry-run',
-  ];
-
+export default class SyncUserSymlinks extends BaseCommand {
+  static override description = 'Clean up broken symlinks via the daemon';
   static override flags = {
-    username: Flags.string({
-      char: 'u',
-      description: 'Unix username',
-      required: true,
-    }),
-    'home-base': Flags.string({
-      description: 'Base directory for home directories',
-      default: AGOR_HOME_BASE,
-    }),
+    username: Flags.string({ char: 'u', description: 'Unix username', required: true }),
     'dry-run': Flags.boolean({
       char: 'n',
       description: 'Show what would be done without making changes',
@@ -47,41 +16,19 @@ export default class SyncUserSymlinks extends Command {
       default: false,
     }),
   };
-
   public async run(): Promise<void> {
     const { flags } = await this.parse(SyncUserSymlinks);
-    const { username, verbose } = flags;
-    const homeBase = flags['home-base'];
-    const dryRun = flags['dry-run'];
-
-    // Create executor with dry-run and verbose support
-    const executor = createAdminExecutor({ 'dry-run': dryRun, verbose });
-
-    if (dryRun) {
-      this.log('🔍 Dry run mode - no changes will be made\n');
-    }
-
-    // Validate username
-    if (!isValidUnixUsername(username)) {
-      this.error(`Invalid Unix username format: ${username}`);
-    }
-
-    const branchesDir = getUserBranchesDir(username, homeBase);
-
-    // Check if directory exists
-    const dirExists = await executor.check(SymlinkCommands.pathExists(branchesDir));
-
-    if (!dirExists) {
-      this.log(`✅ Branches directory does not exist: ${branchesDir} (nothing to do)`);
-      return;
-    }
-
-    // Remove broken symlinks
+    const client = await this.connectToDaemon();
     try {
-      await executor.exec(SymlinkCommands.removeBrokenSymlinks(branchesDir));
-      this.log(`✅ Cleaned up broken symlinks in: ${branchesDir}`);
-    } catch (error) {
-      this.error(`Failed to sync symlinks: ${error}`);
+      const result = await client.service('admin/local-actions').create({
+        action: 'unix.symlink.cleanupBroken',
+        params: { username: flags.username },
+        dryRun: flags['dry-run'],
+        verbose: flags.verbose,
+      });
+      for (const line of (result as { logs?: string[] }).logs ?? []) this.log(line);
+    } finally {
+      await this.cleanupClient(client);
     }
   }
 }

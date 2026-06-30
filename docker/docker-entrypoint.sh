@@ -27,13 +27,21 @@ echo "✅ Home directory permissions fixed"
 
 # Fix build directory permissions (clean stale dist files with wrong ownership)
 echo "🔧 Ensuring write access for build tools..."
-DIST_DIRS="/app/packages/core/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
+DIST_DIRS="/app/packages/git/dist /app/packages/core/dist /app/packages/executor/dist /app/packages/client/dist /app/apps/agor-daemon/dist /app/apps/agor-cli/dist /app/apps/agor-ui/dist"
 if sudo -n true 2>/dev/null; then
   # Clean and recreate dist directories with correct ownership.
   # Use the explicit workspace list instead of /app/packages/*/dist globs:
   # under `set -e`, an unmatched glob is passed literally to chown and aborts
   # startup before the initial builds have a chance to create dist outputs.
   sudo -n rm -rf $DIST_DIRS 2>/dev/null || true
+  # TypeScript incremental state can otherwise claim executor/client outputs are
+  # up-to-date after dist/ was removed, producing an empty dist and a startup
+  # timeout while waiting for .d.ts files.
+  sudo -n rm -rf \
+    /app/packages/executor/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/client/node_modules/.tmp/tsconfig.tsbuildinfo \
+    /app/packages/core/node_modules/.tmp/tsconfig.tsbuildinfo \
+    2>/dev/null || true
   sudo -n mkdir -p $DIST_DIRS
 
   # Chown all package/app directories (non-recursive for speed)
@@ -42,10 +50,21 @@ if sudo -n true 2>/dev/null; then
   # Chown dist directories recursively (in case they have nested files)
   sudo -n chown -R agor:agor $DIST_DIRS
 
+  # The initial builds below run after dist cleanup. If TypeScript's
+  # incremental cache survives from an earlier container, `tsc` can incorrectly
+  # decide there is nothing to emit, leaving dist empty and making the startup
+  # wait loop time out. Remove stale build info alongside dist.
+  BUILD_INFO_DIRS="/app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp"
+  sudo -n rm -rf $BUILD_INFO_DIRS 2>/dev/null || true
+  sudo -n mkdir -p $BUILD_INFO_DIRS
+  sudo -n chown -R agor:agor $BUILD_INFO_DIRS
+
   echo "✅ Build directories ready"
 else
   # Fallback: try without sudo (might work depending on host permissions)
   rm -rf $DIST_DIRS 2>/dev/null || true
+  rm -rf /app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
+  mkdir -p /app/packages/core/node_modules/.tmp /app/packages/executor/node_modules/.tmp /app/packages/client/node_modules/.tmp 2>/dev/null || true
   mkdir -p $DIST_DIRS 2>/dev/null || true
   echo "⚠️  Build directories created (sudo not available, may have permission issues)"
 fi
@@ -54,6 +73,22 @@ fi
 echo "⏭️  Skipping husky install"
 
 # Build packages sequentially with blocking builds to avoid race conditions
+echo "🔨 Building @agor/git (initial build)..."
+pnpm --filter @agor/git build
+
+echo "⏳ Waiting for @agor/git type definitions..."
+MAX_WAIT=30
+WAITED=0
+while [ ! -f "/app/packages/git/dist/index.d.ts" ] || [ ! -f "/app/packages/git/dist/pure.d.ts" ]; do
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "❌ Timeout waiting for git type definitions!"
+    exit 1
+  fi
+  sleep 0.5
+  WAITED=$((WAITED + 1))
+done
+echo "✅ @agor/git initial build complete (including type definitions)"
+
 echo "🔨 Building @agor/core (initial build)..."
 pnpm --filter @agor/core build
 
@@ -87,6 +122,20 @@ while [ ! -f "/app/packages/executor/dist/index.d.ts" ]; do
 done
 echo "✅ @agor/executor initial build complete (including type definitions)"
 
+# In strict/insulated Unix modes, executors are launched as non-daemon Unix
+# users. The bind-mounted /app tree can be group-private in Agor-managed
+# worktrees, so those users may not be able to read /app/packages/executor even
+# though they can read their assigned branch checkout. Build a standalone,
+# world-readable executor runtime outside /app and point the daemon at it.
+if [ "${AGOR_UNIX_USER_MODE:-simple}" != "simple" ] || [ "${AGOR_USE_EXECUTOR:-false}" = "true" ]; then
+  echo "📦 Preparing shared executor runtime for Unix impersonation..."
+  rm -rf /tmp/agor-executor-runtime
+  pnpm --filter @agor/executor deploy --prod /tmp/agor-executor-runtime
+  chmod -R a+rX /tmp/agor-executor-runtime
+  export AGOR_EXECUTOR_PATH=/tmp/agor-executor-runtime/bin/agor-executor
+  echo "✅ Shared executor runtime ready: $AGOR_EXECUTOR_PATH"
+fi
+
 echo "🔨 Building @agor-live/client (initial build)..."
 pnpm --filter @agor-live/client build
 
@@ -105,6 +154,9 @@ echo "✅ @agor-live/client initial build complete (including type definitions)"
 
 # Start watch modes for hot-reload
 echo "🔄 Starting watch modes..."
+pnpm --filter @agor/git dev &
+GIT_PID=$!
+
 pnpm --filter @agor/core dev &
 CORE_PID=$!
 
@@ -114,7 +166,7 @@ EXECUTOR_PID=$!
 pnpm --filter @agor-live/client dev &
 CLIENT_PID=$!
 
-echo "✅ Watch modes started (core, executor, and client will rebuild on file changes)"
+echo "✅ Watch modes started (git, core, executor, and client will rebuild on file changes)"
 
 # Initialize database and configure daemon settings for Docker
 # (idempotent: creates database on first run, preserves JWT secrets on subsequent runs)
@@ -208,7 +260,7 @@ echo "$ADMIN_OUTPUT"
 # a clean pre-daemon window and sudoers access.
 if [ "$AGOR_SET_UNIX_MODE" = "strict" ]; then
   echo "🔒 Provisioning bootstrap admin OS user (strict mode)..."
-  pnpm agor admin ensure-user --username admin || echo "⚠️  Could not provision admin OS user — check sudoers"
+  pnpm agor local ensure-user --username admin || echo "⚠️  Could not provision admin OS user — check sudoers"
 fi
 
 # Get FULL admin user UUID from database (the CLI only shows short ID)
@@ -236,6 +288,21 @@ if [ "$SEED" = "true" ]; then
   fi
 fi
 
+# Load demo fixtures if LOAD_FIXTURES=true (idempotent: skips if demo data
+# exists). Pure DB inserts — no git/network/executor. Orthogonal to SEED and
+# runs AFTER it, so `SEED=true LOAD_FIXTURES=true` yields a real runnable branch
+# plus a rich set of hardcoded fake data for instant end-to-end testing.
+if [ "$LOAD_FIXTURES" = "true" ]; then
+  echo "🎭 Loading demo fixtures..."
+  if [ -n "$ADMIN_USER_ID" ]; then
+    echo "   Using admin user: ${ADMIN_USER_ID}..."
+    pnpm tsx scripts/load-fixtures.ts --skip-if-exists --user-id "$ADMIN_USER_ID"
+  else
+    echo "⚠️  Warning: Could not find admin user, loading demo fixtures without admin owner"
+    pnpm tsx scripts/load-fixtures.ts --skip-if-exists
+  fi
+fi
+
 # Create RBAC test users if enabled (PostgreSQL + RBAC mode)
 if [ "$CREATE_RBAC_TEST_USERS" = "true" ]; then
   echo "👥 Creating RBAC test users and branches..."
@@ -252,11 +319,16 @@ DAEMON_PID=$!
 sleep 3
 
 # Start UI in foreground (this keeps container alive)
+# VITE_DAEMON_URL (when set by the .agor.yml dev variant) points the browser
+# SPA at the daemon's host:DAEMON_PORT in this split-port env, where vite-dev
+# serves the UI on a different port than the daemon API. Forwarded explicitly
+# so vite exposes it as import.meta.env.VITE_DAEMON_URL.
 echo "🎨 Starting UI on port ${UI_PORT:-5173}..."
-VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" pnpm --filter agor-ui dev --host 0.0.0.0 --port "${UI_PORT:-5173}"
+VITE_DAEMON_PORT="${DAEMON_PORT:-3030}" VITE_DAEMON_URL="${VITE_DAEMON_URL:-}" pnpm --filter agor-ui dev --host 0.0.0.0 --port "${UI_PORT:-5173}"
 
 # If UI exits, kill daemon, executor watch, and core watch
 kill $DAEMON_PID 2>/dev/null || true
 kill $CLIENT_PID 2>/dev/null || true
 kill $EXECUTOR_PID 2>/dev/null || true
 kill $CORE_PID 2>/dev/null || true
+kill $GIT_PID 2>/dev/null || true

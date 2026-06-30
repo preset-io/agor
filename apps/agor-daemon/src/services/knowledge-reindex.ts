@@ -1,5 +1,9 @@
 import { loadConfig } from '@agor/core/config';
-import { AppVariableRepository, type Database, isPostgresDatabase } from '@agor/core/db';
+import {
+  AppVariableRepository,
+  isPostgresDatabase,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, KnowledgeEmbeddingStatus, Params } from '@agor/core/types';
 import {
@@ -21,7 +25,7 @@ export class KnowledgeReindexService {
   private variables: AppVariableRepository;
 
   constructor(
-    private db: Database,
+    private db: TenantScopeAwareDatabase,
     private app?: Application
   ) {
     this.variables = new AppVariableRepository(db);
@@ -52,7 +56,7 @@ export class KnowledgeReindexService {
 }
 
 export function createKnowledgeReindexService(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   app?: Application
 ): KnowledgeReindexService {
   return new KnowledgeReindexService(db, app);

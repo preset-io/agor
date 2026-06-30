@@ -9,7 +9,7 @@ import type { User } from '@agor-live/client';
 import { createRestClient } from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
-import { isTransientConnectionError } from '../utils/authErrors';
+import { isDefiniteAuthFailure, isTransientConnectionError } from '../utils/authErrors';
 import { isExpiringSoon, msUntilExpiry } from '../utils/jwtExpiry';
 import {
   exchangeLaunchCode,
@@ -17,6 +17,7 @@ import {
   removeLaunchCodeFromCurrentUrl,
 } from '../utils/launchAuth';
 import {
+  dispatchTokensRefreshed,
   RefreshUnrecoverableError,
   refreshTokensSingleFlight,
   resetRefreshFailureState,
@@ -43,6 +44,28 @@ interface UseAuthReturn extends AuthState {
   login: (email: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   reAuthenticate: () => Promise<void>;
+}
+
+const UNEXPECTED_LOGIN_RESPONSE_MESSAGE =
+  'The Agor server returned an unexpected response while signing in. Check that the daemon URL is correct and the server is reachable, then try again.';
+
+function isJsonParseFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message =
+    error instanceof Error ? error.message : String((error as { message?: unknown }).message ?? '');
+  return /json parsing error/i.test(message) || /unexpected token.*json/i.test(message);
+}
+
+function loginErrorMessage(error: unknown): string {
+  if (isJsonParseFailure(error)) {
+    return UNEXPECTED_LOGIN_RESPONSE_MESSAGE;
+  }
+
+  if (isTransientConnectionError(error)) {
+    return 'Unable to reach the Agor server. Check your connection and try again.';
+  }
+
+  return error instanceof Error ? error.message : 'Login failed';
 }
 
 /**
@@ -96,8 +119,9 @@ export function useAuth(): UseAuthReturn {
           });
 
           return true;
-        } catch (_accessTokenError) {
+        } catch (accessTokenError) {
           // Access token expired or invalid, try refresh token
+          if (!isDefiniteAuthFailure(accessTokenError)) throw accessTokenError;
         }
       }
 
@@ -115,8 +139,14 @@ export function useAuth(): UseAuthReturn {
           });
 
           return true;
-        } catch (_refreshError) {
+        } catch (refreshError) {
           // Refresh token also expired or invalid
+          if (
+            !isDefiniteAuthFailure(refreshError) &&
+            !(refreshError instanceof RefreshUnrecoverableError)
+          ) {
+            throw refreshError;
+          }
         }
       }
 
@@ -143,6 +173,7 @@ export function useAuth(): UseAuthReturn {
             loading: false,
             error: null,
           });
+          dispatchTokensRefreshed(result);
 
           return;
         } catch (launchError) {
@@ -204,14 +235,25 @@ export function useAuth(): UseAuthReturn {
       // IMPORTANT: Don't clear tokens for connection errors or for failed
       // launch-code attempts when stored tokens exist. A stale/consumed URL
       // code must not log out a user with an otherwise valid local session.
-      if (!isConnectionError && !(attemptedLaunch && hasStoredTokens)) {
+      if (
+        isDefiniteAuthFailure(error) &&
+        !isConnectionError &&
+        !(attemptedLaunch && hasStoredTokens)
+      ) {
         console.error('Authentication failure, clearing tokens:', error);
         clearTokens();
       }
 
       if (attemptedLaunch && hasStoredTokens) {
-        const client = await createRestClient(getDaemonUrl());
-        if (await authenticateWithStoredTokens(client)) return;
+        try {
+          const client = await createRestClient(getDaemonUrl());
+          if (await authenticateWithStoredTokens(client)) return;
+        } catch (fallbackError) {
+          console.warn(
+            'Stored-token fallback after launch sign-in failure also failed:',
+            fallbackError
+          );
+        }
       }
 
       setState({
@@ -433,16 +475,18 @@ export function useAuth(): UseAuthReturn {
         loading: false,
         error: null,
       });
+      dispatchTokensRefreshed(result);
 
       return true;
     } catch (error) {
       console.error('❌ Login failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Login failed';
-      console.error('❌ Error message:', errorMessage);
+      const userFacingMessage = loginErrorMessage(error);
+      const rawMessage = error instanceof Error ? error.message : 'Login failed';
+      console.error('❌ Error message:', rawMessage);
       setState((prev) => ({
         ...prev,
         loading: false,
-        error: errorMessage,
+        error: userFacingMessage,
       }));
       return false;
     }

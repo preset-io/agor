@@ -218,13 +218,16 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
     'agor_boards_update',
     {
       description:
-        'Update board metadata and manage zones/objects. Can update name, icon, background, and create/update zones for organizing branches. Zone objects have: type="zone", x, y, width, height, label, borderColor, backgroundColor, borderStyle (optional), trigger (optional: "always_new" auto-creates sessions, "show_picker" shows agent selection). Text objects have: type="text", x, y, text, fontSize, color. Markdown objects have: type="markdown", x, y, width, height, content.',
+        'Update board metadata and manage zones/objects. Can update name, icon, background, and create/update zones for organizing branches. Unicode emoji is preferred for icons; common exact shortcodes like ":compass:" are accepted and normalized. Zone objects have: type="zone", x, y, width, height, label, borderColor, backgroundColor, borderStyle (optional), trigger (optional: "always_new" auto-creates sessions, "show_picker" shows agent selection). Text objects have: type="text", x, y, text, fontSize, color. Markdown objects have: type="markdown", x, y, width, height, content.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         boardId: mcpRequiredId('boardId', 'Board'),
         name: mcpOptionalString('name', 'Board name (optional)'),
         description: mcpOptionalString('description', 'Board description (optional)'),
-        icon: mcpOptionalString('icon', 'Board icon/emoji (optional)'),
+        icon: mcpOptionalString(
+          'icon',
+          'Board icon/emoji (optional). Unicode emoji is preferred; common exact shortcodes like ":compass:" are accepted and normalized.'
+        ),
         color: mcpOptionalString('color', 'Board color (hex format, optional)'),
         backgroundColor: mcpOptionalString(
           'backgroundColor',
@@ -315,7 +318,10 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           'URL-friendly slug (optional, auto-derived from name if not provided)'
         ),
         description: mcpOptionalString('description', 'Board description (optional)'),
-        icon: mcpOptionalString('icon', 'Board icon/emoji (optional, e.g. "📋")'),
+        icon: mcpOptionalString(
+          'icon',
+          'Board icon/emoji (optional, e.g. "📋"). Unicode emoji is preferred; common exact shortcodes like ":compass:" are accepted and normalized.'
+        ),
         color: mcpOptionalString('color', 'Board color in hex format (optional)'),
         backgroundColor: mcpOptionalString(
           'backgroundColor',

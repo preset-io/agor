@@ -19,8 +19,154 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isPromptFlowPatchOnly, PROMPT_FLOW_PATCH_FIELDS } from './register-hooks';
+import {
+  enrichSessionFindResultWithRemoteRelationships,
+  isPromptFlowPatchOnly,
+  PROMPT_FLOW_PATCH_FIELDS,
+  shouldDrainQueueAfterSessionPostTurnPatch,
+  shouldRunSessionPostTurnHooks,
+  shouldValidateRepoEnvironmentPayload,
+  TENANT_OWNED_SERVICE_PATHS,
+} from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
+
+const makeSession = (sessionId: string): import('@agor/core/types').Session =>
+  ({
+    session_id: sessionId,
+    branch_id: 'branch-1',
+    status: 'idle',
+    agentic_tool: 'codex',
+    created_at: '2026-01-01T00:00:00.000Z',
+    last_updated: '2026-01-01T00:00:00.000Z',
+    tasks: [],
+    genealogy: { children: [] },
+    contextFiles: [],
+    git_state: { ref: 'main', base_sha: 'abc', current_sha: 'abc' },
+    scheduled_from_branch: false,
+    ready_for_prompt: false,
+    archived: false,
+  }) as import('@agor/core/types').Session;
+
+describe('tenant-owned service registration', () => {
+  it('wraps gateway inbound routing in tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
+  });
+});
+
+describe('shouldValidateRepoEnvironmentPayload', () => {
+  it('skips absent repo environment payloads', () => {
+    expect(shouldValidateRepoEnvironmentPayload(undefined)).toBe(false);
+    expect(shouldValidateRepoEnvironmentPayload(null)).toBe(false);
+  });
+
+  it('validates present repo environment payloads', () => {
+    expect(shouldValidateRepoEnvironmentPayload({})).toBe(true);
+    expect(shouldValidateRepoEnvironmentPayload('invalid shape')).toBe(true);
+  });
+});
+
+describe('shouldRunSessionPostTurnHooks', () => {
+  it('runs for idle sessions, preserving stop-route gateway finalization behavior', () => {
+    expect(shouldRunSessionPostTurnHooks({ status: 'idle', ready_for_prompt: false })).toBe(true);
+  });
+
+  it('runs for failed sessions only once they are promptable', () => {
+    expect(shouldRunSessionPostTurnHooks({ status: 'failed', ready_for_prompt: true })).toBe(true);
+    expect(shouldRunSessionPostTurnHooks({ status: 'failed', ready_for_prompt: false })).toBe(
+      false
+    );
+  });
+
+  it('does not run for busy sessions', () => {
+    expect(shouldRunSessionPostTurnHooks({ status: 'running', ready_for_prompt: false })).toBe(
+      false
+    );
+  });
+});
+
+describe('shouldDrainQueueAfterSessionPostTurnPatch', () => {
+  it('drains for promptable ready sessions by default', () => {
+    expect(
+      shouldDrainQueueAfterSessionPostTurnPatch({ status: 'failed', ready_for_prompt: true })
+    ).toBe(true);
+    expect(
+      shouldDrainQueueAfterSessionPostTurnPatch({ status: 'idle', ready_for_prompt: true })
+    ).toBe(true);
+  });
+
+  it('does not drain when terminal queue processing is explicitly suppressed', () => {
+    expect(
+      shouldDrainQueueAfterSessionPostTurnPatch(
+        { status: 'failed', ready_for_prompt: true },
+        { suppressTerminalQueueProcessing: true }
+      )
+    ).toBe(false);
+  });
+
+  it('does not drain for promptable-but-not-ready acknowledgement states', () => {
+    expect(
+      shouldDrainQueueAfterSessionPostTurnPatch({ status: 'idle', ready_for_prompt: false })
+    ).toBe(false);
+  });
+});
+
+describe('enrichSessionFindResultWithRemoteRelationships', () => {
+  it('enriches paginated results produced by before.find RBAC scoping', async () => {
+    const session = makeSession('session-1');
+    const relationship = {
+      relationship_id: 'relationship-1',
+      source_session_id: 'session-1',
+      target_session_id: 'session-2',
+      relationship_type: 'remote_create',
+      created_by: 'user-1',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      callback_enabled: false,
+      callback_session_id: null,
+      data: null,
+    } as const;
+    let calls = 0;
+    const service = {
+      async enrichRemoteRelationships(sessions: import('@agor/core/types').Session[]) {
+        calls += 1;
+        return sessions.map((item) =>
+          item.session_id === session.session_id
+            ? { ...item, remote_relationships: { as_source: [relationship], as_target: [] } }
+            : item
+        );
+      },
+    };
+
+    const result = await enrichSessionFindResultWithRemoteRelationships(
+      { total: 1, limit: 10, skip: 0, data: [session] },
+      service
+    );
+
+    expect(calls).toBe(1);
+    expect(Array.isArray(result)).toBe(false);
+    expect(Array.isArray(result) ? null : result.data[0].remote_relationships?.as_source?.[0]).toBe(
+      relationship
+    );
+  });
+
+  it('does not enrich a result that the sessions service already enriched', async () => {
+    const session = makeSession('session-1');
+    let calls = 0;
+    const service = {
+      async enrichRemoteRelationships(sessions: import('@agor/core/types').Session[]) {
+        calls += 1;
+        return sessions.map((item) => ({ ...item, title: 'enriched twice' }));
+      },
+    };
+
+    const once = await enrichSessionFindResultWithRemoteRelationships([session], service);
+    const twice = await enrichSessionFindResultWithRemoteRelationships(once, service);
+
+    expect(twice).toBe(once);
+    expect(calls).toBe(1);
+    expect((twice as import('@agor/core/types').Session[])[0].title).toBe('enriched twice');
+  });
+});
 
 describe('isPromptFlowPatchOnly', () => {
   describe('accepts whitelisted-only patches', () => {
@@ -111,12 +257,11 @@ describe('canReceiveMcpTokenForSession', () => {
   const CREATOR = 'user-creator';
   const OTHER = 'user-other';
 
-  it('allows the session creator (matching user_id)', () => {
+  it('allows any authenticated member+ caller to receive a caller-scoped MCP token', () => {
     expect(
       canReceiveMcpTokenForSession({
-        callerUserId: CREATOR,
+        callerUserId: OTHER,
         callerRole: 'member',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(true);
   });
@@ -126,51 +271,24 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: OTHER,
         callerRole: 'superadmin',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(true);
   });
 
   it('allows the executor service identity (role=service)', () => {
-    // role 'service' is not in ROLE_RANK, so hasMinimumRole returns false for
-    // it — the predicate must match it explicitly.
     expect(
       canReceiveMcpTokenForSession({
         callerUserId: 'executor-service',
         callerRole: 'service',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(true);
   });
 
-  it('denies a member+ viewer who is NOT the creator (the bypass we fixed)', () => {
-    expect(
-      canReceiveMcpTokenForSession({
-        callerUserId: OTHER,
-        callerRole: 'member',
-        sessionCreatedBy: CREATOR,
-      })
-    ).toBe(false);
-  });
-
-  it('denies a plain admin who is NOT the creator (only superadmin gets through)', () => {
-    expect(
-      canReceiveMcpTokenForSession({
-        callerUserId: OTHER,
-        callerRole: 'admin',
-        sessionCreatedBy: CREATOR,
-      })
-    ).toBe(false);
-  });
-
   it('denies a creator who has been demoted to viewer', () => {
-    // Viewers never receive MCP tokens per docs — the creator match alone
-    // isn't enough, they must also be at least a member.
     expect(
       canReceiveMcpTokenForSession({
         callerUserId: CREATOR,
         callerRole: 'viewer',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(false);
   });
@@ -180,29 +298,24 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: undefined,
         callerRole: undefined,
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(false);
   });
 
-  it('denies when session has no created_by and caller is not privileged', () => {
+  it('denies callers with user_id but no explicit role', () => {
     expect(
       canReceiveMcpTokenForSession({
-        callerUserId: OTHER,
-        callerRole: 'member',
-        sessionCreatedBy: null,
+        callerUserId: CREATOR,
+        callerRole: undefined,
       })
     ).toBe(false);
   });
 
-  it('does NOT match empty-string caller user_id against empty-string created_by', () => {
-    // Empty-string coincidence must not count as "creator match" — this is
-    // why the predicate guards with `!!callerUserId` before comparing.
+  it('denies empty-string caller user_id even with member role', () => {
     expect(
       canReceiveMcpTokenForSession({
         callerUserId: '',
         callerRole: 'member',
-        sessionCreatedBy: '',
       })
     ).toBe(false);
   });

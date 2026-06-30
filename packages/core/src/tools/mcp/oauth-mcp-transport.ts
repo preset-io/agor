@@ -983,46 +983,30 @@ export function isOAuthRequired(status: number, headers: Headers): boolean {
 export function getCachedOAuth21Token(mcpUrl: string): string | undefined {
   const now = Date.now();
 
-  console.log('[OAuth 2.1 Cache] Looking for token for MCP URL:', mcpUrl);
-  console.log('[OAuth 2.1 Cache] Cache size:', authCodeTokenCache.size);
-
   let mcpOrigin: string;
   try {
     mcpOrigin = new URL(mcpUrl).origin;
-    console.log('[OAuth 2.1 Cache] MCP origin:', mcpOrigin);
-  } catch (e) {
-    console.log('[OAuth 2.1 Cache] Invalid MCP URL:', e);
+  } catch {
     return undefined;
   }
 
   // Check all cached tokens for a match
   for (const [metadataUrl, cached] of authCodeTokenCache.entries()) {
-    console.log('[OAuth 2.1 Cache] Checking cache entry:', metadataUrl);
-    console.log('[OAuth 2.1 Cache] Token expires at:', new Date(cached.expiresAt).toISOString());
-    console.log('[OAuth 2.1 Cache] Current time:', new Date(now).toISOString());
-
     // Check if token is still valid
     if (cached.expiresAt <= now) {
-      console.log('[OAuth 2.1 Cache] Token expired, skipping');
       continue;
     }
 
     // Check if the metadata URL is from the same origin as the MCP URL
     try {
       const metadataOrigin = new URL(metadataUrl).origin;
-      console.log('[OAuth 2.1 Cache] Metadata origin:', metadataOrigin);
-      console.log('[OAuth 2.1 Cache] Origins match:', metadataOrigin === mcpOrigin);
 
       if (metadataOrigin === mcpOrigin || metadataUrl.includes(mcpOrigin)) {
-        console.log('[OAuth 2.1 Cache] ✅ Found cached token for:', mcpOrigin);
         return cached.token;
       }
-    } catch (e) {
-      console.log('[OAuth 2.1 Cache] Invalid metadata URL:', e);
-    }
+    } catch {}
   }
 
-  console.log('[OAuth 2.1 Cache] ❌ No matching token found');
   return undefined;
 }
 
