@@ -280,6 +280,14 @@ function oneLineForPrompt(text: string, maxChars = 900): string {
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
+const SLACK_GATEWAY_REPLY_NOTE =
+  'Note: Any assistant message you send in this current Agor session is streamed back directly to the Slack conversation. Only use outbound gateway tools when you intentionally need to start a separate thread, DM, or message.';
+
+function prependSlackGatewayReplyNote(prompt: string): string {
+  if (prompt.includes(SLACK_GATEWAY_REPLY_NOTE)) return prompt;
+  return `${SLACK_GATEWAY_REPLY_NOTE}\n\n${prompt}`;
+}
+
 function formatSlackCatchUpPrompt(args: {
   channel: GatewayChannel;
   threadId: string;
@@ -2159,6 +2167,10 @@ export class GatewayService {
         if (contextPrefix) {
           promptText = contextPrefix + promptText;
         }
+      }
+
+      if (channel.channel_type === 'slack') {
+        promptText = prependSlackGatewayReplyNote(promptText);
       }
 
       // Prepend MCP auth warning to the initial prompt so the agent is aware
