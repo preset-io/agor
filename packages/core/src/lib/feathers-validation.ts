@@ -232,6 +232,7 @@ export const linkQuerySchema = createQuerySchema(
         Type.Literal('issue'),
         Type.Literal('pr'),
         Type.Literal('kb_ref'),
+        Type.Literal('internal'),
         Type.Literal('image'),
         Type.Literal('document'),
         Type.Literal('url'),
@@ -240,6 +241,9 @@ export const linkQuerySchema = createQuerySchema(
     source: Type.Optional(
       Type.Union([Type.Literal('manual'), Type.Literal('parsed'), Type.Literal('upload')])
     ),
+    is_pinned: Type.Optional(CommonSchemas.boolean),
+    target_object_type: Type.Optional(Type.String()),
+    target_object_id: Type.Optional(CommonSchemas.uuid),
     created_by: Type.Optional(CommonSchemas.uuid),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),

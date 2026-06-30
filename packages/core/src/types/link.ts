@@ -1,8 +1,16 @@
-import type { BranchID, LinkID, MessageID, SessionID, UserID } from './id';
+import type { BranchID, LinkID, MessageID, SessionID, UserID, UUID } from './id';
 import { extractKnowledgeLinks } from './knowledge';
 import type { ContentBlock, Message } from './message';
 
-export const LINK_KINDS = ['issue', 'pr', 'kb_ref', 'image', 'document', 'url'] as const;
+export const LINK_KINDS = [
+  'issue',
+  'pr',
+  'kb_ref',
+  'internal',
+  'image',
+  'document',
+  'url',
+] as const;
 export type LinkKind = (typeof LINK_KINDS)[number];
 
 export const LINK_SOURCES = ['manual', 'parsed', 'upload'] as const;
@@ -11,11 +19,28 @@ export type LinkSource = (typeof LINK_SOURCES)[number];
 export const LINK_TARGET_FIELDS = ['url', 'ref_uri', 'file_path'] as const;
 export type LinkTargetField = (typeof LINK_TARGET_FIELDS)[number];
 
+export const LINK_TARGET_OBJECT_TYPES = [
+  'artifact',
+  'board',
+  'branch',
+  'card',
+  'knowledge_document',
+  'knowledge_namespace',
+  'message',
+  'mcp_server',
+  'repo',
+  'session',
+  'task',
+  'user',
+] as const;
+export type LinkTargetObjectType = (typeof LINK_TARGET_OBJECT_TYPES)[number];
+
 export const LINK_KIND_TARGET_FIELD = {
   issue: 'url',
   pr: 'url',
   url: 'url',
   kb_ref: 'ref_uri',
+  internal: 'ref_uri',
   image: 'file_path',
   document: 'file_path',
 } as const satisfies Record<LinkKind, LinkTargetField>;
@@ -40,7 +65,10 @@ export interface Link {
   url?: string | null;
   ref_uri?: string | null;
   file_path?: string | null;
+  target_object_type?: LinkTargetObjectType | null;
+  target_object_id?: UUID | null;
   target_key: string;
+  is_pinned: boolean;
   title?: string | null;
   mime_type?: string | null;
   metadata?: LinkMetadata | null;
@@ -54,9 +82,27 @@ export type LinkOwner =
   | { branch_id?: null; session_id: SessionID };
 
 export type LinkTarget =
-  | { url: string; ref_uri?: null; file_path?: null }
-  | { url?: null; ref_uri: string; file_path?: null }
-  | { url?: null; ref_uri?: null; file_path: string };
+  | {
+      url: string;
+      ref_uri?: null;
+      file_path?: null;
+      target_object_type?: null;
+      target_object_id?: null;
+    }
+  | {
+      url?: null;
+      ref_uri: string;
+      file_path?: null;
+      target_object_type?: LinkTargetObjectType | null;
+      target_object_id?: UUID | null;
+    }
+  | {
+      url?: null;
+      ref_uri?: null;
+      file_path: string;
+      target_object_type?: null;
+      target_object_id?: null;
+    };
 
 export type LinkCreate = LinkOwner &
   LinkTarget & {
@@ -64,6 +110,7 @@ export type LinkCreate = LinkOwner &
     source_message_id?: MessageID | null;
     kind: LinkKind;
     source: LinkSource;
+    is_pinned?: boolean;
     title?: string | null;
     mime_type?: string | null;
     metadata?: LinkMetadata | null;
@@ -78,6 +125,9 @@ export type LinkPatch = Partial<
     | 'url'
     | 'ref_uri'
     | 'file_path'
+    | 'target_object_type'
+    | 'target_object_id'
+    | 'is_pinned'
     | 'title'
     | 'mime_type'
     | 'metadata'
@@ -90,6 +140,8 @@ export interface ParsedLinkDraft {
   source: 'parsed';
   url?: string | null;
   ref_uri?: string | null;
+  target_object_type?: LinkTargetObjectType | null;
+  target_object_id?: UUID | null;
   title?: string | null;
   metadata?: LinkMetadata | null;
 }
@@ -105,6 +157,12 @@ export function isLinkKind(value: unknown): value is LinkKind {
 
 export function isLinkSource(value: unknown): value is LinkSource {
   return typeof value === 'string' && (LINK_SOURCES as readonly string[]).includes(value);
+}
+
+export function isLinkTargetObjectType(value: unknown): value is LinkTargetObjectType {
+  return (
+    typeof value === 'string' && (LINK_TARGET_OBJECT_TYPES as readonly string[]).includes(value)
+  );
 }
 
 export function getLinkTargetField(data: {
@@ -135,6 +193,8 @@ export function getLinkTargetCompatibilityError(data: {
   url?: string | null;
   ref_uri?: string | null;
   file_path?: string | null;
+  target_object_type?: LinkTargetObjectType | string | null;
+  target_object_id?: UUID | string | null;
 }): string | null {
   const target = getLinkTargetField(data);
   if (!target) {
@@ -148,6 +208,28 @@ export function getLinkTargetCompatibilityError(data: {
 
   if (!LINK_SOURCE_TARGET_FIELDS[data.source].some((field) => field === target)) {
     return `Link source ${data.source} cannot use target ${target}`;
+  }
+
+  const hasObjectType = Boolean(data.target_object_type);
+  const hasObjectId = Boolean(data.target_object_id);
+  if (hasObjectType !== hasObjectId) {
+    return 'Link target_object_type and target_object_id must be provided together';
+  }
+
+  if (hasObjectType && !isLinkTargetObjectType(data.target_object_type)) {
+    return `Invalid link target_object_type: ${data.target_object_type}`;
+  }
+
+  if (hasObjectType && target !== 'ref_uri') {
+    return 'Internal object references require target ref_uri';
+  }
+
+  if (hasObjectType && !data.ref_uri?.trim().toLowerCase().startsWith('agor://')) {
+    return 'Internal object references require an agor:// ref_uri';
+  }
+
+  if (data.kind === 'internal' && (!hasObjectType || !hasObjectId)) {
+    return 'Internal links require target_object_type and target_object_id';
   }
 
   return null;
@@ -180,7 +262,16 @@ export function normalizeLinkTargetKey(data: {
   url?: string | null;
   ref_uri?: string | null;
   file_path?: string | null;
+  target_object_type?: LinkTargetObjectType | string | null;
+  target_object_id?: UUID | string | null;
 }): string | null {
+  if (data.target_object_type && data.target_object_id) {
+    return `object:${String(data.target_object_type).trim().toLowerCase()}:${String(
+      data.target_object_id
+    )
+      .trim()
+      .toLowerCase()}`;
+  }
   const target = getLinkTargetField(data);
   if (target === 'url' && data.url) return normalizeUrlTargetKey(data.url);
   if (target === 'ref_uri' && data.ref_uri) return normalizeRefTargetKey(data.ref_uri);

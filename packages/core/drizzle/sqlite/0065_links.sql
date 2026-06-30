@@ -8,7 +8,10 @@ CREATE TABLE `links` (
 	`url` text,
 	`ref_uri` text,
 	`file_path` text,
+	`target_object_type` text,
+	`target_object_id` text(36),
 	`target_key` text NOT NULL,
+	`is_pinned` integer DEFAULT false NOT NULL,
 	`title` text,
 	`mime_type` text,
 	`metadata` text,
@@ -24,5 +27,8 @@ CREATE TABLE `links` (
 CREATE INDEX `links_branch_id_idx` ON `links` (`branch_id`);--> statement-breakpoint
 CREATE INDEX `links_session_id_idx` ON `links` (`session_id`);--> statement-breakpoint
 CREATE INDEX `links_source_message_id_idx` ON `links` (`source_message_id`);--> statement-breakpoint
+CREATE INDEX `links_target_object_idx` ON `links` (`target_object_type`,`target_object_id`);--> statement-breakpoint
+CREATE INDEX `links_branch_pinned_idx` ON `links` (`branch_id`,`is_pinned`);--> statement-breakpoint
+CREATE INDEX `links_session_pinned_idx` ON `links` (`session_id`,`is_pinned`);--> statement-breakpoint
 CREATE UNIQUE INDEX `links_branch_target_idx` ON `links` (`branch_id`,`target_key`) WHERE `links`.`branch_id` is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX `links_session_target_idx` ON `links` (`session_id`,`target_key`) WHERE `links`.`session_id` is not null;

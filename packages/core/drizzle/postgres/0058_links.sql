@@ -9,7 +9,10 @@ CREATE TABLE "links" (
 	"url" text,
 	"ref_uri" text,
 	"file_path" text,
+	"target_object_type" text,
+	"target_object_id" varchar(36),
 	"target_key" text NOT NULL,
+	"is_pinned" boolean DEFAULT false NOT NULL,
 	"title" text,
 	"mime_type" text,
 	"metadata" jsonb,
@@ -26,6 +29,9 @@ CREATE INDEX "links_tenant_id_idx" ON "links" USING btree ("tenant_id");--> stat
 CREATE INDEX "links_branch_id_idx" ON "links" USING btree ("branch_id");--> statement-breakpoint
 CREATE INDEX "links_session_id_idx" ON "links" USING btree ("session_id");--> statement-breakpoint
 CREATE INDEX "links_source_message_id_idx" ON "links" USING btree ("source_message_id");--> statement-breakpoint
+CREATE INDEX "links_target_object_idx" ON "links" USING btree ("tenant_id","target_object_type","target_object_id");--> statement-breakpoint
+CREATE INDEX "links_branch_pinned_idx" ON "links" USING btree ("tenant_id","branch_id","is_pinned");--> statement-breakpoint
+CREATE INDEX "links_session_pinned_idx" ON "links" USING btree ("tenant_id","session_id","is_pinned");--> statement-breakpoint
 CREATE UNIQUE INDEX "links_branch_target_idx" ON "links" USING btree ("tenant_id","branch_id","target_key") WHERE "links"."branch_id" is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX "links_session_target_idx" ON "links" USING btree ("tenant_id","session_id","target_key") WHERE "links"."session_id" is not null;--> statement-breakpoint
 ALTER TABLE "links" ENABLE ROW LEVEL SECURITY;

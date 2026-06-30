@@ -6,6 +6,7 @@ import type {
   LinkKind,
   LinkPatch,
   LinkSource,
+  LinkTargetObjectType,
   MessageID,
   SessionID,
   UUID,
@@ -37,6 +38,9 @@ export interface LinkFindFilter {
   sourceMessageId?: MessageID;
   kind?: LinkKind;
   source?: LinkSource;
+  isPinned?: boolean;
+  targetObjectType?: LinkTargetObjectType;
+  targetObjectId?: UUID;
   visibleToUserId?: UUID;
 }
 
@@ -48,6 +52,8 @@ function normalizeTargetKey(data: {
   url?: string | null;
   ref_uri?: string | null;
   file_path?: string | null;
+  target_object_type?: LinkTargetObjectType | string | null;
+  target_object_id?: UUID | string | null;
 }): string {
   const targetKey = normalizeLinkTargetKey(data);
   if (targetKey) return targetKey;
@@ -66,6 +72,8 @@ function validateLinkSemantics(data: {
   url?: string | null;
   ref_uri?: string | null;
   file_path?: string | null;
+  target_object_type?: LinkTargetObjectType | string | null;
+  target_object_id?: UUID | string | null;
 }): void {
   const error = getLinkTargetCompatibilityError(data);
   if (error) throw new RepositoryError(error);
@@ -94,7 +102,10 @@ export class LinksRepository {
         url: row.url ?? null,
         ref_uri: row.ref_uri ?? null,
         file_path: row.file_path ?? null,
+        target_object_type: (row.target_object_type as LinkTargetObjectType | null) ?? null,
+        target_object_id: (row.target_object_id as UUID | null) ?? null,
         target_key: row.target_key,
+        is_pinned: Boolean(row.is_pinned),
         title: row.title ?? null,
         mime_type: row.mime_type ?? null,
         metadata: row.metadata ?? null,
@@ -147,7 +158,10 @@ export class LinksRepository {
       url: data.url ?? null,
       ref_uri: data.ref_uri ?? null,
       file_path: data.file_path ?? null,
+      target_object_type: data.target_object_type ?? null,
+      target_object_id: data.target_object_id ?? null,
       target_key: normalizeTargetKey(data),
+      is_pinned: data.is_pinned ?? existing?.is_pinned ?? false,
       title: data.title ?? null,
       mime_type: data.mime_type ?? null,
       metadata: data.metadata ?? null,
@@ -189,6 +203,8 @@ export class LinksRepository {
     url?: string | null;
     ref_uri?: string | null;
     file_path?: string | null;
+    target_object_type?: LinkTargetObjectType | string | null;
+    target_object_id?: UUID | string | null;
   }): Promise<Link | null> {
     const targetKey = normalizeTargetKey(data);
     const ownerCount = countPresent([data.branch_id, data.session_id]);
@@ -225,6 +241,10 @@ export class LinksRepository {
       conditions.push(eq(links.source_message_id, filter.sourceMessageId));
     if (filter?.kind) conditions.push(eq(links.kind, filter.kind));
     if (filter?.source) conditions.push(eq(links.source, filter.source));
+    if (filter?.isPinned !== undefined) conditions.push(eq(links.is_pinned, filter.isPinned));
+    if (filter?.targetObjectType)
+      conditions.push(eq(links.target_object_type, filter.targetObjectType));
+    if (filter?.targetObjectId) conditions.push(eq(links.target_object_id, filter.targetObjectId));
     if (filter?.visibleToUserId) {
       conditions.push(
         or(
@@ -253,6 +273,12 @@ export class LinksRepository {
     const filePath = hasOwn(data, 'file_path')
       ? (data.file_path ?? null)
       : (existing.file_path ?? null);
+    const targetObjectType = hasOwn(data, 'target_object_type')
+      ? (data.target_object_type ?? null)
+      : (existing.target_object_type ?? null);
+    const targetObjectId = hasOwn(data, 'target_object_id')
+      ? (data.target_object_id ?? null)
+      : (existing.target_object_id ?? null);
     const targetCount = countLinkTargets({ url, ref_uri: refUri, file_path: filePath });
     if (targetCount !== 1) {
       throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
@@ -267,11 +293,16 @@ export class LinksRepository {
       url,
       ref_uri: refUri,
       file_path: filePath,
+      target_object_type: targetObjectType,
+      target_object_id: targetObjectId,
       target_key: normalizeTargetKey({
         url,
         ref_uri: refUri,
         file_path: filePath,
+        target_object_type: targetObjectType,
+        target_object_id: targetObjectId,
       }),
+      is_pinned: hasOwn(data, 'is_pinned') ? (data.is_pinned ?? false) : existing.is_pinned,
       title: hasOwn(data, 'title') ? (data.title ?? null) : (existing.title ?? null),
       mime_type: hasOwn(data, 'mime_type')
         ? (data.mime_type ?? null)
@@ -285,6 +316,8 @@ export class LinksRepository {
       url: next.url,
       ref_uri: next.ref_uri,
       file_path: next.file_path,
+      target_object_type: next.target_object_type,
+      target_object_id: next.target_object_id,
     });
 
     const updated = await update(this.db, links)

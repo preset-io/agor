@@ -80,6 +80,7 @@ describe('link target semantics', () => {
       pr: 'url',
       url: 'url',
       kb_ref: 'ref_uri',
+      internal: 'ref_uri',
       image: 'file_path',
       document: 'file_path',
     });
@@ -110,6 +111,13 @@ describe('link target semantics', () => {
     expect(normalizeLinkTargetKey({ file_path: ' /uploads/image.png ' })).toBe(
       'file:/uploads/image.png'
     );
+    expect(
+      normalizeLinkTargetKey({
+        ref_uri: 'agor://session/01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+        target_object_type: 'session',
+        target_object_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      })
+    ).toBe('object:session:01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f');
     expect(normalizeLinkTargetKey({})).toBeNull();
   });
 
@@ -135,5 +143,21 @@ describe('link target semantics', () => {
         ref_uri: 'agor://kb/team/runbook.md',
       })
     ).toBeNull();
+    expect(
+      getLinkTargetCompatibilityError({
+        kind: 'internal',
+        source: 'manual',
+        ref_uri: 'agor://session/01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+        target_object_type: 'session',
+        target_object_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      })
+    ).toBeNull();
+    expect(
+      getLinkTargetCompatibilityError({
+        kind: 'internal',
+        source: 'manual',
+        ref_uri: 'agor://session/01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      })
+    ).toBe('Internal links require target_object_type and target_object_id');
   });
 });

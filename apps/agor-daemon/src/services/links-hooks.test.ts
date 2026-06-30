@@ -24,6 +24,16 @@ describe('isExternalFileBackedLinkMutation', () => {
         ref_uri: 'agor://kb/team/runbook.md',
       })
     ).toBe(false);
+    expect(
+      isExternalFileBackedLinkMutation({
+        kind: 'internal',
+        source: 'manual',
+        ref_uri: 'agor://session/01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+        target_object_type: 'session',
+        target_object_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      })
+    ).toBe(false);
     expect(isExternalFileBackedLinkMutation({ title: 'Renamed upload' })).toBe(false);
+    expect(isExternalFileBackedLinkMutation({ is_pinned: true })).toBe(false);
   });
 });

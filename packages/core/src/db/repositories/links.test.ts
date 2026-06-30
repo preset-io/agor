@@ -97,7 +97,10 @@ describe('LinksRepository', () => {
       url: 'https://example.com/tenant',
       ref_uri: null,
       file_path: null,
+      target_object_type: null,
+      target_object_id: null,
       target_key: normalizeUrlTargetKey('https://example.com/tenant'),
+      is_pinned: false,
       title: null,
       mime_type: null,
       metadata: null,
@@ -474,6 +477,79 @@ describe('LinksRepository', () => {
       title: 'report.pdf',
       metadata: { size: 456 },
     });
+  });
+
+  dbTest('stores pinned internal object refs and dedupes by object identity', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const targetSessionId = generateId() as UUID;
+
+    const first = await repo.create({
+      session_id: session.session_id,
+      kind: 'internal',
+      source: 'manual',
+      ref_uri: `agor://session/${targetSessionId}`,
+      target_object_type: 'session',
+      target_object_id: targetSessionId,
+      is_pinned: true,
+      title: 'Related session',
+    });
+    const second = await repo.upsert({
+      session_id: session.session_id,
+      kind: 'internal',
+      source: 'manual',
+      ref_uri: `agor://session/${targetSessionId}?via=alias`,
+      target_object_type: 'session',
+      target_object_id: targetSessionId,
+      is_pinned: false,
+      title: 'Updated related session',
+    });
+
+    expect(second.link_id).toBe(first.link_id);
+    expect(second).toMatchObject({
+      kind: 'internal',
+      ref_uri: `agor://session/${targetSessionId}?via=alias`,
+      target_object_type: 'session',
+      target_object_id: targetSessionId,
+      target_key: `object:session:${targetSessionId}`,
+      is_pinned: false,
+      title: 'Updated related session',
+    });
+
+    const pinned = await repo.update(second.link_id, { is_pinned: true });
+    expect(pinned.is_pinned).toBe(true);
+    expect(await repo.findAll({ sessionId: session.session_id, isPinned: true })).toHaveLength(1);
+    expect(
+      await repo.findAll({ targetObjectType: 'session', targetObjectId: targetSessionId })
+    ).toHaveLength(1);
+  });
+
+  dbTest('rejects malformed internal object refs', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+
+    await expect(
+      repo.create({
+        session_id: session.session_id,
+        kind: 'internal',
+        source: 'manual',
+        ref_uri: 'agor://session/missing-id',
+        target_object_type: 'session',
+      } as never)
+    ).rejects.toThrow(/provided together/);
+
+    await expect(
+      repo.create({
+        session_id: session.session_id,
+        kind: 'internal',
+        source: 'manual',
+        ref_uri: 'https://example.com/session',
+        target_object_type: 'session',
+        target_object_id: generateId() as UUID,
+      })
+    ).rejects.toThrow('agor://');
   });
 
   dbTest('pushes branch/session visibility into findAll SQL', async ({ db }) => {

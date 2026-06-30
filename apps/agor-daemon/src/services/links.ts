@@ -15,6 +15,7 @@ import type {
   LinkCreate,
   LinkKind,
   LinkSource,
+  LinkTargetObjectType,
   Message,
   MessageID,
   NullableId,
@@ -34,6 +35,9 @@ export type LinkParams = QueryParams<{
   source_message_id?: MessageID;
   kind?: LinkKind;
   source?: LinkSource;
+  is_pinned?: boolean;
+  target_object_type?: LinkTargetObjectType;
+  target_object_id?: UUID;
 }> & {
   _agorSqlLinkAccessUserId?: UUID;
 };
@@ -64,6 +68,13 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
     }
     if (typeof query.kind === 'string') filter.kind = query.kind as LinkKind;
     if (typeof query.source === 'string') filter.source = query.source as LinkSource;
+    if (typeof query.is_pinned === 'boolean') filter.isPinned = query.is_pinned;
+    if (typeof query.target_object_type === 'string') {
+      filter.targetObjectType = query.target_object_type as LinkTargetObjectType;
+    }
+    if (typeof query.target_object_id === 'string') {
+      filter.targetObjectId = query.target_object_id as UUID;
+    }
     if (params?._agorSqlLinkAccessUserId) filter.visibleToUserId = params._agorSqlLinkAccessUserId;
     return this.linksRepo.findAll(filter);
   }

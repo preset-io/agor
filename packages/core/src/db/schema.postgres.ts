@@ -520,7 +520,7 @@ export const links = pgTable(
       { onDelete: 'set null' }
     ),
     kind: text('kind', {
-      enum: ['issue', 'pr', 'kb_ref', 'image', 'document', 'url'],
+      enum: ['issue', 'pr', 'kb_ref', 'internal', 'image', 'document', 'url'],
     }).notNull(),
     source: text('source', {
       enum: ['manual', 'parsed', 'upload'],
@@ -528,7 +528,10 @@ export const links = pgTable(
     url: text('url'),
     ref_uri: text('ref_uri'),
     file_path: text('file_path'),
+    target_object_type: text('target_object_type'),
+    target_object_id: varchar('target_object_id', { length: 36 }),
     target_key: text('target_key').notNull(),
+    is_pinned: t.bool('is_pinned').notNull().default(false),
     title: text('title'),
     mime_type: text('mime_type'),
     metadata: t.json<Link['metadata']>('metadata'),
@@ -543,6 +546,21 @@ export const links = pgTable(
     branchIdx: index('links_branch_id_idx').on(table.branch_id),
     sessionIdx: index('links_session_id_idx').on(table.session_id),
     sourceMessageIdx: index('links_source_message_id_idx').on(table.source_message_id),
+    targetObjectIdx: index('links_target_object_idx').on(
+      table.tenant_id,
+      table.target_object_type,
+      table.target_object_id
+    ),
+    branchPinnedIdx: index('links_branch_pinned_idx').on(
+      table.tenant_id,
+      table.branch_id,
+      table.is_pinned
+    ),
+    sessionPinnedIdx: index('links_session_pinned_idx').on(
+      table.tenant_id,
+      table.session_id,
+      table.is_pinned
+    ),
     branchTargetIdx: uniqueIndex('links_branch_target_idx')
       .on(table.tenant_id, table.branch_id, table.target_key)
       .where(sql`${table.branch_id} is not null`),
