@@ -2176,38 +2176,33 @@ export class GatewayService {
         );
       }
 
-      // For GitHub channels: edit the "Processing..." comment to include the session link.
-      // The processing_comment_id was stored in inbound metadata by the GitHub connector.
-      if (channel.channel_type === 'github' && data.metadata?.processing_comment_id) {
+      // GitHub/Shortcut: fold the session link into the connector's editable ack
+      // comment (the "Processing..." / "👀 on it" comment) now the session exists.
+      // The processing_comment_id was stored in inbound metadata by the connector.
+      if (
+        data.metadata?.processing_comment_id &&
+        (channel.channel_type === 'github' || channel.channel_type === 'shortcut')
+      ) {
+        const ackText =
+          channel.channel_type === 'github'
+            ? sessionUrl
+              ? `⏳ Processing... [View session](${sessionUrl})`
+              : `⏳ Processing in session \`${shortId(sessionId)}\`...`
+            : sessionUrl
+              ? `👀 On it — [view session](${sessionUrl})`
+              : `👀 On it (session \`${shortId(sessionId)}\`)`;
         try {
           const connector = getConnector(channel.channel_type as ChannelType, channel.config);
-          const processingText = sessionUrl
-            ? `⏳ Processing... [View session](${sessionUrl})`
-            : `⏳ Processing in session \`${shortId(sessionId)}\`...`;
-          await connector.sendMessage({
-            threadId: data.thread_id,
-            text: processingText,
-            metadata: { edit_comment_id: data.metadata.processing_comment_id },
-          });
-        } catch (err) {
-          console.warn('[gateway] Failed to update processing comment with session URL:', err);
-        }
-      }
-
-      // For Shortcut channels: edit the "👀 on it" ack to include the session link.
-      if (channel.channel_type === 'shortcut' && data.metadata?.processing_comment_id) {
-        try {
-          const connector = getConnector(channel.channel_type as ChannelType, channel.config);
-          const ackText = sessionUrl
-            ? `👀 On it — [view session](${sessionUrl})`
-            : `👀 On it (session \`${shortId(sessionId)}\`)`;
           await connector.sendMessage({
             threadId: data.thread_id,
             text: ackText,
             metadata: { edit_comment_id: data.metadata.processing_comment_id },
           });
         } catch (err) {
-          console.warn('[gateway] Failed to update Shortcut ack with session URL:', err);
+          console.warn(
+            `[gateway] Failed to update ${channel.channel_type} ack with session URL:`,
+            err
+          );
         }
       }
     }
