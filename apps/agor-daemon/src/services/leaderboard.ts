@@ -99,6 +99,18 @@ export interface LeaderboardResult {
 }
 
 const VALID_BUCKETS = new Set<DateBucket>(['hour', 'day', 'week', 'month']);
+const MAX_LIMIT = 1000;
+
+function parseIntegerParam(
+  value: unknown,
+  fallback: number,
+  { min, max }: { min: number; max: number }
+): number {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
 
 /**
  * Parse the comma-separated groupBy string into a set of known dimensions.
@@ -151,9 +163,10 @@ export class LeaderboardService {
       bucket,
       sortBy = 'cost',
       sortOrder = 'desc',
-      limit = 50,
-      offset = 0,
     } = query;
+
+    const limit = parseIntegerParam(query.limit, 50, { min: 1, max: MAX_LIMIT });
+    const offset = parseIntegerParam(query.offset, 0, { min: 0, max: Number.MAX_SAFE_INTEGER });
 
     if (bucket !== undefined && !VALID_BUCKETS.has(bucket)) {
       throw new Error(`Invalid bucket: "${bucket}". Expected one of: hour, day, week, month.`);
@@ -166,6 +179,7 @@ export class LeaderboardService {
     const includeRepo = dims.has('repo');
     const includeModel = dims.has('model');
     const includeTool = dims.has('tool');
+    const needsBranchesJoin = includeBranch || includeRepo || Boolean(repoId);
 
     // Build WHERE conditions
     const conditions: SQL[] = [];
@@ -306,16 +320,21 @@ export class LeaderboardService {
     const metricOrder = sortOrder === 'desc' ? desc(sortField) : asc(sortField);
     const orderClauses = bucketExpr ? [asc(sql`bucket`), metricOrder] : [metricOrder];
 
-    // Execute aggregation query
-    // Join: tasks -> sessions -> branches, optionally LEFT JOIN users for display info
+    // Execute aggregation query. We only join branches when a selected/filtering
+    // dimension needs it; common dashboard views such as groupBy=tool or model can
+    // aggregate from tasks -> sessions without paying for the extra join.
+    // Optionally LEFT JOIN users for display info
     // Cast required: Database is a LibSQL|Postgres union; TypeScript cannot narrow the union
     // for dynamic-field SELECT queries even though both dialects share identical .select() API.
     // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
     let qb = (this.db as any)
       .select(selectFields)
       .from(tasks)
-      .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-      .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      .innerJoin(sessions, eq(tasks.session_id, sessions.session_id));
+
+    if (needsBranchesJoin) {
+      qb = qb.innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+    }
 
     if (includeUser) {
       qb = qb.leftJoin(users, eq(tasks.created_by, users.user_id));
@@ -336,13 +355,21 @@ export class LeaderboardService {
     if (groupByFields.length === 0) {
       // No grouping: the main query returns a single aggregate row.
       total = results.length;
+    } else if (offset === 0 && results.length < limit) {
+      // If the first page is not full, the data query already proved the exact
+      // number of groups. Avoid repeating the same expensive aggregation just to
+      // COUNT it; leaderboard metrics extract/cast JSON on every matching task.
+      total = results.length;
     } else {
       // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
       let countInner = (this.db as any)
         .select({ one: sql`1` })
         .from(tasks)
-        .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-        .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+        .innerJoin(sessions, eq(tasks.session_id, sessions.session_id));
+
+      if (needsBranchesJoin) {
+        countInner = countInner.innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      }
 
       if (includeUser) {
         countInner = countInner.leftJoin(users, eq(tasks.created_by, users.user_id));

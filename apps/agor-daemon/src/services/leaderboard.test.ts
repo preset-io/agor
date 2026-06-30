@@ -577,4 +577,14 @@ describe('LeaderboardService input validation', () => {
       /Invalid groupBy dimension/
     );
   });
+
+  dbTest('normalizes string pagination params and caps large limits', async ({ db }) => {
+    await seedCanonicalDataset(db);
+    const service = new LeaderboardService(db);
+
+    const result = await service.find({ query: { groupBy: 'user', limit: '50000', offset: '1' } });
+
+    expect(result.limit).toBe(1000);
+    expect(result.offset).toBe(1);
+  });
 });
