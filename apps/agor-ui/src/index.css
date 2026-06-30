@@ -25,6 +25,17 @@
   min-width: 0;
 }
 
+/* Pulsing animation for the active mic recording button */
+@keyframes agor-mic-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 /* Status dot pulse for homepage session indicators. The halo is a pseudo
    element animated with transform/opacity only, so the loop runs entirely on
    the compositor. Animating box-shadow instead (the previous approach) forces
