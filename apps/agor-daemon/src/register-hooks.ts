@@ -385,6 +385,7 @@ export interface RegisterHooksContext {
  */
 export const TENANT_OWNED_SERVICE_PATHS = [
   'sessions',
+  'sessions/:id/mcp-servers',
   'session-relationships',
   'tasks',
   'messages',
@@ -401,6 +402,14 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'boards/:id/group-grants',
   'app-variables',
   'mcp-servers',
+  'mcp-servers/discover',
+  'mcp-servers/oauth-auth-headers',
+  'mcp-servers/oauth-complete',
+  'mcp-servers/oauth-disconnect',
+  'mcp-servers/oauth-refresh',
+  'mcp-servers/oauth-start',
+  'mcp-servers/oauth-status',
+  'mcp-servers/test-oauth',
   'card-types',
   'cards',
   'artifacts',
