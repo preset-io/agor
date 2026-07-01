@@ -35,7 +35,7 @@ export const metadata = {
     'AI workflow',
     'developer tools',
   ],
-  authors: [{ name: 'Maxime Beauchemin' }],
+  authors: [{ name: 'Preset Inc.' }],
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -65,8 +65,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               url: siteUrl,
               codeRepository: GITHUB_REPO_URL,
               author: {
-                '@type': 'Person',
-                name: 'Maxime Beauchemin',
+                '@type': 'Organization',
+                name: 'Preset Inc.',
               },
             }),
           }}
