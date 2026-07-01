@@ -1,4 +1,5 @@
 import type {
+  AgenticToolName,
   AgorClient,
   Artifact,
   Board,
@@ -373,6 +374,13 @@ export const App: React.FC<AppProps> = ({
 
   const [leftPanelTab, setLeftPanelTab] = useState<BoardAssistantPanelTab>('assistant');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
+  // Deep-links UserSettingsModal to a specific Agentic Tools tab (e.g. the
+  // Connect-AI empty state's "Connect Claude" CTA) instead of always landing
+  // on "General". Cleared on close so a later plain settings-menu click
+  // doesn't re-land on a stale tool tab.
+  const [userSettingsInitialTool, setUserSettingsInitialTool] = useState<
+    AgenticToolName | undefined
+  >(undefined);
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === 'undefined' ? 1440 : window.innerWidth
   );
@@ -997,6 +1005,10 @@ export const App: React.FC<AppProps> = ({
         setBranchModalTab(tab);
       },
       onOpenTerminal: canOpenTerminal ? handleOpenTerminal : undefined,
+      onOpenAgenticToolSettings: (tool: AgenticToolName) => {
+        setUserSettingsInitialTool(tool);
+        setUserSettingsOpen(true);
+      },
     }),
     [
       onSendPrompt,
@@ -1568,11 +1580,13 @@ export const App: React.FC<AppProps> = ({
           open={effectiveUserSettingsOpen}
           onClose={() => {
             setUserSettingsOpen(false);
+            setUserSettingsInitialTool(undefined);
             onUserSettingsClose?.();
           }}
           user={user || null}
           currentUser={user || null}
           client={client}
+          initialTab={userSettingsInitialTool}
           onUpdate={onUpdateUser}
           onRestartOnboarding={async () => {
             setUserSettingsOpen(false);

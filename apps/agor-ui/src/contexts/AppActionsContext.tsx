@@ -1,4 +1,10 @@
-import type { PermissionMode, PermissionScope, Session, SpawnConfig } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  PermissionMode,
+  PermissionScope,
+  Session,
+  SpawnConfig,
+} from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext } from 'react';
 import type { BranchModalTab } from '../components/BranchModal/BranchModal';
@@ -41,6 +47,12 @@ export interface AppActionsContextValue {
   onSessionClick?: (sessionId: string) => void;
   onOpenBranch?: (branchId: string, tab?: BranchModalTab) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
+  /**
+   * Open the current user's Settings modal, deep-linked to a specific
+   * Agentic Tools provider tab (e.g. the Connect-AI empty state's
+   * "Connect Claude" CTA).
+   */
+  onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 
 const AppActionsContext = createContext<AppActionsContextValue | undefined>(undefined);

@@ -643,6 +643,11 @@ export async function executeToolTask(params: {
         timestamp: new Date().toISOString(),
         content: err.message,
         content_preview: err.message.substring(0, 200),
+        // Marks this as *the* task-failure notice so the daemon's
+        // classifyMissingCredentialFailure hook can find it reliably,
+        // instead of guessing from type/role (which other system messages
+        // like daemon-restart/rate-limit notices also use).
+        metadata: { is_task_failure: true },
       });
     } catch (msgErr) {
       console.error(`[${toolName}] Failed to create error message:`, msgErr);

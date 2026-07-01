@@ -9,7 +9,7 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
-import type { AgorClient, StreamingMessageState } from '@agor-live/client';
+import type { AgenticToolName, AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
   type Message,
   MessageRole,
@@ -97,6 +97,9 @@ interface TaskBlockProps {
   client?: AgorClient | null;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
+  /** Opens Settings deep-linked to a provider's Agentic Tools tab. Forwarded
+   * to MessageBlock → MissingCredentialPanel for the Connect-AI empty state. */
+  onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 
 /**
@@ -367,6 +370,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     assistantEmoji,
     isLatestTask = false,
     client = null,
+    onOpenAgenticToolSettings,
   }) => {
     const { token } = theme.useToken();
 
@@ -651,6 +655,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           taskId={task.task_id}
                           assistantEmoji={assistantEmoji}
                           client={client}
+                          onOpenAgenticToolSettings={onOpenAgenticToolSettings}
                         />
                       );
                     }

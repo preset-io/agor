@@ -8,7 +8,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import { AGENTIC_TOOL_DISPLAY_NAMES, hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -81,6 +81,13 @@ export interface UserSettingsModalProps {
   currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onRestartOnboarding?: () => void | Promise<void>;
+  /**
+   * Deep-link to a specific Agentic Tools tab on open (e.g. from the
+   * Connect-AI empty state's "Connect Claude" CTA), instead of always
+   * landing on "General". Only applied on the open transition — switching
+   * tabs afterward is unaffected.
+   */
+  initialTab?: AgenticToolName;
 }
 
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
@@ -91,6 +98,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   currentUser,
   onUpdate,
   onRestartOnboarding,
+  initialTab,
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -178,8 +186,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   // Initialize forms when user changes or modal opens
   const initializeForms = useCallback(
-    (userData: User) => {
-      setActiveTab('general');
+    (userData: User, openToTab?: AgenticToolName) => {
+      setActiveTab(openToTab ?? 'general');
       setDirtyAgenticConfigTools(new Set());
       setAgenticConfigDraftByTool({});
 
@@ -240,9 +248,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!user || !userId || initializedUserIdRef.current === userId) return;
 
     initializedUserIdRef.current = userId;
-    initializeForms(user);
+    initializeForms(user, initialTab);
     void loadUserGroups();
-  }, [open, user, initializeForms, loadUserGroups]);
+  }, [open, user, initialTab, initializeForms, loadUserGroups]);
 
   // Hydrate tab-specific forms only after that tab has rendered its
   // corresponding <Form>. Calling setFieldsValue on never-mounted form
@@ -923,15 +931,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'cursor': {
         const toolName = activeTab as AgenticToolName;
         const currentForm = agenticFormByTool[toolName];
-        const displayNames: Record<AgenticToolName, string> = {
-          'claude-code': 'Claude Code',
-          'claude-code-cli': 'Claude Code CLI',
-          codex: 'Codex',
-          gemini: 'Gemini',
-          opencode: 'OpenCode',
-          copilot: 'Copilot',
-          cursor: 'Cursor SDK',
-        };
+        const displayNames = AGENTIC_TOOL_DISPLAY_NAMES;
         // Field set is owned by ApiKeyFields' `TOOL_FIELD_CONFIGS`. Per-field
         // saving spinners are tracked in `savingToolField` keyed by `${tool}.${field}`.
         const toolFields = TOOL_FIELD_CONFIGS[toolName] ?? [];

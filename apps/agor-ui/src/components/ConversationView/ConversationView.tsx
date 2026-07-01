@@ -10,7 +10,14 @@
  * - Auto-scrolling to latest content
  */
 
-import type { AgorClient, Message, PermissionScope, SessionID, User } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AgorClient,
+  Message,
+  PermissionScope,
+  SessionID,
+  User,
+} from '@agor-live/client';
 import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
@@ -117,6 +124,13 @@ export interface ConversationViewProps {
    * Emoji override for assistant avatar in message bubbles
    */
   assistantEmoji?: string;
+
+  /**
+   * Opens Settings deep-linked to a provider's Agentic Tools tab. Forwarded
+   * to TaskBlock → MessageBlock → MissingCredentialPanel for the Connect-AI
+   * empty state's primary CTA.
+   */
+  onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -136,6 +150,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     isActive = true,
     genealogy,
     assistantEmoji,
+    onOpenAgenticToolSettings,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -496,6 +511,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               assistantEmoji={assistantEmoji}
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}
+              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
             />
           ))}
         </div>

@@ -5,6 +5,7 @@
  * Messages are stored in a normalized table and referenced by tasks via message_range.
  */
 
+import type { AgenticToolName } from './agentic-tool';
 import type { MessageID, SessionID, TaskID } from './id';
 import type { WidgetMessageMetadata } from './widget';
 
@@ -277,6 +278,26 @@ export interface Message {
      * prompt back to the originating widget for audit / debugging.
      */
     widget_id?: MessageID;
+
+    /**
+     * Marks the system message the executor creates when a task fails (see
+     * `base-executor.ts`). Lets the daemon's `classifyMissingCredentialFailure`
+     * hook (apps/agor-daemon/src/hooks/classify-missing-credential.ts) find
+     * exactly this message without relying on type/role heuristics that other
+     * system messages (daemon restart, rate limit, etc.) also use.
+     */
+    is_task_failure?: boolean;
+
+    /**
+     * Set server-side when a task failure is classified as "no credential
+     * resolved for this session's configured provider" — using the same
+     * resolution order as `resolveApiKey` (user > config.yaml > env > native
+     * auth), never by matching the error text. Drives the Connect-AI empty
+     * state in place of the raw error message. `tool` names the provider
+     * that needs a credential.
+     */
+    error_kind?: 'missing_credential';
+    tool?: AgenticToolName;
 
     /** Additional agent-specific fields */
     [key: string]: unknown;
