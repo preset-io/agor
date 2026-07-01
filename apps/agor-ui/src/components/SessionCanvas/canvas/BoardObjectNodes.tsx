@@ -7,7 +7,7 @@ import { DeleteOutlined, LockOutlined, SettingOutlined, UnlockOutlined } from '@
 import { ColorPicker, theme } from 'antd';
 import type { Color } from 'antd/es/color-picker';
 import { AggregationColor } from 'antd/es/color-picker/color';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { DeleteZoneModal } from './DeleteZoneModal';
@@ -89,7 +89,28 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   const [toolbarVisible, setToolbarVisible] = useState(false);
   const [recentColors, setRecentColors] = useState<string[]>(getRecentColors());
   const labelInputRef = useRef<HTMLInputElement>(null);
-  const colors = getColorPalette(token);
+  const colors = useMemo(() => getColorPalette(token), [token]);
+
+  // The two toolbar ColorPickers are always mounted (visibility is CSS-only to
+  // avoid mount/unmount flicker), so their `presets` must be referentially
+  // stable — a fresh array every render churns antd's picker internals and
+  // feeds the ResizeObserver re-measurement loop behind React #185.
+  const borderColorPresets = useMemo(
+    () => [
+      { label: 'Presets', colors },
+      ...(recentColors.length > 0 ? [{ label: 'Recent', colors: recentColors }] : []),
+    ],
+    [colors, recentColors]
+  );
+  const backgroundColorPresets = useMemo(() => {
+    const opacitySuffix = Math.round(ZONE_CONTENT_OPACITY * 255)
+      .toString(16)
+      .padStart(2, '0');
+    return [
+      { label: 'Presets', colors: colors.map((c) => `${c}${opacitySuffix}`) },
+      ...(recentColors.length > 0 ? [{ label: 'Recent', colors: recentColors }] : []),
+    ];
+  }, [colors, recentColors]);
 
   // Connection gate: when disconnected / reconnecting / out-of-sync, every
   // mutator inside the zone (resize, label edit, color, lock, config, delete)
@@ -351,20 +372,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               destroyTooltipOnHide
               showText={false}
               format="hex"
-              presets={[
-                {
-                  label: 'Presets',
-                  colors: colors,
-                },
-                ...(recentColors.length > 0
-                  ? [
-                      {
-                        label: 'Recent',
-                        colors: recentColors,
-                      },
-                    ]
-                  : []),
-              ]}
+              presets={borderColorPresets}
             >
               <button
                 type="button"
@@ -424,25 +432,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               destroyTooltipOnHide
               showText={false}
               format="hex"
-              presets={[
-                {
-                  label: 'Presets',
-                  colors: colors.map(
-                    (c) =>
-                      `${c}${Math.round(ZONE_CONTENT_OPACITY * 255)
-                        .toString(16)
-                        .padStart(2, '0')}`
-                  ),
-                },
-                ...(recentColors.length > 0
-                  ? [
-                      {
-                        label: 'Recent',
-                        colors: recentColors,
-                      },
-                    ]
-                  : []),
-              ]}
+              presets={backgroundColorPresets}
             >
               <button
                 type="button"
