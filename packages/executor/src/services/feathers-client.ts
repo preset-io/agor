@@ -50,6 +50,16 @@ export async function createExecutorClient(
   daemonUrl: string,
   sessionToken: string
 ): Promise<AgorClient> {
+  const startedAt = Date.now();
+  const logSocketEvent = (event: string, detail?: unknown) => {
+    const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+    const suffix =
+      detail === undefined
+        ? ''
+        : `: ${detail instanceof Error ? detail.message : String(detail)}`;
+    console.log(`[executor] Socket ${event} after ${elapsedSeconds}s${suffix}`);
+  };
+
   // CRITICAL FIX: Use in-memory storage for authentication
   // Without this, the authentication result is discarded and subsequent requests fail
   const storage = new MemoryStorage();
@@ -57,7 +67,15 @@ export async function createExecutorClient(
   // Create client with custom storage (don't auto-connect, we'll connect manually)
   const client = createClient(daemonUrl, false, {
     verbose: DEBUG_FEATHERS_CLIENT, // Log connection status for debugging
-    reconnectionAttempts: 5, // Allow more retries for transient network hiccups during long-running tasks
+    // Executors may run for much longer than common proxy/websocket connection
+    // caps (for example, 15-minute ingress/LB limits). A short retry budget
+    // turns a recoverable transport rotation into a permanent daemon
+    // disconnect: heartbeats stop, terminal task patches are lost, and the
+    // daemon eventually marks the task failed via stale heartbeat/onExit
+    // safety nets. Match the browser client and keep retrying for the task's
+    // lifetime; the existing reconnect handler below re-authenticates the
+    // socket after each successful reconnect.
+    reconnectionAttempts: Number.POSITIVE_INFINITY,
     authStorage: storage,
   });
 
@@ -67,6 +85,26 @@ export async function createExecutorClient(
   (client as AgorClient & { executorSessionToken?: string }).executorSessionToken = sessionToken;
 
   // Connect the socket
+  client.io.on('disconnect', (reason: string) => {
+    logSocketEvent('disconnected', reason);
+  });
+
+  client.io.on('connect_error', (error: Error) => {
+    logSocketEvent('connect_error', error);
+  });
+
+  client.io.io.on('reconnect_attempt', (attemptNumber: number) => {
+    logSocketEvent('reconnect_attempt', `attempt ${attemptNumber}`);
+  });
+
+  client.io.io.on('reconnect_error', (error: Error) => {
+    logSocketEvent('reconnect_error', error);
+  });
+
+  client.io.io.on('reconnect_failed', () => {
+    logSocketEvent('reconnect_failed');
+  });
+
   client.io.connect();
 
   // Wait for connection
@@ -106,7 +144,7 @@ export async function createExecutorClient(
   // NOTE: 'reconnect' is a Manager event, not a Socket event.
   // client.io is the Socket; client.io.io is the Manager.
   client.io.io.on('reconnect', async (attemptNumber: number) => {
-    console.log(`[executor] Socket reconnected (attempt ${attemptNumber}), re-authenticating...`);
+    logSocketEvent('reconnected', `attempt ${attemptNumber}; re-authenticating`);
     try {
       // Try reAuthenticate first — uses stored credentials from MemoryStorage
       await client.reAuthenticate(true);

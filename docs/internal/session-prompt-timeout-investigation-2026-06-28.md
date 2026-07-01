@@ -93,6 +93,176 @@ If this reproduces again, capture these fields at failure time:
 - effective config values for `execution.session_token_expiration_ms`, `execution.mcp_token_expiration_ms`, and `execution.executor_heartbeat.*`;
 - browser network/console errors if the visible failure is in the UI.
 
+---
+
+# Follow-up investigation — 2026-07-01 (durations cluster at 907–930s)
+
+New evidence from the parent investigation: real failures cluster at **~907–930s**,
+surfacing as either `Executor heartbeat lost; the executor may have crashed or
+disconnected.` **or** `Executor exited unexpectedly with code 1.` Heartbeats look
+live in the UI right up to the failure.
+
+## Headline conclusion
+
+**There is no 900s / 15-minute constant anywhere in the repo's active code or config.**
+A repo-wide numeric sweep (`900`, `900000`, `900_000`, `15*60`, `15m`, `54000`) turns up
+only: the browser access-token TTL (`15m`, UI-only, already has dynamic refresh), the
+auth rate-limit window (`15 * 60 * 1000`), the external-MCP JWT cache (`15 * 60 * 1000`),
+the MCP OAuth unknown-expiry cache (`900s`), and a Slack user cache (`15m`). **None of
+these can terminate an active executor task.** The docs' only wall-clock deadline is
+k8s `activeDeadlineSeconds: 7200` (2h), not 900s.
+
+Therefore the ~900s cut is **environmental / infrastructure**, not application code.
+The application's role is that it turns a *recoverable* transport blip into a *terminal*
+task failure, and then reports it with a generic message.
+
+## Why both failure messages are symptoms of "couldn't reach the daemon," not root causes
+
+Trace of the two messages:
+
+1. **`Executor exited unexpectedly with code 1.`** — emitted by the daemon, NOT the
+   executor: `apps/agor-daemon/src/register-services.ts:966`, inside the `onExit`
+   handler (`:942`). It only fires when the child exits **while the task row is still
+   `EXECUTING`**. But the executor's own top-level catch already tries to record the
+   real error first:
+   - `packages/executor/src/index.ts:102-108` → on any thrown SDK error it calls
+     `tryMarkTaskTerminal(FAILED, error.message)` then `process.exit(1)`.
+   - `tryMarkTaskTerminal` (`packages/executor/src/terminal-task.ts`) does a socket
+     `tasks.get` + `tasks.patch`, wrapped in a `try/catch` that only **logs** on failure.
+   - So: if the executor could reach the daemon at exit time, the task would already be
+     `FAILED` with the **real** SDK error string, and the daemon's `onExit` net would see
+     a terminal task and NOT write the generic message (`register-services.ts:973-980`).
+   - **The generic "exited unexpectedly with code 1" therefore proves the executor's
+     socket to the daemon was already dead (or unwritable) at exit.** `code 1` (not
+     `null`) means it exited via its own `uncaughtException`/`unhandledRejection`/catch
+     handlers (`index.ts:108,228,237`), i.e. a JS-level error, not a SIGKILL.
+
+2. **`Executor heartbeat lost; …`** — emitted by `ExecutorHeartbeatSupervisor`
+   (`apps/agor-daemon/src/services/executor-heartbeat-supervisor.ts:59-62`) when
+   `now - last_executor_heartbeat_at > stale_after_ms` (default 30s). The heartbeat is a
+   `setInterval` in the executor (`packages/executor/src/executor-heartbeat.ts:55`) that
+   patches over the **same socket** and **swallows errors** (`:44-48`). So the only ways
+   heartbeats stop while the process is alive are: (a) the socket is dead, or (b) the
+   event loop is blocked. A `900s` cut of the socket → heartbeats silently fail →
+   supervisor fails the task ~30s later → **900 + 30 ≈ 930s.** This exactly matches the
+   observed cluster.
+
+**Both messages converge on the same mechanism: the executor↔daemon socket.io
+connection dies around 900s and does not recover.**
+
+## The repo-side amplifier: `reconnectionAttempts: 5`
+
+`packages/executor/src/services/feathers-client.ts:58-62` creates the executor's daemon
+client with `reconnectionAttempts: 5` (overriding the CLI default of 2; browsers use
+`Infinity` — see `packages/core/src/api/index.ts:1015-1016`). With
+`reconnectionDelay:1000 / reconnectionDelayMax:5000`, five attempts are exhausted in
+~15–25s, after which socket.io emits `reconnect_failed` and **never reconnects again**.
+There is a `reconnect` re-auth handler (`feathers-client.ts:108-126`) but **no
+`reconnect_failed` handler** — once the budget is spent, the executor is permanently
+deaf to the daemon: heartbeats fail forever and any terminal report is lost. This is why
+a single ~900s transport cut becomes a hard task failure instead of a blip.
+
+The daemon URL the executor connects to is `getDaemonUrl()`
+(`apps/agor-daemon/src/utils/spawn-executor.ts:803`): `configuredDaemonUrl` if set,
+else `http://localhost:3030`. **In a same-host deployment the socket is localhost and a
+900s proxy cut is implausible — but in a cloud/split deployment where `daemon.url` is set
+to the public/ingress URL, the executor's socket traverses the same ingress/LB/proxy as
+browser traffic and is subject to its connection caps.** This is the single most
+important environment fact to confirm for the affected deployment.
+
+## Ranked hypotheses (for the affected deployment)
+
+1. **Ingress / load-balancer max-connection-duration or idle timeout ≈ 900s severs the
+   executor↔daemon websocket (TOP).** Classic 15-minute killers: GCP backend-service
+   `timeoutSec` (caps *total* websocket duration, not idle — pings don't save you),
+   nginx `proxy_read_timeout`, envoy route/stream idle timeout, AWS ALB idle timeout.
+   Browser sockets survive because they reconnect forever; the executor gives up after 5.
+   - *For:* explains BOTH messages, the 907–930s window, provider-agnostic, and "live in
+     UI until failure." *Against:* only bites if executors use a proxied `daemon.url`
+     (verify config). *Discriminator:* daemon log shows the executor socket
+     `disconnect`/`connect_error` right at ~900s; failures are tool-agnostic.
+
+2. **LLM gateway upstream timeout ≈ 900s cuts the model request/stream.** If
+   `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` point at a Preset gateway with a 900s upstream
+   read timeout, a long turn's streaming response is cut → SDK throws.
+   - *For:* plausible in Preset infra; matches duration. *Against:* a clean SDK throw is
+     *caught* (`index.ts:102`) and, if the (localhost) daemon socket is healthy, would be
+     reported with the **real** error string (e.g. `terminated` / `premature close` /
+     `fetch failed`), NOT the two generic messages. So this alone predicts a *specific*
+     message. It only produces the generic messages if the daemon socket is ALSO cut —
+     i.e. it collapses into hypothesis #1 when executor+daemon share one proxied path.
+     *Discriminator:* provider-specific failures; SDK-specific error strings in executor
+     logs before exit.
+
+3. **Daemon restart / crash at ~900s (e.g. watch-mode reload, OOM, deploy) drops all
+   executor sockets.** *For:* would produce identical symptoms fleet-wide. *Against:*
+   not tied to a 900s period; would cluster in time, not in per-task elapsed. *Discriminator:*
+   check daemon uptime/restart timestamps vs. failure times.
+
+4. **Codex-specific process death.** Ruled out as the *primary* 900s source: the
+   `CodexAppServerClient` (`app-server-client.ts`) is only the short-lived `thread/fork`
+   sidecar (spawned + torn down immediately, 10s request timeout); the streaming turn
+   uses `@openai/codex-sdk`. No 900s / whole-turn deadline exists in
+   `codex/prompt-service.ts` (only `GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000`). A Codex
+   crash would still be *caught* and reported with a real message unless the daemon socket
+   was also down.
+
+## Answer to the Claude `sleep 1000` question (parent Q4)
+
+The executor heartbeat is a standalone `setInterval` independent of SDK messages, so a
+long silent shell tool **does** keep the heartbeat alive. **However**, Claude's own idle
+watchdog (`packages/executor/src/sdk-handlers/claude/prompt-service.ts:52`
+`IDLE_TIMEOUT_MS = 300000`, checked via `message-processor.ts:283 hasTimedOut()` against
+`lastActivityTime` updated on every SDK message) would abort a silent `sleep 1000` at
+**~5 minutes** with an idle-timeout message — not 900s. So the 15-minute failures are
+**not** the Claude idle watchdog and **not** heartbeat starvation; this is a useful
+negative discriminator (a heartbeat-starvation or Claude-idle failure would show at ~5m
+with a different message).
+
+## Recommended next instrumentation (decisive, cheap)
+
+1. In `feathers-client.ts`, add logging for socket lifecycle in the executor:
+   `client.io.on('disconnect', reason => …)`, `client.io.io.on('reconnect_attempt' | 'reconnect_failed', …)`,
+   `client.io.on('connect_error', …)` — each with `Date.now()` and elapsed-since-start.
+   If these fire at ~900s, hypothesis #1 is confirmed immediately.
+2. At failure time capture: task `created_at` vs `completed_at` (confirm ~900 vs ~930),
+   `last_executor_heartbeat_at`, `error_message`, and whether failures span multiple
+   `agentic_tool` values (tool-agnostic ⇒ #1/#3; single-tool ⇒ #2).
+3. Confirm the deployment's effective `daemon.url` seen by executors (localhost vs
+   public) and the ingress/LB websocket timeout for that host. Check
+   `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` and their gateway's upstream read timeout.
+4. Grep daemon logs for `[executor-heartbeat] Marked task … failed after stale heartbeat`
+   and the `onExit` `Exited with code …` lines to see which path fired per failure.
+
+## Safe code fixes (with risk notes)
+
+- **Highest value, low risk — raise executor reconnection budget.** In
+  `packages/executor/src/services/feathers-client.ts:60`, change
+  `reconnectionAttempts: 5` to `Number.POSITIVE_INFINITY` (matching the browser), and add
+  a `client.io.io.on('reconnect_failed', …)` that logs loudly and, ideally, rebuilds the
+  client. This makes a periodic ~900s transport cut *survivable* (the existing `reconnect`
+  handler re-authenticates), turning a hard failure into a brief gap. *Risk:* if the
+  daemon is genuinely, permanently gone, the executor lingers instead of exiting — but it
+  is bounded by task lifetime, daemon-issued SIGTERM on stop, and unref'd timers, and the
+  browser already behaves this way. Acceptable.
+- **Medium value — decouple heartbeat transport from the SDK socket** (or send heartbeats
+  over a plain REST call with its own short retry) so daemon-side liveness does not depend
+  on a single long-lived websocket. *Risk:* larger change; adds an auth path.
+- **Do NOT** add an application-level 15m watchdog — there is none today and the users
+  want longer turns, not a codified 15m cap.
+
+**Bottom line:** the root cause is almost certainly a ~900s infrastructure connection cap
+(ingress/LB or LLM gateway) on the executor's long-lived connection; the code makes it
+fatal because the executor gives up reconnecting after 5 tries and then can only report a
+generic message. Confirm with socket-lifecycle logging at ~900s, and raise
+`reconnectionAttempts` as the immediate mitigation.
+
+**Follow-up action taken in this branch:** implemented the immediate mitigation in
+`packages/executor/src/services/feathers-client.ts` by switching executor socket
+`reconnectionAttempts` to `Number.POSITIVE_INFINITY` and adding executor socket lifecycle
+logs (`disconnect`, `connect_error`, `reconnect_attempt`, `reconnect_error`,
+`reconnect_failed`, `reconnect`) with elapsed-since-client-start timing.
+
 ## Checks run
 
 - Repository-wide timeout search with `rg` for 900s/900000ms/15-minute constants, `AbortSignal.timeout`, `p-timeout`, timeout/watchdog/heartbeat/stale/idle/deadline paths.
