@@ -19,8 +19,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
-import { LeftOutlined, RightOutlined } from '@ant-design/icons';
-import { Layout, Tooltip, Upload } from 'antd';
+import { Layout, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
@@ -70,7 +69,7 @@ import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { AppHeader } from '../AppHeader';
 import type { BoardAssistantPanelTab } from '../BoardAssistantPanel';
-import { BoardAssistantPanel } from '../BoardAssistantPanel';
+import { AssistantPanelRail, BoardAssistantPanel } from '../BoardAssistantPanel';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
@@ -87,7 +86,11 @@ import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal, UserSettingsModal } from '../SettingsModal';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
-import { getShowCommentsPanelState, getToggleBoardPanelState } from './boardPanelActions';
+import {
+  getSelectAssistantPanelTabState,
+  getShowCommentsPanelState,
+  getToggleBoardPanelState,
+} from './boardPanelActions';
 
 const { Content } = Layout;
 
@@ -210,11 +213,16 @@ const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
 const SESSION_PANEL_MIN_WIDTH_PX = 360;
 const SESSION_PANEL_MAX_SIZE_PERCENT = 75;
 const SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT = 15;
-const LEFT_PANEL_TOGGLE_HIT_SIZE_PX = 44;
-const LEFT_PANEL_TOGGLE_KNOB_SIZE_PX = 30;
+// Width of the persistent icon rail (AssistantPanelRail) shown in place of
+// the panel when collapsed. Replaces the old 0px-collapse + floating
+// reopen-knob pattern (see issue agor-cloud#123).
+const LEFT_PANEL_RAIL_WIDTH_PX = 56;
 
 const getLeftPanelMinSizePercent = (viewportWidth: number) =>
   Math.min(LEFT_PANEL_MAX_SIZE_PERCENT, (LEFT_PANEL_MIN_WIDTH_PX / viewportWidth) * 100);
+
+const getLeftPanelRailSizePercent = (viewportWidth: number) =>
+  (LEFT_PANEL_RAIL_WIDTH_PX / viewportWidth) * 100;
 
 // Express the session panel's 360px minimum through the panel sizing system
 // (a percentage of the current viewport) rather than a CSS px `minWidth`, which
@@ -405,6 +413,11 @@ export const App: React.FC<AppProps> = ({
     [viewportWidth]
   );
 
+  const leftPanelRailSize = useMemo(
+    () => getLeftPanelRailSizePercent(viewportWidth),
+    [viewportWidth]
+  );
+
   const sessionPanelMinSize = useMemo(
     () => getSessionPanelMinSizePercent(viewportWidth),
     [viewportWidth]
@@ -509,6 +522,11 @@ export const App: React.FC<AppProps> = ({
     isHomeSurface ||
     isLeavingHomeSurface ||
     homeExitSidePanelDeferred;
+  // The rail only makes sense when there's a board to open the panel onto,
+  // and stays hidden entirely while a modal-first flow suppresses the panel
+  // (suppressLeftPanel) — same gating the old floating knob used.
+  const leftPanelRailVisible = leftPanelCollapsed && !!currentBoard && !suppressLeftPanel;
+  const leftPanelCollapsedSize = leftPanelRailVisible ? leftPanelRailSize : 0;
 
   // Ref for programmatically controlling the comments panel
   const commentsPanelRef = useRef<ImperativePanelHandle>(null);
@@ -736,6 +754,15 @@ export const App: React.FC<AppProps> = ({
   const handleOpenCommentsPanel = useCallback(() => {
     applyLeftPanelState(getShowCommentsPanelState({ collapsed: true, activeTab: 'assistant' }));
   }, [applyLeftPanelState]);
+
+  // Shared by every AssistantPanelRail button: expand the panel onto
+  // whichever tab was clicked.
+  const handleSelectAssistantPanelTab = useCallback(
+    (tab: BoardAssistantPanelTab) => {
+      applyLeftPanelState(getSelectAssistantPanelTabState(tab));
+    },
+    [applyLeftPanelState]
+  );
 
   const handleCommentSelect = useCallback((commentId: string | null) => {
     // Toggle selection: if clicking same comment, deselect
@@ -1040,6 +1067,11 @@ export const App: React.FC<AppProps> = ({
       ),
     [commentById, currentBoardId]
   );
+  // Shared between AppHeader's comments button and the collapsed rail's
+  // Comments item so both surfaces carry the same badge.
+  const unreadCommentsCount = activeComments.filter(
+    (c: BoardComment) => !c.parent_comment_id
+  ).length;
 
   const currentUserName = user?.name || user?.email?.split('@')[0] || '';
   const hasUserMentions =
@@ -1190,9 +1222,7 @@ export const App: React.FC<AppProps> = ({
           onRetryConnection={stableOnRetryConnection}
           currentBoardName={headerBoard?.name}
           currentBoardIcon={headerBoard?.icon}
-          unreadCommentsCount={
-            activeComments.filter((c: BoardComment) => !c.parent_comment_id).length
-          }
+          unreadCommentsCount={unreadCommentsCount}
           eventStreamEnabled={eventStreamEnabled}
           hasUserMentions={hasUserMentions}
           currentBoardId={headerBoardId}
@@ -1223,13 +1253,27 @@ export const App: React.FC<AppProps> = ({
               order={1}
               ref={commentsPanelRef}
               collapsible
-              defaultSize={leftPanelCollapsed ? 0 : effectiveCommentsPanelSize}
-              collapsedSize={0}
-              minSize={leftPanelCollapsed ? 0 : leftPanelMinSize}
+              defaultSize={leftPanelCollapsed ? leftPanelCollapsedSize : effectiveCommentsPanelSize}
+              collapsedSize={leftPanelCollapsedSize}
+              minSize={leftPanelCollapsed ? leftPanelCollapsedSize : leftPanelMinSize}
               maxSize={LEFT_PANEL_MAX_SIZE_PERCENT}
-              style={{ minWidth: leftPanelCollapsed ? 0 : LEFT_PANEL_MIN_WIDTH_PX }}
+              style={{
+                minWidth: leftPanelCollapsed
+                  ? leftPanelRailVisible
+                    ? LEFT_PANEL_RAIL_WIDTH_PX
+                    : 0
+                  : LEFT_PANEL_MIN_WIDTH_PX,
+              }}
             >
-              {!leftPanelCollapsed && (
+              {leftPanelCollapsed ? (
+                leftPanelRailVisible && (
+                  <AssistantPanelRail
+                    onSelectTab={handleSelectAssistantPanelTab}
+                    unreadCommentsCount={unreadCommentsCount}
+                    hasUserMentions={hasUserMentions}
+                  />
+                )
+              ) : (
                 <BoardAssistantPanel
                   client={client}
                   board={currentBoard || null}
@@ -1296,7 +1340,9 @@ export const App: React.FC<AppProps> = ({
             <Panel
               id="content-panel"
               order={2}
-              defaultSize={leftPanelCollapsed ? 100 : 100 - effectiveCommentsPanelSize}
+              defaultSize={
+                leftPanelCollapsed ? 100 - leftPanelCollapsedSize : 100 - effectiveCommentsPanelSize
+              }
               minSize={40}
             >
               <PanelGroup
@@ -1446,59 +1492,6 @@ export const App: React.FC<AppProps> = ({
               </PanelGroup>
             </Panel>
           </PanelGroup>
-          {currentBoard && (
-            <Tooltip
-              title={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
-              placement="right"
-              getPopupContainer={() => document.body}
-            >
-              <button
-                type="button"
-                aria-label={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
-                onClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-                style={{
-                  position: 'absolute',
-                  top: '50%',
-                  left: leftPanelCollapsed ? 0 : `calc(${effectiveCommentsPanelSize}% + 2px)`,
-                  transform: 'translate(-50%, -50%)',
-                  width: LEFT_PANEL_TOGGLE_HIT_SIZE_PX,
-                  height: LEFT_PANEL_TOGGLE_HIT_SIZE_PX,
-                  padding: 0,
-                  border: 0,
-                  background: 'transparent',
-                  cursor: 'pointer',
-                  pointerEvents: 'auto',
-                  zIndex: 20,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <span
-                  aria-hidden="true"
-                  style={{
-                    width: LEFT_PANEL_TOGGLE_KNOB_SIZE_PX,
-                    height: LEFT_PANEL_TOGGLE_KNOB_SIZE_PX,
-                    borderRadius: '50%',
-                    border: '1px solid var(--ant-color-border)',
-                    background: 'var(--ant-color-bg-container)',
-                    boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
-                    color: 'var(--ant-color-text)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  {leftPanelCollapsed ? (
-                    <RightOutlined style={{ fontSize: 12 }} />
-                  ) : (
-                    <LeftOutlined style={{ fontSize: 12 }} />
-                  )}
-                </span>
-              </button>
-            </Tooltip>
-          )}
         </Content>
         {/* Invisible mount of antd Upload so its CSS-in-JS styles stay
               registered even after the SessionPanel (which contains FileUpload)
