@@ -11,6 +11,7 @@ import type {
   BranchFsAccessLevel,
   BranchID,
   EffectiveBranchAccess,
+  GroupID,
   SessionStatus,
   UUID,
 } from '@agor/core/types';
@@ -1003,13 +1004,12 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * Find non-archived branches whose explicit filesystem access set can change
    * when membership in the given group changes.
    *
-   * This scopes Unix permission resyncs to branch-level grants for the group and
-   * board-aligned branches on shared boards that grant the group filesystem
-   * access. App-only grants (`fs_access = 'none'`) are intentionally excluded
-   * because membership changes for those grants do not require branch-folder
-   * mutation.
+   * Keep this inverse lookup in lockstep with findExplicitFsAccessUserIds():
+   * both encode which group grants materialize into branch-folder access.
+   * App-only grants (`fs_access = 'none'`) are intentionally excluded because
+   * membership changes for those grants do not require branch-folder mutation.
    */
-  async findExplicitFsAccessBranchIdsForGroup(groupId: string): Promise<BranchID[]> {
+  async findExplicitFsAccessBranchIdsForGroup(groupId: GroupID): Promise<BranchID[]> {
     const directRows = await select(this.db, { branch_id: branchGroupGrants.branch_id })
       .from(branchGroupGrants)
       .innerJoin(branches, eq(branches.branch_id, branchGroupGrants.branch_id))

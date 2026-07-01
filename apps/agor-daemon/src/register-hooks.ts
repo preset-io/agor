@@ -57,6 +57,7 @@ import type {
   BoardID,
   Branch,
   BranchID,
+  GroupID,
   HookContext,
   MCPServer,
   Paginated,
@@ -679,9 +680,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   ): Promise<HookContext> => {
     if (!executionMode.unixFsIsolationEnabled) return context;
     const groupId = membershipGroupIdFromContext(context);
-    if (!groupId) return context;
+    if (!groupId) {
+      console.warn(
+        `[Unix Integration] Could not resolve group_id for ${context.path}.${context.method}; skipping group membership permission sync`
+      );
+      return context;
+    }
 
-    const branchIds = await branchRepository.findExplicitFsAccessBranchIdsForGroup(groupId);
+    const branchIds = await branchRepository.findExplicitFsAccessBranchIdsForGroup(
+      groupId as GroupID
+    );
     if (branchIds.length === 0) return context;
     console.log(
       `[Unix Integration] Queueing group membership permission sync for ${branchIds.length} branch(es) granted to group ${shortId(groupId)}`
