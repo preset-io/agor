@@ -5,6 +5,7 @@
  * Messages are stored in a normalized table and referenced by tasks via message_range.
  */
 
+import type { AgenticToolName } from './agentic-tool';
 import type { MessageID, SessionID, TaskID } from './id';
 import type { WidgetMessageMetadata } from './widget';
 
@@ -277,6 +278,18 @@ export interface Message {
      * prompt back to the originating widget for audit / debugging.
      */
     widget_id?: MessageID;
+
+    /** Marks the system message the executor emits on task failure, so
+     * `classifyMissingCredentialFailure` can find it without type/role guessing. */
+    is_task_failure?: boolean;
+
+    /**
+     * Set server-side when a task failure resolves to "no credential for this
+     * session's provider". Drives the Connect-AI empty state instead of the
+     * raw error; `tool` names the provider that needs a credential.
+     */
+    error_kind?: 'missing_credential';
+    tool?: AgenticToolName;
 
     /** Additional agent-specific fields */
     [key: string]: unknown;

@@ -67,6 +67,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import {
+  AGENTIC_TOOL_DISPLAY_NAMES,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
@@ -78,6 +79,7 @@ import type {
   MessagesServiceImpl,
   SessionsServiceImpl,
 } from './declarations.js';
+import { classifyMissingCredentialFailure } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { ArtifactsService } from './services/artifacts.js';
@@ -790,6 +792,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
+        // Detect "no credential resolved for this session's provider" task
+        // failures structurally (reusing resolveApiKey's resolution order),
+        // never by matching the raw stderr-passthrough error text. Drives
+        // the Connect-AI empty state instead of a raw "/login" message.
+        classifyMissingCredentialFailure(db, sessionsRepository, AGENTIC_TOOL_DISPLAY_NAMES),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),

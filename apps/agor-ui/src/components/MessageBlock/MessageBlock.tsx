@@ -10,6 +10,7 @@
  */
 
 import {
+  type AgenticToolName,
   type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
@@ -33,6 +34,7 @@ import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { CopyableContent } from '../CopyableContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { MissingCredentialPanel } from '../MissingCredentialPanel';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { SystemMessage } from '../SystemMessage';
 import { ThinkingBlock } from '../ThinkingBlock';
@@ -100,6 +102,8 @@ interface MessageBlockProps {
     allow: boolean,
     scope: PermissionScope
   ) => void;
+  /** Opens Settings deep-linked to a provider's Agentic Tools tab (Connect-AI CTA). */
+  onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -330,6 +334,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   onPermissionDecision,
   teammateEmoji,
   client = null,
+  onOpenAgenticToolSettings,
 }) => {
   const { token } = theme.useToken();
 
@@ -489,6 +494,18 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         </div>
         <MarkdownRenderer content={markdownContent} />
       </div>
+    );
+  }
+
+  // Task failed for lack of a resolved credential — render the actionable
+  // Connect-AI panel instead of the raw provider error.
+  if (isSystem && message.metadata?.error_kind === 'missing_credential' && message.metadata?.tool) {
+    return (
+      <MissingCredentialPanel
+        tool={message.metadata.tool}
+        client={client}
+        onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+      />
     );
   }
 

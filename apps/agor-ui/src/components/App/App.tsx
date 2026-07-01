@@ -420,6 +420,9 @@ export const App: React.FC<AppProps> = ({
 
   const [leftPanelTab, setLeftPanelTab] = useState<BoardTeammatePanelTab>('teammate');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
+  const [userSettingsInitialTool, setUserSettingsInitialTool] = useState<
+    AgenticToolName | undefined
+  >(undefined);
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === 'undefined' ? 1440 : window.innerWidth
   );
@@ -1305,6 +1308,10 @@ export const App: React.FC<AppProps> = ({
       onOpenTerminal: canOpenTerminal ? handleOpenTerminal : undefined,
       onChooseAgenticTool: stableChooseAgenticTool,
       availableAgents,
+      onOpenAgenticToolSettings: (tool: AgenticToolName) => {
+        setUserSettingsInitialTool(tool);
+        setUserSettingsOpen(true);
+      },
     }),
     [
       stableOnSendPrompt,
@@ -1839,9 +1846,10 @@ export const App: React.FC<AppProps> = ({
         <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
         <UserSettingsModal
           open={effectiveUserSettingsOpen}
-          initialTab={initialUserSettingsTab}
+          initialTab={userSettingsInitialTool ?? initialUserSettingsTab}
           onClose={() => {
             setUserSettingsOpen(false);
+            setUserSettingsInitialTool(undefined);
             onUserSettingsClose?.();
           }}
           user={user || null}

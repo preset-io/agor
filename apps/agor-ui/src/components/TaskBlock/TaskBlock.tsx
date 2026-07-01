@@ -9,7 +9,7 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
-import type { AgorClient, StreamingMessageState } from '@agor-live/client';
+import type { AgenticToolName, AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
   type Message,
   MessageRole,
@@ -97,6 +97,8 @@ interface TaskBlockProps {
   onLoadTaskMessages: (taskId: string) => Promise<void> | void;
   onUnloadTaskMessages: (taskId: string) => void;
   teammateEmoji?: string;
+  /** Opens Settings deep-linked to a provider's Agentic Tools tab (Connect-AI empty state CTA). */
+  onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
   client?: AgorClient | null;
   /** Whether this is the most recent task in the session */
@@ -417,6 +419,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     onLoadTaskMessages,
     onUnloadTaskMessages,
     teammateEmoji,
+    onOpenAgenticToolSettings,
     isLatestTask = false,
     client = null,
   }) => {
@@ -733,6 +736,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               taskId={task.task_id}
                               teammateEmoji={teammateEmoji}
                               client={client}
+                              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
                             />
                           </div>
                         );

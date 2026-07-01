@@ -48,6 +48,8 @@ export interface AppActionsContextValue {
   onSessionClick?: (sessionId: string) => void;
   onOpenBranch?: (branchId: string, tab?: BranchModalTab) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
+  /** Open Settings deep-linked to a specific Agentic Tools provider tab. */
+  onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 
   /**
    * Single mechanism behind both tool-choice entry points: the quick-start

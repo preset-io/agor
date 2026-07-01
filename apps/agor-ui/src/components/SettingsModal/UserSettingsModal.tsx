@@ -11,7 +11,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
+import { AGENTIC_TOOL_DISPLAY_NAMES, hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
@@ -1011,15 +1011,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       case 'cursor': {
         const toolName = activeTab as AgenticToolName;
         const currentForm = agenticFormByTool[toolName];
-        const displayNames: Record<AgenticToolName, string> = {
-          'claude-code': 'Claude Code',
-          'claude-code-cli': 'Claude Code CLI',
-          codex: 'Codex',
-          gemini: 'Gemini',
-          opencode: 'OpenCode',
-          copilot: 'Copilot',
-          cursor: 'Cursor SDK',
-        };
+        const displayNames = AGENTIC_TOOL_DISPLAY_NAMES;
         const canonicalTool = (
           toolName === 'claude-code-cli' ? 'claude-code' : toolName
         ) as TenantAgenticToolName;
@@ -1216,17 +1208,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Get title for current section
   const getSectionTitle = () => {
     const titles: Record<string, string> = {
+      ...AGENTIC_TOOL_DISPLAY_NAMES,
       general: 'General',
       'env-vars': 'Environment Variables',
       audio: 'Audio',
       groups: 'Groups',
       'personal-api-keys': 'Agor API Tokens',
-      'claude-code': 'Claude Code',
-      codex: 'Codex',
-      gemini: 'Gemini',
-      opencode: 'OpenCode',
-      cursor: 'Cursor SDK',
-      copilot: 'GitHub Copilot',
     };
     return titles[activeTab] || 'User Settings';
   };
