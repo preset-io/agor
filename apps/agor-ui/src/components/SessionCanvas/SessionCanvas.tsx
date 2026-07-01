@@ -101,6 +101,7 @@ import {
 } from './canvas/utils/coordinateTransforms';
 import { getValidZoneParentId, sanitizeOrphanedNodeParents } from './canvas/utils/nodeParentUtils';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
+import { ZONE_BASE_Z_INDEX, ZONE_SELECTED_Z_INDEX } from './canvas/zIndex';
 
 interface SessionCanvasProps {
   board: Board | null;
@@ -1408,16 +1409,25 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         if (selectChanges.length > 0) {
           setNodes((currentNodes) => {
             // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
-            const zoneIds = new Set(selectChanges.map((c: any) => c.id));
-            const hasZoneChange = currentNodes.some((n) => n.type === 'zone' && zoneIds.has(n.id));
-            if (!hasZoneChange) return currentNodes;
-            return currentNodes.map((n) => {
+            const zoneSelectById = new Map(selectChanges.map((c: any) => [c.id, c]));
+            let changed = false;
+            const nextNodes = currentNodes.map((n) => {
               if (n.type !== 'zone') return n;
               // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
-              const change = selectChanges.find((c: any) => c.id === n.id);
-              if (change) return { ...n, zIndex: change.selected ? 101 : 100 };
-              return n;
+              const change = zoneSelectById.get(n.id) as any;
+              if (!change) return n;
+
+              const nextZIndex = change.selected ? ZONE_SELECTED_Z_INDEX : ZONE_BASE_Z_INDEX;
+              if (n.zIndex === nextZIndex) return n;
+
+              changed = true;
+              return { ...n, zIndex: nextZIndex };
             });
+
+            // React Flow can emit select changes while reconciling the controlled
+            // nodes prop. Returning the same array for no-op zIndex transitions
+            // avoids a controlled-update feedback loop (React #185).
+            return changed ? nextNodes : currentNodes;
           });
         }
 
@@ -2012,7 +2022,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               type: 'zone',
               position,
               // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
-              zIndex: 100, // Zones behind branches and comments
+              zIndex: ZONE_BASE_Z_INDEX, // Zones behind branches and comments
               style: { width, height },
               data: {
                 objectId,

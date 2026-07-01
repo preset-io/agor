@@ -12,6 +12,7 @@ import type {
 } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import type { Node } from 'reactflow';
+import { ZONE_BASE_Z_INDEX } from './zIndex';
 
 interface UseBoardObjectsProps {
   board: Board | null;
@@ -308,7 +309,7 @@ export const useBoardObjects = ({
           // Locked zones are never draggable. Unlocked zones inherit from
           // canvas-level nodesDraggable (mutationGate.canMutate).
           ...(isLocked ? { draggable: false } : {}),
-          zIndex: 100, // Zones behind branches and comments
+          zIndex: ZONE_BASE_Z_INDEX, // Zones behind branches and comments
           className: eraserMode ? 'eraser-mode' : undefined,
           // Set dimensions both as direct props (for collision detection) and style (for rendering)
           width: objectData.width,
@@ -369,7 +370,7 @@ export const useBoardObjects = ({
           type: 'zone',
           position: { x, y },
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
-          zIndex: 100, // Zones behind branches and comments
+          zIndex: ZONE_BASE_Z_INDEX, // Zones behind branches and comments
           style: {
             width,
             height,

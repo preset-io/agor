@@ -1,0 +1,2 @@
+export const ZONE_BASE_Z_INDEX = 100;
+export const ZONE_SELECTED_Z_INDEX = ZONE_BASE_Z_INDEX + 1;
