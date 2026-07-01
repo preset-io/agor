@@ -10,7 +10,7 @@ export const TaskStatus = {
   STOPPING: 'stopping', // Stop requested, waiting for SDK to halt
   AWAITING_PERMISSION: 'awaiting_permission',
   AWAITING_INPUT: 'awaiting_input', // Legacy / pre-#1177: AskUserQuestion was disallowed at the SDK; new tasks never enter this state, kept for historical rows
-  TIMED_OUT: 'timed_out', // Permission/input request timed out, executor exited — user must re-prompt
+  TIMED_OUT: 'timed_out', // Permission/input request timed out, executor exited - user must re-prompt
   COMPLETED: 'completed',
   FAILED: 'failed',
   STOPPED: 'stopped', // User-requested stop (distinct from failed)
@@ -20,7 +20,7 @@ export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
 /**
  * Structured metadata attached to a task. All fields are optional, but the
- * ones that are present are load-bearing — typing them here prevents drift
+ * ones that are present are load-bearing - typing them here prevents drift
  * between the daemon (which writes them) and the UI/services that read them.
  *
  * - `is_agor_callback`: marks a task whose prompt was synthesized by the
@@ -34,7 +34,7 @@ export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
  *   callback owner and `queued_by_user_id` is set to the same value but
  *   the field carries semantic intent rather than ownership).
  * - `child_session_id` / `child_task_id`: lineage breadcrumbs for callback
- *   tasks — the child session/task whose completion produced this prompt.
+ *   tasks - the child session/task whose completion produced this prompt.
  */
 export interface TaskMetadata {
   is_agor_callback?: boolean;
@@ -65,6 +65,14 @@ export interface TaskMetadata {
    * this prompt. Links the task back to the originating widget for audit.
    */
   widget_id?: MessageID;
+  /**
+   * Marks a task queued by the onboarding-agent trigger (see
+   * `apps/agor-daemon/src/onboarding/`). `auto` fires from the Onboarding
+   * Wizard once a credential is actually resolved; `manual` fires from the
+   * re-entry affordance in the session panel. Lets the UI label these
+   * prompts distinctly, same idea as `widget_id` for widget auto-resume.
+   */
+  onboarding_trigger?: 'auto' | 'manual';
 }
 
 /**
@@ -112,7 +120,7 @@ export function isTaskExecuting(task: TaskExecutionState): boolean {
  * Source depends on the agentic tool:
  * - Claude Code: derived from the Claude Agent SDK `getContextUsage()` response.
  * - Codex: extracted from the Codex CLI's `event_msg/token_count.last_token_usage`
- *   payload — see `extractCodexContextSnapshotFromEvent` in the executor.
+ *   payload - see `extractCodexContextSnapshotFromEvent` in the executor.
  *
  * `percentage` is the value the source tool itself reports/displays for
  * "Context XX% used" (i.e. for Codex it is baseline-adjusted to match the
@@ -149,7 +157,7 @@ export interface Task {
 
   /**
    * Structured metadata for the task. Fields here are load-bearing for
-   * auth, lineage, and UI styling — see the per-field comments. When a
+   * auth, lineage, and UI styling - see the per-field comments. When a
    * QUEUED task transitions to RUNNING and a user-message row is written,
    * `is_agor_callback` and `source` are copied onto the new message.metadata
    * so the UI styling for callbacks survives the queue → run hop.
@@ -222,10 +230,10 @@ export interface Task {
   //    Codex CLI event_msg/token_count last_token_usage). This is the common
   //    case and is what UI consumers should rely on.
   // 2. Otherwise the tool's `computeContextWindow()` fallback (per-tool
-  //    heuristic — see tool.interface.ts).
+  //    heuristic - see tool.interface.ts).
   //
   // For display percentages, prefer `contextUsageSnapshot.percentage` over
-  // recomputing here — Codex applies a baseline subtraction that does NOT
+  // recomputing here - Codex applies a baseline subtraction that does NOT
   // equal raw `computed_context_window / contextWindowLimit`.
   computed_context_window?: number;
 

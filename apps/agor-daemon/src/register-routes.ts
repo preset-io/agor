@@ -92,6 +92,8 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
+import type { OnboardingTriggerReason } from './onboarding/kickoff-prompt.js';
+import { triggerOnboarding } from './onboarding/trigger.js';
 import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
@@ -221,7 +223,7 @@ export interface RegisterRoutesContext {
   /**
    * Resolved build info (sha + builtAt). Surfaced on /health so the UI can
    * detect FE/BE drift after a deploy. The SHA is the canonical version
-   * signal for the version-sync banner — see setup/build-info.ts.
+   * signal for the version-sync banner - see setup/build-info.ts.
    */
   DAEMON_BUILD_INFO: import('./setup/build-info.js').BuildInfo;
   servicesConfig: DaemonServicesConfig;
@@ -286,7 +288,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   /**
    * Schedule fn in a new event-loop tick with a fresh tenant DB scope.
-   * Always use this instead of bare setImmediate inside route/service code —
+   * Always use this instead of bare setImmediate inside route/service code -
    * bare setImmediate inherits the active transaction ALS store, while a plain
    * ALS exit loses Postgres RLS tenant context for session/task lookups.
    */
@@ -333,11 +335,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     authStrategiesArray.push('session-token');
   }
 
-  // Access token TTL — short by design. The /authentication/refresh route
+  // Access token TTL - short by design. The /authentication/refresh route
   // (and the after-hook below) issues a 30-day refresh token so users stay
   // logged in across browser restarts; the access token itself stays
   // short-lived so that a leaked one expires quickly. Both the auth-service
-  // config AND the refresh endpoint MUST use this constant — if they drift,
+  // config AND the refresh endpoint MUST use this constant - if they drift,
   // the refresh path silently downgrades the security of the auth path.
   const ACCESS_TOKEN_TTL = '15m';
   const REFRESH_TOKEN_TTL = '30d';
@@ -392,7 +394,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   //
   // Mounted at `/authentication` so it covers BOTH the Feathers auth service
   // (POST /authentication) and the custom refresh endpoint
-  // (POST /authentication/refresh) — Express's path-prefix matching means
+  // (POST /authentication/refresh) - Express's path-prefix matching means
   // a single middleware handles both, and the keyGenerator branches on the
   // sub-path to choose the right composite key.
   const AUTH_RATE_LIMIT_MAX = 50;
@@ -401,13 +403,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const authRateLimiter = rateLimit({
     windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
     limit: AUTH_RATE_LIMIT_MAX,
-    // Modern IETF draft-7 headers (RateLimit-*) — clients can back off.
+    // Modern IETF draft-7 headers (RateLimit-*) - clients can back off.
     standardHeaders: 'draft-7',
     // Drop the legacy X-RateLimit-* set; they're noisy and non-standard.
     legacyHeaders: false,
     // Composite key on (ip, email). For the refresh sub-path the body has
     // no email, so we bucket purely by IP. Trust only Express's resolved
-    // `req.ip` (which respects `app.set('trust proxy', n)`) — never
+    // `req.ip` (which respects `app.set('trust proxy', n)`) - never
     // X-Forwarded-For directly.
     keyGenerator: (req: Request): string => buildAuthRateLimitKey(req),
     message: 'Too many authentication attempts. Please try again in 15 minutes.',
@@ -437,7 +439,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   // Hook: Issue browser access + refresh tokens with millisecond issue time.
   // Rate limiting is enforced by express-rate-limit middleware mounted on
-  // `/authentication` above — by the time we reach this hook the limiter
+  // `/authentication` above - by the time we reach this hook the limiter
   // has already 429'd any over-quota request.
   authService.hooks({
     after: {
@@ -822,7 +824,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    * Closes the existing `cli-<short>` tab (if any) and re-spawns `claude`
    * inside a fresh tab against the same JSONL. The session's
    * `cli_state.watcher_offset` is preserved so the watcher resumes
-   * tailing from wherever it left off — no events are lost across the
+   * tailing from wherever it left off - no events are lost across the
    * restart.
    *
    * Use this when claude has crashed / been Ctrl-C'd inside the pane,
@@ -843,7 +845,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
         const targetUserId = session.created_by;
-        if (!targetUserId) throw new Error('Session has no created_by — cannot route restart');
+        if (!targetUserId) throw new Error('Session has no created_by - cannot route restart');
         if (
           params.provider &&
           !canControlCliSession({
@@ -865,7 +867,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         //    ("Session ID … is already in use") when the new spawn
         //    fires. `pkill -f` against the argv pattern is the reliable
         //    kill. Match BOTH `--session-id <X>` (first launch) and
-        //    `--resume <X>` (post-restart spawn) — same code path
+        //    `--resume <X>` (post-restart spawn) - same code path
         //    `buildClaudeCliSpawn` emits.
         try {
           const { spawn: spawnProc } = await import('node:child_process');
@@ -877,7 +879,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           await new Promise<void>((resolve) => {
             killProc.on('exit', () => resolve());
             killProc.on('error', () => resolve());
-            // Defensive cap — pkill should be <100ms.
+            // Defensive cap - pkill should be <100ms.
             setTimeout(() => {
               try {
                 killProc.kill();
@@ -899,14 +901,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         //   - `close` only closed the focused tab (one of potentially
         //     several duplicates from earlier racing executors), so
         //     the subsequent `create` would see surviving siblings
-        //     and auto-converse to `focus` — restart "succeeded" but
+        //     and auto-converse to `focus` - restart "succeeded" but
         //     claude never actually respawned.
         //   - The 800ms timer was a guess against an uncoordinated
         //     race between executors.
         //
         // With `forceRecreate: true` the executor closes EVERY tab
         // matching `tabName` first, then issues `new-tab --layout`
-        // with the freshly-built claude argv — atomic in the
+        // with the freshly-built claude argv - atomic in the
         // executor's tab-event loop. No timer, no surviving stale
         // tab, no auto-converse. Restart actually restarts.
         const branch = (await app.service('branches').get(session.branch_id, params)) as {
@@ -946,13 +948,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   /**
-   * Per-session "turn" lock — single source of truth for "who's allowed to
+   * Per-session "turn" lock - single source of truth for "who's allowed to
    * spawn an executor for this session right now" mutual exclusion. Shared
    * by `/sessions/:id/prompt`'s idle branch, `/tasks/:id/run`, and the
    * queue processor's drain loop. See `utils/session-turn-lock.ts`.
    *
    * Without this, two concurrent prompts on the same idle session could
-   * both observe `status === 'idle'` and both spawn executors — a race
+   * both observe `status === 'idle'` and both spawn executors - a race
    * that pre-dates the `/tasks/:id/run` route but is now fixed across all
    * three entry points.
    */
@@ -1011,7 +1013,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   }
 
   /**
-   * spawnTaskExecutor — sole transition point for `tasks.status` going from
+   * spawnTaskExecutor - sole transition point for `tasks.status` going from
    * `created` / `queued` → `running`.
    *
    * Both the IDLE branch of POST /sessions/:id/prompt and the queued-task
@@ -1025,7 +1027,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    *     before the executor process is forked. Without this, any crash
    *     during executor startup loses the prompt from the chat transcript
    *     even though `tasks.full_prompt` still has the text. Gated by
-   *     `config.execution.daemon_writes_user_message` (kill switch — see
+   *     `config.execution.daemon_writes_user_message` (kill switch - see
    *     §5.E of `docs/never-lose-prompt-design.md`).
    *   - `task.metadata.is_agor_callback` / `task.metadata.source` are
    *     re-stamped onto the new message so the UI's callback styling
@@ -1080,7 +1082,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       params
     )) as Task;
 
-    // Alt D — write the user-message row before spawning. Gated by kill switch.
+    // Alt D - write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
     // write is harmless if the daemon path is enabled.
     if (config.execution?.daemon_writes_user_message !== false) {
@@ -1091,7 +1093,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           messageMetadata.is_agor_callback = true;
         }
         // Prefer task.metadata.source (set when the task was queued) over
-        // the request's messageSource — the latter applies only to the
+        // the request's messageSource - the latter applies only to the
         // current draining tick, the former to where the prompt originated.
         const source = task.metadata?.source ?? options.messageSource;
         if (source) {
@@ -1111,7 +1113,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         });
         await app.service('messages').create(userMessage, params);
       } catch (msgErr) {
-        // Don't fail the spawn — the executor's createUserMessage fallback
+        // Don't fail the spawn - the executor's createUserMessage fallback
         // (with skip-if-exists) will write the row when it connects.
         console.warn(
           `⚠️  [Daemon] Failed to write initial user-message row for task ${shortId(task.task_id)} (executor will retry):`,
@@ -1171,7 +1173,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (session.agentic_tool === 'claude-code-cli') {
       // Hand the task off to the watcher BEFORE we PTY-inject. The watcher
       // claims this task on the next `user_message` JSONL line and links
-      // every subsequent assistant/tool message to it — then closes it on
+      // every subsequent assistant/tool message to it - then closes it on
       // `turn_end`. Without this stash, the watcher would mint a *new*
       // task on that user line and we'd end up with two task rows per
       // turn (the empty one from /prompt + the one the watcher minted).
@@ -1185,7 +1187,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         try {
           const targetUserId = session.created_by;
           if (!targetUserId) {
-            throw new Error('CLI session has no created_by — cannot route PTY injection');
+            throw new Error('CLI session has no created_by - cannot route PTY injection');
           }
           const channel = `user/${targetUserId}/terminal`;
           const tabName = `cli-${shortId(session.session_id)}`;
@@ -1212,7 +1214,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
           // Append \r so the REPL submits. Zellij forwards raw bytes
           // unchanged to claude's pseudo-tty. If the user is currently
-          // mid-typing into the REPL, the bytes interleave — documented
+          // mid-typing into the REPL, the bytes interleave - documented
           // race per the analysis doc § Blind spot #2.
           const payload = `${promptForExecutor}\r`;
           io?.to(channel).emit('terminal:input', { userId: targetUserId, input: payload });
@@ -1251,7 +1253,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     }
 
     // Background spawn + failure handling. Returning the patched Task to the
-    // caller before this resolves matches the previous behavior — the HTTP
+    // caller before this resolves matches the previous behavior - the HTTP
     // response should not block on the executor process being live.
     // deferInFreshTenantScope uses a fresh DB connection and tenant RLS scope
     // instead of inheriting a stale committed transaction.
@@ -1299,7 +1301,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // prompt and silence even though the task list reads FAILED.
         try {
           // Recompute the next index instead of trusting `messageStartIndex
-          // + 1` — the daemon-write user-message above is wrapped in a
+          // + 1` - the daemon-write user-message above is wrapped in a
           // try/catch and may have been swallowed, leaving a gap at
           // `messageStartIndex`. countMessages always reports the live row
           // count, so it lands the system error at the true tail whether
@@ -1355,7 +1357,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
            * Optional extra task metadata merged onto the queued/created task.
            * Used by internal callers (e.g. widget submissions) to stamp
            * traceability fields like `system_authored` / `widget_id`.
-           * External callers receive no validation on this field — it's
+           * External callers receive no validation on this field - it's
            * trusted because the route is RBAC-gated.
            */
           metadata?: Partial<import('@agor/core/types').TaskMetadata>;
@@ -1438,7 +1440,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           async () => {
             let lockedSession = await sessionsService.get(id, params);
             if (lockedSession.status === SessionStatus.STOPPING) {
-              // The earlier STOPPING check was against pre-lock state — re-check
+              // The earlier STOPPING check was against pre-lock state - re-check
               // here so a session that entered STOPPING while we waited for our
               // turn doesn't accept a prompt.
               throw new Error('Cannot send prompt: session is currently stopping');
@@ -1541,12 +1543,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Task run endpoint
   //
   // Explicit executor trigger for an already-created task. Lets pure-REST
-  // harnesses (Python, Go, shell+curl — anything without an MCP client) drive
+  // harnesses (Python, Go, shell+curl - anything without an MCP client) drive
   // the executor by POSTing a Task row first (`POST /tasks`) and then poking
   // it awake here. Wraps `spawnTaskExecutor` via `runExistingTask` (status
-  // revalidation) under `withSessionTurnLock` — the same shared session-level
+  // revalidation) under `withSessionTurnLock` - the same shared session-level
   // mutex that `/sessions/:id/prompt`'s idle branch and the queue drainer
-  // also acquire — so the on-the-wire effect is identical to "create a task
+  // also acquire - so the on-the-wire effect is identical to "create a task
   // and run it now."
   //
   // Only CREATED tasks on IDLE sessions are accepted. QUEUED tasks are
@@ -1579,7 +1581,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
 
         // Only CREATED tasks may be triggered. QUEUED tasks must drain in
-        // queue-position order via the queue processor — running them out of
+        // queue-position order via the queue processor - running them out of
         // order would violate the invariant documented in
         // `context/concepts/task-queueing.md`. Terminal/in-flight states are
         // rejected so the caller doesn't try to revive a finished task or
@@ -1588,7 +1590,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const hint =
             task.status === TaskStatus.QUEUED
               ? `Queued tasks drain automatically in queue-position order ` +
-                `when the session becomes idle — wait for it, or stop the ` +
+                `when the session becomes idle - wait for it, or stop the ` +
                 `currently running task to free the queue.`
               : `Only 'created' tasks may be triggered.`;
           throw new Conflict(
@@ -1596,12 +1598,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           );
         }
 
-        // Branch RBAC — defense in depth. Without this, a member with
+        // Branch RBAC - defense in depth. Without this, a member with
         // 'view' permission could trigger execution; the eventual
         // `tasks.patch` inside spawnTaskExecutor would still 403 via the
         // `ensureCanPromptInSession` hook, but only after we'd done extra
         // work and emitted partial state. Mirrors the upload route's
-        // pattern (~L1467) and `ensureCanPromptInSession` semantics —
+        // pattern (~L1467) and `ensureCanPromptInSession` semantics -
         // including the service-account / no-provider bypasses so executor
         // callbacks aren't held to the same checks as user requests.
         const isInternalCall = !params.provider;
@@ -1646,12 +1648,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // spawning. This is what closes the race against concurrent
         // /tasks/:id/run on different tasks of the same session, against
         // /sessions/:id/prompt's idle branch, and against the queue
-        // drainer — they all serialize through `sessionTurnLocks`.
+        // drainer - they all serialize through `sessionTurnLocks`.
         return await withSessionTurnLock(
           sessionTurnLocks,
           task.session_id,
           async () => {
-            // Re-read session state inside the lock — it may have flipped to
+            // Re-read session state inside the lock - it may have flipped to
             // RUNNING while we waited for our turn.
             const session = await reconcileSessionPromptStateIfStuck(
               await sessionsService.get(task.session_id, params),
@@ -1666,7 +1668,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
               throw new Conflict(
                 `Cannot run task ${shortId(taskId)}: session is '${session.status}'. ` +
-                  `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
+                  `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead - ` +
                   `it creates and queues a task atomically.`
               );
             }
@@ -1719,7 +1721,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
            */
           parentPermissionMode?: import('@agor/core/types').PermissionMode;
           // Remaining fields are spawn-subsession context (incl. the *child*
-          // session's permissionMode/modelConfig/etc) — see
+          // session's permissionMode/modelConfig/etc) - see
           // `SpawnSubsessionContext` in @agor/core for the shape.
           [key: string]: unknown;
         },
@@ -1735,7 +1737,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           '@agor/core/templates/spawn-subsession-template'
         );
         // Render the meta-prompt against the child-session config (the rest
-        // of `data`). `parentPermissionMode` is intentionally excluded — it's
+        // of `data`). `parentPermissionMode` is intentionally excluded - it's
         // the parent's send-mode, not part of the template.
         const { parentPermissionMode, ...spawnContext } = data;
         const metaPrompt = renderSpawnSubsessionPrompt(
@@ -1759,7 +1761,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Zone-trigger fire endpoint (always_new behaviour)
   //
   // Daemon is the source of truth for the zone's trigger template / agent /
-  // label — the UI only sends the zone id. The shared
+  // label - the UI only sends the zone id. The shared
   // `fireAlwaysNewZoneTrigger` helper (also used by the MCP
   // `agor_branches_set_zone(triggerTemplate: true)` always_new branch)
   // does render → validate → resolve defaults → create session → attach MCPs
@@ -1802,7 +1804,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (zoneObj.trigger?.behavior !== 'always_new') {
           // This endpoint is the always_new server-side action. show_picker
           // zones flow through the modal-driven explicit-target path, not this
-          // route — refuse instead of silently creating a session.
+          // route - refuse instead of silently creating a session.
           throw new BadRequest(
             `Zone "${zoneObj.label}" trigger behaviour is "${zoneObj.trigger?.behavior}", expected "always_new"`
           );
@@ -2069,7 +2071,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       next();
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any,
-    // Cheap pre-multer Content-Length check — short-circuits before we spend
+    // Cheap pre-multer Content-Length check - short-circuits before we spend
     // time writing oversize uploads to disk.
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     enforceTotalUploadSize() as any,
@@ -2077,7 +2079,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 + multer type compatibility
     uploadMiddleware.array('files', 10) as any,
     // Defence-in-depth aggregate-size check using the actual file sizes that
-    // multer wrote — catches Content-Length-spoofing clients.
+    // multer wrote - catches Content-Length-spoofing clients.
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     enforceParsedTotalUploadSize() as any,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
@@ -2158,12 +2160,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // ============================================================================
-  // Queue listing — task-centric (was message-centric pre-never-lose-prompt).
+  // Queue listing - task-centric (was message-centric pre-never-lose-prompt).
   // The queue is the set of tasks with status='queued', ranked by
   // queue_position. Each queued task carries the full prompt + metadata; on
   // drain it transitions queued → running via spawnTaskExecutor.
   //
-  // Enqueueing goes through `POST /sessions/:id/prompt` — the daemon decides
+  // Enqueueing goes through `POST /sessions/:id/prompt` - the daemon decides
   // run-vs-queue based on session state and reports it back via `task.status`.
   // ============================================================================
 
@@ -2191,13 +2193,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // Queue processing implementation — task-centric. Acquires the shared
+  // Queue processing implementation - task-centric. Acquires the shared
   // `sessionTurnLocks` (declared near the top of registerRoutes) so the
   // drainer can't race `/sessions/:id/prompt` or `/tasks/:id/run` for the
   // same session. The retry-on-existing-lock indirection (vs. a plain
   // `withSessionTurnLock` wrapper) preserves the original "if drain is in
   // flight, schedule a retry instead of stacking concurrent drainers"
-  // semantics — important because callbacks can fire processNextQueuedTask
+  // semantics - important because callbacks can fire processNextQueuedTask
   // from arbitrary points in the lifecycle.
   const queueRetryScheduled = new Set<SessionID>();
 
@@ -2220,7 +2222,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       if (outcome === 'timeout') {
         console.error(
-          `❌ [Queue] Session ${shortId(sessionId)}: turn lock held >${LOCK_WAIT_TIMEOUT_MS / 1000}s — ` +
+          `❌ [Queue] Session ${shortId(sessionId)}: turn lock held >${LOCK_WAIT_TIMEOUT_MS / 1000}s - ` +
             `holder may be stuck on a broken DB connection. Skipping this drain trigger; ` +
             `the next natural trigger (user prompt or task completion) will retry.`
         );
@@ -2327,7 +2329,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return;
     }
 
-    // Re-read the task — defend against the case where it was already drained
+    // Re-read the task - defend against the case where it was already drained
     // by a concurrent caller, or removed by an admin via DELETE /tasks/:id.
     const stillQueued = await taskRepo.findById(nextTask.task_id);
     if (!stillQueued || stillQueued.status !== TaskStatus.QUEUED) {
@@ -2513,6 +2515,48 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // ============================================================================
+  // Onboarding-agent trigger endpoint
+  //
+  // Queues the onboarding kickoff prompt into an existing session - no new
+  // session/agent type, this just decides whether to fire and builds the
+  // prompt text. See `./onboarding/trigger.ts`.
+  // ============================================================================
+
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/onboarding/trigger',
+    {
+      async create(data: { reason?: OnboardingTriggerReason }, params: RouteParams) {
+        const sessionId = params.route?.id;
+        if (!sessionId) throw new Error('Session ID required');
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to trigger onboarding');
+        }
+        if (data?.reason !== 'auto' && data?.reason !== 'manual') {
+          throw new Error("reason must be 'auto' or 'manual'");
+        }
+
+        const session = await sessionsService.get(sessionId, params);
+        if (session.created_by !== params.user.user_id) {
+          throw new Forbidden('You can only trigger onboarding for your own sessions');
+        }
+
+        return triggerOnboarding(app, db, {
+          sessionId: session.session_id,
+          userId: session.created_by as UUID,
+          callerUserId: params.user.user_id as UUID,
+          agenticTool: session.agentic_tool,
+          reason: data.reason,
+        });
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'trigger onboarding' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
   // Tasks custom routes
   // ============================================================================
 
@@ -2616,11 +2660,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           pull_request_url?: string;
           boardId: string;
           /** Explicit board position. Omit to let the service compute a
-           *  smart default — preferred for MCP/agent callers. The UI
+           *  smart default - preferred for MCP/agent callers. The UI
            *  passes the viewport center so the new card lands where the
            *  user invoked the dialog. */
           position?: { x: number; y: number };
-          // Branch storage model — see context/explorations/clone-redesign.md.
+          // Branch storage model - see context/explorations/clone-redesign.md.
           storage_mode?: 'worktree' | 'clone';
           clone_depth?: number;
         },
@@ -2777,7 +2821,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const id = params.route?.id;
           if (!id) throw new Error('Comment ID required');
           if (!data.content) throw new Error('content required');
-          // Always attribute the reply to the authenticated caller — never trust
+          // Always attribute the reply to the authenticated caller - never trust
           // a client-supplied `created_by`. `requireAuth` upstream guarantees
           // `params.user.user_id`.
           const callerId = (params as { user?: { user_id?: string } }).user?.user_id;
@@ -3088,7 +3132,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
   // Pre-#1253 callers fired a single per-branch schedule via this route.
   // Now that a branch can have N schedules, the unambiguous case is "exactly
-  // one schedule on this branch" — we forward to that schedule's run-now.
+  // one schedule on this branch" - we forward to that schedule's run-now.
   // Zero or multiple → 400 with a pointer to /schedules/:id/run-now.
   app.use('/branches/:id/execute-schedule-now', {
     async create(_data: unknown, params: RouteParams) {
@@ -3241,7 +3285,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (!user) {
       throw new NotAuthenticated('Authentication required');
     }
-    // Fast-path for service accounts — skip the session lookup entirely.
+    // Fast-path for service accounts - skip the session lookup entirely.
     if (user._isServiceAccount) return;
 
     const session = await sessionsService.get(sessionId, { provider: undefined });
@@ -3434,13 +3478,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Session env selections (v0.5 env-var-access)
   //
   // Routes:
-  //   GET    /sessions/:id/env-selections           — list selected env var names
-  //   POST   /sessions/:id/env-selections           — add one: { envVarName }
-  //   DELETE /sessions/:id/env-selections/:name     — remove one
-  //   PATCH  /sessions/:id/env-selections           — replace all: { envVarNames: [] }
+  //   GET    /sessions/:id/env-selections           - list selected env var names
+  //   POST   /sessions/:id/env-selections           - add one: { envVarName }
+  //   DELETE /sessions/:id/env-selections/:name     - remove one
+  //   PATCH  /sessions/:id/env-selections           - replace all: { envVarNames: [] }
   //
   // RBAC: only the session's creator or a global admin/superadmin may mutate.
-  // Branch `all` permission does NOT grant access — selections expose the
+  // Branch `all` permission does NOT grant access - selections expose the
   // creator's private credentials to the executor process.
   // ============================================================================
 
@@ -3473,7 +3517,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/sessions/:id/env-selections',
     {
-      // GET returns the selected env var names as a plain `string[]` — both
+      // GET returns the selected env var names as a plain `string[]` - both
       // the comment above and the UI consumer expect names, not full rows.
       async find(params: RouteParams): Promise<string[]> {
         const id = params.route?.id;
@@ -3559,7 +3603,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         timestamp: Date.now(),
         version: DAEMON_VERSION,
         // Build identity for the version-sync banner (apps/agor-ui ConnectionStatus).
-        // SHA precedence is resolved at startup — see setup/build-info.ts.
+        // SHA precedence is resolved at startup - see setup/build-info.ts.
         // Tabs capture this SHA on first connect and prompt a refresh whenever
         // a later handshake reports a different value. 'dev' disables the check.
         buildSha: DAEMON_BUILD_INFO.sha,
@@ -3666,7 +3710,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             managedEnvsExecutionMode:
               config.execution?.managed_envs_execution_mode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT,
           },
-          // Resolved security posture — admins can confirm in Settings → About
+          // Resolved security posture - admins can confirm in Settings → About
           // which CSP/CORS policy the daemon booted with, without tailing logs
           // or reading response headers by hand. Keep the shape tight: the
           // full CSP header value is the one piece operators actually need
@@ -3838,7 +3882,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   for (const name of SERVICE_GROUP_NAMES) {
     if (!mappedGroups.has(name)) {
       console.warn(
-        `[services] Service group '${name}' has no path mapping — tier hooks will not apply`
+        `[services] Service group '${name}' has no path mapping - tier hooks will not apply`
       );
     }
   }
