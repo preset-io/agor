@@ -1283,16 +1283,16 @@ export const App: React.FC<AppProps> = ({
                         onCommentSelect={handleCommentSelect}
                       />
                     )}
-                    <NewSessionButton
-                      onClick={() => {
-                        const center = isHomeSurface
-                          ? null
-                          : sessionCanvasRef.current?.getViewportCenter();
-                        setNewBranchDefaultPosition(center || null);
-                        setCreateDialogDefaultTab('assistant');
-                        setCreateDialogOpen(true);
-                      }}
-                    />
+                    {!isHomeSurface && (
+                      <NewSessionButton
+                        onClick={() => {
+                          const center = sessionCanvasRef.current?.getViewportCenter();
+                          setNewBranchDefaultPosition(center || null);
+                          setCreateDialogDefaultTab('assistant');
+                          setCreateDialogOpen(true);
+                        }}
+                      />
+                    )}
                   </div>
                 </Panel>
                 {(effectiveSelectedSessionId || !eventStreamPanelCollapsed) && (

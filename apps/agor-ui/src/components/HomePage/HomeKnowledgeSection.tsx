@@ -172,6 +172,7 @@ export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connect
             rowKey="document_id"
             dataSource={filteredDocs}
             renderItem={(doc) => <KnowledgeDocRow doc={doc} />}
+            style={{ padding: '0 12px' }}
           />
         )}
       </Card>
