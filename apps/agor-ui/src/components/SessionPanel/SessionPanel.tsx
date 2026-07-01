@@ -64,6 +64,7 @@ import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
+import { CreatedByTag } from '../metadata';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
 import {
@@ -82,6 +83,11 @@ import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
+
+// The find shortcut is Cmd+F on mac, Ctrl+F elsewhere — label it correctly.
+const IS_MAC =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform ?? '');
+const FIND_SHORTCUT_LABEL = IS_MAC ? 'Cmd+F' : 'Ctrl+F';
 
 // ---------------------------------------------------------------------------
 // PromptInput — thin wrapper around AutocompleteTextarea that keeps the typed
@@ -647,6 +653,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return () => window.removeEventListener('keydown', handler);
   }, [searchOpen, open, openSearch, closeSearch]);
 
+  // Reset search when switching sessions — stale ranges/counts belong to the
+  // previous conversation's DOM.
+  const prevSearchSessionIdRef = React.useRef(session?.session_id ?? null);
+  React.useEffect(() => {
+    const id = session?.session_id ?? null;
+    if (prevSearchSessionIdRef.current !== id) {
+      prevSearchSessionIdRef.current = id;
+      closeSearch();
+    }
+  }, [session?.session_id, closeSearch]);
+
   React.useEffect(() => {
     if (searchOpen) {
       setTimeout(() => searchInputRef.current?.focus(), 30);
@@ -1175,6 +1192,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 {getSessionDisplayTitle(session, { includeAgentFallback: true })}
               </Typography.Text>
               <Badge status={getStatusColor()} text={session.status.toUpperCase()} />
+              {session.created_by && (
+                <div style={{ marginTop: token.sizeUnit }}>
+                  <CreatedByTag
+                    createdBy={session.created_by}
+                    currentUserId={currentUserId}
+                    userById={userById}
+                    prefix="Created by"
+                  />
+                </div>
+              )}
             </div>
           </div>
           <Space size={4}>
@@ -1184,7 +1211,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 <Button type="text" icon={<EllipsisOutlined />} />
               </Tooltip>
             </Dropdown>
-            <Tooltip title="Search session (Cmd+F)">
+            <Tooltip title={`Search session (${FIND_SHORTCUT_LABEL})`}>
               <Button type="text" icon={<SearchOutlined />} onClick={openSearch} />
             </Tooltip>
             <Tooltip title="Close Panel">

@@ -1,98 +1,102 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { escapeRegExp } from '../components/HighlightMatch/HighlightMatch';
 
-const MARK_CLASS = 'agor-search-highlight';
+const HIGHLIGHT_NAME = 'agor-search';
+const CURRENT_HIGHLIGHT_NAME = 'agor-search-current';
+const REBUILD_DEBOUNCE_MS = 160;
 
-function escapeRegex(s: string) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export interface SessionSearchColors {
+  /** Base color for every match (rendered translucent). */
+  highlight: string;
+  /** Solid color for the active match. */
+  current: string;
+  /** Text color painted over the active match. */
+  currentText: string;
 }
 
-function clearMarks(container: HTMLElement) {
-  container.querySelectorAll(`.${MARK_CLASS}`).forEach((mark) => {
-    const parent = mark.parentNode;
-    if (!parent) return;
-    parent.replaceChild(document.createTextNode(mark.textContent || ''), mark);
-    parent.normalize();
-  });
+// Structural view over the CSS Custom Highlight API so this compiles regardless
+// of whether the installed TS DOM lib ships the (recent) `Highlight` types.
+type CSSHighlight = { priority: number };
+type CSSHighlightCtor = new (...ranges: Range[]) => CSSHighlight;
+interface HighlightRegistryLike {
+  set(name: string, highlight: CSSHighlight): void;
+  delete(name: string): void;
 }
 
-function buildMarks(container: HTMLElement, query: string, highlightColor: string): HTMLElement[] {
-  clearMarks(container);
+function getHighlightApi(): { create: CSSHighlightCtor; registry: HighlightRegistryLike } | null {
+  if (typeof window === 'undefined') return null;
+  const global = window as unknown as {
+    Highlight?: CSSHighlightCtor;
+    CSS?: { highlights?: HighlightRegistryLike };
+  };
+  if (typeof global.Highlight !== 'function' || !global.CSS?.highlights) return null;
+  return { create: global.Highlight, registry: global.CSS.highlights };
+}
+
+/**
+ * Case-insensitive, non-overlapping match offsets of `query` within `text`.
+ * Pure so the range-building logic stays unit-testable without a DOM.
+ */
+export function getMatchOffsets(text: string, query: string): Array<[number, number]> {
+  if (!text || !query.trim()) return [];
+  const regex = new RegExp(escapeRegExp(query), 'gi');
+  const offsets: Array<[number, number]> = [];
+  let match = regex.exec(text);
+  while (match !== null) {
+    offsets.push([match.index, match.index + match[0].length]);
+    // Guard against a zero-length match wedging the loop.
+    if (match.index === regex.lastIndex) regex.lastIndex += 1;
+    match = regex.exec(text);
+  }
+  return offsets;
+}
+
+function buildRanges(container: HTMLElement, query: string): Range[] {
   if (!query.trim()) return [];
-
-  const regex = new RegExp(escapeRegex(query), 'gi');
-  const marks: HTMLElement[] = [];
 
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const el = node.parentElement;
       if (!el) return NodeFilter.FILTER_REJECT;
-      const tag = el.tagName.toLowerCase();
-      if (tag === 'script' || tag === 'style' || el.classList.contains(MARK_CLASS)) {
-        return NodeFilter.FILTER_REJECT;
-      }
-      return NodeFilter.FILTER_ACCEPT;
+      const tag = el.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
+      return node.nodeValue?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     },
   });
 
-  const textNodes: Text[] = [];
-  let next = walker.nextNode();
-  while (next) {
-    textNodes.push(next as Text);
-    next = walker.nextNode();
-  }
-
-  for (const textNode of textNodes) {
-    const text = textNode.textContent || '';
-    if (!regex.test(text)) {
-      regex.lastIndex = 0;
-      continue;
+  const ranges: Range[] = [];
+  let node = walker.nextNode();
+  while (node) {
+    const text = node.nodeValue ?? '';
+    for (const [start, end] of getMatchOffsets(text, query)) {
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, end);
+      ranges.push(range);
     }
-    regex.lastIndex = 0;
-    const frag = document.createDocumentFragment();
-    let last = 0;
-    let m = regex.exec(text);
-    while (m !== null) {
-      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
-      const mark = document.createElement('mark');
-      mark.className = MARK_CLASS;
-      mark.textContent = m[0];
-      mark.style.cssText = `background:${highlightColor};color:rgba(0,0,0,0.88);border-radius:3px;padding:0 1px;`;
-      frag.appendChild(mark);
-      marks.push(mark);
-      last = regex.lastIndex;
-      m = regex.exec(text);
-    }
-    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
-    textNode.parentNode?.replaceChild(frag, textNode);
+    node = walker.nextNode();
   }
-  return marks;
+  return ranges;
 }
 
-function paintMark(
-  mark: HTMLElement,
-  current: boolean,
-  colors: { highlight: string; current: string; currentText: string }
-) {
-  if (current) {
-    mark.style.background = colors.current;
-    mark.style.color = colors.currentText;
-    mark.style.boxShadow = `0 0 0 2px ${colors.current}`;
-    mark.style.outline = 'none';
-    mark.style.outlineOffset = '0';
-  } else {
-    mark.style.background = colors.highlight;
-    mark.style.color = 'rgba(0,0,0,0.88)';
-    mark.style.boxShadow = 'none';
-    mark.style.outline = 'none';
-  }
+function scrollRangeIntoView(range: Range) {
+  const node = range.startContainer;
+  const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
+/**
+ * In-drawer find. Highlights matches with the CSS Custom Highlight API — text
+ * nodes are read-only (ranges only), so React's tree is never mutated and
+ * streaming/hydrating re-renders stay safe. Where the API is unavailable the
+ * hook degrades to navigation without visible highlighting.
+ */
 export function useSessionSearch(
   containerRef: React.RefObject<HTMLElement | null>,
-  colors?: { highlight: string; current: string; currentText: string }
+  colors?: SessionSearchColors
 ) {
   const resolvedColors = colors ?? {
-    highlight: 'rgba(250,173,20,0.4)',
+    highlight: '#faad14',
     current: '#faad14',
     currentText: 'rgba(0,0,0,0.88)',
   };
@@ -102,21 +106,79 @@ export function useSessionSearch(
   const [totalMatches, setTotalMatches] = useState(0);
   const [currentMatch, setCurrentMatch] = useState(0);
   const [searchPending, setSearchPending] = useState(false);
-  const marksRef = useRef<HTMLElement[]>([]);
-  const hiddenBlocksRef = useRef<HTMLElement[]>([]);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const resolvedColorsRef = useRef(resolvedColors);
-  resolvedColorsRef.current = resolvedColors;
 
-  const setCurrent = useCallback((idx: number, marks: HTMLElement[]) => {
-    marks.forEach((m, i) => {
-      paintMark(m, i === idx, resolvedColorsRef.current);
-    });
-    marks[idx]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    setCurrentMatch(idx);
+  const apiRef = useRef<ReturnType<typeof getHighlightApi>>(null);
+  const styleElRef = useRef<HTMLStyleElement | null>(null);
+  const rangesRef = useRef<Range[]>([]);
+  const currentIndexRef = useRef(0);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyHighlights = useCallback((ranges: Range[], currentIdx: number) => {
+    const api = apiRef.current;
+    if (!api) return;
+    if (ranges.length === 0) {
+      api.registry.delete(HIGHLIGHT_NAME);
+      api.registry.delete(CURRENT_HIGHLIGHT_NAME);
+      return;
+    }
+    api.registry.set(HIGHLIGHT_NAME, new api.create(...ranges));
+    const current = ranges[currentIdx];
+    if (current) {
+      const highlight = new api.create(current);
+      // Paint the active match on top of the base highlight.
+      highlight.priority = 1;
+      api.registry.set(CURRENT_HIGHLIGHT_NAME, highlight);
+    } else {
+      api.registry.delete(CURRENT_HIGHLIGHT_NAME);
+    }
   }, []);
 
+  const clearHighlights = useCallback(() => {
+    const api = apiRef.current;
+    if (api) {
+      api.registry.delete(HIGHLIGHT_NAME);
+      api.registry.delete(CURRENT_HIGHLIGHT_NAME);
+    }
+    rangesRef.current = [];
+  }, []);
+
+  const runSearch = useCallback(
+    (scrollToCurrent: boolean) => {
+      const container = containerRef.current;
+      if (!container || !apiRef.current) {
+        setTotalMatches(0);
+        setSearchPending(false);
+        return;
+      }
+      const ranges = buildRanges(container, queryRef.current);
+      rangesRef.current = ranges;
+      const idx = ranges.length === 0 ? 0 : Math.min(currentIndexRef.current, ranges.length - 1);
+      currentIndexRef.current = idx;
+      applyHighlights(ranges, idx);
+      setTotalMatches(ranges.length);
+      setCurrentMatch(idx);
+      setSearchPending(false);
+      if (scrollToCurrent && ranges[idx]) scrollRangeIntoView(ranges[idx]);
+    },
+    [containerRef, applyHighlights]
+  );
+
+  const setCurrent = useCallback(
+    (idx: number) => {
+      const ranges = rangesRef.current;
+      if (!ranges.length) return;
+      currentIndexRef.current = idx;
+      applyHighlights(ranges, idx);
+      setCurrentMatch(idx);
+      if (ranges[idx]) scrollRangeIntoView(ranges[idx]);
+    },
+    [applyHighlights]
+  );
+
   const openSearch = useCallback(() => {
+    currentIndexRef.current = 0;
     setSearchOpen(true);
     setQuery('');
     setTotalMatches(0);
@@ -124,72 +186,81 @@ export function useSessionSearch(
   }, []);
 
   const closeSearch = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (containerRef.current) clearMarks(containerRef.current);
-    marksRef.current = [];
-    hiddenBlocksRef.current.forEach((el) => {
-      el.style.display = '';
-    });
-    hiddenBlocksRef.current = [];
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    clearHighlights();
+    currentIndexRef.current = 0;
     setSearchOpen(false);
     setQuery('');
     setTotalMatches(0);
     setCurrentMatch(0);
     setSearchPending(false);
-  }, [containerRef]);
+  }, [clearHighlights]);
 
+  // Detect the Custom Highlight API once and register the ::highlight() stylesheet.
+  useEffect(() => {
+    const api = getHighlightApi();
+    apiRef.current = api;
+    if (!api) return;
+    const style = document.createElement('style');
+    styleElRef.current = style;
+    document.head.appendChild(style);
+    return () => {
+      style.remove();
+      styleElRef.current = null;
+      api.registry.delete(HIGHLIGHT_NAME);
+      api.registry.delete(CURRENT_HIGHLIGHT_NAME);
+    };
+  }, []);
+
+  // ::highlight() only accepts a handful of properties (no box-shadow/border),
+  // so the active match is distinguished by a solid fill over the translucent base.
+  useEffect(() => {
+    const style = styleElRef.current;
+    if (!style) return;
+    style.textContent = `::highlight(${HIGHLIGHT_NAME}){background-color:color-mix(in srgb, ${resolvedColors.highlight} 40%, transparent);}::highlight(${CURRENT_HIGHLIGHT_NAME}){background-color:${resolvedColors.current};color:${resolvedColors.currentText};}`;
+  }, [resolvedColors.highlight, resolvedColors.current, resolvedColors.currentText]);
+
+  // Rebuild on query change and re-scan when the conversation mutates while open:
+  // lazy task hydration, streaming updates, etc. all land after the initial scan.
+  // `query` is a deliberate trigger — typing doesn't mutate the DOM, so the
+  // observer never fires for it; runSearch reads the latest value via queryRef.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: query re-runs the effect on typing; value is read via queryRef
   useEffect(() => {
     if (!searchOpen) return;
-    if (timerRef.current) clearTimeout(timerRef.current);
-    setSearchPending(true);
-    timerRef.current = setTimeout(() => {
-      if (!containerRef.current) return;
+    const container = containerRef.current;
+    if (!container || !apiRef.current) return;
 
-      // Restore any previously hidden blocks before re-running
-      hiddenBlocksRef.current.forEach((el) => {
-        el.style.display = '';
-      });
-      hiddenBlocksRef.current = [];
+    // A new query starts from the first match.
+    currentIndexRef.current = 0;
 
-      const marks = buildMarks(containerRef.current, query, resolvedColorsRef.current.highlight);
-      marksRef.current = marks;
-      setTotalMatches(marks.length);
-      setCurrentMatch(0);
-
-      if (marks.length > 0) {
-        setCurrent(0, marks);
-        // Hide task blocks with no matches
-        const allBlocks = Array.from(
-          containerRef.current.querySelectorAll<HTMLElement>('[data-task-block]')
-        );
-        const matchedBlocks = new Set(
-          marks.map((m) => m.closest('[data-task-block]')).filter(Boolean)
-        );
-        hiddenBlocksRef.current = allBlocks.filter((b) => !matchedBlocks.has(b));
-        hiddenBlocksRef.current.forEach((el) => {
-          el.style.display = 'none';
-        });
-      }
-      setSearchPending(false);
-    }, 160);
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+    const scheduleRebuild = (scrollToCurrent: boolean) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      setSearchPending(true);
+      debounceRef.current = setTimeout(() => runSearch(scrollToCurrent), REBUILD_DEBOUNCE_MS);
     };
-  }, [query, searchOpen, containerRef, setCurrent]);
+
+    scheduleRebuild(true);
+
+    const observer = new MutationObserver(() => scheduleRebuild(false));
+    observer.observe(container, { childList: true, subtree: true, characterData: true });
+
+    return () => {
+      observer.disconnect();
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query, searchOpen, containerRef, runSearch]);
 
   const goNext = useCallback(() => {
-    const marks = marksRef.current;
-    if (!marks.length) return;
-    const next = (currentMatch + 1) % marks.length;
-    setCurrent(next, marks);
-  }, [currentMatch, setCurrent]);
+    const total = rangesRef.current.length;
+    if (!total) return;
+    setCurrent((currentIndexRef.current + 1) % total);
+  }, [setCurrent]);
 
   const goPrev = useCallback(() => {
-    const marks = marksRef.current;
-    if (!marks.length) return;
-    const prev = (currentMatch - 1 + marks.length) % marks.length;
-    setCurrent(prev, marks);
-  }, [currentMatch, setCurrent]);
+    const total = rangesRef.current.length;
+    if (!total) return;
+    setCurrent((currentIndexRef.current - 1 + total) % total);
+  }, [setCurrent]);
 
   return {
     searchOpen,
