@@ -109,7 +109,7 @@ export function OnboardingBanners({
         }}
       >
         <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>
-          ⚡ Connect your AI - sessions need it to run agents.
+          ⚡ No AI connected - sessions will open but nothing will run.
         </span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Button
@@ -157,7 +157,7 @@ export function OnboardingBanners({
         }}
       >
         <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>
-          Your AI connection is not working - agents won&apos;t run until you fix it.
+          Your AI credentials aren&apos;t working. Sessions will fail until you reconnect.
         </span>
         <Button
           size="small"
