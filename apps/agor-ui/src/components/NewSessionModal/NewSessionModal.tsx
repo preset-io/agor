@@ -267,12 +267,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             kbLinkTarget="absolute-route"
             onFilesDrop={addAttachments}
           />
-          <SessionAttachmentTray
-            attachments={attachments}
-            onRemove={removeAttachment}
-            disabled={isCreating}
-          />
         </Form.Item>
+        <SessionAttachmentTray
+          attachments={attachments}
+          onRemove={removeAttachment}
+          disabled={isCreating}
+        />
 
         {/* MCP Servers — first-class field, mirrors SessionSettingsModal */}
         <SessionMcpServersField mcpServerById={mcpServerById} />
