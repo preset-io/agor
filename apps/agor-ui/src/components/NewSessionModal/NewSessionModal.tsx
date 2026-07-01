@@ -258,7 +258,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           <AutocompleteTextarea
             value={form.getFieldValue('initialPrompt') || ''}
             onChange={(value) => form.setFieldValue('initialPrompt', value)}
-            placeholder="e.g., Build a JWT authentication system with secure password storage... (type @ for autocomplete)"
+            placeholder="e.g., Build a JWT authentication system with secure password storage... (type @ for autocomplete, or ⌘V / Ctrl+V to paste a screenshot)"
             autoSize={{ minRows: 4, maxRows: 8 }}
             client={client}
             sessionId={null}
@@ -268,11 +268,15 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             onFilesDrop={addAttachments}
           />
         </Form.Item>
-        <SessionAttachmentTray
-          attachments={attachments}
-          onRemove={removeAttachment}
-          disabled={isCreating}
-        />
+        {attachments.length > 0 && (
+          <div style={{ padding: '8px 0' }}>
+            <SessionAttachmentTray
+              attachments={attachments}
+              onRemove={removeAttachment}
+              disabled={isCreating}
+            />
+          </div>
+        )}
 
         {/* MCP Servers — first-class field, mirrors SessionSettingsModal */}
         <SessionMcpServersField mcpServerById={mcpServerById} />
