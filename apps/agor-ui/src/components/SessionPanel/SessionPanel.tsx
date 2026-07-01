@@ -22,6 +22,7 @@ import {
   AimOutlined,
   CloseOutlined,
   CodeOutlined,
+  CompassOutlined,
   EllipsisOutlined,
   InboxOutlined,
   SettingOutlined,
@@ -35,7 +36,7 @@ import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
-import { useAgorStore } from '../../store/agorStore';
+import { agorStore, useAgorStore } from '../../store/agorStore';
 import {
   selectMcpServerById,
   selectUserAuthenticatedMcpServerIds,
@@ -58,6 +59,7 @@ import {
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
+import { OnboardingDiscoveryBanner } from './OnboardingDiscoveryBanner';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionAttachmentTray } from './SessionAttachmentTray';
@@ -70,7 +72,7 @@ import { useComposerAttachments } from './useComposerAttachments';
 export type { PermissionMode };
 
 // ---------------------------------------------------------------------------
-// PromptInput — thin wrapper around AutocompleteTextarea that keeps the typed
+// PromptInput - thin wrapper around AutocompleteTextarea that keeps the typed
 // text in *local* state so that keystrokes never trigger a parent re-render.
 // The parent reads/clears the value imperatively via a ref.
 // ---------------------------------------------------------------------------
@@ -295,7 +297,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const { archiveSession } = useSessionActions(client);
 
-  // Tool capabilities — drives which buttons are shown
+  // Tool capabilities - drives which buttons are shown
   const toolCaps = session?.agentic_tool
     ? AGENTIC_TOOL_CAPABILITIES[session.agentic_tool]
     : undefined;
@@ -337,14 +339,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }, []);
 
   // Input value lives entirely inside PromptInput (local state).
-  // The parent reads it imperatively via promptRef / inputValueRef — no
+  // The parent reads it imperatively via promptRef / inputValueRef - no
   // parent re-renders on keystrokes.
   const promptRef = React.useRef<PromptInputHandle>(null);
   const inputValueRef = React.useRef(session ? getDraft(session.session_id) : '');
   const [hasInput, setHasInput] = React.useState(() => !!inputValueRef.current.trim());
   const handleHasInputChange = React.useCallback((v: boolean) => setHasInput(v), []);
 
-  // getDefaultPermissionMode imported from @agor-live/client — canonical
+  // getDefaultPermissionMode imported from @agor-live/client - canonical
   // per-tool defaults live in core's `getDefaultPermissionMode`. The local
   // shadow that used to live here was stale (missing gemini/opencode/copilot)
   // and silently drifted from the core definition.
@@ -602,6 +604,28 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     setEffortLevel(session?.model_config?.effort || 'high');
   }, [session?.model_config?.effort]);
 
+  // "First session ever" is approximated as "the store currently has
+  // exactly one session created by this user, and it's this one" - the
+  // best available proxy without a dedicated first-login flag (there
+  // isn't one on the User type). Read imperatively via `agorStore.getState()`
+  // rather than a reactive `useAgorStore` selector: this file deliberately
+  // avoids subscribing to the live sessions slice (see the comment above
+  // the `userById`/`mcpServerById` selectors) so streaming session patches
+  // elsewhere in the app don't re-render this panel. Recomputed only when
+  // the viewed session or user actually changes, not on every store update.
+  const [isFirstSessionEver, setIsFirstSessionEver] = React.useState(false);
+  React.useEffect(() => {
+    const sessionId = session?.session_id;
+    if (!currentUserId || !sessionId) {
+      setIsFirstSessionEver(false);
+      return;
+    }
+    const ownSessions = Array.from(agorStore.getState().sessionById.values()).filter(
+      (s) => s.created_by === currentUserId
+    );
+    setIsFirstSessionEver(ownSessions.length === 1 && ownSessions[0]?.session_id === sessionId);
+  }, [session?.session_id, currentUserId]);
+
   // When there's no session, render nothing (panel is collapsed to zero).
   // When open=false, we still render the component tree (hidden) so that
   // antd's CSS-in-JS doesn't garbage-collect component styles.
@@ -630,6 +654,40 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         }
       },
     });
+  };
+
+  const handleTriggerOnboarding = async () => {
+    if (!client || connectionDisabled) {
+      showError('Cannot start the setup guide while disconnected from the daemon.');
+      return;
+    }
+    try {
+      await client
+        .service(`sessions/${session.session_id}/onboarding/trigger`)
+        .create({ reason: 'manual' });
+      showSuccess('Setup guide is on its way in this session.');
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Failed to start the setup guide');
+    }
+  };
+
+  const currentUser = currentUserId ? (userById.get(currentUserId) ?? null) : null;
+  const discoveryBannerDismissed = currentUser?.preferences?.setupGuideBannerDismissed === true;
+  const showDiscoveryBanner = isFirstSessionEver && !discoveryBannerDismissed && !!currentUserId;
+
+  const handleDismissDiscoveryBanner = async () => {
+    // Optimistic - hide immediately regardless of persistence outcome; a
+    // failed patch just means it may reappear next session, which is a
+    // fine degrade for a one-time tip, not worth blocking the UI over.
+    setIsFirstSessionEver(false);
+    if (!client || !currentUserId || !currentUser) return;
+    try {
+      await client.service('users').patch(currentUserId, {
+        preferences: { ...currentUser.preferences, setupGuideBannerDismissed: true },
+      });
+    } catch (error) {
+      console.warn('[SessionPanel] Failed to persist discovery banner dismissal:', error);
+    }
   };
 
   const hasBranchActions = !!branch;
@@ -762,7 +820,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // function ConversationView exposed via onScrollRef.
       if (composerStillOwnsSend) scrollToBottom?.();
     } catch (error) {
-      console.error('Composer send failed — keeping prompt and files in composer:', error);
+      console.error('Composer send failed - keeping prompt and files in composer:', error);
       showError(error instanceof Error ? error.message : 'Failed to send prompt');
     } finally {
       composerSendInFlightRef.current = false;
@@ -808,7 +866,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // leaves the typed prompt intact for the user to retry.
       promptRef.current?.clear();
     } catch (error) {
-      console.error('Fork failed — keeping prompt in compose box:', error);
+      console.error('Fork failed - keeping prompt in compose box:', error);
     }
   };
 
@@ -833,7 +891,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       await onBtwFork?.(session.session_id, promptToSend);
       promptRef.current?.clear();
     } catch (error) {
-      console.error('BTW fork failed — keeping prompt in compose box:', error);
+      console.error('BTW fork failed - keeping prompt in compose box:', error);
     }
   };
 
@@ -857,7 +915,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     // `parentPermissionMode` is the *parent* session's permission mode for the
     // forwarding prompt; the spawn config's `permissionMode` is rendered into
     // the meta-prompt as the *child* session's intended mode. They're distinct
-    // — don't reuse one for the other.
+    // - don't reuse one for the other.
     const spawnConfig =
       typeof config === 'string'
         ? { userPrompt: config }
@@ -946,7 +1004,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       };
       // Honor the advisor selector's clear action. `model_config` is
       // column-replaced on patch, so we must DELETE the key when the user clears
-      // it (allowClear → undefined) — the spread above would otherwise silently
+      // it (allowClear → undefined) - the spread above would otherwise silently
       // carry the previous value forward (root cause of "no way to turn it off").
       if (newConfig.advisorModel) {
         nextConfig.advisorModel = newConfig.advisorModel;
@@ -1147,6 +1205,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           </Space>
           <Space size={4}>
             <SessionAttachmentsDropdown items={attachmentItems} />
+            {currentUserId && session.created_by === currentUserId && (
+              <Tooltip title="Setup guide">
+                <Button type="text" icon={<CompassOutlined />} onClick={handleTriggerOnboarding} />
+              </Tooltip>
+            )}
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
                 <Button type="text" icon={<EllipsisOutlined />} />
@@ -1174,6 +1237,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px 0`,
         }}
       >
+        {showDiscoveryBanner && (
+          <OnboardingDiscoveryBanner onDismiss={handleDismissDiscoveryBanner} />
+        )}
         <SessionPanelContent
           client={client}
           session={session}
@@ -1195,7 +1261,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           setCliViewMode={setCliViewMode}
         />
 
-        {/* Footer — rendered outside SessionPanelContent so that
+        {/* Footer - rendered outside SessionPanelContent so that
             keystroke-driven re-renders don't propagate to ConversationView.
             Hidden for CLI sessions in 'terminal' view because the embedded
             `claude` REPL has its own input prompt; the Agor textarea is
@@ -1223,7 +1289,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           }}
         />
 
-        {/* Fork modal — opened when Fork button is clicked with an empty textarea */}
+        {/* Fork modal - opened when Fork button is clicked with an empty textarea */}
         <ForkSpawnModal
           open={forkModalOpen}
           action="fork"
