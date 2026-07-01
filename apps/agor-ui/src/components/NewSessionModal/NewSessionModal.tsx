@@ -272,6 +272,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             enableKnowledgeMentions
             kbLinkTarget="absolute-route"
             onFilesDrop={addAttachments}
+            filesDropDisabled={isCreating}
           />
         </Form.Item>
         {attachments.length > 0 && (
