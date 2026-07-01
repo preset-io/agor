@@ -77,6 +77,7 @@ import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
 import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
+import { ErrorBoundary } from '../ErrorBoundary';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
 import { NewSessionButton } from '../NewSessionButton';
@@ -1252,36 +1253,43 @@ export const App: React.FC<AppProps> = ({
                         onOpenSettings={openSettings}
                       />
                     ) : (
-                      <SessionCanvas
-                        ref={sessionCanvasRef}
-                        board={currentBoard || null}
-                        client={client}
-                        branches={boardBranches}
-                        primaryAssistantId={primaryAssistantId}
-                        currentUserId={user?.user_id}
-                        selectedSessionId={effectiveSelectedSessionId}
-                        activeUrlTargetBranchId={activeUrlTargetBranchId}
-                        activeUrlTargetArtifactId={activeUrlTargetArtifactId}
-                        availableAgents={availableAgents}
-                        onSessionClick={handleSessionClick}
-                        onSessionUpdate={stableOnSessionUpdate}
-                        onSessionDelete={stableOnSessionDelete}
-                        onForkSession={stableOnForkSession}
-                        onSpawnSession={stableOnSpawnSession}
-                        onUpdateSessionMcpServers={stableOnUpdateSessionMcpServers}
-                        onOpenSettings={setSessionSettingsId}
-                        onCreateSessionForBranch={setNewSessionBranchId}
-                        onOpenBranch={setBranchModalBranchId}
-                        onArchiveOrDeleteBranch={stableOnArchiveOrDeleteBranch}
-                        onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
-                        onStartEnvironment={stableOnStartEnvironment}
-                        onStopEnvironment={stableOnStopEnvironment}
-                        onViewLogs={setLogsModalBranchId}
-                        onNukeEnvironment={stableOnNukeEnvironment}
-                        onOpenCommentsPanel={handleOpenCommentsPanel}
-                        onCommentHover={setHoveredCommentId}
-                        onCommentSelect={handleCommentSelect}
-                      />
+                      // Canvas-scoped boundary: a render loop (e.g. React #185
+                      // from ResizeObserver re-measurement on tab focus) is
+                      // contained here so the app shell survives instead of
+                      // white-screening. resetKey clears a stuck error when the
+                      // user switches boards.
+                      <ErrorBoundary variant="canvas" resetKey={currentBoard?.board_id}>
+                        <SessionCanvas
+                          ref={sessionCanvasRef}
+                          board={currentBoard || null}
+                          client={client}
+                          branches={boardBranches}
+                          primaryAssistantId={primaryAssistantId}
+                          currentUserId={user?.user_id}
+                          selectedSessionId={effectiveSelectedSessionId}
+                          activeUrlTargetBranchId={activeUrlTargetBranchId}
+                          activeUrlTargetArtifactId={activeUrlTargetArtifactId}
+                          availableAgents={availableAgents}
+                          onSessionClick={handleSessionClick}
+                          onSessionUpdate={stableOnSessionUpdate}
+                          onSessionDelete={stableOnSessionDelete}
+                          onForkSession={stableOnForkSession}
+                          onSpawnSession={stableOnSpawnSession}
+                          onUpdateSessionMcpServers={stableOnUpdateSessionMcpServers}
+                          onOpenSettings={setSessionSettingsId}
+                          onCreateSessionForBranch={setNewSessionBranchId}
+                          onOpenBranch={setBranchModalBranchId}
+                          onArchiveOrDeleteBranch={stableOnArchiveOrDeleteBranch}
+                          onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
+                          onStartEnvironment={stableOnStartEnvironment}
+                          onStopEnvironment={stableOnStopEnvironment}
+                          onViewLogs={setLogsModalBranchId}
+                          onNukeEnvironment={stableOnNukeEnvironment}
+                          onOpenCommentsPanel={handleOpenCommentsPanel}
+                          onCommentHover={setHoveredCommentId}
+                          onCommentSelect={handleCommentSelect}
+                        />
+                      </ErrorBoundary>
                     )}
                     <NewSessionButton
                       onClick={() => {
