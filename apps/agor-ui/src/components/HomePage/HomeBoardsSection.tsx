@@ -240,7 +240,7 @@ export const HomeBoardsSection: React.FC<
                 icon={<LeftOutlined />}
                 aria-label="Previous boards"
                 disabled={currentPage === 0}
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                onClick={() => setPage(Math.max(0, currentPage - 1))}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {currentPage + 1} / {totalPages}
@@ -251,7 +251,7 @@ export const HomeBoardsSection: React.FC<
                 icon={<RightOutlined />}
                 aria-label="Next boards"
                 disabled={currentPage >= totalPages - 1}
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
               />
             </div>
           )}
