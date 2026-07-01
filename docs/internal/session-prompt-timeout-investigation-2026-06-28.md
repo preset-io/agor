@@ -263,6 +263,31 @@ generic message. Confirm with socket-lifecycle logging at ~900s, and raise
 logs (`disconnect`, `connect_error`, `reconnect_attempt`, `reconnect_error`,
 `reconnect_failed`, `reconnect`) with elapsed-since-client-start timing.
 
+## Claude long-silent-tool discriminator — 2026-07-01
+
+A sibling Claude session (`019f1e6d-a0b6-7a60-9711-688dcab0bbb5`) ran a foreground
+long sleep prompt and failed after **614584ms** with:
+
+```text
+Claude SDK error after 93 messages: Claude SDK idle timeout: No activity for 566s
+(timeout: 300s).
+```
+
+This is distinct from the ~930s heartbeat-loss cluster:
+
+- heartbeats were still current (`last_executor_heartbeat_at` was ~10s before completion);
+- the task had a specific Claude idle-timeout error, not a generic heartbeat/onExit error;
+- the failure surfaced when the SDK produced a later message after a long silent interval,
+  because `SDKMessageProcessor.hasTimedOut()` is checked before processing the new message.
+
+Conclusion: the 5-minute Claude SDK idle watchdog is too aggressive for legitimate long
+silent tool calls. Executor heartbeats already cover process liveness, so the SDK idle
+guard should be a much larger "truly stuck stream" safety net rather than a normal
+long-tool deadline.
+
+**Follow-up action taken in this branch:** raised
+`ClaudePromptService.IDLE_TIMEOUT_MS` from 5 minutes to **60 minutes**.
+
 ## Checks run
 
 - Repository-wide timeout search with `rg` for 900s/900000ms/15-minute constants, `AbortSignal.timeout`, `p-timeout`, timeout/watchdog/heartbeat/stale/idle/deadline paths.
