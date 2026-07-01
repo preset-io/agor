@@ -44,7 +44,7 @@ agent/user git commands.
   repo `remote_url` rows and managed git config files. It runs after the API is
   listening to avoid extending the boot critical path, so it is not a hard
   pre-listen exposure barrier.
-- CLI repair: `agor admin scrub-git-remotes` scans registered repos/branches;
+- CLI repair: `agor local scrub-git-remotes` scans registered repos/branches;
   add `--write` to remove userinfo from persisted repo rows and remote
   `url` / `pushurl` config entries. Unlike daemon startup repair, the explicit
   admin command includes registered local repos/branches too.
@@ -52,7 +52,7 @@ agent/user git commands.
 ## Operational guidance
 
 1. Remove embedded credentials from all shared repo configs:
-   `agor admin scrub-git-remotes --write`.
+   `agor local scrub-git-remotes --write`.
 2. Rotate any token that was ever embedded in a git remote URL.
 3. Prefer credential helpers or Agor's per-user git token flow; never persist
    PATs in remotes.

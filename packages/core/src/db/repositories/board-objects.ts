@@ -26,7 +26,7 @@ import {
   branchOwners,
 } from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { visibleBoardReferenceAccessExists, visibleBranchAccessCondition } from './branch-access';
 
 export interface BoardObjectFindFilters {
   board_id?: BoardID;
@@ -75,8 +75,13 @@ export class BoardObjectRepository {
 
   private buildVisibleToUserCondition(userId: UUID): SQL {
     return (
-      or(isNull(boardObjects.branch_id), visibleBranchAccessCondition(this.db, userId)) ??
-      sql`false`
+      or(
+        and(isNotNull(boardObjects.branch_id), visibleBranchAccessCondition(this.db, userId)),
+        and(
+          isNull(boardObjects.branch_id),
+          visibleBoardReferenceAccessExists(this.db, userId, boardObjects.board_id)
+        )
+      ) ?? sql`false`
     );
   }
 

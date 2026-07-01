@@ -4,7 +4,7 @@
  * Tests for type-safe CRUD operations on branches with short ID support.
  */
 
-import type { BranchID, UUID } from '@agor/core/types';
+import type { BoardID, BranchID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
 import { boards } from '../schema';
@@ -15,6 +15,7 @@ import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
 import { GroupRepository } from './groups';
 import { RepoRepository } from './repos';
+import { ScheduleRepository } from './schedules';
 import { UsersRepository } from './users';
 
 /**
@@ -502,11 +503,187 @@ describe('BranchRepository.findAll', () => {
     const filtered = await wtRepo.findAll({ repo_id: generateId() });
     expect(filtered).toEqual([]);
   });
+
+  dbTest('should filter by board_id', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const boardA = generateId() as UUID;
+    const boardB = generateId() as UUID;
+    for (const boardId of [boardA, boardB]) {
+      await (db as any).insert(boards).values({
+        board_id: boardId,
+        created_at: new Date(),
+        created_by: 'test-user' as UUID,
+        name: 'Board',
+        data: {},
+      });
+    }
+
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'a1', branch_unique_id: 1, board_id: boardA })
+    );
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'a2', branch_unique_id: 2, board_id: boardA })
+    );
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b1', branch_unique_id: 3, board_id: boardB })
+    );
+
+    const boardABranches = await wtRepo.findAll({ board_id: boardA as BoardID });
+    expect(boardABranches.map((w) => w.name).sort()).toEqual(['a1', 'a2']);
+    expect(boardABranches.every((w) => w.board_id === boardA)).toBe(true);
+  });
+
+  dbTest('should filter by exact archived state', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const active = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'active', branch_unique_id: 1 })
+    );
+    const archived = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'archived', branch_unique_id: 2 })
+    );
+    await wtRepo.update(archived.branch_id, { archived: true });
+
+    const activeOnly = await wtRepo.findAll({ archived: false });
+    expect(activeOnly.map((w) => w.branch_id)).toEqual([active.branch_id]);
+
+    const archivedOnly = await wtRepo.findAll({ archived: true });
+    expect(archivedOnly.map((w) => w.branch_id)).toEqual([archived.branch_id]);
+  });
+
+  dbTest('should restrict to an explicit branchIds set', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    const b1 = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b1', branch_unique_id: 1 })
+    );
+    const b2 = await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b2', branch_unique_id: 2 })
+    );
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b3', branch_unique_id: 3 })
+    );
+
+    const scoped = await wtRepo.findAll({ branchIds: [b1.branch_id, b2.branch_id] });
+    expect(scoped.map((w) => w.name).sort()).toEqual(['b1', 'b2']);
+  });
+
+  dbTest('should return no rows for an empty branchIds set', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+
+    const repo = await repoRepo.create(createRepoData());
+    await wtRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'b1', branch_unique_id: 1 })
+    );
+
+    expect(await wtRepo.findAll({ branchIds: [] })).toEqual([]);
+  });
+
+  dbTest('should push branch visibility directly into findAll SQL', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const viewerId = generateId() as UUID;
+    await usersRepo.create({
+      user_id: viewerId,
+      email: 'findall-visible-branch@example.com',
+      name: 'Visible Branch Viewer',
+    });
+
+    const repo = await repoRepo.create(createRepoData());
+    const ownedPrivate = await wtRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'owned-private',
+        branch_unique_id: 1,
+        permission_source: 'override',
+        others_can: 'none',
+      })
+    );
+    await wtRepo.addOwner(ownedPrivate.branch_id, viewerId);
+    await wtRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'other-private',
+        branch_unique_id: 2,
+        permission_source: 'override',
+        others_can: 'none',
+      })
+    );
+
+    const visible = await wtRepo.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((w) => w.name)).toEqual(['owned-private']);
+  });
 });
 
 // ============================================================================
 // FindByRepoAndName
 // ============================================================================
+
+describe('BranchRepository.findActiveEnvironmentRefs', () => {
+  dbTest(
+    'returns routing refs for running and starting branch environments only',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+
+      const repo = await repoRepo.create(createRepoData({ slug: 'active-env-refs' }));
+
+      const running = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-running',
+          branch_unique_id: 1,
+          environment_instance: { status: 'running' },
+        })
+      );
+      const starting = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-starting',
+          branch_unique_id: 2,
+          environment_instance: { status: 'starting' },
+        })
+      );
+      await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-stopped',
+          branch_unique_id: 3,
+          environment_instance: { status: 'stopped' },
+        })
+      );
+      await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-error',
+          branch_unique_id: 4,
+          environment_instance: { status: 'error' },
+        })
+      );
+      await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-missing',
+          branch_unique_id: 5,
+        })
+      );
+
+      const refs = await branchRepo.findActiveEnvironmentRefs();
+      const branchIds = refs.map((ref) => ref.branch_id).sort();
+
+      expect(branchIds).toEqual([running.branch_id, starting.branch_id].sort());
+    }
+  );
+});
 
 describe('BranchRepository.findByRepoAndName', () => {
   dbTest('should find by repo_id and name with case sensitivity', async ({ db }) => {
@@ -1068,4 +1245,170 @@ describe('BranchRepository findExplicitFsAccessUserIds', () => {
       );
     }
   );
+});
+
+describe('BranchRepository.findAssistantBranches', () => {
+  dbTest(
+    'finds marker assistants and enabled-schedule legacy assistants without scanning all branches',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const repos = new RepoRepository(db);
+      const branches = new BranchRepository(db);
+      const schedules = new ScheduleRepository(db);
+
+      const user = await users.create({
+        email: `assistant-discovery-${Date.now()}@example.com`,
+        name: 'Assistant Discovery',
+      });
+      const repo = await repos.create(
+        createRepoData({ slug: `assistant-discovery-${Date.now()}` })
+      );
+
+      const markedCloneAssistant = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          created_by: user.user_id as UUID,
+          branch_unique_id: 1,
+          name: 'private-hodor-like',
+          storage_mode: 'clone',
+          custom_context: {
+            assistant: {
+              kind: 'assistant',
+              displayName: 'Hodor-like',
+              kb: {
+                primary_namespace_id: generateId(),
+                primary_namespace_slug: 'team-kb',
+                memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
+                default_visibility: 'public',
+              },
+            },
+          },
+        })
+      );
+      await schedules.create({
+        schedule_id: generateId(),
+        branch_id: markedCloneAssistant.branch_id,
+        created_by: user.user_id as UUID,
+        name: 'Daily brief',
+        cron_expression: '0 15 * * 1-5',
+        timezone_mode: 'utc',
+        prompt: 'Run the daily brief',
+        agentic_tool_config: { agentic_tool: 'codex' },
+        enabled: true,
+        allow_concurrent_runs: false,
+        retention: 5,
+      });
+
+      const legacyScheduledAssistant = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          created_by: user.user_id as UUID,
+          branch_unique_id: 2,
+          name: 'datagor-like',
+          storage_mode: 'clone',
+        })
+      );
+      await schedules.create({
+        schedule_id: generateId(),
+        branch_id: legacyScheduledAssistant.branch_id,
+        created_by: user.user_id as UUID,
+        name: 'Heartbeat',
+        cron_expression: '0 * * * *',
+        timezone_mode: 'utc',
+        prompt: 'Heartbeat',
+        agentic_tool_config: { agentic_tool: 'claude-code' },
+        enabled: true,
+        allow_concurrent_runs: false,
+        retention: 5,
+      });
+
+      const disabledScheduledBranch = await branches.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          created_by: user.user_id as UUID,
+          branch_unique_id: 3,
+          name: 'disabled-scheduled-branch',
+          storage_mode: 'clone',
+        })
+      );
+      await schedules.create({
+        schedule_id: generateId(),
+        branch_id: disabledScheduledBranch.branch_id,
+        created_by: user.user_id as UUID,
+        name: 'Disabled heartbeat',
+        cron_expression: '0 * * * *',
+        timezone_mode: 'utc',
+        prompt: 'Heartbeat',
+        agentic_tool_config: { agentic_tool: 'claude-code' },
+        enabled: false,
+        allow_concurrent_runs: false,
+        retention: 5,
+      });
+
+      const result = await branches.findAssistantBranches({
+        archived: false,
+        repo_id: repo.repo_id as UUID,
+        limit: 10,
+      });
+
+      expect(result.map((branch) => branch.branch_id)).toEqual(
+        expect.arrayContaining([markedCloneAssistant.branch_id, legacyScheduledAssistant.branch_id])
+      );
+      expect(result.map((branch) => branch.branch_id)).not.toContain(
+        disabledScheduledBranch.branch_id
+      );
+    }
+  );
+
+  dbTest('applies branch visibility when a userId is provided', async ({ db }) => {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branches = new BranchRepository(db);
+
+    const owner = await users.create({
+      email: `assistant-owner-${Date.now()}@example.com`,
+      name: 'Assistant Owner',
+    });
+    const outsider = await users.create({
+      email: `assistant-outsider-${Date.now()}@example.com`,
+      name: 'Assistant Outsider',
+    });
+    const repo = await repos.create(createRepoData({ slug: `assistant-rbac-${Date.now()}` }));
+
+    const privateAssistant = await branches.create(
+      createBranchData({
+        repo_id: repo.repo_id as UUID,
+        created_by: owner.user_id as UUID,
+        branch_unique_id: 4,
+        name: 'private-assistant',
+        permission_source: 'override',
+        others_can: 'none',
+        custom_context: {
+          assistant: {
+            kind: 'assistant',
+            displayName: 'Private Assistant',
+          },
+        },
+      })
+    );
+    await branches.addOwner(privateAssistant.branch_id, owner.user_id as UUID);
+
+    const ownerResult = await branches.findAssistantBranches({
+      archived: false,
+      repo_id: repo.repo_id as UUID,
+      userId: owner.user_id as UUID,
+      limit: 10,
+    });
+    const outsiderResult = await branches.findAssistantBranches({
+      archived: false,
+      repo_id: repo.repo_id as UUID,
+      userId: outsider.user_id as UUID,
+      limit: 10,
+    });
+
+    expect(ownerResult.map((branch) => branch.branch_id)).toContain(privateAssistant.branch_id);
+    expect(outsiderResult.map((branch) => branch.branch_id)).not.toContain(
+      privateAssistant.branch_id
+    );
+  });
 });

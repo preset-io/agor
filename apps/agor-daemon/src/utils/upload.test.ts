@@ -8,6 +8,8 @@
  *   - aggregate-size middlewares reject oversize requests (pre + post multer)
  */
 
+import os from 'node:os';
+import path from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -15,9 +17,11 @@ import {
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
   enforceTotalUploadSize,
+  getUploadDirectory,
   MAX_UPLOAD_FILE_SIZE,
   MAX_UPLOAD_FILES_PER_REQUEST,
   MAX_UPLOAD_TOTAL_SIZE,
+  validateUploadDestinationQuery,
 } from './upload';
 
 function mockRes() {
@@ -54,10 +58,7 @@ describe('upload allowlist', () => {
   it('multer instance carries the configured limits', () => {
     // Tiny stand-ins for the repos — the limit fields are read off the multer
     // instance directly, so the storage callbacks never run.
-    const mw = createUploadMiddleware(
-      {} as Parameters<typeof createUploadMiddleware>[0],
-      {} as Parameters<typeof createUploadMiddleware>[1]
-    );
+    const mw = createUploadMiddleware();
     // multer attaches the original options under `.limits`
     const limits = (mw as unknown as { limits?: Record<string, number> }).limits;
     expect(limits?.fileSize).toBe(MAX_UPLOAD_FILE_SIZE);
@@ -68,6 +69,24 @@ describe('upload allowlist', () => {
     // VALUES (a single text input), not combined file payload. If it ever
     // reappears here it likely means someone re-introduced the bad ceiling.
     expect(limits?.fieldSize).toBeUndefined();
+  });
+});
+
+describe('upload destination handling', () => {
+  it('stores daemon-side uploads under ~/.agor/uploads', () => {
+    expect(getUploadDirectory()).toBe(path.join(os.homedir(), '.agor', 'uploads'));
+  });
+
+  it('ignores only legacy no-op destination values', () => {
+    expect(() => validateUploadDestinationQuery(undefined)).not.toThrow();
+    expect(() => validateUploadDestinationQuery('')).not.toThrow();
+    expect(() => validateUploadDestinationQuery('branch')).not.toThrow();
+    expect(() => validateUploadDestinationQuery('global')).not.toThrow();
+  });
+
+  it('rejects unsupported upload destinations', () => {
+    expect(() => validateUploadDestinationQuery('temp')).toThrow(/no longer supported/i);
+    expect(() => validateUploadDestinationQuery('workspace')).toThrow(/no longer supported/i);
   });
 });
 

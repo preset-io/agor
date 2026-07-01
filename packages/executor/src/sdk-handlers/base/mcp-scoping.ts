@@ -20,6 +20,7 @@
 import { buildMCPTemplateContextFromEnv, resolveMcpServerTemplates } from '@agor/core/mcp';
 import type { MCPServer, SessionID } from '@agor/core/types';
 import type {
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
@@ -51,6 +52,13 @@ export interface MCPServerWithSource {
 export interface MCPResolutionDeps {
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
+  /**
+   * Trusted executor-only route for hydrating OAuth Authorization headers.
+   *
+   * Normal session MCP server payloads redact OAuth access tokens, so executor
+   * paths must not rely on `server.auth.oauth_access_token` being present.
+   */
+  mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository;
   /**
    * User ID to use for fetching per-user OAuth tokens.
    * When provided, MCP servers with per-user OAuth will have tokens injected.
@@ -212,6 +220,62 @@ export async function getMcpServersForSession(
       console.warn(
         `   ⚠️  Skipped ${serversSkipped} MCP server(s) due to unresolved required templates`
       );
+    }
+
+    const oauthServers = servers
+      .map(({ server }) => server)
+      .filter((server) => server.auth?.type === 'oauth');
+    if (oauthServers.length > 0) {
+      if (!deps.mcpOAuthAuthHeadersRepo) {
+        mcpDebug(
+          `   ℹ️  ${oauthServers.length} OAuth MCP server(s) resolved without executor auth-header hydrator`
+        );
+      } else {
+        try {
+          const authHeaders = await deps.mcpOAuthAuthHeadersRepo.getAuthHeaders(
+            oauthServers.map((server) => server.mcp_server_id)
+          );
+          let hydrated = 0;
+          for (let i = 0; i < servers.length; i++) {
+            const server = servers[i].server;
+            if (server.auth?.type !== 'oauth') continue;
+
+            const header = authHeaders[server.mcp_server_id];
+            const bearer = /^Bearer\s+(.+)$/i.exec(header?.authorization ?? '')?.[1];
+            if (!bearer) {
+              if (header?.error && header.error !== 'needs_reauth') {
+                console.warn(
+                  `   ⚠️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
+                );
+              } else if (header?.error) {
+                mcpDebug(
+                  `   ℹ️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
+                );
+              }
+              continue;
+            }
+
+            servers[i] = {
+              ...servers[i],
+              server: {
+                ...server,
+                auth: {
+                  ...server.auth,
+                  oauth_access_token: bearer,
+                },
+              },
+            };
+            hydrated++;
+          }
+          mcpDebug(`   🔐 Hydrated OAuth auth headers for ${hydrated} MCP server(s)`);
+        } catch (error) {
+          console.warn(
+            `   ⚠️  Failed to hydrate OAuth MCP auth headers: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      }
     }
 
     // Keep MCP config order stable across turns. Provider SDKs serialize MCP

@@ -38,6 +38,7 @@ import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mod
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -54,18 +55,17 @@ import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
 /**
- * Map Agor's effort level (`low`/`medium`/`high`/`max`) to Codex SDK's
+ * Map Agor's effort level (`low`/`medium`/`high`/`xhigh`/`max`) to Codex SDK's
  * `ModelReasoningEffort` (`minimal`/`low`/`medium`/`high`/`xhigh`).
  *
- * Agor has no equivalent for `minimal`, and Codex has no equivalent for `max`
- * — `max` is the user's "go as deep as possible" intent, which on Codex maps
- * to `xhigh`.
+ * Agor has no equivalent for `minimal`. Codex has no `max` — both Agor `max`
+ * and Agor `xhigh` map to Codex `xhigh` (the Codex ceiling).
  */
 function toCodexReasoningEffort(
   effort: EffortLevel | undefined
 ): 'low' | 'medium' | 'high' | 'xhigh' | undefined {
   if (!effort) return undefined;
-  return effort === 'max' ? 'xhigh' : effort;
+  return effort === 'max' || effort === 'xhigh' ? 'xhigh' : effort;
 }
 
 /**
@@ -285,7 +285,8 @@ export class CodexPromptService {
     private mcpServerRepo?: MCPServerRepository,
     _usersRepo?: UsersRepository,
     useNativeAuth: boolean = false,
-    private tasksService?: TasksService
+    private tasksService?: TasksService,
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     // Store API key from base-executor (already resolved with proper precedence)
     this.apiKey = apiKey || '';
@@ -636,6 +637,7 @@ export class CodexPromptService {
     const serversWithSource = await getMcpServersForSession(sessionId, {
       sessionMCPRepo: this.sessionMCPServerRepo,
       mcpServerRepo: this.mcpServerRepo,
+      mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
       forUserId,
     });
 

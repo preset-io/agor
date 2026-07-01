@@ -61,7 +61,7 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
 # NOTE: Update these versions when upgrading Agor SDKs (see packages/core/package.json)
 RUN npm install -g \
   pnpm@9.15.1 \
-  @anthropic-ai/claude-code@2.1.183 \
+  @anthropic-ai/claude-code@2.1.197 \
   @google/gemini-cli@0.31.0 \
   @openai/codex@0.141.0 \
   opencode-ai@1.2.15
@@ -114,6 +114,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/agor-daemon/package.json ./apps/agor-daemon/
 COPY apps/agor-cli/package.json ./apps/agor-cli/
 COPY apps/agor-ui/package.json ./apps/agor-ui/
+COPY packages/git/package.json ./packages/git/
 COPY packages/core/package.json ./packages/core/
 COPY packages/executor/package.json ./packages/executor/
 COPY packages/client/package.json ./packages/client/

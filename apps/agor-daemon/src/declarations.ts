@@ -11,6 +11,7 @@ import type { ExpressApplication, Service } from '@agor/core/feathers';
 import type {
   Board,
   Branch,
+  BranchEnvironmentUpdate,
   BranchID,
   CloneRepositoryResult,
   AuthenticatedParams as CoreAuthenticatedParams,
@@ -231,10 +232,10 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
       | {
           branch_id?: BranchID;
           branchId?: BranchID;
-          environment_update?: Partial<Branch['environment_instance']>;
-          environmentUpdate?: Partial<Branch['environment_instance']>;
+          environment_update?: BranchEnvironmentUpdate;
+          environmentUpdate?: BranchEnvironmentUpdate;
         },
-    environmentUpdate?: Partial<Branch['environment_instance']> | FeathersParams,
+    environmentUpdate?: BranchEnvironmentUpdate | FeathersParams,
     params?: FeathersParams
   ): Promise<Branch>;
   startEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;

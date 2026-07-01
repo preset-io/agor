@@ -14,6 +14,7 @@ import { execSync } from 'node:child_process';
 import { generateId } from '@agor/core/db';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -72,7 +73,8 @@ export class GeminiTool implements ITool {
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpEnabled?: boolean,
     useNativeAuth?: boolean, // Flag to use OAuth when no API key
-    usersRepo?: UsersRepository
+    usersRepo?: UsersRepository,
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(
@@ -86,7 +88,8 @@ export class GeminiTool implements ITool {
         mcpEnabled,
         useNativeAuth,
         usersRepo,
-        this.tasksService
+        this.tasksService,
+        mcpOAuthAuthHeadersRepo
       );
     }
   }

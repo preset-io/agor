@@ -1,0 +1,520 @@
+---
+title: Architecture Overview
+description: Learn about agor's system architecture, daemon-based design, data flow, and tech stack. Understand how FeathersJS, React, and WebSockets power real-time AI agent orchestration.
+---
+
+# Architecture Overview
+
+Agor is a **multi-client agent orchestration platform** with real-time collaboration, built on a local-first daemon architecture.
+
+## System Architecture
+
+### Current Architecture (Executor Isolation)
+
+Agor uses the **Executor Isolation** model, which separates privileged daemon operations from untrusted SDK/CLI execution contexts for enhanced security. The executor runs as a specialized subprocess that communicates with the daemon via session token authentication.
+
+```mermaid
+graph TB
+    subgraph Clients
+        CLI["<b>CLI</b><br/>oclif"]
+        UI["<b>Web UI</b><br/>React + Ant Design"]
+    end
+
+    Client["<b>Feathers Client</b><br/>REST + WebSocket"]
+
+    subgraph "Agor Daemon (Trusted Zone)"
+        Feathers["<b>FeathersJS Server</b>"]
+        MCP["<b>MCP HTTP Endpoint</b><br/>POST /mcp?sessionToken=..."]
+        Services["<b>Services</b><br/>Sessions, Tasks, Messages<br/>Boards, Branches, Repos<br/>Users, MCP, Context, Health"]
+        ExecutorPool["<b>Executor Pool</b><br/>Spawn & manage executors"]
+        IPCService["<b>IPC Service</b><br/>Unix socket server"]
+        ORM["<b>Drizzle ORM</b><br/>Type-safe queries"]
+    end
+
+    subgraph "Executor Processes (Sandboxed)"
+        Executor1["<b>Executor (agor_alice)</b><br/>Unix user: agor_alice"]
+        Executor2["<b>Executor (agor_bob)</b><br/>Unix user: agor_bob"]
+
+        subgraph "Executor1 Scope"
+            SDK1["<b>Agent SDK</b><br/>Claude/Codex/Gemini"]
+            Terminal1["<b>Terminal (PTY)</b><br/>bash/zsh"]
+            MCPServers1["<b>MCP Servers</b><br/>Child processes"]
+        end
+
+        subgraph "Executor2 Scope"
+            SDK2["<b>Agent SDK</b><br/>Claude/Codex/Gemini"]
+            Terminal2["<b>Terminal (PTY)</b><br/>bash/zsh"]
+            MCPServers2["<b>MCP Servers</b><br/>Child processes"]
+        end
+    end
+
+    subgraph Storage
+        DB[("<b>LibSQL Database</b><br/>~/.agor/agor.db<br/>🔒 Daemon access only")]
+        Git["<b>Git Branches</b><br/>~/.agor/worktrees/"]
+        Config["<b>Config</b><br/>~/.agor/config.yaml<br/>🔒 Daemon access only"]
+    end
+
+    CLI --> Client
+    UI --> Client
+    Client <-->|REST + WebSocket| Feathers
+
+    Feathers --> Services
+    Feathers --> MCP
+    MCP --> Services
+    Services --> ORM
+    Services --> ExecutorPool
+
+    ExecutorPool -.->|"spawn (sudo -u)"| Executor1
+    ExecutorPool -.->|"spawn (sudo -u)"| Executor2
+
+    IPCService <-->|"JSON-RPC 2.0<br/>Unix Socket"| Executor1
+    IPCService <-->|"JSON-RPC 2.0<br/>Unix Socket"| Executor2
+
+    Executor1 --> SDK1
+    Executor1 --> Terminal1
+    Executor1 --> MCPServers1
+
+    Executor2 --> SDK2
+    Executor2 --> Terminal2
+    Executor2 --> MCPServers2
+
+    ORM --> DB
+    Services --> Git
+    Services --> Config
+
+    SDK1 -.->|"request API key<br/>(just-in-time)"| IPCService
+    SDK2 -.->|"request API key<br/>(just-in-time)"| IPCService
+
+    style Executor1 fill:#fff4e6
+    style Executor2 fill:#fff4e6
+    style DB fill:#ffe6e6
+    style Config fill:#ffe6e6
+```
+
+**Key Security Improvements:**
+
+- **Process Separation** - Executors run as separate processes with different Unix users
+- **Session Token Authentication** - Executors authenticate with daemon using opaque UUID tokens (not JWTs), validated by custom Feathers strategy
+- **Feathers Client Communication** - Executors use authenticated Feathers client for all database/service operations (no direct database access)
+- **No Database Access** - Executors never receive database credentials or direct database connections
+- **Just-in-Time API Keys** - Executors request API keys per-call via IPC (not in environment)
+- **Unix User Isolation** - Each executor runs as `agor_alice`, `agor_bob`, etc. (file permission boundaries)
+- **IPC Audit Trail** - All daemon↔executor communication logged
+- **Credential Isolation** - SSH keys, GitHub tokens isolated by Unix user (`~/.ssh/` ownership)
+
+**Implementation Details:**
+
+- All Agent SDKs (Claude, Codex, Gemini) run exclusively in executor processes
+- External clients (UI/CLI) use `@agor-live/client`; executor internals currently use `@agor/core/api` with session token authentication
+- Custom `SessionTokenStrategy` in daemon validates tokens via `SessionTokenService`
+- Session tokens are opaque UUIDs (not JWTs) with 24-hour expiration
+- IPC communication via Unix sockets using JSON-RPC 2.0 protocol
+- Daemon routes all SDK operations through ExecutorPool service
+
+For detailed design documentation, see `context/explorations/executor-isolation.md`.
+
+### Legacy Architecture (Unified Process Model)
+
+Prior to executor isolation, Agor ran all SDK operations directly within the daemon process. This simplified architecture had Agent SDKs as direct dependencies of the daemon, with tools executing in the same process as database operations and service logic.
+
+**Why we moved away:**
+
+- Security concerns with untrusted SDK code having database access
+- Difficulty isolating credentials and API keys
+- No process-level separation between trusted daemon and untrusted execution
+- All sessions shared the same execution environment
+
+The unified model is no longer used in current Agor releases.
+
+## Technology Stack
+
+### Backend
+
+- **[FeathersJS](https://feathersjs.com/)** - Unified REST + WebSocket API framework
+- **[Drizzle ORM](https://orm.drizzle.team/)** - Type-safe database layer with LibSQL support
+- **[LibSQL](https://github.com/tursodatabase/libsql)** - Local SQLite-compatible database (future: cloud sync via Turso)
+- **[simple-git](https://github.com/steveukx/simple-git)** - Git operations for branch management
+
+### Frontend
+
+- **[React 18](https://react.dev/)** + **[Vite](https://vitejs.dev/)** - Fast development with HMR
+- **[Ant Design](https://ant.design/)** - Enterprise UI component library
+- **[React Flow](https://reactflow.dev/)** - Interactive session canvas with drag-and-drop
+- **[Socket.IO Client](https://socket.io/)** - Real-time WebSocket connection
+
+### Typed TypeScript Client (`@agor-live/client`)
+
+The UI and CLI both consume the daemon through a published, fully-typed client package. It's the same shape of API your own scripts and integrations use — there is no second-class "internal API."
+
+```typescript
+import { createAgorClient } from '@agor-live/client';
+
+const agor = createAgorClient({ url: 'http://localhost:3030' });
+await agor.authenticate({ strategy: 'local', email, password });
+
+// Strongly-typed CRUD across every service
+const { data: branches } = await agor.service('branches').find({
+  query: { board_id: boardId },
+});
+
+const session = await agor.service('sessions').create({
+  branch_id: branches[0].id,
+  agentic_tool: 'claude-code',
+  initial_prompt: 'Add OAuth login',
+});
+
+// Real-time WebSocket events with typed payloads
+agor.service('messages').on('created', (msg) => {
+  console.log(`${msg.role}: ${msg.content}`);
+});
+```
+
+**What you get:**
+
+- **Branded ID types** — `BranchId`, `SessionId`, `BoardId` aren't interchangeable; the compiler catches mix-ups.
+- **Service hooks across REST + WebSocket** — One subscription, one event API; the same `created`/`patched`/`removed` pattern for every entity.
+- **Schema-driven types** — Generated from Drizzle ORM models so DB schema changes propagate to clients at compile time.
+- **Authentication strategies built in** — `local`, `jwt`, `api-key`, and session-token strategies share one client surface.
+- **Same client the UI uses** — Whatever pattern works for an Agor screen works for your script.
+
+> If you're integrating Agor into your own tooling, prefer `@agor-live/client` over raw HTTP. You'll inherit every type and event the product evolves.
+
+### CLI
+
+- **[oclif](https://oclif.io/)** - Enterprise-grade CLI framework
+
+### Agent Integration
+
+- **[@anthropic-ai/claude-agent-sdk](https://github.com/anthropics/claude-agent-sdk)** - Claude Code capabilities with CLAUDE.md auto-loading
+- **[OpenAI SDK](https://github.com/openai/openai-node)** - Codex integration with custom permission system
+- **[Google Generative AI SDK](https://ai.google.dev/)** - Gemini integration (beta)
+
+## Real-Time Multiplayer
+
+Agor achieves multiplayer collaboration through **FeathersJS real-time events**:
+
+### WebSocket Event Flow
+
+```mermaid
+sequenceDiagram
+    participant U1 as User 1 (Browser)
+    participant U2 as User 2 (CLI)
+    participant D as Daemon
+    participant DB as Database
+
+    U1->>D: Create session (WebSocket)
+    D->>DB: INSERT session
+    DB-->>D: Session created
+    D->>U1: 'created' event
+    D->>U2: 'created' event (broadcast)
+
+    U2->>D: Update session position
+    D->>DB: UPDATE session
+    D->>U1: 'patched' event (broadcast)
+    D->>U2: 'patched' event
+
+    Note over U1,U2: All connected clients<br/>receive real-time updates
+```
+
+**Key Features:**
+
+- **Automatic broadcasting** - FeathersJS emits events to all connected clients
+- **Service-level events** - `created`, `patched`, `removed`, `updated`
+- **Custom events** - Cursor position, presence updates (100ms throttle)
+- **Optimistic UI** - React hooks listen to events and update state immediately
+
+## Core Services
+
+The daemon exposes 12 FeathersJS services via REST and WebSocket:
+
+| Service                 | Purpose                       | Key Operations                      |
+| ----------------------- | ----------------------------- | ----------------------------------- |
+| **sessions**            | Agent sessions with genealogy | CRUD, fork, spawn, prompt execution |
+| **tasks**               | Work units within sessions    | CRUD, completion tracking           |
+| **messages**            | Conversation history          | CRUD, bulk insert, streaming        |
+| **boards**              | Spatial session organization  | CRUD, session positioning           |
+| **branches**           | Git branch isolation        | Create, list, delete branches      |
+| **repos**               | Git repository management     | Clone, list, branch operations    |
+| **users**               | User accounts & auth          | CRUD, JWT authentication            |
+| **mcp-servers**         | MCP server configs            | CRUD, capability queries            |
+| **session-mcp-servers** | Session MCP links             | Associate MCP servers with sessions |
+| **context**             | Context file browser          | Read-only access to context/ files  |
+| **terminals**           | WebSocket terminal proxy      | PTY sessions for live terminals     |
+| **health-monitor**      | Real-time diagnostics         | System health, connection status    |
+
+## Agor as an MCP Server
+
+Agor exposes itself as a **Model Context Protocol (MCP) server** through the same daemon instance that serves the REST and WebSocket APIs. This enables both **internal agents** (running within Agor sessions) and **external tools** to interact with Agor programmatically.
+
+Looking for a deeper dive into what agents can do with those tools? See the [Agor MCP Server](./internal-mcp) guide.
+
+### Automatic Session Integration
+
+Every Agor session automatically gets MCP configured with **zero user configuration**:
+
+1. **Token Generation** - When a session is created, a unique 64-character hex token is generated and stored in `session.data.mcp_token`
+2. **Auto-Injection** - The token is automatically injected into the agent's MCP configuration:
+   ```typescript
+   mcpServers: {
+     agor: {
+       type: 'http',
+       url: 'http://localhost:3030/mcp',
+       headers: { Authorization: 'Bearer cd5fc175...' }
+     }
+   }
+   ```
+   The daemon requires the token in the `Authorization: Bearer` header. Query-string tokens are rejected so secrets don't leak into access logs.
+3. **Immediate Availability** - The agent can use MCP tools without any setup
+
+**Benefits:**
+
+- No manual MCP server installation or configuration
+- Session-scoped security (agents can't access other sessions' private data)
+- Consistent experience across all agentic tools (Claude Code, Codex, Gemini)
+
+### Self-Aware Agent Capabilities
+
+Agents running in Agor sessions can **introspect their own execution context**:
+
+**Understand Their Identity:**
+
+```typescript
+→ agor_sessions_get_current()
+← {
+    session_id: "019a1...",
+    agentic_tool: "claude-code",
+    branch_id: "019a2...",
+    board_id: "019a3...",
+    status: "running"
+  }
+```
+
+**Query Sibling Sessions:**
+
+```typescript
+→ agor_sessions_list({ boardId: "019a3...", status: "running" })
+← { total: 3, data: [...other sessions on same board...] }
+```
+
+**Spawn Child Sessions (Multi-Agent Delegation):**
+
+```typescript
+→ agor_sessions_spawn({
+    prompt: "Write integration tests for the auth module",
+    title: "Auth Tests"
+  })
+← { session_id: "019a4...", status: "running", ... }
+```
+
+**Manage User Profile:**
+
+```typescript
+→ agor_users_update_current({ name: "AI Assistant", emoji: "🤖" })
+← { user_id: "019a5...", name: "AI Assistant", emoji: "🤖" }
+```
+
+This enables **autonomous multi-agent workflows** where a parent agent can delegate subtasks to specialized child agents, monitor their progress, and coordinate work across multiple sessions.
+
+### Usage Modes
+
+**Internal (Session-Scoped Tokens)**
+
+- **Authentication:** Session-specific tokens (64-char hex, 24h expiration)
+- **Scope:** Full access to own session + read access to other sessions/boards/branches
+- **Use Case:** Agents running within Agor sessions (primary mode)
+- **Security:** Token is scoped to the user who created the session
+
+**External (Future: API Tokens)**
+
+- **Authentication:** Admin API tokens (not yet implemented)
+- **Scope:** Full CRUD access across all resources
+- **Use Cases:**
+  - External monitoring dashboards
+  - CI/CD integration (trigger sessions, check status)
+  - Cross-tool orchestration (e.g., GitHub Actions → Agor)
+  - Custom tooling and automation
+
+### Architecture: Same Daemon Instance
+
+The MCP server runs on the **same FeathersJS HTTP server** as the REST and WebSocket APIs:
+
+```
+https://localhost:3030/
+├── /sessions (REST)
+├── /tasks (REST)
+├── /mcp (MCP JSON-RPC 2.0)
+└── wss:// (WebSocket Secure)
+```
+
+**Why this design?**
+
+- ✅ Single process to manage (no separate MCP server)
+- ✅ MCP tools call FeathersJS services directly (no HTTP overhead)
+- ✅ Proper WebSocket event broadcasting when MCP tools create/update resources
+- ✅ Shared database connection and service layer
+
+## MCP Tools Reference
+
+The MCP server provides a growing toolkit across sessions, branches, boards, tasks, users, environments, cards, artifacts, and more — enabling structured programmatic access instead of brittle CLI parsing. See the [Agor MCP Server](/guide/internal-mcp) page for the up-to-date capability map.
+
+```typescript
+// ❌ Brittle approach
+$ agor session list | grep running | wc -l
+
+// ✅ Structured MCP approach
+→ agor_sessions_list({ status: 'running' })
+← { total: 3, data: [...] }
+```
+
+### Available Tools (14 Total)
+
+**Session Tools:**
+| Tool | Description | Example |
+|------|-------------|---------|
+| `agor_sessions_list` | List sessions with filters | `{ status: 'running', boardId: '...' }` |
+| `agor_sessions_get` | Get specific session details | `{ sessionId: '01933e4a...' }` |
+| `agor_sessions_get_current` | Get current session (introspection) | `{}` |
+| `agor_sessions_spawn` | Spawn child session & execute prompt | `{ prompt: 'Implement feature X', title: 'Feature X' }` |
+
+**Branch Tools:**
+| Tool | Description | Example |
+|------|-------------|---------|
+| `agor_branches_get` | Get branch details | `{ branchId: '...' }` |
+| `agor_branches_list` | List branches, including zone metadata and optional zone filtering | `{ limit: 10, zoneId: 'zone-review' }` |
+| `agor_branches_create` | Create a branch with optional issue/PR links | `{ repoId: '019a...', branchName: 'feat-x', issueUrl: 'https://...' }` |
+| `agor_branches_update` | Update branch metadata (issue/PR URLs, notes, attention state) | `{ branchId: '019a...', pullRequestUrl: 'https://...', notes: 'Ready for review', needsAttention: false }` |
+| `agor_branches_set_zone` | Pin a branch to a board zone, or clear its zone pin with `zoneId: null` | `{ branchId: '019a...', zoneId: null }` |
+
+**Board Tools:**
+| Tool | Description | Example |
+|------|-------------|---------|
+| `agor_boards_get` | Get board metadata/canvas objects; filter to zones or paginated active entities for large boards (`includeArchived: true` opts archived branch entities back in) | `{ boardId: '...', objectTypes: ['zone'], includeEntities: true, entityZoneId: 'zone-review', entitiesLimit: 25 }` |
+| `agor_boards_list` | List all boards | `{}` |
+
+**Task Tools:**
+| Tool | Description | Example |
+|------|-------------|---------|
+| `agor_tasks_list` | List tasks in session | `{ sessionId: '...' }` |
+| `agor_tasks_get` | Get specific task | `{ taskId: '...' }` |
+
+**User Tools:**
+| Tool | Description | Example |
+|------|-------------|---------|
+| `agor_users_list` | List users with pagination, compact rows, and optional search | `{ search: 'reed', limit: 10 }` |
+| `agor_users_find` | Find users by name, email, or Unix username before admin updates | `{ email: 'reed@preset.io' }` |
+| `agor_users_get` | Get user by ID | `{ userId: '...' }` |
+| `agor_users_get_current` | Get current authenticated user | `{}` |
+| `agor_users_update_current` | Update own profile | `{ name: 'Alice', emoji: '🚀' }` |
+
+### Example Agent Workflow
+
+```
+User: "What other sessions are running on this board?"
+
+Agent thinking:
+→ agor_sessions_get_current()
+← { session_id: "019a1...", board_id: "019a2...", status: "running" }
+
+→ agor_sessions_list({ boardId: "019a2...", status: "running" })
+← { total: 3, data: [
+    { session_id: "019a3...", agentic_tool: "claude-code", title: "Schema design" },
+    { session_id: "019a4...", agentic_tool: "claude-code", title: "API implementation" }
+  ]}
+
+Agent: "There are 2 other sessions running on this board:
+       - Session 019a3... (Claude Code, schema design)
+       - Session 019a4... (Claude Code, API implementation)"
+```
+
+### Service Layer Integration
+
+MCP tools route through **FeathersJS services** (not direct ORM) for:
+
+- ✅ Consistent business logic
+- ✅ Hook execution (validation, auth)
+- ✅ Future RBAC support
+- ✅ Cross-database compatibility
+
+### Future: Additional Write Operations
+
+Planned tools for expanded orchestration capabilities:
+
+- `agor_sessions_fork` - Fork session at decision point (preserve history)
+- `agor_boards_create` - Create new board for organizing sessions
+- `agor_branches_clone` - Clone an existing branch configuration (branch, metadata) for rapid duplication
+
+**Note:** `agor_sessions_spawn` is already live and enables autonomous multi-agent delegation!
+
+## Data Architecture
+
+### Hybrid Schema Strategy
+
+Agor uses a **hybrid materialization approach** for cross-database compatibility (LibSQL → PostgreSQL):
+
+**Materialized Columns** (indexed):
+
+- Primary keys, foreign keys, status, timestamps
+- Used for filtering, joins, sorting
+
+**JSON Blobs** (flexible):
+
+- Nested objects (git_state, genealogy, config)
+- Arrays (tasks, contextFiles, children)
+- Rarely queried metadata
+
+**Benefits:**
+
+- Migration-free schema evolution
+- Fast indexed queries
+- Cross-database compatibility (LibSQL ↔ PostgreSQL)
+
+### Branch-Based Isolation
+
+Every session requires a branch (foreign key constraint):
+
+```
+~/.agor/
+├── agor.db              # Database
+├── repos/               # Bare repositories
+│   └── myapp/
+└── branches/           # Session branches
+    └── myapp/
+        ├── main/        # Session 1 branch
+        └── feat-auth/   # Session 2 branch
+```
+
+**Why branches?**
+
+- Parallel development without branch switching
+- Session isolation (no shared working directory)
+- Natural mapping for fork/spawn operations
+
+## Authentication
+
+Four authentication strategies (all require credentials — there is no anonymous path):
+
+1. **Local** (email/password) - JWT-based authentication for user login
+2. **JWT** - Token refresh and validation for user sessions
+3. **API Key** - Long-lived `agor_sk_…` tokens for scripts and CI
+4. **Session Token** - Opaque UUID tokens for executor-to-daemon authentication
+
+On a fresh install with zero users, the daemon auto-creates an admin user on first start (`ensureFirstRunAdmin`), writing the generated password to `~/.agor/admin-credentials` (mode 0600) and printing it once to the daemon log.
+
+**Session Token Strategy Details:**
+
+- Used exclusively by executor processes to authenticate with daemon
+- Tokens are opaque UUIDs (not JWTs) generated by `SessionTokenService`
+- 24-hour expiration with automatic cleanup
+- Validated via custom `SessionTokenStrategy` in FeathersJS authentication
+- Scoped to the user who created the session
+- Never exposed to untrusted execution contexts
+
+All strategies use FeathersJS authentication with configurable storage.
+
+## Next Steps
+
+- **[Getting Started](/guide/getting-started)** — Install and run Agor
+- **[Agor MCP Server](/guide/internal-mcp)** — The agent-facing automation surface
+- **[Security](/security)** — Deployment modes, RBAC, Unix isolation, trust boundaries
+- **[SDK Comparison](/guide/sdk-comparison)** — Capability matrix across agent SDKs
+- Run `agor --help` for complete CLI documentation

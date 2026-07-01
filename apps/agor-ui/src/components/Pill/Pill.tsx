@@ -866,7 +866,7 @@ export const EntityPill: React.FC<EntityPillProps> = ({
 
   return (
     <Tag
-      icon={icon}
+      icon={emoji ? undefined : icon}
       color={color}
       title={title}
       aria-label={resolvedAriaLabel}

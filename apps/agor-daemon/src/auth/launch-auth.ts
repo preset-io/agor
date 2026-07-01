@@ -1,12 +1,37 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
-import type { AgorConfig } from '@agor/core/config';
-import { type Database, eq, generateId, hash, insert, select, update, users } from '@agor/core/db';
+import {
+  type AgorConfig,
+  resolveMultiTenancyConfig,
+  resolveTenantContext,
+  TenantResolutionError,
+} from '@agor/core/config';
+import {
+  eq,
+  generateId,
+  hash,
+  insert,
+  reattributeLegacyAnonymousRows,
+  runWithTenantDatabaseScope,
+  select,
+  type TenantScopeAwareDatabase,
+  update,
+  users,
+} from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
+import type {
+  Params,
+  TenantContext,
+  User,
+  UserExternalIdentity,
+  UserID,
+  UserRole,
+} from '@agor/core/types';
 import { normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
-import { issueRuntimeTokenPair } from './runtime-tokens.js';
+import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
+import { authTokenIssuedAtClaim } from './token-invalidation.js';
+import { redactUserAuthMetadata } from './user-redaction.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_SERVICE_TOKEN_ENV = 'AGOR_EXTERNAL_LAUNCH_SERVICE_TOKEN';
@@ -28,6 +53,7 @@ interface ResolvedLaunchSettings {
   devSharedSecret?: string;
   serviceCredential?: string;
   allowAdminRoles: boolean;
+  trustVerifiedEmailForLinking: boolean;
   requestTimeoutMs: number;
   algorithms?: string[];
 }
@@ -47,6 +73,7 @@ interface LaunchClaims extends JwtPayload {
   sub: string;
   aud?: string | string[];
   email?: string;
+  email_verified?: boolean;
   name?: string;
   picture?: string;
   avatar?: string;
@@ -74,7 +101,7 @@ export interface LaunchAuthResult {
 }
 
 export interface LaunchAuthServiceOptions {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   config: AgorConfig;
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
@@ -104,6 +131,7 @@ export function resolveLaunchSettings(config: AgorConfig): ResolvedLaunchSetting
     devSharedSecret: process.env[sharedSecretEnv] || raw?.dev_shared_secret,
     serviceCredential: process.env[serviceTokenEnv] || raw?.service_credential,
     allowAdminRoles: raw?.allow_admin_roles === true,
+    trustVerifiedEmailForLinking: raw?.trust_verified_email_for_linking === true,
     requestTimeoutMs: raw?.request_timeout_ms ?? DEFAULT_TIMEOUT_MS,
     algorithms: raw?.algorithms,
   };
@@ -166,7 +194,7 @@ function derivedEmail(provider: string, issuer: string, subject: string): string
 }
 
 async function chooseLocalEmail(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   requestedEmail: string | undefined,
   key: string,
   provider: string,
@@ -226,7 +254,7 @@ function mapRole(
 }
 
 async function findUserByExternalIdentity(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   key: string
 ): Promise<typeof users.$inferSelect | null> {
   const rows = await select(db).from(users).all();
@@ -237,14 +265,44 @@ async function findUserByExternalIdentity(
   return null;
 }
 
+async function findUserByTrustedEmail(
+  db: TenantScopeAwareDatabase,
+  email: string | undefined,
+  key: string,
+  settings: ResolvedLaunchSettings,
+  claims: LaunchClaims
+): Promise<typeof users.$inferSelect | null> {
+  if (!settings.trustVerifiedEmailForLinking || claims.email_verified !== true || !email) {
+    return null;
+  }
+
+  const existing = await select(db).from(users).where(eq(users.email, email)).one();
+  if (!existing) return null;
+
+  const identities = getExternalIdentities(existing.data as UserDataWithExternalIdentities);
+  // Preserve explicit mappings to other external identities. The trusted-email
+  // path is primarily for first Agor Cloud joins where a local seeded/manual
+  // account already exists with the verified registration email.
+  if (identities.length > 0 && !identities.some((identity) => identity.key === key)) {
+    return null;
+  }
+
+  return existing;
+}
+
 async function upsertLaunchUser(
   options: LaunchAuthServiceOptions,
-  claims: LaunchClaims
+  claims: LaunchClaims,
+  tenant?: TenantContext
 ): Promise<User> {
   const { db, config, usersService } = options;
   const issuer = claims.iss;
   const subject = claims.sub;
   const settings = resolveLaunchSettings(config);
+  const userLookupParams = {
+    provider: undefined,
+    ...(tenant ? { tenant } : {}),
+  };
   const provider = claims.provider || settings.providerId || issuer;
   const key = identityKey(provider, issuer, subject);
   const now = new Date();
@@ -262,7 +320,9 @@ async function upsertLaunchUser(
     last_login_at: nowIso,
   };
 
-  const existing = await findUserByExternalIdentity(db, key);
+  const existing =
+    (await findUserByExternalIdentity(db, key)) ??
+    (await findUserByTrustedEmail(db, email, key, settings, claims));
   if (existing) {
     const role = mapRole(
       claims.role,
@@ -286,14 +346,16 @@ async function upsertLaunchUser(
         updated_at: now,
         data: {
           ...data,
-          avatar: avatar ?? data.avatar,
+          avatar_url: avatar ?? data.avatar_url ?? data.avatar,
+          avatar_source: avatar ? 'launch-auth' : data.avatar_source,
           external_identities: nextIdentities,
         },
       })
       .where(eq(users.user_id, existing.user_id))
       .run();
+    await reattributeLegacyAnonymousRows(db, existing.user_id);
 
-    return usersService.get(existing.user_id as UserID, { provider: undefined });
+    return usersService.get(existing.user_id as UserID, userLookupParams);
   }
 
   const role = mapRole(claims.role, settings, config.execution?.allow_superadmin);
@@ -314,14 +376,17 @@ async function upsertLaunchUser(
       onboarding_completed: false,
       must_change_password: false,
       data: {
+        avatar_url: avatar,
         avatar,
+        avatar_source: avatar ? 'launch-auth' : undefined,
         preferences: {},
         external_identities: [identity],
       } as UserDataWithExternalIdentities,
     })
     .run();
+  await reattributeLegacyAnonymousRows(db, userId);
 
-  return usersService.get(userId, { provider: undefined });
+  return usersService.get(userId, userLookupParams);
 }
 
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
@@ -439,20 +504,27 @@ function issueRuntimeTokens(
   user: User,
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
-  refreshTokenTtl: SignOptions['expiresIn']
+  refreshTokenTtl: SignOptions['expiresIn'],
+  tenantClaim = 'tenant_id',
+  tenantId?: string
 ): LaunchAuthResult {
-  const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl);
+  const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl, {
+    ...authTokenIssuedAtClaim(Date.now(), user),
+    ...runtimeTenantClaims(tenantId ?? (user as { tenant_id?: string }).tenant_id, tenantClaim),
+  });
 
   return {
     ...tokens,
     authentication: { strategy: 'launch' },
-    user,
+    user: redactUserAuthMetadata(user),
   };
 }
 
 export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
+  const multiTenancy = resolveMultiTenancyConfig(options.config);
+  const tenantClaim = multiTenancy.auth_claim ?? 'tenant_id';
   return {
-    async create(data: { launchCode?: string; launch_code?: string }, _params?: Params) {
+    async create(data: { launchCode?: string; launch_code?: string }, params?: Params) {
       const launchCode =
         typeof data?.launchCode === 'string'
           ? data.launchCode.trim()
@@ -475,16 +547,28 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           throw new NotAuthenticated('Invalid one-time launch exchange response');
         }
         const claims = await verifyLaunchAssertion(exchange.assertion, settings);
-        const user = await upsertLaunchUser(options, claims);
-        return issueRuntimeTokens(
-          user,
-          options.jwtSecret,
-          options.accessTokenTtl,
-          options.refreshTokenTtl
-        );
+        const tenant = resolveTenantContext(multiTenancy, {
+          params,
+          authPayload: claims,
+          headers: params?.headers as Record<string, unknown> | undefined,
+        });
+        return await runWithTenantDatabaseScope(options.db, tenant.tenant_id, async () => {
+          const user = await upsertLaunchUser(options, claims, tenant);
+          return issueRuntimeTokens(
+            user,
+            options.jwtSecret,
+            options.accessTokenTtl,
+            options.refreshTokenTtl,
+            tenantClaim,
+            tenant.tenant_id
+          );
+        });
       } catch (error) {
         if (error instanceof BadRequest || error instanceof NotAuthenticated) {
           throw error;
+        }
+        if (error instanceof TenantResolutionError) {
+          throw new NotAuthenticated(error.message);
         }
         throw new NotAuthenticated('Invalid or expired one-time launch code');
       }

@@ -26,6 +26,7 @@ import {
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
+  TENANT_OWNED_SERVICE_PATHS,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
 
@@ -45,6 +46,28 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('tenant-owned service registration', () => {
+  it('wraps gateway inbound routing in tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
+  });
+
+  it('wraps MCP OAuth/session helper services in tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
+      expect.arrayContaining([
+        'sessions/:id/mcp-servers',
+        'mcp-servers/discover',
+        'mcp-servers/oauth-auth-headers',
+        'mcp-servers/oauth-complete',
+        'mcp-servers/oauth-disconnect',
+        'mcp-servers/oauth-refresh',
+        'mcp-servers/oauth-start',
+        'mcp-servers/oauth-status',
+        'mcp-servers/test-oauth',
+      ])
+    );
+  });
+});
 
 describe('shouldValidateRepoEnvironmentPayload', () => {
   it('skips absent repo environment payloads', () => {
@@ -250,12 +273,11 @@ describe('canReceiveMcpTokenForSession', () => {
   const CREATOR = 'user-creator';
   const OTHER = 'user-other';
 
-  it('allows the session creator (matching user_id)', () => {
+  it('allows any authenticated member+ caller to receive a caller-scoped MCP token', () => {
     expect(
       canReceiveMcpTokenForSession({
-        callerUserId: CREATOR,
+        callerUserId: OTHER,
         callerRole: 'member',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(true);
   });
@@ -265,51 +287,24 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: OTHER,
         callerRole: 'superadmin',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(true);
   });
 
   it('allows the executor service identity (role=service)', () => {
-    // role 'service' is not in ROLE_RANK, so hasMinimumRole returns false for
-    // it — the predicate must match it explicitly.
     expect(
       canReceiveMcpTokenForSession({
         callerUserId: 'executor-service',
         callerRole: 'service',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(true);
   });
 
-  it('denies a member+ viewer who is NOT the creator (the bypass we fixed)', () => {
-    expect(
-      canReceiveMcpTokenForSession({
-        callerUserId: OTHER,
-        callerRole: 'member',
-        sessionCreatedBy: CREATOR,
-      })
-    ).toBe(false);
-  });
-
-  it('denies a plain admin who is NOT the creator (only superadmin gets through)', () => {
-    expect(
-      canReceiveMcpTokenForSession({
-        callerUserId: OTHER,
-        callerRole: 'admin',
-        sessionCreatedBy: CREATOR,
-      })
-    ).toBe(false);
-  });
-
   it('denies a creator who has been demoted to viewer', () => {
-    // Viewers never receive MCP tokens per docs — the creator match alone
-    // isn't enough, they must also be at least a member.
     expect(
       canReceiveMcpTokenForSession({
         callerUserId: CREATOR,
         callerRole: 'viewer',
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(false);
   });
@@ -319,29 +314,24 @@ describe('canReceiveMcpTokenForSession', () => {
       canReceiveMcpTokenForSession({
         callerUserId: undefined,
         callerRole: undefined,
-        sessionCreatedBy: CREATOR,
       })
     ).toBe(false);
   });
 
-  it('denies when session has no created_by and caller is not privileged', () => {
+  it('denies callers with user_id but no explicit role', () => {
     expect(
       canReceiveMcpTokenForSession({
-        callerUserId: OTHER,
-        callerRole: 'member',
-        sessionCreatedBy: null,
+        callerUserId: CREATOR,
+        callerRole: undefined,
       })
     ).toBe(false);
   });
 
-  it('does NOT match empty-string caller user_id against empty-string created_by', () => {
-    // Empty-string coincidence must not count as "creator match" — this is
-    // why the predicate guards with `!!callerUserId` before comparing.
+  it('denies empty-string caller user_id even with member role', () => {
     expect(
       canReceiveMcpTokenForSession({
         callerUserId: '',
         callerRole: 'member',
-        sessionCreatedBy: '',
       })
     ).toBe(false);
   });

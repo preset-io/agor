@@ -443,13 +443,14 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
 
     connect();
 
-    // In-place reauth on token refresh. When singleFlightRefresh rotates
-    // the access token, it dispatches TOKENS_REFRESHED_EVENT. Instead of
-    // rebuilding the entire socket (which would flicker the UI and reset
-    // every real-time subscription), we just call client.authenticate with
-    // the new token on the existing socket. If the socket happens to be
-    // disconnected at the moment of refresh, skip — the connect handler
-    // will pick up the fresh token from the ref when the socket reconnects.
+    // In-place reauth on token replacement. When refresh, local login, or
+    // launch sign-in stores a fresh access token, it dispatches
+    // TOKENS_REFRESHED_EVENT. Instead of rebuilding the entire socket (which
+    // would flicker the UI and reset every real-time subscription), we just
+    // call client.authenticate with the new token on the existing socket. If
+    // the socket happens to be disconnected at the moment of replacement, skip
+    // — the connect handler will pick up the fresh token from the ref when the
+    // socket reconnects.
     const handleTokensRefreshed = (event: Event) => {
       if (!mounted) return;
       const detail = (event as CustomEvent<RefreshResult>).detail;
@@ -463,12 +464,11 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
           // refresh attempt fails transiently (network half-restored, daemon
           // briefly 5xxs, etc.) — see the `setConnecting(true); return;`
           // branch above. Without this `setConnected(true)`, a later
-          // successful refresh from any source (proactive timer, around-hook
-          // on a user click, visibility-change handler) re-authenticates the
+          // successful token replacement from any source re-authenticates the
           // socket but the navbar stays stuck on "Reconnecting" until page
           // refresh. We're safe to publish here because (a) `client.io.connected`
-          // was true at entry, (b) `authenticate()` just resolved, so the
-          // socket is connected AND authenticated.
+          // was true at entry, (b) `authenticate()` just resolved, so the socket
+          // is connected AND authenticated.
           if (!mounted) return;
           setConnected(true);
           setConnecting(false);
@@ -478,7 +478,7 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
           // Best-effort — if this fails, the next service call will 401
           // and the around-hook will take the standard refresh-and-retry
           // path. Log so the cause isn't invisible.
-          console.error('In-place re-authentication failed after token refresh:', err);
+          console.error('In-place re-authentication failed after token replacement:', err);
         });
     };
     window.addEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
@@ -505,8 +505,8 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
     };
     // The dep list deliberately uses `hasToken` (presence), not the token
     // value itself: see the accessTokenRef comment above. Rebuilds happen
-    // only on login/logout and url changes; token refreshes are absorbed
-    // in-place by the handler above.
+    // only on login/logout and url changes; in-session token replacements are
+    // absorbed in-place by the handler above.
   }, [url, hasToken]);
 
   /**

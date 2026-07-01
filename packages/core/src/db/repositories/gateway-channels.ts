@@ -26,6 +26,7 @@ import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type GatewayChannelInsert, type GatewayChannelRow, gatewayChannels } from '../schema';
 import {
   AmbiguousIdError,
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RepositoryError,
@@ -147,21 +148,24 @@ export class GatewayChannelRepository
       (row.agentic_config as Record<string, unknown> | null) ?? null
     );
 
-    return {
-      id: row.id as GatewayChannelID,
-      created_by: row.created_by,
-      name: row.name,
-      channel_type: row.channel_type as ChannelType,
-      target_branch_id: row.target_branch_id as UUID,
-      agor_user_id: row.agor_user_id as UUID,
-      channel_key: row.channel_key,
-      config: decryptConfig(config),
-      agentic_config: (agenticConfig as unknown as GatewayAgenticConfig) ?? null,
-      enabled: Boolean(row.enabled),
-      created_at: new Date(row.created_at).toISOString(),
-      updated_at: new Date(row.updated_at).toISOString(),
-      last_message_at: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
-    };
+    return attachHiddenTenant(
+      {
+        id: row.id as GatewayChannelID,
+        created_by: row.created_by,
+        name: row.name,
+        channel_type: row.channel_type as ChannelType,
+        target_branch_id: row.target_branch_id as UUID,
+        agor_user_id: row.agor_user_id as UUID,
+        channel_key: row.channel_key,
+        config: decryptConfig(config),
+        agentic_config: (agenticConfig as unknown as GatewayAgenticConfig) ?? null,
+        enabled: Boolean(row.enabled),
+        created_at: new Date(row.created_at).toISOString(),
+        updated_at: new Date(row.updated_at).toISOString(),
+        last_message_at: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
+      },
+      row
+    );
   }
 
   /**

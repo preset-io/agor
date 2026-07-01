@@ -383,6 +383,8 @@ export interface UserPreferences {
   onboarding?: OnboardingState;
   /** The user's personal/main board ID (created during onboarding or later) */
   mainBoardId?: string;
+  /** Whether to render Slack-synced avatar_url when available. Undefined defaults to true. */
+  use_slack_avatar?: boolean;
   // Future preferences can be added here
   [key: string]: unknown;
 }
@@ -417,7 +419,17 @@ export interface BaseUserFields {
  */
 export interface User extends BaseUserFields {
   user_id: UserID;
+  /**
+   * Preferred image avatar URL for this user.
+   *
+   * Stored in `users.data.avatar_url`. `avatar` is retained as a legacy alias
+   * for older launch-auth/MCP callers and should be treated as a fallback.
+   */
+  avatar_url?: string;
   avatar?: string;
+  avatar_source?: 'manual' | 'slack' | 'launch-auth' | string;
+  avatar_source_id?: string;
+  avatar_synced_at?: string;
   preferences?: UserPreferences;
   onboarding_completed: boolean;
   /** Force password change on next login (admin-settable, auto-cleared on password change) */
@@ -448,6 +460,21 @@ export interface User extends BaseUserFields {
   // Default agentic tool configuration (prepopulates session creation forms)
   default_agentic_config?: DefaultAgenticConfig;
 }
+
+/**
+ * Backend/internal user shape with auth invalidation metadata.
+ *
+ * Public user DTOs returned to browser clients intentionally omit this marker;
+ * auth services use it while validating or issuing browser tokens.
+ */
+export type UserAuthMetadata = object & {
+  /** Tokens issued at or before this timestamp are no longer valid. */
+  tokens_valid_after?: Date;
+  /** Backend-only tenant id used while issuing/validating runtime tokens. */
+  tenant_id?: string;
+};
+
+export type InternalUser = User & UserAuthMetadata;
 
 /**
  * Env var scope values.
@@ -491,6 +518,32 @@ export interface UserApiKey {
   last_used_at?: Date;
 }
 
+export interface UserAvatarSettings {
+  enabled: boolean;
+  provider: 'slack' | null;
+  gateway_channel_id: string | null;
+  last_sync_at?: string;
+  last_sync_result?: UserAvatarSyncResult;
+}
+
+export interface UserAvatarSyncResult {
+  ok: boolean;
+  mode: 'bulk' | 'single';
+  gateway_channel_id: string | null;
+  started_at: string;
+  finished_at: string;
+  matched: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  failures: Array<{ user_id?: string; email?: string; reason: string }>;
+}
+
+export interface UserAvatarSyncRequest {
+  gateway_channel_id?: string;
+  user_id?: string;
+}
+
 /**
  * Create user input (password required, not stored in User type)
  */
@@ -499,6 +552,11 @@ export interface CreateUserInput extends Partial<Omit<BaseUserFields, 'role'>> {
   password: string;
   role?: UserRole; // Optional, defaults to 'member' if not provided
   unix_username?: string;
+  avatar_url?: string;
+  avatar?: string;
+  avatar_source?: string;
+  avatar_source_id?: string;
+  avatar_synced_at?: string;
   /** Force user to change password on first login (admin-only) */
   must_change_password?: boolean;
 }
@@ -508,7 +566,11 @@ export interface CreateUserInput extends Partial<Omit<BaseUserFields, 'role'>> {
  */
 export interface UpdateUserInput extends Partial<BaseUserFields> {
   password?: string;
+  avatar_url?: string | null;
   avatar?: string;
+  avatar_source?: string | null;
+  avatar_source_id?: string | null;
+  avatar_synced_at?: string | null;
   preferences?: UserPreferences;
   onboarding_completed?: boolean;
   unix_username?: string;

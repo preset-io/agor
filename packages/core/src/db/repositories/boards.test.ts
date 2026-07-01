@@ -5,7 +5,7 @@
  * board object management (zones/text), and JSON field handling.
  */
 
-import type { Board, BoardObject, UUID } from '@agor/core/types';
+import type { Board, BoardID, BoardObject, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
@@ -540,6 +540,65 @@ describe('BoardRepository.findAll', () => {
     expect(found.color).toBe('#1677ff');
     expect(found.created_at).toBeDefined();
     expect(found.last_updated).toBeDefined();
+  });
+
+  dbTest('should filter by exact archived state', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const active = await repo.create(createBoardData({ name: 'Active', slug: 'active' }));
+    const archived = await repo.create(createBoardData({ name: 'Archived', slug: 'archived' }));
+    await repo.update(archived.board_id, { archived: true });
+
+    const activeOnly = await repo.findAll({ archived: false });
+    expect(activeOnly.map((b) => b.board_id)).toEqual([active.board_id]);
+
+    const archivedOnly = await repo.findAll({ archived: true });
+    expect(archivedOnly.map((b) => b.board_id)).toEqual([archived.board_id]);
+  });
+
+  dbTest('should restrict to an explicit boardIds set', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const b1 = await repo.create(createBoardData({ name: 'B1', slug: 'b1' }));
+    const b2 = await repo.create(createBoardData({ name: 'B2', slug: 'b2' }));
+    await repo.create(createBoardData({ name: 'B3', slug: 'b3' }));
+
+    const scoped = await repo.findAll({
+      boardIds: [b1.board_id as BoardID, b2.board_id as BoardID],
+    });
+    expect(scoped.map((b) => b.name).sort()).toEqual(['B1', 'B2']);
+  });
+
+  dbTest('should return no rows for an empty boardIds set', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    await repo.create(createBoardData({ name: 'B1', slug: 'b1' }));
+
+    expect(await repo.findAll({ boardIds: [] })).toEqual([]);
+  });
+
+  dbTest('should push board visibility directly into findAll SQL', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const viewerId = generateId() as UUID;
+
+    const ownedPrivate = await repo.create(
+      createBoardData({
+        name: 'Owned private',
+        slug: 'owned-private',
+        access_mode: 'private',
+        created_by: viewerId,
+      })
+    );
+    await repo.create(
+      createBoardData({
+        name: 'Other private',
+        slug: 'other-private',
+        access_mode: 'private',
+        created_by: generateId() as UUID,
+      })
+    );
+
+    const visible = await repo.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((b) => b.board_id)).toEqual([ownedPrivate.board_id]);
   });
 });
 

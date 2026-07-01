@@ -246,6 +246,38 @@ export class FeathersSessionMCPServersRepository {
   }
 }
 
+type MCPOAuthAuthHeaderResult = {
+  headers: Record<string, { authorization?: string; error?: string }>;
+};
+
+/**
+ * MCP OAuth auth headers repository - proxies to the trusted executor route.
+ *
+ * Session-scoped MCP server reads intentionally redact OAuth access tokens in
+ * normal API payloads. Executors use this narrow route to retrieve just the
+ * launch-time Authorization header for OAuth servers that are already in the
+ * session's effective MCP scope.
+ */
+export class FeathersMCPOAuthAuthHeadersRepository {
+  constructor(private client: AgorClient) {}
+
+  async getAuthHeaders(
+    mcpServerIds: MCPServerID[]
+  ): Promise<Record<string, { authorization?: string; error?: string }>> {
+    if (mcpServerIds.length === 0) return {};
+
+    const service = this.client.service('mcp-servers/oauth-auth-headers');
+    const executorSessionToken = (this.client as AgorClient & { executorSessionToken?: string })
+      .executorSessionToken;
+    const result = (await service.create({
+      mcp_server_ids: mcpServerIds,
+      ...(executorSessionToken ? { executorSessionToken } : {}),
+    })) as MCPOAuthAuthHeaderResult;
+
+    return result.headers ?? {};
+  }
+}
+
 /**
  * Users Repository - proxies to 'users' Feathers service
  */
@@ -276,6 +308,7 @@ export type BranchRepository = FeathersBranchesRepository;
 export type RepoRepository = FeathersReposRepository;
 export type MCPServerRepository = FeathersMCPServersRepository;
 export type SessionMCPServerRepository = FeathersSessionMCPServersRepository;
+export type MCPOAuthAuthHeadersRepository = FeathersMCPOAuthAuthHeadersRepository;
 export type UsersRepository = FeathersUsersRepository;
 
 /**
@@ -291,6 +324,7 @@ export function createFeathersBackedRepositories(client: AgorClient) {
     users: new FeathersUsersRepository(client),
     mcpServers: new FeathersMCPServersRepository(client),
     sessionMCP: new FeathersSessionMCPServersRepository(client),
+    mcpOAuthAuthHeaders: new FeathersMCPOAuthAuthHeadersRepository(client),
 
     // Services (direct Feathers service access)
     // SDK handlers can use these services directly with proper typing

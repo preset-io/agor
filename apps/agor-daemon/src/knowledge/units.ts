@@ -1,7 +1,6 @@
 import type { AgorConfig } from '@agor/core/config';
 import {
   and,
-  type Database,
   eq,
   KnowledgeDocumentRepository,
   kbDocuments,
@@ -9,6 +8,7 @@ import {
   kbNamespaces,
   type ReplaceKnowledgeUnitInput,
   select,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { KnowledgeDocumentVersionID } from '@agor/core/types';
 import { DEFAULT_KNOWLEDGE_CHUNKING } from './embeddings.js';
@@ -47,7 +47,7 @@ export function knowledgeUnitsForMarkdown(
 }
 
 export async function rebuildCurrentKnowledgeUnits(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   config: AgorConfig,
   options: { embeddingConfigured: boolean }
 ): Promise<number> {

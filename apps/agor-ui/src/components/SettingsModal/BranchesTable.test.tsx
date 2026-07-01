@@ -19,8 +19,8 @@ import { describe, expect, it } from 'vitest';
 import { BranchesTable } from './BranchesTable';
 
 /** BranchesTable uses useAppNavigation → useNavigate under the hood,
- *  so the test wraps in a Router. It no longer needs the AppLiveDataProvider
- *  (table reads navigation maps from its props, not from context). */
+ *  so the test wraps in a Router. It needs no data-context provider
+ *  (table reads navigation maps from its props). */
 function renderWithProviders(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }

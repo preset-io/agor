@@ -9,6 +9,14 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'claude-tag-vs-agor-assistants',
+    title: 'Claude Tag Validates the Category. Now Model Your Assistants.',
+    description:
+      'Claude Tag brings @Claude into Slack. Here is why teams will still need modeled, governed, observable, multi-specialist assistants — and why Agor is built for that next step.',
+    date: '2026-06-26',
+    image: '/images/blog/claude-tag-vs-agor-assistants.png',
+  },
+  {
     slug: 'raise-team-helper-agent',
     title: 'Raise a Team Helper Agent in an Afternoon',
     description:

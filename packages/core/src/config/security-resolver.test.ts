@@ -23,6 +23,7 @@ import {
   resolveSecurity,
   SANDPACK_CSP_FRAME_SRC,
   SANDPACK_CSP_WORKER_SRC,
+  SLACK_AVATAR_CSP_IMG_SRC,
 } from './security-resolver';
 import type { AgorConfig } from './types';
 
@@ -34,6 +35,11 @@ describe('resolveSecurity — CSP defaults', () => {
     expect(csp.directives['frame-src']).toContain("'self'");
     expect(csp.directives['frame-src']).toContain(SANDPACK_CSP_FRAME_SRC);
     expect(csp.directives['worker-src']).toContain(SANDPACK_CSP_WORKER_SRC);
+  });
+
+  it('allows Slack avatar images by default', () => {
+    const { csp } = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' });
+    expect(csp.directives['img-src']).toContain(SLACK_AVATAR_CSP_IMG_SRC);
   });
 
   it('honours allowSandpack=false by dropping *.codesandbox.io from frame-src', () => {

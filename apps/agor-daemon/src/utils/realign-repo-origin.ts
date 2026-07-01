@@ -1,7 +1,7 @@
 import type { Application } from '@agor/core/feathers';
-import type { HookContext, Repo, RepoID } from '@agor/core/types';
+import type { AuthenticatedParams, HookContext, Repo, RepoID } from '@agor/core/types';
 import {
-  generateSessionToken,
+  generateScopedServiceToken,
   getDaemonUrl,
   spawnExecutorFireAndForget,
 } from './spawn-executor.js';
@@ -15,24 +15,33 @@ import {
  */
 
 /** Look up the repo row, then realign. Use when caller only has a repoId. */
-export async function ensureRepoOriginAlignedById(app: Application, repoId: RepoID): Promise<void> {
+export async function ensureRepoOriginAlignedById(
+  app: Application,
+  repoId: RepoID,
+  params?: Partial<AuthenticatedParams>
+): Promise<void> {
   let repo: Repo;
   try {
-    repo = (await app.service('repos').get(repoId)) as Repo;
+    repo = (await app.service('repos').get(repoId, params as never)) as Repo;
   } catch {
     return;
   }
-  return ensureRepoOriginAlignedForRepo(app, repo);
+  return ensureRepoOriginAlignedForRepo(app, repo, params);
 }
 
 /** Realign using a Repo row the caller already has (no extra DB fetch before spawning). */
-export async function ensureRepoOriginAlignedForRepo(app: Application, repo: Repo): Promise<void> {
+export async function ensureRepoOriginAlignedForRepo(
+  app: Application,
+  repo: Repo,
+  params?: Partial<AuthenticatedParams>
+): Promise<void> {
   if (repo.repo_type !== 'remote') return;
   if (!repo.remote_url) return;
   if (!repo.local_path) return;
 
-  const sessionToken = generateSessionToken(
-    app as unknown as { settings: { authentication?: { secret?: string } } }
+  const sessionToken = generateScopedServiceToken(
+    app as unknown as { settings: { authentication?: { secret?: string } } },
+    params
   );
 
   spawnExecutorFireAndForget(
@@ -72,12 +81,14 @@ export function realignRepoOriginAfterPatchHook() {
     const repos = Array.isArray(result) ? result : [result];
     for (const repo of repos) {
       if (!repo?.repo_id) continue;
-      ensureRepoOriginAlignedForRepo(context.app as Application, repo).catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `⚠️  [repos.after.patch] ensureRepoOriginAlignedForRepo failed for repo ${repo.repo_id}: ${message}`
-        );
-      });
+      ensureRepoOriginAlignedForRepo(context.app as Application, repo, context.params).catch(
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(
+            `⚠️  [repos.after.patch] ensureRepoOriginAlignedForRepo failed for repo ${repo.repo_id}: ${message}`
+          );
+        }
+      );
     }
     return context;
   };

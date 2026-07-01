@@ -101,6 +101,8 @@ import { MarkdownRenderer } from '../components/MarkdownRenderer';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 import { DiffBlock } from '../components/ToolUseRenderer/renderers/DiffBlock';
 import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
+import { useAgorStore } from '../store/agorStore';
+import { selectUserById } from '../store/selectors';
 import {
   buildKnowledgeRoutePath,
   decodeKnowledgeRoutePath,
@@ -195,13 +197,9 @@ type KnowledgeNamespacesClientServiceWithMethods = KnowledgeNamespacesClientServ
 interface KnowledgePageProps {
   client: AgorClient | null;
   currentUser?: User | null;
-  /** All known users, keyed by id — powers `@` user mentions in the editor. */
-  userById?: Map<string, User>;
   onUserSettingsClick?: () => void;
   onLogout?: () => void;
 }
-
-const EMPTY_USER_MAP: Map<string, User> = new Map();
 
 const DEFAULT_MARKDOWN = `# New Knowledge Page\n\nWrite markdown here.\n`;
 const DRAFT_DOCUMENT_ID = '__knowledge_draft__' as CoreKnowledgeDocument['document_id'];
@@ -714,10 +712,13 @@ interface FolderSection {
 export function KnowledgePage({
   client,
   currentUser = null,
-  userById = EMPTY_USER_MAP,
   onUserSettingsClick,
   onLogout,
 }: KnowledgePageProps) {
+  // Self-subscribe to the user map (powers `@` user mentions). The subscription
+  // used to live in the outer App shell; relocating it here keeps the shell from
+  // re-rendering on every user write.
+  const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
   const { confirm } = useThemedModal();
   const navigate = useNavigate();

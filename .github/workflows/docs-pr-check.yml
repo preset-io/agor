@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build git package
+        run: pnpm --filter @agor/git build
+
       - name: Build core package
         run: pnpm --filter @agor/core build
 

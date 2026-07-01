@@ -16,8 +16,8 @@ import {
   validateEnvVar,
 } from '@agor/core/config';
 import {
+  and,
   compare,
-  type Database,
   decryptApiKey,
   deleteFrom,
   encryptApiKey,
@@ -25,11 +25,12 @@ import {
   hash,
   insert,
   select,
+  type TenantScopeAwareDatabase,
   update,
   users,
 } from '@agor/core/db';
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { isLikelyGitToken } from '@agor/core/git';
+import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { isLikelyGitToken } from '@agor/core/git/pure';
 import type {
   AgenticToolName,
   AgenticToolsConfig,
@@ -37,10 +38,14 @@ import type {
   AuthenticatedParams,
   EnvVarMetadata,
   EnvVarScope,
+  InternalUser,
   Paginated,
   Params,
   StoredAgenticTools,
   User,
+  UserAvatarSettings,
+  UserAvatarSyncRequest,
+  UserAvatarSyncResult,
   UserID,
   UserRole,
 } from '@agor/core/types';
@@ -51,6 +56,7 @@ import {
   ROLES,
   toAgenticToolsStatus,
 } from '@agor/core/types';
+import { UserAvatarSyncManager } from './user-avatar-sync.js';
 
 function optionalNonNegativeInteger(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
@@ -65,20 +71,57 @@ function queryString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function usersTableHasTenantColumn(): boolean {
+  return 'tenant_id' in (users as unknown as object);
+}
+
+function tenantPredicate(params?: Params) {
+  const tenantId = (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id;
+  if (!tenantId || !usersTableHasTenantColumn()) return undefined;
+  return eq((users as never as { tenant_id: never }).tenant_id, tenantId);
+}
+
+function withTenantPredicate(params: Params | undefined, predicate: unknown) {
+  const tenant = tenantPredicate(params);
+  return tenant ? and(predicate as never, tenant) : predicate;
+}
+
+function tenantInsertValues(params?: Params): { tenant_id?: string } {
+  const tenantId = (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id;
+  return tenantId && usersTableHasTenantColumn() ? { tenant_id: tenantId } : {};
+}
+
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
+export const AUTH_INTERNAL_USER_LOOKUP_PARAM = Symbol('agor.users.auth-internal-lookup');
 
 export interface LocalAuthenticationLookupParams extends Params {
   [LOCAL_AUTH_LOOKUP_PARAM]?: true;
+  [AUTH_INTERNAL_USER_LOOKUP_PARAM]?: true;
 }
 
 export function markLocalAuthenticationLookup(params: Params): void {
   (params as LocalAuthenticationLookupParams)[LOCAL_AUTH_LOOKUP_PARAM] = true;
 }
 
+export function markAuthenticationUserLookup(params: Params): void {
+  (params as LocalAuthenticationLookupParams)[AUTH_INTERNAL_USER_LOOKUP_PARAM] = true;
+}
+
 export function isLocalAuthenticationLookup(params: Params | undefined): boolean {
   return (
     (params as LocalAuthenticationLookupParams | undefined)?.[LOCAL_AUTH_LOOKUP_PARAM] === true
   );
+}
+
+export function isAuthenticationUserLookup(params: Params | undefined): boolean {
+  return (
+    (params as LocalAuthenticationLookupParams | undefined)?.[AUTH_INTERNAL_USER_LOOKUP_PARAM] ===
+    true
+  );
+}
+
+function shouldIncludeAuthMetadata(params: Params | undefined, includePassword = false): boolean {
+  return includePassword || !params?.provider || isAuthenticationUserLookup(params);
 }
 
 function isServiceAccount(params: Params | undefined): boolean {
@@ -167,6 +210,11 @@ interface CreateUserData {
   role?: UserRole;
   unix_username?: string;
   must_change_password?: boolean;
+  avatar_url?: string | null;
+  avatar?: string | null;
+  avatar_source?: string | null;
+  avatar_source_id?: string | null;
+  avatar_synced_at?: string | null;
 }
 
 /**
@@ -180,7 +228,11 @@ interface UpdateUserData {
   role?: UserRole;
   unix_username?: string;
   must_change_password?: boolean;
-  avatar?: string;
+  avatar_url?: string | null;
+  avatar?: string | null;
+  avatar_source?: string | null;
+  avatar_source_id?: string | null;
+  avatar_synced_at?: string | null;
   preferences?: Record<string, unknown>;
   onboarding_completed?: boolean;
   /**
@@ -202,7 +254,23 @@ interface UpdateUserData {
  * Users Service Methods
  */
 export class UsersService {
-  constructor(protected db: Database) {}
+  private avatarSync?: UserAvatarSyncManager;
+
+  constructor(
+    protected db: TenantScopeAwareDatabase,
+    app?: Application
+  ) {
+    if (app) {
+      this.avatarSync = new UserAvatarSyncManager(db, app);
+    }
+  }
+
+  private requireAvatarSync(): UserAvatarSyncManager {
+    if (!this.avatarSync) {
+      throw new Error('User avatar sync is not available in this service context');
+    }
+    return this.avatarSync;
+  }
 
   /**
    * Find all users.
@@ -229,11 +297,16 @@ export class UsersService {
     if (email) {
       ensureCanExactEmailLookup(params, email);
       // Find by email (for LocalStrategy / authorized exact lookup)
-      const row = await select(this.db).from(users).where(eq(users.email, email)).one();
+      const row = await select(this.db)
+        .from(users)
+        .where(withTenantPredicate(params, eq(users.email, email)))
+        .one();
       rows = row ? [row] : [];
     } else {
       // Find all
-      rows = await select(this.db).from(users).all();
+      rows = tenantPredicate(params)
+        ? await select(this.db).from(users).where(tenantPredicate(params)).all()
+        : await select(this.db).from(users).all();
     }
 
     rows = rows.sort(
@@ -263,7 +336,10 @@ export class UsersService {
     const pageRows =
       limit === undefined ? rows.slice(skip) : rows.slice(skip, skip + Math.max(limit, 0));
 
-    const results = pageRows.map((row) => this.rowToUser(row, includePassword, requesterId));
+    const includeAuthMetadata = shouldIncludeAuthMetadata(params, includePassword);
+    const results = pageRows.map((row) =>
+      this.rowToUser(row, includePassword, requesterId, includeAuthMetadata)
+    );
 
     return {
       total,
@@ -277,7 +353,10 @@ export class UsersService {
    * Get user by ID
    */
   async get(id: UserID, params?: Params): Promise<User> {
-    const row = await select(this.db).from(users).where(eq(users.user_id, id)).one();
+    const row = await select(this.db)
+      .from(users)
+      .where(withTenantPredicate(params, eq(users.user_id, id)))
+      .one();
 
     if (!row) {
       throw new Error(`User not found: ${id}`);
@@ -286,15 +365,18 @@ export class UsersService {
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
-    return this.rowToUser(row, false, requesterId);
+    return this.rowToUser(row, false, requesterId, shouldIncludeAuthMetadata(params));
   }
 
   /**
    * Create new user
    */
-  async create(data: CreateUserData, _params?: Params): Promise<User> {
+  async create(data: CreateUserData, params?: Params): Promise<User> {
     // Check if email already exists
-    const existing = await select(this.db).from(users).where(eq(users.email, data.email)).one();
+    const existing = await select(this.db)
+      .from(users)
+      .where(withTenantPredicate(params, eq(users.email, data.email)))
+      .one();
 
     if (existing) {
       throw new Error(`User with email ${data.email} already exists`);
@@ -322,14 +404,20 @@ export class UsersService {
         must_change_password: data.must_change_password ?? false,
         created_at: now,
         updated_at: now,
+        ...tenantInsertValues(params),
         data: {
+          avatar_url: data.avatar_url ?? data.avatar ?? undefined,
+          avatar_source:
+            data.avatar_source ?? ((data.avatar_url ?? data.avatar) ? 'manual' : undefined),
+          avatar_source_id: data.avatar_source_id ?? undefined,
+          avatar_synced_at: data.avatar_synced_at ?? undefined,
           preferences: {},
         },
       })
       .returning()
       .one();
 
-    return this.rowToUser(row);
+    return this.rowToUser(row, false, undefined, shouldIncludeAuthMetadata(params));
   }
 
   /**
@@ -342,6 +430,9 @@ export class UsersService {
     // Handle password separately (needs hashing)
     if (data.password) {
       updates.password = await hash(data.password, 10);
+      // Any password change requires fresh browser authentication; previously
+      // issued access and refresh tokens are rejected after this marker.
+      updates.tokens_valid_after = now;
       // Auto-clear must_change_password when password is changed,
       // UNLESS explicitly set in the same request (admin reset + force change scenario)
       // e.g., `user update --password newpass --force-password-change` should keep flag true
@@ -362,17 +453,28 @@ export class UsersService {
 
     // Update data blob
     if (
-      data.avatar ||
+      data.avatar_url !== undefined ||
+      data.avatar !== undefined ||
+      data.avatar_source !== undefined ||
+      data.avatar_source_id !== undefined ||
+      data.avatar_synced_at !== undefined ||
       data.preferences ||
       data.agentic_tools ||
       data.env_vars ||
       data.env_var_scopes ||
       data.default_agentic_config
     ) {
-      const current = await this.get(id);
-      const currentRow = await select(this.db).from(users).where(eq(users.user_id, id)).one();
+      const current = await this.get(id, params);
+      const currentRow = await select(this.db)
+        .from(users)
+        .where(withTenantPredicate(params, eq(users.user_id, id)))
+        .one();
       const currentData = currentRow?.data as {
+        avatar_url?: string;
         avatar?: string;
+        avatar_source?: string;
+        avatar_source_id?: string;
+        avatar_synced_at?: string;
         preferences?: Record<string, unknown>;
         agentic_tools?: StoredAgenticTools;
         env_vars?: Record<string, string | StoredEnvVar>;
@@ -461,8 +563,44 @@ export class UsersService {
         }
       }
 
+      const avatarUrlTouched = data.avatar_url !== undefined || data.avatar !== undefined;
+      const avatarCleared = data.avatar_url === null || data.avatar === null;
+      const inferredManualAvatarSource =
+        avatarUrlTouched && !avatarCleared && data.avatar_source === undefined;
+      const avatarSourceChangedAwayFromSlack =
+        data.avatar_source !== undefined &&
+        data.avatar_source !== null &&
+        data.avatar_source !== 'slack';
+
       updates.data = {
-        avatar: data.avatar ?? current.avatar,
+        ...currentData,
+        avatar_url: avatarCleared
+          ? undefined
+          : (data.avatar_url ?? data.avatar ?? current.avatar_url),
+        // Deprecated legacy alias: read for back-compat, stop writing it on avatar updates.
+        avatar: undefined,
+        avatar_source:
+          data.avatar_source === null || avatarCleared
+            ? undefined
+            : data.avatar_source !== undefined
+              ? data.avatar_source
+              : inferredManualAvatarSource
+                ? 'manual'
+                : current.avatar_source,
+        avatar_source_id:
+          data.avatar_source_id === null ||
+          avatarCleared ||
+          inferredManualAvatarSource ||
+          (avatarSourceChangedAwayFromSlack && data.avatar_source_id === undefined)
+            ? undefined
+            : (data.avatar_source_id ?? current.avatar_source_id),
+        avatar_synced_at:
+          data.avatar_synced_at === null ||
+          avatarCleared ||
+          inferredManualAvatarSource ||
+          (avatarSourceChangedAwayFromSlack && data.avatar_synced_at === undefined)
+            ? undefined
+            : (data.avatar_synced_at ?? current.avatar_synced_at),
         preferences: data.preferences ?? current.preferences,
         agentic_tools: Object.keys(nextAgenticTools).length > 0 ? nextAgenticTools : undefined,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
@@ -483,14 +621,14 @@ export class UsersService {
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
       | undefined;
-    return this.rowToUser(row, false, requesterId);
+    return this.rowToUser(row, false, requesterId, shouldIncludeAuthMetadata(params));
   }
 
   /**
    * Delete user
    */
-  async remove(id: UserID, _params?: Params): Promise<User> {
-    const user = await this.get(id);
+  async remove(id: UserID, params?: Params): Promise<User> {
+    const user = await this.get(id, params);
 
     await deleteFrom(this.db, users).where(eq(users.user_id, id)).run();
 
@@ -635,6 +773,28 @@ export class UsersService {
     return resolveUserEnvironment(userId, this.db);
   }
 
+  async getAvatarSettings(_data?: unknown, params?: Params): Promise<UserAvatarSettings> {
+    return this.requireAvatarSync().getSettings(params);
+  }
+
+  async updateAvatarSettings(
+    data: Partial<UserAvatarSettings>,
+    params?: Params
+  ): Promise<UserAvatarSettings> {
+    return this.requireAvatarSync().updateSettings(data, params);
+  }
+
+  async syncAvatars(
+    data: UserAvatarSyncRequest = {},
+    params?: Params
+  ): Promise<UserAvatarSyncResult> {
+    return this.requireAvatarSync().syncAvatars(data, params);
+  }
+
+  async refreshAvatarFromSettings(userId: UserID): Promise<UserAvatarSyncResult | null> {
+    return this.requireAvatarSync().refreshUserFromSettings(userId);
+  }
+
   /**
    * Convert database row to User type
    *
@@ -650,10 +810,15 @@ export class UsersService {
   private rowToUser(
     row: typeof users.$inferSelect,
     includePassword = false,
-    requesterId?: UserID
-  ): User & { password?: string } {
+    requesterId?: UserID,
+    includeAuthMetadata = true
+  ): (User | InternalUser) & { password?: string } {
     const data = row.data as {
+      avatar_url?: string;
       avatar?: string;
+      avatar_source?: string;
+      avatar_source_id?: string;
+      avatar_synced_at?: string;
       preferences?: Record<string, unknown>;
       agentic_tools?: StoredAgenticTools; // Encrypted per-tool credential blobs
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
@@ -671,14 +836,18 @@ export class UsersService {
           )
         : undefined;
 
-    const user: User & { password?: string } = {
+    const user: (User | InternalUser) & { password?: string } = {
       user_id: row.user_id as UserID,
       email: row.email,
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
       role: normalizeRole(row.role ?? undefined),
       unix_username: row.unix_username ?? undefined,
+      avatar_url: data.avatar_url ?? data.avatar,
       avatar: data.avatar,
+      avatar_source: data.avatar_source,
+      avatar_source_id: data.avatar_source_id,
+      avatar_synced_at: data.avatar_synced_at,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,
@@ -699,6 +868,13 @@ export class UsersService {
       default_agentic_config: data.default_agentic_config,
     };
 
+    if (includeAuthMetadata && row.tokens_valid_after) {
+      (user as InternalUser).tokens_valid_after = new Date(row.tokens_valid_after);
+    }
+    if (includeAuthMetadata && 'tenant_id' in row) {
+      (user as InternalUser).tenant_id = row.tenant_id;
+    }
+
     // Include password for authentication (FeathersJS LocalStrategy needs this)
     if (includePassword) {
       user.password = row.password;
@@ -712,7 +888,7 @@ export class UsersService {
  * User service with password field for authentication
  * This version includes the password field for FeathersJS local strategy
  */
-interface UserWithPassword extends User {
+interface UserWithPassword extends InternalUser {
   password: string;
 }
 
@@ -732,7 +908,11 @@ class UsersServiceWithAuth extends UsersService {
     }
 
     const data = row.data as {
+      avatar_url?: string;
       avatar?: string;
+      avatar_source?: string;
+      avatar_source_id?: string;
+      avatar_synced_at?: string;
       preferences?: Record<string, unknown>;
       agentic_tools?: StoredAgenticTools;
       env_vars?: Record<string, string | StoredEnvVar>;
@@ -756,10 +936,15 @@ class UsersServiceWithAuth extends UsersService {
       name: row.name ?? undefined,
       emoji: row.emoji ?? undefined,
       role: normalizeRole(row.role ?? undefined),
+      avatar_url: data.avatar_url ?? data.avatar,
       avatar: data.avatar,
+      avatar_source: data.avatar_source,
+      avatar_source_id: data.avatar_source_id,
+      avatar_synced_at: data.avatar_synced_at,
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,
+      tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
       created_at: row.created_at,
       updated_at: row.updated_at ?? undefined,
       agentic_tools: toAgenticToolsStatus(data.agentic_tools),
@@ -771,6 +956,9 @@ class UsersServiceWithAuth extends UsersService {
 /**
  * Create users service
  */
-export function createUsersService(db: Database): UsersServiceWithAuth {
-  return new UsersServiceWithAuth(db);
+export function createUsersService(
+  db: TenantScopeAwareDatabase,
+  app?: Application
+): UsersServiceWithAuth {
+  return new UsersServiceWithAuth(db, app);
 }

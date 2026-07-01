@@ -1,4 +1,4 @@
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { KnowledgeDocumentVersionRepository, KnowledgeNamespaceRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
@@ -70,7 +70,7 @@ function extractChangedRanges(
 
 export class KnowledgeDocumentEditsService {
   constructor(
-    db: Database,
+    db: TenantScopeAwareDatabase,
     private readonly documentsService: KnowledgeDocumentsService,
     private readonly versionRepo = new KnowledgeDocumentVersionRepository(db),
     private readonly namespaceRepo = new KnowledgeNamespaceRepository(db)
@@ -217,7 +217,7 @@ export class KnowledgeDocumentEditsService {
 }
 
 export function createKnowledgeDocumentEditsService(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   _app: Application,
   documentsService: KnowledgeDocumentsService
 ) {

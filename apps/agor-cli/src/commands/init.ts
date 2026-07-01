@@ -6,10 +6,10 @@
  */
 
 import { access, constants, mkdir, readdir, rm } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, setConfigValue } from '@agor/core/config';
+import { loadConfig, saveConfig, setConfigValue } from '@agor/core/config';
 import {
   createDatabase,
   createUser,
@@ -17,6 +17,14 @@ import {
   runMigrations,
   seedInitialData,
 } from '@agor/core/db';
+import {
+  AGOR_TELEMETRY_DOCS_URL,
+  createOpenSourceTelemetryLogger,
+  generateTelemetryInstanceId,
+  isTelemetryFullyDisabledByEnv,
+  loadOpenSourceTelemetryAgorVersion,
+  pruneDefaultOpenSourceTelemetryDestination,
+} from '@agor/core/telemetry';
 import { isDaemonRunning } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -173,6 +181,8 @@ export default class Init extends Command {
         this.log(chalk.green('✓ Daemon configuration updated'));
       }
 
+      await this.warnExistingInstallTelemetryUnconfigured();
+
       this.log(chalk.dim('Skipping initialization (use --force to re-initialize)\n'));
       return;
     }
@@ -196,6 +206,7 @@ export default class Init extends Command {
 
       // Already initialized - need to decide what to do
       this.log(chalk.yellow('⚠  Agor is already initialized at: ') + chalk.cyan(baseDir));
+      await this.warnExistingInstallTelemetryUnconfigured();
       this.log('');
 
       // Gather information about what exists
@@ -383,6 +394,12 @@ export default class Init extends Command {
       }
     }
 
+    if (!skipPrompts) {
+      await this.promptTelemetrySetup();
+    } else if (process.env.AGOR_TELEMETRY === undefined) {
+      await this.saveTelemetryPreference(false, false);
+    }
+
     // Success summary
     this.log('');
     this.log(chalk.green.bold('✅ Agor initialized successfully!'));
@@ -423,6 +440,148 @@ export default class Init extends Command {
       }
     }
     this.log('');
+  }
+
+  private getInstallChannel(): 'npm' | 'docker' | 'source' | 'homebrew' | 'unknown' {
+    if (process.env.KUBERNETES_SERVICE_HOST || process.env.AGOR_DOCKER) {
+      return 'docker';
+    }
+    if (process.env.HOMEBREW_PREFIX || process.execPath.includes('/Cellar/')) return 'homebrew';
+    if (process.env.npm_config_global || process.env.npm_execpath) return 'npm';
+    return 'unknown';
+  }
+
+  private getDeploymentKind(): 'local' | 'docker' | 'k8s' | 'unknown' {
+    if (process.env.KUBERNETES_SERVICE_HOST) return 'k8s';
+    if (process.env.container || process.env.AGOR_DOCKER) return 'docker';
+    return 'local';
+  }
+
+  private async warnExistingInstallTelemetryUnconfigured(): Promise<void> {
+    try {
+      const config = await loadConfig();
+      if (config.telemetry?.enabled !== undefined || isTelemetryFullyDisabledByEnv()) return;
+      this.log('');
+      this.log(
+        chalk.yellow('ℹ  Open-source telemetry is not configured for this existing install.')
+      );
+      this.log(
+        chalk.gray(
+          `   Agor will not send telemetry unless an admin enables it. Learn more: ${AGOR_TELEMETRY_DOCS_URL}`
+        )
+      );
+      this.log(chalk.gray('   To enable later: agor telemetry on'));
+      this.log(chalk.gray('   To keep it disabled: agor telemetry off'));
+    } catch {
+      // Existing-install warning should never block init.
+    }
+  }
+
+  private async saveTelemetryPreference(
+    enabled: boolean,
+    ensureInstanceId: boolean
+  ): Promise<string | null> {
+    const config = await loadConfig();
+    const instanceId =
+      config.telemetry?.instance_id ??
+      (ensureInstanceId ? generateTelemetryInstanceId() : undefined);
+    config.telemetry = {
+      ...config.telemetry,
+      enabled,
+    };
+    if (instanceId) {
+      config.telemetry.instance_id = instanceId;
+    }
+    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(config));
+    return instanceId ?? null;
+  }
+
+  private async promptTelemetrySetup(): Promise<void> {
+    if (isTelemetryFullyDisabledByEnv()) {
+      await this.saveTelemetryPreference(false, false);
+      this.log('');
+      this.log(chalk.gray('Telemetry fully disabled by AGOR_TELEMETRY=0 or DO_NOT_TRACK=1.'));
+      return;
+    }
+
+    this.log('');
+    this.log(chalk.bold('📊 Anonymous telemetry'));
+    this.log('');
+    this.log(
+      chalk.gray(
+        'Agor sends one anonymous install ping so we can count installs and whether ongoing ' +
+          'telemetry was enabled.'
+      )
+    );
+    this.log(
+      chalk.gray(
+        'If enabled, Agor also sends occasional anonymous install and aggregate usage summaries.'
+      )
+    );
+    this.log(
+      chalk.gray(
+        'We never send prompts, messages, repo names, file paths, user emails, ' +
+          'branch/session/task IDs, code, tool output, secrets, or raw custom model names.'
+      )
+    );
+    this.log(chalk.gray(`Learn more: ${AGOR_TELEMETRY_DOCS_URL}`));
+    this.log(
+      chalk.gray(
+        'To disable all telemetry, including the one-time install ping, set AGOR_TELEMETRY=0.'
+      )
+    );
+    this.log('');
+
+    const { enabled } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'enabled',
+        message: 'Enable ongoing anonymous telemetry?',
+        default: true,
+      },
+    ]);
+
+    const instanceId = await this.saveTelemetryPreference(enabled, true);
+    await this.emitInstallTelemetry(enabled, instanceId);
+
+    if (enabled) {
+      this.log(`${chalk.green('   ✓')} Ongoing anonymous telemetry enabled`);
+    } else {
+      this.log(
+        chalk.gray(
+          '   Ongoing telemetry disabled. Sent only the one-time anonymous install result.'
+        )
+      );
+    }
+  }
+
+  private async emitInstallTelemetry(enabled: boolean, instanceId: string | null): Promise<void> {
+    if (!instanceId || isTelemetryFullyDisabledByEnv()) return;
+    const config = await loadConfig();
+    config.telemetry = { ...config.telemetry, enabled: true, instance_id: instanceId };
+    const logger = createOpenSourceTelemetryLogger(config);
+    logger.track({
+      event: 'install.completed',
+      properties: {
+        agor_version: await loadOpenSourceTelemetryAgorVersion(
+          this.config.version,
+          import.meta.url
+        ),
+        install_channel: this.getInstallChannel(),
+        deployment_kind: this.getDeploymentKind(),
+        os_family: platform(),
+        node_major: Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10),
+        ongoing_telemetry_enabled: enabled,
+      },
+    });
+    await logger.flush();
+
+    const saved = await loadConfig();
+    saved.telemetry = {
+      ...saved.telemetry,
+      install_ping_sent_at: new Date().toISOString(),
+    };
+    await saveConfig(pruneDefaultOpenSourceTelemetryDestination(saved));
   }
 
   /**

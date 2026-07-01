@@ -1,17 +1,12 @@
 /**
  * Upload middleware using multer for file upload handling
  *
- * Supports uploading files to:
- * - Branch (.agor/uploads/) - Default, agent-accessible
- * - Temp folder - Ephemeral uploads
- * - Global (~/.agor/uploads/) - Shared across sessions
+ * Stores daemon-side uploads under ~/.agor/uploads/.
  */
 
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import type { BranchRepository, SessionRepository } from '@agor/core/db';
-import { shortId } from '@agor/core/db';
+import { getAgorHome } from '@agor/core/config';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
 
@@ -56,67 +51,55 @@ export const MAX_UPLOAD_TOTAL_SIZE = 100 * 1024 * 1024; // 100 MB
 // Debug logging only in development
 const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
 
+const LEGACY_IGNORED_UPLOAD_DESTINATIONS = new Set(['branch', 'global']);
+
 /**
- * Destination types for file uploads
+ * Resolve the only supported daemon-side upload directory.
  */
-export type UploadDestination = 'branch' | 'temp' | 'global';
+export function getUploadDirectory(): string {
+  return path.join(getAgorHome(), 'uploads');
+}
+
+export function validateUploadDestinationQuery(destination: unknown): void {
+  if (destination == null || destination === '') return;
+  if (Array.isArray(destination)) {
+    throw Object.assign(new Error('Upload destination options are no longer supported'), {
+      status: 400,
+    });
+  }
+  const value = String(destination);
+  // Old clients sent the previous default (`branch`) or explicit `global`.
+  // Treat those as no-ops so they write to the single supported location.
+  if (LEGACY_IGNORED_UPLOAD_DESTINATIONS.has(value)) return;
+  throw Object.assign(
+    new Error(
+      `Upload destination '${value}' is no longer supported; uploads are stored in ~/.agor/uploads/`
+    ),
+    { status: 400 }
+  );
+}
 
 /**
  * Create multer storage configuration
  */
-export function createUploadStorage(sessionRepo: SessionRepository, branchRepo: BranchRepository) {
+export function createUploadStorage() {
   const storage = multer.diskStorage({
     destination: async (req: Request, _file, cb) => {
       try {
         const { sessionId } = req.params;
         // NOTE: req.body is NOT available yet during multer's destination callback
-        // because multer hasn't parsed the body fields yet. We read from query params instead.
-        const destination = (req.query.destination as UploadDestination) || 'branch';
-
-        // Validate destination
-        if (!['branch', 'temp', 'global'].includes(destination)) {
-          console.error(`❌ [Upload Storage] Invalid destination: ${destination}`);
-          return cb(new Error(`Invalid destination: ${destination}`), '');
-        }
+        // because multer hasn't parsed the body fields yet. Legacy clients may
+        // still send destination as a query param; only the old no-op values are
+        // tolerated, and all uploads are written to ~/.agor/uploads/.
+        validateUploadDestinationQuery(req.query.destination);
 
         if (DEBUG_UPLOAD) {
           console.log(
-            `📂 [Upload Storage] Processing upload for session ${sessionId ? shortId(sessionId) : 'unknown'}`
+            `📂 [Upload Storage] Processing upload for session ${sessionId || 'unknown'}`
           );
-          console.log(`   Destination type: ${destination}`);
         }
 
-        if (!sessionId) {
-          console.error('❌ [Upload Storage] No session ID provided');
-          return cb(new Error('Session ID required'), '');
-        }
-
-        // Get session to find associated branch
-        const session = await sessionRepo.findById(sessionId);
-        if (!session) {
-          console.error(`❌ [Upload Storage] Session not found: ${shortId(sessionId)}`);
-          return cb(new Error(`Session not found: ${sessionId}`), '');
-        }
-
-        if (!session.branch_id) {
-          console.error(`❌ [Upload Storage] Session ${shortId(sessionId)} has no branch`);
-          return cb(new Error(`Session ${sessionId} has no associated branch`), '');
-        }
-
-        const branch = await branchRepo.findById(session.branch_id);
-        if (!branch) {
-          console.error(`❌ [Upload Storage] Branch not found: ${shortId(session.branch_id)}`);
-          return cb(new Error(`Branch not found: ${session.branch_id}`), '');
-        }
-
-        // Map destination to actual path
-        const paths: Record<UploadDestination, string> = {
-          branch: path.join(branch.path, '.agor', 'uploads'),
-          temp: path.join(os.tmpdir(), 'agor-uploads'),
-          global: path.join(os.homedir(), '.agor', 'uploads'),
-        };
-
-        const dest = paths[destination] || paths.branch;
+        const dest = getUploadDirectory();
 
         if (DEBUG_UPLOAD) console.log(`📁 [Upload Storage] Target directory: ${dest}`);
 
@@ -165,11 +148,8 @@ export function createUploadStorage(sessionRepo: SessionRepository, branchRepo: 
 /**
  * Create configured multer instance
  */
-export function createUploadMiddleware(
-  sessionRepo: SessionRepository,
-  branchRepo: BranchRepository
-) {
-  const storage = createUploadStorage(sessionRepo, branchRepo);
+export function createUploadMiddleware() {
+  const storage = createUploadStorage();
 
   return multer({
     storage,

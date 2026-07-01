@@ -52,7 +52,6 @@ describe('renderSpawnSubsessionPrompt', () => {
     // accidentally passes it, the template should not surface it.
     const out = renderSpawnSubsessionPrompt({
       userPrompt: 'x',
-      // biome-ignore lint/suspicious/noExplicitAny: pinning behaviour for unexpected input
       parentPermissionMode: 'bypassPermissions',
     } as any);
     expect(out).not.toContain('bypassPermissions');

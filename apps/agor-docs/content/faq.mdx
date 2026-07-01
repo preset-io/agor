@@ -1,0 +1,575 @@
+---
+title: FAQ
+description: Frequently asked questions about branches, multi-repo workflows, session forking, spawning, and Agor's multiplayer workflow
+---
+
+# FAQ
+
+## What's a branch?
+
+**A branch is an isolated working directory for a git repository** - think of it as a checkout of your repo at a specific branch or commit.
+
+Agor uses **git branches** under the hood (same concept as `git branch` command), but manages them for you automatically. When you create a branch in Agor, it:
+
+- Creates a git branch in `~/.agor/worktrees/<repo>/<name>`
+- Optionally creates a new branch or checks out an existing one
+- Tracks metadata (issue URL, PR URL, notes)
+- Associates all sessions within that branch
+
+### Think of a branch as a unit of work
+
+**Best practice**: 1 branch = 1 issue = 1 PR = 1 feature
+
+```
+Branch "auth-feature" (issue #123, PR #456)
+├─ Working directory: ~/.agor/worktrees/myapp/auth-feature
+├─ Git ref: feature/oauth2-auth
+└─ Sessions: All AI sessions working on this feature
+
+Branch "payment-integration" (issue #124, PR #457)
+├─ Working directory: ~/.agor/worktrees/myapp/payment-integration
+├─ Git ref: feature/stripe-integration
+└─ Sessions: All AI sessions working on this feature
+```
+
+Each branch is completely isolated - changes in one don't affect the other. This lets you work on multiple features simultaneously without switching branches or stashing changes.
+
+**Agor manages the git branches for you** - no need to run `git worktree add` manually. Just create a branch in the UI or CLI, and Agor handles the git operations.
+
+## Can Agor work on multiple repos or branches?
+
+Yes. Agor can support workflows that span multiple repositories and branches. The right pattern depends on how those repos relate to each other.
+
+### Pattern 1: Use git submodules for clear dependencies
+
+If one repo has a clear dependency on another, use a [git submodule](https://git-scm.com/book/en/v2/Git-Tools-Submodules) to formalize that relationship. The agent then gets a repo-in-a-repo inside the current Agor branch/workspace, so it can inspect and modify both codebases from one working directory.
+
+If you do not want to commit the submodule link, you can keep the wiring local-only or `.gitignore` it as appropriate for your team.
+
+### Pattern 2: Align branches across repos
+
+For coordinated work across independent repos, create Agor branches for the same feature or workstream in each repo, then ask an orchestrating agent to coordinate across them. For example:
+
+> We're in `feature-X` for this repo. Create or use the same `feature-X` branch in these three other repos, and coordinate the work across all four branches.
+
+The orchestrating agent can do the cross-repo work itself, or it can spawn and coordinate agents in each branch.
+
+Agor's strength is the control plane: multiple isolated branches, visible on boards, with agents that can coordinate across them. A single OS working directory is still one branch/workspace, but Agor makes multi-repo work natural through orchestration, branch alignment, and multi-agent visibility.
+
+## Session trees? WTF?
+
+**Sessions in Agor can fork and spawn, creating genealogy trees** - this is what makes Agor fundamentally different from linear CLI tools.
+
+```
+Session: "Build authentication system"
+├─ Fork: "Write tests for auth"
+├─ Fork: "Build user profile that uses auth"
+└─ Spawn: "Research OAuth2 best practices"
+   └─ Spawn: "Evaluate PKCE vs implicit flow"
+```
+
+### Why this matters:
+
+**Traditional AI coding tools**: Linear conversation. Want to try something different? Start over or lose your context.
+
+**Agor**: Branch your conversation like git branches code. Every fork/spawn is:
+
+- **Introspectable** - full conversation history kept
+- **Composable** - fork from forks, spawn from spawns
+- **Multiplayer-friendly** - teammates see the tree, understand the exploration
+- **Resumable** - post-prompt any session in the tree anytime
+
+### The groundbreaking part:
+
+Most people don't know you can do this! Context engineering is usually about:
+
+- Crafting the perfect prompt
+- Managing context window size
+- Knowing what to include/exclude
+
+**Agor adds**: Session-level branching and composition. You can:
+
+1. **Fork** to parallelize work with shared context ([details below](#what-happens-when-i-fork-a-session))
+2. **Spawn** to delegate with curated context ([details below](#what-happens-when-i-spawn-a-subsession))
+3. Combine both to orchestrate complex multi-agent workflows
+4. Inspect the entire tree to understand how work evolved
+
+**Visual organization**: On boards, you see branches (projects) containing session trees (conversation genealogy). It's like Trello for AI conversations, but with git-style branching.
+
+## Why a spatial layout for AI coding sessions?
+
+**Because your brain thinks spatially, and complex work is inherently non-linear.**
+
+Traditional CLI tools force linear organization: sessions scroll up in a terminal, newest at bottom, oldest lost to scrollback. Good luck finding "that session from Tuesday where we fixed the auth bug."
+
+Agor uses a **2D spatial canvas** instead. Here's why that matters:
+
+### Cognitive psychology: Spatial memory is powerful
+
+Your brain is wired for spatial reasoning. You remember:
+
+- "The auth branch is in the top-left corner"
+- "Testing sessions are clustered on the right"
+- "That failed experiment is way down there"
+
+This is **location-based memory** - the same reason you remember where you parked, but forget a shopping list.
+
+**Research shows**: People recall information better when it has spatial location. A 2D board gives every branch and session a "place."
+
+### Organic organization of complex workflows
+
+Real work doesn't fit into rigid lists. It evolves:
+
+- Start with one branch for a feature
+- Fork sessions to explore approaches
+- Spawn subsessions for research
+- Some succeed, some fail, some branch further
+
+**A spatial canvas lets this emerge naturally:**
+
+- Drag active work to the top
+- Group related branches together
+- Push failed experiments to the side (but keep them visible)
+- Arrange by priority, status, or relationships - your choice
+
+It's like **arranging sticky notes on a wall** - fluid, visual, intuitive.
+
+### Zones: Visual workflow stages
+
+Zones are spatial regions that trigger actions:
+
+- **"Ready for Review"** zone auto-prompts sessions for self-review
+- **"Needs Tests"** zone triggers test generation
+- **"Deploy to Staging"** zone kicks off deployment
+
+This is **Kanban for AI sessions** - drag a branch to a zone, workflow happens.
+
+**Visual boundaries create mental models**: Left side = new work, middle = in progress, right = done. Your eyes scan the board and instantly understand status.
+
+### Multiplayer: Figma for AI coding
+
+Figma revolutionized design collaboration with:
+
+- Infinite spatial canvas
+- Real-time cursors showing who's working where
+- Comments anchored to specific locations
+- No "email me the file" chaos
+
+**Agor does the same for AI coding:**
+
+- Everyone sees the same board
+- Cursors show teammates' focus in real-time
+- Scoped/spatial comments on boards, zones, and branches
+- Drag your branch, teammates see it move
+- No "whose terminal is this?" confusion
+- Async-friendly: glance at the board, see full state
+
+**The parallel**: Designers moved from local Photoshop files to collaborative Figma canvases. Developers should move from local terminal sessions to collaborative spatial boards.
+
+### Why it works
+
+**Linear tools** (CLI, chat interfaces):
+
+- One thing at a time
+- Context switches lose your place
+- Hard to see the big picture
+- Collaboration = screen sharing (painful)
+
+**Spatial tools** (Agor boards):
+
+- See everything at once
+- Visual proximity shows relationships
+- Zoom out for overview, zoom in for details
+- Collaboration = everyone on same canvas (natural)
+
+**The spatial layout isn't just "pretty"** - it's a fundamental match for how humans organize complex, multi-threaded work with multiple collaborators.
+
+You wouldn't manage a large codebase without a file tree. Why manage AI sessions without spatial organization?
+
+## Zones? Zone "triggers"?
+
+**Zones are spatial regions on your board that trigger templated prompts when you drop a branch into them.**
+
+Think: drag a branch to "Ready for Review" → auto-prompts for code review. Drag to "Needs Tests" → auto-prompts for test generation.
+
+### How it works
+
+When you drop a branch into a zone:
+
+1. **Session selection** - which session gets the prompt?
+   - **Always create new session** (default) - clean slate for the zone's task
+   - **Let me pick** - choose which session in the tree has the right context
+   - **Most recently active** - usually the session you were just working in
+
+2. **Templated prompt executes** - the zone's prompt template renders with dynamic data
+
+### Why templates?
+
+Zone prompts need **dynamism and complexity**. You don't just want "write tests" - you want:
+
+```
+"Review this implementation of {{ branch.issue_url }} and check:
+- Does it match the requirements in {{ branch.pull_request_url }}?
+- Are there edge cases we missed?
+- Should we add tests for {{ session.title }}?"
+```
+
+**Handlebars templates** let you inject context from:
+
+- **Branch**: `{{ branch.name }}`, `{{ branch.issue_url }}`, `{{ branch.pull_request_url }}`
+- **Board**: `{{ board.name }}`, `{{ board.description }}`
+- **Session**: `{{ session.title }}`, `{{ session.description }}`
+- **Environment**: `{{ environment.url }}`, `{{ environment.status }}`
+- **Repo**: `{{ repo.name }}`, `{{ repo.default_branch }}`
+
+### Example use cases
+
+**1. Issue-driven code review**
+
+Zone: "Ready for Review"
+
+```
+Review the implementation of {{ branch.issue_url }}.
+
+Check if:
+1. All acceptance criteria from the issue are met
+2. Edge cases are handled
+3. Error messages are user-friendly
+
+If approved, comment on {{ branch.pull_request_url }} with summary.
+```
+
+Drop a branch → auto-prompts with issue/PR links pre-filled.
+
+**2. PR-aware test generation**
+
+Zone: "Needs Tests"
+
+```
+Generate comprehensive tests for {{ branch.name }}.
+
+Context:
+- Issue: {{ branch.issue_url }}
+- PR: {{ branch.pull_request_url }}
+- Branch: {{ branch.ref }}
+
+Focus on scenarios mentioned in the PR description.
+Write tests to tests/ directory.
+```
+
+**3. Environment-specific deployment**
+
+Zone: "Deploy to Staging"
+
+```
+Deploy {{ branch.name }} to {{ environment.url }}.
+
+Steps:
+1. Run build in {{ branch.path }}
+2. Push to {{ repo.name }}/{{ branch.ref }}
+3. Trigger deployment to staging
+4. Update {{ branch.pull_request_url }} with deployment URL
+
+Environment: {{ environment.status }}
+```
+
+**4. Board-level context**
+
+Zone: "Sprint Review Demo"
+
+```
+Prepare demo for {{ board.name }}.
+
+Show:
+- Feature: {{ branch.name }}
+- Related issue: {{ branch.issue_url }}
+- Key changes in this PR: {{ branch.pull_request_url }}
+
+Create a demo script highlighting {{ board.custom_context.sprint_goals }}.
+```
+
+### Custom JSON context
+
+Each object (board, branch, session, repo) can have a **`custom_context` JSON blob** for your own metadata:
+
+**Board custom context:**
+
+```json
+{
+  "sprint_goals": "Improve auth UX",
+  "demo_date": "2025-11-01",
+  "stakeholders": ["product", "design"]
+}
+```
+
+**Branch custom context:**
+
+```json
+{
+  "priority": "P0",
+  "estimated_hours": 8,
+  "dependencies": ["auth-backend", "user-service"]
+}
+```
+
+**Use in templates:**
+
+```
+Priority: {{ branch.custom_context.priority }}
+Estimated effort: {{ branch.custom_context.estimated_hours }}h
+Dependencies: {{ branch.custom_context.dependencies }}
+
+{{ board.custom_context.sprint_goals }}
+Demo stakeholders: {{ board.custom_context.stakeholders }}
+```
+
+### Why this is powerful
+
+Instead of copy-pasting issue URLs and PR links into prompts manually:
+
+**Without zones:**
+
+```
+You: "Review this code. Here's the issue: https://github.com/..."
+     (repeat for every review)
+```
+
+**With zones:**
+
+```
+You: *drag branch to "Ready for Review" zone*
+AI: "Reviewing implementation of https://github.com/myorg/repo/issues/123..."
+     (issue/PR links auto-injected)
+```
+
+**Zones = Templated workflow automation for AI sessions.**
+
+Drag to trigger. Context flows automatically. No manual copy-paste.
+
+## What happens when I "fork" a session?
+
+**Forking creates a sibling session with a COPY of the conversation context at that moment** - perfect for parallel work streams that need the same starting knowledge but different focus.
+
+**IMPORTANT**: You're forking the **CONTEXT WINDOW** (conversation history), NOT the git branch.
+
+- ✅ **Forked**: Conversation history, AI's memory of what was discussed
+- ❌ **NOT forked**: Git state, filesystem, branch
+
+**Both sessions work on the SAME branch.** If one session creates a file, the other session sees it immediately. This is NOT like git branches!
+
+After forking, the conversations diverge. The fork has its own independent conversation history going forward.
+
+### Common use cases:
+
+**Parallelize work that needs the same starting context**
+
+```
+Session: "Built user authentication feature" <- snapshot taken here
+├─ Fork A: "Write comprehensive unit tests for auth"
+├─ Fork B: "Build user profile page that uses auth"
+└─ Fork C: "Generate API documentation"
+```
+
+Each fork starts with the full context of how auth works, then builds its own conversation. They work on different files so no conflicts.
+
+**Other examples:**
+
+- Generate reports/summaries without interrupting work
+- Review or validate completed work with full context
+- Get second opinions from different models
+
+### Key insight
+
+Forks **share the branch** (same filesystem) but **copy the context** (snapshot at fork time, then conversations diverge).
+
+You're not exploring alternative implementations (they'd conflict on disk!) - you're doing parallel work that starts from the same knowledge but different focus.
+
+---
+
+## What happens when I "spawn" a subsession?
+
+**Spawning creates a child session with a FRESH context window** - the calling agent packages only the relevant context from the current session based on your spawn prompt.
+
+### How it differs from forking:
+
+**Fork**: Copies entire conversation history (all 100+ messages)
+**Spawn**: Parent agent curates what's relevant, starts fresh context
+
+Your parent session might have:
+
+- Useful context for the subsession (implementation details, design decisions)
+- Lots of noise (debugging, unrelated topics, log reading, tool uses from other work)
+
+When you spawn, the calling agent packages just what the subsession needs. The spawned session gets a clean context window without all the parent's clutter.
+
+**Key benefit**: Work in the subsession doesn't pollute the parent's context.
+
+### How Agor differs from Claude Code's Task tool
+
+In Claude Code CLI, when you use the [Task tool](https://docs.claude.com/en/docs/agent/tools/task) or spawn a subagent:
+
+- Parent agent **waits** for subsession to complete
+- Subsession **reports back** to parent with results
+- Subsession history is **not** kept after completion
+
+In Agor (currently):
+
+- Parent agent **does NOT wait** (fire-and-forget, may change in future)
+- Subsession **does NOT report back** automatically (may add callback option in future)
+- Subsession history **IS kept** - you can:
+  - Inspect the full conversation
+  - Post-prompt the subsession
+  - Fork from the subsession
+  - Spawn nested subsessions
+
+**You can still close the loop manually** since subsessions are live and accessible:
+
+1. **Two-step approach**: Prompt the subsession to produce a report, then ask the parent session to read it
+2. **One-step approach**: Include "produce a report in `/tmp/subsession-results.md` when done" right in your spawn prompt
+
+Example spawn prompt: `"Implement payment gateway integration. When complete, write a summary of the implementation and any issues to /tmp/payment-report.md"`
+
+Then later, prompt the parent: `"Read /tmp/payment-report.md and integrate the payment module"`
+
+**Note**: You can still use Claude Code's Task tool and subagent workflows in Agor exactly like the CLI - those follow the normal Claude Code flow with waiting and callbacks.
+
+### Common use cases:
+
+**Break down complex work**
+
+```
+Parent: "Build complete e-commerce checkout flow"
+├─ Spawn: "Implement payment gateway integration"
+├─ Spawn: "Build inventory validation service"
+└─ Spawn: "Create order confirmation email templates"
+```
+
+**Delegate to different agents**
+
+```
+Parent (Claude): "Refactor legacy codebase"
+├─ Spawn (Codex): "Write comprehensive unit tests"
+├─ Spawn (Gemini): "Generate API documentation"
+└─ Spawn (Claude): "Extract common utilities"
+```
+
+Parent orchestrates, children execute focused subsessions with clean context.
+
+---
+
+## Fork vs Spawn: Quick Reference
+
+|                         | **Fork**                                   | **Spawn**                                      |
+| ----------------------- | ------------------------------------------ | ---------------------------------------------- |
+| **Context window**      | Full copy of parent's conversation history | Fresh context with curated subset from parent  |
+| **Who decides context** | Automatic (SDK copies everything)          | Parent agent packages what's relevant          |
+| **Context size**        | Large (entire parent history)              | Small (only what's needed)                     |
+| **After creation**      | Independent conversations that diverge     | Independent conversations that diverge         |
+| **Branch**              | **SHARED** (same filesystem)               | **SHARED** (same filesystem)                   |
+| **Relationship**        | Sibling (parallel work)                    | Child (delegated work)                         |
+| **Use case**            | Parallel tasks with same starting context  | Delegate focused subsession with clean context |
+| **Parent waits?**       | No                                         | No (currently, may change)                     |
+| **Reports back?**       | No                                         | No (currently, may add callback)               |
+
+---
+
+## When should I fork a session vs create a new branch?
+
+**Different branches = Isolation** (different features, competing implementations, or agents that would conflict)
+
+**Fork session = Shared branch** (parallel work that needs same context but won't conflict)
+
+### Use different branches when:
+
+- **Working on different features/issues** - Each branch represents a unit of work
+- **Trying competing implementations** - Let Claude and Codex both implement the same feature, compare results
+- **Need filesystem isolation** - Changes in one branch don't affect the other
+- **Working on different git branches** - Each branch can be on a different branch
+
+**Best practice**: Think of a branch as a project or unit of work. Ideally 1 branch = 1 issue = 1 PR. Agor lets you attach issue URLs and PR URLs to branches for this reason.
+
+### Fork a session within a branch when:
+
+- **Parallel work on same feature** - Write tests while building the next component
+- **Different aspects of same work** - Implementation, documentation, review all need same context
+- **Read-only analysis** - Generate reports or summaries without interrupting main work
+- **No filesystem conflicts** - Work happens in different files/directories
+
+**Example:**
+
+```
+Branch "auth-feature" (issue #123, PR #456)
+└─ Session: "Build OAuth2 authentication"
+   ├─ Fork: "Write unit tests for OAuth2"        <- Same branch
+   ├─ Fork: "Build user profile that uses auth"  <- Same branch
+   └─ Fork: "Document OAuth2 API"                <- Same branch
+
+Branch "payment-feature" (issue #124, PR #457)  <- Different feature = different branch
+└─ Session: "Build Stripe integration"
+```
+
+**Rule of thumb**: If they're working on the same issue/feature and won't conflict on disk, fork the session. If they're different features or would conflict, use a different Agor branch.
+
+---
+
+## Best Practices
+
+### ✅ DO:
+
+- Fork for read-only analysis (summaries, reviews, documentation)
+- Fork for parallel non-conflicting work (tests while building next feature)
+- Spawn to break down complex work into focused tasks
+- Ensure forked/spawned work won't conflict on disk (different files/directories)
+
+### ❌ DON'T:
+
+- **Don't fork to try alternative implementations** (they'll conflict on disk!)
+- Don't forget: **forks share the branch** - they're not git branches!
+- Don't nest spawns too deeply (2-3 levels max)
+
+---
+
+## Summary
+
+**What's forked**: Context window (conversation history snapshot)
+**What's NOT forked**: Git branch (shared filesystem)
+
+**Fork** = Parallel work with same starting context (sibling sessions)
+**Spawn** = Hierarchical delegation (parent-child sessions)
+
+Both work on the **same branch**, both start from a **copied context snapshot**, both build **independent conversations** going forward.
+
+Example: Build Feature 1 once. Fork 3 times:
+
+- Tests being written (with context snapshot of implementation)
+- Feature 2 being built (with context snapshot of how Feature 1 works)
+- Documentation being generated (with context snapshot of design decisions)
+
+All running in parallel, same codebase, each starting from the same understanding.
+
+<a id="open-source-telemetry" />
+
+## What does Agor's open-source telemetry collect?
+
+During `agor init`, Agor explains its open-source telemetry and asks whether to enable ongoing anonymous telemetry. Agor sends one anonymous install result so the maintainers can count installs and whether ongoing telemetry was enabled. To disable all telemetry, including that one-time install result, set `AGOR_TELEMETRY=0` before running Agor.
+
+When ongoing telemetry is enabled, Agor sends lightweight install and aggregate usage summaries that help prioritize product work. These can include:
+
+- Agor version and install channel
+- OS family, Node major version, deployment kind, and database backend
+- broad configuration modes such as RBAC / Unix isolation mode
+- daemon start events and daily active-install heartbeats
+- aggregate usage counts such as prompt count, session count, branch count, active user count, and counts by agentic tool / provider / normalized model family
+
+Agor does **not** send prompts, messages, repo names or remotes, file paths, user emails or names, branch/session/task IDs, code, tool output, secrets, tokens, or raw custom model names.
+
+You can change the setting later:
+
+```bash
+agor telemetry on
+agor telemetry off
+agor telemetry
+```
+
+`DO_NOT_TRACK=1` and `AGOR_TELEMETRY=0` disable telemetry regardless of config.
+`AGOR_TELEMETRY=1` explicitly enables telemetry and creates an anonymous install ID if one has not been configured yet.

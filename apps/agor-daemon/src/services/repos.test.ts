@@ -1,4 +1,4 @@
-import { assertRemoteRefVisibleForClone } from '@agor/core/git';
+import { assertRemoteRefVisibleForClone } from '@agor/core/git/exec';
 import type { Application } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { ReposService } from './repos';
@@ -28,8 +28,8 @@ vi.mock('@agor/core/db', async (importOriginal) => {
   };
 });
 
-vi.mock('@agor/core/git', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@agor/core/git')>();
+vi.mock('@agor/core/git/exec', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/git/exec')>();
 
   return {
     ...actual,

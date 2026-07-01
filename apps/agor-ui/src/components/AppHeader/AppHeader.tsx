@@ -1,14 +1,4 @@
-import type {
-  ActiveUser,
-  AgorClient,
-  Artifact,
-  Board,
-  BoardID,
-  Branch,
-  MCPServer,
-  Session,
-  User,
-} from '@agor-live/client';
+import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
 import {
   ApiOutlined,
   BulbOutlined,
@@ -17,9 +7,21 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
+import { memo, useMemo } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
+import { mapToArray } from '@/utils/mapHelpers';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useRecentBoards } from '../../hooks/useRecentBoards';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectArtifactById,
+  selectBoardById,
+  selectBranchById,
+  selectMcpServerById,
+  selectSessionById,
+  selectUserById,
+} from '../../store/selectors';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
@@ -34,7 +36,6 @@ const { Header } = Layout;
 export interface AppHeaderProps {
   user?: User | null;
   presenceClient?: AgorClient | null;
-  presenceUsers?: User[];
   currentUserId?: string;
   /** Demo/screenshot-only fixture: render static presence while keeping AppHeader chrome. */
   staticActiveUsers?: ActiveUser[];
@@ -55,29 +56,18 @@ export interface AppHeaderProps {
   unreadCommentsCount?: number;
   eventStreamEnabled?: boolean;
   hasUserMentions?: boolean; // True if current user is mentioned in active comments
-  boards?: Board[];
   currentBoardId?: string;
   onBoardChange?: (boardId: string) => void;
   onHomeClick?: () => void;
-  branchById: Map<string, Branch>;
-  boardById: Map<string, Board>; // For looking up board names; required because GlobalSearch hands it to useAppNavigation for slug-aware path building
   onUserClick?: (
     userId: string,
     boardId?: BoardID,
     cursorPosition?: { x: number; y: number }
   ) => void; // Navigate to user's board
-  /** Recently visited boards (excluding current) for quick-access pills */
-  recentBoards?: Board[];
   /** Instance label for deployment identification (displayed as a Tag) */
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
-  /** Live entity maps for the global-search dropdown. Passed through from App.tsx.
-   * GlobalSearch calls useAppNavigation directly, so it needs boardById (for
-   * slug-aware path building) on top of the entity maps. */
-  sessionById: Map<string, Session>;
-  artifactById: Map<string, Artifact>;
-  mcpServerById: Map<string, MCPServer>;
 }
 
 const RecentBoardPills: React.FC<{
@@ -118,10 +108,9 @@ const RecentBoardPills: React.FC<{
   );
 };
 
-export const AppHeader: React.FC<AppHeaderProps> = ({
+const AppHeaderInner: React.FC<AppHeaderProps> = ({
   user,
   presenceClient = null,
-  presenceUsers = [],
   currentUserId,
   staticActiveUsers,
   presenceMaxVisible,
@@ -139,23 +128,36 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   unreadCommentsCount = 0,
   eventStreamEnabled = false,
   hasUserMentions = false,
-  boards = [],
   currentBoardId,
   onBoardChange,
   onHomeClick,
-  branchById,
-  boardById,
   onUserClick,
-  recentBoards = [],
   instanceLabel,
   instanceDescription,
-  sessionById,
-  artifactById,
-  mcpServerById,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
+
+  // Entity state via narrow store subscriptions rather than props. Each
+  // whole-map selector is a stable module-level reference, so the header
+  // re-renders only when a slice it actually reads changes — not on every
+  // top-down App render. The board list and presence directory are derived
+  // here (instead of arriving as fresh `mapToArray(...)` props each render)
+  // so React.memo's bailout isn't defeated by an unstable array identity.
+  const boardById = useAgorStore(selectBoardById);
+  const userById = useAgorStore(selectUserById);
+  const branchById = useAgorStore(selectBranchById);
+  const sessionById = useAgorStore(selectSessionById);
+  const artifactById = useAgorStore(selectArtifactById);
+  const mcpServerById = useAgorStore(selectMcpServerById);
+  const boards = useMemo(() => mapToArray(boardById), [boardById]);
+  const presenceUsers = useMemo(() => mapToArray(userById), [userById]);
+  // Derive the recent-board pills here (not as a prop): the source array is the
+  // store-derived `boards`, so unrelated App re-renders can't hand us a fresh
+  // recents array and defeat React.memo. The localStorage-backed recents list is
+  // shared across hook instances, so this stays in sync with App's visit tracker.
+  const { recentBoards } = useRecentBoards(boards, currentBoardId ?? '');
   // Single source of truth for "is the daemon usable right now?". Captures
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.
@@ -362,3 +364,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
     </Header>
   );
 };
+
+// Memoized so the always-mounted header is insulated from App's top-down
+// re-renders: App re-renders on every live store patch, but AppHeader re-renders
+// only when one of its own props actually changes OR one of its `useAgorStore`
+// selector slices fires. The bailout holds only while the parent keeps every
+// prop referentially stable (see the stabilized handlers at the App render site).
+export const AppHeader = memo(AppHeaderInner);

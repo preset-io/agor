@@ -5,13 +5,14 @@
  */
 
 import bcrypt from 'bcryptjs';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { generateId } from '../lib/ids';
-import type { User, UserID } from '../types';
+import type { InternalUser, User, UserID } from '../types';
 import { normalizeRole } from '../types/user';
 import type { Database } from './client';
-import { insert, select } from './database-wrapper';
+import { insert, isPostgresDatabase, select } from './database-wrapper';
 import { type UserRow, users } from './schema';
+import { getCurrentTenantId } from './tenant-scope';
 
 /**
  * Create user input
@@ -30,15 +31,37 @@ export interface CreateUserData {
   must_change_password?: boolean;
 }
 
+function currentUserTenantPredicate(db: Database) {
+  const tenantId = getCurrentTenantId();
+  return isPostgresDatabase(db) && tenantId
+    ? eq((users as never as { tenant_id: never }).tenant_id, tenantId)
+    : undefined;
+}
+
+function userEmailPredicate(db: Database, email: string) {
+  const tenantPredicate = currentUserTenantPredicate(db);
+  const emailPredicate = eq(users.email, email);
+  return tenantPredicate ? and(emailPredicate, tenantPredicate) : emailPredicate;
+}
+
+function currentTenantInsertValues(db: Database): { tenant_id?: string } {
+  const tenantId = getCurrentTenantId();
+  return isPostgresDatabase(db) && tenantId ? { tenant_id: String(tenantId) } : {};
+}
+
 /**
  * Convert a raw `users` row into the canonical `User` model. Centralized so
  * all callers agree on field handling — JSON-bag fields (avatar, preferences)
  * come from `row.data`, role goes through `normalizeRole`, and nullable DB
  * columns become `undefined` rather than `null`.
  */
-export function userRowToUser(row: UserRow): User {
+export function userRowToUser(row: UserRow): InternalUser {
   const userData = (row.data ?? {}) as {
+    avatar_url?: string;
     avatar?: string;
+    avatar_source?: string;
+    avatar_source_id?: string;
+    avatar_synced_at?: string;
     preferences?: Record<string, unknown>;
   };
   return {
@@ -48,10 +71,15 @@ export function userRowToUser(row: UserRow): User {
     emoji: row.emoji ?? undefined,
     role: normalizeRole(row.role ?? undefined),
     unix_username: row.unix_username ?? undefined,
+    avatar_url: userData.avatar_url ?? userData.avatar,
     avatar: userData.avatar,
+    avatar_source: userData.avatar_source,
+    avatar_source_id: userData.avatar_source_id,
+    avatar_synced_at: userData.avatar_synced_at,
     preferences: userData.preferences,
     onboarding_completed: !!row.onboarding_completed,
     must_change_password: !!row.must_change_password,
+    tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
     created_at: row.created_at,
     updated_at: row.updated_at ?? undefined,
   };
@@ -69,7 +97,7 @@ export function userRowToUser(row: UserRow): User {
  */
 export async function createUser(db: Database, data: CreateUserData): Promise<User> {
   // Check if email already exists
-  const existing = await select(db).from(users).where(eq(users.email, data.email)).one();
+  const existing = await select(db).from(users).where(userEmailPredicate(db, data.email)).one();
 
   if (existing) {
     throw new Error(`User with email ${data.email} already exists`);
@@ -105,6 +133,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
       data: {
         preferences: {},
       },
+      ...currentTenantInsertValues(db),
     })
     .returning()
     .one();
@@ -120,7 +149,7 @@ export async function createUser(db: Database, data: CreateUserData): Promise<Us
  * @returns True if user exists
  */
 export async function userExists(db: Database, email: string): Promise<boolean> {
-  const existing = await select(db).from(users).where(eq(users.email, email)).one();
+  const existing = await select(db).from(users).where(userEmailPredicate(db, email)).one();
   return !!existing;
 }
 
@@ -132,7 +161,7 @@ export async function userExists(db: Database, email: string): Promise<boolean> 
  * @returns User or null if not found
  */
 export async function getUserByEmail(db: Database, email: string): Promise<User | null> {
-  const row = await select(db).from(users).where(eq(users.email, email)).one();
+  const row = await select(db).from(users).where(userEmailPredicate(db, email)).one();
   return row ? userRowToUser(row) : null;
 }
 

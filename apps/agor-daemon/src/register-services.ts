@@ -9,21 +9,26 @@ import {
   type AgorConfig,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
+  resolveExecutionSecurityMode,
 } from '@agor/core/config';
 import {
   and,
   BoardRepository,
   BranchRepository,
-  type Database,
   eq,
+  getCurrentTenantId,
   inArray,
+  isPostgresDatabase,
   MCPServerRepository,
+  runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   type SessionMCPServerRow,
   select,
   sessionMcpServers,
   shortId,
+  type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
+  visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
@@ -36,11 +41,13 @@ import type {
   Params,
   SessionID,
   UserID,
+  UUID,
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_CAPABILITIES,
   isSessionExecuting,
   isTaskExecuting,
+  ROLES,
   SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
@@ -78,6 +85,7 @@ import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
+import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
@@ -98,6 +106,7 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
+import { createLocalActionsService } from './services/local-actions.js';
 import { createMCPServersService } from './services/mcp-servers.js';
 import { createMessagesService } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
@@ -113,6 +122,7 @@ import { createThreadSessionMapService } from './services/thread-session-map.js'
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
+import { requireMinimumRole } from './utils/authorization.js';
 import { escapeHtml } from './utils/html.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -131,7 +141,7 @@ import { spawnExecutor } from './utils/spawn-executor.js';
  * Interface for dependencies needed by service registration.
  */
 export interface RegisterServicesContext {
-  db: Database;
+  db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
   svcEnabled: (group: string) => boolean;
@@ -357,14 +367,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     !app.services['branches/:id/owners/:userId']
   ) {
     const branchRepo = new BranchRepository(db);
+    const executionMode = resolveExecutionSecurityMode(config);
     setupBranchOwnersService(app, branchRepo, {
       jwtSecret,
       daemonUser: config.daemon?.unix_user,
+      unixFsIsolationEnabled: executionMode.unixFsIsolationEnabled,
       allowSuperadmin,
     });
   }
 
-  if (branchRbacEnabled) {
+  if (resolveExecutionSecurityMode(config).unixFsIsolationEnabled) {
     const daemonUser = config.daemon?.unix_user || 'agor';
     console.log(`[Unix Integration] Executor-based sync enabled (daemon user: ${daemonUser})`);
   }
@@ -458,6 +470,18 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   if (svcEnabled('gateway')) {
     app.use('/gateway-channels', createGatewayChannelsService(db));
+
+    // Sub-path service for the connection probe. A sub-path does NOT inherit
+    // the parent gateway-channels admin gating / redaction hooks, so it carries
+    // its own requireAuth + admin gate. It reads decrypted tokens via the
+    // repository and returns no token values.
+    app.use('/gateway-channels/test', createGatewayChannelsTestService(db));
+    app.service('gateway-channels/test').hooks({
+      before: {
+        create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'test gateway channels')],
+      },
+    });
+
     app.use('/thread-session-map', createThreadSessionMapService(db));
     app.use('/gateway', createGatewayService(db, app), {
       // Only expose the inbound gateway entrypoint and existing route hook
@@ -477,6 +501,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const configService = createConfigService(db);
   configService.app = app;
+  app.use('/admin/local-actions', createLocalActionsService());
+
   app.use('/config', configService);
 
   app.use('/config/resolve-api-key', {
@@ -571,10 +597,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           mcp_server_id?: string;
           enabled?: boolean;
         };
+        _agorSqlSessionAccessUserId?: UUID;
       }) {
         const conditions: ReturnType<typeof eq>[] = [];
-        // session_id may be a scalar string or `{ $in: [...] }` — the latter is
-        // injected by the RBAC scoping hook to restrict rows to accessible sessions.
+        // session_id may be a scalar string or `{ $in: [...] }` from callers.
+        // RBAC scoping is composed below via `_agorSqlSessionAccessUserId`.
         const sessionIdFilter = params?.query?.session_id;
         if (typeof sessionIdFilter === 'string') {
           conditions.push(eq(sessionMcpServers.session_id, sessionIdFilter));
@@ -593,6 +620,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         }
         if (params?.query?.enabled !== undefined) {
           conditions.push(eq(sessionMcpServers.enabled, params.query.enabled));
+        }
+        if (params?._agorSqlSessionAccessUserId) {
+          conditions.push(
+            visibleSessionReferenceAccessExists(
+              db,
+              params._agorSqlSessionAccessUserId,
+              sessionMcpServers.session_id
+            )
+          );
         }
         let query = select(db).from(sessionMcpServers);
         if (conditions.length > 0) {
@@ -613,12 +649,22 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Users service
   // ============================================================================
 
-  const usersService = createUsersService(db);
+  const usersService = createUsersService(db, app);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
-  // the custom `getGitEnvironment`. Listing `update` here makes Feathers' hook
+  // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
   app.use('/users', usersService, {
-    methods: ['find', 'get', 'create', 'patch', 'remove', 'getGitEnvironment'],
+    methods: [
+      'find',
+      'get',
+      'create',
+      'patch',
+      'remove',
+      'getGitEnvironment',
+      'getAvatarSettings',
+      'updateAvatarSettings',
+      'syncAvatars',
+    ],
   });
 
   // Bootstrap superadmin users
@@ -1078,6 +1124,8 @@ async function registerMCPServices(
     mcpServerId?: string;
     userId?: string;
     oauthMode?: 'per_user' | 'shared';
+    /** Tenant captured when the flow starts; browser callbacks have no auth headers. */
+    tenantId?: string;
     socketId?: string;
     createdAt: number;
     /**
@@ -1275,6 +1323,7 @@ async function registerMCPServices(
       mcpServerId: opts.mcpServerId,
       userId: opts.userId,
       oauthMode: opts.oauthMode,
+      tenantId: getCurrentTenantId(),
       socketId: opts.socketId,
       createdAt: Date.now(),
       tokenResolve,
@@ -1300,6 +1349,44 @@ async function registerMCPServices(
     }
     return base;
   }
+
+  const persistOAuthTokenForPendingFlow = async (
+    tokenResponse: OAuthTokenResponse,
+    pendingFlow: PendingOAuthFlow,
+    logPrefix: string
+  ): Promise<void> => {
+    const work = () =>
+      persistOAuthToken(
+        db,
+        tokenResponse,
+        pendingFlow.mcpUrl,
+        {
+          ...pendingFlow,
+          clientId: pendingFlow.context.clientId,
+          clientSecret: pendingFlow.context.clientSecret,
+          tokenEndpoint: pendingFlow.context.tokenEndpoint,
+        },
+        logPrefix
+      );
+
+    if (pendingFlow.tenantId) {
+      await runWithTenantDatabaseScope(db, pendingFlow.tenantId, work);
+      return;
+    }
+
+    // OAuth callbacks arrive as unauthenticated browser redirects, so they
+    // cannot re-resolve tenant scope from request auth. In Postgres/multitenant
+    // deployments, a flow without captured tenant metadata is unsafe to persist:
+    // fail closed and ask the user to restart the OAuth flow. SQLite/single-user
+    // installs do not have tenant DB scope, so they keep the legacy direct path.
+    if (isPostgresDatabase(db) && pendingFlow.mcpServerId) {
+      throw new Error(
+        'Missing tenant context for MCP OAuth callback. Please restart the OAuth flow.'
+      );
+    }
+
+    await work();
+  };
 
   // Set the OAuth callback handler
   const oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
@@ -1354,18 +1441,7 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
         pendingOAuthFlows.delete(state);
 
-        await persistOAuthToken(
-          db,
-          tokenResponse,
-          pendingFlow.mcpUrl,
-          {
-            ...pendingFlow,
-            clientId: pendingFlow.context.clientId,
-            clientSecret: pendingFlow.context.clientSecret,
-            tokenEndpoint: pendingFlow.context.tokenEndpoint,
-          },
-          'OAuth Callback'
-        );
+        await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback');
 
         if (app.io) {
           const oauthEvent = {
@@ -1934,18 +2010,14 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
         pendingOAuthFlows.delete(state);
 
-        await persistOAuthToken(
-          db,
-          tokenResponse,
-          pendingFlow.mcpUrl,
-          {
-            ...pendingFlow,
-            clientId: pendingFlow.context.clientId,
-            clientSecret: pendingFlow.context.clientSecret,
-            tokenEndpoint: pendingFlow.context.tokenEndpoint,
-          },
-          'OAuth Complete'
-        );
+        const activeTenantId = getCurrentTenantId();
+        if (pendingFlow.tenantId && activeTenantId && pendingFlow.tenantId !== activeTenantId) {
+          throw new Error(
+            'OAuth flow belongs to a different tenant. Please restart the OAuth flow.'
+          );
+        }
+
+        await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
         return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
       } catch (error) {
         console.error('[OAuth Complete] Error:', error);
@@ -2021,7 +2093,7 @@ async function registerMCPServices(
   // --------------------------------------------------------------------------
   app.use('/mcp-servers/oauth-auth-headers', {
     async create(
-      data: { mcp_server_ids: string[] },
+      data: { mcp_server_ids: string[]; executorSessionToken?: string },
       params?: AuthenticatedParams
     ): Promise<{
       headers: Record<string, { authorization?: string; error?: string }>;
@@ -2041,9 +2113,30 @@ async function registerMCPServices(
       const sessionId = (params as (AuthenticatedParams & { session_id?: string }) | undefined)
         ?.session_id;
       const trustedInternalOrService = shouldExposeMCPServerSecrets(params);
-      const trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
+      let trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
         sessionId,
       });
+      let executorSessionId = sessionId;
+      if (!trustedSessionExecutor && params?.provider && data.executorSessionToken) {
+        const executorTokenService = (
+          app as unknown as {
+            sessionTokenService?: {
+              validateToken: (
+                token: string,
+                expected?: { sessionId?: string; taskId?: string; branchId?: string }
+              ) => Promise<{ session_id: string } | null>;
+            };
+          }
+        ).sessionTokenService;
+        const sessionInfo = await executorTokenService?.validateToken(
+          data.executorSessionToken,
+          {}
+        );
+        if (sessionInfo?.session_id) {
+          executorSessionId = sessionInfo.session_id;
+          trustedSessionExecutor = true;
+        }
+      }
       if (!trustedInternalOrService && !trustedSessionExecutor) {
         throw new Forbidden('oauth-auth-headers is only available to trusted executor paths');
       }
@@ -2051,8 +2144,14 @@ async function registerMCPServices(
       const userTokenRepo = new UserMCPOAuthTokenRepository(db);
       const mcpServerRepo = new MCPServerRepository(db);
       if (trustedSessionExecutor) {
+        if (!executorSessionId) {
+          throw new Forbidden('oauth-auth-headers requires executor session scope');
+        }
         const sessionMcpRepo = new SessionMCPServerRepository(db);
-        const attachedServers = await sessionMcpRepo.listServers(sessionId as SessionID, true);
+        const attachedServers = await sessionMcpRepo.listServers(
+          executorSessionId as SessionID,
+          true
+        );
         const globalServers = await mcpServerRepo.findAll({ scope: 'global', enabled: true });
         const allowedServerIds = new Set([
           ...globalServers.map((server) => server.mcp_server_id),

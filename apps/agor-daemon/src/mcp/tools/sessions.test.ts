@@ -98,6 +98,7 @@ async function registerAndCaptureTools(
     app: unknown;
     userId: string;
     sessionId?: string;
+    baseServiceParams?: Record<string, unknown>;
   },
   toolNames: string[]
 ): Promise<Record<string, CapturedTool>> {
@@ -117,7 +118,7 @@ async function registerAndCaptureTools(
     userId: ctx.userId as any,
     sessionId: ctx.sessionId as any,
     authenticatedUser: { user_id: ctx.userId, role: 'member' } as any,
-    baseServiceParams: {},
+    baseServiceParams: (ctx.baseServiceParams ?? {}) as any,
   });
 
   for (const name of toolNames) {
@@ -127,7 +128,12 @@ async function registerAndCaptureTools(
 }
 
 async function registerAndCaptureHandlers(
-  ctx: { app: unknown; userId: string; sessionId?: string },
+  ctx: {
+    app: unknown;
+    userId: string;
+    sessionId?: string;
+    baseServiceParams?: Record<string, unknown>;
+  },
   toolNames: string[]
 ): Promise<Record<string, ToolHandler>> {
   const tools = await registerAndCaptureTools(ctx, toolNames);
@@ -317,7 +323,7 @@ describe('agor_sessions_create', () => {
         permissionMode: 'acceptEdits',
         modelConfig: {
           mode: 'alias',
-          model: 'claude-sonnet-4-6', // user default
+          model: 'claude-sonnet-5', // user default
           effort: 'medium',
         },
       },
@@ -383,7 +389,7 @@ describe('agor_sessions_create', () => {
     expect(sessionCreates).toHaveLength(1);
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.model_config).toBeDefined();
-    // Explicit override wins over user default ('claude-sonnet-4-6').
+    // Explicit override wins over user default ('claude-sonnet-5').
     expect(created.model_config.model).toBe('claude-opus-4-6');
     expect(created.model_config.mode).toBe('alias');
     expect(created.model_config.effort).toBe('max');
@@ -391,6 +397,116 @@ describe('agor_sessions_create', () => {
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.session).not.toHaveProperty('mcp_token');
+  });
+
+  it('accepts effort: xhigh and threads it through to session.model_config', async () => {
+    const sessionCreates: unknown[] = [];
+    const app = makeFakeApp({
+      users: { get: async () => baseUser },
+      branches: { get: async () => baseBranch },
+      sessions: {
+        create: async (data: unknown) => {
+          sessionCreates.push(data);
+          return {
+            session_id: 'sess-xhigh',
+            mcp_token: 'secret-token',
+            ...(data as Record<string, unknown>),
+          };
+        },
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'wt-1',
+          genealogy: { children: [] },
+        }),
+        patch: async () => ({}),
+      },
+      '/sessions/:id/mcp-servers': { create: async () => ({}) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({
+      branchId: 'wt-1',
+      agenticTool: 'claude-code',
+      modelConfig: { model: 'claude-sonnet-5', mode: 'alias', effort: 'xhigh' },
+    });
+
+    expect(sessionCreates).toHaveLength(1);
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.model_config.effort).toBe('xhigh');
+  });
+
+  it("attributes sessions created from another user's session context to the acting MCP user and uses their defaults", async () => {
+    const sessionCreates: unknown[] = [];
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-b', role: 'member' },
+    };
+    const actingUser = {
+      user_id: 'user-b',
+      unix_username: 'bob',
+      default_agentic_config: {
+        'claude-code': {
+          permissionMode: 'acceptEdits',
+          modelConfig: { model: 'claude-sonnet-5', mode: 'alias', effort: 'high' },
+        },
+      },
+    };
+    const app = makeFakeApp({
+      users: {
+        get: vi.fn(async (id: string) => {
+          expect(id).toBe('user-b');
+          return actingUser;
+        }),
+      },
+      branches: {
+        get: vi.fn(async (_id: string, params: unknown) => {
+          expect(params).toBe(baseServiceParams);
+          return { ...baseBranch, branch_id: 'wt-1', mcp_server_ids: [] };
+        }),
+      },
+      sessions: {
+        create: vi.fn(async (data: unknown, params: unknown) => {
+          expect(params).toBe(baseServiceParams);
+          sessionCreates.push(data);
+          return { session_id: 'sess-new', ...(data as Record<string, unknown>) };
+        }),
+        get: vi.fn(async (id: string, params: unknown) => {
+          expect(params).toBe(baseServiceParams);
+          return {
+            session_id: id,
+            branch_id: 'wt-1',
+            created_by: 'user-a',
+            unix_username: 'alice',
+            model_config: { model: 'claude-parent' },
+            permission_config: { mode: 'ask' },
+            genealogy: { children: [] },
+          };
+        }),
+        patch: vi.fn(async () => ({})),
+      },
+      '/sessions/:id/mcp-servers': { create: vi.fn(async () => ({})) },
+    });
+
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-b', sessionId: 'sess-owned-by-a', baseServiceParams },
+      ['agor_sessions_create']
+    );
+
+    await agor_sessions_create({ branchId: 'wt-1', agenticTool: 'claude-code' });
+
+    expect(sessionCreates).toHaveLength(1);
+    const created = sessionCreates[0] as Record<string, any>;
+    expect(created.created_by).toBe('user-b');
+    expect(created.unix_username).toBe('bob');
+    expect(created.permission_config.mode).toBe('acceptEdits');
+    expect(created.model_config.model).toBe('claude-sonnet-5');
+    expect(created.model_config.effort).toBe('high');
+    expect(created.model_config.model).not.toBe('claude-parent');
   });
 
   it('falls back to user default modelConfig when none is explicitly provided', async () => {
@@ -425,7 +541,7 @@ describe('agor_sessions_create', () => {
     });
 
     const created = sessionCreates[0] as Record<string, any>;
-    expect(created.model_config.model).toBe('claude-sonnet-4-6'); // user default
+    expect(created.model_config.model).toBe('claude-sonnet-5'); // user default
     expect(created.model_config.effort).toBe('medium');
   });
 
@@ -926,7 +1042,7 @@ describe('agor_sessions_spawn', () => {
 
     await agor_sessions_spawn({
       prompt: 'do the thing',
-      modelConfig: { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+      modelConfig: { model: 'claude-sonnet-5', provider: 'anthropic' },
     });
 
     // Regression guard: without `provider` on SpawnConfig, Zod-validated input
@@ -934,7 +1050,7 @@ describe('agor_sessions_spawn', () => {
     // would drop it (or TS would reject the field). This asserts the full
     // shape survives the MCP → service boundary.
     expect(spawnCalls[0].data.modelConfig).toEqual({
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       provider: 'anthropic',
     });
   });
@@ -1083,12 +1199,12 @@ describe('modelConfig schema (string shorthand coercion)', () => {
     const parsed = schema.parse({
       branchId: 'wt-1',
       agenticTool: 'claude-code',
-      modelConfig: { mode: 'alias', model: 'claude-sonnet-4-6', effort: 'high' },
+      modelConfig: { mode: 'alias', model: 'claude-sonnet-5', effort: 'high' },
     }) as Record<string, unknown>;
 
     expect(parsed.modelConfig).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       effort: 'high',
     });
   });
@@ -1136,7 +1252,7 @@ describe('modelConfig schema (string shorthand coercion)', () => {
       },
       '/sessions/:id/mcp-servers': { create: async () => ({}) },
     });
-    vi.doMock('@agor/core/git', () => ({
+    vi.doMock('@agor/core/git/exec', () => ({
       getGitState: async () => 'sha',
       getCurrentBranch: async () => 'main',
     }));
@@ -1183,7 +1299,7 @@ describe('agor_models_list', () => {
     expect(parsed.codex).toBeDefined();
     expect(parsed.gemini).toBeDefined();
 
-    expect(parsed['claude-code'].default).toBe('claude-sonnet-4-6');
+    expect(parsed['claude-code'].default).toBe('claude-sonnet-5');
     expect(Array.isArray(parsed['claude-code'].models)).toBe(true);
     expect(parsed['claude-code'].models[0]).toMatchObject({
       id: expect.any(String),
@@ -1193,7 +1309,7 @@ describe('agor_models_list', () => {
     // Sanity: the canonical aliases an agent would want to pin should be discoverable
     const claudeIds = parsed['claude-code'].models.map((m: { id: string }) => m.id);
     expect(claudeIds).toContain('claude-opus-4-6');
-    expect(claudeIds).toContain('claude-sonnet-4-6');
+    expect(claudeIds).toContain('claude-sonnet-5');
   });
 
   it('filters to a single agenticTool when requested', async () => {

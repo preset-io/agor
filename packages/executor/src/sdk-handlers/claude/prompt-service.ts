@@ -9,6 +9,7 @@ import { shortId } from '@agor/core/db';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   SessionMCPServerRepository,
@@ -67,7 +68,8 @@ export class ClaudePromptService {
     private reposRepo?: import('../../db/feathers-repositories').RepoRepository,
     private messagesService?: MessagesService, // FeathersJS Messages service for creating permission requests
     private mcpEnabled?: boolean,
-    private usersRepo?: UsersRepository
+    private usersRepo?: UsersRepository,
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -191,6 +193,7 @@ If you continue to see authentication errors, please contact your Agor administr
         messagesService: this.messagesService,
         branchesRepo: this.branchesRepo,
         usersRepo: this.usersRepo,
+        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
         permissionLocks: this.permissionLocks,
       },
       {
@@ -357,6 +360,7 @@ If you continue to see authentication errors, please contact your Agor administr
         messagesService: this.messagesService,
         branchesRepo: this.branchesRepo,
         usersRepo: this.usersRepo,
+        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
         permissionLocks: this.permissionLocks,
       },
       {

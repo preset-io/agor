@@ -79,7 +79,8 @@ export async function executeOpenCodeTask(params: {
       },
       repos.messagesService,
       repos.sessionMCP,
-      repos.mcpServers
+      repos.mcpServers,
+      repos.mcpOAuthAuthHeaders
     );
 
     let opencodeSessionId: string;

@@ -12,6 +12,7 @@ import type {
   BoardExportBlob,
   BoardGroupGrantWithGroup,
   Branch,
+  BranchEnvironmentUpdate,
   BranchGroupGrantWithGroup,
   CardType,
   CardWithType,
@@ -38,6 +39,9 @@ import type {
   TemplateRenderRequest,
   TemplateRenderResponse,
   User,
+  UserAvatarSettings,
+  UserAvatarSyncRequest,
+  UserAvatarSyncResult,
   UUID,
 } from '@agor/core/types';
 import authentication from '@feathersjs/authentication-client';
@@ -436,6 +440,12 @@ export interface UsersService extends AgorService<User> {
    * regular users may only fetch their own.
    */
   getGitEnvironment(data: { userId: string }, params?: Params): Promise<Record<string, string>>;
+  getAvatarSettings(data?: unknown, params?: Params): Promise<UserAvatarSettings>;
+  updateAvatarSettings(
+    data: Partial<UserAvatarSettings>,
+    params?: Params
+  ): Promise<UserAvatarSettings>;
+  syncAvatars(data?: UserAvatarSyncRequest, params?: Params): Promise<UserAvatarSyncResult>;
 }
 
 /**
@@ -493,11 +503,11 @@ export interface BranchesService extends AgorService<Branch> {
       | {
           branch_id?: string;
           branchId?: string;
-          environment_update?: Partial<Branch['environment_instance']>;
-          environmentUpdate?: Partial<Branch['environment_instance']>;
+          environment_update?: BranchEnvironmentUpdate;
+          environmentUpdate?: BranchEnvironmentUpdate;
         }
       | string,
-    environmentUpdate?: Partial<Branch['environment_instance']>,
+    environmentUpdate?: BranchEnvironmentUpdate,
     params?: Params
   ): Promise<Branch>;
 
@@ -799,7 +809,12 @@ function extendUsersService(client: AgorClient): void {
   };
   if (usersService[USERS_SERVICE_EXTENDED]) return;
   if (typeof usersService.methods === 'function') {
-    usersService.methods('getGitEnvironment');
+    usersService.methods(
+      'getGitEnvironment',
+      'getAvatarSettings',
+      'updateAvatarSettings',
+      'syncAvatars'
+    );
   }
   usersService[USERS_SERVICE_EXTENDED] = true;
 }

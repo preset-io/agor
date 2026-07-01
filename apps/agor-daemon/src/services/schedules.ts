@@ -15,7 +15,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, ScheduleRepository } from '@agor/core/db';
+import { ScheduleRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { AuthenticatedParams, BranchID, QueryParams, Schedule, UUID } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
@@ -27,7 +27,7 @@ export type ScheduleParams = QueryParams<{
   AuthenticatedParams;
 
 export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>, ScheduleParams> {
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const repo = new ScheduleRepository(db);
     super(repo, {
       id: 'schedule_id',
@@ -40,6 +40,6 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
   }
 }
 
-export function createSchedulesService(db: Database): SchedulesService {
+export function createSchedulesService(db: TenantScopeAwareDatabase): SchedulesService {
   return new SchedulesService(db);
 }

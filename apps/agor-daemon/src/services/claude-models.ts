@@ -7,7 +7,7 @@
  */
 
 import { resolveApiKey } from '@agor/core/config';
-import { type Database, shortId } from '@agor/core/db';
+import { shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { AVAILABLE_CLAUDE_MODEL_ALIASES, DEFAULT_CLAUDE_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import Anthropic from '@anthropic-ai/sdk';
@@ -47,7 +47,7 @@ interface AuthenticatedParams extends Params {
  * that already has the alias form. Keep only alias-style entries.
  */
 function isAlias(id: string): boolean {
-  return /^claude-[a-z]+-\d+-\d+$/.test(id);
+  return /^claude-[a-z]+-\d+(?:-\d+)?$/.test(id);
 }
 
 const CONTEXT_1M_BETA = 'context-1m-2025-08-07';
@@ -96,7 +96,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, message: string):
 }
 
 export class ClaudeModelsService {
-  constructor(private db: Database) {}
+  constructor(private db: TenantScopeAwareDatabase) {}
 
   async find(params?: AuthenticatedParams): Promise<ClaudeModelsResult> {
     const userId = params?.user?.user_id;
@@ -152,6 +152,6 @@ export class ClaudeModelsService {
   }
 }
 
-export function createClaudeModelsService(db: Database): ClaudeModelsService {
+export function createClaudeModelsService(db: TenantScopeAwareDatabase): ClaudeModelsService {
   return new ClaudeModelsService(db);
 }

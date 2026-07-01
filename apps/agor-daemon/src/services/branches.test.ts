@@ -5,6 +5,7 @@ import {
   GroupRepository,
   KnowledgeNamespaceRepository,
   RepoRepository,
+  runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
@@ -22,6 +23,10 @@ vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
     getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   };
 });
+
+function createTenantScopeTestDb() {
+  return { run: vi.fn() };
+}
 
 function createRenderEnvHarness(opts: {
   current: string | null;
@@ -48,7 +53,7 @@ function createRenderEnvHarness(opts: {
       throw new Error(`Unknown service: ${path}`);
     },
   } as unknown as Application;
-  const service = new BranchesService({} as never, app);
+  const service = new BranchesService(createTenantScopeTestDb() as never, app);
   // Bypass the auth gate (it would otherwise call loadConfig); the running
   // guard fires after auth and is what we're testing here.
   vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
@@ -115,7 +120,7 @@ function createPatchHarness(opts: {
       primary_assistant_id: branchId,
     })),
   };
-  const service = new BranchesService({} as never, app);
+  const service = new BranchesService(createTenantScopeTestDb() as never, app);
   (service as unknown as { repository: typeof repository }).repository = repository;
   (service as unknown as { boardRepo: typeof boardRepo }).boardRepo = boardRepo;
   (service as unknown as { branchRepo: { enrichWithZoneInfo: typeof vi.fn } }).branchRepo = {
@@ -168,8 +173,16 @@ function createServiceHarness() {
     },
   } as unknown as Application;
 
-  const service = new BranchesService({} as never, app);
+  const service = new BranchesService(createTenantScopeTestDb() as never, app);
   return { service, boardObjectsService, sessionsService };
+}
+
+async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
+  return runWithTenantDatabaseScope(createTenantScopeTestDb() as never, 'tenant-test', work);
+}
+
+function waitForDeferredWork(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
@@ -189,6 +202,29 @@ function createFindHarness(opts: {
       throw new Error(`Unknown service: ${path}`);
     },
   } as unknown as Application;
+  // Faithfully simulate the SQL pushdown performed by BranchRepository.findAll:
+  // narrow the candidate rows by the predicates fetchData hands the repository.
+  // DrizzleService.find still re-applies every query filter in memory, so the
+  // returned set only needs to match what the real WHERE clause would select.
+  const applyFilter = (filter?: {
+    repo_id?: string;
+    board_id?: string;
+    archived?: boolean;
+    branchIds?: BranchID[];
+    visibleToUserId?: string;
+  }) =>
+    opts.branches.filter((branch) => {
+      if (filter?.repo_id !== undefined && branch.repo_id !== filter.repo_id) return false;
+      if (filter?.board_id !== undefined && branch.board_id !== filter.board_id) return false;
+      if (filter?.archived !== undefined && Boolean(branch.archived) !== filter.archived)
+        return false;
+      if (
+        filter?.branchIds !== undefined &&
+        !filter.branchIds.includes(branch.branch_id as BranchID)
+      )
+        return false;
+      return true;
+    });
   const repository = {
     findAll: vi.fn(async () => opts.branches),
     findById: vi.fn(),
@@ -197,6 +233,7 @@ function createFindHarness(opts: {
     delete: vi.fn(),
   };
   const branchRepo = {
+    findAll: vi.fn(async (filter?: Parameters<typeof applyFilter>[0]) => applyFilter(filter)),
     findBranchIdsByZone: vi.fn(async () => opts.branchIdsInZone),
     enrichManyWithZoneInfo: vi.fn(async (branches: Array<Record<string, unknown>>) =>
       branches.map((branch: Record<string, unknown>) => ({
@@ -207,7 +244,7 @@ function createFindHarness(opts: {
       }))
     ),
   };
-  const service = new BranchesService({} as never, app);
+  const service = new BranchesService(createTenantScopeTestDb() as never, app);
   (service as unknown as { repository: typeof repository }).repository = repository;
   (service as unknown as { branchRepo: typeof branchRepo }).branchRepo = branchRepo;
 
@@ -263,11 +300,15 @@ describe('BranchesService environment start async behavior', () => {
     const { service, branch, environmentUpdates } = createStartHarness();
 
     const result = await Promise.race([
-      service.startEnvironment(branch.branch_id),
+      runInTestTenantScope(() => service.startEnvironment(branch.branch_id)),
       new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 50)),
     ]);
 
     expect(result).not.toBe('timed-out');
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+
+    await waitForDeferredWork();
+
     expect(mockedSpawnExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.lifecycle',
@@ -338,9 +379,13 @@ describe('BranchesService environment start async behavior', () => {
       service as unknown as { processes: Map<BranchID, { process: { kill: () => void } }> }
     ).processes.set(branch.branch_id, { process: { kill } });
 
-    await service.restartEnvironment(branch.branch_id);
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
 
     expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+
+    await waitForDeferredWork();
+
     expect(mockedSpawnExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.lifecycle',
@@ -498,7 +543,15 @@ describe('BranchesService environment start async behavior', () => {
       path: '/tmp/wt-env-rpc',
       created_by: 'user-1' as UUID,
       branch_unique_id: 1,
-      environment_instance: { status: 'stopping' },
+      environment_instance: {
+        status: 'stopping',
+        process: { pid: 123 },
+        last_health_check: {
+          timestamp: '2026-01-01T00:00:00.000Z',
+          status: 'healthy',
+          message: 'old',
+        },
+      },
     };
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
     const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
@@ -509,20 +562,70 @@ describe('BranchesService environment start async behavior', () => {
       branch_id: branch.branch_id,
       environment_update: {
         status: 'stopped',
-        process: undefined,
+        // Remote executor calls cross JSON, where undefined is dropped; null is
+        // the explicit clear sentinel.
+        process: null,
+        last_health_check: null,
       },
     });
 
+    const patchedEnvironment = patchSpy.mock.calls[0]?.[1]?.environment_instance as
+      | Record<string, unknown>
+      | undefined;
+    expect(patchedEnvironment).toMatchObject({ status: 'stopped' });
+    expect(patchedEnvironment).not.toHaveProperty('process');
+    expect(patchedEnvironment).not.toHaveProperty('last_health_check');
     expect(patchSpy).toHaveBeenCalledWith(
       branch.branch_id,
       expect.objectContaining({
         environment_instance: expect.objectContaining({
           status: 'stopped',
-          process: undefined,
         }),
       }),
       undefined
     );
+  });
+
+  it('clears explicit undefined environment fields for in-process callers', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-clear' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-clear',
+      path: '/tmp/wt-env-clear',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_instance: {
+        status: 'error',
+        process: { pid: 456 },
+        last_error: 'old error',
+        last_command: {
+          action: 'start',
+          status: 'failed',
+          message: 'old failure',
+          timestamp: '2026-01-01T00:00:00.000Z',
+        },
+      },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+      return { ...branch, ...(data as object) } as never;
+    });
+
+    await service.updateEnvironment(branch.branch_id, {
+      status: 'starting',
+      process: undefined,
+      last_error: undefined,
+      last_command: undefined,
+    });
+
+    const patchedEnvironment = patchSpy.mock.calls[0]?.[1]?.environment_instance as
+      | Record<string, unknown>
+      | undefined;
+    expect(patchedEnvironment).toMatchObject({ status: 'starting' });
+    expect(patchedEnvironment).not.toHaveProperty('process');
+    expect(patchedEnvironment).not.toHaveProperty('last_error');
+    expect(patchedEnvironment).not.toHaveProperty('last_command');
   });
 });
 
@@ -863,6 +966,110 @@ describe('BranchesService.find zone filtering', () => {
     expect(result.total).toBe(1);
     expect(result.data).toHaveLength(1);
     expect(result.data[0].branch_id).toBe('branch-3');
+  });
+});
+
+describe('BranchesService.find SQL pushdown', () => {
+  // Mixed fixture: two boards, archived + active rows, so a whole-table read
+  // would over-fetch relative to a board+archived scoped query.
+  const fixture = () => [
+    { branch_id: 'b1', name: 'beta', board_id: 'board-1', archived: false },
+    { branch_id: 'b2', name: 'alpha', board_id: 'board-1', archived: false },
+    { branch_id: 'b3', name: 'gamma', board_id: 'board-1', archived: true },
+    { branch_id: 'b4', name: 'delta', board_id: 'board-2', archived: false },
+  ];
+
+  it('pushes board_id + archived into the repository read and never reads the whole table (rbac off)', async () => {
+    const { service, repository, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    const result = (await service.find({
+      query: { board_id: 'board-1', archived: false, $sort: { name: 1 } },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    // Read is SQL-bounded: the scoped repo read runs, the whole-table read does not.
+    expect(branchRepo.findAll).toHaveBeenCalledWith({ board_id: 'board-1', archived: false });
+    expect(repository.findAll).not.toHaveBeenCalled();
+
+    // Parity: same rows the JS filter would keep, same order, same total + zone enrichment.
+    expect(result.total).toBe(2);
+    expect(result.data.map((b) => b.branch_id)).toEqual(['b2', 'b1']);
+    expect(result.data.every((b) => 'zone_id' in b)).toBe(true);
+  });
+
+  it('pushes an accessible branch_id $in set alongside board_id + archived (rbac on)', async () => {
+    const { service, repository, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    const result = (await service.find({
+      query: {
+        board_id: 'board-1',
+        archived: false,
+        branch_id: { $in: ['b1' as BranchID, 'b3' as BranchID, 'b4' as BranchID] },
+      },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    expect(branchRepo.findAll).toHaveBeenCalledWith({
+      board_id: 'board-1',
+      archived: false,
+      branchIds: ['b1', 'b3', 'b4'],
+    });
+    expect(repository.findAll).not.toHaveBeenCalled();
+
+    // b3 is archived, b4 is on board-2 → only b1 survives the intersection.
+    expect(result.total).toBe(1);
+    expect(result.data.map((b) => b.branch_id)).toEqual(['b1']);
+  });
+
+  it('pushes a scalar branch_id as a single-id set', async () => {
+    const { service, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    const result = (await service.find({
+      query: { branch_id: 'b2' as BranchID },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    expect(branchRepo.findAll).toHaveBeenCalledWith({ branchIds: ['b2'] });
+    expect(result.total).toBe(1);
+    expect(result.data[0].branch_id).toBe('b2');
+  });
+
+  it('returns no rows for an empty accessible set without reading the table', async () => {
+    const { service, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    const result = (await service.find({
+      query: { branch_id: { $in: [] } },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    expect(branchRepo.findAll).toHaveBeenCalledWith({ branchIds: [] });
+    expect(result.total).toBe(0);
+    expect(result.data).toHaveLength(0);
+  });
+
+  it('pushes the RBAC SQL visibility marker into the repository read', async () => {
+    const { service, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: [],
+    });
+
+    await service.find({
+      _agorSqlBranchAccessUserId: 'viewer-1' as UUID,
+      query: { board_id: 'board-1' },
+    } as BranchParams);
+
+    expect(branchRepo.findAll).toHaveBeenCalledWith({
+      board_id: 'board-1',
+      visibleToUserId: 'viewer-1',
+    });
   });
 });
 
@@ -1424,4 +1631,66 @@ describe('BranchesService.create permission defaults', () => {
       expect(branch.others_fs_access).toBe('write');
     }
   );
+});
+
+describe('BranchesService environment health recovery', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('recovers an errored environment to running when the health URL succeeds', async () => {
+    const branch = {
+      branch_id: 'wt-health-recover' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-recover',
+      path: '/tmp/wt-health-recover',
+      branch_unique_id: 1,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: {
+        status: 'error',
+        last_health_check: {
+          timestamp: '2026-06-27T00:00:00.000Z',
+          status: 'unhealthy',
+          message: 'start command exited with code 1',
+        },
+      },
+    };
+    const app = {
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update) =>
+        ({
+          ...branch,
+          environment_instance: {
+            ...branch.environment_instance,
+            ...(update as Record<string, unknown>),
+          },
+        }) as never
+    );
+    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      branch.health_check_url,
+      expect.objectContaining({ method: 'GET' })
+    );
+    expect(updateEnvironment).toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({
+        status: 'running',
+        last_health_check: expect.objectContaining({ status: 'healthy', message: 'HTTP 200' }),
+      }),
+      undefined
+    );
+    expect(result.environment_instance?.status).toBe('running');
+  });
 });

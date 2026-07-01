@@ -1467,6 +1467,32 @@ async function resolveFindScopeAccess(
   return { kind: 'filter', accessibleIds: new Set<string>(ids) };
 }
 
+type FindSqlScopeDecision =
+  | { kind: 'passThrough' }
+  | { kind: 'handled' }
+  | { kind: 'filter'; userId: UUID };
+
+async function resolveFindSqlScopeAccess(
+  context: HookContext,
+  options: { allowSuperadmin?: boolean } | undefined
+): Promise<FindSqlScopeDecision> {
+  if (context.method !== 'find') return { kind: 'passThrough' };
+  if (!context.params.provider) return { kind: 'passThrough' };
+  if (context.params.user?._isServiceAccount) return { kind: 'passThrough' };
+
+  const userId = context.params.user?.user_id as UUID | undefined;
+  if (!userId) {
+    emptyFindResult(context);
+    return { kind: 'handled' };
+  }
+
+  const userRole = context.params.user?.role as string | undefined;
+  const allowSuperadmin = options?.allowSuperadmin ?? true;
+  if (isSuperAdmin(userRole, allowSuperadmin)) return { kind: 'passThrough' };
+
+  return { kind: 'filter', userId };
+}
+
 /**
  * Intersect the existing `query[field]` filter with the caller's accessible
  * id set. Handles scalar string, `{ $in: [...] }`, and unset cases.
@@ -1547,6 +1573,25 @@ export function scopeFindToAccessibleBranches(
 }
 
 /**
+ * Mark a branch-scoped find() request for repository-level SQL RBAC pushdown.
+ *
+ * This is the single-query alternative to {@link scopeFindToAccessibleBranches}:
+ * instead of preloading every accessible branch id and injecting a large
+ * `branch_id IN (...)` filter, services that understand this marker compose the
+ * shared branch visibility predicate directly into their repository query.
+ */
+export function scopeFindToAccessibleBranchesSql(options?: { allowSuperadmin?: boolean }) {
+  return async (context: HookContext) => {
+    const decision = await resolveFindSqlScopeAccess(context, options);
+    if (decision.kind !== 'filter') return context;
+
+    (context.params as { _agorSqlBranchAccessUserId?: UUID })._agorSqlBranchAccessUserId =
+      decision.userId;
+    return context;
+  };
+}
+
+/**
  * Scope find() queries on session-scoped resources to the set of sessions
  * the caller can access (via their accessible branches).
  *
@@ -1583,6 +1628,25 @@ export function scopeFindToAccessibleSessions(
 }
 
 /**
+ * Mark a session-scoped find() request for repository-level SQL RBAC pushdown.
+ *
+ * This is the single-query alternative to {@link scopeFindToAccessibleSessions}:
+ * instead of preloading every accessible session id and injecting a large
+ * `session_id IN (...)` filter, services that understand this marker compose
+ * the shared branch visibility predicate through the session's branch.
+ */
+export function scopeFindToAccessibleSessionsSql(options?: { allowSuperadmin?: boolean }) {
+  return async (context: HookContext) => {
+    const decision = await resolveFindSqlScopeAccess(context, options);
+    if (decision.kind !== 'filter') return context;
+
+    (context.params as { _agorSqlSessionAccessUserId?: UUID })._agorSqlSessionAccessUserId =
+      decision.userId;
+    return context;
+  };
+}
+
+/**
  * Scope find() queries on the boards service to the set of boards the caller
  * can see.
  *
@@ -1611,6 +1675,22 @@ export function scopeFindToAccessibleBoards(
 
     if (decision.kind !== 'filter') return context;
     return intersectFindQuery(context, 'board_id', decision.accessibleIds);
+  };
+}
+
+/**
+ * Mark a boards.find() request for repository-level SQL board-visibility
+ * pushdown. Avoids resolving visible board ids into a large `board_id IN (...)`
+ * list before the service query runs.
+ */
+export function scopeFindToAccessibleBoardsSql(options?: { allowSuperadmin?: boolean }) {
+  return async (context: HookContext) => {
+    const decision = await resolveFindSqlScopeAccess(context, options);
+    if (decision.kind !== 'filter') return context;
+
+    (context.params as { _agorSqlBoardAccessUserId?: UUID })._agorSqlBoardAccessUserId =
+      decision.userId;
+    return context;
   };
 }
 

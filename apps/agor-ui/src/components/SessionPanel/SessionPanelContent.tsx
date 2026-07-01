@@ -9,10 +9,11 @@ import {
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppMcpData, useAppRepoData, useAppUserData } from '../../contexts/AppDataContext';
+import { useAgorStore } from '../../store/agorStore';
+import { selectMcpServerById, selectRepoById, selectUserById } from '../../store/selectors';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 import { BranchHeaderPill } from '../BranchHeaderPill';
@@ -68,13 +69,33 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
   }) => {
     const { token } = theme.useToken();
     const { showSuccess, showError } = useThemedMessage();
+    const [resumeQueueInFlight, setResumeQueueInFlight] = React.useState(false);
+    const isQueueHeldByFailure = queuedTasks.length > 0 && session.status === 'failed';
 
-    // Subscribe only to the entity families this panel needs. This keeps the
-    // panel insulated from session/branch/board patches and avoids unrelated
-    // entity churn (e.g. repo edits invalidating user/MCP consumers).
-    const { userById } = useAppUserData();
-    const { repoById } = useAppRepoData();
-    const { mcpServerById } = useAppMcpData();
+    const handleResumeHeldQueue = React.useCallback(async () => {
+      if (!client || resumeQueueInFlight) return;
+      setResumeQueueInFlight(true);
+      try {
+        await client.service('sessions').patch(session.session_id, { ready_for_prompt: true });
+        showSuccess('Resuming queued prompts');
+      } catch (error) {
+        showError(
+          `Failed to resume queue: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        setResumeQueueInFlight(false);
+      }
+    }, [client, resumeQueueInFlight, session.session_id, showError, showSuccess]);
+
+    // Subscribe only to the entity families this panel needs via narrow store
+    // selectors. This keeps the panel insulated from session/branch/board
+    // patches and avoids unrelated entity churn (e.g. repo edits invalidating
+    // user/MCP consumers): each whole-map selector is a stable module-level
+    // reference, so a slice only re-renders this content when its own reference
+    // changes.
+    const userById = useAgorStore(selectUserById);
+    const repoById = useAgorStore(selectRepoById);
+    const mcpServerById = useAgorStore(selectMcpServerById);
     // Get actions from context
     const {
       onOpenBranch,
@@ -339,6 +360,26 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             >
               Queued Tasks ({queuedTasks.length})
             </Typography.Text>
+            {isQueueHeldByFailure && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: token.sizeUnit * 2 }}
+                message="Queue paused by failed session"
+                description="Queued prompts are preserved. Resume the queue to run the next prompt without copy/paste."
+                action={
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={resumeQueueInFlight}
+                    disabled={!client}
+                    onClick={handleResumeHeldQueue}
+                  >
+                    Resume queue
+                  </Button>
+                }
+              />
+            )}
             <Space orientation="vertical" size={8} style={{ width: '100%' }}>
               {queuedTasks.map((task, idx) => (
                 <div
@@ -361,6 +402,17 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                     {task.full_prompt}
                   </Typography.Text>
                   <Space size={4}>
+                    {isQueueHeldByFailure && idx === 0 && (
+                      <Button
+                        size="small"
+                        type="link"
+                        loading={resumeQueueInFlight}
+                        disabled={!client}
+                        onClick={handleResumeHeldQueue}
+                      >
+                        Run next
+                      </Button>
+                    )}
                     <Button
                       type="text"
                       size="small"
