@@ -140,6 +140,52 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(String(enabledMissing.error)).toContain('config.bot_token is required for Slack');
   });
 
+  it('enforces non-secret required config on disabled create', async () => {
+    const tools = await captureTools();
+
+    const githubDraft = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft GitHub',
+      targetBranchId: 'branch-1',
+      channelType: 'github',
+      enabled: false,
+      config: {},
+    });
+    expect(githubDraft.success).toBe(false);
+    expect(String(githubDraft.error)).toContain('config.app_id is required for GitHub');
+    expect(String(githubDraft.error)).toContain('config.installation_id is required for GitHub');
+    expect(String(githubDraft.error)).toContain('config.watch_repos is required for GitHub');
+    expect(String(githubDraft.error)).not.toContain('config.private_key is required for GitHub');
+
+    const teamsDraft = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft Teams',
+      targetBranchId: 'branch-1',
+      channelType: 'teams',
+      enabled: false,
+      config: {},
+    });
+    expect(teamsDraft.success).toBe(false);
+    expect(String(teamsDraft.error)).toContain('config.app_id is required for Teams');
+    expect(String(teamsDraft.error)).not.toContain('config.app_password is required for Teams');
+
+    const slackDraft = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft Slack',
+      targetBranchId: 'branch-1',
+      channelType: 'slack',
+      enabled: false,
+      config: {},
+    });
+    expect(slackDraft.success).toBe(true);
+
+    const githubDraftComplete = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft GitHub',
+      targetBranchId: 'branch-1',
+      channelType: 'github',
+      enabled: false,
+      config: { app_id: '123', installation_id: '456', watch_repos: ['org/repo'] },
+    });
+    expect(githubDraftComplete.success).toBe(true);
+  });
+
   it('creates through gateway-channels service and redacts returned secrets', async () => {
     const createCalls: Array<{ data: Record<string, unknown>; params: unknown }> = [];
     const app = makeFakeApp({

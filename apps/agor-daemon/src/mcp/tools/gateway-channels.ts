@@ -172,28 +172,31 @@ const gatewayChannelCreateSchema = z
     agenticConfig: agenticConfigSchema.optional(),
   })
   .superRefine((value, issue) => {
+    const config = value.config ?? {};
+
     // Disabled channels are drafts: they may omit required credentials so they
     // can be created before secrets are supplied. The repository enforces that
     // the channel can never become enabled while a required secret is missing.
-    if (value.enabled === false) return;
-
-    const config = value.config ?? {};
-    const requiredSecretMessages: Record<string, string> = {
-      bot_token:
-        'config.bot_token is required for Slack. Prefer a bot token stored outside the transcript when possible.',
-      app_token: 'config.app_token is required for Slack Socket Mode.',
-      private_key: 'config.private_key is required for GitHub gateway channels.',
-      app_password: 'config.app_password is required for Teams gateway channels.',
-    };
-    for (const field of getRequiredSecretFields(value.channelType, config)) {
-      if (!config[field]) {
-        issue.addIssue({
-          code: 'custom',
-          path: ['config', field],
-          message:
-            requiredSecretMessages[field] ??
-            `config.${field} is required for ${value.channelType} gateway channels.`,
-        });
+    // Only the secret requirements are gated on enabled — non-secret required
+    // config below is always enforced.
+    if (value.enabled !== false) {
+      const requiredSecretMessages: Record<string, string> = {
+        bot_token:
+          'config.bot_token is required for Slack. Prefer a bot token stored outside the transcript when possible.',
+        app_token: 'config.app_token is required for Slack Socket Mode.',
+        private_key: 'config.private_key is required for GitHub gateway channels.',
+        app_password: 'config.app_password is required for Teams gateway channels.',
+      };
+      for (const field of getRequiredSecretFields(value.channelType, config)) {
+        if (!config[field]) {
+          issue.addIssue({
+            code: 'custom',
+            path: ['config', field],
+            message:
+              requiredSecretMessages[field] ??
+              `config.${field} is required for ${value.channelType} gateway channels.`,
+          });
+        }
       }
     }
 

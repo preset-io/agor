@@ -216,7 +216,9 @@ export class GatewayChannelRepository
     const config = channel.config ?? {};
     const missing = getRequiredSecretFields(channelType, config).filter((field) => {
       const value = config[field];
-      return typeof value !== 'string' || value.trim() === '';
+      return (
+        typeof value !== 'string' || value.trim() === '' || value === GATEWAY_REDACTED_SENTINEL
+      );
     });
 
     if (missing.length > 0) {
@@ -261,13 +263,13 @@ export class GatewayChannelRepository
    */
   async create(data: Partial<GatewayChannel>): Promise<GatewayChannel> {
     try {
-      this.assertRequiredSecretsWhenEnabled(data);
-
       const insertData = this.channelToInsert({
         ...data,
         id: data.id ?? generateId(),
         channel_key: data.channel_key ?? generateId(),
       });
+
+      this.assertRequiredSecretsWhenEnabled(data);
 
       await insert(this.db, gatewayChannels).values(insertData).run();
 

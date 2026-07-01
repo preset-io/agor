@@ -155,5 +155,41 @@ describe('GatewayChannelRepository', () => {
       expect(enabled.enabled).toBe(true);
       expect(enabled.config.bot_token).toBe('xoxb-stored');
     });
+
+    dbTest('rejects enabling a token-less channel with the redaction sentinel', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+
+      const draft = await repo.create({
+        name: 'Draft Slack',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'slack',
+        enabled: false,
+      });
+
+      await expect(
+        repo.update(draft.id, {
+          enabled: true,
+          config: { bot_token: GATEWAY_REDACTED_SENTINEL },
+        })
+      ).rejects.toThrow('missing required secret(s) bot_token');
+    });
+
+    dbTest('rejects an enabled channel created with the redaction sentinel', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+
+      await expect(
+        repo.create({
+          name: 'Enabled Slack',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'slack',
+          enabled: true,
+          config: { bot_token: GATEWAY_REDACTED_SENTINEL },
+        })
+      ).rejects.toThrow('missing required secret(s) bot_token');
+    });
   });
 });
