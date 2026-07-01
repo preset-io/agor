@@ -118,6 +118,28 @@ describe('agor_gateway_channels MCP tools', () => {
     );
   });
 
+  it('allows creating a disabled Slack channel without secrets', async () => {
+    const tools = await captureTools();
+    const draft = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft Slack',
+      targetBranchId: 'branch-1',
+      channelType: 'slack',
+      enabled: false,
+      config: {},
+    });
+    expect(draft.success).toBe(true);
+
+    const enabledMissing = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Eng Slack',
+      targetBranchId: 'branch-1',
+      channelType: 'slack',
+      enabled: true,
+      config: {},
+    });
+    expect(enabledMissing.success).toBe(false);
+    expect(String(enabledMissing.error)).toContain('config.bot_token is required for Slack');
+  });
+
   it('creates through gateway-channels service and redacts returned secrets', async () => {
     const createCalls: Array<{ data: Record<string, unknown>; params: unknown }> = [];
     const app = makeFakeApp({

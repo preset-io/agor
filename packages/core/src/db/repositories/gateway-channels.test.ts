@@ -5,7 +5,7 @@
  * injectCreatedBy() hook must satisfy before calling create().
  */
 
-import type { BranchID, UUID } from '@agor/core/types';
+import { type BranchID, GATEWAY_REDACTED_SENTINEL, type UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -57,10 +57,103 @@ describe('GatewayChannelRepository', () => {
       name: 'Test Channel',
       created_by: userId,
       target_branch_id: branch.branch_id as UUID,
+      config: { bot_token: 'xoxb-test' },
     });
 
     expect(channel.created_by).toBe(userId);
     expect(channel.name).toBe('Test Channel');
     expect(channel.id).toBeDefined();
+  });
+
+  describe('enabled requires secrets invariant', () => {
+    dbTest('creates a disabled channel without secrets', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+
+      const channel = await repo.create({
+        name: 'Draft Slack',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'slack',
+        enabled: false,
+      });
+
+      expect(channel.enabled).toBe(false);
+      expect(channel.config.bot_token).toBeUndefined();
+    });
+
+    dbTest('rejects an enabled channel created without secrets', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+
+      await expect(
+        repo.create({
+          name: 'Enabled Slack',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'slack',
+          enabled: true,
+        })
+      ).rejects.toThrow('missing required secret(s) bot_token');
+    });
+
+    dbTest('rejects enabling a disabled token-less channel', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+
+      const draft = await repo.create({
+        name: 'Draft Slack',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'slack',
+        enabled: false,
+      });
+
+      await expect(repo.update(draft.id, { enabled: true })).rejects.toThrow(
+        'missing required secret(s) bot_token'
+      );
+    });
+
+    dbTest('enables a draft after its secrets are supplied', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+
+      const draft = await repo.create({
+        name: 'Draft Slack',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'slack',
+        enabled: false,
+      });
+
+      const withToken = await repo.update(draft.id, { config: { bot_token: 'xoxb-token' } });
+      expect(withToken.enabled).toBe(false);
+
+      const enabled = await repo.update(draft.id, { enabled: true });
+      expect(enabled.enabled).toBe(true);
+      expect(enabled.config.bot_token).toBe('xoxb-token');
+    });
+
+    dbTest('enables a channel whose stored tokens are preserved via sentinel', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+
+      const draft = await repo.create({
+        name: 'Draft Slack',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'slack',
+        enabled: false,
+        config: { bot_token: 'xoxb-stored' },
+      });
+
+      const enabled = await repo.update(draft.id, {
+        enabled: true,
+        config: { bot_token: GATEWAY_REDACTED_SENTINEL },
+      });
+
+      expect(enabled.enabled).toBe(true);
+      expect(enabled.config.bot_token).toBe('xoxb-stored');
+    });
   });
 });

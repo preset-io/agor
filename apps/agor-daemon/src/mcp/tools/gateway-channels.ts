@@ -16,6 +16,7 @@ import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   type GatewayChannel,
+  getRequiredSecretFields,
   hasMinimumRole,
   ROLES,
   type ScheduleID,
@@ -171,26 +172,35 @@ const gatewayChannelCreateSchema = z
     agenticConfig: agenticConfigSchema.optional(),
   })
   .superRefine((value, issue) => {
+    // Disabled channels are drafts: they may omit required credentials so they
+    // can be created before secrets are supplied. The repository enforces that
+    // the channel can never become enabled while a required secret is missing.
+    if (value.enabled === false) return;
+
     const config = value.config ?? {};
-    if (value.channelType === 'slack') {
-      if (!config.bot_token) {
+    const requiredSecretMessages: Record<string, string> = {
+      bot_token:
+        'config.bot_token is required for Slack. Prefer a bot token stored outside the transcript when possible.',
+      app_token: 'config.app_token is required for Slack Socket Mode.',
+      private_key: 'config.private_key is required for GitHub gateway channels.',
+      app_password: 'config.app_password is required for Teams gateway channels.',
+    };
+    for (const field of getRequiredSecretFields(value.channelType, config)) {
+      if (!config[field]) {
         issue.addIssue({
           code: 'custom',
-          path: ['config', 'bot_token'],
+          path: ['config', field],
           message:
-            'config.bot_token is required for Slack. Prefer a bot token stored outside the transcript when possible.',
-        });
-      }
-      if (config.connection_mode === 'socket' && !config.app_token) {
-        issue.addIssue({
-          code: 'custom',
-          path: ['config', 'app_token'],
-          message: 'config.app_token is required for Slack Socket Mode.',
+            requiredSecretMessages[field] ??
+            `config.${field} is required for ${value.channelType} gateway channels.`,
         });
       }
     }
+
+    // Non-secret config a working channel still needs; secrets come from
+    // getRequiredSecretFields above to avoid duplicating that list.
     if (value.channelType === 'github') {
-      for (const field of ['app_id', 'private_key', 'installation_id', 'watch_repos'] as const) {
+      for (const field of ['app_id', 'installation_id', 'watch_repos'] as const) {
         if (!config[field]) {
           issue.addIssue({
             code: 'custom',
@@ -200,16 +210,12 @@ const gatewayChannelCreateSchema = z
         }
       }
     }
-    if (value.channelType === 'teams') {
-      for (const field of ['app_id', 'app_password'] as const) {
-        if (!config[field]) {
-          issue.addIssue({
-            code: 'custom',
-            path: ['config', field],
-            message: `config.${field} is required for Teams gateway channels.`,
-          });
-        }
-      }
+    if (value.channelType === 'teams' && !config.app_id) {
+      issue.addIssue({
+        code: 'custom',
+        path: ['config', 'app_id'],
+        message: 'config.app_id is required for Teams gateway channels.',
+      });
     }
   });
 
