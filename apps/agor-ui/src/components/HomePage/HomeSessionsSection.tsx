@@ -137,12 +137,13 @@ export const HomeSessionsSection: React.FC<
           body: {
             padding: 0,
             flex: 1,
-            minHeight: 240,
+            minHeight: 0,
             overflowY: 'auto',
           },
         }}
         style={{
           flex: 1,
+          minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
           border: `1px solid ${token.colorBorderSecondary}`,
