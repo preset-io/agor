@@ -418,6 +418,7 @@ function AppContent() {
     user ? (s.userById.get(user.user_id) ?? null) : null
   );
   const currentUser = user ? storedCurrentUser || user : null;
+  const mcpServerById = useAgorStore((s) => s.mcpServerById);
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
