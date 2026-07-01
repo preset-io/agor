@@ -136,7 +136,7 @@ const SessionItemWithActions: React.FC<{
 
   return (
     <div
-      style={{ position: 'relative', minWidth: 120 }}
+      style={{ position: 'relative', minWidth: 0, width: '100%' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -519,6 +519,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           : 'transparent',
       display: 'flex',
       alignItems: 'center',
+      width: '100%',
+      boxSizing: 'border-box',
       cursor: 'pointer',
       marginBottom: 4,
       opacity: isRemoteSurrogate ? 0.78 : undefined,
@@ -722,6 +724,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         onExpand={(keys) => setExpandedKeys(keys as React.Key[])}
         showLine
         showIcon={false}
+        blockNode
         selectable={false}
         style={{ background: 'transparent', borderRadius: 0, padding: 0 }}
         titleRender={renderSessionNode}

@@ -119,7 +119,11 @@ export interface AppProps {
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
-  onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
+  onSendPrompt?: (
+    sessionId: string,
+    prompt: string,
+    permissionMode?: PermissionMode
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;
   onCreateBoard?: (board: Partial<Board>) => Promise<Board | null>;
@@ -203,11 +207,26 @@ const EMPTY_BOARD_OBJECTS: BoardEntityObject[] = Object.freeze(
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
 const LEFT_PANEL_MIN_WIDTH_PX = 320;
 const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
+const SESSION_PANEL_MIN_WIDTH_PX = 360;
+const SESSION_PANEL_MAX_SIZE_PERCENT = 75;
+const SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT = 15;
 const LEFT_PANEL_TOGGLE_HIT_SIZE_PX = 44;
 const LEFT_PANEL_TOGGLE_KNOB_SIZE_PX = 30;
 
 const getLeftPanelMinSizePercent = (viewportWidth: number) =>
   Math.min(LEFT_PANEL_MAX_SIZE_PERCENT, (LEFT_PANEL_MIN_WIDTH_PX / viewportWidth) * 100);
+
+// Express the session panel's 360px minimum through the panel sizing system
+// (a percentage of the current viewport) rather than a CSS px `minWidth`, which
+// fights react-resizable-panels' percentage layout on narrow viewports.
+const getSessionPanelMinSizePercent = (viewportWidth: number) =>
+  Math.min(
+    SESSION_PANEL_MAX_SIZE_PERCENT,
+    Math.max(
+      SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT,
+      (SESSION_PANEL_MIN_WIDTH_PX / viewportWidth) * 100
+    )
+  );
 
 const clampPercent = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -386,6 +405,11 @@ export const App: React.FC<AppProps> = ({
     [viewportWidth]
   );
 
+  const sessionPanelMinSize = useMemo(
+    () => getSessionPanelMinSizePercent(viewportWidth),
+    [viewportWidth]
+  );
+
   // Settings modal state via URL routing
   const {
     isOpen: settingsRouteOpen,
@@ -464,7 +488,11 @@ export const App: React.FC<AppProps> = ({
     50
   );
 
-  const effectiveSessionPanelSize = clampPercent(sessionPanelSize, 15, 75);
+  const effectiveSessionPanelSize = clampPercent(
+    sessionPanelSize,
+    sessionPanelMinSize,
+    SESSION_PANEL_MAX_SIZE_PERCENT
+  );
   const sessionPanelRef = useRef<ImperativePanelHandle>(null);
   const leftPanelResizeDraggingRef = useRef(false);
   const rightPanelResizeDraggingRef = useRef(false);
@@ -1027,6 +1055,26 @@ export const App: React.FC<AppProps> = ({
   const stableOnStopEnvironment = useStableCallback(onStopEnvironment);
   const stableOnNukeEnvironment = useStableCallback(onNukeEnvironment);
 
+  // Stabilize the remaining passthrough props (schedule + comment actions) and
+  // the panel's inline-arrow handlers so the memoized BoardAssistantPanel's
+  // React.memo bailout holds — every prop it receives stays referentially stable
+  // across store-driven re-renders that don't change what it draws.
+  const stableOnExecuteScheduleNow = useStableCallback(onExecuteScheduleNow);
+  const stableOnReplyComment = useStableCallback(onReplyComment);
+  const stableOnResolveComment = useStableCallback(onResolveComment);
+  const stableOnToggleReaction = useStableCallback(onToggleReaction);
+  const stableOnDeleteComment = useStableCallback(onDeleteComment);
+  const handleAssistantOpenSettings = useStableCallback(
+    (branchId: string, tab?: BranchModalTab) => {
+      setBranchModalBranchId(branchId);
+      setBranchModalTab(tab);
+    }
+  );
+  const handleAssistantSendComment = useStableCallback((content: string) =>
+    onSendComment?.(currentBoardId || '', content)
+  );
+  const handleAssistantCollapse = useStableCallback(() => setCommentsPanelCollapsed(true));
+
   // Header action handlers, frozen so the memoized AppHeader's React.memo bailout
   // isn't defeated by a fresh inline-arrow identity on every App re-render. Each
   // delegates to the latest impl via useStableCallback, so they read current
@@ -1132,28 +1180,25 @@ export const App: React.FC<AppProps> = ({
                   selectedSessionId={effectiveSelectedSessionId}
                   onSessionClick={handleSessionClick}
                   onCreateSession={setNewSessionBranchId}
-                  onForkSession={onForkSession}
-                  onSpawnSession={onSpawnSession}
-                  onArchiveOrDelete={onArchiveOrDeleteBranch}
-                  onOpenSettings={(branchId, tab) => {
-                    setBranchModalBranchId(branchId);
-                    setBranchModalTab(tab);
-                  }}
+                  onForkSession={stableOnForkSession}
+                  onSpawnSession={stableOnSpawnSession}
+                  onArchiveOrDelete={stableOnArchiveOrDeleteBranch}
+                  onOpenSettings={handleAssistantOpenSettings}
                   onOpenSessionSettings={setSessionSettingsId}
                   onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
-                  onStartEnvironment={onStartEnvironment}
-                  onStopEnvironment={onStopEnvironment}
+                  onStartEnvironment={stableOnStartEnvironment}
+                  onStopEnvironment={stableOnStopEnvironment}
                   onViewLogs={setLogsModalBranchId}
-                  onNukeEnvironment={onNukeEnvironment}
-                  onExecuteScheduleNow={onExecuteScheduleNow}
-                  onSendComment={(content) => onSendComment?.(currentBoardId || '', content)}
-                  onReplyComment={onReplyComment}
-                  onResolveComment={onResolveComment}
-                  onToggleReaction={onToggleReaction}
-                  onDeleteComment={onDeleteComment}
+                  onNukeEnvironment={stableOnNukeEnvironment}
+                  onExecuteScheduleNow={stableOnExecuteScheduleNow}
+                  onSendComment={handleAssistantSendComment}
+                  onReplyComment={stableOnReplyComment}
+                  onResolveComment={stableOnResolveComment}
+                  onToggleReaction={stableOnToggleReaction}
+                  onDeleteComment={stableOnDeleteComment}
                   hoveredCommentId={hoveredCommentId}
                   selectedCommentId={selectedCommentId}
-                  onCollapse={() => setCommentsPanelCollapsed(true)}
+                  onCollapse={handleAssistantCollapse}
                 />
               )}
             </Panel>
@@ -1202,7 +1247,9 @@ export const App: React.FC<AppProps> = ({
                     rightPanelResizeDraggingRef.current &&
                     sizes.length === 2
                   ) {
-                    setSessionPanelSize(clampPercent(sizes[1], 15, 75));
+                    setSessionPanelSize(
+                      clampPercent(sizes[1], sessionPanelMinSize, SESSION_PANEL_MAX_SIZE_PERCENT)
+                    );
                   }
                 }}
               >
@@ -1222,6 +1269,13 @@ export const App: React.FC<AppProps> = ({
                         onBoardClick={navigation.goToBoard}
                         onBranchClick={navigation.goToBranch}
                         onSessionClick={handleSessionClick}
+                        onOpenCreateDialog={(tab, boardId) => {
+                          if (boardId) navigation.goToBoard(boardId);
+                          setNewBranchDefaultPosition(null);
+                          setCreateDialogDefaultTab(tab);
+                          setCreateDialogOpen(true);
+                        }}
+                        onOpenSettings={openSettings}
                       />
                     ) : (
                       <SessionCanvas
@@ -1293,8 +1347,8 @@ export const App: React.FC<AppProps> = ({
                       order={2}
                       ref={sessionPanelRef}
                       defaultSize={effectiveSessionPanelSize}
-                      minSize={15}
-                      maxSize={75}
+                      minSize={sessionPanelMinSize}
+                      maxSize={SESSION_PANEL_MAX_SIZE_PERCENT}
                     >
                       {effectiveSelectedSessionId ? (
                         <SessionPanel

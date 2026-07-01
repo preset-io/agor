@@ -213,6 +213,17 @@ const BranchCardComponent = ({
   }, [activeSessions, branch.needs_attention, isFocused]);
 
   const isDarkMode = isDarkTheme(token);
+  // AntD exposes `colorPrimaryBg` as the subtle primary surface token.
+  // In dark mode it can still read a bit bright on a large card, so mix it
+  // with the base background while staying in the primary token family.
+  const runningCardBackgroundColor = isDarkMode
+    ? `color-mix(in srgb, ${token.colorPrimaryBg} 67%, ${token.colorBgBase})`
+    : token.colorPrimaryBg;
+  const cardBackgroundColor = hasRunningSession
+    ? runningCardBackgroundColor
+    : isAgent
+      ? token.colorInfoBg
+      : undefined;
 
   // Memoize glow shadow string to avoid recomputing color normalization on every render
   const attentionGlowShadow = useMemo(() => {
@@ -306,10 +317,10 @@ const BranchCardComponent = ({
         width: panelMode ? '100%' : peekedSessions.length > 0 ? 880 : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
-          'box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
+          'background-color 0.2s ease-in-out, box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
         willChange: needsAttention && !inPopover ? 'box-shadow' : 'auto',
         ...highlightStyle,
-        ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
+        ...(cardBackgroundColor ? { backgroundColor: cardBackgroundColor } : {}),
         // Disconnected chokepoint: block all in-card interactions (clicking
         // into a session, env pill actions, modals) and dim to communicate
         // the state. Canvas pan/zoom and the slim app-shell banner remain

@@ -1,36 +1,20 @@
 import type { Board, Branch, Session } from '@agor-live/client';
-import { getAssistantConfig } from '@agor-live/client';
-import {
-  ApartmentOutlined,
-  BranchesOutlined,
-  InfoCircleOutlined,
-  RobotOutlined,
-} from '@ant-design/icons';
-import { Avatar, Card, Empty, Popover, Space, Tag, Tooltip, Typography, theme } from 'antd';
+import { ClockCircleOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Button, Empty, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatRelativeTime } from '../../utils/time';
-import { MarkdownRenderer } from '../MarkdownRenderer';
-import { HomeSectionHeader } from './HomeSectionHeader';
-import { glassCardStyle, withAlpha } from './homeStyles';
+import { glassCardStyle } from './homeStyles';
 import type { HomeSectionProps } from './types';
 
 const { Text } = Typography;
 
 const HOME_BOARDS_LIMIT = 50;
 
-const activeStatuses = new Set<Session['status']>([
-  'running',
-  'stopping',
-  'awaiting_permission',
-  'awaiting_input',
-]);
-
 interface BoardHomeRow {
   board: Board;
   branches: Branch[];
   sessions: Session[];
-  primaryAssistant?: Branch;
   latest: number;
   visitRank: number;
 }
@@ -57,229 +41,233 @@ const groupVisibleSessionsByBranch = (
   return grouped;
 };
 
-const deriveBoardRows = ({
-  boardById,
-  recentBoardIds,
-  branchById,
-  sessionsByBranch,
-}: Pick<HomeSectionProps, 'boardById' | 'recentBoardIds' | 'branchById' | 'sessionsByBranch'>) => {
-  const visitRank = new Map((recentBoardIds ?? []).map((boardId, index) => [boardId, index]));
-  const branchesByBoard = groupBranchesByBoard(branchById);
-  const visibleSessionsByBranch = groupVisibleSessionsByBranch(sessionsByBranch);
-
-  return Array.from(boardById.values())
-    .filter((board) => !board.archived)
-    .map<BoardHomeRow>((board) => {
-      const branches = branchesByBoard.get(board.board_id) ?? [];
-      const sessions = branches.flatMap(
-        (branch) => visibleSessionsByBranch.get(branch.branch_id) ?? []
-      );
-      const primaryAssistant = board.primary_assistant_id
-        ? branchById.get(board.primary_assistant_id)
-        : undefined;
-      const latest = Math.max(
-        new Date(board.last_updated).getTime(),
-        ...branches.map((branch) => new Date(branch.updated_at || branch.created_at).getTime()),
-        ...sessions.map((session) => new Date(session.last_updated).getTime())
-      );
-      return {
-        board,
-        branches,
-        sessions,
-        primaryAssistant,
-        latest: Number.isFinite(latest) ? latest : 0,
-        visitRank: visitRank.get(board.board_id) ?? Number.POSITIVE_INFINITY,
-      };
-    })
-    .sort(
-      (a, b) =>
-        a.visitRank - b.visitRank || b.latest - a.latest || a.board.name.localeCompare(b.board.name)
-    )
-    .slice(0, HOME_BOARDS_LIMIT);
-};
+const activeSessions = (sessions: Session[]) =>
+  sessions.filter(
+    (s) =>
+      s.status === 'running' || s.status === 'awaiting_permission' || s.status === 'awaiting_input'
+  );
 
 const BoardHomeCard: React.FC<{
   board: Board;
   branches: Branch[];
   sessions: Session[];
-  primaryAssistant?: Branch;
   onClick: () => void;
-}> = ({ board, branches, sessions, primaryAssistant, onClick }) => {
+}> = ({ board, branches, sessions, onClick }) => {
   const { token } = theme.useToken();
-  const cardGlassStyle = glassCardStyle(token);
-  const assistantConfig = primaryAssistant ? getAssistantConfig(primaryAssistant) : null;
   const [hovered, setHovered] = useState(false);
-  const activeCount = sessions.filter((session) => activeStatuses.has(session.status)).length;
-  const latestSession = [...sessions].sort(
-    (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
-  )[0];
-  const description = board.description?.trim() ?? '';
-  const firstDescriptionLine = description.split(/\r?\n/)[0]?.trim() ?? '';
+  const [focused, setFocused] = useState(false);
+  const activeCount = activeSessions(sessions).length;
+  const latestSession = useMemo(
+    () =>
+      [...sessions].sort(
+        (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
+      )[0],
+    [sessions]
+  );
 
   return (
-    <Card
-      hoverable
+    <button
+      type="button"
       onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       style={{
-        width: 320,
-        flex: '0 0 320px',
-        borderColor: hovered ? token.colorPrimaryBorderHover : token.colorBorderSecondary,
-        ...cardGlassStyle,
-        background: hovered ? withAlpha(token.colorBgElevated, 0.65) : cardGlassStyle.background,
-        backgroundColor: hovered
-          ? withAlpha(token.colorBgElevated, 0.65)
-          : cardGlassStyle.backgroundColor,
-        boxShadow: hovered ? token.boxShadowSecondary : undefined,
-        transition: 'border-color 0.2s, background 0.2s, box-shadow 0.2s',
+        display: 'block',
+        width: '100%',
+        height: '100%',
+        textAlign: 'left',
+        border: `1px solid ${hovered ? token.colorPrimary : token.colorBorderSecondary}`,
+        borderRadius: token.borderRadiusLG,
+        padding: '12px 14px',
+        cursor: 'pointer',
+        ...glassCardStyle(token, 0.3),
+        boxShadow: hovered
+          ? `${token.boxShadowSecondary}, inset 0 1px 0 rgba(255, 255, 255, 0.12)`
+          : undefined,
+        outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
+        outlineOffset: focused ? 2 : undefined,
+        transition: 'border-color 0.2s, box-shadow 0.2s',
+        fontFamily: 'inherit',
       }}
-      styles={{ body: { minHeight: 136, background: 'transparent' } }}
     >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-        <Space align="start" style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Space size={10} style={{ minWidth: 0 }}>
-            <Avatar
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        {/* Board icon */}
+        <div
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 8,
+            background: token.colorFillTertiary,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 20,
+            flexShrink: 0,
+          }}
+        >
+          {board.icon || '📋'}
+        </div>
+
+        {/* Name + meta — all aligned under each other, to the right of the icon */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <Tooltip title={board.name}>
+            <Text
+              strong
               style={{
-                background: token.colorFillSecondary,
-                color: token.colorText,
-                flexShrink: 0,
+                fontSize: 14,
+                display: 'block',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
-              {board.icon || '📋'}
-            </Avatar>
-            <div style={{ minWidth: 0 }}>
-              <Space size={6} style={{ maxWidth: 230 }}>
-                <Text
-                  strong
-                  ellipsis={{ tooltip: board.name }}
-                  style={{ display: 'block', maxWidth: primaryAssistant ? 190 : 220 }}
-                >
-                  {board.name}
-                </Text>
-                {primaryAssistant && (
-                  <Tooltip
-                    title={`Primary assistant: ${assistantConfig?.displayName ?? primaryAssistant.name}`}
-                  >
-                    <RobotOutlined
-                      aria-label="Primary assistant"
-                      style={{ color: token.colorPrimary, fontSize: 13, flexShrink: 0 }}
-                    />
-                  </Tooltip>
-                )}
-              </Space>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  maxWidth: 220,
-                  minHeight: 20,
-                }}
-              >
-                <Text
-                  type="secondary"
-                  ellipsis={description ? { tooltip: firstDescriptionLine } : false}
-                  style={{
-                    display: 'block',
-                    fontSize: 12,
-                    flex: 1,
-                    minWidth: 0,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {firstDescriptionLine || '\u00a0'}
-                </Text>
-                {description && (
-                  <Popover
-                    content={
-                      <div style={{ maxWidth: 360, maxHeight: 320, overflow: 'auto' }}>
-                        <MarkdownRenderer content={description} compact showControls={false} />
-                      </div>
-                    }
-                    title="Board description"
-                    trigger="hover"
-                    placement="rightTop"
-                  >
-                    <InfoCircleOutlined
-                      style={{
-                        color: token.colorTextTertiary,
-                        cursor: 'help',
-                        flexShrink: 0,
-                        fontSize: 12,
-                      }}
-                    />
-                  </Popover>
-                )}
-              </div>
-            </div>
-          </Space>
-        </Space>
-        <Space wrap size={[6, 6]}>
-          <Tag icon={<BranchesOutlined />}>
-            {branches.length} branch{branches.length === 1 ? '' : 'es'}
-          </Tag>
-          <Tag>
-            {sessions.length} session{sessions.length === 1 ? '' : 's'}
-          </Tag>
-          {activeCount > 0 && <Tag color="processing">{activeCount} active</Tag>}
-        </Space>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {latestSession ? (
-            <>Last session {formatRelativeTime(latestSession.last_updated)}</>
-          ) : (
-            'No sessions yet'
-          )}
-        </Text>
-      </Space>
-    </Card>
+              {board.name}
+            </Text>
+          </Tooltip>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {branches.length} branch{branches.length !== 1 ? 'es' : ''}
+            </Text>
+            {activeCount > 0 && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <ThunderboltOutlined style={{ marginRight: 2 }} />
+                {activeCount} active
+              </Text>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <ClockCircleOutlined style={{ fontSize: 11, color: token.colorTextSecondary }} />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {latestSession
+                ? `Last session ${formatRelativeTime(latestSession.last_updated)}`
+                : 'No sessions yet'}
+            </Text>
+          </div>
+        </div>
+      </div>
+    </button>
   );
 };
 
 export const HomeBoardsSection: React.FC<
   Pick<
     HomeSectionProps,
-    'boardById' | 'recentBoardIds' | 'branchById' | 'sessionsByBranch' | 'onBoardClick'
+    | 'boardById'
+    | 'recentBoardIds'
+    | 'branchById'
+    | 'sessionsByBranch'
+    | 'onBoardClick'
+    | 'onOpenCreateDialog'
   >
-> = ({ boardById, recentBoardIds = [], branchById, sessionsByBranch, onBoardClick }) => {
-  const { token } = theme.useToken();
-  const rows = useMemo(
-    () => deriveBoardRows({ boardById, recentBoardIds, branchById, sessionsByBranch }),
-    [boardById, recentBoardIds, branchById, sessionsByBranch]
-  );
+> = ({
+  boardById,
+  recentBoardIds = [],
+  branchById,
+  sessionsByBranch,
+  onBoardClick,
+  onOpenCreateDialog,
+}) => {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [columns, setColumns] = useState(4);
+
+  const rows = useMemo(() => {
+    const visitRank = new Map((recentBoardIds ?? []).map((boardId, index) => [boardId, index]));
+    const branchesByBoard = groupBranchesByBoard(branchById);
+    const visibleSessionsByBranch = groupVisibleSessionsByBranch(sessionsByBranch);
+
+    return Array.from(boardById.values())
+      .filter((board) => !board.archived)
+      .map<BoardHomeRow>((board) => {
+        const branches = branchesByBoard.get(board.board_id) ?? [];
+        const sessions = branches.flatMap(
+          (branch) => visibleSessionsByBranch.get(branch.branch_id) ?? []
+        );
+        const latest = Math.max(
+          new Date(board.last_updated).getTime(),
+          ...branches.map((branch) => new Date(branch.updated_at || branch.created_at).getTime()),
+          ...sessions.map((session) => new Date(session.last_updated).getTime())
+        );
+        return {
+          board,
+          branches,
+          sessions,
+          latest: Number.isFinite(latest) ? latest : 0,
+          visitRank: visitRank.get(board.board_id) ?? Number.POSITIVE_INFINITY,
+        };
+      })
+      .sort(
+        (a, b) =>
+          a.visitRank - b.visitRank ||
+          b.latest - a.latest ||
+          a.board.name.localeCompare(b.board.name)
+      )
+      .slice(0, HOME_BOARDS_LIMIT);
+  }, [boardById, recentBoardIds, branchById, sessionsByBranch]);
+
+  const hasBoards = rows.length > 0;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: hasBoards is a sentinel dep — re-attaches observer when board count transitions between 0 and >0 (gridRef only mounts with boards)
+  useEffect(() => {
+    if (!gridRef.current) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const w = entry.contentRect.width;
+      setColumns(w < 400 ? 1 : w < 700 ? 2 : 4);
+    });
+    observer.observe(gridRef.current);
+    return () => observer.disconnect();
+  }, [hasBoards]);
 
   return (
-    <section>
-      <HomeSectionHeader
-        title="Boards"
-        icon={<ApartmentOutlined />}
-        info={`Up to ${HOME_BOARDS_LIMIT} accessible boards, sorted by this browser’s last-visited board order when available, then by recent board, branch, or session activity.`}
-      />
+    <section aria-label="Boards" style={{ marginBottom: 24 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 12,
+        }}
+      >
+        <Text strong style={{ fontSize: 14 }}>
+          Boards
+        </Text>
+        <Button
+          type="link"
+          size="small"
+          icon={<PlusOutlined />}
+          style={{ padding: 0 }}
+          onClick={() => onOpenCreateDialog('board')}
+        >
+          New board
+        </Button>
+      </div>
+
       {rows.length === 0 ? (
-        <Card style={glassCardStyle(token)}>
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No boards yet. Use the create button to make your first board, assistant, repo, or branch."
-          />
-        </Card>
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="No boards yet"
+          style={{ padding: '24px 0' }}
+        >
+          <Button type="primary" onClick={() => onOpenCreateDialog('board')}>
+            Create your first board
+          </Button>
+        </Empty>
       ) : (
         <div
+          ref={gridRef}
           style={{
-            display: 'flex',
-            gap: 16,
-            overflowX: 'auto',
-            paddingTop: 2,
-            paddingBottom: 10,
-            scrollbarColor: `${token.colorFill} transparent`,
+            display: 'grid',
+            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+            gap: 12,
           }}
         >
-          {rows.map(({ board, branches, sessions, primaryAssistant }) => (
+          {rows.map(({ board, branches, sessions }) => (
             <BoardHomeCard
               key={board.board_id}
               board={board}
               branches={branches}
               sessions={sessions}
-              primaryAssistant={primaryAssistant}
               onClick={() => onBoardClick(board.board_id)}
             />
           ))}

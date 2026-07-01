@@ -1413,21 +1413,28 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         if (selectChanges.length > 0) {
           setNodes((currentNodes) => {
             // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
-            const zoneIds = new Set(selectChanges.map((c: any) => c.id));
-            const hasZoneChange = currentNodes.some((n) => n.type === 'zone' && zoneIds.has(n.id));
-            if (!hasZoneChange) return currentNodes;
-            return currentNodes.map((n) => {
+            const zoneSelectById = new Map(selectChanges.map((c: any) => [c.id, c]));
+            let changed = false;
+            const nextNodes = currentNodes.map((n) => {
               if (n.type !== 'zone') return n;
               // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
-              const change = selectChanges.find((c: any) => c.id === n.id);
-              if (change) {
-                // Bump above the zone's own base order while selected; restore the
-                // persisted/default base on deselect so custom layering survives.
-                const base = (n.data?.zIndex as number) ?? DEFAULT_BOARD_OBJECT_Z_INDEX.zone;
-                return { ...n, zIndex: selectedZIndex(base, !!change.selected) };
-              }
-              return n;
+              const change = zoneSelectById.get(n.id) as any;
+              if (!change) return n;
+
+              // Bump above the zone's own base order while selected; restore the
+              // persisted/default base on deselect so custom layering survives.
+              const base = (n.data?.zIndex as number) ?? DEFAULT_BOARD_OBJECT_Z_INDEX.zone;
+              const nextZIndex = selectedZIndex(base, !!change.selected);
+              if (n.zIndex === nextZIndex) return n;
+
+              changed = true;
+              return { ...n, zIndex: nextZIndex };
             });
+
+            // React Flow can emit select changes while reconciling the controlled
+            // nodes prop. Returning the same array for no-op zIndex transitions
+            // avoids a controlled-update feedback loop (React #185).
+            return changed ? nextNodes : currentNodes;
           });
         }
 

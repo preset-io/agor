@@ -51,6 +51,22 @@ describe('tenant-owned service registration', () => {
   it('wraps gateway inbound routing in tenant database scope', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
   });
+
+  it('wraps MCP OAuth/session helper services in tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
+      expect.arrayContaining([
+        'sessions/:id/mcp-servers',
+        'mcp-servers/discover',
+        'mcp-servers/oauth-auth-headers',
+        'mcp-servers/oauth-complete',
+        'mcp-servers/oauth-disconnect',
+        'mcp-servers/oauth-refresh',
+        'mcp-servers/oauth-start',
+        'mcp-servers/oauth-status',
+        'mcp-servers/test-oauth',
+      ])
+    );
+  });
 });
 
 describe('shouldValidateRepoEnvironmentPayload', () => {

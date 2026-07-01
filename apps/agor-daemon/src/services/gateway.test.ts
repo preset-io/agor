@@ -270,6 +270,9 @@ describe('GatewayService Slack thread catch-up', () => {
       triggerTs: '103.000000',
     });
     const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain(
+      'Any assistant message you send in this current Agor session is streamed back directly to the Slack conversation'
+    );
     expect(prompt).toContain('**Slack context**');
     expect(prompt).toContain('### Previous thread messages');
     expect(prompt).toContain('missed context');
@@ -317,7 +320,10 @@ describe('GatewayService Slack thread catch-up', () => {
     });
 
     expect(result).toMatchObject({ success: true, sessionId: 'sess-1', created: false });
-    expect(promptCreate.mock.calls[0][0].prompt).toBe('please answer');
+    expect(promptCreate.mock.calls[0][0].prompt).toContain(
+      'Any assistant message you send in this current Agor session is streamed back directly to the Slack conversation'
+    );
+    expect(promptCreate.mock.calls[0][0].prompt).toContain('please answer');
     expect(threadMapRepo.updateMetadata).not.toHaveBeenCalledWith(
       'map-1',
       expect.objectContaining({

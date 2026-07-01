@@ -41,6 +41,17 @@ export interface ClaudeModelPricing {
  * entry even if Anthropic mints a `-7-1` patch revision.
  */
 const PRICING: ReadonlyArray<{ prefix: string; price: ClaudeModelPricing }> = [
+  // Sonnet 5 introductory pricing through 2026-08-31.
+  {
+    prefix: 'claude-sonnet-5',
+    price: {
+      inputPerMTok: 2,
+      outputPerMTok: 10,
+      cacheWritePerMTok: 2.5,
+      cacheReadPerMTok: 0.2,
+      webSearchPerRequest: 0.01,
+    },
+  },
   // Opus 4.x — most expensive tier.
   {
     prefix: 'claude-opus-4',

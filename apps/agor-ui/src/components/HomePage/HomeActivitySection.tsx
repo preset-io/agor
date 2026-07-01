@@ -23,7 +23,6 @@ import { useCallback, useMemo, useState } from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { AssistantPill, BoardPill, BranchPill, SessionPill, UserPill } from '../Pill';
-import { HomeSectionHeader } from './HomeSectionHeader';
 import { glassCardStyle } from './homeStyles';
 import type { HomeSectionProps } from './types';
 
@@ -269,59 +268,82 @@ export const HomeActivitySection: React.FC<
   );
 
   return (
-    <Card
-      style={{ minHeight: 0, flex: 1, ...cardGlassStyle }}
-      styles={{
-        body: {
-          height: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'transparent',
-        },
-      }}
+    <section
+      aria-label="Team activity"
+      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
     >
-      <HomeSectionHeader
-        title="Team activity"
-        icon={<TeamOutlined />}
-        info={`Up to ${HOME_ACTIVITY_LIMIT} recent branch, assistant, and session events derived from local state and sorted together by event time. A persisted activity summary endpoint can replace this later for comments, artifacts, and prompt events.`}
-        extra={
-          <Segmented<ActivityFilter>
-            size="small"
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { label: <Tooltip title="All activity">All</Tooltip>, value: 'all' },
-              {
-                label: (
-                  <Tooltip title="Branches">
-                    <BranchesOutlined />
-                  </Tooltip>
-                ),
-                value: 'branches',
-              },
-              {
-                label: (
-                  <Tooltip title="Sessions">
-                    <UnorderedListOutlined />
-                  </Tooltip>
-                ),
-                value: 'sessions',
-              },
-              {
-                label: (
-                  <Tooltip title="Assistants">
-                    <RobotOutlined />
-                  </Tooltip>
-                ),
-                value: 'assistants',
-              },
-            ]}
-          />
-        }
-      />
-      <div style={{ overflow: 'auto', minHeight: 0 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          marginBottom: 8,
+          gap: 6,
+        }}
+      >
+        <Space size={6}>
+          <TeamOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />
+          <Text strong style={{ fontSize: 14 }}>
+            Team activity
+          </Text>
+        </Space>
+        <Segmented<ActivityFilter>
+          size="small"
+          value={filter}
+          onChange={setFilter}
+          options={[
+            { label: <Tooltip title="All activity">All</Tooltip>, value: 'all' },
+            {
+              label: (
+                <Tooltip title="Branches">
+                  <BranchesOutlined aria-label="Branches" />
+                </Tooltip>
+              ),
+              value: 'branches',
+            },
+            {
+              label: (
+                <Tooltip title="Sessions">
+                  <UnorderedListOutlined aria-label="Sessions" />
+                </Tooltip>
+              ),
+              value: 'sessions',
+            },
+            {
+              label: (
+                <Tooltip title="Assistants">
+                  <RobotOutlined aria-label="Assistants" />
+                </Tooltip>
+              ),
+              value: 'assistants',
+            },
+          ]}
+        />
+      </div>
+      <Card
+        style={{
+          flex: 1,
+          minHeight: 0,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: token.borderRadiusLG,
+          ...cardGlassStyle,
+        }}
+        styles={{
+          body: {
+            padding: 0,
+            height: '100%',
+            overflow: 'auto',
+            background: 'transparent',
+          },
+        }}
+      >
         {items.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No recent activity" />
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="No recent activity"
+            style={{ padding: '24px 0' }}
+          />
         ) : (
           <List
             rowKey="id"
@@ -337,9 +359,10 @@ export const HomeActivitySection: React.FC<
                 />
               );
             }}
+            style={{ padding: '0 12px' }}
           />
         )}
-      </div>
-    </Card>
+      </Card>
+    </section>
   );
 };

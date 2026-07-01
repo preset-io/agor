@@ -38,6 +38,7 @@ import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mod
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -284,7 +285,8 @@ export class CodexPromptService {
     private mcpServerRepo?: MCPServerRepository,
     _usersRepo?: UsersRepository,
     useNativeAuth: boolean = false,
-    private tasksService?: TasksService
+    private tasksService?: TasksService,
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     // Store API key from base-executor (already resolved with proper precedence)
     this.apiKey = apiKey || '';
@@ -635,6 +637,7 @@ export class CodexPromptService {
     const serversWithSource = await getMcpServersForSession(sessionId, {
       sessionMCPRepo: this.sessionMCPServerRepo,
       mcpServerRepo: this.mcpServerRepo,
+      mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
       forUserId,
     });
 

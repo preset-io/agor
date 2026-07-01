@@ -19,15 +19,33 @@
 import type { UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetWidgetRegistryForTests, getWidget } from '../registry';
+
+const sessionSelectionRepoMock = vi.hoisted(() => ({
+  asSet: vi.fn(async () => new Set<string>()),
+  setAll: vi.fn(async (_sessionId: unknown, _names: string[]) => {}),
+}));
+
+vi.mock('@agor/core/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/db')>();
+  return {
+    ...actual,
+    SessionEnvSelectionRepository: vi.fn(function SessionEnvSelectionRepository() {
+      return sessionSelectionRepoMock;
+    }),
+  };
+});
+
 import {
   envVarsParamsSchema,
   envVarsSubmitSchema,
   envVarsWidget,
+  normalizeEnvVarsParams,
   registerEnvVarsWidget,
 } from './index';
 
 function makeCtx(
-  patch?: (id: string, data: unknown, params: unknown) => unknown | Promise<unknown>
+  patch?: (id: string, data: unknown, params: unknown) => unknown | Promise<unknown>,
+  user: { env_vars?: Record<string, { set: true; scope: 'global' | 'session' }> } = {}
 ) {
   const patchSpy = vi.fn(async (id: string, data: unknown, params: unknown) => {
     return patch ? patch(id, data, params) : { user_id: id };
@@ -35,8 +53,12 @@ function makeCtx(
   const app = {
     service(name: string) {
       if (name !== 'users') throw new Error(`Unexpected service call: ${name}`);
-      return { patch: patchSpy };
+      return {
+        get: vi.fn(async () => ({ user_id: 'user-creator', env_vars: user.env_vars ?? {} })),
+        patch: patchSpy,
+      };
     },
+    get: vi.fn(() => undefined),
   };
   return {
     ctx: {
@@ -49,6 +71,13 @@ function makeCtx(
     patchSpy,
   };
 }
+
+beforeEach(() => {
+  sessionSelectionRepoMock.asSet.mockReset();
+  sessionSelectionRepoMock.asSet.mockResolvedValue(new Set<string>());
+  sessionSelectionRepoMock.setAll.mockReset();
+  sessionSelectionRepoMock.setAll.mockResolvedValue(undefined);
+});
 
 describe('env_vars widget — registry registration', () => {
   beforeEach(() => {
@@ -82,6 +111,21 @@ describe('env_vars widget — paramsSchema', () => {
     }
   });
 
+  it('keeps params schema JSON-Schema-safe and normalizes requested names via helper', () => {
+    const result = envVarsParamsSchema.safeParse({
+      names: ['STRIPE_SECRET_KEY', 'HUBSPOT_API_KEY'],
+      reason: 'two integrations',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.names).toEqual(['STRIPE_SECRET_KEY', 'HUBSPOT_API_KEY']);
+      expect(normalizeEnvVarsParams(result.data).names).toEqual([
+        'HUBSPOT_API_KEY',
+        'STRIPE_SECRET_KEY',
+      ]);
+    }
+  });
+
   it('rejects lower-case env var names', () => {
     expect(
       envVarsParamsSchema.safeParse({
@@ -109,6 +153,38 @@ describe('env_vars widget — paramsSchema', () => {
       envVarsParamsSchema.safeParse({ names: ['A_KEY', 'A_KEY'], reason: 'why' }).success
     ).toBe(false);
   });
+
+  it('accepts per-variable metadata only for requested names and safe fields', () => {
+    const result = envVarsParamsSchema.safeParse({
+      names: ['API_TOKEN'],
+      reason: 'call api',
+      variable_metadata: {
+        API_TOKEN: {
+          description: 'Token from the API dashboard.',
+          placeholder: 'Paste token',
+          format_hint: 'Starts with tok_',
+          input_type: 'text',
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+
+    expect(
+      envVarsParamsSchema.safeParse({
+        names: ['API_TOKEN'],
+        reason: 'call api',
+        variable_metadata: { OTHER_TOKEN: { description: 'wrong key' } },
+      }).success
+    ).toBe(false);
+
+    expect(
+      envVarsParamsSchema.safeParse({
+        names: ['API_TOKEN'],
+        reason: 'call api',
+        variable_metadata: { API_TOKEN: { value: 'must-not-carry-secrets' } },
+      }).success
+    ).toBe(false);
+  });
 });
 
 describe('env_vars widget — submitSchema', () => {
@@ -116,6 +192,16 @@ describe('env_vars widget — submitSchema', () => {
     expect(
       envVarsSubmitSchema.safeParse({
         values: { HUBSPOT_API_KEY: 'secret' },
+        scope: 'global',
+      }).success
+    ).toBe(true);
+  });
+
+  it('accepts use_existing names without submitted values', () => {
+    expect(
+      envVarsSubmitSchema.safeParse({
+        values: {},
+        use_existing: ['HUBSPOT_API_KEY'],
         scope: 'global',
       }).success
     ).toBe(true);
@@ -142,12 +228,23 @@ describe('env_vars widget — submitSchema', () => {
       }).success
     ).toBe(false);
   });
+
+  it('rejects a name submitted both as a value and use_existing', () => {
+    expect(
+      envVarsSubmitSchema.safeParse({
+        values: { HUBSPOT_API_KEY: 'v' },
+        use_existing: ['HUBSPOT_API_KEY'],
+        scope: 'global',
+      }).success
+    ).toBe(false);
+  });
 });
 
 describe('env_vars widget — buildResultMeta', () => {
   it('returns ONLY { names_submitted, scope } — never values', () => {
     const submit = {
       values: { HUBSPOT_API_KEY: 'super-secret-value' },
+      use_existing: [],
       scope: 'global' as const,
     };
     const rm = envVarsWidget.buildResultMeta(submit);
@@ -157,14 +254,27 @@ describe('env_vars widget — buildResultMeta', () => {
     expect(JSON.stringify(rm)).not.toContain('super-secret-value');
   });
 
-  it('preserves submission order across multiple names', () => {
+  it('returns submitted names in deterministic order across multiple names', () => {
     const submit = {
-      values: { A_KEY: 'a', B_KEY: 'b', C_KEY: 'c' },
+      values: { C_KEY: 'c', A_KEY: 'a', B_KEY: 'b' },
+      use_existing: [],
       scope: 'session' as const,
     };
     const rm = envVarsWidget.buildResultMeta(submit);
     expect(rm.names_submitted).toEqual(['A_KEY', 'B_KEY', 'C_KEY']);
     expect(rm.scope).toBe('session');
+  });
+
+  it('returns use_existing names separately and never includes values', () => {
+    const submit = {
+      values: { B_KEY: 'new-secret' },
+      use_existing: ['A_KEY'],
+      scope: 'global' as const,
+    };
+    const rm = envVarsWidget.buildResultMeta(submit);
+    expect(rm.names_submitted).toEqual(['B_KEY']);
+    expect(rm.names_used_existing).toEqual(['A_KEY']);
+    expect(JSON.stringify(rm)).not.toContain('new-secret');
   });
 });
 
@@ -173,7 +283,7 @@ describe('env_vars widget — applySubmit', () => {
     const { ctx, patchSpy } = makeCtx();
     await envVarsWidget.applySubmit(
       ctx,
-      { values: { HUBSPOT_API_KEY: 'shh' }, scope: 'global' },
+      { values: { HUBSPOT_API_KEY: 'shh' }, use_existing: [], scope: 'global' },
       { names: ['HUBSPOT_API_KEY'], reason: 'call hubspot', auto_resume: true }
     );
     expect(patchSpy).toHaveBeenCalledTimes(1);
@@ -202,7 +312,7 @@ describe('env_vars widget — applySubmit', () => {
     };
     await envVarsWidget.applySubmit(
       adminCtx,
-      { values: { HUBSPOT_API_KEY: 'shh' }, scope: 'global' },
+      { values: { HUBSPOT_API_KEY: 'shh' }, use_existing: [], scope: 'global' },
       { names: ['HUBSPOT_API_KEY'], reason: 'call hubspot', auto_resume: true }
     );
     const [, , params] = patchSpy.mock.calls[0];
@@ -218,7 +328,7 @@ describe('env_vars widget — applySubmit', () => {
     const { ctx, patchSpy } = makeCtx();
     await envVarsWidget.applySubmit(
       ctx,
-      { values: { A_KEY: 'a', B_KEY: 'b' }, scope: 'session' },
+      { values: { A_KEY: 'a', B_KEY: 'b' }, use_existing: [], scope: 'session' },
       { names: ['A_KEY', 'B_KEY'], reason: 'why', auto_resume: true }
     );
     expect(patchSpy).toHaveBeenCalledTimes(1);
@@ -227,13 +337,74 @@ describe('env_vars widget — applySubmit', () => {
     expect(data.env_var_scopes).toEqual({ A_KEY: 'session', B_KEY: 'session' });
   });
 
+  it('adds newly submitted session-scope values to the current session selection', async () => {
+    const { ctx } = makeCtx();
+    const app = ctx.app as unknown as { get: ReturnType<typeof vi.fn> };
+    app.get.mockReturnValue({ kind: 'database' });
+    sessionSelectionRepoMock.asSet.mockResolvedValue(new Set(['EXISTING_KEY']));
+
+    await envVarsWidget.applySubmit(
+      ctx,
+      { values: { B_KEY: 'b', A_KEY: 'a' }, use_existing: [], scope: 'session' },
+      { names: ['A_KEY', 'B_KEY'], reason: 'why', auto_resume: true }
+    );
+
+    expect(sessionSelectionRepoMock.asSet).toHaveBeenCalledWith('sess-1');
+    expect(sessionSelectionRepoMock.setAll).toHaveBeenCalledWith('sess-1', [
+      'A_KEY',
+      'B_KEY',
+      'EXISTING_KEY',
+    ]);
+  });
+
+  it('allows a saved global value to cover a requested name without patching it', async () => {
+    const { ctx, patchSpy } = makeCtx(undefined, {
+      env_vars: { A_KEY: { set: true, scope: 'global' } },
+    });
+    await envVarsWidget.applySubmit(
+      ctx,
+      { values: { B_KEY: 'b' }, use_existing: ['A_KEY'], scope: 'global' },
+      { names: ['A_KEY', 'B_KEY'], reason: 'why', auto_resume: true }
+    );
+    expect(patchSpy).toHaveBeenCalledTimes(1);
+    const [, data] = patchSpy.mock.calls[0] as [string, Record<string, unknown>];
+    expect(data.env_vars).toEqual({ B_KEY: 'b' });
+    expect(data.env_var_scopes).toEqual({ B_KEY: 'global' });
+  });
+
+  it('allows all requested names to use saved global values without patching', async () => {
+    const { ctx, patchSpy } = makeCtx(undefined, {
+      env_vars: { A_KEY: { set: true, scope: 'global' } },
+    });
+    await envVarsWidget.applySubmit(
+      ctx,
+      { values: {}, use_existing: ['A_KEY'], scope: 'global' },
+      { names: ['A_KEY'], reason: 'why', auto_resume: true }
+    );
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects use_existing for non-global saved values with a field error', async () => {
+    const { ctx, patchSpy } = makeCtx(undefined, {
+      env_vars: { A_KEY: { set: true, scope: 'session' } },
+    });
+    await expect(
+      envVarsWidget.applySubmit(
+        ctx,
+        { values: {}, use_existing: ['A_KEY'], scope: 'global' },
+        { names: ['A_KEY'], reason: 'why', auto_resume: true }
+      )
+    ).rejects.toMatchObject({ data: { field_errors: { A_KEY: expect.any(String) } } });
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
   it('rejects submitted names that do not exactly match params.names', async () => {
     const { ctx, patchSpy } = makeCtx();
     // Tampered client tries to write EXTRA_VAR that wasn't in the widget request.
     await expect(
       envVarsWidget.applySubmit(
         ctx,
-        { values: { HUBSPOT_API_KEY: 'v', EXTRA_VAR: 'evil' }, scope: 'global' },
+        { values: { HUBSPOT_API_KEY: 'v', EXTRA_VAR: 'evil' }, use_existing: [], scope: 'global' },
         { names: ['HUBSPOT_API_KEY'], reason: 'why', auto_resume: true }
       )
     ).rejects.toThrow(/exactly match/i);
@@ -246,10 +417,22 @@ describe('env_vars widget — applySubmit', () => {
     await expect(
       envVarsWidget.applySubmit(
         ctx,
-        { values: { A_KEY: 'v' }, scope: 'global' },
+        { values: { A_KEY: 'v' }, use_existing: [], scope: 'global' },
         { names: ['A_KEY', 'B_KEY'], reason: 'why', auto_resume: true }
       )
     ).rejects.toThrow(/exactly match/i);
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing coverage with per-field errors', async () => {
+    const { ctx, patchSpy } = makeCtx();
+    await expect(
+      envVarsWidget.applySubmit(
+        ctx,
+        { values: { A_KEY: 'v' }, use_existing: [], scope: 'global' },
+        { names: ['A_KEY', 'B_KEY'], reason: 'why', auto_resume: true }
+      )
+    ).rejects.toMatchObject({ data: { field_errors: { B_KEY: expect.any(String) } } });
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
@@ -259,7 +442,7 @@ describe('env_vars widget — applySubmit', () => {
     await expect(
       envVarsWidget.applySubmit(
         ctx,
-        { values: { PATH: '/tmp/evil' }, scope: 'global' },
+        { values: { PATH: '/tmp/evil' }, use_existing: [], scope: 'global' },
         { names: ['PATH'], reason: 'why', auto_resume: true }
       )
     ).rejects.toThrow(/blocked|cannot be set/i);
@@ -273,7 +456,7 @@ describe('env_vars widget — applySubmit', () => {
     await expect(
       envVarsWidget.applySubmit(
         ctx,
-        { values: { HUBSPOT_API_KEY: 'v' }, scope: 'global' },
+        { values: { HUBSPOT_API_KEY: 'v' }, use_existing: [], scope: 'global' },
         { names: ['HUBSPOT_API_KEY'], reason: 'why', auto_resume: true }
       )
     ).rejects.toThrow(/value too long/i);
@@ -308,7 +491,7 @@ describe('env_vars widget — applySubmit', () => {
       const { ctx } = makeCtx();
       await envVarsWidget.applySubmit(
         ctx,
-        { values: { HUBSPOT_API_KEY: secret }, scope: 'global' },
+        { values: { HUBSPOT_API_KEY: secret }, use_existing: [], scope: 'global' },
         { names: ['HUBSPOT_API_KEY'], reason: 'why', auto_resume: true }
       );
       // Flatten every logged arg into a string and assert the secret is
@@ -349,6 +532,23 @@ describe('env_vars widget — prompt builders', () => {
     };
     const prompt = envVarsWidget.buildAutoResumePrompt(rm, params);
     expect(prompt).toContain('them');
+  });
+
+  it('buildAutoResumePrompt mentions saved and existing names without values', () => {
+    const rm = {
+      names_submitted: ['B_KEY'],
+      names_used_existing: ['A_KEY'],
+      scope: 'global' as const,
+    };
+    const params = {
+      names: ['A_KEY', 'B_KEY'],
+      reason: 'why',
+      auto_resume: true,
+    };
+    const prompt = envVarsWidget.buildAutoResumePrompt(rm, params);
+    expect(prompt).toContain('saved B_KEY');
+    expect(prompt).toContain('used existing A_KEY');
+    expect(prompt).not.toMatch(/secret|value/i);
   });
 
   it('buildDismissedPrompt says "do not re-request immediately"', () => {

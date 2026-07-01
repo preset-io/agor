@@ -1,9 +1,29 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { resolveBranchId, resolveRepoId, resolveUserId } from '../resolve-ids.js';
-import { mcpLimit, mcpOffset, mcpOptionalId, mcpOptionalString } from '../schema.js';
+import { mcpLimit, mcpOffset, mcpOptionalString } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
+
+const optionalStringOrStringArray = (fieldName: string, description: string) =>
+  z
+    .union([
+      z.string().min(1, `${fieldName} cannot be empty when provided.`),
+      z.array(z.string().min(1, `${fieldName} values cannot be empty.`)).min(1),
+    ])
+    .optional()
+    .describe(description);
+
+type StringOrStringArray = string | string[] | undefined;
+
+async function resolveOneOrMany(
+  value: StringOrStringArray,
+  resolver: (value: string) => Promise<string>
+): Promise<StringOrStringArray> {
+  if (!value) return undefined;
+  if (Array.isArray(value)) return Promise.all(value.map((item) => resolver(item)));
+  return resolver(value);
+}
 
 export function registerAnalyticsTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_analytics_leaderboard
@@ -19,9 +39,26 @@ export function registerAnalyticsTools(server: McpServer, ctx: McpContext): void
         'Get usage analytics leaderboard showing token, cost, session, and duration breakdown. Supports dynamic grouping by user, branch, repo, model, and/or tool (freely combined), plus optional time bucketing (hour/day/week/month) for time-series reports.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
-        userId: mcpOptionalId('userId', 'User', 'Filter by user ID (optional)'),
-        branchId: mcpOptionalId('branchId', 'Branch', 'Filter by branch ID (optional)'),
-        repoId: mcpOptionalId('repoId', 'Repository', 'Filter by repository ID (optional)'),
+        userId: optionalStringOrStringArray(
+          'userId',
+          'Filter by one or more user IDs (UUIDv7 or short IDs). Accepts a string or array.'
+        ),
+        branchId: optionalStringOrStringArray(
+          'branchId',
+          'Filter by one or more branch IDs (UUIDv7 or short IDs). Accepts a string or array.'
+        ),
+        repoId: optionalStringOrStringArray(
+          'repoId',
+          'Filter by one or more repository IDs (UUIDv7 or short IDs). Accepts a string or array.'
+        ),
+        model: optionalStringOrStringArray(
+          'model',
+          'Filter by one or more model names. Accepts a string or array.'
+        ),
+        tool: optionalStringOrStringArray(
+          'tool',
+          'Filter by one or more agentic tools. Accepts a string or array.'
+        ),
         startDate: mcpOptionalString(
           'startDate',
           'Filter by start date (ISO 8601 format, optional)'
@@ -51,9 +88,16 @@ export function registerAnalyticsTools(server: McpServer, ctx: McpContext): void
     },
     async (args) => {
       const query: Record<string, unknown> = {};
-      if (args.userId) query.userId = await resolveUserId(ctx, args.userId);
-      if (args.branchId) query.branchId = await resolveBranchId(ctx, args.branchId);
-      if (args.repoId) query.repoId = await resolveRepoId(ctx, args.repoId);
+      const userId = await resolveOneOrMany(args.userId, (value) => resolveUserId(ctx, value));
+      if (userId) query.userId = userId;
+      const branchId = await resolveOneOrMany(args.branchId, (value) =>
+        resolveBranchId(ctx, value)
+      );
+      if (branchId) query.branchId = branchId;
+      const repoId = await resolveOneOrMany(args.repoId, (value) => resolveRepoId(ctx, value));
+      if (repoId) query.repoId = repoId;
+      if (args.model) query.model = args.model;
+      if (args.tool) query.tool = args.tool;
       if (args.startDate) query.startDate = args.startDate;
       if (args.endDate) query.endDate = args.endDate;
       if (args.groupBy) query.groupBy = args.groupBy;

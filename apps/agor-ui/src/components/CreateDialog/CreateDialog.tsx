@@ -131,11 +131,12 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const repoFormRef = useRef<(() => Promise<RepoTabResult | null>) | null>(null);
   const assistantFormRef = useRef<(() => Promise<AssistantTabResult | null>) | null>(null);
 
-  // Reset state when dialog closes (covers both cancel and successful submit)
+  // Sync active tab when opening, reset form state when closing
   useEffect(() => {
-    if (!open) {
-      setValidByTab(INITIAL_VALIDITY);
+    if (open) {
       setActiveTab(defaultTab);
+    } else {
+      setValidByTab(INITIAL_VALIDITY);
       setIsSubmitting(false);
       setSubmitStatus(null);
       setSubmitError(null);

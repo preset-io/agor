@@ -171,8 +171,12 @@ export function dateTruncUtc(db: Database, column: SQL | any, bucket: DateBucket
     // IMPORTANT: `date_trunc(unit, timestamptz)` truncates in the session's timezone, so we
     // convert to a UTC wall-clock timestamp *first* (`column AT TIME ZONE 'UTC'`) and truncate
     // that. Otherwise day/week/month buckets misalign for any session not set to UTC.
+    // Use a validated raw literal for the date_trunc unit. If this is emitted as
+    // a bound parameter, selecting and grouping by the same helper expression can
+    // produce separate placeholders (for example $1 and $3). PostgreSQL then treats
+    // those as different expressions and rejects bucketed leaderboard queries.
     return sql`to_char(
-      date_trunc(${bucket}, ${column} AT TIME ZONE 'UTC'),
+      date_trunc(${sql.raw(`'${bucket}'`)}, ${column} AT TIME ZONE 'UTC'),
       'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
     )`;
   }

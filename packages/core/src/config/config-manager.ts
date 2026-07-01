@@ -8,7 +8,7 @@ import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { resolveExecutorHeartbeatConfig } from './executor-heartbeat';
@@ -139,6 +139,10 @@ export function __resetConfigCacheForTests(): void {
  * the same invalid inputs (e.g. deprecated `unix_user_mode: opportunistic`).
  */
 function parseAndValidateConfig(content: string): AgorConfig {
+  if (content.trim() === '') {
+    return {};
+  }
+
   const parsed = yaml.load(content) as AgorConfig | undefined | null;
   const finalConfig = parsed || {};
   validateConfig(finalConfig);

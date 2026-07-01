@@ -1,5 +1,6 @@
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { MCPServer } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
 import {
   redactMCPServerSecrets,
@@ -94,6 +95,41 @@ describe('MCP server secret redaction', () => {
         },
       },
       session_id: 'session-a',
+    } as never;
+
+    expect(
+      shouldExposeMCPServerSecrets(executorParams, {
+        allowSessionToken: true,
+        sessionId: 'session-a',
+      })
+    ).toBe(true);
+    expect(
+      shouldExposeMCPServerSecretsForSessionToken(executorParams, { sessionId: 'session-a' })
+    ).toBe(true);
+
+    expect(
+      shouldExposeMCPServerSecrets(executorParams, {
+        allowSessionToken: true,
+        sessionId: 'session-b',
+      })
+    ).toBe(false);
+  });
+
+  it('falls back to decoding executor-session JWT claims when Feathers params lost payload metadata', () => {
+    const accessToken = jwt.sign(
+      {
+        type: 'executor-session',
+        purpose: 'executor-task',
+        session_id: 'session-a',
+      },
+      'test-secret'
+    );
+    const executorParams = {
+      provider: 'socketio',
+      authentication: {
+        strategy: 'jwt',
+        accessToken,
+      },
     } as never;
 
     expect(

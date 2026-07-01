@@ -15,7 +15,7 @@ import {
   theme,
 } from 'antd';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectBranchById,
@@ -75,7 +75,7 @@ interface BoardAssistantPanelProps {
   client: AgorClient | null;
 }
 
-export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
+const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
   board,
   activeTab: controlledActiveTab,
   onTabChange,
@@ -454,5 +454,10 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
     </div>
   );
 };
+
+// Memoized: the inner App stabilizes every handler prop it passes (via
+// useStableCallback), so React.memo bails out of re-renders driven by unrelated
+// store patches and only re-renders when a value prop it draws actually changes.
+export const BoardAssistantPanel = memo(BoardAssistantPanelComponent);
 
 export default BoardAssistantPanel;

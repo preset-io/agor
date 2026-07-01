@@ -1,5 +1,5 @@
 import type { KnowledgeDocument as CoreKnowledgeDocument } from '@agor/core/types';
-import type { AgorClient, Board, Branch, Repo, Session, User } from '@agor-live/client';
+import type { AgorClient, Board, Branch, MCPServer, Repo, Session, User } from '@agor-live/client';
 
 export interface HomePageProps {
   client: AgorClient | null;
@@ -9,6 +9,11 @@ export interface HomePageProps {
   onBoardClick: (boardId: string) => void;
   onBranchClick: (branchId: string) => void;
   onSessionClick: (sessionId: string) => void;
+  onOpenCreateDialog: (
+    tab: 'assistant' | 'branch' | 'board' | 'repository',
+    boardId?: string
+  ) => void;
+  onOpenSettings: (section: 'repos' | 'mcp' | 'users') => void;
 }
 
 /**
@@ -23,6 +28,7 @@ export interface HomeEntityMaps {
   sessionById: Map<string, Session>;
   sessionsByBranch: Map<string, Session[]>;
   userById: Map<string, User>;
+  mcpServerById?: Map<string, MCPServer>;
 }
 
 /** Props available to home sub-sections: HomePage's own props plus entity maps. */

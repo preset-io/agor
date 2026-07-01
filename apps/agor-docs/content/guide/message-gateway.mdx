@@ -34,7 +34,7 @@ Things that still warrant caution:
 
 The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack bot in a channel thread or mention `@agor` on a GitHub PR, and Agor spins up a coding session on the right branch with the right agent — then routes responses back to the platform. In Slack channels, every prompt requires an explicit bot mention; Agor catches the bot up on intervening thread replies when it is mentioned again.
 
-> Currently supports **Slack** and **GitHub**. Discord, WhatsApp, and Telegram connectors are planned.
+> Currently supports **Slack**, **GitHub**, and **Microsoft Teams**. Discord, WhatsApp, and Telegram connectors are planned.
 
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
@@ -108,32 +108,66 @@ This keeps normal team discussions from turning into implicit agent prompts whil
 
 ## Setting Up Slack Integration
 
-### 1. Create a Slack App
+Slack setup is **manifest-based**. Instead of clicking through OAuth scopes, event subscriptions, and Socket Mode by hand, you describe what the bot should do and Agor produces a complete Slack app manifest. Pasting that manifest into Slack's "Create app from manifest" flow preconfigures every scope and event in one step — so the scope list can never drift from what the connector actually calls.
 
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app.
-2. Under **OAuth & Permissions**, add the `chat:write` bot scope.
-3. Under **App Home**, enable the **Messages Tab** and check "Allow users to send Slash commands and messages from the messages tab."
-4. Under **Event Subscriptions**, subscribe to the `message.im` bot event.
-5. Under **Socket Mode**, enable Socket Mode
-6. Under **Basic Information**, generate an **App-Level Token** (`xapp-...`) with `connections:write` scope.
-7. Install the app to your workspace and note the **Bot User OAuth Token** (`xoxb-...`).
+There are two ways to get the manifest:
 
-### 2. Create a Channel in Agor
+- **The Add Channel wizard (UI).** When you create a Slack channel in Agor, a guided wizard builds the manifest from your choices and shows it (with a live scope/event preview) ready to copy.
+- **The `agor_gateway_slack_manifest_generate` MCP tool (agent-driven).** Ask an agent to generate the manifest for you. The tool is the programmatic equivalent of the wizard, backed by the same generator: from a set of capability toggles it returns the manifest JSON, the derived bot scopes and events, ordered setup steps, and the channel config to pass to `agor_gateway_channels_create`. It is pure — it creates no Slack app, no Agor channel, and validates no tokens.
 
-1. Open **Settings** (gear icon) and navigate to the **Gateway** tab.
-2. Click **Add Channel**.
-3. Fill in:
-   - **Name** — Give it a memorable name (e.g., "Optimus Prime").
-   - **Channel Type** — Select `slack`.
-   - **Target Branch** — Pick the branch where sessions will run.
-   - **Bot Token** — Paste the `xoxb-...` token.
-   - **App Token** — Paste the `xapp-...` token (required for receiving DMs via Socket Mode).
-4. Optionally expand **Agentic Tool Configuration** to customize the agent, model, permission mode, and MCP servers for sessions created by this channel.
-5. Save. The daemon will immediately start a Socket Mode listener for this channel.
+Once a channel exists, its edit form also has an **App Manifest** panel showing the recommended manifest for the channel's current options. Re-paste it into Slack whenever you change surfaces or capabilities so the app's scopes stay aligned.
 
-### 3. DM Your Bot
+The one step neither path can cover is the **app-level token**: `connections:write` is an app-level scope, not a bot scope, so you generate that token by hand after creating the app.
 
-Open Slack, find your bot under Apps, and send it a message. You should see system debug messages confirming session creation, followed by the agent's response — all in the same DM thread.
+### 1. Build the manifest in Agor
+
+1. Open **Settings** (gear icon) → **Gateway Channels** → **Add Channel**.
+2. Select **Slack** as the channel type. A four-step wizard appears: **Channel → Options → Create app → Tokens & test**. A consistent footer carries the flow — **Back** and **Cancel** plus a primary button that reads **Continue** on each step and **Create channel** on the last.
+3. On the **Channel** step, set the basics: **Channel Type** (Slack), a **Name** for the Agor channel, the **Target Branch** where sessions run, and whether the channel is **Enabled**. Click **Continue**.
+4. On the **Options** step, choose what the bot can do:
+   - **App Name** — the display name for the Slack app.
+   - **Surfaces** — where the bot listens. Direct messages are always on; optionally add **Public channels** (all, or a specific list of channel IDs), **Private channels**, and **Group DMs**.
+   - **Align Slack users** — match each Slack profile's email to an Agor user (unmatched senders are rejected). When off, pick a single Agor user to run every session as.
+   - **Enable outbound sends** — allow authorized agents to post proactive Slack messages through this channel.
+5. As you toggle options, the wizard updates a **live manifest preview** and the derived **bot scopes** and **event subscriptions**. You never add a scope by hand. Click **Continue**.
+
+### 2. Create the Slack app from the manifest
+
+1. On the **Create app** step, click **Copy manifest**.
+2. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**.
+3. Pick your workspace, paste the manifest, and click **Create**.
+4. Click **Install to Workspace** and approve the requested scopes.
+5. Under **OAuth & Permissions**, copy the **Bot User OAuth Token** (starts with `xoxb-`).
+6. Under **Basic Information → App-Level Tokens**, generate a token with the **`connections:write`** scope and copy the **App-Level Token** (starts with `xapp-`). This token is what enables Socket Mode.
+
+### 3. Finish the channel in Agor
+
+1. On the **Tokens & test** step, paste the **Bot Token** (`xoxb-…`) and **App Token** (`xapp-…`).
+2. Optionally click **Test connection** to verify the bot and app tokens before saving. (A passing test is advisory — Slack can't fully verify channel access up front.)
+3. Optionally expand **Agent Configuration** to set the agent, model, permission mode, MCP servers, and channel-level environment variables for sessions created by this channel.
+4. Click **Create channel**. The daemon immediately starts a Socket Mode listener for the channel.
+
+### 4. Message your bot
+
+DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels and group DMs the bot responds **only** to explicit `@`-mentions; direct messages don't need one.
+
+### Scope reference
+
+The wizard and manifest bake these in automatically — this table is for understanding what each capability grants, not a checklist to apply by hand. Scopes are bot scopes (requested in the manifest); `connections:write` is the one app-level scope, generated separately on the app-level (`xapp-`) token.
+
+| Capability                                | Bot scopes added                                                                    | Events added  |
+| ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------- |
+| **Direct messages** (baseline, always on) | `chat:write`, `im:history`, `im:read`, `users:read`                                 | `message.im`  |
+| **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention` |
+| **Private channels**                      | `groups:history`, `groups:read`                                                     | —             |
+| **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | —             |
+| **Align Slack users**                     | `users:read.email`                                                                  | —             |
+| **Outbound sends**                        | `chat:write.public`, `channels:read`, `groups:read`, `im:write`, `users:read.email` | —             |
+
+Notes:
+
+- `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled — those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
+- `connections:write` never appears in the manifest. It lives on the app-level token you generate under **Basic Information → App-Level Tokens**.
 
 ## Setting Up GitHub Integration
 
@@ -335,9 +369,14 @@ The `blocks` field is opaque platform-specific data — currently only the Slack
 
 ### Slack
 
-- **"Sending messages to this app has been turned off."** Enable the Messages Tab in your Slack app's App Home settings, and subscribe to the `message.im` bot event.
-- **Bot doesn't respond to DMs.** Check that Socket Mode is enabled, the `app_token` is set in the channel config, and the daemon logs show `[gateway] Socket Mode listener started for channel "..."`.
-- **Response appears in logs but not in Slack.** The `bot_token` may lack the `chat:write` scope, or the bot may not have permission to DM the user. Check Slack app permissions.
+- **`missing_scope` errors.** Slack reports the exact scope it needs in the error. Add the capability in the channel (or re-copy the **App Manifest** from the channel's edit form), paste the updated manifest into your Slack app, then **reinstall the app** — new scopes only take effect after a reinstall.
+- **Bot doesn't respond to DMs.** Check that the **App Token** (`xapp-…`) is set in the channel config and that the daemon logs show a Socket Mode listener started for the channel.
+- **Socket Mode won't connect.** This is almost always the app-level token. Confirm the `xapp-` token was generated with the **`connections:write`** scope under **Basic Information → App-Level Tokens**.
+- **Bot ignores channel messages.** In channels and group DMs the bot wakes only on an explicit `@`-mention. Ordinary replies are ignored by design — mention the bot again to continue. (Direct messages don't need a mention.)
+- **Response appears in logs but not in Slack.** The bot token may lack a needed scope, or the bot may not be a member of the target channel. Reinstall after aligning scopes, and add the bot to the channel.
+- **Editing tokens.** Token fields are write-only. Leaving a token field blank on edit **keeps** the stored value; entering a value **overwrites** it. To swap a token, generate a new one in Slack and paste it in.
+- **Token rotation.** Slack's automatic token rotation is not used — the manifest disables it. Rotate manually by generating a fresh token and pasting it into the channel.
+- **Multiple workspaces / Enterprise Grid.** Each workspace needs its own Slack app and its own bot + app token pair, configured as a separate Agor channel. One token pair maps to one workspace.
 - **Infinite message loop.** The connector filters out bot messages (`bot_id` or `subtype: bot_message`). If you see loops, check that your Slack app's bot user is properly configured.
 
 ### GitHub

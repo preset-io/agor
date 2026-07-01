@@ -47,7 +47,7 @@ interface AuthenticatedParams extends Params {
  * that already has the alias form. Keep only alias-style entries.
  */
 function isAlias(id: string): boolean {
-  return /^claude-[a-z]+-\d+-\d+$/.test(id);
+  return /^claude-[a-z]+-\d+(?:-\d+)?$/.test(id);
 }
 
 const CONTEXT_1M_BETA = 'context-1m-2025-08-07';

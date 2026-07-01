@@ -358,8 +358,8 @@ async function injectRestartNoticesInTenantScope(
 
   const restartType = wasGraceful ? ('daemon_restart' as const) : ('daemon_crash' as const);
   const messageText = wasGraceful
-    ? 'The Agor daemon was restarted while this session was running. Ask the agent to resume where it left off.'
-    : 'The Agor daemon restarted unexpectedly while this session was running. Ask the agent to resume where it left off.';
+    ? 'The Agor daemon was restarted while this session was running.'
+    : 'The Agor daemon restarted unexpectedly while this session was running.';
 
   // Build session → last orphaned task map so we can attach notices to a task_id.
   // Prefer orphaned tasks (they were the active tasks at shutdown); fall back to
@@ -515,7 +515,14 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 2. Register Health Monitor listeners before serving requests. The initial
   // full scan of already-running environments is deferred until after listen.
-  const healthMonitor = new HealthMonitor(app, { defaultParams: startupTenantParams(config) });
+  const startupMultiTenancy = resolveMultiTenancyConfig(config);
+  const healthMonitor = new HealthMonitor(app, {
+    defaultParams: startupTenantParams(config),
+    db,
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    requireTenantParams: startupMultiTenancy.mode !== 'static',
+  });
 
   // 3. Validate/generate master secret for API key encryption
   await ensureMasterSecret(config);

@@ -23,6 +23,7 @@ import type { Database } from '../client';
 import {
   deleteFrom,
   insert,
+  isPostgresDatabase,
   jsonExtract,
   lockRowForUpdate,
   select,
@@ -95,6 +96,11 @@ export interface BranchWithZone extends Branch {
  */
 export interface BranchWithZoneAndSessions extends BranchWithZone {
   sessions?: BranchSessionActivity[];
+}
+
+export interface ActiveEnvironmentBranchRef {
+  branch_id: BranchID;
+  tenant_id?: string;
 }
 
 /**
@@ -415,6 +421,32 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
     const baseUrl = await getBaseUrl();
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
+  }
+
+  /**
+   * Health-monitor discovery query. Returns only routing metadata so the
+   * background monitor can enter the correct tenant DB scope before loading
+   * branch contents or patching health state.
+   */
+  async findActiveEnvironmentRefs(): Promise<ActiveEnvironmentBranchRef[]> {
+    const tenantColumn = (branches as unknown as { tenant_id?: unknown }).tenant_id;
+    const columns =
+      isPostgresDatabase(this.db) && tenantColumn
+        ? { branch_id: branches.branch_id, tenant_id: tenantColumn }
+        : { branch_id: branches.branch_id };
+
+    const statusExpr = sql`${jsonExtract(this.db, branches.data, 'environment_instance.status')}`;
+    const rows = await select(this.db, columns)
+      .from(branches)
+      .where(or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+      .all();
+
+    return (rows as Array<{ branch_id: string; tenant_id?: unknown }>).map((row) => ({
+      branch_id: row.branch_id as BranchID,
+      ...(typeof row.tenant_id === 'string' && row.tenant_id.length > 0
+        ? { tenant_id: row.tenant_id }
+        : {}),
+    }));
   }
 
   /**

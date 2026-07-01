@@ -26,6 +26,7 @@ export const withAlpha = (color: string, alpha: number): string => {
       .split(',')
       .map((part) => part.trim())
       .slice(0, 3);
+    if (r == null || g == null || b == null) return color;
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
@@ -34,10 +35,10 @@ export const withAlpha = (color: string, alpha: number): string => {
 
 export const glassCardStyle = (
   token: ReturnType<typeof theme.useToken>['token'],
-  alpha = 0.5
+  alpha = 0.3
 ): React.CSSProperties => ({
   background: withAlpha(token.colorBgContainer, alpha),
-  backgroundColor: withAlpha(token.colorBgContainer, alpha),
-  backdropFilter: 'blur(12px)',
-  WebkitBackdropFilter: 'blur(12px)',
+  backdropFilter: 'blur(20px) saturate(180%)',
+  WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+  boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
 });

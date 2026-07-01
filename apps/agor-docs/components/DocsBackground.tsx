@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * Docs Background - Subtle particles behind the layout
  * Add this to _app.tsx to have particles behind sidebars/panels

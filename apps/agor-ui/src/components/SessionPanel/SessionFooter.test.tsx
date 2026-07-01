@@ -73,6 +73,7 @@ const baseProps = {
   onFork: vi.fn(),
   onBtwSend: vi.fn(),
   onSpawnOpen: vi.fn(),
+  onAttachFiles: vi.fn(),
   onUploadOpen: vi.fn(),
   onEffortChange: vi.fn(),
   onPermissionModeChange: vi.fn(),
@@ -263,5 +264,19 @@ describe('SessionFooter pinned items', () => {
     localStorage.setItem('agor-footer-prefs', JSON.stringify({ pinnedItems: ['btw-fork'] }));
     render(<SessionFooter {...baseProps} hasInput={true} />, { wrapper: Wrapper });
     expect(screen.getByTestId('btw-fork-bar-btn')).toBeInTheDocument();
+  });
+
+  it('labels and disables upload action buttons while attachments upload', () => {
+    localStorage.setItem(
+      'agor-footer-prefs',
+      JSON.stringify({ pinnedItems: ['upload', 'advanced-upload'] })
+    );
+
+    render(<SessionFooter {...baseProps} composerAttachmentUploading={true} />, {
+      wrapper: Wrapper,
+    });
+
+    expect(screen.getByTestId('upload-bar-btn')).toBeDisabled();
+    expect(screen.getByTitle('Advanced upload')).toBeDisabled();
   });
 });
