@@ -105,7 +105,7 @@ export const HomeSessionsSection: React.FC<
   return (
     <section
       aria-label={currentUserId ? 'My sessions' : 'Sessions'}
-      style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+      style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 240 }}
     >
       {/* Section header */}
       <div
