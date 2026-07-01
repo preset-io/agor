@@ -366,6 +366,7 @@ function AppContent() {
     undefined
   );
   const [openNewBranch, setOpenNewBranch] = useState(false);
+  const [credentialVersion, setCredentialVersion] = useState(0);
 
   // Detect GitHub App setup callback URL and auto-open gateway settings
   useEffect(() => {
@@ -843,6 +844,9 @@ function AppContent() {
     try {
       // Cast UpdateUserInput to Partial<User> - backend handles encryption/conversion
       await client.service('users').patch(userId, updates as Partial<User>);
+      if (updates.agentic_tools || updates.env_vars) {
+        setCredentialVersion((v) => v + 1);
+      }
       if (!options.silent) {
         showSuccess('User updated successfully!');
       }
@@ -1586,6 +1590,7 @@ function AppContent() {
           }}
           onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
           onCheckAuth={handleCheckAuth}
+          credentialVersion={credentialVersion}
         />
       }
       onCreateSession={handleCreateSession}

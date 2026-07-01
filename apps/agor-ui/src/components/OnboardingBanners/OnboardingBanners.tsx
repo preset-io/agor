@@ -21,6 +21,8 @@ export interface OnboardingBannersProps {
   onOpenWorkspaceSettings: (tab: string) => void;
   /** Optional auth check — used to detect stored-but-broken keys. */
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
+  /** Bumped by the parent whenever credentials are saved — forces a re-check even if key presence is unchanged (e.g. key rotation). */
+  credentialVersion?: number;
 }
 
 function hasAnyLlmKey(user: User | null | undefined): boolean {
@@ -61,6 +63,7 @@ export function OnboardingBanners({
   onOpenUserSettings,
   onOpenWorkspaceSettings,
   onCheckAuth,
+  credentialVersion,
 }: OnboardingBannersProps) {
   const [storedKeyInvalid, setStoredKeyInvalid] = useState(false);
   const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
@@ -73,6 +76,9 @@ export function OnboardingBanners({
   // Check if the stored LLM key is actually working.
   // Re-runs when the user's key changes or identity changes.
   // Fails open (storedKeyInvalid=false) on network errors — deliberate: avoid false positives.
+  // credentialVersion is a trigger-only dep: it re-runs the check when the parent bumps it after a credential save,
+  // catching key rotations where presence (hasLlm) and primaryAgent are unchanged.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: credentialVersion is an intentional trigger dep
   useEffect(() => {
     if (!onboardingCompleted || !onCheckAuth || !hasLlm || !primaryAgent) {
       setStoredKeyInvalid(false);
@@ -81,7 +87,7 @@ export function OnboardingBanners({
     onCheckAuth(primaryAgent)
       .then((result) => setStoredKeyInvalid(!result.authenticated))
       .catch(() => setStoredKeyInvalid(false));
-  }, [onboardingCompleted, hasLlm, primaryAgent, onCheckAuth]);
+  }, [onboardingCompleted, hasLlm, primaryAgent, onCheckAuth, credentialVersion]);
 
   if (!onboardingCompleted) return null;
 
