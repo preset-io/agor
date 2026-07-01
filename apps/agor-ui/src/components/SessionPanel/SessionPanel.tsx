@@ -414,6 +414,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const tasks = reactiveSessionState?.tasks || [];
   const attachmentInputRef = React.useRef<HTMLInputElement>(null);
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  // Search observes only the conversation region, not the whole body: the
+  // no-results overlay, footer, and modals are `bodyRef` children, so observing
+  // `bodyRef` would let the overlay's own mount/unmount retrigger the scan.
+  const conversationRef = React.useRef<HTMLDivElement | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const {
     searchOpen,
@@ -426,7 +430,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     closeSearch,
     goNext,
     goPrev,
-  } = useSessionSearch(bodyRef, {
+  } = useSessionSearch(conversationRef, {
     highlight: token.colorWarning,
     current: token.colorWarning,
     currentText: 'rgba(0,0,0,0.88)',
@@ -1349,27 +1353,38 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </div>
         )}
-        <SessionPanelContent
-          client={client}
-          session={session}
-          branch={branch}
-          currentUserId={currentUserId}
-          sessionMcpServerIds={sessionMcpServerIds}
-          scrollToBottom={scrollToBottom}
-          scrollToTop={scrollToTop}
-          setScrollToBottom={setScrollToBottom}
-          setScrollToTop={setScrollToTop}
-          queuedTasks={queuedTasks}
-          setQueuedTasks={setQueuedTasks}
-          spawnModalOpen={spawnModalOpen}
-          setSpawnModalOpen={setSpawnModalOpen}
-          onSpawnModalConfirm={handleSpawnModalConfirm}
-          inputValueRef={inputValueRef}
-          isOpen={open}
-          cliViewMode={cliViewMode}
-          setCliViewMode={setCliViewMode}
-          forceExpandAll={searchOpen && query.trim().length > 0}
-        />
+        <div
+          ref={conversationRef}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <SessionPanelContent
+            client={client}
+            session={session}
+            branch={branch}
+            currentUserId={currentUserId}
+            sessionMcpServerIds={sessionMcpServerIds}
+            scrollToBottom={scrollToBottom}
+            scrollToTop={scrollToTop}
+            setScrollToBottom={setScrollToBottom}
+            setScrollToTop={setScrollToTop}
+            queuedTasks={queuedTasks}
+            setQueuedTasks={setQueuedTasks}
+            spawnModalOpen={spawnModalOpen}
+            setSpawnModalOpen={setSpawnModalOpen}
+            onSpawnModalConfirm={handleSpawnModalConfirm}
+            inputValueRef={inputValueRef}
+            isOpen={open}
+            cliViewMode={cliViewMode}
+            setCliViewMode={setCliViewMode}
+            forceExpandAll={searchOpen && query.trim().length > 0}
+          />
+        </div>
 
         {/* Footer — rendered outside SessionPanelContent so that
             keystroke-driven re-renders don't propagate to ConversationView.
