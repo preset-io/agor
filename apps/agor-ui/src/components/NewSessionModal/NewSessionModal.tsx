@@ -27,6 +27,12 @@ import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
 
+const PASTE_SHORTCUT =
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '')
+    ? '⌘V'
+    : 'Ctrl+V';
+
 export interface NewSessionConfig {
   branch_id: string; // Required - sessions are always created from a branch
   agent: string;
@@ -258,7 +264,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           <AutocompleteTextarea
             value={form.getFieldValue('initialPrompt') || ''}
             onChange={(value) => form.setFieldValue('initialPrompt', value)}
-            placeholder="e.g., Build a JWT authentication system with secure password storage... (type @ for autocomplete, or ⌘V / Ctrl+V to paste a screenshot)"
+            placeholder={`e.g., Build a JWT authentication system with secure password storage... (type @ for autocomplete, or ${PASTE_SHORTCUT} to paste a screenshot)`}
             autoSize={{ minRows: 4, maxRows: 8 }}
             client={client}
             sessionId={null}
