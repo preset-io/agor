@@ -1,17 +1,13 @@
 /**
- * Tests for `classifyMissingCredentialFailure` — the before-create hook on
- * the `messages` service that swaps the raw provider CLI/SDK error text for
- * a structured "missing credential" classification.
- *
- * The behavior under test: classification must be driven entirely by
- * `resolveApiKey`'s resolution result (user > config.yaml > env > native
- * auth) — never by inspecting the error text itself — and must never touch
- * messages the executor didn't mark as a task-failure notice.
+ * Tests for `classifyMissingCredentialFailure`: classification is driven by
+ * `resolveApiKey`'s result, never by the error text, and must not touch
+ * messages the executor didn't flag as a failure notice.
  */
 
 import { resolveApiKey } from '@agor/core/config';
 import type { SessionRepository, TaskRepository } from '@agor/core/db';
 import type { HookContext, Message, Session, Task } from '@agor/core/types';
+import { MessageRole } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { classifyMissingCredentialFailure } from './classify-missing-credential';
 
@@ -72,6 +68,104 @@ describe('classifyMissingCredentialFailure', () => {
     expect((ctx.data as Message).metadata?.tool).toBe('claude-code');
     // Raw stderr text must not survive into the persisted content.
     expect((ctx.data as Message).content).not.toContain('/login');
+  });
+
+  describe('zero-token "success" pathway (claude CLI reports success but never called the model)', () => {
+    // Reproduces the live repro from a fresh no-credential container: the SDK's
+    // result event has subtype 'success' with zero real assistant turns, so
+    // message-processor.ts synthesizes the result text into a plain assistant
+    // message instead of throwing — no `is_task_failure` marker exists for
+    // this pathway, so classification falls back to the zero-token signal.
+    const zeroTokenAssistantMessage: Partial<Message> = {
+      task_id: 'task-1' as Message['task_id'],
+      session_id: 'session-1' as Message['session_id'],
+      type: 'assistant',
+      role: MessageRole.ASSISTANT,
+      content: [{ type: 'text', text: 'Not logged in · Please run /login' }],
+      metadata: { tokens: { input: 0, output: 0 } },
+    };
+
+    it('classifies a zero-token assistant message when no credential resolves anywhere', async () => {
+      vi.mocked(resolveApiKey).mockResolvedValue({
+        apiKey: undefined,
+        source: 'none',
+        useNativeAuth: true,
+      });
+
+      const ctx = await runHook()(makeContext({ ...zeroTokenAssistantMessage }));
+      const result = ctx.data as Message;
+
+      expect(result.metadata?.error_kind).toBe('missing_credential');
+      expect(result.metadata?.tool).toBe('claude-code');
+      // Normalized onto system/SYSTEM so the UI has one render branch
+      // regardless of which SDK pathway produced the classification.
+      expect(result.type).toBe('system');
+      expect(result.role).toBe(MessageRole.SYSTEM);
+      expect(JSON.stringify(result.content)).not.toContain('/login');
+    });
+
+    it('does not classify (and does not touch) a real assistant reply with nonzero tokens', async () => {
+      const realReply: Partial<Message> = {
+        task_id: 'task-1' as Message['task_id'],
+        session_id: 'session-1' as Message['session_id'],
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'text', text: 'Here is the answer.' }],
+        metadata: { tokens: { input: 512, output: 24 } },
+      };
+
+      const ctx = await runHook()(makeContext({ ...realReply }));
+
+      expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+      expect((ctx.data as Message).type).toBe('assistant');
+      expect(resolveApiKey).not.toHaveBeenCalled();
+    });
+
+    it('does not reclassify legitimate zero-token output (e.g. /cost) when the user IS authenticated', async () => {
+      // Same structural shape as a genuine auth failure (zero tokens, no
+      // is_task_failure marker) — this is the local-slash-command case the
+      // heuristic can't structurally distinguish from an auth failure.
+      // resolveApiKey is the actual arbiter: a real credential means this
+      // output is left completely untouched.
+      vi.mocked(resolveApiKey).mockResolvedValue({
+        apiKey: 'sk-ant-user-key',
+        source: 'user',
+        useNativeAuth: false,
+      });
+
+      const localCommandOutput: Partial<Message> = {
+        task_id: 'task-1' as Message['task_id'],
+        session_id: 'session-1' as Message['session_id'],
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        content: [{ type: 'text', text: 'Total cost: $0.42' }],
+        metadata: { tokens: { input: 0, output: 0 } },
+      };
+
+      const ctx = await runHook()(makeContext({ ...localCommandOutput }));
+      const result = ctx.data as Message;
+
+      expect(result.metadata?.error_kind).toBeUndefined();
+      expect(result.type).toBe('assistant');
+      expect(result.role).toBe(MessageRole.ASSISTANT);
+      expect(JSON.stringify(result.content)).toContain('Total cost');
+    });
+
+    it('does not trigger for user- or system-role messages even with zero tokens', async () => {
+      const userMessage: Partial<Message> = {
+        task_id: 'task-1' as Message['task_id'],
+        session_id: 'session-1' as Message['session_id'],
+        type: 'user',
+        role: MessageRole.USER,
+        content: 'hello',
+        metadata: { tokens: { input: 0, output: 0 } },
+      };
+
+      const ctx = await runHook()(makeContext({ ...userMessage }));
+
+      expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+      expect(resolveApiKey).not.toHaveBeenCalled();
+    });
   });
 
   it('does not classify when a workspace/env-level credential resolves', async () => {
