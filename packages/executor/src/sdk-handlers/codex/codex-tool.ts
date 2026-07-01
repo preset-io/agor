@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process';
 import { generateId, shortId } from '@agor/core/db';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -97,7 +98,8 @@ export class CodexTool implements ITool {
     tasksStreamingService?: TasksStreamingService,
     useNativeAuth?: boolean,
     mcpServerRepo?: MCPServerRepository,
-    usersRepo?: UsersRepository
+    usersRepo?: UsersRepository,
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -117,7 +119,8 @@ export class CodexTool implements ITool {
         mcpServerRepo,
         usersRepo,
         useNativeAuth ?? false,
-        tasksService
+        tasksService,
+        mcpOAuthAuthHeadersRepo
       );
     }
   }

@@ -2093,7 +2093,7 @@ async function registerMCPServices(
   // --------------------------------------------------------------------------
   app.use('/mcp-servers/oauth-auth-headers', {
     async create(
-      data: { mcp_server_ids: string[] },
+      data: { mcp_server_ids: string[]; executorSessionToken?: string },
       params?: AuthenticatedParams
     ): Promise<{
       headers: Record<string, { authorization?: string; error?: string }>;
@@ -2113,9 +2113,30 @@ async function registerMCPServices(
       const sessionId = (params as (AuthenticatedParams & { session_id?: string }) | undefined)
         ?.session_id;
       const trustedInternalOrService = shouldExposeMCPServerSecrets(params);
-      const trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
+      let trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
         sessionId,
       });
+      let executorSessionId = sessionId;
+      if (!trustedSessionExecutor && params?.provider && data.executorSessionToken) {
+        const executorTokenService = (
+          app as unknown as {
+            sessionTokenService?: {
+              validateToken: (
+                token: string,
+                expected?: { sessionId?: string; taskId?: string; branchId?: string }
+              ) => Promise<{ session_id: string } | null>;
+            };
+          }
+        ).sessionTokenService;
+        const sessionInfo = await executorTokenService?.validateToken(
+          data.executorSessionToken,
+          {}
+        );
+        if (sessionInfo?.session_id) {
+          executorSessionId = sessionInfo.session_id;
+          trustedSessionExecutor = true;
+        }
+      }
       if (!trustedInternalOrService && !trustedSessionExecutor) {
         throw new Forbidden('oauth-auth-headers is only available to trusted executor paths');
       }
@@ -2123,8 +2144,14 @@ async function registerMCPServices(
       const userTokenRepo = new UserMCPOAuthTokenRepository(db);
       const mcpServerRepo = new MCPServerRepository(db);
       if (trustedSessionExecutor) {
+        if (!executorSessionId) {
+          throw new Forbidden('oauth-auth-headers requires executor session scope');
+        }
         const sessionMcpRepo = new SessionMCPServerRepository(db);
-        const attachedServers = await sessionMcpRepo.listServers(sessionId as SessionID, true);
+        const attachedServers = await sessionMcpRepo.listServers(
+          executorSessionId as SessionID,
+          true
+        );
         const globalServers = await mcpServerRepo.findAll({ scope: 'global', enabled: true });
         const allowedServerIds = new Set([
           ...globalServers.map((server) => server.mcp_server_id),

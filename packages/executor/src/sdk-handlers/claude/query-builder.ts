@@ -21,6 +21,7 @@ type Options = Claude.Options;
 import { getDaemonUrl, resolveUserEnvironment } from '../../config.js';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -122,6 +123,7 @@ export interface QuerySetupDeps {
   apiKey?: string;
   sessionMCPRepo?: SessionMCPServerRepository;
   mcpServerRepo?: MCPServerRepository;
+  mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository;
   permissionService?: PermissionService;
   tasksService?: TasksService;
   sessionsService?: SessionsPatchClient;
@@ -558,6 +560,7 @@ export async function setupQuery(
       const serversWithSource = await getMcpServersForSession(sessionId, {
         sessionMCPRepo: deps.sessionMCPRepo,
         mcpServerRepo: deps.mcpServerRepo,
+        mcpOAuthAuthHeadersRepo: deps.mcpOAuthAuthHeadersRepo,
         forUserId: contextUserId,
       });
 
