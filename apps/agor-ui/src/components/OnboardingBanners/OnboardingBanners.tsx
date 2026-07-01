@@ -198,7 +198,7 @@ export function OnboardingBanners({
           fontWeight: 500,
         }}
       >
-        Connect Slack, GitHub, or Linear to let your AI post updates and track issues.
+        Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues.
       </span>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <Button
