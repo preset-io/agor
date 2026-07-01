@@ -17,7 +17,7 @@ import {
 import { ColorPicker, theme } from 'antd';
 import type { Color } from 'antd/es/color-picker';
 import { AggregationColor } from 'antd/es/color-picker/color';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { DeleteZoneModal } from './DeleteZoneModal';
@@ -49,27 +49,13 @@ const getColorPalette = (token: ReturnType<typeof theme.useToken>['token']) => [
   token.magenta6 || token.magenta, // magenta-6
 ];
 
+type ZoneBoardObject = Extract<BoardObject, { type: 'zone' }>;
+
 /**
  * ZoneNode - Resizable rectangle for organizing sessions visually
  */
-interface ZoneNodeData {
+interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
   objectId: string;
-  label: string;
-  width: number;
-  height: number;
-  borderColor?: string;
-  backgroundColor?: string;
-  /** @deprecated Use borderColor instead */
-  color?: string;
-  status?: string;
-  locked?: boolean;
-  /** Label/status font size in px. Falls back to the theme default when unset. */
-  fontSize?: number;
-  /** Effective base stacking order (persisted value or per-type default). */
-  zIndex?: number;
-  x: number;
-  y: number;
-  trigger?: BoardObject extends { type: 'zone'; trigger?: infer T } ? T : never;
   pinnedItemCount?: number;
   onUpdate?: (objectId: string, objectData: BoardObject) => void;
   onDelete?: (objectId: string, deleteAssociatedSessions: boolean) => void;
@@ -149,36 +135,43 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     }
   }, [isEditingLabel]);
 
+  const zoneData = useMemo<ZoneBoardObject>(
+    () => ({
+      type: 'zone',
+      x: data.x,
+      y: data.y,
+      width: data.width,
+      height: data.height,
+      label: data.label,
+      borderColor: data.borderColor,
+      backgroundColor: data.backgroundColor,
+      color: data.color,
+      status: data.status,
+      locked: data.locked,
+      fontSize: data.fontSize,
+      zIndex: data.zIndex,
+      trigger: data.trigger,
+    }),
+    [
+      data.x,
+      data.y,
+      data.width,
+      data.height,
+      data.label,
+      data.borderColor,
+      data.backgroundColor,
+      data.color,
+      data.status,
+      data.locked,
+      data.fontSize,
+      data.zIndex,
+      data.trigger,
+    ]
+  );
+
   // Helper to create full object data with current values
-  const createObjectData = (
-    overrides: Partial<{
-      width: number;
-      height: number;
-      label: string;
-      borderColor?: string;
-      backgroundColor?: string;
-      color?: string;
-      status?: string;
-      locked?: boolean;
-      fontSize?: number;
-      zIndex?: number;
-      trigger?: BoardObject extends { type: 'zone'; trigger?: infer T } ? T : never;
-    }>
-  ): BoardObject => ({
-    type: 'zone',
-    x: data.x,
-    y: data.y,
-    width: data.width,
-    height: data.height,
-    label: data.label,
-    borderColor: data.borderColor,
-    backgroundColor: data.backgroundColor,
-    color: data.color,
-    status: data.status,
-    locked: data.locked,
-    fontSize: data.fontSize,
-    zIndex: data.zIndex,
-    trigger: data.trigger,
+  const createObjectData = (overrides: Partial<Omit<ZoneBoardObject, 'type'>>): BoardObject => ({
+    ...zoneData,
     ...overrides,
   });
 
@@ -905,26 +898,30 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           </div>
         )}
       </div>
-      <ZoneConfigModal
-        open={configModalOpen}
-        onCancel={() => setConfigModalOpen(false)}
-        zoneName={data.label}
-        objectId={data.objectId}
-        onUpdate={data.onUpdate || (() => {})}
-        zoneData={createObjectData({})}
-      />
-      <DeleteZoneModal
-        open={deleteModalOpen}
-        onCancel={() => setDeleteModalOpen(false)}
-        onConfirm={(deleteAssociatedSessions) => {
-          setDeleteModalOpen(false);
-          if (data.onDelete) {
-            data.onDelete(data.objectId, deleteAssociatedSessions);
-          }
-        }}
-        zoneName={data.label}
-        pinnedItemCount={data.pinnedItemCount || 0}
-      />
+      {configModalOpen && (
+        <ZoneConfigModal
+          open={configModalOpen}
+          onCancel={() => setConfigModalOpen(false)}
+          zoneName={data.label}
+          objectId={data.objectId}
+          onUpdate={data.onUpdate || (() => {})}
+          zoneData={zoneData}
+        />
+      )}
+      {deleteModalOpen && (
+        <DeleteZoneModal
+          open={deleteModalOpen}
+          onCancel={() => setDeleteModalOpen(false)}
+          onConfirm={(deleteAssociatedSessions) => {
+            setDeleteModalOpen(false);
+            if (data.onDelete) {
+              data.onDelete(data.objectId, deleteAssociatedSessions);
+            }
+          }}
+          zoneName={data.label}
+          pinnedItemCount={data.pinnedItemCount || 0}
+        />
+      )}
     </>
   );
 };

@@ -47,17 +47,26 @@ export const ZoneConfigModal = ({
 
   const triggerBehavior = Form.useWatch('triggerBehavior', form);
 
-  // Reset form when modal opens (prevent WebSocket updates from erasing user input)
+  const zoneTrigger = zoneData.type === 'zone' ? zoneData.trigger : undefined;
+  const hasZoneTrigger = Boolean(zoneTrigger);
+  const zoneTriggerBehavior = zoneTrigger?.behavior;
+  const zoneTriggerTemplate = zoneTrigger?.template;
+  const zoneTriggerAgent = zoneTrigger?.agent;
+
+  // Reset form when modal opens (prevent WebSocket updates from erasing user input).
+  // Keep dependencies to stable primitive fields: ZoneNode re-renders often, and
+  // passing a freshly-created zone object through this effect used to make AntD's
+  // Form/Modal tree re-run initialization work unnecessarily while open.
   useEffect(() => {
     if (open && !isInitializingRef.current) {
       isInitializingRef.current = true;
-      if (zoneData.type === 'zone' && zoneData.trigger) {
+      if (hasZoneTrigger) {
         form.setFieldsValue({
           name: zoneName,
-          triggerBehavior: zoneData.trigger.behavior,
-          triggerTemplate: zoneData.trigger.template,
+          triggerBehavior: zoneTriggerBehavior,
+          triggerTemplate: zoneTriggerTemplate,
         });
-        setTriggerAgent(zoneData.trigger.agent || 'claude-code');
+        setTriggerAgent(zoneTriggerAgent || 'claude-code');
       } else {
         form.setFieldsValue({
           name: zoneName,
@@ -69,7 +78,15 @@ export const ZoneConfigModal = ({
     } else if (!open) {
       isInitializingRef.current = false;
     }
-  }, [open, zoneName, zoneData, form]);
+  }, [
+    open,
+    zoneName,
+    hasZoneTrigger,
+    zoneTriggerBehavior,
+    zoneTriggerTemplate,
+    zoneTriggerAgent,
+    form,
+  ]);
 
   const handleSave = async () => {
     if (!mutationGate.canMutate) return;

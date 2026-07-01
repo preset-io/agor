@@ -2,9 +2,18 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactNode } from 'react';
 import { ReactFlowProvider } from 'reactflow';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../../contexts/ConnectionContext';
 import { ZoneNode } from './BoardObjectNodes';
+
+const zoneConfigModalRenderSpy = vi.hoisted(() => vi.fn());
+
+vi.mock('./ZoneConfigModal', () => ({
+  ZoneConfigModal: (props: { zoneName: string }) => {
+    zoneConfigModalRenderSpy(props);
+    return <div data-testid="zone-config-modal">Configure Zone: {props.zoneName}</div>;
+  },
+}));
 
 const CONNECTED = {
   connected: true,
@@ -104,5 +113,23 @@ describe('ZoneNode layer toolbar', () => {
     fireEvent.keyDown(btn, { key: 'Enter' });
     fireEvent.click(btn, { detail: 0 });
     expect(onReorder).not.toHaveBeenCalled();
+  });
+});
+
+describe('ZoneNode config modal', () => {
+  beforeEach(() => {
+    zoneConfigModalRenderSpy.mockClear();
+  });
+
+  it('mounts the configuration modal only when the user opens it', () => {
+    renderZone(vi.fn(), CONNECTED);
+
+    expect(zoneConfigModalRenderSpy).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('zone-config-modal')).not.toBeInTheDocument();
+
+    fireEvent.pointerUp(screen.getByTitle('Configure zone'));
+
+    expect(zoneConfigModalRenderSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('zone-config-modal')).toHaveTextContent('Configure Zone: My Zone');
   });
 });
