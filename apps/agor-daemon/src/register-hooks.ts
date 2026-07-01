@@ -661,19 +661,34 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const syncUnixAccessForAllBranches = async (
+  const membershipGroupIdFromContext = (context: HookContext): string | undefined => {
+    const resultGroupId = (context.result as { group_id?: unknown } | undefined)?.group_id;
+    if (typeof resultGroupId === 'string' && resultGroupId.length > 0) return resultGroupId;
+    const dataGroupId = (context.data as { group_id?: unknown } | undefined)?.group_id;
+    if (typeof dataGroupId === 'string' && dataGroupId.length > 0) return dataGroupId;
+    const queryGroupId = context.params.query?.group_id;
+    if (typeof queryGroupId === 'string' && queryGroupId.length > 0) return queryGroupId;
+    const routeGroupId = context.params.route?.groupId;
+    if (typeof routeGroupId === 'string' && routeGroupId.length > 0) return routeGroupId;
+    return undefined;
+  };
+
+  const syncUnixAccessForGroupGrantedBranches = async (
     context: HookContext,
     logPrefix: string
   ): Promise<HookContext> => {
     if (!executionMode.unixFsIsolationEnabled) return context;
-    const branches = await branchRepository.findAll({ includeArchived: false });
-    for (const branch of branches) {
-      syncBranchUnixAccess(
-        branch.branch_id as BranchID,
-        logPrefix,
-        context.params as Partial<AuthenticatedParams>
-      );
-      await invalidateRealtimeBranchAccess(branch.branch_id);
+    const groupId = membershipGroupIdFromContext(context);
+    if (!groupId) return context;
+
+    const branchIds = await branchRepository.findExplicitFsAccessBranchIdsForGroup(groupId);
+    if (branchIds.length === 0) return context;
+    console.log(
+      `[Unix Integration] Queueing group membership permission sync for ${branchIds.length} branch(es) granted to group ${shortId(groupId)}`
+    );
+    for (const branchId of branchIds) {
+      syncBranchUnixAccess(branchId, logPrefix, context.params as Partial<AuthenticatedParams>);
+      await invalidateRealtimeBranchAccess(branchId);
     }
     return context;
   };
@@ -1862,12 +1877,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         clearRealtimeBranchVisibility,
         (context: HookContext) =>
-          syncUnixAccessForAllBranches(context, '[Executor/group-memberships.create]'),
+          syncUnixAccessForGroupGrantedBranches(context, '[Executor/group-memberships.create]'),
       ],
       remove: [
         clearRealtimeBranchVisibility,
         (context: HookContext) =>
-          syncUnixAccessForAllBranches(context, '[Executor/group-memberships.remove]'),
+          syncUnixAccessForGroupGrantedBranches(context, '[Executor/group-memberships.remove]'),
       ],
     },
   });
