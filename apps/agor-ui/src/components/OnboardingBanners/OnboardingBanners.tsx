@@ -109,7 +109,7 @@ export function OnboardingBanners({
         }}
       >
         <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>
-          ⚡ Connect your AI to start your first session.
+          ⚡ Connect your AI - sessions need it to run agents.
         </span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Button
@@ -157,7 +157,7 @@ export function OnboardingBanners({
         }}
       >
         <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>
-          Your AI connection is not working - update it to start a session.
+          Your AI connection is not working - agents won&apos;t run until you fix it.
         </span>
         <Button
           size="small"
