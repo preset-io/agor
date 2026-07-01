@@ -27,6 +27,7 @@ import {
   ScheduleRepository,
   type SessionRepository,
   shortId,
+  TaskRepository,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
@@ -475,6 +476,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     sessionsRepository,
   } = ctx;
 
+  // Used by classifyMissingCredentialFailure to look up the acting user for
+  // a failed task (no service-layer equivalent already in ctx).
+  const taskRepository = new TaskRepository(db);
+
   // Helper: safely get a service (returns undefined if not registered due to tier=off)
   const safeService = (path: string) => {
     try {
@@ -796,7 +801,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         // failures structurally (reusing resolveApiKey's resolution order),
         // never by matching the raw stderr-passthrough error text. Drives
         // the Connect-AI empty state instead of a raw "/login" message.
-        classifyMissingCredentialFailure(db, sessionsRepository, AGENTIC_TOOL_DISPLAY_NAMES),
+        classifyMissingCredentialFailure(
+          db,
+          taskRepository,
+          sessionsRepository,
+          AGENTIC_TOOL_DISPLAY_NAMES
+        ),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update messages'),

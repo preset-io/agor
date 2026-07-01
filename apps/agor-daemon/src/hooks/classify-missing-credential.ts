@@ -17,11 +17,7 @@
  */
 
 import { resolveApiKey } from '@agor/core/config';
-import {
-  type SessionRepository,
-  TaskRepository,
-  type TenantScopeAwareDatabase,
-} from '@agor/core/db';
+import type { SessionRepository, TaskRepository, TenantScopeAwareDatabase } from '@agor/core/db';
 import type { HookContext, Message, TaskID, UserID } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 
@@ -35,11 +31,10 @@ function fallbackContent(toolDisplayName: string): string {
 
 export function classifyMissingCredentialFailure(
   db: TenantScopeAwareDatabase,
+  taskRepository: Pick<TaskRepository, 'findById'>,
   sessionsRepository: Pick<SessionRepository, 'findById'>,
   toolDisplayNames: Record<string, string>
 ) {
-  const taskRepo = new TaskRepository(db);
-
   return async (context: HookContext): Promise<HookContext> => {
     const data = context.data as Partial<Message> | undefined;
     if (!data?.metadata?.is_task_failure || !data.task_id || !data.session_id) {
@@ -48,7 +43,7 @@ export function classifyMissingCredentialFailure(
 
     try {
       const [task, session] = await Promise.all([
-        taskRepo.findById(data.task_id as TaskID),
+        taskRepository.findById(data.task_id as TaskID),
         sessionsRepository.findById(data.session_id),
       ]);
       if (!task || !session) return context;
