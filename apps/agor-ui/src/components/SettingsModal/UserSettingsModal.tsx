@@ -81,6 +81,7 @@ export interface UserSettingsModalProps {
   currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onRestartOnboarding?: () => void | Promise<void>;
+  initialTab?: string;
 }
 
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
@@ -92,9 +93,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   currentUser,
   onUpdate,
   onRestartOnboarding,
+  initialTab,
 }) => {
   const [form] = Form.useForm();
-  const [activeTab, setActiveTab] = useState<string>('general');
+  const [activeTab, setActiveTab] = useState<string>(initialTab ?? 'general');
   const initializedUserIdRef = useRef<string | null>(null);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
@@ -120,6 +122,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }),
     [claudeCliForm, claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm]
   );
+
+  // Jump to initialTab each time the modal opens (e.g. from a banner deep-link).
+  useEffect(() => {
+    if (open && initialTab) setActiveTab(initialTab);
+  }, [open, initialTab]);
 
   // Per-tool credential presence state, keyed `${tool}.${field}` for spinner
   // tracking. The actual presence map is rebuilt from `user.agentic_tools`

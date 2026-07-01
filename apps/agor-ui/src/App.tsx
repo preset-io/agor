@@ -1,4 +1,5 @@
 import type {
+  AgenticToolName,
   Artifact,
   AuthCheckResult,
   Board,
@@ -25,7 +26,7 @@ import {
   sessionPath,
 } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider } from 'antd';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
@@ -33,6 +34,7 @@ import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
+import { OnboardingBanners } from './components/OnboardingBanners';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -360,6 +362,9 @@ function AppContent() {
   // Onboarding state (for new users)
   const [settingsTabToOpen, setSettingsTabToOpen] = useState<string | null>(null);
   const [openUserSettings, setOpenUserSettings] = useState(false);
+  const [userSettingsInitialTab, setUserSettingsInitialTab] = useState<string | undefined>(
+    undefined
+  );
   const [openNewBranch, setOpenNewBranch] = useState(false);
 
   // Detect GitHub App setup callback URL and auto-open gateway settings
@@ -506,6 +511,18 @@ function AppContent() {
       navigate('/');
     }
   };
+
+  const handleCheckAuth = useCallback(
+    async (tool: AgenticToolName, apiKey?: string): Promise<AuthCheckResult> => {
+      if (!client) return { authenticated: false, method: 'none' as const };
+      try {
+        return (await client.service('check-auth').create({ tool, apiKey })) as AuthCheckResult;
+      } catch {
+        return { authenticated: false, method: 'none' as const, hint: 'Connection check failed.' };
+      }
+    },
+    [client]
+  );
 
   // NOW handle conditional rendering based on state
   // Show loading while fetching auth config
@@ -1559,6 +1576,18 @@ function AppContent() {
       openNewBranchModal={openNewBranch}
       onNewBranchModalClose={handleNewBranchModalClose}
       suppressLeftPanel={onboardingWizardOpen}
+      topBanner={
+        <OnboardingBanners
+          user={currentUser}
+          mcpServerCount={mcpServerById.size}
+          onOpenUserSettings={(tab) => {
+            setUserSettingsInitialTab(tab);
+            setOpenUserSettings(true);
+          }}
+          onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
+          onCheckAuth={handleCheckAuth}
+        />
+      }
       onCreateSession={handleCreateSession}
       onForkSession={handleForkSession}
       onBtwForkSession={handleBtwForkSession}
@@ -1630,13 +1659,17 @@ function AppContent() {
         {sharedSurfaceOwnsUserSettings && (
           <SharedUserSettingsModal
             open={openUserSettings}
-            onClose={() => setOpenUserSettings(false)}
+            onClose={() => {
+              setOpenUserSettings(false);
+              setUserSettingsInitialTab(undefined);
+            }}
             user={currentUser}
             client={client}
             mcpServerById={mcpServerById}
             onUpdateUser={handleUpdateUser}
             onRefreshCurrentUser={reAuthenticate}
             onRestartOnboarding={handleRestartOnboarding}
+            initialTab={userSettingsInitialTab}
           />
         )}
 
