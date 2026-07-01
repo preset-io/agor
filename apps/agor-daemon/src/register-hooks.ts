@@ -662,15 +662,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const membershipGroupIdFromContext = (context: HookContext): string | undefined => {
+  const membershipGroupIdFromContext = (context: HookContext): GroupID | undefined => {
     const resultGroupId = (context.result as { group_id?: unknown } | undefined)?.group_id;
-    if (typeof resultGroupId === 'string' && resultGroupId.length > 0) return resultGroupId;
+    if (typeof resultGroupId === 'string' && resultGroupId.length > 0) {
+      return resultGroupId as GroupID;
+    }
     const dataGroupId = (context.data as { group_id?: unknown } | undefined)?.group_id;
-    if (typeof dataGroupId === 'string' && dataGroupId.length > 0) return dataGroupId;
+    if (typeof dataGroupId === 'string' && dataGroupId.length > 0) return dataGroupId as GroupID;
     const queryGroupId = context.params.query?.group_id;
-    if (typeof queryGroupId === 'string' && queryGroupId.length > 0) return queryGroupId;
+    if (typeof queryGroupId === 'string' && queryGroupId.length > 0) return queryGroupId as GroupID;
     const routeGroupId = context.params.route?.groupId;
-    if (typeof routeGroupId === 'string' && routeGroupId.length > 0) return routeGroupId;
+    if (typeof routeGroupId === 'string' && routeGroupId.length > 0) return routeGroupId as GroupID;
     return undefined;
   };
 
@@ -687,9 +689,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       return context;
     }
 
-    const branchIds = await branchRepository.findExplicitFsAccessBranchIdsForGroup(
-      groupId as GroupID
-    );
+    const branchIds = await branchRepository.findExplicitFsAccessBranchIdsForGroup(groupId);
     if (branchIds.length === 0) return context;
     console.log(
       `[Unix Integration] Queueing group membership permission sync for ${branchIds.length} branch(es) granted to group ${shortId(groupId)}`
