@@ -15,6 +15,7 @@ import { ENVIRONMENT } from '@agor/core/config';
 import {
   BranchRepository,
   getHiddenTenantId,
+  runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   shortId,
@@ -161,21 +162,30 @@ export class HealthMonitor {
     this.stopMonitoring(branchId);
     if (params) this.branchParams.set(branchId, params);
 
-    // Wait grace period before first check
-    setTimeout(() => {
-      if (this.isShuttingDown) return;
-
-      // Perform first health check
-      this.checkHealth(branchId);
-
-      // Set up periodic health checks
-      const interval = setInterval(() => {
+    // Wait grace period before first check.
+    //
+    // Health monitoring is often started from inside tenant-scoped service
+    // hooks or startup discovery. Timers inherit AsyncLocalStorage, including
+    // the active tenant DB transaction; by the time the timer fires that
+    // transaction has usually committed. Schedule outside the current tenant
+    // DB scope so every check enters a fresh scope through the branches service
+    // hooks using the stored tenant params.
+    runWithoutTenantDatabaseScope(() => {
+      setTimeout(() => {
         if (this.isShuttingDown) return;
-        this.checkHealth(branchId);
-      }, ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS);
 
-      this.intervals.set(branchId, interval);
-    }, ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+        // Perform first health check
+        this.checkHealth(branchId);
+
+        // Set up periodic health checks
+        const interval = setInterval(() => {
+          if (this.isShuttingDown) return;
+          this.checkHealth(branchId);
+        }, ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS);
+
+        this.intervals.set(branchId, interval);
+      }, ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    });
   }
 
   /**
