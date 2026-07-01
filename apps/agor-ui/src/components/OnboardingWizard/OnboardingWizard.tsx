@@ -590,6 +590,27 @@ export function OnboardingWizard({
             onStatusChange: setOperationText,
           }));
 
+        // Fire-and-forget: always call this after every session
+        // creation/reuse, regardless of which LLM-step button got here
+        // ("Save & Continue", "Continue with Codex CLI auth", or
+        // "Continue without key" - the last of these creates a session
+        // with no credential at all). The daemon route performs a LIVE
+        // credential-resolution check before actually queuing the kickoff
+        // prompt, so this is always safe to call - it just silently
+        // no-ops when there is nothing to talk to the user about yet.
+        // Wrapped in an async IIFE (not just `.catch()`) so a synchronous
+        // throw from `client.service(...)` itself can't escape and fail
+        // wizard completion - this must never block or break setup.
+        void (async () => {
+          try {
+            await client?.service(`sessions/${sessionId}/onboarding/trigger`).create({
+              reason: 'auto',
+            });
+          } catch (err) {
+            console.warn('[OnboardingWizard] Failed to trigger onboarding agent:', err);
+          }
+        })();
+
         setSetupStage('done');
         setOperationText('Opening your assistant…');
         onComplete({ branchId: branch.branch_id, sessionId, boardId, path: 'assistant' });
