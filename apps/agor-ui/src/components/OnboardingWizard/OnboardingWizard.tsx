@@ -977,7 +977,11 @@ export function OnboardingWizard({
           <div
             role="radiogroup"
             aria-label="Recommended LLM providers"
-            style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: 12,
+            }}
           >
             {RECOMMENDED_AGENT_OPTIONS.map((option) => {
               const selected = selectedAgent === option.value;
@@ -992,10 +996,14 @@ export function OnboardingWizard({
                   styles={{ body: { padding: 0 } }}
                 >
                   <label style={{ display: 'block', cursor: 'pointer', padding: 14 }}>
-                    <Space align="center" size={10} style={{ width: '100%' }}>
-                      <ToolIcon tool={option.value} size={32} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{ flexShrink: 0 }}>
+                        <ToolIcon tool={option.value} size={32} />
+                      </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <Text strong>{option.title}</Text>
+                        <Text strong ellipsis>
+                          {option.title}
+                        </Text>
                         <div>
                           <Tag color={selected ? 'blue' : 'default'}>{option.eyebrow}</Tag>
                         </div>
@@ -1006,9 +1014,9 @@ export function OnboardingWizard({
                         value={option.value}
                         checked={selected}
                         onChange={() => selectAgent(option.value, { useDifferentProvider: false })}
-                        style={{ accentColor: token.colorPrimary }}
+                        style={{ accentColor: token.colorPrimary, flexShrink: 0 }}
                       />
-                    </Space>
+                    </div>
                   </label>
                 </Card>
               );
@@ -1086,7 +1094,7 @@ export function OnboardingWizard({
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
                     gap: 8,
                   }}
                 >
