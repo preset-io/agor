@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  capSessionSizeForCanvasMin,
   getContentPanelWidthPercent,
   toContentRelativePercent,
   toViewportRelativePercent,
@@ -74,5 +75,21 @@ describe('viewport <-> content relative percent conversion', () => {
 
   it('clamps viewport-relative percent to [0, 100]', () => {
     expect(toViewportRelativePercent(150, 90)).toBe(100);
+  });
+});
+
+describe('capSessionSizeForCanvasMin', () => {
+  it('caps the session panel so the canvas panel keeps its minSize when the left panel is expanded', () => {
+    // Chat pinned at 75% of the viewport (its max); left panel expanded to
+    // 24%, leaving a 76%-wide content panel — converting to content-relative
+    // asks for ~98.7%, which would starve the canvas below its 20% minimum.
+    const contentPanelWidthPercent = getContentPanelWidthPercent(false, 4, 24);
+    const sessionContentRelativePercent = toContentRelativePercent(75, contentPanelWidthPercent);
+
+    expect(capSessionSizeForCanvasMin(sessionContentRelativePercent, 20)).toBeLessThanOrEqual(80);
+  });
+
+  it('passes the size through unchanged when it already leaves the canvas its minimum', () => {
+    expect(capSessionSizeForCanvasMin(50, 20)).toBe(50);
   });
 });

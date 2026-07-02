@@ -31,3 +31,14 @@ export const toViewportRelativePercent = (
   contentRelativePercent: number,
   contentPanelWidthPercent: number
 ) => clamp((contentRelativePercent * contentPanelWidthPercent) / 100, 0, 100);
+
+// The session panel shares the content panel with the canvas, which enforces
+// its own `minSize`. A content-relative session size only bounded to [0, 100]
+// can ask for more room than leaves the canvas its minimum; react-resizable-
+// panels then clamps the layout and the session panel visibly jumps when the
+// left panel toggles. Cap the session panel's content-relative percentage so
+// the canvas always keeps at least `canvasMinPercent`.
+export const capSessionSizeForCanvasMin = (
+  sessionContentRelativePercent: number,
+  canvasMinPercent: number
+) => Math.min(sessionContentRelativePercent, 100 - canvasMinPercent);

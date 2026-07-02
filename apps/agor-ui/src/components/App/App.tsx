@@ -92,6 +92,7 @@ import {
   getToggleBoardPanelState,
 } from './boardPanelActions';
 import {
+  capSessionSizeForCanvasMin,
   getContentPanelWidthPercent,
   toContentRelativePercent,
   toViewportRelativePercent,
@@ -218,6 +219,9 @@ const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
 const SESSION_PANEL_MIN_WIDTH_PX = 360;
 const SESSION_PANEL_MAX_SIZE_PERCENT = 75;
 const SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT = 15;
+// Matches the canvas panel's own `minSize` below — kept as one constant so
+// the two cannot drift apart.
+const CANVAS_MIN_SIZE_PERCENT = 20;
 // Width of the persistent icon rail (AssistantPanelRail) shown in place of
 // the panel when collapsed. Replaces the old 0px-collapse + floating
 // reopen-knob pattern (see issue agor-cloud#123).
@@ -570,18 +574,20 @@ export const App: React.FC<AppProps> = ({
     SESSION_PANEL_MAX_SIZE_PERCENT
   );
   // react-resizable-panels sizes the nested `canvas-session` PanelGroup's
-  // panels relative to the content panel, not the viewport — convert.
-  const sessionPanelSizeWithinContent = toContentRelativePercent(
-    effectiveSessionPanelSize,
-    contentPanelWidthPercent
+  // panels relative to the content panel, not the viewport — convert. Both
+  // the default and max are further capped so the canvas panel can always
+  // keep its own `minSize` (CANVAS_MIN_SIZE_PERCENT).
+  const sessionPanelSizeWithinContent = capSessionSizeForCanvasMin(
+    toContentRelativePercent(effectiveSessionPanelSize, contentPanelWidthPercent),
+    CANVAS_MIN_SIZE_PERCENT
   );
-  const sessionPanelMinSizeWithinContent = toContentRelativePercent(
-    sessionPanelMinSize,
-    contentPanelWidthPercent
+  const sessionPanelMaxSizeWithinContent = capSessionSizeForCanvasMin(
+    toContentRelativePercent(SESSION_PANEL_MAX_SIZE_PERCENT, contentPanelWidthPercent),
+    CANVAS_MIN_SIZE_PERCENT
   );
-  const sessionPanelMaxSizeWithinContent = toContentRelativePercent(
-    SESSION_PANEL_MAX_SIZE_PERCENT,
-    contentPanelWidthPercent
+  const sessionPanelMinSizeWithinContent = Math.min(
+    toContentRelativePercent(sessionPanelMinSize, contentPanelWidthPercent),
+    sessionPanelMaxSizeWithinContent
   );
   const sessionPanelRef = useRef<ImperativePanelHandle>(null);
   const leftPanelResizeDraggingRef = useRef(false);
@@ -1415,7 +1421,7 @@ export const App: React.FC<AppProps> = ({
                   defaultSize={
                     effectiveSelectedSessionId ? 100 - sessionPanelSizeWithinContent : 100
                   }
-                  minSize={20}
+                  minSize={CANVAS_MIN_SIZE_PERCENT}
                 >
                   <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
                     {isHomeSurface ? (
