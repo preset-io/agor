@@ -1,10 +1,49 @@
 import type { Branch, Session, User } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { BranchSessionSections } from './BranchSessionSections';
+
+vi.mock('antd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('antd')>();
+
+  const MockTree = ({ treeData, expandedKeys = [], onExpand, titleRender }: any) => {
+    const expandedKeySet = new Set(expandedKeys);
+
+    const renderNodes = (nodes: any[]) =>
+      nodes.map((node) => {
+        const hasChildren = Boolean(node.children?.length);
+        const expanded = expandedKeySet.has(node.key);
+        const nextExpandedKeys = expanded
+          ? expandedKeys.filter((key: React.Key) => key !== node.key)
+          : [...expandedKeys, node.key];
+        const title = titleRender ? titleRender(node) : node.title;
+
+        return (
+          <div key={node.key}>
+            {hasChildren && (
+              <button
+                type="button"
+                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.session.title}`}
+                onClick={() => onExpand?.(nextExpandedKeys)}
+              />
+            )}
+            {title}
+            {hasChildren && expanded && <div>{renderNodes(node.children)}</div>}
+          </div>
+        );
+      });
+
+    return <div role="tree">{renderNodes(treeData)}</div>;
+  };
+
+  return {
+    ...actual,
+    Tree: MockTree,
+  };
+});
 
 const branch = {
   branch_id: 'branch-1',
@@ -118,5 +157,105 @@ describe('BranchSessionSections', () => {
     expect(screen.queryByText('Archived parent')).not.toBeInTheDocument();
     expect(screen.getByText('Visible child')).toBeInTheDocument();
     expect(screen.getByText('1')).toBeInTheDocument();
+  });
+
+  it('keeps a manually collapsed parent collapsed after selecting another session', async () => {
+    const parentSession = makeManualSession({
+      session_id: 'session-parent',
+      title: 'Parent session',
+      genealogy: { children: ['session-child'] },
+    });
+    const childSession = makeManualSession({
+      session_id: 'session-child',
+      title: 'Child session',
+      genealogy: { parent_session_id: 'session-parent', children: [] },
+    });
+    const otherSession = makeManualSession({
+      session_id: 'session-other',
+      title: 'Other session',
+    });
+    const sessions = [parentSession, childSession, otherSession];
+    const onSessionClick = vi.fn();
+
+    const { rerender } = renderSections({
+      sessions,
+      selectedSessionId: 'session-parent',
+      onSessionClick,
+    });
+
+    expect(screen.getByText('Child session')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(/collapse parent session/i));
+
+    await waitFor(() => expect(screen.queryByText('Child session')).not.toBeInTheDocument());
+
+    rerender(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <AntApp>
+          <BranchSessionSections
+            branch={branch}
+            sessions={sessions.map((session) => ({ ...session }))}
+            userById={new Map<string, User>()}
+            selectedSessionId="session-other"
+            onSessionClick={onSessionClick}
+            onCreateSession={vi.fn()}
+            client={null}
+          />
+        </AntApp>
+      </ConnectionProvider>
+    );
+
+    expect(screen.getByLabelText(/expand parent session/i)).toBeInTheDocument();
+    expect(screen.queryByText('Child session')).not.toBeInTheDocument();
+  });
+
+  it('expands a session when it newly gains children', () => {
+    const parentSession = makeManualSession({
+      session_id: 'session-parent',
+      title: 'Parent session',
+    });
+    const childSession = makeManualSession({
+      session_id: 'session-child',
+      title: 'Child session',
+      genealogy: { parent_session_id: 'session-parent', children: [] },
+    });
+
+    const { rerender } = renderSections({ sessions: [parentSession] });
+
+    expect(screen.queryByText('Child session')).not.toBeInTheDocument();
+
+    rerender(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <AntApp>
+          <BranchSessionSections
+            branch={branch}
+            sessions={[{ ...parentSession }, childSession]}
+            userById={new Map<string, User>()}
+            onSessionClick={vi.fn()}
+            onCreateSession={vi.fn()}
+            client={null}
+          />
+        </AntApp>
+      </ConnectionProvider>
+    );
+
+    expect(screen.getByLabelText(/collapse parent session/i)).toBeInTheDocument();
+    expect(screen.getByText('Child session')).toBeInTheDocument();
   });
 });

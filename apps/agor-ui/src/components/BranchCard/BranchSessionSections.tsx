@@ -31,7 +31,7 @@ import {
   theme,
 } from 'antd';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
@@ -254,6 +254,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     session: null,
   });
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
+  const previousExpandableKeysRef = useRef<Set<React.Key> | null>(null);
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
@@ -464,6 +465,20 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     () => buildSessionTree(sortedManualSessions),
     [sortedManualSessions]
   );
+  const expandableKeys = useMemo(() => {
+    const collectKeysWithChildren = (nodes: SessionTreeNode[]): React.Key[] => {
+      const keys: React.Key[] = [];
+      for (const node of nodes) {
+        if (node.children && node.children.length > 0) {
+          keys.push(node.key);
+          keys.push(...collectKeysWithChildren(node.children));
+        }
+      }
+      return keys;
+    };
+
+    return collectKeysWithChildren(sessionTreeData);
+  }, [sessionTreeData]);
   const searchResults = useMemo(
     () =>
       isPanel && searchActive
@@ -487,19 +502,29 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const isSessionFailed = (session: Session): boolean => session.status === SessionStatus.FAILED;
 
   useEffect(() => {
-    const collectKeysWithChildren = (nodes: SessionTreeNode[]): React.Key[] => {
-      const keys: React.Key[] = [];
-      for (const node of nodes) {
-        if (node.children && node.children.length > 0) {
-          keys.push(node.key);
-          keys.push(...collectKeysWithChildren(node.children));
+    const expandableKeySet = new Set(expandableKeys);
+    const previousExpandableKeys = previousExpandableKeysRef.current;
+
+    setExpandedKeys((previousExpandedKeys) => {
+      if (!previousExpandableKeys) {
+        return expandableKeys;
+      }
+
+      const nextExpandedKeys = previousExpandedKeys.filter((key) => expandableKeySet.has(key));
+      const nextExpandedKeySet = new Set(nextExpandedKeys);
+
+      for (const key of expandableKeys) {
+        if (!previousExpandableKeys.has(key) && !nextExpandedKeySet.has(key)) {
+          nextExpandedKeys.push(key);
+          nextExpandedKeySet.add(key);
         }
       }
-      return keys;
-    };
 
-    setExpandedKeys(collectKeysWithChildren(sessionTreeData));
-  }, [sessionTreeData]);
+      return nextExpandedKeys;
+    });
+
+    previousExpandableKeysRef.current = expandableKeySet;
+  }, [expandableKeys]);
 
   const sessionRowStyle = (session: Session): React.CSSProperties => {
     const isSessionSelected = session.session_id === selectedSessionId;
