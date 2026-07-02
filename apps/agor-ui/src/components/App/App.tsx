@@ -91,6 +91,11 @@ import {
   getShowCommentsPanelState,
   getToggleBoardPanelState,
 } from './boardPanelActions';
+import {
+  getContentPanelWidthPercent,
+  toContentRelativePercent,
+  toViewportRelativePercent,
+} from './panelSizing';
 
 const { Content } = Layout;
 
@@ -536,7 +541,23 @@ export const App: React.FC<AppProps> = ({
     LEFT_PANEL_MAX_SIZE_PERCENT
   );
 
-  // Session panel size persistence (percentage of available width), scoped per user.
+  // Width of the middle content panel (canvas + session panel), as a
+  // percentage of the full viewport — whatever's left once the left
+  // assistant/comments panel (rail or fully expanded) takes its share. The
+  // session panel's own size is persisted relative to the viewport (below),
+  // so this is the conversion factor used to translate that into the
+  // content-relative percentage react-resizable-panels expects — keeping the
+  // session panel's absolute pixel width stable whenever the left panel
+  // toggles or resizes.
+  const contentPanelWidthPercent = getContentPanelWidthPercent(
+    leftPanelCollapsed,
+    leftPanelCollapsedSize,
+    effectiveCommentsPanelSize
+  );
+
+  // Session panel size persistence: percentage of the FULL VIEWPORT (not of
+  // the content panel), scoped per user, so the chat panel's absolute pixel
+  // width doesn't change when the left panel collapses to a rail or back.
   const [sessionPanelSize, setSessionPanelSize] = useUserLocalStorage<number>(
     user?.user_id,
     'panel:right:size',
@@ -547,6 +568,20 @@ export const App: React.FC<AppProps> = ({
     sessionPanelSize,
     sessionPanelMinSize,
     SESSION_PANEL_MAX_SIZE_PERCENT
+  );
+  // react-resizable-panels sizes the nested `canvas-session` PanelGroup's
+  // panels relative to the content panel, not the viewport — convert.
+  const sessionPanelSizeWithinContent = toContentRelativePercent(
+    effectiveSessionPanelSize,
+    contentPanelWidthPercent
+  );
+  const sessionPanelMinSizeWithinContent = toContentRelativePercent(
+    sessionPanelMinSize,
+    contentPanelWidthPercent
+  );
+  const sessionPanelMaxSizeWithinContent = toContentRelativePercent(
+    SESSION_PANEL_MAX_SIZE_PERCENT,
+    contentPanelWidthPercent
   );
   const sessionPanelRef = useRef<ImperativePanelHandle>(null);
   const leftPanelResizeDraggingRef = useRef(false);
@@ -608,11 +643,17 @@ export const App: React.FC<AppProps> = ({
     }
   }, [effectiveCommentsPanelSize, leftPanelCollapsed]);
 
+  // Re-resize whenever the content-relative size changes — including when
+  // the left panel toggles or resizes and shifts contentPanelWidthPercent,
+  // which sessionPanelSizeWithinContent is derived from. Without this, the
+  // session panel keeps the same content-relative percentage while its
+  // parent's absolute width changes, so its own absolute pixel width would
+  // drift along with the left panel.
   useEffect(() => {
     if (sessionPanelRef.current && (effectiveSelectedSessionId || !eventStreamPanelCollapsed)) {
-      sessionPanelRef.current.resize(effectiveSessionPanelSize);
+      sessionPanelRef.current.resize(sessionPanelSizeWithinContent);
     }
-  }, [effectiveSelectedSessionId, effectiveSessionPanelSize, eventStreamPanelCollapsed]);
+  }, [effectiveSelectedSessionId, sessionPanelSizeWithinContent, eventStreamPanelCollapsed]);
 
   // URL state synchronization - bidirectional sync between URL and state
   useUrlState({
@@ -1337,14 +1378,7 @@ export const App: React.FC<AppProps> = ({
                 }
               }}
             />
-            <Panel
-              id="content-panel"
-              order={2}
-              defaultSize={
-                leftPanelCollapsed ? 100 - leftPanelCollapsedSize : 100 - effectiveCommentsPanelSize
-              }
-              minSize={40}
-            >
+            <Panel id="content-panel" order={2} defaultSize={contentPanelWidthPercent} minSize={40}>
               <PanelGroup
                 id="canvas-session"
                 direction="horizontal"
@@ -1352,13 +1386,25 @@ export const App: React.FC<AppProps> = ({
                 onLayout={(sizes) => {
                   // Persist only user drag updates so panel open/close and
                   // programmatic restores do not overwrite the user's preference.
+                  // sizes[1] is content-relative (react-resizable-panels sizes
+                  // panels relative to their own PanelGroup) — convert back to
+                  // viewport-relative before persisting, matching the frame
+                  // sessionPanelSize is stored in.
                   if (
                     effectiveSelectedSessionId &&
                     rightPanelResizeDraggingRef.current &&
                     sizes.length === 2
                   ) {
+                    const viewportRelativeSize = toViewportRelativePercent(
+                      sizes[1],
+                      contentPanelWidthPercent
+                    );
                     setSessionPanelSize(
-                      clampPercent(sizes[1], sessionPanelMinSize, SESSION_PANEL_MAX_SIZE_PERCENT)
+                      clampPercent(
+                        viewportRelativeSize,
+                        sessionPanelMinSize,
+                        SESSION_PANEL_MAX_SIZE_PERCENT
+                      )
                     );
                   }
                 }}
@@ -1366,7 +1412,9 @@ export const App: React.FC<AppProps> = ({
                 <Panel
                   id="canvas-panel"
                   order={1}
-                  defaultSize={effectiveSelectedSessionId ? 100 - effectiveSessionPanelSize : 100}
+                  defaultSize={
+                    effectiveSelectedSessionId ? 100 - sessionPanelSizeWithinContent : 100
+                  }
                   minSize={20}
                 >
                   <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
@@ -1451,9 +1499,9 @@ export const App: React.FC<AppProps> = ({
                       id="session-panel"
                       order={2}
                       ref={sessionPanelRef}
-                      defaultSize={effectiveSessionPanelSize}
-                      minSize={sessionPanelMinSize}
-                      maxSize={SESSION_PANEL_MAX_SIZE_PERCENT}
+                      defaultSize={sessionPanelSizeWithinContent}
+                      minSize={sessionPanelMinSizeWithinContent}
+                      maxSize={sessionPanelMaxSizeWithinContent}
                     >
                       {effectiveSelectedSessionId ? (
                         <SessionPanel
