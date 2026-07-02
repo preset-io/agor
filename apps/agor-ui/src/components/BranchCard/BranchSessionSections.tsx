@@ -257,6 +257,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   });
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const previousExpandableKeysRef = useRef<Set<React.Key> | null>(null);
+  const manuallyCollapsedKeysRef = useRef<Set<React.Key>>(new Set());
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
@@ -506,17 +507,22 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   useEffect(() => {
     const expandableKeySet = new Set(expandableKeys);
     const previousExpandableKeys = previousExpandableKeysRef.current;
+    const manuallyCollapsedKeys = manuallyCollapsedKeysRef.current;
 
     setExpandedKeys((previousExpandedKeys) => {
       if (!previousExpandableKeys) {
-        return expandableKeys;
+        return expandableKeys.filter((key) => !manuallyCollapsedKeys.has(key));
       }
 
       const nextExpandedKeys = previousExpandedKeys.filter((key) => expandableKeySet.has(key));
       const nextExpandedKeySet = new Set(nextExpandedKeys);
 
       for (const key of expandableKeys) {
-        if (!previousExpandableKeys.has(key) && !nextExpandedKeySet.has(key)) {
+        if (
+          !previousExpandableKeys.has(key) &&
+          !nextExpandedKeySet.has(key) &&
+          !manuallyCollapsedKeys.has(key)
+        ) {
           nextExpandedKeys.push(key);
           nextExpandedKeySet.add(key);
         }
@@ -527,6 +533,27 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
     previousExpandableKeysRef.current = expandableKeySet;
   }, [expandableKeys]);
+
+  const handleSessionTreeExpand = useCallback((keys: React.Key[]) => {
+    setExpandedKeys((previousKeys) => {
+      const nextKeys = [...keys];
+      const previousKeySet = new Set(previousKeys);
+      const nextKeySet = new Set(nextKeys);
+
+      for (const key of previousKeySet) {
+        if (!nextKeySet.has(key)) {
+          manuallyCollapsedKeysRef.current.add(key);
+        }
+      }
+      for (const key of nextKeySet) {
+        if (!previousKeySet.has(key)) {
+          manuallyCollapsedKeysRef.current.delete(key);
+        }
+      }
+
+      return nextKeys;
+    });
+  }, []);
 
   const sessionRowStyle = (session: Session): React.CSSProperties => {
     const isSessionSelected = session.session_id === selectedSessionId;
@@ -709,11 +736,15 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           aria-expanded={expanded}
           onClick={(event) => {
             event.stopPropagation();
-            setExpandedKeys((previousKeys) =>
-              previousKeys.includes(key)
-                ? previousKeys.filter((expandedKey) => expandedKey !== key)
-                : [...previousKeys, key]
-            );
+            setExpandedKeys((previousKeys) => {
+              if (previousKeys.includes(key)) {
+                manuallyCollapsedKeysRef.current.add(key);
+                return previousKeys.filter((expandedKey) => expandedKey !== key);
+              }
+
+              manuallyCollapsedKeysRef.current.delete(key);
+              return [...previousKeys, key];
+            });
           }}
           style={{
             border: 0,
@@ -793,7 +824,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         className="agor-flat-tree"
         treeData={sessionTreeData}
         expandedKeys={expandedKeys}
-        onExpand={(keys) => setExpandedKeys(keys as React.Key[])}
+        onExpand={(keys) => handleSessionTreeExpand(keys as React.Key[])}
         showLine
         switcherIcon={renderTreeSwitcherIcon}
         showIcon={false}

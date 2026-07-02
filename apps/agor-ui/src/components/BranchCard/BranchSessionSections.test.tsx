@@ -277,4 +277,81 @@ describe('BranchSessionSections', () => {
 
     expect(screen.getByText('Child session')).toBeInTheDocument();
   });
+
+  it('keeps a manually collapsed parent collapsed when it loses and regains children', async () => {
+    const parentSession = makeManualSession({
+      session_id: 'session-parent',
+      title: 'Parent session',
+      genealogy: { children: ['session-child-1'] },
+    });
+    const firstChild = makeManualSession({
+      session_id: 'session-child-1',
+      title: 'First child',
+      genealogy: { parent_session_id: 'session-parent', children: [] },
+    });
+    const secondChild = makeManualSession({
+      session_id: 'session-child-2',
+      title: 'Second child',
+      genealogy: { parent_session_id: 'session-parent', children: [] },
+    });
+
+    const { rerender } = renderSections({ sessions: [parentSession, firstChild] });
+
+    expect(screen.getByText('First child')).toBeInTheDocument();
+
+    fireEvent.click(getSessionTreeToggle('Parent session'));
+
+    await waitFor(() => expect(screen.queryByText('First child')).not.toBeInTheDocument());
+
+    rerender(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <AntApp>
+          <BranchSessionSections
+            branch={branch}
+            sessions={[{ ...parentSession, genealogy: { children: [] } }]}
+            userById={new Map<string, User>()}
+            onSessionClick={vi.fn()}
+            onCreateSession={vi.fn()}
+            client={null}
+          />
+        </AntApp>
+      </ConnectionProvider>
+    );
+
+    rerender(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <AntApp>
+          <BranchSessionSections
+            branch={branch}
+            sessions={[
+              { ...parentSession, genealogy: { children: ['session-child-2'] } },
+              secondChild,
+            ]}
+            userById={new Map<string, User>()}
+            onSessionClick={vi.fn()}
+            onCreateSession={vi.fn()}
+            client={null}
+          />
+        </AntApp>
+      </ConnectionProvider>
+    );
+
+    expect(screen.queryByText('Second child')).not.toBeInTheDocument();
+  });
 });
