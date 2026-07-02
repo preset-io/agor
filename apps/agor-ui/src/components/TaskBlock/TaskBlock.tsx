@@ -9,7 +9,12 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
-import type { AgenticToolName, AgorClient, StreamingMessageState } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AgorClient,
+  StreamingMessageState,
+  UpdateUserInput,
+} from '@agor-live/client';
 import {
   type Message,
   MessageRole,
@@ -100,6 +105,10 @@ interface TaskBlockProps {
   /** Opens Settings deep-linked to a provider's Agentic Tools tab. Forwarded
    * to MessageBlock → MissingCredentialPanel for the Connect-AI empty state. */
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
+  /** Saves a per-user credential field. Forwarded to MessageBlock →
+   * MissingCredentialPanel for the Connect-AI empty state's inline
+   * "paste an API key" quick-connect. */
+  onUpdateUser?: (userId: string, updates: UpdateUserInput) => void | Promise<void>;
 }
 
 /**
@@ -371,6 +380,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     isLatestTask = false,
     client = null,
     onOpenAgenticToolSettings,
+    onUpdateUser,
   }) => {
     const { token } = theme.useToken();
 
@@ -656,6 +666,13 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           assistantEmoji={assistantEmoji}
                           client={client}
                           onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+                          onUpdateUser={onUpdateUser}
+                          // NOTE: intentionally distinct from `currentUserId`
+                          // above, which is set to `task.created_by` here for
+                          // message-authorship display — this is the actual
+                          // logged-in viewer, needed for MissingCredentialPanel's
+                          // inline "paste an API key" save target.
+                          viewerUserId={currentUserId}
                         />
                       );
                     }

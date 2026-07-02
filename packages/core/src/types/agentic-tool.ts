@@ -232,22 +232,6 @@ export const AGENTIC_TOOL_DISPLAY_NAMES: Record<AgenticToolName, string> = {
   cursor: 'Cursor SDK',
 };
 
-/**
- * Where a user can create a fresh API key for each tool. Mirrors the `docUrl`
- * values already used per-field in `ApiKeyFields.tsx` — kept here too so
- * non-Settings surfaces (e.g. the Connect-AI empty state) can link out
- * without importing UI-layer field config. Tools with no key concept
- * (opencode) are intentionally absent.
- */
-export const AGENTIC_TOOL_KEY_CREATION_URL: Partial<Record<AgenticToolName, string>> = {
-  'claude-code': 'https://platform.claude.com/settings/keys',
-  'claude-code-cli': 'https://platform.claude.com/settings/keys',
-  codex: 'https://platform.openai.com/api-keys',
-  gemini: 'https://aistudio.google.com/app/apikey',
-  copilot: 'https://github.com/settings/tokens',
-  cursor: 'https://cursor.com/dashboard/integrations',
-};
-
 export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapabilities> = {
   'claude-code': {
     supportsSessionFork: true,

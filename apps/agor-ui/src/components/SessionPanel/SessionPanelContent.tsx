@@ -105,6 +105,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
       onViewLogs,
       onPermissionDecision,
       onOpenAgenticToolSettings,
+      onUpdateUser,
     } = useAppActions();
 
     // Get repo from branch
@@ -327,6 +328,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               branch && isAssistant(branch) ? getAssistantConfig(branch)?.emoji : undefined
             }
             onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+            onUpdateUser={onUpdateUser}
           />
         </div>
 

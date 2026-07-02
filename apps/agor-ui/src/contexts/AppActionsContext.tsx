@@ -4,6 +4,7 @@ import type {
   PermissionScope,
   Session,
   SpawnConfig,
+  UpdateUserInput,
 } from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext } from 'react';
@@ -53,6 +54,12 @@ export interface AppActionsContextValue {
    * "Connect Claude" CTA).
    */
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
+  /**
+   * Saves a per-user profile/credential field (e.g. the Connect-AI empty
+   * state's inline "paste an API key" quick-connect — the same save path
+   * Settings' own API-key fields use).
+   */
+  onUpdateUser?: (userId: string, updates: UpdateUserInput) => void | Promise<void>;
 }
 
 const AppActionsContext = createContext<AppActionsContextValue | undefined>(undefined);

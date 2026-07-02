@@ -19,6 +19,7 @@ import {
   PermissionScope,
   PermissionStatus,
   shortId,
+  type UpdateUserInput,
   type User,
 } from '@agor-live/client';
 import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
@@ -105,6 +106,14 @@ interface MessageBlockProps {
   /** Opens Settings deep-linked to a provider's Agentic Tools tab. Forwarded
    * to MissingCredentialPanel for the Connect-AI empty state's primary CTA. */
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
+  /** Saves a per-user credential field. Forwarded to MissingCredentialPanel
+   * for the Connect-AI empty state's inline "paste an API key" quick-connect. */
+  onUpdateUser?: (userId: string, updates: UpdateUserInput) => void | Promise<void>;
+  /** The actual logged-in viewer's id — deliberately distinct from
+   * `currentUserId` above, which callers (e.g. TaskBlock) may set to a
+   * message's author for avatar/identity display rather than the viewer.
+   * Used as the save target for MissingCredentialPanel's inline quick-connect. */
+  viewerUserId?: string;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -336,6 +345,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   assistantEmoji,
   client = null,
   onOpenAgenticToolSettings,
+  onUpdateUser,
+  viewerUserId,
 }) => {
   const { token } = theme.useToken();
 
@@ -507,7 +518,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       <MissingCredentialPanel
         tool={message.metadata.tool}
         client={client}
+        currentUserId={viewerUserId}
         onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+        onUpdateUser={onUpdateUser}
       />
     );
   }

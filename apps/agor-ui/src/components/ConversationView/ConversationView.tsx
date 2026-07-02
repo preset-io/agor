@@ -16,6 +16,7 @@ import type {
   Message,
   PermissionScope,
   SessionID,
+  UpdateUserInput,
   User,
 } from '@agor-live/client';
 import { shortId, TaskStatus } from '@agor-live/client';
@@ -131,6 +132,12 @@ export interface ConversationViewProps {
    * empty state's primary CTA.
    */
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
+  /**
+   * Saves a per-user credential field. Forwarded to TaskBlock → MessageBlock
+   * → MissingCredentialPanel for the Connect-AI empty state's inline
+   * "paste an API key" quick-connect.
+   */
+  onUpdateUser?: (userId: string, updates: UpdateUserInput) => void | Promise<void>;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -151,6 +158,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     genealogy,
     assistantEmoji,
     onOpenAgenticToolSettings,
+    onUpdateUser,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -512,6 +520,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}
               onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+              onUpdateUser={onUpdateUser}
             />
           ))}
         </div>

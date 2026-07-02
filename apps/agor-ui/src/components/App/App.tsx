@@ -1009,6 +1009,7 @@ export const App: React.FC<AppProps> = ({
         setUserSettingsInitialTool(tool);
         setUserSettingsOpen(true);
       },
+      onUpdateUser,
     }),
     [
       onSendPrompt,
@@ -1024,6 +1025,7 @@ export const App: React.FC<AppProps> = ({
       handleSessionClick,
       handleOpenTerminal,
       canOpenTerminal,
+      onUpdateUser,
     ]
   );
 
