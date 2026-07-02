@@ -1,10 +1,8 @@
 import type { Branch, Session, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { App as AntApp } from 'antd';
 import type React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
-import { BranchSessionSections } from './BranchSessionSections';
 
 vi.mock('antd', async (importOriginal) => {
   const actual = await importOriginal<typeof import('antd')>();
@@ -44,6 +42,11 @@ vi.mock('antd', async (importOriginal) => {
     Tree: MockTree,
   };
 });
+
+const [{ App: AntApp }, { BranchSessionSections }] = await Promise.all([
+  import('antd'),
+  import('./BranchSessionSections'),
+]);
 
 const branch = {
   branch_id: 'branch-1',
