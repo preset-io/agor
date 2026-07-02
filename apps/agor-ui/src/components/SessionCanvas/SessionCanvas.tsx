@@ -173,6 +173,7 @@ interface SessionNodeData {
   parentZoneId?: string;
   zoneName?: string;
   zoneColor?: string;
+  isActiveUrlTarget?: boolean;
 }
 
 // Shared empty array for branches that have no sessions. Without this, a
@@ -197,7 +198,7 @@ const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
         isPinned={data.isPinned}
         zoneName={data.zoneName}
         zoneColor={data.zoneColor}
-        defaultExpanded={!data.compact}
+        defaultExpanded={Boolean(data.isActiveUrlTarget && !data.compact)}
       />
     </div>
   );
@@ -303,7 +304,7 @@ const BranchNode = React.memo(
           zoneName={data.zoneName}
           client={data.client}
           zoneColor={data.zoneColor}
-          defaultExpanded={!data.compact}
+          defaultExpanded={Boolean(data.isActiveUrlTarget && !data.compact)}
         />
       </div>
     );

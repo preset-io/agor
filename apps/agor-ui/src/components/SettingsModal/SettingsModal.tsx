@@ -121,7 +121,7 @@ export interface SettingsModalProps {
   branchStorageConfig?: BranchStorageConfig;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({
+const SettingsModalContent: React.FC<SettingsModalProps> = ({
   open,
   onClose,
   client,
@@ -566,4 +566,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       />
     </Modal>
   );
+};
+
+export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
+  if (!props.open) return null;
+  return <SettingsModalContent {...props} />;
 };

@@ -61,6 +61,11 @@ import { ToolIcon } from '../ToolIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 
 export type BranchSessionSectionsMode = 'card' | 'panel';
+type CollapseKey = string | number;
+type RemoteRelationshipRef = {
+  relationship_type?: string;
+  source_session_id?: string;
+};
 
 export interface BranchSessionSectionsProps {
   branch: Branch;
@@ -259,6 +264,39 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
   const isPanel = mode === 'panel';
+  const [openSectionKeys, setOpenSectionKeys] = useState<CollapseKey[]>(() =>
+    defaultExpanded ? ['sessions'] : []
+  );
+  const isManualSessionsOpen = openSectionKeys.includes('sessions');
+  const isScheduledRunsOpen = openSectionKeys.includes('scheduled-runs');
+  const isGatewaySessionsOpen = openSectionKeys.includes('gateway-sessions');
+  const updateSectionOpenState = useCallback(
+    (sectionKey: CollapseKey, keys: CollapseKey | CollapseKey[]) => {
+      const sectionIsOpen = Array.isArray(keys) ? keys.includes(sectionKey) : keys === sectionKey;
+      setOpenSectionKeys((currentKeys) => {
+        const alreadyOpen = currentKeys.includes(sectionKey);
+        if (sectionIsOpen) return alreadyOpen ? currentKeys : [...currentKeys, sectionKey];
+        return alreadyOpen ? currentKeys.filter((key) => key !== sectionKey) : currentKeys;
+      });
+    },
+    []
+  );
+  const handleManualSessionsChange = useCallback(
+    (keys: CollapseKey | CollapseKey[]) => updateSectionOpenState('sessions', keys),
+    [updateSectionOpenState]
+  );
+  const handleScheduledRunsChange = useCallback(
+    (keys: CollapseKey | CollapseKey[]) => updateSectionOpenState('scheduled-runs', keys),
+    [updateSectionOpenState]
+  );
+  const handleGatewaySessionsChange = useCallback(
+    (keys: CollapseKey | CollapseKey[]) => updateSectionOpenState('gateway-sessions', keys),
+    [updateSectionOpenState]
+  );
+  useEffect(() => {
+    if (!defaultExpanded) return;
+    setOpenSectionKeys((keys) => (keys.includes('sessions') ? keys : [...keys, 'sessions']));
+  }, [defaultExpanded]);
   const peekedIds = peekedSessionIds ?? new Set<string>();
   const trimmedSearchQuery = searchQuery.trim();
   const searchActive = isSessionSearchActive(trimmedSearchQuery);
@@ -275,7 +313,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     return (
       session.remote_surrogate?.relationship ??
       session.remote_relationships?.as_target?.find(
-        (relationship) => relationship.relationship_type === 'remote_create'
+        (relationship: RemoteRelationshipRef) => relationship.relationship_type === 'remote_create'
       )
     );
   }, []);
@@ -285,7 +323,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       if (session.remote_surrogate) return undefined;
 
       const relationshipParentId = session.remote_relationships?.as_target?.find(
-        (relationship) => relationship.relationship_type === 'remote_create'
+        (relationship: RemoteRelationshipRef) => relationship.relationship_type === 'remote_create'
       )?.source_session_id;
       if (relationshipParentId) return relationshipParentId;
 
@@ -457,12 +495,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     [gatewayEnabled, gatewaySessions, manualSessions, scheduledSessions, schedulerEnabled]
   );
   const sortedManualSessions = useMemo(
-    () => sortSessions(manualSessions, sort),
-    [manualSessions, sort]
+    () => (isManualSessionsOpen ? sortSessions(manualSessions, sort) : []),
+    [isManualSessionsOpen, manualSessions, sort]
   );
   const sessionTreeData = useMemo(
-    () => buildSessionTree(sortedManualSessions),
-    [sortedManualSessions]
+    () => (isManualSessionsOpen ? buildSessionTree(sortedManualSessions) : []),
+    [isManualSessionsOpen, sortedManualSessions]
   );
   const searchResults = useMemo(
     () =>
@@ -487,6 +525,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const isSessionFailed = (session: Session): boolean => session.status === SessionStatus.FAILED;
 
   useEffect(() => {
+    if (!isManualSessionsOpen) return;
+
     const collectKeysWithChildren = (nodes: SessionTreeNode[]): React.Key[] => {
       const keys: React.Key[] = [];
       for (const node of nodes) {
@@ -499,7 +539,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     };
 
     setExpandedKeys(collectKeysWithChildren(sessionTreeData));
-  }, [sessionTreeData]);
+  }, [isManualSessionsOpen, sessionTreeData]);
 
   const sessionRowStyle = (session: Session): React.CSSProperties => {
     const isSessionSelected = session.session_id === selectedSessionId;
@@ -715,7 +755,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     );
   };
 
-  const sessionListContent = (
+  const sessionListContent = isManualSessionsOpen ? (
     <ConfigProvider theme={{ components: { Tree: { colorBgContainer: 'transparent' } } }}>
       <Tree
         className="agor-flat-tree"
@@ -730,7 +770,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         titleRender={renderSessionNode}
       />
     </ConfigProvider>
-  );
+  ) : null;
 
   const sessionListHeader = (
     <div
@@ -794,7 +834,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </div>
   );
 
-  const scheduledRunsContent = (
+  const scheduledRunsContent = isScheduledRunsOpen ? (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {scheduledSessions.map((session) => {
         const isActive = isSessionExecuting(session);
@@ -842,7 +882,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         );
       })}
     </div>
-  );
+  ) : null;
 
   const gatewaySessionsHeader = (
     <div
@@ -866,7 +906,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     </div>
   );
 
-  const gatewaySessionsContent = (
+  const gatewaySessionsContent = isGatewaySessionsOpen ? (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       {gatewaySessions.map((session) => {
         const gatewaySource = getGatewaySource(session);
@@ -937,7 +977,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         );
       })}
     </div>
-  );
+  ) : null;
 
   const sessionSearchBar =
     isPanel && activeSessions.length > 0 ? (
@@ -1062,7 +1102,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         <>
           {manualSessions.length > 0 ? (
             <Collapse
-              defaultActiveKey={defaultExpanded ? ['sessions'] : []}
+              activeKey={openSectionKeys}
+              onChange={handleManualSessionsChange}
               items={[
                 {
                   key: 'sessions',
@@ -1082,7 +1123,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
           {schedulerEnabled && scheduledSessions.length > 0 && (
             <Collapse
-              defaultActiveKey={[]}
+              activeKey={openSectionKeys}
+              onChange={handleScheduledRunsChange}
               items={[
                 {
                   key: 'scheduled-runs',
@@ -1100,7 +1142,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 
           {gatewayEnabled && gatewaySessions.length > 0 && (
             <Collapse
-              defaultActiveKey={[]}
+              activeKey={openSectionKeys}
+              onChange={handleGatewaySessionsChange}
               items={[
                 {
                   key: 'gateway-sessions',

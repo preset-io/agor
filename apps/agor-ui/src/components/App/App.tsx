@@ -449,6 +449,38 @@ export const App: React.FC<AppProps> = ({
   const isHomeSurface = (isRootHomePath || pendingHomeNavigation) && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
   const headerBoard = isHomeSurface ? undefined : currentBoard;
+  const wasHomeSurfaceRef = useRef(isHomeSurface);
+  const isLeavingHomeSurface = wasHomeSurfaceRef.current && !isHomeSurface;
+  const [homeExitSidePanelDeferred, setHomeExitSidePanelDeferred] = useState(false);
+  const [homeExitPanelDetailsDeferred, setHomeExitPanelDetailsDeferred] = useState(false);
+
+  useLayoutEffect(() => {
+    if (isLeavingHomeSurface) {
+      setHomeExitSidePanelDeferred(true);
+      setHomeExitPanelDetailsDeferred(true);
+    }
+    wasHomeSurfaceRef.current = isHomeSurface;
+  }, [isLeavingHomeSurface, isHomeSurface]);
+
+  useEffect(() => {
+    if (!homeExitSidePanelDeferred) return;
+    const timer = window.setTimeout(() => {
+      setHomeExitSidePanelDeferred(false);
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [homeExitSidePanelDeferred]);
+
+  useEffect(() => {
+    if (!homeExitPanelDetailsDeferred) return;
+    const timer = window.setTimeout(() => {
+      setHomeExitPanelDetailsDeferred(false);
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [homeExitPanelDetailsDeferred]);
+
+  const handleDeferredDetailsHydrated = useCallback(() => {
+    setHomeExitPanelDetailsDeferred(false);
+  }, []);
 
   // Home is route-authoritative. Do not clear board/session state while the
   // old `/b/...` URL is still active — that creates a transient no-board
@@ -471,7 +503,12 @@ export const App: React.FC<AppProps> = ({
     selectedSessionId,
   ]);
 
-  const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel || isHomeSurface;
+  const leftPanelCollapsed =
+    commentsPanelCollapsed ||
+    suppressLeftPanel ||
+    isHomeSurface ||
+    isLeavingHomeSurface ||
+    homeExitSidePanelDeferred;
 
   // Ref for programmatically controlling the comments panel
   const commentsPanelRef = useRef<ImperativePanelHandle>(null);
@@ -587,6 +624,26 @@ export const App: React.FC<AppProps> = ({
     branchById,
     artifactById,
   });
+
+  const handleHomeBoardClick = useCallback(
+    (boardId: string) => navigation.goToBoard(boardId),
+    [navigation]
+  );
+
+  const handleHomeBranchClick = useCallback(
+    (branchId: string) => navigation.goToBranch(branchId),
+    [navigation]
+  );
+
+  const handleHomeOpenCreateDialog = useCallback(
+    (tab?: 'branch' | 'assistant' | 'board' | 'repository', boardId?: string) => {
+      if (boardId) navigation.goToBoard(boardId);
+      setNewBranchDefaultPosition(null);
+      setCreateDialogDefaultTab(tab || 'assistant');
+      setCreateDialogOpen(true);
+    },
+    [navigation]
+  );
 
   // Wrapper to update board ID (updates both state and URL via hook)
   // Also closes conversation panel when switching to a different board
@@ -974,9 +1031,14 @@ export const App: React.FC<AppProps> = ({
     [currentBoardObjects, branchById]
   );
 
-  // Check if current user is mentioned in active comments
-  const activeComments = mapToArray(commentById).filter(
-    (c: BoardComment) => c.board_id === currentBoardId && !c.resolved
+  // Check if current user is mentioned in active comments. Keep this memoized so
+  // route/UI state changes do not rescan the global comments map.
+  const activeComments = useMemo(
+    () =>
+      mapToArray(commentById).filter(
+        (c: BoardComment) => c.board_id === currentBoardId && !c.resolved
+      ),
+    [commentById, currentBoardId]
   );
 
   const currentUserName = user?.name || user?.email?.split('@')[0] || '';
@@ -1199,6 +1261,8 @@ export const App: React.FC<AppProps> = ({
                   hoveredCommentId={hoveredCommentId}
                   selectedCommentId={selectedCommentId}
                   onCollapse={handleAssistantCollapse}
+                  deferSessionDetails={homeExitPanelDetailsDeferred}
+                  onDeferredDetailsHydrated={handleDeferredDetailsHydrated}
                 />
               )}
             </Panel>
@@ -1266,15 +1330,10 @@ export const App: React.FC<AppProps> = ({
                         connected={connected}
                         recentBoardIds={recentBoardIds}
                         currentUserId={user?.user_id}
-                        onBoardClick={navigation.goToBoard}
-                        onBranchClick={navigation.goToBranch}
+                        onBoardClick={handleHomeBoardClick}
+                        onBranchClick={handleHomeBranchClick}
                         onSessionClick={handleSessionClick}
-                        onOpenCreateDialog={(tab, boardId) => {
-                          if (boardId) navigation.goToBoard(boardId);
-                          setNewBranchDefaultPosition(null);
-                          setCreateDialogDefaultTab(tab);
-                          setCreateDialogOpen(true);
-                        }}
+                        onOpenCreateDialog={handleHomeOpenCreateDialog}
                         onOpenSettings={openSettings}
                       />
                     ) : (
