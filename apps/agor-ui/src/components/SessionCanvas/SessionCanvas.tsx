@@ -2495,6 +2495,19 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             nodesConnectable={false}
             elementsSelectable={true}
             elevateNodesOnSelect={false}
+            // Viewport virtualization. Entering a board from Home is a COLD mount
+            // of the whole graph (Home unmounts SessionCanvas), so without this
+            // every BranchCard and every Sandpack artifact/app node mounts — and
+            // each artifact boots its own Sandpack sandbox (babel transpile +
+            // iframe) — all at once. That is the dominant cost of the ~15s
+            // home→board load on large boards. Culling to on-viewport nodes keeps
+            // the fiber tree (and the offscreen Sandpack boots) proportional to
+            // what actually fits on screen; on a large board fitView clamps to
+            // minZoom (0.1) and the content overflows the window, so most nodes
+            // are offscreen and never mount until scrolled into view. DOM-only
+            // culling: `instance.getNodes()`, fitView, and edge routing all read
+            // node geometry from the store, so logic is unaffected.
+            onlyRenderVisibleElements={true}
             // Two-finger scrolling to pan when in select mode (Figma-style)
             // Also allow click-drag to pan since selection box isn't useful here
             // Disable all panning when actively drawing a zone to prevent interference

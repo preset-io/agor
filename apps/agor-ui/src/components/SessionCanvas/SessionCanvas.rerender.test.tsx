@@ -23,6 +23,9 @@ import SessionCanvas from './SessionCanvas';
 // board-object-derived card node.
 const branchCardRenders = new Map<string, number>();
 let cardNodeRenders = 0;
+// Captures the props last passed to the (mocked) ReactFlow so tests can assert
+// on canvas-level configuration such as viewport virtualization.
+let lastReactFlowProps: { onlyRenderVisibleElements?: boolean } | null = null;
 // SessionCanvas's own render count. The mocked ReactFlow below renders exactly
 // once per SessionCanvas render, so its invocation count is a faithful proxy —
 // it lets us assert the memo+selector boundary protects the WHOLE canvas, not
@@ -74,8 +77,10 @@ vi.mock('reactflow', async () => {
       nodes?: Array<{ id: string; type: string; data: unknown }>;
       nodeTypes?: Record<string, React.ComponentType<{ data: unknown }>>;
       children?: React.ReactNode;
+      onlyRenderVisibleElements?: boolean;
     }) => {
       sessionCanvasRenders += 1;
+      lastReactFlowProps = props;
       return (
         <div data-testid="react-flow">
           {props.nodes?.map((node) => {
@@ -202,8 +207,25 @@ describe('SessionCanvas store-selector re-render isolation', () => {
     branchCardRenders.clear();
     cardNodeRenders = 0;
     sessionCanvasRenders = 0;
+    lastReactFlowProps = null;
     agorStore.setState({ ...EMPTY_MAPS });
     seedStore();
+  });
+
+  it('enables ReactFlow viewport virtualization (onlyRenderVisibleElements)', async () => {
+    // Regression guard for the home→board cold-mount perf fix: without viewport
+    // virtualization, entering a large board from Home mounts every BranchCard
+    // and boots every Sandpack artifact at once (~15s). See SessionCanvas.tsx.
+    render(
+      <ConnectionProvider value={CONNECTION_VALUE}>
+        <SessionCanvas board={board} client={null} branches={BRANCHES} />
+      </ConnectionProvider>
+    );
+
+    await waitFor(() => {
+      expect(lastReactFlowProps).not.toBeNull();
+    });
+    expect(lastReactFlowProps?.onlyRenderVisibleElements).toBe(true);
   });
 
   it('a session:patched for branch A does not re-render branch B card nor the board-object card node', async () => {
