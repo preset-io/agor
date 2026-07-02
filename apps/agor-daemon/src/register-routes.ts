@@ -233,6 +233,7 @@ import {
   deferWithSessionQueueTenantScope,
   runWithSessionQueueTenantScope,
 } from './utils/session-queue-tenant-scope.js';
+import { findHostTaskForSession } from './utils/session-tasks.js';
 import { stopSessionPreserveQueue } from './utils/session-stop.js';
 import {
   sessionCanStartTask,
@@ -820,7 +821,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionsService,
     boardsService,
     branchRepository,
-    usersRepository: _usersRepository,
+    usersRepository,
     sessionsRepository,
     sessionMCPServersService,
     sessionEnvSelectionsService,
@@ -2219,6 +2220,72 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       create: { role: ROLES.MEMBER, action: 'execute prompts' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
+  // Ping endpoint
+  //
+  // A "ping" is a human-to-human note in the conversation stream — Slack-style
+  // `@collaborator what do you think?`. Unlike /sessions/:id/prompt, this path
+  // NEVER creates/queues a Task and NEVER spawns the executor: it only writes
+  // a `type: 'mention'` message via the same messages service used elsewhere,
+  // so the same RBAC hooks (ensureCanPromptInSession) apply. Structurally this
+  // guarantees the ping can't reach the agent — no Task means the executor is
+  // never invoked with it. It's also excluded from the agent-facing
+  // `agor_messages_list` MCP tool (see mcp/tools/messages.ts) so the agent
+  // can't read it back that way either.
+  // ============================================================================
+
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/ping',
+    {
+      async create(data: { text: string; mentioned_user_ids?: string[] }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        const text = data.text?.trim();
+        if (!text) throw new Error('Ping text required');
+        if (!params.user?.user_id) {
+          throw new NotAuthenticated('Authentication required to ping a session');
+        }
+
+        const session = await sessionsService.get(id, params);
+
+        // Resolve mentioned user ids, silently dropping any that don't
+        // resolve to a real user (best-effort — the ping still posts).
+        const requestedMentionIds = Array.from(new Set(data.mentioned_user_ids ?? []));
+        const mentions: UserID[] = [];
+        for (const userId of requestedMentionIds) {
+          const user = await usersRepository.findById(userId);
+          if (user) mentions.push(user.user_id as UserID);
+        }
+
+        // Attach to the session's host task (mirrors the widget_request
+        // pattern) so the transcript renderer — which loads messages by
+        // task_id — picks it up. Sessions with no tasks yet (never prompted)
+        // have no host task; the ping is still stored but won't render until
+        // the session has at least one task.
+        const hostTask = await findHostTaskForSession(app, session.session_id, params);
+
+        const created = await appendSystemMessage({
+          app,
+          db,
+          sessionId: session.session_id,
+          taskId: hostTask?.task_id,
+          content: text,
+          type: 'mention',
+          role: MessageRole.USER,
+          metadata: { mentions },
+          params,
+        });
+
+        return created;
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'ping session collaborators' },
     },
     requireAuth
   );
