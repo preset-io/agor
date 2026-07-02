@@ -14,7 +14,9 @@ import {
   EyeOutlined,
   LinkOutlined,
   MessageOutlined,
+  MinusSquareOutlined,
   PlusOutlined,
+  PlusSquareOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
 import {
@@ -684,6 +686,51 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     );
   };
 
+  const renderTreeSwitcherIcon = useCallback(
+    (nodeProps: {
+      eventKey?: React.Key;
+      expanded?: boolean;
+      isLeaf?: boolean;
+      session?: Session;
+    }) => {
+      const key = nodeProps.eventKey;
+      if (nodeProps.isLeaf || key == null) return null;
+
+      const expanded = Boolean(nodeProps.expanded);
+      const sessionTitle = nodeProps.session
+        ? getSessionDisplayTitle(nodeProps.session, { includeAgentFallback: true })
+        : 'session';
+      const Icon = expanded ? MinusSquareOutlined : PlusSquareOutlined;
+
+      return (
+        <button
+          type="button"
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${sessionTitle}`}
+          aria-expanded={expanded}
+          onClick={(event) => {
+            event.stopPropagation();
+            setExpandedKeys((previousKeys) =>
+              previousKeys.includes(key)
+                ? previousKeys.filter((expandedKey) => expandedKey !== key)
+                : [...previousKeys, key]
+            );
+          }}
+          style={{
+            border: 0,
+            background: 'transparent',
+            padding: 0,
+            lineHeight: 0,
+            cursor: 'pointer',
+            color: 'inherit',
+          }}
+        >
+          <Icon />
+        </button>
+      );
+    },
+    []
+  );
+
   const renderSessionNode = (node: SessionTreeNode) => {
     const session = node.session;
     const isActive = isSessionExecuting(session);
@@ -748,6 +795,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         expandedKeys={expandedKeys}
         onExpand={(keys) => setExpandedKeys(keys as React.Key[])}
         showLine
+        switcherIcon={renderTreeSwitcherIcon}
         showIcon={false}
         blockNode
         selectable={false}

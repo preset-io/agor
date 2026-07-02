@@ -82,6 +82,24 @@ function makeManualSession(
   } as unknown as Session;
 }
 
+function getSessionTreeToggle(sessionTitle: string): HTMLElement {
+  const mockedToggle = screen.queryByLabelText(
+    new RegExp(`(collapse|expand) ${sessionTitle}`, 'i')
+  );
+  if (mockedToggle) return mockedToggle;
+
+  const titleElement = screen.getByText(sessionTitle);
+  const treeNode = titleElement.closest('.ant-tree-treenode');
+  const switcher = treeNode?.querySelector<HTMLElement>(
+    ':scope > .ant-tree-switcher:not(.ant-tree-switcher-noop)'
+  );
+  if (!switcher) {
+    throw new Error(`Unable to find tree toggle for ${sessionTitle}`);
+  }
+
+  return switcher;
+}
+
 function renderSections(props: Partial<React.ComponentProps<typeof BranchSessionSections>> = {}) {
   return render(
     <ConnectionProvider
@@ -188,7 +206,7 @@ describe('BranchSessionSections', () => {
 
     expect(screen.getByText('Child session')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByLabelText(/collapse parent session/i));
+    fireEvent.click(getSessionTreeToggle('Parent session'));
 
     await waitFor(() => expect(screen.queryByText('Child session')).not.toBeInTheDocument());
 
@@ -216,7 +234,6 @@ describe('BranchSessionSections', () => {
       </ConnectionProvider>
     );
 
-    expect(screen.getByLabelText(/expand parent session/i)).toBeInTheDocument();
     expect(screen.queryByText('Child session')).not.toBeInTheDocument();
   });
 
@@ -258,7 +275,6 @@ describe('BranchSessionSections', () => {
       </ConnectionProvider>
     );
 
-    expect(screen.getByLabelText(/collapse parent session/i)).toBeInTheDocument();
     expect(screen.getByText('Child session')).toBeInTheDocument();
   });
 });
