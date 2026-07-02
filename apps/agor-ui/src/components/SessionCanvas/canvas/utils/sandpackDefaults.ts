@@ -56,7 +56,7 @@ export function useStableSandpackProviderInputs({
   );
 
   const stableOptions = useStableComputed(stableValueKey({ entryFile, optionsKey }), () => ({
-    initMode: 'user-visible',
+    initMode: 'user-visible' as const,
     ...(options ?? {}),
     ...(entryFile && !options?.activeFile ? { activeFile: entryFile } : {}),
   }));
