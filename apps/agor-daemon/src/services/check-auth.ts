@@ -33,6 +33,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
+import { isRealAuthSource } from './check-auth-helpers.js';
 
 /** Tools where no API key is required — native CLI/OAuth auth is a real, usable path. */
 const NATIVE_AUTH_TOOLS = new Set<string>(['claude-code', 'codex']);
@@ -304,7 +305,9 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
           // Need at least one auth-indicating field to call it real.
           const hasAuthSignal = !!(
             account &&
-            (account.apiKeySource || account.tokenSource || account.email)
+            (isRealAuthSource(account.apiKeySource) ||
+              isRealAuthSource(account.tokenSource) ||
+              account.email)
           );
           // Surface what the probe actually saw — invaluable when the wizard
           // says "authenticated" but the session can't find creds.
@@ -316,9 +319,9 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
             }`
           );
           if (hasAuthSignal && account) {
-            const method: AuthCheckResult['method'] = account.apiKeySource
+            const method: AuthCheckResult['method'] = isRealAuthSource(account.apiKeySource)
               ? 'api-key'
-              : account.tokenSource
+              : isRealAuthSource(account.tokenSource)
                 ? 'oauth'
                 : 'native';
             const hintParts: string[] = [];
