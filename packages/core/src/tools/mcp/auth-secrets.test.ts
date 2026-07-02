@@ -57,6 +57,40 @@ describe('MCP auth secret helpers', () => {
     });
   });
 
+  it('always redacts OAuth runtime-token fields, even template-looking values', () => {
+    const redacted = redactMCPAuthSecrets({
+      type: 'oauth',
+      oauth_client_secret: '{{ user.env.OAUTH_CLIENT_SECRET }}',
+      oauth_access_token: '{{ user.env.SHOULD_NOT_RESOLVE }}',
+      oauth_refresh_token: '{{ user.env.SHOULD_NOT_RESOLVE }}',
+    });
+
+    // The resolver never substitutes oauth_access_token / oauth_refresh_token,
+    // so a template-looking value there must not escape redaction.
+    expect(redacted).toEqual({
+      type: 'oauth',
+      oauth_client_secret: '{{ user.env.OAUTH_CLIENT_SECRET }}',
+      oauth_access_token: MCP_HEADER_REDACTED_SENTINEL,
+      oauth_refresh_token: MCP_HEADER_REDACTED_SENTINEL,
+    });
+  });
+
+  it('redacts raw non-template secrets in every field', () => {
+    const redacted = redactMCPAuthSecrets({
+      type: 'oauth',
+      oauth_client_secret: 'raw-client-secret',
+      oauth_access_token: 'raw-access',
+      oauth_refresh_token: 'raw-refresh',
+    });
+
+    expect(redacted).toEqual({
+      type: 'oauth',
+      oauth_client_secret: MCP_HEADER_REDACTED_SENTINEL,
+      oauth_access_token: MCP_HEADER_REDACTED_SENTINEL,
+      oauth_refresh_token: MCP_HEADER_REDACTED_SENTINEL,
+    });
+  });
+
   it('restores redacted placeholders from current auth config', () => {
     const restored = restoreRedactedMCPAuthSecrets({
       current: {

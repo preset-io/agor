@@ -5,7 +5,10 @@
  * sentinel restoration cannot drift.
  */
 
-import { containsTemplate } from '../../mcp/template-resolver';
+import {
+  containsTemplate,
+  TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
+} from '../../mcp/template-resolver';
 import type { MCPAuth } from '../../types/mcp';
 import { MCP_HEADER_REDACTED_SENTINEL } from './http-headers';
 
@@ -25,15 +28,24 @@ export function redactMCPAuthSecrets(auth?: MCPAuth): MCPAuth | undefined {
   const redacted: MCPAuth = { ...auth };
   const record = redacted as unknown as Record<string, unknown>;
 
+  const templateResolvable = new Set<string>(TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS);
+
   for (const field of MCP_AUTH_SECRET_FIELDS) {
     const value = redacted[field];
-    // Leave `{{ }}` templates intact: downstream session-scoping resolves them
-    // against the user's env, and the sentinel would defeat that substitution
-    // (yielding a literal `Bearer ••••••••` header the MCP client rejects).
-    if (value !== undefined && !(typeof value === 'string' && containsTemplate(value))) {
-      record[field] = MCP_HEADER_REDACTED_SENTINEL;
-      changed = true;
+    if (value === undefined) continue;
+
+    // Leave `{{ }}` templates intact ONLY in fields the resolver actually
+    // substitutes: downstream session-scoping resolves them against the user's
+    // env, and the sentinel would defeat that substitution (yielding a literal
+    // `Bearer ••••••••` header the MCP client rejects). Fields the resolver
+    // never touches — notably the OAuth runtime secrets `oauth_access_token` /
+    // `oauth_refresh_token` — are always redacted, even template-looking ones.
+    if (templateResolvable.has(field) && typeof value === 'string' && containsTemplate(value)) {
+      continue;
     }
+
+    record[field] = MCP_HEADER_REDACTED_SENTINEL;
+    changed = true;
   }
 
   return changed ? redacted : auth;
