@@ -1,10 +1,10 @@
 import type { AppBoardObject, BoardObject, SandpackTemplate } from '@agor-live/client';
 import { CodeOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
-import { SandpackPreview, SandpackProvider } from '@codesandbox/sandpack-react';
+import { SandpackPreview, SandpackProvider, type SandpackSetup } from '@codesandbox/sandpack-react';
 import { Button, Card, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
-import { withBodyReset } from './utils/sandpackDefaults';
+import { useStableSandpackProviderInputs } from './utils/sandpackDefaults';
 
 export interface AppNodeData {
   objectId: string;
@@ -29,6 +29,12 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
   const { token } = theme.useToken();
   const [interactMode, setInteractMode] = useState(false);
   const iframeContainerRef = useRef<HTMLDivElement>(null);
+  const sandpackInputs = useStableSandpackProviderInputs({
+    template: data.template,
+    files: data.files,
+    dependencies: data.dependencies,
+    entryFile: data.entryFile,
+  });
 
   const handleResize = useCallback(
     (_event: unknown, params: { x: number; y: number; width: number; height: number }) => {
@@ -145,13 +151,10 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
           }}
         >
           <SandpackProvider
-            template={data.template as 'react'}
-            files={withBodyReset(data.files)}
-            customSetup={data.dependencies ? { dependencies: data.dependencies } : undefined}
-            options={{
-              initMode: 'user-visible',
-              ...(data.entryFile ? { activeFile: data.entryFile } : {}),
-            }}
+            template={sandpackInputs.template as 'react'}
+            files={sandpackInputs.files}
+            customSetup={sandpackInputs.customSetup as SandpackSetup | undefined}
+            options={sandpackInputs.options}
           >
             <SandpackPreview
               style={{

@@ -1,3 +1,5 @@
+import { useRef } from 'react';
+
 /**
  * Prepend a body margin reset to Sandpack files.
  * The default React template imports /styles.css, so prepending to it
@@ -10,4 +12,86 @@ export function withBodyReset(files: Record<string, string>): Record<string, str
   const existing = files[key];
   if (existing?.includes(reset)) return files;
   return { ...files, [key]: existing ? `${reset}\n${existing}` : reset };
+}
+
+type SandpackCustomSetup = Record<string, unknown> & {
+  dependencies?: Record<string, string>;
+};
+
+type SandpackOptions = Record<string, unknown> & {
+  activeFile?: string;
+};
+
+export function useStableSandpackProviderInputs({
+  template,
+  files,
+  customSetup,
+  dependencies,
+  entryFile,
+  options,
+}: {
+  template: string;
+  files: Record<string, string>;
+  customSetup?: SandpackCustomSetup;
+  dependencies?: Record<string, string>;
+  entryFile?: string;
+  options?: SandpackOptions;
+}) {
+  const filesKey = stableValueKey(files);
+  const customSetupKey = stableValueKey(customSetup);
+  const dependenciesKey = stableValueKey(dependencies);
+  const optionsKey = stableValueKey(options);
+
+  const stableFiles = useStableComputed(filesKey, () => withBodyReset(files));
+
+  const stableCustomSetup = useStableComputed(
+    stableValueKey({ customSetupKey, dependenciesKey }),
+    () => {
+      const merged = {
+        ...(customSetup ?? {}),
+        ...(dependencies && !customSetup?.dependencies ? { dependencies } : {}),
+      };
+      return Object.keys(merged).length > 0 ? merged : undefined;
+    }
+  );
+
+  const stableOptions = useStableComputed(stableValueKey({ entryFile, optionsKey }), () => ({
+    initMode: 'user-visible',
+    ...(options ?? {}),
+    ...(entryFile && !options?.activeFile ? { activeFile: entryFile } : {}),
+  }));
+
+  return useStableComputed(
+    stableValueKey({ template, filesKey, customSetupKey, dependenciesKey, entryFile, optionsKey }),
+    () => ({
+      template,
+      files: stableFiles,
+      customSetup: stableCustomSetup,
+      options: stableOptions,
+    })
+  );
+}
+
+function useStableComputed<T>(key: string, compute: () => T): T {
+  const ref = useRef<{ key: string; value: T } | null>(null);
+  if (!ref.current || ref.current.key !== key) {
+    ref.current = { key, value: compute() };
+  }
+  return ref.current.value;
+}
+
+function stableValueKey(value: unknown): string {
+  return JSON.stringify(toStableJsonValue(value));
+}
+
+function toStableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(toStableJsonValue);
+  if (!value || typeof value !== 'object') return value;
+
+  const stableObject: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    const entry = (value as Record<string, unknown>)[key];
+    if (entry !== undefined) stableObject[key] = toStableJsonValue(entry);
+  }
+  return stableObject;
 }
