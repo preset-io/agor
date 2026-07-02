@@ -229,6 +229,7 @@ describe('SessionCanvas store-selector re-render isolation', () => {
       expect(cardNodeRenders).toBeGreaterThanOrEqual(1);
     });
 
+    const canvasBaseline = sessionCanvasRenders;
     const branchBBaseline = branchCardRenders.get('B') ?? 0;
     const branchABaseline = branchCardRenders.get('A') ?? 0;
     const cardNodeBaseline = cardNodeRenders;
@@ -242,9 +243,11 @@ describe('SessionCanvas store-selector re-render isolation', () => {
       expect(branchCardRenders.get('A') ?? 0).toBeGreaterThan(branchABaseline);
     });
 
-    // The win: branch B's card and the board-object-derived card node are
-    // untouched because their selector inputs (branch B's session bucket; this
-    // board's board-object array) kept the same reference across the patch.
+    // The win: the session patch is handled inside the affected BranchNode's
+    // per-branch subscription. SessionCanvas itself does not subscribe to the
+    // whole sessionsByBranch map, so React Flow's controlled node array is not
+    // rebuilt for every streaming session patch.
+    expect(sessionCanvasRenders).toBe(canvasBaseline);
     expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
     expect(cardNodeRenders).toBe(cardNodeBaseline);
   });

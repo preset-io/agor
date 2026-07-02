@@ -10,6 +10,7 @@ import type {
   Branch,
   BranchID,
   CardWithType,
+  MCPServer,
   Repo,
   Session,
   SpawnConfig,
@@ -362,6 +363,63 @@ const EMPTY_BOARD_ENTITY_OBJECTS: BoardEntityObject[] = Object.freeze(
   [] as BoardEntityObject[]
 ) as BoardEntityObject[];
 
+interface BranchZoneTriggerModalProps {
+  modal: {
+    branchId: BranchID;
+    zoneName: string;
+    zoneId: string;
+    trigger: ZoneTrigger;
+  };
+  client: AgorClient | null;
+  branches: Branch[];
+  board: Board | null;
+  availableAgents: AgenticToolOption[];
+  mcpServerById: Map<string, MCPServer>;
+  currentUser: User | null;
+  onCancel: () => void;
+  onExecute: React.ComponentProps<typeof ZoneTriggerModal>['onExecute'];
+}
+
+// The zone-trigger modal needs the full sessionsByBranch map to offer source
+// session choices, but that map changes on every streaming session patch. Keep
+// that subscription behind this tiny conditional child so the main canvas does
+// not rebuild every React Flow node while the modal is closed.
+const BranchZoneTriggerModal = React.memo(
+  ({
+    modal,
+    client,
+    branches,
+    board,
+    availableAgents,
+    mcpServerById,
+    currentUser,
+    onCancel,
+    onExecute,
+  }: BranchZoneTriggerModalProps) => {
+    const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+
+    return (
+      <ZoneTriggerModal
+        open={true}
+        onCancel={onCancel}
+        client={client}
+        branchId={modal.branchId}
+        branch={branches.find((wt) => wt.branch_id === modal.branchId)}
+        sessionsByBranch={sessionsByBranch}
+        zoneName={modal.zoneName}
+        trigger={modal.trigger}
+        boardName={board?.name}
+        boardDescription={board?.description}
+        boardCustomContext={board?.custom_context}
+        availableAgents={availableAgents}
+        mcpServerById={mcpServerById}
+        currentUser={currentUser}
+        onExecute={onExecute}
+      />
+    );
+  }
+);
+
 const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   (
     {
@@ -406,7 +464,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Entity state via narrow store subscriptions. Each whole-map selector is a
     // stable module-level reference, so a slice only re-renders the canvas when
     // its own reference changes (idempotent writes are short-circuited upstream).
-    const sessionsByBranch = useAgorStore(selectSessionsByBranch);
     const repoById = useAgorStore(selectRepoById);
     const branchById = useAgorStore(selectBranchById);
     const commentById = useAgorStore(selectCommentById);
@@ -594,13 +651,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const { getBoardObjectNodes, batchUpdateObjectPositions, deleteObject } = useBoardObjects({
       board,
       client,
-      sessionsByBranch,
-      branches,
       boardObjectsForBoard,
       setNodes,
       deletedObjectsRef,
       eraserMode: activeTool === 'eraser',
-      selectedSessionId,
       activeUrlTargetArtifactId,
       onEditMarkdown: handleEditMarkdownNote,
     });
@@ -2785,18 +2839,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         {/* Branch Zone Trigger Modal */}
         {branchTriggerModal && (
-          <ZoneTriggerModal
-            open={true}
+          <BranchZoneTriggerModal
+            modal={branchTriggerModal}
             onCancel={() => setBranchTriggerModal(null)}
             client={client}
-            branchId={branchTriggerModal.branchId}
-            branch={branches.find((wt) => wt.branch_id === branchTriggerModal.branchId)}
-            sessionsByBranch={sessionsByBranch}
-            zoneName={branchTriggerModal.zoneName}
-            trigger={branchTriggerModal.trigger}
-            boardName={board?.name}
-            boardDescription={board?.description}
-            boardCustomContext={board?.custom_context}
+            branches={branches}
+            board={board}
             availableAgents={availableAgents}
             mcpServerById={mcpServerById}
             currentUser={currentUserId ? userById.get(currentUserId) || null : null}

@@ -51,8 +51,6 @@ function renderReorder(board: Board, client: unknown) {
       useBoardObjects({
         board,
         client: client as never,
-        sessionsByBranch: new Map(),
-        branches: [],
         boardObjectsForBoard: [],
         setNodes: vi.fn(),
         deletedObjectsRef: { current: new Set<string>() },
