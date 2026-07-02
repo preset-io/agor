@@ -1266,7 +1266,7 @@ export class CodexPromptService {
             continue;
           }
 
-          if (payloadType === 'task_complete') {
+          if (payloadType === 'task_complete' || payloadType === 'turn_complete') {
             // Terminal completion event from new Codex rollout format.
             // Treat as equivalent to turn.completed.
             threadId = thread.id || '';
@@ -1276,15 +1276,17 @@ export class CodexPromptService {
             const contextUsage =
               latestContextUsage ?? (await extractLatestContextUsageFromRollout(thread.id || ''));
 
-            // Synthesize final assistant text from last_agent_message only when
-            // no text block was already pushed by a preceding agent_message event.
-            // Avoids duplication when both payloads carry the same text.
-            const hasTextContent = currentMessage.some((block) => block.type === 'text');
+            // Synthesize final assistant text from last_agent_message unless
+            // a preceding agent_message event already pushed the same text.
+            // This preserves distinct progress/final messages without duplicating.
             const lastAgentMessage =
               typeof eventPayload?.last_agent_message === 'string'
                 ? eventPayload.last_agent_message
                 : '';
-            if (!hasTextContent && lastAgentMessage) {
+            const hasSameTextContent = currentMessage.some(
+              (block) => block.type === 'text' && block.text === lastAgentMessage
+            );
+            if (lastAgentMessage && !hasSameTextContent) {
               currentMessage.push({ type: 'text', text: lastAgentMessage });
             }
 

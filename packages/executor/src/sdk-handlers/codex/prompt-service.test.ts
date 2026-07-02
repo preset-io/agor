@@ -1320,6 +1320,39 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ).toBe(true);
   });
 
+  it('treats event_msg turn_complete alias as terminal success', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'turn_complete',
+          turn_id: 'turn-v2',
+          last_agent_message: 'Done via turn_complete.',
+        },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const last = emitted.filter((e) => e.type === 'complete').at(-1);
+    const content = last?.content as Array<{ type: string; text?: string }>;
+    expect(content.some((c) => c.type === 'text' && c.text === 'Done via turn_complete.')).toBe(
+      true
+    );
+  });
+
   it('uses last_agent_message from task_complete when no prior agent_message event provided text', async () => {
     const service = makeStreamingService();
     const serviceWithPrivates = service as any;
@@ -1401,6 +1434,44 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     // There should be exactly one text block with finalText, not two.
     const textOccurrences = content.filter((c) => c.type === 'text' && c.text === finalText);
     expect(textOccurrences).toHaveLength(1);
+  });
+
+  it('preserves distinct agent_message and last_agent_message text blocks', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        payload: { type: 'agent_message', message: 'Progress update.', phase: 'running' },
+      },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-final',
+          last_agent_message: 'Final answer.',
+        },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const finalComplete = emitted.filter((e) => e.type === 'complete').at(-1);
+    const content = finalComplete?.content as Array<{ type: string; text?: string }>;
+    expect(content.filter((c) => c.type === 'text').map((c) => c.text)).toEqual([
+      'Progress update.',
+      'Final answer.',
+    ]);
   });
 
   it('carries event_msg token_count context snapshot into the task_complete complete event', async () => {
