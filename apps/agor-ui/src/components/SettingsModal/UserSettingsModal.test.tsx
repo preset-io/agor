@@ -17,6 +17,24 @@ vi.mock('../ApiKeyFields', () => ({
 vi.mock('../AgenticToolConfigForm', async () => {
   const { Form, Radio } = await import('antd');
 
+  const MockModelSelector = ({
+    agenticTool,
+    value,
+    onChange,
+  }: {
+    agenticTool: AgenticToolName;
+    value?: { model?: string };
+    onChange?: (value: { mode: 'alias'; model: string }) => void;
+  }) => (
+    <Radio.Group
+      value={value?.model}
+      onChange={(event) => onChange?.({ mode: 'alias', model: event.target.value })}
+    >
+      <Radio value="claude-sonnet-5">{agenticTool} model claude-sonnet-5</Radio>
+      <Radio value="claude-opus-4-8">{agenticTool} model claude-opus-4-8</Radio>
+    </Radio.Group>
+  );
+
   return {
     AgenticToolConfigForm: ({ agenticTool }: { agenticTool: AgenticToolName }) => (
       <>
@@ -28,31 +46,36 @@ vi.mock('../AgenticToolConfigForm', async () => {
             <Radio value="allow-all">{agenticTool} allow-all</Radio>
           </Radio.Group>
         </Form.Item>
-        {/* Stand-in for ModelSelector so tests can assert the saved model alias. */}
-        <Form.Item name="model" label="Model">
-          <Radio.Group>
-            <Radio value="claude-sonnet-5">{agenticTool} model claude-sonnet-5</Radio>
-            <Radio value="claude-opus-4-8">{agenticTool} model claude-opus-4-8</Radio>
-          </Radio.Group>
+        {/* Stand-in for ModelSelector so tests can assert the saved modelConfig alias. */}
+        <Form.Item name="modelConfig" label="Model">
+          <MockModelSelector agenticTool={agenticTool} />
         </Form.Item>
       </>
     ),
     buildConfigFromFormValues: (
       _tool: AgenticToolName,
-      values: { permissionMode?: string; mcpServerIds?: string[]; model?: string }
+      values: {
+        permissionMode?: string;
+        mcpServerIds?: string[];
+        modelConfig?: { mode?: string; model?: string };
+      }
     ) => ({
       permissionMode: values.permissionMode,
       mcpServerIds: values.mcpServerIds ?? [],
-      ...(values.model ? { model: values.model } : {}),
+      ...(values.modelConfig ? { modelConfig: values.modelConfig } : {}),
     }),
     getClearedFormValues: () => ({ permissionMode: 'default', mcpServerIds: [] }),
     getFormValuesFromConfig: (
       _tool: AgenticToolName,
-      config?: { permissionMode?: string; mcpServerIds?: string[]; model?: string }
+      config?: {
+        permissionMode?: string;
+        mcpServerIds?: string[];
+        modelConfig?: { mode?: string; model?: string };
+      }
     ) => ({
       permissionMode: config?.permissionMode ?? 'default',
       mcpServerIds: config?.mcpServerIds ?? [],
-      model: config?.model,
+      modelConfig: config?.modelConfig,
     }),
   };
 });
@@ -131,7 +154,11 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     // against this stale config and snapped the field back to sonnet-5.
     const user = makeUser({
       default_agentic_config: {
-        'claude-code': { permissionMode: 'default', mcpServerIds: [], model: 'claude-sonnet-5' },
+        'claude-code': {
+          permissionMode: 'default',
+          mcpServerIds: [],
+          modelConfig: { mode: 'alias', model: 'claude-sonnet-5' },
+        },
       },
     });
     const onUpdate = vi.fn(async () => {});
@@ -164,7 +191,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
           'claude-code': {
             permissionMode: 'default',
             mcpServerIds: [],
-            model: 'claude-opus-4-8',
+            modelConfig: { mode: 'alias', model: 'claude-opus-4-8' },
           },
         },
       });
