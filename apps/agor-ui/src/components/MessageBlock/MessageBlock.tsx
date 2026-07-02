@@ -22,7 +22,7 @@ import {
   shortId,
   type User,
 } from '@agor-live/client';
-import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
+import { CommentOutlined, RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Button, Tooltip, theme } from 'antd';
 
@@ -312,6 +312,62 @@ function DaemonRestartNotice({
   );
 }
 
+interface PingNoteProps {
+  message: Message;
+  userById: Map<string, User>;
+}
+
+/**
+ * Renders a `type === 'mention'` message — a human-to-human note posted via
+ * the composer's "Ping" action. Styled to read as a comment between
+ * collaborators, not as agent output: it never enters the agent's context
+ * (see MessageType docs / mcp/tools/messages.ts).
+ */
+function PingNote({ message, userById }: PingNoteProps) {
+  const { token } = theme.useToken();
+  const authorId = message.metadata?.author_user_id;
+  const author = authorId ? userById.get(authorId) : undefined;
+  const mentionIds = message.metadata?.mentions ?? [];
+  const mentionedUsers = mentionIds.map((id) => userById.get(id)).filter((u): u is User => !!u);
+  const text = typeof message.content === 'string' ? message.content : '';
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 8,
+        border: `1px solid ${token.colorInfoBorder}`,
+        borderRadius: token.borderRadiusLG,
+        padding: '8px 12px',
+        margin: '8px 0',
+        background: token.colorInfoBg,
+      }}
+    >
+      <UserIdentityAvatar user={author} size={24} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 600,
+            color: token.colorInfo,
+            marginBottom: 4,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+        >
+          <CommentOutlined />
+          {author?.name || author?.email || 'Someone'} pinged
+          {mentionedUsers.length > 0 &&
+            ` ${mentionedUsers.map((u) => u.name || u.email).join(', ')}`}
+        </div>
+        <MarkdownRenderer content={text} />
+      </div>
+    </div>
+  );
+}
+
 // Memoized: every text block / tool block of every message in the conversation
 // re-rendered on every streaming chunk because TaskBlock's `messages` array
 // gets a fresh reference each tick. Default shallow compare is sufficient
@@ -400,6 +456,12 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         <WidgetBlock message={message} client={client} />
       </div>
     );
+  }
+
+  // Ping — human-to-human note posted via the composer's "Ping" action.
+  // Never sent to the agent (see MessageType docs).
+  if (message.type === 'mention') {
+    return <PingNote message={message} userById={userById} />;
   }
 
   // Check if this is a Task tool prompt or result (agent-generated, but has user role)

@@ -282,6 +282,15 @@ export interface Message {
     mentions?: UserID[];
 
     /**
+     * The user who posted this message. Only populated on `type ===
+     * 'mention'` messages — Message has no general `created_by` column, and
+     * ordinary user/assistant messages are attributed to the session's
+     * current viewer instead. Pings need explicit attribution because any
+     * collaborator with session access can post one.
+     */
+    author_user_id?: UserID;
+
+    /**
      * Marks the user-role message / task as having been authored by the
      * daemon on behalf of the user, rather than typed by a human.
      * Used by widget auto-resume prompts (see `widget_id`) and other

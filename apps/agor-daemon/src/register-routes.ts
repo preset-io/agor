@@ -2277,7 +2277,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           content: text,
           type: 'mention',
           role: MessageRole.USER,
-          metadata: { mentions },
+          metadata: { mentions, author_user_id: params.user.user_id as UserID },
           params,
         });
 
