@@ -1,5 +1,5 @@
 import { CommentOutlined, RobotOutlined, UnorderedListOutlined } from '@ant-design/icons';
-import { Badge, Tooltip, theme } from 'antd';
+import { Badge, theme } from 'antd';
 import type React from 'react';
 import { memo } from 'react';
 import type { BoardAssistantPanelTab } from './BoardAssistantPanel';
@@ -48,36 +48,35 @@ const AssistantPanelRailComponent: React.FC<AssistantPanelRailProps> = ({
     >
       {RAIL_ITEMS.map((item) => {
         const button = (
-          <Tooltip key={item.key} title={item.label} placement="right">
-            <button
-              type="button"
-              aria-label={item.label}
-              onClick={() => onSelectTab(item.key)}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 2,
-                width: 48,
-                padding: '8px 2px',
-                border: 0,
-                borderRadius: token.borderRadius,
-                background: 'transparent',
-                color: token.colorText,
-                cursor: 'pointer',
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background = token.colorFillTertiary;
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
-              }}
-            >
-              <span style={{ fontSize: 18, lineHeight: 1 }}>{item.icon}</span>
-              <span style={{ fontSize: 10, lineHeight: 1.2 }}>{item.label}</span>
-            </button>
-          </Tooltip>
+          <button
+            key={item.key}
+            type="button"
+            aria-label={item.label}
+            onClick={() => onSelectTab(item.key)}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 2,
+              width: 48,
+              padding: '8px 2px',
+              border: 0,
+              borderRadius: token.borderRadius,
+              background: 'transparent',
+              color: token.colorText,
+              cursor: 'pointer',
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.background = token.colorFillTertiary;
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+            }}
+          >
+            <span style={{ fontSize: 18, lineHeight: 1 }}>{item.icon}</span>
+            <span style={{ fontSize: 10, lineHeight: 1.2 }}>{item.label}</span>
+          </button>
         );
 
         if (item.key !== 'comments') return button;
