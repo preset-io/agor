@@ -1393,9 +1393,12 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       emitted.push(event as Record<string, unknown>);
     }
 
-    const finalComplete = emitted.filter((e) => e.type === 'complete').at(-1);
+    const completeEvents = emitted.filter((e) => e.type === 'complete');
+    expect(completeEvents).toHaveLength(1);
+
+    const finalComplete = completeEvents.at(-1);
     const content = finalComplete?.content as Array<{ type: string; text?: string }>;
-    // There should be exactly one text block with finalText, not two
+    // There should be exactly one text block with finalText, not two.
     const textOccurrences = content.filter((c) => c.type === 'text' && c.text === finalText);
     expect(textOccurrences).toHaveLength(1);
   });

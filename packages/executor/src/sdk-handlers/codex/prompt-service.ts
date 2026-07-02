@@ -1262,12 +1262,6 @@ export class CodexPromptService {
                     : '';
             if (text) {
               currentMessage.push({ type: 'text', text });
-              yield {
-                type: 'complete',
-                content: [{ type: 'text', text }],
-                threadId: thread.id || '',
-                resolvedModel,
-              };
             }
             continue;
           }
