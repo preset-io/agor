@@ -62,7 +62,7 @@ describe('GatewayChannelRepository', () => {
       name: 'Test Channel',
       created_by: userId,
       target_branch_id: branch.branch_id as UUID,
-      config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+      config: { bot_token: 'xoxb-test' },
     });
 
     expect(channel.created_by).toBe(userId);
@@ -131,15 +131,12 @@ describe('GatewayChannelRepository', () => {
         enabled: false,
       });
 
-      const withToken = await repo.update(draft.id, {
-        config: { bot_token: 'xoxb-token', app_token: 'xapp-token' },
-      });
+      const withToken = await repo.update(draft.id, { config: { bot_token: 'xoxb-token' } });
       expect(withToken.enabled).toBe(false);
 
       const enabled = await repo.update(draft.id, { enabled: true });
       expect(enabled.enabled).toBe(true);
       expect(enabled.config.bot_token).toBe('xoxb-token');
-      expect(enabled.config.app_token).toBe('xapp-token');
     });
 
     dbTest('enables a channel whose stored tokens are preserved via sentinel', async ({ db }) => {
@@ -152,17 +149,16 @@ describe('GatewayChannelRepository', () => {
         target_branch_id: branch.branch_id as UUID,
         channel_type: 'slack',
         enabled: false,
-        config: { bot_token: 'xoxb-stored', app_token: 'xapp-stored' },
+        config: { bot_token: 'xoxb-stored' },
       });
 
       const enabled = await repo.update(draft.id, {
         enabled: true,
-        config: { bot_token: GATEWAY_REDACTED_SENTINEL, app_token: GATEWAY_REDACTED_SENTINEL },
+        config: { bot_token: GATEWAY_REDACTED_SENTINEL },
       });
 
       expect(enabled.enabled).toBe(true);
       expect(enabled.config.bot_token).toBe('xoxb-stored');
-      expect(enabled.config.app_token).toBe('xapp-stored');
     });
 
     dbTest('rejects enabling a token-less channel with the redaction sentinel', async ({ db }) => {
@@ -200,18 +196,53 @@ describe('GatewayChannelRepository', () => {
         })
       ).rejects.toThrow('missing required secret(s) bot_token');
     });
+
+    dbTest('rejects an enabled Socket Mode channel missing app_token', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+
+      // Socket Mode (inbound) needs app_token for the WebSocket handshake.
+      await expect(
+        repo.create({
+          name: 'Inbound Slack',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'slack',
+          enabled: true,
+          config: { connection_mode: 'socket', bot_token: 'xoxb-token' },
+        })
+      ).rejects.toThrow('missing required secret(s) app_token');
+    });
+
+    dbTest('enables an outbound-only Slack channel with only bot_token', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+
+      // Outbound-only channels post via chat.postMessage and never listen, so
+      // they legitimately need no app_token (no connection_mode set).
+      const channel = await repo.create({
+        name: 'Outbound Slack',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'slack',
+        enabled: true,
+        config: { bot_token: 'xoxb-token', outbound_enabled: true },
+      });
+
+      expect(channel.enabled).toBe(true);
+      expect(channel.config.bot_token).toBe('xoxb-token');
+      expect(channel.config.app_token).toBeUndefined();
+    });
   });
 
   describe('getRequiredSecretFields', () => {
-    it('requires both Slack tokens regardless of connection_mode', () => {
-      // The gateway listener requires app_token unconditionally (there is no
-      // outbound-only Slack mode), so the enable-guard must too.
-      expect(getRequiredSecretFields('slack', {})).toEqual(['bot_token', 'app_token']);
+    it('gates Slack app_token on Socket Mode (inbound) intent', () => {
+      // Outbound-only Slack (no connection_mode) posts via chat.postMessage and
+      // never listens, so it needs only bot_token. Socket Mode (inbound) also
+      // needs app_token for the WebSocket handshake.
+      expect(getRequiredSecretFields('slack', {})).toEqual(['bot_token']);
+      expect(getRequiredSecretFields('slack', { outbound_enabled: true })).toEqual(['bot_token']);
       expect(getRequiredSecretFields('slack', { connection_mode: 'socket' })).toEqual([
-        'bot_token',
-        'app_token',
-      ]);
-      expect(getRequiredSecretFields('slack', { connection_mode: 'events' })).toEqual([
         'bot_token',
         'app_token',
       ]);
