@@ -47,6 +47,7 @@ interface FileResult {
 }
 
 interface UserResult {
+  userId: string;
   name: string;
   email: string;
   type: 'user';
@@ -120,8 +121,18 @@ interface AutocompleteTextareaProps {
   kbLinkTarget?: KbLinkTarget;
   /** Draw attention to the textarea while it is empty. */
   highlightWhenEmpty?: boolean;
+<<<<<<< HEAD
   /** Style overrides for the underlying Ant Design textarea control. */
   textareaStyle?: React.CSSProperties;
+=======
+  /**
+   * Fires when a user is chosen from the `@` autocomplete, with the userId
+   * and the exact `@name` / `@"name"` text inserted into the textarea. Lets
+   * callers (e.g. the ping composer) track mentioned user ids without
+   * re-parsing free text.
+   */
+  onMentionSelect?: (userId: string, insertedText: string) => void;
+>>>>>>> 25fbfd852 (feat(ui): add Ping compose action to session composer)
 }
 
 // Minimum characters required after : before showing emoji picker (like Slack)
@@ -381,7 +392,11 @@ export const AutocompleteTextarea = React.forwardRef<
       kbDocs,
       kbLinkTarget = 'stable-uri',
       highlightWhenEmpty = false,
+<<<<<<< HEAD
       textareaStyle,
+=======
+      onMentionSelect,
+>>>>>>> 25fbfd852 (feat(ui): add Ping compose action to session composer)
     },
     ref
   ) => {
@@ -623,6 +638,7 @@ export const AutocompleteTextarea = React.forwardRef<
         // If no query, show all users (up to MAX_USER_RESULTS)
         if (!searchQuery.trim()) {
           return allUsers.slice(0, MAX_USER_RESULTS).map((u: User) => ({
+            userId: u.user_id,
             name: u.name || u.email,
             email: u.email,
             type: 'user' as const,
@@ -639,6 +655,7 @@ export const AutocompleteTextarea = React.forwardRef<
           )
           .slice(0, MAX_USER_RESULTS)
           .map((u: User) => ({
+            userId: u.user_id,
             name: u.name || u.email,
             email: u.email,
             type: 'user' as const,
@@ -929,8 +946,10 @@ export const AutocompleteTextarea = React.forwardRef<
           // File selection
           insertText = `@${quoteIfNeeded(item.path)}`;
         } else {
-          // User selection
-          insertText = `@${item.name}`;
+          // User selection. Quote multi-word names so the highlight regex
+          // (and any downstream mention parsing) captures the whole name.
+          insertText = `@${quoteIfNeeded(item.name)}`;
+          onMentionSelect?.(item.userId, insertText);
         }
 
         const newValue =
@@ -960,7 +979,7 @@ export const AutocompleteTextarea = React.forwardRef<
           textareaRef.current.current?.focus();
         }, 0);
       },
-      [triggerIndex, value, onChange, kbLinkTarget]
+      [triggerIndex, value, onChange, kbLinkTarget, onMentionSelect]
     );
 
     /**

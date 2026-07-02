@@ -1420,6 +1420,24 @@ function AppContent() {
     }
   };
 
+  // Handle send ping - human-to-human note, never reaches the agent
+  const handleSendPing = async (
+    sessionId: string,
+    text: string,
+    mentionedUserIds?: string[]
+  ): Promise<boolean> => {
+    if (!client) return false;
+
+    try {
+      await client.sessions.ping(sessionId, text, mentionedUserIds);
+      return true;
+    } catch (error) {
+      showError(`Failed to send ping: ${error instanceof Error ? error.message : String(error)}`);
+      console.error('Ping error:', error);
+      return false;
+    }
+  };
+
   // Handle update session
   const handleUpdateSession = async (sessionId: string, updates: Partial<Session>) => {
     const authority = appAuthorityGuard.begin();
@@ -2188,6 +2206,7 @@ function AppContent() {
       onBtwForkSession={handleBtwForkSession}
       onSpawnSession={handleSpawnSession}
       onSendPrompt={handleSendPrompt}
+      onSendPing={handleSendPing}
       onUpdateSession={handleUpdateSession}
       onDeleteSession={handleDeleteSession}
       onCreateBoard={handleCreateBoard}

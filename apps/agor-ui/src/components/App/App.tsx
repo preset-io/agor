@@ -189,6 +189,11 @@ export interface AppProps {
     prompt: string,
     permissionMode?: PermissionMode
   ) => boolean | undefined | Promise<boolean | undefined>;
+  onSendPing?: (
+    sessionId: string,
+    text: string,
+    mentionedUserIds?: string[]
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;
   onCreateBoard?: (board: Partial<Board>) => Promise<Board | null>;
@@ -336,6 +341,7 @@ export const App: React.FC<AppProps> = ({
   onBtwForkSession,
   onSpawnSession,
   onSendPrompt,
+  onSendPing,
   onUpdateSession,
   onDeleteSession,
   onCreateBoard,
@@ -1314,6 +1320,50 @@ export const App: React.FC<AppProps> = ({
   // terminal buttons via `{onOpenTerminal && ...}`.
   const canOpenTerminal = webTerminalEnabled && hasMinimumRole(user?.role, WEB_TERMINAL_MIN_ROLE);
 
+<<<<<<< HEAD
+=======
+  // Memoize AppActionsContext value with useCallback-wrapped handlers
+  const appActionsValue = useMemo(
+    () => ({
+      onSendPrompt,
+      onSendPing,
+      onFork: onForkSession,
+      onBtwFork: onBtwForkSession,
+      onSubsession: onSpawnSession,
+      onUpdateSession,
+      onDeleteSession,
+      onPermissionDecision: handlePermissionDecision,
+      onStartEnvironment,
+      onStopEnvironment,
+      onNukeEnvironment,
+      onViewLogs: (branchId: string) => setLogsModalBranchId(branchId),
+      onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
+      onSessionClick: handleSessionClick,
+      onOpenBranch: (branchId: string, tab?: BranchModalTab) => {
+        setBranchModalBranchId(branchId);
+        setBranchModalTab(tab);
+      },
+      onOpenTerminal: canOpenTerminal ? handleOpenTerminal : undefined,
+    }),
+    [
+      onSendPrompt,
+      onSendPing,
+      onForkSession,
+      onBtwForkSession,
+      onSpawnSession,
+      onUpdateSession,
+      onDeleteSession,
+      handlePermissionDecision,
+      onStartEnvironment,
+      onStopEnvironment,
+      onNukeEnvironment,
+      handleSessionClick,
+      handleOpenTerminal,
+      canOpenTerminal,
+    ]
+  );
+
+>>>>>>> 25fbfd852 (feat(ui): add Ping compose action to session composer)
   // Stabilize the passthrough action props before they reach the memoized
   // SessionCanvas and the AppActions context value. These arrive from
   // AppContent as plain consts (fresh identity on every store-driven
