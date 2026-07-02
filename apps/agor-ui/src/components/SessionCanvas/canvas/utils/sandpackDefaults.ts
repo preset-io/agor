@@ -37,10 +37,11 @@ export function useStableSandpackProviderInputs({
   entryFile?: string;
   options?: SandpackOptions;
 }) {
-  const filesKey = stableValueKey(files);
-  const customSetupKey = stableValueKey(customSetup);
-  const dependenciesKey = stableValueKey(dependencies);
-  const optionsKey = stableValueKey(options);
+  const effectiveDependencies = customSetup?.dependencies ? undefined : dependencies;
+  const filesKey = useStableValueKey(files);
+  const customSetupKey = useStableValueKey(customSetup);
+  const dependenciesKey = useStableValueKey(effectiveDependencies);
+  const optionsKey = useStableValueKey(options);
 
   const stableFiles = useStableComputed(filesKey, () => withBodyReset(files));
 
@@ -49,7 +50,7 @@ export function useStableSandpackProviderInputs({
     () => {
       const merged = {
         ...(customSetup ?? {}),
-        ...(dependencies && !customSetup?.dependencies ? { dependencies } : {}),
+        ...(effectiveDependencies ? { dependencies: effectiveDependencies } : {}),
       };
       return Object.keys(merged).length > 0 ? merged : undefined;
     }
@@ -70,6 +71,14 @@ export function useStableSandpackProviderInputs({
       options: stableOptions,
     })
   );
+}
+
+function useStableValueKey(value: unknown): string {
+  const ref = useRef<{ value: unknown; key: string } | null>(null);
+  if (!ref.current || !Object.is(ref.current.value, value)) {
+    ref.current = { value, key: stableValueKey(value) };
+  }
+  return ref.current.key;
 }
 
 function useStableComputed<T>(key: string, compute: () => T): T {

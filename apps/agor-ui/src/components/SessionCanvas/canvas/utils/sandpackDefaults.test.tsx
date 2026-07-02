@@ -91,6 +91,28 @@ describe('useStableSandpackProviderInputs', () => {
     });
   });
 
+  it('ignores standalone dependency churn when customSetup already owns dependencies', () => {
+    const customSetup = { dependencies: { react: '^18.3.1' } };
+    const { result, rerender } = renderHook(
+      ({ dependencies }) =>
+        useStableSandpackProviderInputs({
+          template: 'react',
+          files: { '/App.tsx': 'export default function App() { return <div />; }' },
+          customSetup,
+          dependencies,
+          entryFile: '/App.tsx',
+        }),
+      { initialProps: { dependencies: { antd: '^6.4.4' } } }
+    );
+    const first = result.current;
+
+    rerender({ dependencies: { antd: '^6.5.0' } });
+
+    expect(result.current).toBe(first);
+    expect(result.current.customSetup).toBe(first.customSetup);
+    expect(result.current.customSetup).toEqual(customSetup);
+  });
+
   it('updates Sandpack props when render-affecting content changes', () => {
     const { result, rerender } = renderHook(
       ({ files, options }) =>
