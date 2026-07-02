@@ -16,6 +16,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useEffect, useMemo, useState } from 'react';
+import { useProgressiveMount } from '../../hooks/useProgressiveMount';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectBranchById,
@@ -206,6 +207,10 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
     [primaryAssistantBranch, sessionsByBranch]
   );
 
+  // The assistant's session tree is one of the heaviest mounts on the board
+  // surface (#1768) — hydrate it right after the canvas shell commits.
+  const sectionsReady = useProgressiveMount({ enabled: true, priority: 2 });
+
   const assistantContent = (() => {
     if (primaryAssistantBranch && primaryAssistantRepo) {
       const assistantConfig = getAssistantConfig(primaryAssistantBranch);
@@ -296,20 +301,27 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
             )}
           </div>
 
-          <BranchSessionSections
-            branch={primaryAssistantBranch}
-            sessions={assistantSessions}
-            userById={userById}
-            currentUserId={currentUserId}
-            selectedSessionId={selectedSessionId}
-            onSessionClick={onSessionClick}
-            onCreateSession={onCreateSession}
-            onForkSession={onForkSession}
-            onSpawnSession={onSpawnSession}
-            onOpenSessionSettings={onOpenSessionSettings}
-            mode="panel"
-            client={client}
-          />
+          {sectionsReady ? (
+            <BranchSessionSections
+              branch={primaryAssistantBranch}
+              sessions={assistantSessions}
+              userById={userById}
+              currentUserId={currentUserId}
+              selectedSessionId={selectedSessionId}
+              onSessionClick={onSessionClick}
+              onCreateSession={onCreateSession}
+              onForkSession={onForkSession}
+              onSpawnSession={onSpawnSession}
+              onOpenSessionSettings={onOpenSessionSettings}
+              mode="panel"
+              client={client}
+            />
+          ) : (
+            // Truthful shell while the session tree waits for its hydration slot.
+            <Typography.Text type="secondary" style={{ fontSize: 12, padding: '8px 0' }}>
+              Sessions ({assistantSessions.length})
+            </Typography.Text>
+          )}
         </div>
       );
     }

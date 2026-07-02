@@ -60,6 +60,9 @@ import {
 import { ToolIcon } from '../ToolIcon';
 import { buildSessionTree, type SessionTreeNode } from './buildSessionTree';
 
+// Stable theme object so the ConfigProvider context value doesn't churn.
+const NO_MOTION_THEME = { token: { motion: false } };
+
 export type BranchSessionSectionsMode = 'card' | 'panel';
 
 export interface BranchSessionSectionsProps {
@@ -1005,7 +1008,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   }
 
   return (
-    <>
+    // Card mode disables antd motion: 30 cards animating their collapse/tree
+    // mounts multiplies board-mount commits (#1768). Panel mode keeps motion.
+    <ConfigProvider theme={isPanel ? undefined : NO_MOTION_THEME}>
       {sessionSearchBar}
       {activeSessions.length === 0 ? (
         <div
@@ -1130,6 +1135,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         client={client}
         userById={userById}
       />
-    </>
+    </ConfigProvider>
   );
 };
