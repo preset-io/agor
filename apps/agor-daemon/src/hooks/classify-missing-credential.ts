@@ -38,6 +38,47 @@
  * resolve, so the hook leaves it untouched; only a genuine no-credential
  * session gets reclassified. This keeps detection fully structural (SDK
  * facts + the same resolution chain used elsewhere), never text-matching.
+ *
+ * Per-provider coverage (audited, not just assumed — see
+ * TOOL_API_KEY_NAMES for which tools this hook even applies to):
+ *
+ * - **claude-code / claude-code-cli**: both pathways confirmed live against
+ *   a genuinely credential-less container — case 1 covers the SDK throwing,
+ *   case 2 covers the zero-token "success" repro this hook was extended for.
+ * - **codex**: throws on missing credential (`codex/prompt-service.ts`
+ *   explicitly detects 401/Unauthorized and throws before any assistant
+ *   message is created) — case 1 covers it; case 2 never triggers since no
+ *   message is ever created on that path. Uses the shared
+ *   `buildAssistantMessageMetadata()` helper for real replies.
+ * - **gemini**: throws during auth setup, before any message is created —
+ *   same shape as codex. Case 1 covers it.
+ * - **copilot**: uses the shared `buildAssistantMessageMetadata()` helper
+ *   (so case 2 WOULD fire if the Copilot SDK ever produced a zero-token
+ *   "success" auth failure), and has no explicit auth-error throw path
+ *   analogous to codex/gemini's — whether Copilot's SDK actually produces a
+ *   throw or a zero-token success on missing credential is UNVERIFIED (no
+ *   live Copilot credential available to test against). Structurally
+ *   covered if it manifests as either shape; flagging as unverified rather
+ *   than claiming confirmed coverage.
+ * - **cursor**: `resolveCursorApiKey()` throws when no `CURSOR_API_KEY` is
+ *   configured at all — case 1 covers that. However `cursor.ts`'s own
+ *   `createAssistantMessage()` does NOT call the shared
+ *   `buildAssistantMessageMetadata()` helper and never sets
+ *   `metadata.tokens` (the Cursor SDK integration doesn't plumb token usage
+ *   at all yet) — so case 2 can never fire for cursor, even in principle.
+ *   Deliberately NOT fixed by forcing `tokens: {input:0, output:0}` onto
+ *   every cursor message: with no real usage data, EVERY cursor reply would
+ *   look zero-token, turning the heuristic into an unconditional (if
+ *   harmless, since resolveApiKey remains the arbiter) trigger rather than a
+ *   meaningful proxy. A real fix needs actual token-usage plumbing from
+ *   `@cursor/sdk` (marked experimental in this codebase) — out of scope
+ *   here. Practical impact today is narrow: an already-configured-but-
+ *   invalid Cursor key that fails without throwing would show raw
+ *   error text instead of this panel.
+ * - **opencode**: NOT a gap — `TOOL_API_KEY_NAMES` has no entry for it by
+ *   design (server-based, no credential concept; `check-auth.ts` always
+ *   reports it authenticated), so `!keyName` below intentionally skips it
+ *   before either case is evaluated.
  */
 
 import { resolveApiKey } from '@agor/core/config';
