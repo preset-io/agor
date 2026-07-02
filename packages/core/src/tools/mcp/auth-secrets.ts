@@ -6,7 +6,7 @@
  */
 
 import {
-  containsTemplate,
+  isFullValueTemplate,
   TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
 } from '../../mcp/template-resolver';
 import type { MCPAuth } from '../../types/mcp';
@@ -34,13 +34,14 @@ export function redactMCPAuthSecrets(auth?: MCPAuth): MCPAuth | undefined {
     const value = redacted[field];
     if (value === undefined) continue;
 
-    // Leave `{{ }}` templates intact ONLY in fields the resolver actually
-    // substitutes: downstream session-scoping resolves them against the user's
-    // env, and the sentinel would defeat that substitution (yielding a literal
-    // `Bearer ••••••••` header the MCP client rejects). Fields the resolver
-    // never touches — notably the OAuth runtime secrets `oauth_access_token` /
-    // `oauth_refresh_token` — are always redacted, even template-looking ones.
-    if (templateResolvable.has(field) && typeof value === 'string' && containsTemplate(value)) {
+    // Leave full-value `{{ }}` templates intact ONLY in fields the resolver
+    // actually substitutes: downstream session-scoping resolves them against the
+    // user's env, and the sentinel would defeat that substitution (yielding a
+    // literal `Bearer ••••••••` header the MCP client rejects). A strict
+    // whole-value check keeps raw secrets that merely contain braces redacted,
+    // and fields the resolver never touches — notably the OAuth runtime secrets
+    // `oauth_access_token` / `oauth_refresh_token` — are always redacted.
+    if (templateResolvable.has(field) && typeof value === 'string' && isFullValueTemplate(value)) {
       continue;
     }
 

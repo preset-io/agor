@@ -121,6 +121,28 @@ export function containsTemplate(value: string): boolean {
 }
 
 /**
+ * Matches a value that is EXACTLY one `{{ ... }}` expression with no surrounding
+ * text and no nested braces. Trimmed, so leading/trailing whitespace is allowed.
+ *
+ * Rejects `secret-{{x}}-tail` and `{{a}}{{b}}`, so a raw secret that merely
+ * contains braces is not mistaken for a template.
+ */
+const FULL_VALUE_TEMPLATE_RE = /^\{\{[^{}]+\}\}$/;
+
+/**
+ * Check if a string is a single, whole-value Handlebars template expression.
+ *
+ * Stricter than {@link containsTemplate}: only values that are entirely one
+ * `{{ ... }}` expression qualify. Redaction uses this to decide whether a
+ * secret-bearing auth field is a template placeholder (safe to preserve for
+ * downstream resolution) versus a raw secret that happens to contain braces
+ * (must be redacted).
+ */
+export function isFullValueTemplate(value: string): boolean {
+  return FULL_VALUE_TEMPLATE_RE.test(value.trim());
+}
+
+/**
  * Resolve templates in a single string value.
  *
  * @param fieldName - Field name (for logging)

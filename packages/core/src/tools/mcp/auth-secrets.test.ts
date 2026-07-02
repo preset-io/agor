@@ -57,6 +57,22 @@ describe('MCP auth secret helpers', () => {
     });
   });
 
+  it('redacts a raw secret that merely contains braces in a resolvable field', () => {
+    const redacted = redactMCPAuthSecrets({
+      type: 'bearer',
+      token: 'sk-live-{{oops}}-tail',
+      api_token: '{{a}}{{b}}',
+    });
+
+    // Only a whole-value `{{ ... }}` template is preserved; partial or multiple
+    // brace expressions are raw secrets and must be redacted.
+    expect(redacted).toEqual({
+      type: 'bearer',
+      token: MCP_HEADER_REDACTED_SENTINEL,
+      api_token: MCP_HEADER_REDACTED_SENTINEL,
+    });
+  });
+
   it('always redacts OAuth runtime-token fields, even template-looking values', () => {
     const redacted = redactMCPAuthSecrets({
       type: 'oauth',

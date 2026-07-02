@@ -3,6 +3,7 @@ import { generateId } from '../lib/ids';
 import type { MCPServer, MCPServerID } from '../types';
 import {
   buildMCPTemplateContextFromEnv,
+  isFullValueTemplate,
   resolveMcpServerEnv,
   resolveMcpServerTemplates,
 } from './template-resolver';
@@ -21,6 +22,20 @@ function createTestServer(overrides: Partial<MCPServer> = {}): MCPServer {
     ...overrides,
   };
 }
+
+describe('isFullValueTemplate', () => {
+  it('accepts a single whole-value template, tolerating surrounding whitespace', () => {
+    expect(isFullValueTemplate('{{ user.env.GARMIN_TOKEN }}')).toBe(true);
+    expect(isFullValueTemplate('  {{user.env.X}}  ')).toBe(true);
+  });
+
+  it('rejects raw values that merely contain braces', () => {
+    expect(isFullValueTemplate('sk-live-{{oops}}-tail')).toBe(false);
+    expect(isFullValueTemplate('{{a}}{{b}}')).toBe(false);
+    expect(isFullValueTemplate('plain-secret')).toBe(false);
+    expect(isFullValueTemplate('{{ outer {{ inner }} }}')).toBe(false);
+  });
+});
 
 describe('buildMCPTemplateContextFromEnv', () => {
   it('should only include user-defined env vars (from AGOR_USER_ENV_KEYS)', () => {
