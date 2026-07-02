@@ -116,7 +116,7 @@ export function buildMCPTemplateContextFromEnv(
 /**
  * Check if a string contains Handlebars template syntax
  */
-function containsTemplate(value: string): boolean {
+export function containsTemplate(value: string): boolean {
   return value.includes('{{') && value.includes('}}');
 }
 

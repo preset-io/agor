@@ -29,6 +29,34 @@ describe('MCP auth secret helpers', () => {
     });
   });
 
+  it('preserves {{ }} auth templates so downstream env resolution can run', () => {
+    const redacted = redactMCPAuthSecrets({
+      type: 'bearer',
+      token: '{{ user.env.GARMIN_TOKEN }}',
+      api_token: '{{ user.env.GARMIN_API_TOKEN }}',
+    });
+
+    expect(redacted).toEqual({
+      type: 'bearer',
+      token: '{{ user.env.GARMIN_TOKEN }}',
+      api_token: '{{ user.env.GARMIN_API_TOKEN }}',
+    });
+  });
+
+  it('redacts raw secret tokens even alongside a template field', () => {
+    const redacted = redactMCPAuthSecrets({
+      type: 'bearer',
+      token: 'gmcp_abc123rawsecret',
+      api_token: '{{ user.env.GARMIN_API_TOKEN }}',
+    });
+
+    expect(redacted).toEqual({
+      type: 'bearer',
+      token: MCP_HEADER_REDACTED_SENTINEL,
+      api_token: '{{ user.env.GARMIN_API_TOKEN }}',
+    });
+  });
+
   it('restores redacted placeholders from current auth config', () => {
     const restored = restoreRedactedMCPAuthSecrets({
       current: {

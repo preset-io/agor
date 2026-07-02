@@ -5,6 +5,7 @@
  * sentinel restoration cannot drift.
  */
 
+import { containsTemplate } from '../../mcp/template-resolver';
 import type { MCPAuth } from '../../types/mcp';
 import { MCP_HEADER_REDACTED_SENTINEL } from './http-headers';
 
@@ -25,7 +26,11 @@ export function redactMCPAuthSecrets(auth?: MCPAuth): MCPAuth | undefined {
   const record = redacted as unknown as Record<string, unknown>;
 
   for (const field of MCP_AUTH_SECRET_FIELDS) {
-    if (redacted[field] !== undefined) {
+    const value = redacted[field];
+    // Leave `{{ }}` templates intact: downstream session-scoping resolves them
+    // against the user's env, and the sentinel would defeat that substitution
+    // (yielding a literal `Bearer ••••••••` header the MCP client rejects).
+    if (value !== undefined && !(typeof value === 'string' && containsTemplate(value))) {
       record[field] = MCP_HEADER_REDACTED_SENTINEL;
       changed = true;
     }
