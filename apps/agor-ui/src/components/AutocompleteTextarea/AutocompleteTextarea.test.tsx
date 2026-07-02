@@ -281,6 +281,39 @@ describe('AutocompleteTextarea', () => {
     expect(kbDocumentsFind).not.toHaveBeenCalled();
   });
 
+  it('quotes multi-word user mentions and fires onMentionSelect', async () => {
+    const onMentionSelect = vi.fn();
+    const userById = new Map([
+      ['user-1', { user_id: 'user-1', name: 'Jane Smith', email: 'jane@example.com' } as never],
+    ]);
+
+    const Harness = () => {
+      const [value, setValue] = useState('');
+      return (
+        <AutocompleteTextarea
+          value={value}
+          onChange={setValue}
+          placeholder="Prompt"
+          client={null}
+          sessionId={null}
+          userById={userById}
+          onMentionSelect={onMentionSelect}
+        />
+      );
+    };
+    render(<Harness />);
+    const textarea = screen.getByPlaceholderText('Prompt') as HTMLTextAreaElement;
+
+    fireEvent.change(textarea, { target: { value: '@Jane', selectionStart: 5 } });
+
+    fireEvent.click(await screen.findByText(/Jane Smith/));
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue('@"Jane Smith" ');
+    });
+    expect(onMentionSelect).toHaveBeenCalledWith('user-1', '@"Jane Smith"');
+  });
+
   it('routes pasted image files through file drop handling with screenshot names', () => {
     const { textarea, onFilesDrop } = renderFilePasteTextarea();
     const imageFile = new File(['image'], 'clipboard.png', { type: 'image/png' });
