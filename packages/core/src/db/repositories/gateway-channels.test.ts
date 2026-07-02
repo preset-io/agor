@@ -5,8 +5,13 @@
  * injectCreatedBy() hook must satisfy before calling create().
  */
 
-import { type BranchID, GATEWAY_REDACTED_SENTINEL, type UUID } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import {
+  type BranchID,
+  GATEWAY_REDACTED_SENTINEL,
+  getRequiredSecretFields,
+  type UUID,
+} from '@agor/core/types';
+import { describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
@@ -57,7 +62,7 @@ describe('GatewayChannelRepository', () => {
       name: 'Test Channel',
       created_by: userId,
       target_branch_id: branch.branch_id as UUID,
-      config: { bot_token: 'xoxb-test' },
+      config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
     });
 
     expect(channel.created_by).toBe(userId);
@@ -126,12 +131,15 @@ describe('GatewayChannelRepository', () => {
         enabled: false,
       });
 
-      const withToken = await repo.update(draft.id, { config: { bot_token: 'xoxb-token' } });
+      const withToken = await repo.update(draft.id, {
+        config: { bot_token: 'xoxb-token', app_token: 'xapp-token' },
+      });
       expect(withToken.enabled).toBe(false);
 
       const enabled = await repo.update(draft.id, { enabled: true });
       expect(enabled.enabled).toBe(true);
       expect(enabled.config.bot_token).toBe('xoxb-token');
+      expect(enabled.config.app_token).toBe('xapp-token');
     });
 
     dbTest('enables a channel whose stored tokens are preserved via sentinel', async ({ db }) => {
@@ -144,16 +152,17 @@ describe('GatewayChannelRepository', () => {
         target_branch_id: branch.branch_id as UUID,
         channel_type: 'slack',
         enabled: false,
-        config: { bot_token: 'xoxb-stored' },
+        config: { bot_token: 'xoxb-stored', app_token: 'xapp-stored' },
       });
 
       const enabled = await repo.update(draft.id, {
         enabled: true,
-        config: { bot_token: GATEWAY_REDACTED_SENTINEL },
+        config: { bot_token: GATEWAY_REDACTED_SENTINEL, app_token: GATEWAY_REDACTED_SENTINEL },
       });
 
       expect(enabled.enabled).toBe(true);
       expect(enabled.config.bot_token).toBe('xoxb-stored');
+      expect(enabled.config.app_token).toBe('xapp-stored');
     });
 
     dbTest('rejects enabling a token-less channel with the redaction sentinel', async ({ db }) => {
@@ -190,6 +199,22 @@ describe('GatewayChannelRepository', () => {
           config: { bot_token: GATEWAY_REDACTED_SENTINEL },
         })
       ).rejects.toThrow('missing required secret(s) bot_token');
+    });
+  });
+
+  describe('getRequiredSecretFields', () => {
+    it('requires both Slack tokens regardless of connection_mode', () => {
+      // The gateway listener requires app_token unconditionally (there is no
+      // outbound-only Slack mode), so the enable-guard must too.
+      expect(getRequiredSecretFields('slack', {})).toEqual(['bot_token', 'app_token']);
+      expect(getRequiredSecretFields('slack', { connection_mode: 'socket' })).toEqual([
+        'bot_token',
+        'app_token',
+      ]);
+      expect(getRequiredSecretFields('slack', { connection_mode: 'events' })).toEqual([
+        'bot_token',
+        'app_token',
+      ]);
     });
   });
 });
