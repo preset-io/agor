@@ -348,9 +348,10 @@ export function useAgorData(
           () =>
             client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
           (list) =>
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, mcpServerById: buildById(list, 'mcp_server_id') }))
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
+            }))
         );
         void runHydration(
           'session-mcp-servers',
@@ -372,9 +373,10 @@ export function useAgorData(
               .service('gateway-channels')
               .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
           (list) =>
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, gatewayChannelById: buildById(list, 'id') }))
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
+            }))
         );
         void runHydration(
           'artifacts',
@@ -407,9 +409,10 @@ export function useAgorData(
               },
             }),
           (list) =>
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, artifactById: buildById(list, 'artifact_id') }))
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              artifactById: buildById(list, 'artifact_id', prev.artifactById),
+            }))
         );
         void runHydration(
           'oauth-status',
@@ -839,7 +842,14 @@ export function useAgorData(
                 for (const [id, session] of prev.sessionById) {
                   if (session.archived && !sessions.has(id)) sessions.set(id, session);
                 }
-                const { sessionById, sessionsByBranch } = buildSessionMaps([...sessions.values()]);
+                // Reconcile against the current maps so a wholesale apply of
+                // already-loaded sessions reuses prior refs (no board-wide
+                // re-render). This is the hot path on a busy workspace: the
+                // full-session hydration lands right as the user enters a board.
+                const { sessionById, sessionsByBranch } = buildSessionMaps([...sessions.values()], {
+                  sessionById: prev.sessionById,
+                  sessionsByBranch: prev.sessionsByBranch,
+                });
                 return { ...prev, sessionById, sessionsByBranch };
               })
           );
@@ -855,9 +865,10 @@ export function useAgorData(
               // are active-only (the snapshot query is archived:false and the
               // handlers never keep an archived branch), so a wholesale replace
               // is complete.
-              agorStore
-                .getState()
-                .applyMaps((prev) => ({ ...prev, branchById: buildById(allBranches, 'branch_id') }))
+              agorStore.getState().applyMaps((prev) => ({
+                ...prev,
+                branchById: buildById(allBranches, 'branch_id', prev.branchById),
+              }))
           );
         }
 
@@ -894,9 +905,10 @@ export function useAgorData(
             ['cards'],
             () => client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
             (allCards) =>
-              agorStore
-                .getState()
-                .applyMaps((prev) => ({ ...prev, cardById: buildById(allCards, 'card_id') }))
+              agorStore.getState().applyMaps((prev) => ({
+                ...prev,
+                cardById: buildById(allCards, 'card_id', prev.cardById),
+              }))
           );
           void runHydration(
             'board-comments',
@@ -908,7 +920,7 @@ export function useAgorData(
             (allComments) =>
               agorStore.getState().applyMaps((prev) => ({
                 ...prev,
-                commentById: buildById(allComments, 'comment_id'),
+                commentById: buildById(allComments, 'comment_id', prev.commentById),
               }))
           );
         }
@@ -925,9 +937,10 @@ export function useAgorData(
             ['boards'],
             () => client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
             (allBoards) =>
-              agorStore
-                .getState()
-                .applyMaps((prev) => ({ ...prev, boardById: buildById(allBoards, 'board_id') }))
+              agorStore.getState().applyMaps((prev) => ({
+                ...prev,
+                boardById: buildById(allBoards, 'board_id', prev.boardById),
+              }))
           );
         }
 

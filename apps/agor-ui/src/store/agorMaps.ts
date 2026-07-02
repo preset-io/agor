@@ -115,15 +115,46 @@ export function replaceIfChanged<T extends object>(
   return next;
 }
 
+// Reconcile a freshly-built id-map against the previous one: reuse the prior
+// entity reference for every row that is value-equal, and return the PRIOR Map
+// object itself when nothing changed at all. Without this, a wholesale rebuild
+// (the background "load whole store" hydration, first-paint apply, reconnect
+// resync) mints brand-new references for every row even when the data is
+// identical — which invalidates the top-level store subscriptions and every
+// per-entity memo/selector, re-rendering the whole board for no reason. This
+// makes a wholesale apply of already-loaded data a true no-op for subscribers.
+export function reconcileByIdMap<T extends object>(
+  prev: Map<string, T> | undefined,
+  next: Map<string, T>
+): Map<string, T> {
+  if (!prev || prev.size === 0) return next;
+  let changed = prev.size !== next.size;
+  for (const [id, value] of next) {
+    const prior = prev.get(id);
+    if (prior !== undefined && (prior === value || shallowEqualEntity(prior, value))) {
+      // Reuse the prior reference so downstream `===`/memo checks stay quiet.
+      if (prior !== value) next.set(id, prior);
+    } else {
+      changed = true;
+    }
+  }
+  return changed ? next : prev;
+}
+
 // Build a plain `byId` Map from a fetched list. Used by the background
 // (non-gated) fetches whose results land via their own setter rather than the
-// single atomic map-apply the essential gate performs.
-export function buildById<T>(list: readonly T[], key: keyof T): Map<string, T> {
+// single atomic map-apply the essential gate performs. Pass `prev` to preserve
+// references for unchanged rows (see `reconcileByIdMap`).
+export function buildById<T extends object>(
+  list: readonly T[],
+  key: keyof T,
+  prev?: Map<string, T>
+): Map<string, T> {
   const map = new Map<string, T>();
   for (const item of list) {
     map.set(item[key] as unknown as string, item);
   }
-  return map;
+  return reconcileByIdMap(prev, map);
 }
 
 // Group session-MCP relationship rows by session_id.
@@ -176,7 +207,10 @@ export function buildBoardObjectMaps(list: readonly BoardEntityObject[]): {
 // can open the drawer) but are kept OUT of the branch buckets (so they never
 // reappear as branch/board cards). Cross-branch remote-created sessions are
 // projected as muted surrogate children under the creating session's branch.
-export function buildSessionMaps(sessionsList: readonly Session[]): {
+export function buildSessionMaps(
+  sessionsList: readonly Session[],
+  prev?: { sessionById: Map<string, Session>; sessionsByBranch: Map<string, Session[]> }
+): {
   sessionById: Map<string, Session>;
   sessionsByBranch: Map<string, Session[]>;
 } {
@@ -215,7 +249,40 @@ export function buildSessionMaps(sessionsList: readonly Session[]): {
     }
   }
 
-  return { sessionById: sessionsById, sessionsByBranch: sessionsByBranchId };
+  if (!prev || (prev.sessionById.size === 0 && prev.sessionsByBranch.size === 0)) {
+    return { sessionById: sessionsById, sessionsByBranch: sessionsByBranchId };
+  }
+
+  // Reuse prior references for unchanged sessions and unchanged per-branch
+  // buckets so a wholesale rebuild of already-loaded data doesn't re-render the
+  // whole board. Sessions are reconciled first; buckets then remap to the
+  // reconciled refs before comparing element-wise against the prior bucket.
+  const sessionById = reconcileByIdMap(prev.sessionById, sessionsById);
+  let bucketsChanged = prev.sessionsByBranch.size !== sessionsByBranchId.size;
+  for (const [branchId, bucket] of sessionsByBranchId) {
+    let remapped = bucket;
+    for (let i = 0; i < bucket.length; i++) {
+      const canonical = sessionById.get(bucket[i].session_id);
+      if (canonical && canonical !== bucket[i]) {
+        if (remapped === bucket) remapped = bucket.slice();
+        remapped[i] = canonical;
+      }
+    }
+    const prior = prev.sessionsByBranch.get(branchId);
+    if (
+      prior &&
+      prior.length === remapped.length &&
+      prior.every((session, i) => session === remapped[i])
+    ) {
+      sessionsByBranchId.set(branchId, prior); // reuse prior array ref
+    } else {
+      sessionsByBranchId.set(branchId, remapped);
+      bucketsChanged = true;
+    }
+  }
+  const sessionsByBranch = bucketsChanged ? sessionsByBranchId : prev.sessionsByBranch;
+
+  return { sessionById, sessionsByBranch };
 }
 
 export function removeBoardObjectFromBoardBucket(
