@@ -58,11 +58,21 @@ function schedulePump(): void {
 export function useProgressiveMount({
   enabled,
   priority = 0,
+  resetKey = 'default',
 }: {
   enabled: boolean;
   priority?: number;
+  /**
+   * Logical surface key for this mount request. Changing it replays deferral
+   * for reused component instances (for example, same branch node across boards).
+   */
+  resetKey?: string | number | null;
 }): boolean {
-  const [ready, setReady] = useState(!enabled);
+  const [state, setState] = useState(() => ({ ready: !enabled, resetKey }));
+
+  // If the key changed, compute the visible value from the new key immediately
+  // instead of rendering one frame with the previous board's granted state.
+  const ready = state.resetKey === resetKey ? state.ready : !enabled;
 
   // Enqueue-time priority via ref: a later priority flip must not re-enqueue
   // (losing queue position) or re-run the effect.
@@ -70,13 +80,28 @@ export function useProgressiveMount({
   priorityRef.current = priority;
 
   useEffect(() => {
-    if (ready) return;
+    if (state.resetKey !== resetKey) {
+      setState({ ready: !enabled, resetKey });
+      return;
+    }
+
+    if (!enabled) {
+      if (!state.ready) setState({ ready: true, resetKey });
+      return;
+    }
+
+    if (state.ready) return;
+
     let cancelled = false;
     const entry: PendingMount = {
       priority: priorityRef.current,
       seq: seqCounter++,
       fire: () => {
-        if (!cancelled) setReady(true);
+        if (!cancelled) {
+          setState((current) =>
+            current.resetKey === resetKey ? { ready: true, resetKey } : current
+          );
+        }
       },
     };
     pending.push(entry);
@@ -85,7 +110,7 @@ export function useProgressiveMount({
       cancelled = true;
       pending = pending.filter((e) => e !== entry);
     };
-  }, [ready]);
+  }, [enabled, resetKey, state.ready, state.resetKey]);
 
   return ready;
 }

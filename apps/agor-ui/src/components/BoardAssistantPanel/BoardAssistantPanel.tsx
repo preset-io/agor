@@ -209,7 +209,11 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
 
   // The assistant's session tree is one of the heaviest mounts on the board
   // surface (#1768) — hydrate it right after the canvas shell commits.
-  const sectionsReady = useProgressiveMount({ enabled: true, priority: 2 });
+  const sectionsReady = useProgressiveMount({
+    enabled: true,
+    priority: 1,
+    resetKey: board?.board_id ?? 'no-board',
+  });
 
   const assistantContent = (() => {
     if (primaryAssistantBranch && primaryAssistantRepo) {

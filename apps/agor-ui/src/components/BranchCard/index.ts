@@ -4,3 +4,4 @@ export type {
   BranchSessionSectionsProps,
 } from './BranchSessionSections';
 export { BranchSessionSections } from './BranchSessionSections';
+export { estimateBranchSessionSectionsHeight } from './branchCardLayout';

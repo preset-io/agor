@@ -27,6 +27,7 @@ import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
 import { BranchSessionSections } from './BranchSessionSections';
+import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
@@ -66,6 +67,7 @@ interface BranchCardProps {
   defaultExpanded?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
   panelMode?: boolean; // Render inside side panel instead of as a draggable canvas card
+  progressiveMountKey?: string | number | null;
   /** True when this branch is the deep-link target of the current URL
    *  (`/w/<branchShort>/`). Folded together with `isFocused` (a session
    *  is open in the drawer) into a unified "selected" state — rendered
@@ -101,19 +103,27 @@ const BranchCardComponent = ({
   defaultExpanded = true,
   inPopover = false,
   panelMode = false,
+  progressiveMountKey,
   isActiveUrlTarget = false,
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
 
+  const branchBoardId = (branch as { board_id?: string | null }).board_id;
+
   // Canvas cards hydrate their session sections in chunks after the board
   // shell commits (#1768); panel/popover surfaces render a single card, so
   // they mount immediately.
   const sectionsReady = useProgressiveMount({
     enabled: !inPopover && !panelMode,
-    priority: isActiveUrlTarget || sessions.some((s) => s.session_id === selectedSessionId) ? 1 : 0,
+    priority: isActiveUrlTarget || sessions.some((s) => s.session_id === selectedSessionId) ? 2 : 0,
+    resetKey: progressiveMountKey ?? branchBoardId ?? 'unassigned',
   });
+  const sessionShellMinHeight = useMemo(
+    () => estimateBranchSessionSectionsHeight(sessions, { defaultExpanded }),
+    [defaultExpanded, sessions]
+  );
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
@@ -570,7 +580,10 @@ const BranchCardComponent = ({
       )}
 
       {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
-      <div className={REACT_FLOW_NO_DRAG_CLASS}>
+      <div
+        className={REACT_FLOW_NO_DRAG_CLASS}
+        style={sectionsReady ? undefined : { minHeight: sessionShellMinHeight }}
+      >
         {sectionsReady ? (
           <BranchSessionSections
             branch={branch}
