@@ -82,9 +82,46 @@ export async function createExecutorClient(
   // while dropping custom JWT claims from subsequent service params.
   (client as AgorClient & { executorSessionToken?: string }).executorSessionToken = sessionToken;
 
+  let reauthenticating = false;
+  const reauthenticateSocket = async (label: string) => {
+    if (reauthenticating) return;
+    reauthenticating = true;
+    try {
+      // Try reAuthenticate first — uses stored credentials from MemoryStorage
+      await client.reAuthenticate(true);
+      console.log(`[executor] Re-authenticated successfully after ${label}`);
+    } catch {
+      // Fallback: authenticate with raw JWT if storage-based re-auth fails
+      try {
+        await client.authenticate({
+          strategy: 'jwt',
+          accessToken: sessionToken,
+        });
+        console.log(`[executor] Re-authenticated with JWT fallback after ${label}`);
+      } catch (error) {
+        console.error(`[executor] Re-authentication failed after ${label}:`, error);
+      }
+    } finally {
+      reauthenticating = false;
+    }
+  };
+
   // Connect the socket
   client.io.on('disconnect', (reason: string) => {
     logSocketEvent('disconnected', reason);
+
+    if (reason === 'io server disconnect') {
+      // Socket.IO intentionally disables automatic reconnect after a server-
+      // initiated namespace disconnect. In practice, long executor tasks can
+      // see this at the same ~15-minute boundary as proxy transport rotation.
+      // Treat it as recoverable for executor lifetimes and explicitly reopen
+      // the socket; the one-shot connect handler below re-authenticates the new
+      // socket because Manager "reconnect" is not emitted for this path.
+      client.io.once('connect', () => {
+        void reauthenticateSocket('server disconnect reconnect');
+      });
+      client.io.connect();
+    }
   });
 
   client.io.on('connect_error', (error: Error) => {
@@ -143,22 +180,7 @@ export async function createExecutorClient(
   // client.io is the Socket; client.io.io is the Manager.
   client.io.io.on('reconnect', async (attemptNumber: number) => {
     logSocketEvent('reconnected', `attempt ${attemptNumber}; re-authenticating`);
-    try {
-      // Try reAuthenticate first — uses stored credentials from MemoryStorage
-      await client.reAuthenticate(true);
-      console.log('[executor] Re-authenticated successfully after reconnect');
-    } catch {
-      // Fallback: authenticate with raw JWT if storage-based re-auth fails
-      try {
-        await client.authenticate({
-          strategy: 'jwt',
-          accessToken: sessionToken,
-        });
-        console.log('[executor] Re-authenticated with JWT fallback after reconnect');
-      } catch (error) {
-        console.error('[executor] Re-authentication failed after reconnect:', error);
-      }
-    }
+    await reauthenticateSocket('reconnect');
   });
 
   return client;
