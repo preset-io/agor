@@ -54,9 +54,7 @@ export async function createExecutorClient(
   const logSocketEvent = (event: string, detail?: unknown) => {
     const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
     const suffix =
-      detail === undefined
-        ? ''
-        : `: ${detail instanceof Error ? detail.message : String(detail)}`;
+      detail === undefined ? '' : `: ${detail instanceof Error ? detail.message : String(detail)}`;
     console.log(`[executor] Socket ${event} after ${elapsedSeconds}s${suffix}`);
   };
 
