@@ -1,7 +1,12 @@
 import type { AgorExecutionSettings } from './types';
 
 export const EXECUTOR_HEARTBEAT_DEFAULT_INTERVAL_MS = 10_000;
-export const EXECUTOR_HEARTBEAT_MIN_STALE_AFTER_MS = 30_000;
+// Minimum grace period before a stale heartbeat is even considered for failure.
+// Kept forgiving (90s) so a busy-but-alive executor under heavy git/build/test
+// work or host load is not mistaken for a crash. The daemon additionally probes
+// the executor process's liveness before failing, so this is a floor, not the
+// sole safeguard. Fully overridable via `execution.executor_heartbeat.stale_after_ms`.
+export const EXECUTOR_HEARTBEAT_MIN_STALE_AFTER_MS = 90_000;
 export const EXECUTOR_HEARTBEAT_DEFAULT_CALLBACK_TIMEOUT_MS = 3_000;
 
 export interface ResolvedExecutorHeartbeatConfig {
