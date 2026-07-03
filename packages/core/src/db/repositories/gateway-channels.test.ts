@@ -62,7 +62,7 @@ describe('GatewayChannelRepository', () => {
       name: 'Test Channel',
       created_by: userId,
       target_branch_id: branch.branch_id as UUID,
-      config: { bot_token: 'xoxb-test' },
+      config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
     });
 
     expect(channel.created_by).toBe(userId);
