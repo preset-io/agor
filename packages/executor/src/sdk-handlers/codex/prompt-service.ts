@@ -1291,7 +1291,7 @@ export class CodexPromptService {
             }
 
             codexDebug(
-              `✅ [Codex] task_complete event_msg received for session ${shortId(sessionId)}`
+              `✅ [Codex] terminal event_msg (${payloadType}) received for session ${shortId(sessionId)}`
             );
 
             yield {
@@ -1516,11 +1516,11 @@ export class CodexPromptService {
 
       // If we reach here without returning, the stream ended.
       // A user-requested stop is a valid early exit; anything else means Codex
-      // exited without emitting a terminal event (turn.completed / task_complete),
+      // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
         throw new Error(
-          'Codex stream ended without a terminal completion event (turn.completed or task_complete). ' +
+          'Codex stream ended without a terminal completion event (turn.completed, task_complete, or turn_complete). ' +
             'The Codex process may have exited unexpectedly (check the executor logs for exit code 0 clues). ' +
             'This is usually resolved by retrying the prompt; if it persists, restart the session.'
         );
