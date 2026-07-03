@@ -131,12 +131,16 @@ describe('GatewayChannelRepository', () => {
         enabled: false,
       });
 
-      const withToken = await repo.update(draft.id, { config: { bot_token: 'xoxb-token' } });
+      // Unconfigured Slack defaults to inbound, so it needs app_token too.
+      const withToken = await repo.update(draft.id, {
+        config: { bot_token: 'xoxb-token', app_token: 'xapp-token' },
+      });
       expect(withToken.enabled).toBe(false);
 
       const enabled = await repo.update(draft.id, { enabled: true });
       expect(enabled.enabled).toBe(true);
       expect(enabled.config.bot_token).toBe('xoxb-token');
+      expect(enabled.config.app_token).toBe('xapp-token');
     });
 
     dbTest('enables a channel whose stored tokens are preserved via sentinel', async ({ db }) => {
@@ -149,16 +153,17 @@ describe('GatewayChannelRepository', () => {
         target_branch_id: branch.branch_id as UUID,
         channel_type: 'slack',
         enabled: false,
-        config: { bot_token: 'xoxb-stored' },
+        config: { bot_token: 'xoxb-stored', app_token: 'xapp-stored' },
       });
 
       const enabled = await repo.update(draft.id, {
         enabled: true,
-        config: { bot_token: GATEWAY_REDACTED_SENTINEL },
+        config: { bot_token: GATEWAY_REDACTED_SENTINEL, app_token: GATEWAY_REDACTED_SENTINEL },
       });
 
       expect(enabled.enabled).toBe(true);
       expect(enabled.config.bot_token).toBe('xoxb-stored');
+      expect(enabled.config.app_token).toBe('xapp-stored');
     });
 
     dbTest('rejects enabling a token-less channel with the redaction sentinel', async ({ db }) => {
@@ -236,16 +241,20 @@ describe('GatewayChannelRepository', () => {
   });
 
   describe('getRequiredSecretFields', () => {
-    it('gates Slack app_token on Socket Mode (inbound) intent', () => {
-      // Outbound-only Slack (no connection_mode) posts via chat.postMessage and
-      // never listens, so it needs only bot_token. Socket Mode (inbound) also
-      // needs app_token for the WebSocket handshake.
-      expect(getRequiredSecretFields('slack', {})).toEqual(['bot_token']);
+    it('requires app_token unless the channel explicitly opts into outbound-only', () => {
+      // app_token is required for any inbound/Socket-Mode channel (needs it to
+      // listen) AND for unconfigured channels (default to inbound). It is NOT
+      // required only for EXPLICIT outbound-only (outbound_enabled and not
+      // Socket Mode) — a socket+outbound channel is still inbound.
       expect(getRequiredSecretFields('slack', { outbound_enabled: true })).toEqual(['bot_token']);
+      expect(getRequiredSecretFields('slack', {})).toEqual(['bot_token', 'app_token']);
       expect(getRequiredSecretFields('slack', { connection_mode: 'socket' })).toEqual([
         'bot_token',
         'app_token',
       ]);
+      expect(
+        getRequiredSecretFields('slack', { outbound_enabled: true, connection_mode: 'socket' })
+      ).toEqual(['bot_token', 'app_token']);
     });
   });
 });

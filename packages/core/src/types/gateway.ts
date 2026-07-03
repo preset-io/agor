@@ -65,8 +65,10 @@ export function getRequiredSecretFields(
   config: Record<string, unknown>
 ): string[] {
   switch (channelType) {
-    case 'slack':
-      return ['bot_token', ...(config.connection_mode === 'socket' ? ['app_token'] : [])];
+    case 'slack': {
+      const outboundOnly = config.outbound_enabled === true && config.connection_mode !== 'socket';
+      return outboundOnly ? ['bot_token'] : ['bot_token', 'app_token'];
+    }
     case 'github':
       return ['private_key'];
     case 'teams':
