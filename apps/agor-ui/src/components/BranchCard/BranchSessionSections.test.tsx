@@ -7,7 +7,7 @@ import { ConnectionProvider } from '../../contexts/ConnectionContext';
 vi.mock('antd', async (importOriginal) => {
   const actual = await importOriginal<typeof import('antd')>();
 
-  const MockTree = ({ treeData, expandedKeys = [], onExpand, titleRender }: any) => {
+  const MockTree = ({ treeData, expandedKeys = [], onExpand, switcherIcon, titleRender }: any) => {
     const expandedKeySet = new Set(expandedKeys);
 
     const renderNodes = (nodes: any[]) =>
@@ -19,15 +19,23 @@ vi.mock('antd', async (importOriginal) => {
           : [...expandedKeys, node.key];
         const title = titleRender ? titleRender(node) : node.title;
 
+        const renderedSwitcher = switcherIcon?.({
+          eventKey: node.key,
+          expanded,
+          isLeaf: !hasChildren,
+          session: node.session,
+        });
+
         return (
           <div key={node.key}>
-            {hasChildren && (
-              <button
-                type="button"
-                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.session.title}`}
-                onClick={() => onExpand?.(nextExpandedKeys)}
-              />
-            )}
+            {hasChildren &&
+              (renderedSwitcher ?? (
+                <button
+                  type="button"
+                  aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.session.title}`}
+                  onClick={() => onExpand?.(nextExpandedKeys)}
+                />
+              ))}
             {title}
             {hasChildren && expanded && <div>{renderNodes(node.children)}</div>}
           </div>
@@ -237,6 +245,68 @@ describe('BranchSessionSections', () => {
     expect(screen.queryByText('Child session')).not.toBeInTheDocument();
   });
 
+  it('keeps a manually collapsed nested ancestor collapsed after selecting another session', async () => {
+    const rootSession = makeManualSession({
+      session_id: 'session-root',
+      title: 'Root session',
+      genealogy: { children: ['session-nested-parent'] },
+    });
+    const nestedParentSession = makeManualSession({
+      session_id: 'session-nested-parent',
+      title: 'Nested parent',
+      genealogy: { parent_session_id: 'session-root', children: ['session-nested-child'] },
+    });
+    const nestedChildSession = makeManualSession({
+      session_id: 'session-nested-child',
+      title: 'Nested child',
+      genealogy: { parent_session_id: 'session-nested-parent', children: [] },
+    });
+    const otherSession = makeManualSession({
+      session_id: 'session-other',
+      title: 'Other session',
+    });
+    const sessions = [rootSession, nestedParentSession, nestedChildSession, otherSession];
+
+    const { rerender } = renderSections({
+      sessions,
+      selectedSessionId: 'session-root',
+    });
+
+    expect(screen.getByText('Nested child')).toBeInTheDocument();
+
+    fireEvent.click(getSessionTreeToggle('Nested parent'));
+
+    await waitFor(() => expect(screen.queryByText('Nested child')).not.toBeInTheDocument());
+
+    rerender(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <AntApp>
+          <BranchSessionSections
+            branch={branch}
+            sessions={sessions.map((session) => ({ ...session }))}
+            userById={new Map<string, User>()}
+            selectedSessionId="session-other"
+            onSessionClick={vi.fn()}
+            onCreateSession={vi.fn()}
+            client={null}
+          />
+        </AntApp>
+      </ConnectionProvider>
+    );
+
+    expect(screen.getByText('Nested parent')).toBeInTheDocument();
+    expect(screen.queryByText('Nested child')).not.toBeInTheDocument();
+    expect(getSessionTreeToggle('Nested parent')).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('expands a session when it newly gains children', () => {
     const parentSession = makeManualSession({
       session_id: 'session-parent',
@@ -325,6 +395,8 @@ describe('BranchSessionSections', () => {
         </AntApp>
       </ConnectionProvider>
     );
+
+    expect(screen.queryByLabelText(/(collapse|expand) parent session/i)).not.toBeInTheDocument();
 
     rerender(
       <ConnectionProvider
