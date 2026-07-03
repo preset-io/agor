@@ -55,12 +55,12 @@ describe('resolveModelConfig', () => {
 
   it('includes provider only when defined (omits the key otherwise)', () => {
     const withProvider = resolveModelConfig(
-      { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+      { model: 'claude-sonnet-5', provider: 'anthropic' },
       { now }
     );
     expect(withProvider).toHaveProperty('provider', 'anthropic');
 
-    const withoutProvider = resolveModelConfig({ model: 'claude-sonnet-4-6' }, { now });
+    const withoutProvider = resolveModelConfig({ model: 'claude-sonnet-5' }, { now });
     expect(withoutProvider).not.toHaveProperty('provider');
   });
 
@@ -77,7 +77,7 @@ describe('resolveModelConfigPrecedence', () => {
 
   it('returns the first resolvable source', () => {
     const explicit = { model: 'claude-opus-4-6', effort: 'max' as const };
-    const userDefault = { model: 'claude-sonnet-4-6', effort: 'medium' as const };
+    const userDefault = { model: 'claude-sonnet-5', effort: 'medium' as const };
     const result = resolveModelConfigPrecedence([explicit, userDefault], { now });
     expect(result?.model).toBe('claude-opus-4-6');
     expect(result?.effort).toBe('max');
@@ -85,9 +85,9 @@ describe('resolveModelConfigPrecedence', () => {
 
   it('falls through past sources with no model', () => {
     const noModel = { mode: 'alias' as const };
-    const userDefault = { model: 'claude-sonnet-4-6' };
+    const userDefault = { model: 'claude-sonnet-5' };
     const result = resolveModelConfigPrecedence([undefined, noModel, userDefault], { now });
-    expect(result?.model).toBe('claude-sonnet-4-6');
+    expect(result?.model).toBe('claude-sonnet-5');
   });
 
   it('returns undefined when every source is empty', () => {
@@ -98,7 +98,7 @@ describe('resolveModelConfigPrecedence', () => {
     // Regression guard: the resolver picks ONE source and normalizes it.
     // It must NOT fall back to userDefault.effort when explicit has no effort.
     const explicit = { model: 'claude-opus-4-6' }; // no effort
-    const userDefault = { model: 'claude-sonnet-4-6', effort: 'high' as const };
+    const userDefault = { model: 'claude-sonnet-5', effort: 'high' as const };
     const result = resolveModelConfigPrecedence([explicit, userDefault], { now });
     expect(result?.model).toBe('claude-opus-4-6');
     expect(result).not.toHaveProperty('effort');
@@ -107,8 +107,8 @@ describe('resolveModelConfigPrecedence', () => {
 
 describe('getDefaultModelForTool', () => {
   it('returns the static default for tools that have one', () => {
-    expect(getDefaultModelForTool('claude-code')).toBe('claude-sonnet-4-6');
-    expect(getDefaultModelForTool('claude-code-cli')).toBe('claude-sonnet-4-6');
+    expect(getDefaultModelForTool('claude-code')).toBe('claude-sonnet-5');
+    expect(getDefaultModelForTool('claude-code-cli')).toBe('claude-sonnet-5');
     expect(getDefaultModelForTool('codex')).toBe('gpt-5.5');
     expect(getDefaultModelForTool('gemini')).toBe('gemini-2.0-flash');
     expect(getDefaultModelForTool('copilot')).toBe('claude-sonnet-4.6');
@@ -159,7 +159,7 @@ describe('resolveModelConfigWithFallback', () => {
     const result = resolveModelConfigWithFallback('claude-code', [{ effort: 'max' }], { now });
     expect(result).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       effort: 'max',
       updated_at: '2026-04-23T00:00:00.000Z',
     });
@@ -171,7 +171,7 @@ describe('resolveModelConfigWithFallback', () => {
     });
     expect(result).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       advisorModel: 'opus',
       updated_at: '2026-04-23T00:00:00.000Z',
     });
@@ -185,7 +185,7 @@ describe('resolveModelConfigWithFallback', () => {
     );
     expect(result).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       effort: 'max',
       advisorModel: 'opus',
       updated_at: '2026-04-23T00:00:00.000Z',
@@ -219,7 +219,7 @@ describe('resolveModelConfigWithFallback', () => {
     // first-wins, so advisor stays cleared.
     const result = resolveModelConfigWithFallback(
       'claude-code',
-      [{ model: 'claude-opus-4-6' }, { model: 'claude-sonnet-4-6', advisorModel: 'opus' }],
+      [{ model: 'claude-opus-4-6' }, { model: 'claude-sonnet-5', advisorModel: 'opus' }],
       { now }
     );
     expect(result).toEqual({
@@ -238,7 +238,7 @@ describe('resolveModelConfigWithFallback', () => {
     );
     expect(result).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       effort: 'max',
       updated_at: '2026-04-23T00:00:00.000Z',
     });

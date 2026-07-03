@@ -39,9 +39,6 @@ export const HighlightMatch: React.FC<HighlightMatchProps> = ({
             style={{
               backgroundColor: token.colorWarning,
               color: 'rgba(0, 0, 0, 0.88)',
-              padding: `0 ${token.paddingXXS}px`,
-              borderRadius: token.borderRadiusSM,
-              fontWeight: 600,
             }}
           >
             {part}
@@ -55,6 +52,6 @@ export const HighlightMatch: React.FC<HighlightMatchProps> = ({
   );
 };
 
-function escapeRegExp(value: string): string {
+export function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

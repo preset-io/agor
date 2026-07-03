@@ -12,6 +12,7 @@ import {
   GatewayChannelRepository,
   GatewayOutboundMessageRepository,
   getCurrentTenantId,
+  getHiddenTenantId,
   MCPServerRepository,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
@@ -60,6 +61,7 @@ import type {
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
+import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
 
 /**
  * Inbound message data (platform → session)
@@ -193,9 +195,8 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
   }
 }
 
-function tenantIdFromGatewayChannel(channel: GatewayChannel): TenantID | string | undefined {
-  const tenantId = (channel as GatewayChannel & { tenant_id?: unknown }).tenant_id;
-  return typeof tenantId === 'string' && tenantId.length > 0 ? tenantId : undefined;
+export function tenantIdFromGatewayChannel(channel: GatewayChannel): TenantID | string | undefined {
+  return getHiddenTenantId(channel);
 }
 
 function isSlackThinkingPlaceholder(text: string): boolean {
@@ -277,6 +278,14 @@ function oneLineForPrompt(text: string, maxChars = 900): string {
   const normalized = text.replace(/\s+/g, ' ').trim() || '(no text)';
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+const SLACK_GATEWAY_REPLY_NOTE =
+  'Note: Any assistant message you send in this current Agor session is streamed back directly to the Slack conversation. Only use outbound gateway tools when you intentionally need to start a separate thread, DM, or message.';
+
+function prependSlackGatewayReplyNote(prompt: string): string {
+  if (prompt.includes(SLACK_GATEWAY_REPLY_NOTE)) return prompt;
+  return `${SLACK_GATEWAY_REPLY_NOTE}\n\n${prompt}`;
 }
 
 function formatSlackCatchUpPrompt(args: {
@@ -990,6 +999,25 @@ export class GatewayService {
         this.slackProgressQueues.delete(data.session_id);
       }
     }
+  }
+
+  /**
+   * Schedule Slack assistant progress/status updates after the current
+   * tenant-scoped database work commits, then update inside a fresh tenant
+   * scope. Presence/status updates are often emitted from hooks and streaming
+   * routes whose enclosing transaction is about to close.
+   */
+  updateProgressAfterCommit(data: GatewayProgressData, params?: unknown): void {
+    deferWithTenantDatabaseScope(
+      this.db,
+      params,
+      async () => {
+        await this.updateProgress(data);
+      },
+      (error) => {
+        console.warn('[gateway] Failed to update Slack progress after commit:', error);
+      }
+    );
   }
 
   wasMessageStreamedToSlack(messageId: string): boolean {
@@ -2141,6 +2169,10 @@ export class GatewayService {
         }
       }
 
+      if (channel.channel_type === 'slack') {
+        promptText = prependSlackGatewayReplyNote(promptText);
+      }
+
       // Prepend MCP auth warning to the initial prompt so the agent is aware
       if (created && mcpAuthWarning) {
         promptText = `${mcpAuthWarning}\n\n${promptText}`;
@@ -2148,9 +2180,14 @@ export class GatewayService {
 
       // Internal call: pass user, omit provider to bypass auth hooks
       // Mark message source as 'gateway' so it won't be echoed back to the platform
+      const tenantId = getCurrentTenantId();
       const task = await promptService.create(
         { prompt: promptText, permissionMode, messageSource: 'gateway' },
-        { route: { id: sessionId }, user }
+        {
+          route: { id: sessionId },
+          user,
+          ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
+        }
       );
 
       if (channel.channel_type === 'slack' && slackCursorTsToWrite && mappingForCursor) {
@@ -2180,7 +2217,7 @@ export class GatewayService {
           `Session is busy, message queued at position ${task.queue_position}`,
           { suppressSlack: true }
         );
-        void this.updateProgress({
+        this.updateProgressAfterCommit({
           session_id: sessionId,
           state: 'queued',
           task_id: task.task_id,
@@ -2190,7 +2227,7 @@ export class GatewayService {
         console.log(
           `[gateway] Prompt sent to session ${shortId(sessionId)} via /sessions/:id/prompt`
         );
-        void this.updateProgress({
+        this.updateProgressAfterCommit({
           session_id: sessionId,
           state: 'working',
           task_id: task.task_id,
@@ -2199,7 +2236,7 @@ export class GatewayService {
     } catch (error) {
       console.error('[gateway] Failed to send prompt to session:', error);
       this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${error}`);
-      void this.updateProgress({
+      this.updateProgressAfterCommit({
         session_id: sessionId,
         state: 'failed',
         error_message: error instanceof Error ? error.message : String(error),
@@ -2306,6 +2343,26 @@ export class GatewayService {
       routed: true,
       channelType: channel.channel_type,
     };
+  }
+
+  /**
+   * Schedule outbound routing after the current tenant-scoped database work
+   * commits, then route inside a fresh tenant scope. Message after-hooks fire
+   * while the newly-created row may still be transactional; routing immediately
+   * can inherit a stale transaction object or query before the session/message
+   * graph is visible on a new scoped connection.
+   */
+  routeMessageAfterCommit(data: RouteMessageData, params?: unknown): void {
+    deferWithTenantDatabaseScope(
+      this.db,
+      params,
+      async () => {
+        await this.routeMessage(data);
+      },
+      (error) => {
+        console.warn('[gateway] Failed to route message after commit:', error);
+      }
+    );
   }
 
   /**

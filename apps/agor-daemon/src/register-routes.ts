@@ -681,17 +681,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         params: RouteParams
       ) {
         app.service('messages').emit(data.event, data.data);
-        if (
-          isServiceAccountRoute(params) &&
-          (data.event === 'streaming:start' ||
+        if (isServiceAccountRoute(params)) {
+          const gatewayStreamingEvent =
+            data.event === 'streaming:start' ||
             data.event === 'streaming:chunk' ||
             data.event === 'streaming:end' ||
-            data.event === 'streaming:error')
-        ) {
-          void (app.service('gateway') as unknown as GatewayService).handleMessageStreamingEvent(
-            data.event,
-            data.data
-          );
+            data.event === 'streaming:error'
+              ? data.event
+              : null;
+
+          if (gatewayStreamingEvent) {
+            deferInFreshTenantScope(params, async () => {
+              await (
+                app.service('gateway') as unknown as GatewayService
+              ).handleMessageStreamingEvent(gatewayStreamingEvent, data.data);
+            });
+          }
         }
         return { success: true };
       },
@@ -720,11 +725,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const toolName =
             typeof data.data.tool_name === 'string' ? data.data.tool_name : undefined;
           if (sessionId) {
-            void (app.service('gateway') as unknown as GatewayService).updateProgress({
-              session_id: sessionId,
-              state: 'working',
-              task_id: typeof data.data.task_id === 'string' ? data.data.task_id : undefined,
-              tool_name: toolName,
+            deferInFreshTenantScope(params, async () => {
+              await (app.service('gateway') as unknown as GatewayService).updateProgress({
+                session_id: sessionId,
+                state: 'working',
+                task_id: typeof data.data.task_id === 'string' ? data.data.task_id : undefined,
+                tool_name: toolName,
+              });
             });
           }
         }
@@ -3051,6 +3058,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/schedules/:id/run-now').hooks({
+    around: { all: [tenantDatabaseScopeAround] },
     before: {
       create: [
         requireAuth,
@@ -3142,6 +3150,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/execute-schedule-now').hooks({
+    around: { all: [tenantDatabaseScopeAround] },
     before: {
       create: [
         requireAuth,

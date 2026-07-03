@@ -155,7 +155,7 @@ describe('resolveSessionDefaults', () => {
       const r = resolveSessionDefaults({ agenticTool: 'claude-code', now });
       expect(r.model_config).toEqual({
         mode: 'alias',
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5',
         updated_at: now.toISOString(),
       });
     });
@@ -168,10 +168,10 @@ describe('resolveSessionDefaults', () => {
     it("uses the user's tool default model when present", () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
-        user: makeUser({ 'claude-code': { modelConfig: { model: 'claude-sonnet-4-6' } } }),
+        user: makeUser({ 'claude-code': { modelConfig: { model: 'claude-sonnet-5' } } }),
         now,
       });
-      expect(r.model_config?.model).toBe('claude-sonnet-4-6');
+      expect(r.model_config?.model).toBe('claude-sonnet-5');
       expect(r.model_config?.updated_at).toBe(now.toISOString());
     });
 
@@ -179,13 +179,13 @@ describe('resolveSessionDefaults', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({
-          'claude-code': { modelConfig: { model: 'claude-sonnet-4-6', advisorModel: 'opus' } },
+          'claude-code': { modelConfig: { model: 'claude-sonnet-5', advisorModel: 'opus' } },
         }),
         now,
       });
       expect(r.model_config).toEqual({
         mode: 'alias',
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5',
         advisorModel: 'opus',
         updated_at: now.toISOString(),
       });
@@ -199,7 +199,7 @@ describe('resolveSessionDefaults', () => {
       });
       expect(r.model_config).toEqual({
         mode: 'alias',
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5',
         effort: 'max',
         updated_at: now.toISOString(),
       });
@@ -242,7 +242,7 @@ describe('resolveSessionDefaults', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
         user: makeUser({
-          'claude-code': { modelConfig: { model: 'claude-sonnet-4-6', effort: 'high' } },
+          'claude-code': { modelConfig: { model: 'claude-sonnet-5', effort: 'high' } },
         }),
         overrides: { modelConfig: { model: 'claude-opus-4-6' } },
         now,

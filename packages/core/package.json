@@ -340,6 +340,12 @@
       "import": "./dist/gateway/index.js",
       "require": "./dist/gateway/index.cjs"
     },
+    "./gateway/slack-manifest": {
+      "source": "./src/gateway/connectors/slack-manifest.ts",
+      "types": "./dist/gateway/connectors/slack-manifest.d.ts",
+      "import": "./dist/gateway/connectors/slack-manifest.js",
+      "require": "./dist/gateway/connectors/slack-manifest.cjs"
+    },
     "./git/pure": {
       "source": "./src/git/pure.ts",
       "types": "./dist/git/pure.d.ts",
@@ -384,8 +390,8 @@
   },
   "dependencies": {
     "@agor/git": "workspace:*",
-    "@anthropic-ai/claude-agent-sdk": "^0.3.183",
-    "@anthropic-ai/sdk": "^0.105.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.197",
+    "@anthropic-ai/sdk": "^0.109.0",
     "@feathersjs/authentication": "^5.0.45",
     "@feathersjs/authentication-client": "^5.0.45",
     "@feathersjs/authentication-local": "^5.0.45",
@@ -414,7 +420,7 @@
     "cronstrue": "^3.20.0",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
-    "js-yaml": "^4.2.0",
+    "js-yaml": "^5.2.0",
     "open": "^11.0.0",
     "postgres": "^3.4.9",
     "simple-git": "^3.36.0",

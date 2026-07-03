@@ -6,6 +6,7 @@ import type {
   SessionPromptResult,
   Task,
 } from '@agor/core/client';
+import { TaskStatus } from '@agor/core/client';
 
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager';
 
@@ -349,6 +350,29 @@ export class ReactiveSessionHandle {
         });
         messagesByTask = groupMessagesByTask(allMessages);
         loadedTaskIds = new Set(messagesByTask.keys());
+      } else if (this.options.taskHydration === 'lazy') {
+        // The conversation view expands the latest non-queued task by default
+        // and auto-scrolls to it. Hydrating that task's messages here — before
+        // we flip loading:false so ready() resolves with them in place —
+        // guarantees the scroll target exists in the first render, instead of
+        // landing on a header placeholder while TaskBlock lazy-loads the
+        // messages afterward.
+        const latestTask = findLatestHydratableTask(tasks);
+        if (latestTask) {
+          try {
+            const latestMessages = await this.client.service('messages').findAll({
+              query: {
+                task_id: latestTask.task_id,
+                $sort: { index: 1 },
+              },
+            });
+            messagesByTask.set(latestTask.task_id, sortMessagesByIndex(latestMessages));
+            loadedTaskIds.add(latestTask.task_id);
+          } catch {
+            // Non-fatal: leave the latest task unhydrated so the rest of
+            // bootstrap still succeeds; TaskBlock will lazy-load it as before.
+          }
+        }
       }
 
       this.updateState((prev) => ({
@@ -902,19 +926,28 @@ export class ReactiveSessionHandle {
         });
         messagesByTask = groupMessagesByTask(allMessages);
         loadedTaskIds = new Set(messagesByTask.keys());
-      } else if (this.stateSnapshot.loadedTaskIds.size > 0) {
-        const refreshedByTask = new Map<string, Message[]>();
-        for (const taskId of this.stateSnapshot.loadedTaskIds) {
-          const taskMessages = await this.client.service('messages').findAll({
-            query: {
-              task_id: taskId,
-              $sort: { index: 1 },
-            },
-          });
-          refreshedByTask.set(taskId, sortMessagesByIndex(taskMessages));
+      } else if (this.options.taskHydration === 'lazy') {
+        // Preserve the bootstrap invariant across reconnect: the latest
+        // (expanded / scroll-target) task must stay hydrated even if a new task
+        // became the latest while disconnected, or bootstrap's hydration failed
+        // and left loadedTaskIds empty.
+        const latestId = findLatestHydratableTask(tasks)?.task_id;
+        const toRefresh = new Set(this.stateSnapshot.loadedTaskIds);
+        if (latestId) toRefresh.add(latestId);
+        if (toRefresh.size > 0) {
+          const refreshedByTask = new Map<string, Message[]>();
+          for (const taskId of toRefresh) {
+            const taskMessages = await this.client.service('messages').findAll({
+              query: {
+                task_id: taskId,
+                $sort: { index: 1 },
+              },
+            });
+            refreshedByTask.set(taskId, sortMessagesByIndex(taskMessages));
+          }
+          messagesByTask = refreshedByTask;
+          loadedTaskIds = new Set(refreshedByTask.keys());
         }
-        messagesByTask = refreshedByTask;
-        loadedTaskIds = new Set(refreshedByTask.keys());
       }
 
       if (this.disposed) return;
@@ -1061,6 +1094,18 @@ export function releaseReactiveSession(
   if (clientSessions.size === 0) {
     SHARED_REACTIVE_SESSIONS.delete(client);
   }
+}
+
+/**
+ * The task the conversation view expands (and scrolls to) by default: the last
+ * task in the created_at-ascending list whose status isn't QUEUED. Queued tasks
+ * have no messages yet, so they are never the hydration / scroll target.
+ */
+function findLatestHydratableTask(tasks: Task[]): Task | undefined {
+  for (let i = tasks.length - 1; i >= 0; i--) {
+    if (tasks[i].status !== TaskStatus.QUEUED) return tasks[i];
+  }
+  return undefined;
 }
 
 function sortMessagesByIndex(messages: Message[]): Message[] {

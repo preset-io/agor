@@ -247,6 +247,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Hydrate tab-specific forms only after that tab has rendered its
   // corresponding <Form>. Calling setFieldsValue on never-mounted form
   // instances triggers Ant's "useForm is not connected" console warning.
+  //
+  // `agenticConfigDraftByTool` is intentionally NOT a dependency: it is read as
+  // a "prefer the in-progress edit over the persisted config" source, but must
+  // not itself re-trigger hydration. On tab switch the effect already re-runs
+  // (via `activeTab`) with a fresh closure over the latest draft. Including the
+  // draft in the deps caused a post-save revert (#1769): `saveAgenticConfigs`
+  // clears the draft immediately after the patch resolves, which re-ran this
+  // effect against a `user` prop that had not yet been refreshed by the realtime
+  // `patched` event — reapplying the stale/empty config and wiping the just-saved
+  // model. Reacting only to `activeTab`/`user`/`open` keeps hydration correct
+  // while leaving the saved value in place until fresh `user` data arrives.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: draft is read-only here; see comment above.
   useEffect(() => {
     if (!open || !user) return;
 
@@ -268,7 +280,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
       });
     }
-  }, [activeTab, agenticConfigDraftByTool, audioForm, agenticFormByTool, open, user]);
+  }, [activeTab, audioForm, agenticFormByTool, open, user]);
 
   // Rehydrate per-tool credential presence and env-var metadata from the
   // server every time the modal opens, so flags reflect the latest patch.

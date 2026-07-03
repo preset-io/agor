@@ -31,7 +31,9 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 ## Unreleased
 
-_No user-visible changes yet._
+### Chores
+
+- **Refresh Claude tooling and agor-live patch versions** — bumps Claude Code CLI, Claude Agent SDK, and Anthropic SDK pins; adds Claude Sonnet 5 to the Claude model fallback catalog; and bumps `agor-live` / `@agor-live/client` to 0.23.1. ([#1727](https://github.com/preset-io/agor/pull/1727))
 
 ## 0.23.0 (TBD)
 

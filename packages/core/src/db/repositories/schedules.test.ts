@@ -179,6 +179,26 @@ describe('ScheduleRepository.findDue', () => {
     expect(dueIds.has(never.schedule_id)).toBe(true);
     expect(dueList.length).toBe(2);
   });
+
+  dbTest('findDueRefs returns only due schedule routing refs', async ({ db }) => {
+    const ctx = await setupContext(db);
+    const now = Date.now();
+
+    const due = await ctx.scheduleRepo.create({
+      ...scheduleData({ name: 'due-ref', next_run_at: now - 1000 }),
+      branch_id: ctx.branchId,
+      created_by: ctx.userId,
+    });
+    await ctx.scheduleRepo.create({
+      ...scheduleData({ name: 'future-ref', next_run_at: now + 60 * 60 * 1000 }),
+      branch_id: ctx.branchId,
+      created_by: ctx.userId,
+    });
+
+    const refs = await ctx.scheduleRepo.findDueRefs(now);
+
+    expect(refs).toEqual([{ schedule_id: due.schedule_id }]);
+  });
 });
 
 describe('ScheduleRepository.findAccessibleSchedules', () => {

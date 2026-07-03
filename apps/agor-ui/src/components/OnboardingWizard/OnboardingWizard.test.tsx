@@ -1,7 +1,9 @@
 import type { Board, Branch, Repo, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { FRAMEWORK_REPO_SLUG } from '../../hooks/useFrameworkRepo';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
 import { OnboardingWizard } from './OnboardingWizard';
 
 vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
@@ -58,7 +60,25 @@ function makeBranch(overrides: Partial<Branch> = {}): Branch {
   } as Branch;
 }
 
-function renderWizard(overrides: Partial<ComponentProps<typeof OnboardingWizard>> = {}) {
+// The wizard now self-subscribes to repoById / branchById / boardById from the
+// store instead of receiving them as props, so the harness seeds those slices
+// into the store rather than passing them through. Map seeds may be supplied
+// alongside the component-prop overrides; they're split out here.
+function renderWizard(
+  overrides: Partial<ComponentProps<typeof OnboardingWizard>> & {
+    repoById?: Map<string, Repo>;
+    branchById?: Map<string, Branch>;
+    boardById?: Map<string, Board>;
+  } = {}
+) {
+  const { repoById, branchById, boardById, ...componentOverrides } = overrides;
+  agorStore.setState({
+    ...EMPTY_MAPS,
+    ...(repoById ? { repoById } : {}),
+    ...(branchById ? { branchById } : {}),
+    ...(boardById ? { boardById } : {}),
+  });
+
   const boardsService = {
     create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
     setPrimaryAssistant: vi.fn(async () => undefined),
@@ -77,9 +97,6 @@ function renderWizard(overrides: Partial<ComponentProps<typeof OnboardingWizard>
   const props = {
     open: true,
     onComplete: vi.fn(),
-    repoById: new Map<string, Repo>(),
-    branchById: new Map<string, Branch>(),
-    boardById: new Map<string, Board>(),
     user: makeUser(),
     client,
     onCreateRepo: vi.fn(async () => undefined),
@@ -87,7 +104,7 @@ function renderWizard(overrides: Partial<ComponentProps<typeof OnboardingWizard>
     onCreateBranch: vi.fn(async () => makeBranch()),
     onCreateSession: vi.fn(async () => 'session-1'),
     onUpdateUser: vi.fn(async () => undefined),
-    ...overrides,
+    ...componentOverrides,
   } satisfies ComponentProps<typeof OnboardingWizard>;
 
   return { ...render(<OnboardingWizard {...props} />), props, client, boardsService };
@@ -238,7 +255,7 @@ describe('OnboardingWizard', () => {
       ],
     ]);
     const onCreateRepo = vi.fn(async () => undefined);
-    const view = renderWizard({ repoById, onCreateRepo });
+    renderWizard({ repoById, onCreateRepo });
 
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
     fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
@@ -257,7 +274,9 @@ describe('OnboardingWizard', () => {
         clone_error: { message: 'new failure', exit_code: 1 },
       })
     );
-    view.rerender(<OnboardingWizard {...view.props} repoById={nextRepoById} />);
+    act(() => {
+      agorStore.setState({ repoById: nextRepoById });
+    });
 
     expect(await screen.findByText(/Setup failed/i)).toBeInTheDocument();
     expect(screen.getByText(/new failure/i)).toBeInTheDocument();
@@ -442,9 +461,10 @@ describe('OnboardingWizard', () => {
     fireEvent.click(await screen.findByRole('button', { name: /continue with codex cli auth/i }));
 
     expect(await screen.findByText(/Cloning assistant framework/i)).toBeInTheDocument();
-    repoById.set('repo-1', makeRepo());
-    const readyRepoById = new Map(repoById);
-    view.rerender(<OnboardingWizard {...view.props} repoById={readyRepoById} />);
+    const readyRepoById = new Map(repoById).set('repo-1', makeRepo());
+    act(() => {
+      agorStore.setState({ repoById: readyRepoById });
+    });
 
     await waitFor(() => {
       expect(onCreateBranch).toHaveBeenCalledWith(

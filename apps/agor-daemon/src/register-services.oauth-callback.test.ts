@@ -62,16 +62,15 @@ describe('register-services OAuth callback URL regression', () => {
     expect(codeOnly).toMatch(/['"]\/mcp-servers\/oauth-callback['"]/);
   });
 
-  it('persists callback tokens inside the tenant captured when the flow started', () => {
-    // PendingOAuthFlow carries tenantId so the callback handler knows which tenant DB to use.
+  it('preserves tenant scope across unauthenticated OAuth callbacks', () => {
+    // Browser redirects to /mcp-servers/oauth-callback do not carry the
+    // originating Feathers auth params or tenant headers, so the pending OAuth
+    // state must capture tenant_id at flow start and re-enter that DB scope
+    // before persisting user_mcp_oauth_tokens or backfilling mcp_servers auth.
     expect(codeOnly).toMatch(/tenantId\?\s*:\s*string/);
-    // Tenant is captured at flow start, not derived later, to guarantee it matches the
-    // authenticated caller at the time the flow was initiated.
-    expect(codeOnly).toMatch(/tenantId:\s*opts\.tenantId\s*\?\?\s*getCurrentTenantId\(\)/);
-    // persistPendingOAuthToken delegates through runInOAuthTenantScope so
-    // runWithTenantDatabaseScope is applied (see oauth-auth-helpers.ts + oauth-auth-helpers.test.ts
-    // for the behavioral assertion that the scope is actually invoked with the pending flow tenant).
+    expect(codeOnly).toMatch(/tenantId:\s*opts\.tenantId\s*\?\?\s*getCurrentTenantId\s*\(\s*\)/);
     expect(codeOnly).toMatch(/runInOAuthTenantScope\s*\(\s*db,\s*pendingFlow\.tenantId/);
-    expect(codeOnly).toMatch(/persistPendingOAuthToken\s*\(\s*tokenResponse,\s*pendingFlow/);
+    expect(codeOnly).toMatch(/Missing tenant context for MCP OAuth callback/);
+    expect(codeOnly).toMatch(/OAuth flow belongs to a different tenant/);
   });
 });

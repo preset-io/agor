@@ -15,6 +15,7 @@
 import { generateId, shortId } from '@agor/core/db';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -80,7 +81,8 @@ export class CopilotTool implements ITool {
     mcpServerRepo?: MCPServerRepository,
     usersRepo?: UsersRepository,
     permissionService?: PermissionService,
-    sessionsService?: SessionsPatchClient
+    sessionsService?: SessionsPatchClient,
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -100,7 +102,8 @@ export class CopilotTool implements ITool {
         permissionService,
         messagesService,
         tasksService,
-        sessionsService
+        sessionsService,
+        mcpOAuthAuthHeadersRepo
       );
     }
   }

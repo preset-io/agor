@@ -628,6 +628,63 @@ describe('BranchRepository.findAll', () => {
 // FindByRepoAndName
 // ============================================================================
 
+describe('BranchRepository.findActiveEnvironmentRefs', () => {
+  dbTest(
+    'returns routing refs for running and starting branch environments only',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+
+      const repo = await repoRepo.create(createRepoData({ slug: 'active-env-refs' }));
+
+      const running = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-running',
+          branch_unique_id: 1,
+          environment_instance: { status: 'running' },
+        })
+      );
+      const starting = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-starting',
+          branch_unique_id: 2,
+          environment_instance: { status: 'starting' },
+        })
+      );
+      await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-stopped',
+          branch_unique_id: 3,
+          environment_instance: { status: 'stopped' },
+        })
+      );
+      await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-error',
+          branch_unique_id: 4,
+          environment_instance: { status: 'error' },
+        })
+      );
+      await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-missing',
+          branch_unique_id: 5,
+        })
+      );
+
+      const refs = await branchRepo.findActiveEnvironmentRefs();
+      const branchIds = refs.map((ref) => ref.branch_id).sort();
+
+      expect(branchIds).toEqual([running.branch_id, starting.branch_id].sort());
+    }
+  );
+});
+
 describe('BranchRepository.findByRepoAndName', () => {
   dbTest('should find by repo_id and name with case sensitivity', async ({ db }) => {
     const repoRepo = new RepoRepository(db);

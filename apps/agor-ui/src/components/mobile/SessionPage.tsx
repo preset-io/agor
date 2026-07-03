@@ -22,7 +22,11 @@ interface SessionPageProps {
   repoById: Map<string, Repo>;
   userById: Map<string, User>;
   currentUser?: User | null;
-  onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
+  onSendPrompt?: (
+    sessionId: string,
+    prompt: string,
+    permissionMode?: PermissionMode
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onMenuClick?: () => void;
   promptDrafts: Map<string, string>;
   onUpdateDraft: (sessionId: string, draft: string) => void;

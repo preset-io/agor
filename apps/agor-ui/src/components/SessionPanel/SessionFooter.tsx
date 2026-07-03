@@ -25,6 +25,7 @@ import {
   SendOutlined,
   StopOutlined,
   ToolOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Divider, Popover, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
@@ -64,6 +65,8 @@ export interface SessionFooterProps {
   isStopping: boolean;
   stopRequestInFlight: boolean;
   hasInput: boolean;
+  composerAttachmentsPresent?: boolean;
+  composerAttachmentUploading?: boolean;
   connectionDisabled: boolean;
   toolCaps?: { supportsSessionFork?: boolean; supportsChildSpawn?: boolean };
   // Settings state
@@ -83,6 +86,7 @@ export interface SessionFooterProps {
   onFork: () => void;
   onBtwSend: () => void;
   onSpawnOpen: () => void;
+  onAttachFiles: () => void;
   onUploadOpen: () => void;
   onEffortChange: (v: EffortLevel) => void;
   onPermissionModeChange: (v: PermissionMode) => void;
@@ -105,6 +109,8 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   isStopping,
   stopRequestInFlight,
   hasInput,
+  composerAttachmentsPresent = false,
+  composerAttachmentUploading = false,
   connectionDisabled,
   toolCaps,
   queuedTasks,
@@ -122,6 +128,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   onFork,
   onBtwSend,
   onSpawnOpen,
+  onAttachFiles,
   onUploadOpen,
   onEffortChange,
   onPermissionModeChange,
@@ -183,6 +190,14 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
     );
   }, [latestContextWindow]);
   const contextWarning = contextPct > 0.8;
+  const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
+  const composerUploadTooltip = 'Uploading files...';
+  const uploadDisabled = connectionDisabled || composerAttachmentUploading;
+  const advancedUploadDisabled = uploadDisabled;
+  const forkDisabled = connectionDisabled || composerAttachmentsPresent;
+  const btwForkDisabled = connectionDisabled || !hasInput || composerAttachmentsPresent;
+  const spawnDisabled = connectionDisabled || isRunning || composerAttachmentsPresent;
+  const sendDisabled = connectionDisabled || composerAttachmentUploading || !hasInput;
 
   const sectionHeaderStyle: React.CSSProperties = {
     padding: '6px 12px 3px',
@@ -208,7 +223,16 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       <div style={sectionHeaderStyle}>Settings</div>
 
       {/* Model */}
-      <div style={{ ...overflowRowStyle, alignItems: 'flex-start', cursor: 'default' }}>
+      <div
+        style={{
+          ...overflowRowStyle,
+          height: 'auto',
+          paddingTop: 6,
+          paddingBottom: 6,
+          alignItems: 'flex-start',
+          cursor: 'default',
+        }}
+      >
         <RobotOutlined
           style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0, marginTop: 7 }}
         />
@@ -301,38 +325,44 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
       {/* === Section: Actions === */}
       <div style={sectionHeaderStyle}>Actions</div>
 
-      {/* Upload */}
+      {/* Attach files */}
       {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
       <div
         role="button"
-        tabIndex={connectionDisabled ? -1 : 0}
+        tabIndex={uploadDisabled ? -1 : 0}
         style={{
           ...overflowRowStyle,
-          opacity: connectionDisabled ? 0.4 : 1,
-          cursor: connectionDisabled ? 'not-allowed' : 'pointer',
+          opacity: uploadDisabled ? 0.4 : 1,
+          cursor: uploadDisabled ? 'not-allowed' : 'pointer',
         }}
         onClick={
-          connectionDisabled
+          uploadDisabled
             ? undefined
             : () => {
                 setMoreOpen(false);
-                onUploadOpen();
+                onAttachFiles();
               }
         }
         onKeyDown={
-          connectionDisabled
+          uploadDisabled
             ? undefined
             : (e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
                   setMoreOpen(false);
-                  onUploadOpen();
+                  onAttachFiles();
                 }
               }
         }
       >
         <Tooltip
-          title={connectionDisabled ? 'Disconnected from daemon' : 'Attach files to prompt'}
+          title={
+            composerAttachmentUploading
+              ? composerUploadTooltip
+              : connectionDisabled
+                ? 'Disconnected from daemon'
+                : 'Attach files to prompt'
+          }
           placement="left"
         >
           <span
@@ -394,19 +424,126 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         </Tooltip>
       </div>
 
+      {/* Advanced upload */}
+      {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
+      <div
+        role="button"
+        tabIndex={advancedUploadDisabled ? -1 : 0}
+        style={{
+          ...overflowRowStyle,
+          opacity: advancedUploadDisabled ? 0.4 : 1,
+          cursor: advancedUploadDisabled ? 'not-allowed' : 'pointer',
+        }}
+        onClick={
+          advancedUploadDisabled
+            ? undefined
+            : () => {
+                setMoreOpen(false);
+                onUploadOpen();
+              }
+        }
+        onKeyDown={
+          advancedUploadDisabled
+            ? undefined
+            : (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setMoreOpen(false);
+                  onUploadOpen();
+                }
+              }
+        }
+      >
+        <Tooltip
+          title={
+            composerAttachmentUploading
+              ? composerUploadTooltip
+              : connectionDisabled
+                ? 'Disconnected from daemon'
+                : 'Upload files with options'
+          }
+          placement="left"
+        >
+          <span
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+            }}
+          >
+            <UploadOutlined
+              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
+            />
+            <Typography.Text
+              style={{
+                fontSize: 13,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Advanced upload
+            </Typography.Text>
+          </span>
+        </Tooltip>
+        <Tooltip
+          title={pinnedItems.includes('advanced-upload') ? 'Unpin from bar' : 'Pin to bar'}
+          placement="right"
+        >
+          <button
+            type="button"
+            aria-label={
+              pinnedItems.includes('advanced-upload')
+                ? 'Unpin Advanced upload'
+                : 'Pin Advanced upload'
+            }
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: pinnedItems.includes('advanced-upload')
+                ? token.colorPrimary
+                : token.colorTextTertiary,
+              lineHeight: 1,
+              padding: '4px',
+              flexShrink: 0,
+              borderRadius: token.borderRadiusSM,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePin('advanced-upload');
+            }}
+          >
+            {pinnedItems.includes('advanced-upload') ? (
+              <PushpinFilled style={{ fontSize: 12 }} />
+            ) : (
+              <PushpinOutlined style={{ fontSize: 12 }} />
+            )}
+          </button>
+        </Tooltip>
+      </div>
+
       {/* Fork */}
       {toolCaps?.supportsSessionFork !== false && (
         // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
           role="button"
-          tabIndex={connectionDisabled ? -1 : 0}
+          aria-disabled={forkDisabled}
+          aria-label="Fork session"
+          tabIndex={forkDisabled ? -1 : 0}
           style={{
             ...overflowRowStyle,
-            opacity: connectionDisabled ? 0.4 : 1,
-            cursor: connectionDisabled ? 'not-allowed' : 'pointer',
+            opacity: forkDisabled ? 0.4 : 1,
+            cursor: forkDisabled ? 'not-allowed' : 'pointer',
           }}
           onClick={
-            connectionDisabled
+            forkDisabled
               ? undefined
               : () => {
                   setMoreOpen(false);
@@ -414,7 +551,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 }
           }
           onKeyDown={
-            connectionDisabled
+            forkDisabled
               ? undefined
               : (e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -426,7 +563,13 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           }
         >
           <Tooltip
-            title={connectionDisabled ? 'Disconnected from daemon' : 'Fork this session'}
+            title={
+              connectionDisabled
+                ? 'Disconnected from daemon'
+                : composerAttachmentsPresent
+                  ? composerAttachmentActionTooltip
+                  : 'Fork this session'
+            }
             placement="left"
           >
             <span
@@ -494,14 +637,16 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
           role="button"
-          tabIndex={connectionDisabled || !hasInput ? -1 : 0}
+          aria-disabled={btwForkDisabled}
+          aria-label="Ask side question via BTW fork"
+          tabIndex={btwForkDisabled ? -1 : 0}
           style={{
             ...overflowRowStyle,
-            opacity: connectionDisabled || !hasInput ? 0.4 : 1,
-            cursor: connectionDisabled || !hasInput ? 'not-allowed' : 'pointer',
+            opacity: btwForkDisabled ? 0.4 : 1,
+            cursor: btwForkDisabled ? 'not-allowed' : 'pointer',
           }}
           onClick={
-            connectionDisabled || !hasInput
+            btwForkDisabled
               ? undefined
               : () => {
                   setMoreOpen(false);
@@ -509,7 +654,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 }
           }
           onKeyDown={
-            connectionDisabled || !hasInput
+            btwForkDisabled
               ? undefined
               : (e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -522,9 +667,11 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         >
           <Tooltip
             title={
-              connectionDisabled || !hasInput
-                ? 'Needs input and a live connection'
-                : 'Ask a side question via an ephemeral fork'
+              composerAttachmentsPresent
+                ? composerAttachmentActionTooltip
+                : connectionDisabled || !hasInput
+                  ? 'Needs input and a live connection'
+                  : 'Ask a side question via an ephemeral fork'
             }
             placement="left"
           >
@@ -595,14 +742,16 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
         // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
           role="button"
-          tabIndex={connectionDisabled || isRunning ? -1 : 0}
+          aria-disabled={spawnDisabled}
+          aria-label="Spawn subsession"
+          tabIndex={spawnDisabled ? -1 : 0}
           style={{
             ...overflowRowStyle,
-            opacity: connectionDisabled || isRunning ? 0.4 : 1,
-            cursor: connectionDisabled || isRunning ? 'not-allowed' : 'pointer',
+            opacity: spawnDisabled ? 0.4 : 1,
+            cursor: spawnDisabled ? 'not-allowed' : 'pointer',
           }}
           onClick={
-            connectionDisabled || isRunning
+            spawnDisabled
               ? undefined
               : () => {
                   setMoreOpen(false);
@@ -610,7 +759,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 }
           }
           onKeyDown={
-            connectionDisabled || isRunning
+            spawnDisabled
               ? undefined
               : (e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -625,9 +774,11 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
             title={
               connectionDisabled
                 ? 'Disconnected'
-                : isRunning
-                  ? 'Session is running'
-                  : 'Spawn a child subsession'
+                : composerAttachmentsPresent
+                  ? composerAttachmentActionTooltip
+                  : isRunning
+                    ? 'Session is running'
+                    : 'Spawn a child subsession'
             }
             placement="left"
           >
@@ -1036,9 +1187,11 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
   const sendLabel = isRunning && hasInput ? 'Queue' : 'Send';
   const sendTooltip = connectionDisabled
     ? 'Disconnected from daemon'
-    : isRunning
-      ? 'Queue Message'
-      : 'Send Prompt';
+    : composerAttachmentUploading
+      ? composerUploadTooltip
+      : isRunning
+        ? 'Queue Message'
+        : 'Send Prompt';
 
   return (
     <div
@@ -1274,14 +1427,45 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
           {/* Left group */}
           <Space size={4}>
             {pinnedItems.includes('upload') && (
-              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Upload Files'}>
+              <Tooltip
+                title={
+                  composerAttachmentUploading
+                    ? composerUploadTooltip
+                    : connectionDisabled
+                      ? 'Disconnected from daemon'
+                      : 'Attach Files'
+                }
+              >
                 <Button
                   size="small"
                   type="text"
+                  aria-label="Attach files"
+                  title="Attach files"
                   icon={<PaperClipOutlined />}
-                  onClick={onUploadOpen}
-                  disabled={connectionDisabled}
+                  onClick={onAttachFiles}
+                  disabled={uploadDisabled}
                   data-testid="upload-bar-btn"
+                />
+              </Tooltip>
+            )}
+            {pinnedItems.includes('advanced-upload') && (
+              <Tooltip
+                title={
+                  composerAttachmentUploading
+                    ? composerUploadTooltip
+                    : connectionDisabled
+                      ? 'Disconnected from daemon'
+                      : 'Advanced upload'
+                }
+              >
+                <Button
+                  size="small"
+                  type="text"
+                  aria-label="Advanced upload"
+                  title="Advanced upload"
+                  icon={<UploadOutlined />}
+                  onClick={onUploadOpen}
+                  disabled={advancedUploadDisabled}
                 />
               </Tooltip>
             )}
@@ -1290,9 +1474,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 <Button
                   size="small"
                   type="text"
+                  aria-label="Fork session"
                   icon={<ForkOutlined />}
                   onClick={onFork}
-                  disabled={connectionDisabled}
+                  disabled={forkDisabled}
                   data-testid="fork-bar-btn"
                 />
               </Tooltip>
@@ -1303,9 +1488,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 <Button
                   size="small"
                   type="text"
+                  aria-label="Ask side question via BTW fork"
                   icon={<QuestionCircleOutlined />}
                   onClick={onBtwSend}
-                  disabled={connectionDisabled || !hasInput}
+                  disabled={btwForkDisabled}
                   data-testid="btw-fork-bar-btn"
                 />
               </Tooltip>
@@ -1315,9 +1501,10 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                 <Button
                   size="small"
                   type="text"
+                  aria-label="Spawn subsession"
                   icon={<BranchesOutlined />}
                   onClick={onSpawnOpen}
-                  disabled={connectionDisabled || isRunning}
+                  disabled={spawnDisabled}
                 />
               </Tooltip>
             )}
@@ -1371,7 +1558,7 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
                   size="small"
                   icon={<SendOutlined />}
                   onClick={onSendPrompt}
-                  disabled={connectionDisabled || !hasInput}
+                  disabled={sendDisabled}
                 >
                   {sendLabel}
                 </Button>

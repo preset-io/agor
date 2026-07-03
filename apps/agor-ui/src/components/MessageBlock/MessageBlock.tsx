@@ -22,9 +22,9 @@ import {
 } from '@agor-live/client';
 import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Tooltip, theme } from 'antd';
+import { Button, Tooltip, theme } from 'antd';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
@@ -234,6 +234,77 @@ function getAgentAvatar({
   );
 }
 
+interface DaemonRestartNoticeProps {
+  isGraceful: boolean;
+  text: string;
+  sessionId?: string | null;
+  client?: AgorClient | null;
+  isTaskRunning?: boolean;
+}
+
+function DaemonRestartNotice({
+  isGraceful,
+  text,
+  sessionId,
+  client,
+  isTaskRunning = false,
+}: DaemonRestartNoticeProps) {
+  const { token } = theme.useToken();
+  const [loading, setLoading] = useState(false);
+  const [resumed, setResumed] = useState(false);
+
+  const handleResume = async () => {
+    if (!client || !sessionId) return;
+    setLoading(true);
+    try {
+      await client.sessions.prompt(
+        sessionId,
+        'Please resume where you left off before the daemon restarted.',
+        { messageSource: 'agor' }
+      );
+      setResumed(true);
+    } catch (err) {
+      console.error('Failed to send resume prompt:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const showButton = !!client && !!sessionId && !resumed && !isTaskRunning;
+
+  return (
+    <SystemMessage
+      content={
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+          <span
+            style={{
+              color: isGraceful ? token.colorInfo : token.colorWarning,
+              flexShrink: 0,
+              marginTop: 2,
+            }}
+          >
+            {isGraceful ? <SyncOutlined /> : <WarningOutlined />}
+          </span>
+          <div style={{ fontSize: 13, flex: 1 }}>
+            <MarkdownRenderer content={text} />
+            {showButton && (
+              <Button
+                size="small"
+                type="primary"
+                loading={loading}
+                onClick={handleResume}
+                style={{ marginTop: 6 }}
+              >
+                Resume
+              </Button>
+            )}
+          </div>
+        </div>
+      }
+    />
+  );
+}
+
 // Memoized: every text block / tool block of every message in the conversation
 // re-rendered on every streaming chunk because TaskBlock's `messages` array
 // gets a fresh reference each tick. Default shallow compare is sufficient
@@ -428,23 +499,12 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     const isGraceful = message.type === 'daemon_restart';
     const text = typeof message.content === 'string' ? message.content : '';
     return (
-      <SystemMessage
-        content={
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-            <span
-              style={{
-                color: isGraceful ? token.colorInfo : token.colorWarning,
-                flexShrink: 0,
-                marginTop: 2,
-              }}
-            >
-              {isGraceful ? <SyncOutlined /> : <WarningOutlined />}
-            </span>
-            <div style={{ fontSize: 13 }}>
-              <MarkdownRenderer content={text} />
-            </div>
-          </div>
-        }
+      <DaemonRestartNotice
+        isGraceful={isGraceful}
+        text={text}
+        sessionId={sessionId}
+        client={client}
+        isTaskRunning={isTaskRunning}
       />
     );
   }

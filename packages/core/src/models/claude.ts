@@ -24,11 +24,23 @@ export interface ClaudeModel {
  */
 export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
   {
+    id: 'claude-fable-5',
+    displayName: 'Claude Fable 5',
+    family: 'claude-5',
+    description: 'Frontier model for complex reasoning, creative work, and agentic coding',
+  },
+  {
     id: 'claude-opus-4-8',
     displayName: 'Claude Opus 4.8',
     family: 'claude-4',
     description:
       'Most capable model for complex reasoning, long-horizon agentic coding, and high-autonomy work',
+  },
+  {
+    id: 'claude-sonnet-5',
+    displayName: 'Claude Sonnet 5',
+    family: 'claude-5',
+    description: 'Best combination of speed and intelligence',
   },
   {
     id: 'claude-opus-4-7',
@@ -105,6 +117,6 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
 ];
 
 /**
- * Default Claude model for new sessions (uses Sonnet 4.6 for best speed/intelligence balance)
+ * Default Claude model for new sessions (uses Sonnet 5 for best speed/intelligence balance)
  */
-export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5';

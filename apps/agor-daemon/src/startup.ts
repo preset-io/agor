@@ -358,8 +358,8 @@ async function injectRestartNoticesInTenantScope(
 
   const restartType = wasGraceful ? ('daemon_restart' as const) : ('daemon_crash' as const);
   const messageText = wasGraceful
-    ? 'The Agor daemon was restarted while this session was running. Ask the agent to resume where it left off.'
-    : 'The Agor daemon restarted unexpectedly while this session was running. Ask the agent to resume where it left off.';
+    ? 'The Agor daemon was restarted while this session was running.'
+    : 'The Agor daemon restarted unexpectedly while this session was running.';
 
   // Build session → last orphaned task map so we can attach notices to a task_id.
   // Prefer orphaned tasks (they were the active tasks at shutdown); fall back to
@@ -515,7 +515,14 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 2. Register Health Monitor listeners before serving requests. The initial
   // full scan of already-running environments is deferred until after listen.
-  const healthMonitor = new HealthMonitor(app, { defaultParams: startupTenantParams(config) });
+  const startupMultiTenancy = resolveMultiTenancyConfig(config);
+  const healthMonitor = new HealthMonitor(app, {
+    defaultParams: startupTenantParams(config),
+    db,
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    requireTenantParams: startupMultiTenancy.mode !== 'static',
+  });
 
   // 3. Validate/generate master secret for API key encryption
   await ensureMasterSecret(config);
@@ -586,18 +593,20 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 6. Start scheduler service (background worker)
   let schedulerService: SchedulerService | null = null;
   if (svcEnabled('scheduler')) {
+    const multiTenancy = resolveMultiTenancyConfig(config);
     schedulerService = new SchedulerService(db, app, {
       tickInterval: 30000, // 30 seconds
       gracePeriod: 120000, // 2 minutes
       debug: process.env.NODE_ENV !== 'production',
       unixUserMode: config.execution?.unix_user_mode ?? 'simple',
-      tenantId: startupTenantParams(config).tenant.tenant_id,
+      // Static mode keeps the historical single-tenant scope. Auth-resolved
+      // multi-tenant mode leaves this undefined so the scheduler discovers due
+      // schedule tenant metadata at the DB boundary on each tick.
+      tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
     });
-    schedulerService.start();
-    // Expose on app so route handlers (e.g. /branches/:id/execute-schedule-now)
-    // can reuse the scheduler's spawn code path.
     app.set('scheduler', schedulerService);
-    console.log(`🔄 Scheduler started (tick interval: 30s)`);
+    schedulerService.start();
+    console.log('🔄 Scheduler started (tick interval: 30s)');
   }
 
   // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)

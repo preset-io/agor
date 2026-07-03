@@ -11,7 +11,6 @@ import type {
   AgenticToolName,
   AssistantConfig,
   AuthCheckResult,
-  Board,
   Branch,
   CloneRepositoryResult,
   CodexApprovalPolicy,
@@ -56,6 +55,8 @@ import {
   FRAMEWORK_REPO_URL,
   findFrameworkRepo,
 } from '../../hooks/useFrameworkRepo';
+import { useAgorStore } from '../../store/agorStore';
+import { selectBoardById, selectBranchById, selectRepoById } from '../../store/selectors';
 import type { CreateRepoOptions } from '../../types';
 import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
 import { ensureAssistantWelcomeNote } from '../../utils/assistantWelcomeNote';
@@ -84,9 +85,6 @@ export interface OnboardingWizardProps {
     path: WizardPath;
   }) => void;
 
-  repoById: Map<string, Repo>;
-  branchById: Map<string, Branch>;
-  boardById: Map<string, Board>;
   user?: User | null;
   // biome-ignore lint/suspicious/noExplicitAny: AgorClient type varies across package boundaries in tests/apps.
   client: any;
@@ -235,9 +233,6 @@ function authMethodOptionsForAgent(agent: AgenticToolName) {
 export function OnboardingWizard({
   open,
   onComplete,
-  repoById,
-  branchById,
-  boardById,
   user,
   client,
   onCreateRepo,
@@ -247,6 +242,12 @@ export function OnboardingWizard({
   onCheckAuth,
   frameworkRepoUrl,
 }: OnboardingWizardProps) {
+  // Self-subscribe to the entity maps this wizard reads. The subscription used
+  // to live in the outer App shell; relocating it here keeps the shell from
+  // re-rendering on every repo/branch/board write.
+  const repoById = useAgorStore(selectRepoById);
+  const branchById = useAgorStore(selectBranchById);
+  const boardById = useAgorStore(selectBoardById);
   const { token } = useToken();
   const [currentStep, setCurrentStep] = useState<WizardStep>('identity');
   const [assistantDisplayName, setAssistantDisplayName] = useState('My Assistant');

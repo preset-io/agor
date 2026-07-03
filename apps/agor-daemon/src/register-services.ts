@@ -18,6 +18,7 @@ import {
   eq,
   getCurrentTenantId,
   inArray,
+  isPostgresDatabase,
   MCPServerRepository,
   SessionMCPServerRepository,
   type SessionMCPServerRow,
@@ -1123,6 +1124,7 @@ async function registerMCPServices(
     mcpServerId?: string;
     userId?: string;
     oauthMode?: 'per_user' | 'shared';
+    /** Tenant captured when the flow starts; browser callbacks have no auth headers. */
     tenantId?: string;
     socketId?: string;
     createdAt: number;
@@ -1353,12 +1355,12 @@ async function registerMCPServices(
     (params as (AuthenticatedParams & { tenant?: { tenant_id?: string } }) | undefined)?.tenant
       ?.tenant_id ?? getCurrentTenantId();
 
-  const persistPendingOAuthToken = async (
+  const persistOAuthTokenForPendingFlow = async (
     tokenResponse: OAuthTokenResponse,
     pendingFlow: PendingOAuthFlow,
     logPrefix: string
-  ): Promise<void> =>
-    runInOAuthTenantScope(db, pendingFlow.tenantId, () =>
+  ): Promise<void> => {
+    const work = () =>
       persistOAuthToken(
         db,
         tokenResponse,
@@ -1370,8 +1372,26 @@ async function registerMCPServices(
           tokenEndpoint: pendingFlow.context.tokenEndpoint,
         },
         logPrefix
-      )
-    );
+      );
+
+    if (pendingFlow.tenantId) {
+      await runInOAuthTenantScope(db, pendingFlow.tenantId, work);
+      return;
+    }
+
+    // OAuth callbacks arrive as unauthenticated browser redirects, so they
+    // cannot re-resolve tenant scope from request auth. In Postgres/multitenant
+    // deployments, a flow without captured tenant metadata is unsafe to persist:
+    // fail closed and ask the user to restart the OAuth flow. SQLite/single-user
+    // installs do not have tenant DB scope, so they keep the legacy direct path.
+    if (isPostgresDatabase(db) && pendingFlow.mcpServerId) {
+      throw new Error(
+        'Missing tenant context for MCP OAuth callback. Please restart the OAuth flow.'
+      );
+    }
+
+    await work();
+  };
 
   // Set the OAuth callback handler
   const oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
@@ -1426,7 +1446,7 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
         pendingOAuthFlows.delete(state);
 
-        await persistPendingOAuthToken(tokenResponse, pendingFlow, 'OAuth Callback');
+        await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback');
 
         if (app.io) {
           const oauthEvent = {
@@ -2000,7 +2020,14 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
         pendingOAuthFlows.delete(state);
 
-        await persistPendingOAuthToken(tokenResponse, pendingFlow, 'OAuth Complete');
+        const activeTenantId = getCurrentTenantId();
+        if (pendingFlow.tenantId && activeTenantId && pendingFlow.tenantId !== activeTenantId) {
+          throw new Error(
+            'OAuth flow belongs to a different tenant. Please restart the OAuth flow.'
+          );
+        }
+
+        await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
         return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
       } catch (error) {
         console.error('[OAuth Complete] Error:', error);
@@ -2076,7 +2103,7 @@ async function registerMCPServices(
   // --------------------------------------------------------------------------
   app.use('/mcp-servers/oauth-auth-headers', {
     async create(
-      data: { mcp_server_ids: string[] },
+      data: { mcp_server_ids: string[]; executorSessionToken?: string },
       params?: AuthenticatedParams
     ): Promise<{
       headers: Record<string, { authorization?: string; error?: string }>;
@@ -2096,9 +2123,30 @@ async function registerMCPServices(
       const sessionId = (params as (AuthenticatedParams & { session_id?: string }) | undefined)
         ?.session_id;
       const trustedInternalOrService = shouldExposeMCPServerSecrets(params);
-      const trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
+      let trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
         sessionId,
       });
+      let executorSessionId = sessionId;
+      if (!trustedSessionExecutor && params?.provider && data.executorSessionToken) {
+        const executorTokenService = (
+          app as unknown as {
+            sessionTokenService?: {
+              validateToken: (
+                token: string,
+                expected?: { sessionId?: string; taskId?: string; branchId?: string }
+              ) => Promise<{ session_id: string } | null>;
+            };
+          }
+        ).sessionTokenService;
+        const sessionInfo = await executorTokenService?.validateToken(
+          data.executorSessionToken,
+          {}
+        );
+        if (sessionInfo?.session_id) {
+          executorSessionId = sessionInfo.session_id;
+          trustedSessionExecutor = true;
+        }
+      }
       if (!trustedInternalOrService && !trustedSessionExecutor) {
         throw new Forbidden('oauth-auth-headers is only available to trusted executor paths');
       }
@@ -2106,8 +2154,14 @@ async function registerMCPServices(
       const userTokenRepo = new UserMCPOAuthTokenRepository(db);
       const mcpServerRepo = new MCPServerRepository(db);
       if (trustedSessionExecutor) {
+        if (!executorSessionId) {
+          throw new Forbidden('oauth-auth-headers requires executor session scope');
+        }
         const sessionMcpRepo = new SessionMCPServerRepository(db);
-        const attachedServers = await sessionMcpRepo.listServers(sessionId as SessionID, true);
+        const attachedServers = await sessionMcpRepo.listServers(
+          executorSessionId as SessionID,
+          true
+        );
         const globalServers = await mcpServerRepo.findAll({ scope: 'global', enabled: true });
         const allowedServerIds = new Set([
           ...globalServers.map((server) => server.mcp_server_id),

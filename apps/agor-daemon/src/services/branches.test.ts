@@ -5,6 +5,7 @@ import {
   GroupRepository,
   KnowledgeNamespaceRepository,
   RepoRepository,
+  runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
@@ -22,6 +23,10 @@ vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
     getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   };
 });
+
+function createTenantScopeTestDb() {
+  return { run: vi.fn() };
+}
 
 function createRenderEnvHarness(opts: {
   current: string | null;
@@ -48,7 +53,7 @@ function createRenderEnvHarness(opts: {
       throw new Error(`Unknown service: ${path}`);
     },
   } as unknown as Application;
-  const service = new BranchesService({} as never, app);
+  const service = new BranchesService(createTenantScopeTestDb() as never, app);
   // Bypass the auth gate (it would otherwise call loadConfig); the running
   // guard fires after auth and is what we're testing here.
   vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
@@ -115,7 +120,7 @@ function createPatchHarness(opts: {
       primary_assistant_id: branchId,
     })),
   };
-  const service = new BranchesService({} as never, app);
+  const service = new BranchesService(createTenantScopeTestDb() as never, app);
   (service as unknown as { repository: typeof repository }).repository = repository;
   (service as unknown as { boardRepo: typeof boardRepo }).boardRepo = boardRepo;
   (service as unknown as { branchRepo: { enrichWithZoneInfo: typeof vi.fn } }).branchRepo = {
@@ -168,8 +173,16 @@ function createServiceHarness() {
     },
   } as unknown as Application;
 
-  const service = new BranchesService({} as never, app);
+  const service = new BranchesService(createTenantScopeTestDb() as never, app);
   return { service, boardObjectsService, sessionsService };
+}
+
+async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
+  return runWithTenantDatabaseScope(createTenantScopeTestDb() as never, 'tenant-test', work);
+}
+
+function waitForDeferredWork(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
@@ -231,7 +244,7 @@ function createFindHarness(opts: {
       }))
     ),
   };
-  const service = new BranchesService({} as never, app);
+  const service = new BranchesService(createTenantScopeTestDb() as never, app);
   (service as unknown as { repository: typeof repository }).repository = repository;
   (service as unknown as { branchRepo: typeof branchRepo }).branchRepo = branchRepo;
 
@@ -287,11 +300,15 @@ describe('BranchesService environment start async behavior', () => {
     const { service, branch, environmentUpdates } = createStartHarness();
 
     const result = await Promise.race([
-      service.startEnvironment(branch.branch_id),
+      runInTestTenantScope(() => service.startEnvironment(branch.branch_id)),
       new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 50)),
     ]);
 
     expect(result).not.toBe('timed-out');
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+
+    await waitForDeferredWork();
+
     expect(mockedSpawnExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.lifecycle',
@@ -362,9 +379,13 @@ describe('BranchesService environment start async behavior', () => {
       service as unknown as { processes: Map<BranchID, { process: { kill: () => void } }> }
     ).processes.set(branch.branch_id, { process: { kill } });
 
-    await service.restartEnvironment(branch.branch_id);
+    await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
 
     expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+
+    await waitForDeferredWork();
+
     expect(mockedSpawnExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.lifecycle',
@@ -1642,7 +1663,7 @@ describe('BranchesService environment health recovery', () => {
         throw new Error(`Unknown service: ${path}`);
       },
     } as unknown as Application;
-    const service = new BranchesService({} as never, app);
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
     const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
       async (_id, update) =>

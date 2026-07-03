@@ -1,6 +1,6 @@
 import type { Session } from '@agor-live/client';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { EMPTY_MAPS } from '../hooks/useAgorData';
+import { EMPTY_MAPS } from './agorMaps';
 import { agorStore } from './agorStore';
 
 // Reset the singleton before each test so cases don't bleed into each other.
