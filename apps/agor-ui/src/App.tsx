@@ -47,6 +47,7 @@ import {
   useSessionActions,
 } from './hooks';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
+import { KeyboardShortcutsProvider } from './keyboard';
 import { agorStore, useAgorStore } from './store/agorStore';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
@@ -1806,13 +1807,15 @@ function AppWrapper() {
               read the canvas-nav context. The inner App component used to
               wrap its own JSX in this provider; that's been removed. */}
           <CanvasNavigationProvider>
-            {isMarketingScreenshotRoute ? (
-              <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
-                <MarketingScreenshotPage />
-              </Suspense>
-            ) : (
-              <AppContent />
-            )}
+            <KeyboardShortcutsProvider>
+              {isMarketingScreenshotRoute ? (
+                <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
+                  <MarketingScreenshotPage />
+                </Suspense>
+              ) : (
+                <AppContent />
+              )}
+            </KeyboardShortcutsProvider>
           </CanvasNavigationProvider>
         </ErrorBoundary>
       </AntApp>
