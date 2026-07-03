@@ -43,6 +43,7 @@ import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
 import { type ActiveUrlTarget, useUrlState } from '../../hooks/useUrlState';
 import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
+import { useKeyboardShortcut } from '../../keyboard';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectArtifactById,
@@ -65,12 +66,14 @@ import type { AgenticToolOption } from '../../types';
 import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
 import { createAssistantBranch } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
+import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { AppHeader } from '../AppHeader';
 import type { BoardAssistantPanelTab } from '../BoardAssistantPanel';
 import { BoardAssistantPanel } from '../BoardAssistantPanel';
+import { BoardSwitcherPalette } from '../BoardSwitcherPalette';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
@@ -98,6 +101,37 @@ const BoardSwitcherBridge: React.FC<{ setCurrentBoardId: (id: string) => void }>
 }) => {
   useRegisterBoardSwitcher(setCurrentBoardId);
   return null;
+};
+
+/**
+ * Binds the app-level global keyboard shortcuts (new session, board switcher,
+ * MCP auth) and owns the board-switcher command palette. Lives inside
+ * `KeyboardShortcutsProvider` so it can register handlers via the context.
+ */
+const GlobalShortcuts: React.FC<{
+  boards: Board[];
+  currentBoardId?: string | null;
+  onNewSession: () => void;
+  onAuthenticateMcp: () => void;
+  onSelectBoard: (boardId: string) => void;
+  onSelectHome: () => void;
+}> = ({ boards, currentBoardId, onNewSession, onAuthenticateMcp, onSelectBoard, onSelectHome }) => {
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useKeyboardShortcut('new-session', onNewSession);
+  useKeyboardShortcut('board-switcher', () => setPaletteOpen(true));
+  useKeyboardShortcut('authenticate-mcp', onAuthenticateMcp);
+
+  return (
+    <BoardSwitcherPalette
+      open={paletteOpen}
+      boards={boards}
+      currentBoardId={currentBoardId}
+      onClose={() => setPaletteOpen(false)}
+      onSelectBoard={onSelectBoard}
+      onSelectHome={onSelectHome}
+    />
+  );
 };
 
 export interface AppProps {
@@ -334,7 +368,7 @@ export const App: React.FC<AppProps> = ({
   const gatewayChannelById = useAgorStore(selectGatewayChannelById);
   const artifactById = useAgorStore(selectArtifactById);
 
-  const { showWarning } = useThemedMessage();
+  const { showWarning, showSuccess, showInfo, showError } = useThemedMessage();
   const location = useLocation();
   const routeParams = useParams<{
     sessionShortId?: string;
@@ -1170,9 +1204,76 @@ export const App: React.FC<AppProps> = ({
   const stableOnLogout = useStableCallback(onLogout);
   const stableOnRetryConnection = useStableCallback(onRetryConnection);
 
+  // Global keyboard-shortcut handlers. Boards feed the `b` command palette;
+  // `c` opens the create dialog (mirrors NewSessionButton); `a` re-authenticates
+  // MCP servers.
+  const allBoards = useMemo(() => mapToArray(boardById), [boardById]);
+  const handleNewSessionShortcut = useStableCallback(() => {
+    setCreateDialogDefaultTab('assistant');
+    setCreateDialogOpen(true);
+  });
+
+  // Silently re-authenticate every OAuth MCP server whose token is missing or
+  // expired via the refresh endpoint (no popups). Servers that need an
+  // interactive sign-in (no refresh token / revoked grant) can't be batched
+  // because browsers block bulk OAuth popups — we report those so the user can
+  // click each pill in Settings → MCP servers.
+  const handleAuthenticateMcpShortcut = useStableCallback(async () => {
+    if (!client) return;
+    const oauthServers = mapToArray(mcpServerById).filter((s) => s.auth?.type === 'oauth');
+    if (oauthServers.length === 0) {
+      showInfo('No MCP servers require authentication.');
+      return;
+    }
+    const needing = oauthServers.filter((s) => mcpServerNeedsAuth(s, new Set<string>()));
+    if (needing.length === 0) {
+      showInfo('All MCP servers are already authenticated.');
+      return;
+    }
+
+    let refreshed = 0;
+    const needsInteractive: string[] = [];
+    await Promise.all(
+      needing.map(async (server) => {
+        const label = server.display_name || server.name;
+        try {
+          const result = (await client
+            .service('mcp-servers/oauth-refresh')
+            .create({ mcp_server_id: server.mcp_server_id })) as {
+            success: boolean;
+            error?: string;
+          };
+          if (result?.success) refreshed += 1;
+          else needsInteractive.push(label);
+        } catch {
+          needsInteractive.push(label);
+        }
+      })
+    );
+
+    if (refreshed > 0) {
+      showSuccess(`Re-authenticated ${refreshed} MCP server${refreshed === 1 ? '' : 's'}.`);
+    }
+    if (needsInteractive.length > 0) {
+      showWarning(
+        `${needsInteractive.length} MCP server${needsInteractive.length === 1 ? '' : 's'} need interactive sign-in (${needsInteractive.join(', ')}). Open Settings → MCP servers to authenticate.`
+      );
+    } else if (refreshed === 0) {
+      showError('Failed to authenticate MCP servers.');
+    }
+  });
+
   return (
     <AppActionsProvider value={appActionsValue}>
       <BoardSwitcherBridge setCurrentBoardId={setCurrentBoardId} />
+      <GlobalShortcuts
+        boards={allBoards}
+        currentBoardId={headerBoardId}
+        onNewSession={handleNewSessionShortcut}
+        onAuthenticateMcp={handleAuthenticateMcpShortcut}
+        onSelectBoard={navigation.goToBoard}
+        onSelectHome={handleHomeClick}
+      />
       <Layout style={{ height: '100vh' }}>
         <AppHeader
           user={user}
