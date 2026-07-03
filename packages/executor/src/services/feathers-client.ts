@@ -13,6 +13,11 @@ export type { AgorClient } from '@agor/core/api';
 const DEBUG_FEATHERS_CLIENT =
   process.env.AGOR_DEBUG_FEATHERS_CLIENT === '1' || process.env.DEBUG?.includes('feathers-client');
 
+const SERVER_DISCONNECT_RECONNECT_BASE_DELAY_MS = 1000;
+const SERVER_DISCONNECT_RECONNECT_MAX_DELAY_MS = 30_000;
+const SERVER_DISCONNECT_RECONNECT_MAX_ATTEMPTS = 8;
+const SERVER_DISCONNECT_RECONNECT_MAX_AUTH_FAILURES = 3;
+
 function feathersClientDebug(...args: unknown[]): void {
   if (DEBUG_FEATHERS_CLIENT) {
     console.debug(...args);
@@ -82,14 +87,28 @@ export async function createExecutorClient(
   // while dropping custom JWT claims from subsequent service params.
   (client as AgorClient & { executorSessionToken?: string }).executorSessionToken = sessionToken;
 
+  let serverDisconnectReconnectAttempts = 0;
+  let serverDisconnectAuthFailures = 0;
+  let serverDisconnectReconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  const resetServerDisconnectRecovery = () => {
+    serverDisconnectReconnectAttempts = 0;
+    serverDisconnectAuthFailures = 0;
+    if (serverDisconnectReconnectTimer) {
+      clearTimeout(serverDisconnectReconnectTimer);
+      serverDisconnectReconnectTimer = undefined;
+    }
+  };
+
   let reauthenticating = false;
-  const reauthenticateSocket = async (label: string) => {
-    if (reauthenticating) return;
+  const reauthenticateSocket = async (label: string): Promise<boolean> => {
+    if (reauthenticating) return true;
     reauthenticating = true;
     try {
       // Try reAuthenticate first — uses stored credentials from MemoryStorage
       await client.reAuthenticate(true);
       console.log(`[executor] Re-authenticated successfully after ${label}`);
+      resetServerDisconnectRecovery();
+      return true;
     } catch {
       // Fallback: authenticate with raw JWT if storage-based re-auth fails
       try {
@@ -98,12 +117,64 @@ export async function createExecutorClient(
           accessToken: sessionToken,
         });
         console.log(`[executor] Re-authenticated with JWT fallback after ${label}`);
+        resetServerDisconnectRecovery();
+        return true;
       } catch (error) {
         console.error(`[executor] Re-authentication failed after ${label}:`, error);
+        return false;
       }
     } finally {
       reauthenticating = false;
     }
+  };
+
+  const scheduleServerDisconnectReconnect = () => {
+    if (serverDisconnectReconnectTimer) return;
+
+    if (serverDisconnectReconnectAttempts >= SERVER_DISCONNECT_RECONNECT_MAX_ATTEMPTS) {
+      logSocketEvent(
+        'server_disconnect_reconnect_abandoned',
+        `after ${serverDisconnectReconnectAttempts} attempts`
+      );
+      return;
+    }
+
+    serverDisconnectReconnectAttempts += 1;
+    const delayMs =
+      serverDisconnectReconnectAttempts === 1
+        ? 0
+        : Math.min(
+            SERVER_DISCONNECT_RECONNECT_BASE_DELAY_MS *
+              2 ** (serverDisconnectReconnectAttempts - 2),
+            SERVER_DISCONNECT_RECONNECT_MAX_DELAY_MS
+          );
+
+    logSocketEvent(
+      'server_disconnect_reconnect_scheduled',
+      `attempt ${serverDisconnectReconnectAttempts} in ${delayMs}ms`
+    );
+
+    serverDisconnectReconnectTimer = setTimeout(() => {
+      serverDisconnectReconnectTimer = undefined;
+      client.io.once('connect', async () => {
+        const reauthenticated = await reauthenticateSocket('server disconnect reconnect');
+        if (reauthenticated) return;
+
+        serverDisconnectAuthFailures += 1;
+        if (serverDisconnectAuthFailures >= SERVER_DISCONNECT_RECONNECT_MAX_AUTH_FAILURES) {
+          logSocketEvent(
+            'server_disconnect_reconnect_auth_abandoned',
+            `after ${serverDisconnectAuthFailures} auth failures`
+          );
+          client.io.disconnect();
+          return;
+        }
+
+        client.io.disconnect();
+        scheduleServerDisconnectReconnect();
+      });
+      client.io.connect();
+    }, delayMs);
   };
 
   // Connect the socket
@@ -117,10 +188,7 @@ export async function createExecutorClient(
       // Treat it as recoverable for executor lifetimes and explicitly reopen
       // the socket; the one-shot connect handler below re-authenticates the new
       // socket because Manager "reconnect" is not emitted for this path.
-      client.io.once('connect', () => {
-        void reauthenticateSocket('server disconnect reconnect');
-      });
-      client.io.connect();
+      scheduleServerDisconnectReconnect();
     }
   });
 
