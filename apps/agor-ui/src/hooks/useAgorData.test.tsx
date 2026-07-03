@@ -19,6 +19,9 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../store/agorStore';
+// Session `patched`/`updated` writes are coalesced to one flush per frame (see
+// realtimeBatch); flush synchronously in tests that assert the post-patch store.
+import { flushRealtimeNow } from '../store/realtimeBatch';
 import { useAgorData } from './useAgorData';
 
 /**
@@ -261,7 +264,10 @@ describe('useAgorData — socket-event bailouts', () => {
 
     const beforeSessions = agorStore.getState().sessionById;
 
-    act(() => emit('sessions', 'patched', { ...session, status: 'running' }));
+    act(() => {
+      emit('sessions', 'patched', { ...session, status: 'running' });
+      flushRealtimeNow();
+    });
 
     expect(agorStore.getState().sessionById).not.toBe(beforeSessions);
     expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'running' });
@@ -273,13 +279,14 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    act(() =>
+    act(() => {
       emit('sessions', 'patched', {
         ...session,
         status: 'idle',
         ready_for_prompt: true,
-      })
-    );
+      });
+      flushRealtimeNow();
+    });
 
     expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({
       status: 'idle',
@@ -378,7 +385,10 @@ describe('useAgorData — socket-event bailouts', () => {
         ?.map((s) => s.session_id)
     ).toEqual(['s-1']);
 
-    act(() => emit('sessions', 'patched', { ...session, branch_id: 'b-2' }));
+    act(() => {
+      emit('sessions', 'patched', { ...session, branch_id: 'b-2' });
+      flushRealtimeNow();
+    });
 
     // Old branch bucket is cleaned up; new branch bucket holds the session.
     expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);

@@ -47,6 +47,7 @@ import {
 } from '../store/agorMaps';
 import * as realtime from '../store/agorRealtimeActions';
 import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
+import { batchRealtime, flushRealtimeNow } from '../store/realtimeBatch';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import {
@@ -1094,11 +1095,25 @@ export function useAgorData(
       return;
     }
 
-    // Subscribe to session events
+    // Subscribe to session events. `patched`/`updated` are the streaming hot
+    // path (a patch per token batch), so they're coalesced to one flush per
+    // frame — without this, mounting a board into a live store (home→board)
+    // never converges. `created`/`removed` stay immediate; the patch reducer
+    // no-ops on a since-removed id, so batching can't reorder them harmfully.
     const sessionsService = client.service('sessions');
+    // Coalesce the streaming UI write, but keep the skip-apply-on-race revision
+    // bump SYNCHRONOUS — the background hydration's quiet-window guard depends on
+    // seeing the bump the instant the event lands, not a frame later. The
+    // deferred `sessionPatched` bumps again, which is harmless (the counter is
+    // monotonic; an extra bump only makes hydration more conservative).
+    const batchedSessionPatch = batchRealtime(realtime.sessionPatched);
+    const sessionPatchedBatched = (session: Session) => {
+      bumpRevision('sessions');
+      batchedSessionPatch(session);
+    };
     sessionsService.on('created', realtime.sessionCreated);
-    sessionsService.on('patched', realtime.sessionPatched);
-    sessionsService.on('updated', realtime.sessionPatched);
+    sessionsService.on('patched', sessionPatchedBatched);
+    sessionsService.on('updated', sessionPatchedBatched);
     sessionsService.on('removed', realtime.sessionRemoved);
 
     // Subscribe to board events
@@ -1340,13 +1355,16 @@ export function useAgorData(
 
     // Cleanup listeners on unmount
     return () => {
+      // Apply any frame-batched session patches before tearing down so the last
+      // streamed update isn't dropped when the workspace surface unmounts.
+      flushRealtimeNow();
       client.io.off('oauth:completed', handleOAuthCompleted);
       client.io.off('oauth:disconnected', handleOAuthDisconnected);
       client.io.off('connect', refetchSilently);
       window.removeEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
       sessionsService.removeListener('created', realtime.sessionCreated);
-      sessionsService.removeListener('patched', realtime.sessionPatched);
-      sessionsService.removeListener('updated', realtime.sessionPatched);
+      sessionsService.removeListener('patched', sessionPatchedBatched);
+      sessionsService.removeListener('updated', sessionPatchedBatched);
       sessionsService.removeListener('removed', realtime.sessionRemoved);
 
       boardsService.removeListener('created', realtime.boardCreated);
