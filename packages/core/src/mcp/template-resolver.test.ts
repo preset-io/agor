@@ -3,7 +3,7 @@ import { generateId } from '../lib/ids';
 import type { MCPServer, MCPServerID } from '../types';
 import {
   buildMCPTemplateContextFromEnv,
-  isFullValueTemplate,
+  isUserEnvPlaceholder,
   resolveMcpServerEnv,
   resolveMcpServerTemplates,
 } from './template-resolver';
@@ -23,17 +23,22 @@ function createTestServer(overrides: Partial<MCPServer> = {}): MCPServer {
   };
 }
 
-describe('isFullValueTemplate', () => {
-  it('accepts a single whole-value template, tolerating surrounding whitespace', () => {
-    expect(isFullValueTemplate('{{ user.env.GARMIN_TOKEN }}')).toBe(true);
-    expect(isFullValueTemplate('  {{user.env.X}}  ')).toBe(true);
+describe('isUserEnvPlaceholder', () => {
+  it('accepts a bare user.env placeholder, tolerating whitespace', () => {
+    expect(isUserEnvPlaceholder('{{ user.env.GARMIN_TOKEN }}')).toBe(true);
+    expect(isUserEnvPlaceholder('{{user.env.X}}')).toBe(true);
+    expect(isUserEnvPlaceholder('  {{ user.env.API_TOKEN }}  ')).toBe(true);
   });
 
-  it('rejects raw values that merely contain braces', () => {
-    expect(isFullValueTemplate('sk-live-{{oops}}-tail')).toBe(false);
-    expect(isFullValueTemplate('{{a}}{{b}}')).toBe(false);
-    expect(isFullValueTemplate('plain-secret')).toBe(false);
-    expect(isFullValueTemplate('{{ outer {{ inner }} }}')).toBe(false);
+  it('rejects non-user.env templates, helper/fallback expressions, and brace-bearing secrets', () => {
+    expect(isUserEnvPlaceholder('{{secret}}')).toBe(false);
+    expect(isUserEnvPlaceholder('{{ env.X }}')).toBe(false);
+    expect(isUserEnvPlaceholder('{{default user.env.MISSING "sk-live-abc"}}')).toBe(false);
+    expect(isUserEnvPlaceholder('{{ lookup user.env "SECRET" }}')).toBe(false);
+    expect(isUserEnvPlaceholder('sk-live-{{user.env.X}}-tail')).toBe(false);
+    expect(isUserEnvPlaceholder('{{user.env.A}}{{user.env.B}}')).toBe(false);
+    expect(isUserEnvPlaceholder('{{ outer {{ user.env.X }} }}')).toBe(false);
+    expect(isUserEnvPlaceholder('plain-secret')).toBe(false);
   });
 });
 

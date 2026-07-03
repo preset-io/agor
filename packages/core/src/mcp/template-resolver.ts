@@ -121,25 +121,28 @@ export function containsTemplate(value: string): boolean {
 }
 
 /**
- * Matches a value that is EXACTLY one `{{ ... }}` expression with no surrounding
- * text and no nested braces. Trimmed, so leading/trailing whitespace is allowed.
+ * Matches a value that is EXACTLY one bare `{{ user.env.NAME }}` placeholder:
+ * optional surrounding/inner whitespace, a standard env-var name, nothing else.
  *
- * Rejects `secret-{{x}}-tail` and `{{a}}{{b}}`, so a raw secret that merely
- * contains braces is not mistaken for a template.
+ * Deliberately rejects everything but a direct user-env reference — arbitrary
+ * expressions (`{{secret}}`), helper/fallback forms
+ * (`{{default user.env.X "sk-live-…"}}`), partial values (`sk-{{x}}`), and
+ * multiple expressions (`{{a}}{{b}}`) — so a raw secret or a literal secret
+ * fallback can never be mistaken for a placeholder.
  */
-const FULL_VALUE_TEMPLATE_RE = /^\{\{[^{}]+\}\}$/;
+const USER_ENV_PLACEHOLDER_RE = /^\{\{\s*user\.env\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}$/;
 
 /**
- * Check if a string is a single, whole-value Handlebars template expression.
+ * Check if a string is a single bare `{{ user.env.NAME }}` placeholder.
  *
- * Stricter than {@link containsTemplate}: only values that are entirely one
- * `{{ ... }}` expression qualify. Redaction uses this to decide whether a
- * secret-bearing auth field is a template placeholder (safe to preserve for
- * downstream resolution) versus a raw secret that happens to contain braces
- * (must be redacted).
+ * Redaction uses this to decide whether a secret-bearing auth field holds a
+ * user-env placeholder — which references an env key and carries no secret
+ * material itself, so it is safe to preserve for downstream resolution — versus
+ * a raw secret (which must be redacted). Intentionally far narrower than
+ * {@link containsTemplate}: only bare user-env references may bypass redaction.
  */
-export function isFullValueTemplate(value: string): boolean {
-  return FULL_VALUE_TEMPLATE_RE.test(value.trim());
+export function isUserEnvPlaceholder(value: string): boolean {
+  return USER_ENV_PLACEHOLDER_RE.test(value.trim());
 }
 
 /**

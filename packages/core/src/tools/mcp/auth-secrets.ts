@@ -6,7 +6,7 @@
  */
 
 import {
-  isFullValueTemplate,
+  isUserEnvPlaceholder,
   TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
 } from '../../mcp/template-resolver';
 import type { MCPAuth } from '../../types/mcp';
@@ -34,14 +34,16 @@ export function redactMCPAuthSecrets(auth?: MCPAuth): MCPAuth | undefined {
     const value = redacted[field];
     if (value === undefined) continue;
 
-    // Leave full-value `{{ }}` templates intact ONLY in fields the resolver
-    // actually substitutes: downstream session-scoping resolves them against the
-    // user's env, and the sentinel would defeat that substitution (yielding a
-    // literal `Bearer ••••••••` header the MCP client rejects). A strict
-    // whole-value check keeps raw secrets that merely contain braces redacted,
-    // and fields the resolver never touches — notably the OAuth runtime secrets
-    // `oauth_access_token` / `oauth_refresh_token` — are always redacted.
-    if (templateResolvable.has(field) && typeof value === 'string' && isFullValueTemplate(value)) {
+    // Leave a bare `{{ user.env.NAME }}` placeholder intact ONLY in fields the
+    // resolver actually substitutes: downstream session-scoping resolves it
+    // against the user's env, and the sentinel would defeat that substitution
+    // (yielding a literal `Bearer ••••••••` header the MCP client rejects). The
+    // strict placeholder check keeps raw secrets redacted even when wrapped in a
+    // single Handlebars expression (`{{secret}}` or a helper/fallback like
+    // `{{default user.env.X "sk-live-…"}}`), and fields the resolver never touch
+    // — the OAuth runtime secrets `oauth_access_token` / `oauth_refresh_token` —
+    // are always redacted.
+    if (templateResolvable.has(field) && typeof value === 'string' && isUserEnvPlaceholder(value)) {
       continue;
     }
 

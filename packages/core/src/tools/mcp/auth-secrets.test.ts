@@ -64,8 +64,8 @@ describe('MCP auth secret helpers', () => {
       api_token: '{{a}}{{b}}',
     });
 
-    // Only a whole-value `{{ ... }}` template is preserved; partial or multiple
-    // brace expressions are raw secrets and must be redacted.
+    // Only a bare `{{ user.env.NAME }}` placeholder is preserved; partial or
+    // multiple brace expressions are raw secrets and must be redacted.
     expect(redacted).toEqual({
       type: 'bearer',
       token: MCP_HEADER_REDACTED_SENTINEL,
@@ -104,6 +104,37 @@ describe('MCP auth secret helpers', () => {
       oauth_client_secret: MCP_HEADER_REDACTED_SENTINEL,
       oauth_access_token: MCP_HEADER_REDACTED_SENTINEL,
       oauth_refresh_token: MCP_HEADER_REDACTED_SENTINEL,
+    });
+  });
+
+  it('redacts a single non-user.env Handlebars expression in a resolvable field', () => {
+    // `{{secret}}` is one whole-value expression but references an arbitrary
+    // variable, not a user-env placeholder — it must not escape redaction.
+    const redacted = redactMCPAuthSecrets({
+      type: 'bearer',
+      token: '{{secret}}',
+    });
+
+    expect(redacted).toEqual({
+      type: 'bearer',
+      token: MCP_HEADER_REDACTED_SENTINEL,
+    });
+  });
+
+  it('redacts helper/fallback expressions that can embed a literal secret', () => {
+    // A single Handlebars helper expression (default/lookup/…) is still not a
+    // bare user-env placeholder and can carry secret material in a literal
+    // fallback, so it must redact rather than survive to resolution.
+    const redacted = redactMCPAuthSecrets({
+      type: 'bearer',
+      token: '{{default user.env.MISSING "sk-live-shouldnotleak"}}',
+      api_secret: '{{ lookup user.env "SECRET" }}',
+    });
+
+    expect(redacted).toEqual({
+      type: 'bearer',
+      token: MCP_HEADER_REDACTED_SENTINEL,
+      api_secret: MCP_HEADER_REDACTED_SENTINEL,
     });
   });
 
