@@ -32,6 +32,94 @@ const NEW_MENU_ITEMS: MenuProps['items'] = [
   { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
 ];
 
+/**
+ * Gate around OnboardingCard that owns the onboarding-progress subscription,
+ * so its per-notification cost (including a session scan for `hasSessions`)
+ * exists ONLY while the card can appear. HomePage unmounts this once the card
+ * is dismissed — the common case for established users — leaving the page
+ * with zero onboarding subscription cost; when every step is done it renders
+ * nothing while parked on the (rarely notified) shallow-equal booleans.
+ */
+const HomeOnboarding: React.FC<{
+  currentUserId?: string;
+  onNewSession: () => void;
+  onOpenCreateDialog: HomePageProps['onOpenCreateDialog'];
+  onOpenSettings: HomePageProps['onOpenSettings'];
+  onDismiss: () => void;
+}> = ({ currentUserId, onNewSession, onOpenCreateDialog, onOpenSettings, onDismiss }) => {
+  // Booleans with shallow equality: entity patches only re-render this gate
+  // when a step actually flips (e.g. first repo connected). `sessionById`
+  // keeps archived sessions around for deep links, so `hasSessions` must
+  // filter !archived (and scope to the current user when known); `.some`
+  // exits the scan at the first match.
+  const { hasBoards, hasRepos, hasMcp, hasTeammates, hasSessions } = useStoreWithEqualityFn(
+    agorStore,
+    (state) => ({
+      hasBoards: state.boardById.size > 0,
+      hasRepos: state.repoById.size > 0,
+      hasMcp: state.mcpServerById.size > 0,
+      hasTeammates: state.userById.size > 1,
+      hasSessions: Array.from(state.sessionById.values()).some(
+        (s) => !s.archived && (!currentUserId || s.created_by === currentUserId)
+      ),
+    }),
+    shallow
+  );
+
+  const steps = useMemo(() => {
+    return [
+      {
+        id: 'repo',
+        label: 'Connect a repository',
+        done: hasRepos,
+        cta: 'Connect →',
+        onClick: () => onOpenSettings('repos'),
+      },
+      {
+        id: 'board',
+        label: 'Create your first board',
+        done: hasBoards,
+        cta: 'Create →',
+        onClick: () => onOpenCreateDialog('board'),
+      },
+      {
+        id: 'session',
+        label: 'Launch an AI session',
+        done: hasSessions,
+        cta: 'Start →',
+        onClick: onNewSession,
+      },
+      {
+        id: 'mcp',
+        label: 'Configure MCP tools',
+        done: hasMcp,
+        cta: 'Set up →',
+        onClick: () => onOpenSettings('mcp'),
+      },
+      {
+        id: 'invite',
+        label: 'Invite a teammate',
+        done: hasTeammates,
+        cta: 'Invite →',
+        onClick: () => onOpenSettings('users'),
+      },
+    ];
+  }, [
+    hasBoards,
+    hasRepos,
+    hasMcp,
+    hasTeammates,
+    hasSessions,
+    onOpenCreateDialog,
+    onOpenSettings,
+    onNewSession,
+  ]);
+
+  if (steps.every((s) => s.done)) return null;
+
+  return <OnboardingCard steps={steps} onDismiss={onDismiss} />;
+};
+
 export const HomePage = memo(function HomePage(props: HomePageProps) {
   const { token } = theme.useToken();
   const homeBackground = DEFAULT_BACKGROUNDS[isDarkTheme(token) ? 'dark' : 'light'];
@@ -162,74 +250,6 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     props.onOpenCreateDialog(createType, selectedBoardId);
   }, [props.onOpenCreateDialog, createType, selectedBoardId]);
 
-  // Booleans with shallow equality: entity patches only re-render HomePage
-  // when a step actually flips (e.g. first repo connected), not on every
-  // write to the underlying maps.
-  const { hasBoards, hasRepos, hasMcp, hasTeammates, hasSessions } = useStoreWithEqualityFn(
-    agorStore,
-    (state) => ({
-      hasBoards: state.boardById.size > 0,
-      hasRepos: state.repoById.size > 0,
-      hasMcp: state.mcpServerById.size > 0,
-      hasTeammates: state.userById.size > 1,
-      hasSessions: Array.from(state.sessionById.values()).some(
-        (s) => !s.archived && (!props.currentUserId || s.created_by === props.currentUserId)
-      ),
-    }),
-    shallow
-  );
-
-  const onboardingSteps = useMemo(() => {
-    return [
-      {
-        id: 'repo',
-        label: 'Connect a repository',
-        done: hasRepos,
-        cta: 'Connect →',
-        onClick: () => props.onOpenSettings('repos'),
-      },
-      {
-        id: 'board',
-        label: 'Create your first board',
-        done: hasBoards,
-        cta: 'Create →',
-        onClick: () => props.onOpenCreateDialog('board'),
-      },
-      {
-        id: 'session',
-        label: 'Launch an AI session',
-        done: hasSessions,
-        cta: 'Start →',
-        onClick: handleNewSession,
-      },
-      {
-        id: 'mcp',
-        label: 'Configure MCP tools',
-        done: hasMcp,
-        cta: 'Set up →',
-        onClick: () => props.onOpenSettings('mcp'),
-      },
-      {
-        id: 'invite',
-        label: 'Invite a teammate',
-        done: hasTeammates,
-        cta: 'Invite →',
-        onClick: () => props.onOpenSettings('users'),
-      },
-    ];
-  }, [
-    hasBoards,
-    hasRepos,
-    hasMcp,
-    hasTeammates,
-    hasSessions,
-    props.onOpenCreateDialog,
-    props.onOpenSettings,
-    handleNewSession,
-  ]);
-
-  const showOnboardingCard = !onboardingHidden && onboardingSteps.some((s) => !s.done);
-
   return (
     <>
       <div style={{ height: '100%', overflow: 'hidden', background: homeBackground }}>
@@ -287,10 +307,13 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                 </Dropdown>
               </header>
 
-              {/* Get started onboarding card */}
-              {showOnboardingCard && (
-                <OnboardingCard
-                  steps={onboardingSteps}
+              {/* Get started onboarding card — gate unmounted once dismissed */}
+              {!onboardingHidden && (
+                <HomeOnboarding
+                  currentUserId={props.currentUserId}
+                  onNewSession={handleNewSession}
+                  onOpenCreateDialog={props.onOpenCreateDialog}
+                  onOpenSettings={props.onOpenSettings}
                   onDismiss={() => {
                     localStorage.setItem(ONBOARDING_HIDDEN_KEY, 'true');
                     setOnboardingHidden(true);

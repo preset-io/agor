@@ -47,6 +47,8 @@ function renderHome() {
         onBoardClick={() => {}}
         onBranchClick={() => {}}
         onSessionClick={() => {}}
+        onOpenCreateDialog={() => {}}
+        onOpenSettings={() => {}}
       />
     </MemoryRouter>
   );
@@ -77,8 +79,8 @@ describe('HomePage store-selector re-render isolation', () => {
   });
 
   it('a session patch does not re-render HomePage', async () => {
-    // Seed BEFORE the baseline so the patch below can't flip a derived value
-    // HomePage does select (the onboarding "hasSessions" boolean).
+    // Seed BEFORE the baseline so the patch below flips nothing derived
+    // anywhere in the subtree (e.g. the onboarding gate's "hasSessions").
     agorStore.setState({ sessionById: new Map([[session.session_id, session]]) });
     renderHome();
 
@@ -153,6 +155,8 @@ const STABLE_HOME_PROPS = {
   currentUserId: 'u1',
   onBoardClick: noop,
   onBranchClick: noop,
+  onOpenCreateDialog: noop,
+  onOpenSettings: noop,
 } as const;
 
 // Parent harness rendering the REAL memo'd HomePage the way App does. The
