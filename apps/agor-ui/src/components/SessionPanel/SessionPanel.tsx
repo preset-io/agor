@@ -275,6 +275,11 @@ PromptInput.displayName = 'PromptInput';
 
 // ---------------------------------------------------------------------------
 
+// Stable fallback so renders before the reactive session hydrates don't mint
+// a fresh array — the memos deriving footer props from `tasks` (and through
+// them the memoized SessionFooter) key on its identity.
+const EMPTY_TASKS: Task[] = [];
+
 export interface SessionPanelProps {
   client: AgorClient | null;
   session: Session | null;
@@ -411,7 +416,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     reactiveOptions: { taskHydration: 'none' },
   });
 
-  const tasks = reactiveSessionState?.tasks || [];
+  const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
   const attachmentInputRef = React.useRef<HTMLInputElement>(null);
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
   // Search observes only the conversation region, not the whole body: the
@@ -674,6 +679,163 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   }, [searchOpen]);
 
+  const isRunning =
+    session?.status === SessionStatus.RUNNING || session?.status === SessionStatus.STOPPING;
+  const isStopping = session?.status === SessionStatus.STOPPING;
+
+  // SessionFooter is memoized, but its handlers close over per-render state
+  // and are defined below the null-session early return, so they can't be
+  // useCallback'd directly. Freeze the identities the footer sees with
+  // lifetime-stable wrappers that delegate to the latest implementations via
+  // a ref (re-pointed each render, right where the impls are defined).
+  const footerHandlersRef = React.useRef<{
+    onModelConfigChange: (config: ModelConfig) => void;
+    onSendPrompt: () => void;
+    onStop: () => void;
+    onFork: () => void;
+    onBtwSend: () => void;
+    onSpawnOpen: () => void;
+    onAttachFiles: () => void;
+    onUploadOpen: () => void;
+    onEffortChange: (v: EffortLevel) => void;
+    onPermissionModeChange: (v: PermissionMode) => void;
+    onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
+  } | null>(null);
+  const stableFooterHandlers = React.useMemo(
+    () => ({
+      onModelConfigChange: (config: ModelConfig) =>
+        footerHandlersRef.current?.onModelConfigChange(config),
+      onSendPrompt: () => footerHandlersRef.current?.onSendPrompt(),
+      onStop: () => footerHandlersRef.current?.onStop(),
+      onFork: () => footerHandlersRef.current?.onFork(),
+      onBtwSend: () => footerHandlersRef.current?.onBtwSend(),
+      onSpawnOpen: () => footerHandlersRef.current?.onSpawnOpen(),
+      onAttachFiles: () => footerHandlersRef.current?.onAttachFiles(),
+      onUploadOpen: () => footerHandlersRef.current?.onUploadOpen(),
+      onEffortChange: (v: EffortLevel) => footerHandlersRef.current?.onEffortChange(v),
+      onPermissionModeChange: (v: PermissionMode) =>
+        footerHandlersRef.current?.onPermissionModeChange(v),
+      onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) =>
+        footerHandlersRef.current?.onCodexPermissionChange(sandbox, approval),
+    }),
+    []
+  );
+
+  const modelLabel =
+    session?.model_config?.model &&
+    session.agentic_tool === 'opencode' &&
+    session.model_config.provider
+      ? `${session.model_config.provider}/${session.model_config.model}`
+      : session?.model_config?.model;
+  const modelConfig: ModelConfig | undefined = React.useMemo(
+    () =>
+      session?.model_config?.model
+        ? {
+            mode: session.model_config.mode || 'alias',
+            model: session.model_config.model,
+            provider: session.model_config.provider,
+            advisorModel: session.model_config.advisorModel,
+          }
+        : undefined,
+    [
+      session?.model_config?.mode,
+      session?.model_config?.model,
+      session?.model_config?.provider,
+      session?.model_config?.advisorModel,
+    ]
+  );
+
+  // The composer subtree only depends on composer/draft state — memoize it so
+  // ordinary SessionPanel re-renders (reactive-session notifies, store
+  // patches) hand the memoized SessionFooter a reference-stable slot.
+  const sessionCustomContext = session?.custom_context as Record<string, unknown> | undefined;
+  const promptInputSlot = React.useMemo(() => {
+    if (!session) return null;
+    return (
+      <SessionComposerDropZone
+        disabled={composerAttachmentUploading}
+        onDragActiveChange={setComposerDropActive}
+        onFilesDrop={addComposerAttachments}
+      >
+        {composerAttachmentValidationError && (
+          <Alert
+            type="error"
+            showIcon
+            message={composerAttachmentValidationError}
+            style={{ marginBottom: 0, borderRadius: token.borderRadius }}
+          />
+        )}
+        <SessionAttachmentTray
+          attachments={composerAttachments}
+          disabled={composerAttachmentUploading}
+          onRemove={removeComposerAttachment}
+        />
+        <PromptInput
+          ref={promptRef}
+          sessionId={session.session_id}
+          getDraft={getDraft}
+          saveDraft={saveDraft}
+          deleteDraft={deleteDraft}
+          onHasInputChange={handleHasInputChange}
+          inputValueRef={inputValueRef}
+          onSubmit={stableFooterHandlers.onSendPrompt}
+          hasExternalInput={hasComposerAttachments}
+          placeholder={
+            isRunning
+              ? 'Queue here… @ for mentions, : for emoji'
+              : 'Prompt here… @ for mentions, : for emoji'
+          }
+          autoSize={{ minRows: 1, maxRows: 10 }}
+          client={client}
+          userById={userById}
+          onFilesDrop={addComposerAttachments}
+          filesDropDisabled={composerAttachmentUploading}
+          showFilesDropOverlay={false}
+          suppressEmptyHighlight={composerDropActive}
+          slashCommands={
+            Array.isArray(sessionCustomContext?.slash_commands)
+              ? sessionCustomContext.slash_commands
+              : undefined
+          }
+          skills={
+            Array.isArray(sessionCustomContext?.skills) ? sessionCustomContext.skills : undefined
+          }
+        />
+        <input
+          ref={attachmentInputRef}
+          type="file"
+          accept={getComposerUploadAccept()}
+          multiple
+          disabled={composerAttachmentUploading}
+          style={{ display: 'none' }}
+          onChange={(event) => {
+            addComposerAttachments(Array.from(event.target.files ?? []));
+            event.target.value = '';
+          }}
+        />
+      </SessionComposerDropZone>
+    );
+  }, [
+    session,
+    sessionCustomContext,
+    composerAttachmentUploading,
+    composerAttachmentValidationError,
+    composerAttachments,
+    composerDropActive,
+    hasComposerAttachments,
+    isRunning,
+    client,
+    userById,
+    addComposerAttachments,
+    removeComposerAttachment,
+    getDraft,
+    saveDraft,
+    deleteDraft,
+    handleHasInputChange,
+    stableFooterHandlers,
+    token.borderRadius,
+  ]);
+
   // When there's no session, render nothing (panel is collapsed to zero).
   // When open=false, we still render the component tree (hidden) so that
   // antd's CSS-in-JS doesn't garbage-collect component styles.
@@ -745,10 +907,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onClick: handleArchive,
     },
   ];
-
-  const isRunning =
-    session.status === SessionStatus.RUNNING || session.status === SessionStatus.STOPPING;
-  const isStopping = session.status === SessionStatus.STOPPING;
 
   const openAdvancedUpload = (initialFiles: File[] = []) => {
     if (composerAttachmentUploadingRef.current) return;
@@ -1044,20 +1202,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const modelLabel =
-    session.model_config?.model &&
-    session.agentic_tool === 'opencode' &&
-    session.model_config.provider
-      ? `${session.model_config.provider}/${session.model_config.model}`
-      : session.model_config?.model;
-  const modelConfig: ModelConfig | undefined = session.model_config?.model
-    ? {
-        mode: session.model_config.mode || 'alias',
-        model: session.model_config.model,
-        provider: session.model_config.provider,
-        advisorModel: session.model_config.advisorModel,
-      }
-    : undefined;
+  // Re-point the stable footer wrappers at this render's implementations.
+  // Render-phase ref write (instead of the usual useLayoutEffect) because the
+  // impls above only exist when `session` is non-null, past the early return.
+  footerHandlersRef.current = {
+    onModelConfigChange: handleModelConfigChange,
+    onSendPrompt: handleSendPrompt,
+    onStop: handleStop,
+    onFork: handleFork,
+    onBtwSend: handleBtwSend,
+    onSpawnOpen: handleSpawnOpen,
+    onAttachFiles: () => attachmentInputRef.current?.click(),
+    onUploadOpen: () => openAdvancedUpload(),
+    onEffortChange: handleEffortChange,
+    onPermissionModeChange: handlePermissionModeChange,
+    onCodexPermissionChange: handleCodexPermissionChange,
+  };
 
   const sessionFooter = (
     <SessionFooter
@@ -1086,82 +1246,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       client={client}
       modelLabel={modelLabel}
       modelConfig={modelConfig}
-      onModelConfigChange={handleModelConfigChange}
+      onModelConfigChange={stableFooterHandlers.onModelConfigChange}
       onOpenSessionSettings={onOpenSettings}
-      onSendPrompt={handleSendPrompt}
-      onStop={handleStop}
-      onFork={handleFork}
-      onBtwSend={handleBtwSend}
-      onSpawnOpen={handleSpawnOpen}
-      onAttachFiles={() => attachmentInputRef.current?.click()}
-      onUploadOpen={() => openAdvancedUpload()}
-      onEffortChange={handleEffortChange}
-      onPermissionModeChange={handlePermissionModeChange}
-      onCodexPermissionChange={handleCodexPermissionChange}
-      promptInputSlot={
-        <SessionComposerDropZone
-          disabled={composerAttachmentUploading}
-          onDragActiveChange={setComposerDropActive}
-          onFilesDrop={addComposerAttachments}
-        >
-          {composerAttachmentValidationError && (
-            <Alert
-              type="error"
-              showIcon
-              message={composerAttachmentValidationError}
-              style={{ marginBottom: 0, borderRadius: token.borderRadius }}
-            />
-          )}
-          <SessionAttachmentTray
-            attachments={composerAttachments}
-            disabled={composerAttachmentUploading}
-            onRemove={removeComposerAttachment}
-          />
-          <PromptInput
-            ref={promptRef}
-            sessionId={session.session_id}
-            getDraft={getDraft}
-            saveDraft={saveDraft}
-            deleteDraft={deleteDraft}
-            onHasInputChange={handleHasInputChange}
-            inputValueRef={inputValueRef}
-            onSubmit={handleSendPrompt}
-            hasExternalInput={hasComposerAttachments}
-            placeholder={
-              isRunning
-                ? 'Queue here… @ for mentions, : for emoji'
-                : 'Prompt here… @ for mentions, : for emoji'
-            }
-            autoSize={{ minRows: 1, maxRows: 10 }}
-            client={client}
-            userById={userById}
-            onFilesDrop={addComposerAttachments}
-            filesDropDisabled={composerAttachmentUploading}
-            showFilesDropOverlay={false}
-            suppressEmptyHighlight={composerDropActive}
-            slashCommands={(() => {
-              const ctx = session?.custom_context as Record<string, unknown> | undefined;
-              return Array.isArray(ctx?.slash_commands) ? ctx.slash_commands : undefined;
-            })()}
-            skills={(() => {
-              const ctx = session?.custom_context as Record<string, unknown> | undefined;
-              return Array.isArray(ctx?.skills) ? ctx.skills : undefined;
-            })()}
-          />
-          <input
-            ref={attachmentInputRef}
-            type="file"
-            accept={getComposerUploadAccept()}
-            multiple
-            disabled={composerAttachmentUploading}
-            style={{ display: 'none' }}
-            onChange={(event) => {
-              addComposerAttachments(Array.from(event.target.files ?? []));
-              event.target.value = '';
-            }}
-          />
-        </SessionComposerDropZone>
-      }
+      onSendPrompt={stableFooterHandlers.onSendPrompt}
+      onStop={stableFooterHandlers.onStop}
+      onFork={stableFooterHandlers.onFork}
+      onBtwSend={stableFooterHandlers.onBtwSend}
+      onSpawnOpen={stableFooterHandlers.onSpawnOpen}
+      onAttachFiles={stableFooterHandlers.onAttachFiles}
+      onUploadOpen={stableFooterHandlers.onUploadOpen}
+      onEffortChange={stableFooterHandlers.onEffortChange}
+      onPermissionModeChange={stableFooterHandlers.onPermissionModeChange}
+      onCodexPermissionChange={stableFooterHandlers.onCodexPermissionChange}
+      promptInputSlot={promptInputSlot}
     />
   );
 

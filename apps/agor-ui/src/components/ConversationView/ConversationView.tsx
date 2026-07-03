@@ -24,6 +24,9 @@ import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
+// Default-param `= new Map()` would mint a fresh Map on every render and
+// defeat every TaskBlock's React.memo whenever the prop is omitted.
+const EMPTY_USER_MAP = new Map<string, User>();
 // Shared empty-array sentinel so TaskBlock's `taskMessages` prop keeps a stable
 // reference for tasks whose messages haven't been loaded — otherwise `|| []`
 // would mint a fresh array on every render and thrash TaskBlock's React.memo.
@@ -130,7 +133,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     sessionId,
     agentic_tool,
     sessionModel,
-    userById = new Map(),
+    userById = EMPTY_USER_MAP,
     currentUserId,
     onScrollRef,
     onPermissionDecision,

@@ -31,7 +31,7 @@ import {
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Collapse, Flex, Spin, Typography, theme } from 'antd';
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
@@ -54,6 +54,10 @@ import { TaskStatusIcon } from '../TaskStatusIcon';
 import { ToolIcon } from '../ToolIcon';
 
 const { Paragraph } = Typography;
+
+// Default-param `= new Map()` would mint a fresh Map per render and defeat
+// the MessageBlock memos below whenever the prop is omitted.
+const EMPTY_USER_MAP = new Map<string, User>();
 
 /**
  * Block types for rendering
@@ -345,12 +349,32 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   return blocks;
 }
 
+/**
+ * Identity key for reconciling a block across renders — mirrors the React
+ * `key` each block type renders with.
+ */
+function getBlockKey(block: Block): string {
+  return block.type === 'message'
+    ? `m:${block.message.message_id}`
+    : `${block.type}:${block.messages[0]?.message_id || 'unknown'}`;
+}
+
+/** Same composition: identical message references in identical order. */
+function blocksHaveSameMessages(a: Block, b: Block): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === 'message' && b.type === 'message') return a.message === b.message;
+  const aMessages = (a as { messages: Message[] }).messages;
+  const bMessages = (b as { messages: Message[] }).messages;
+  if (aMessages.length !== bMessages.length) return false;
+  return aMessages.every((msg, i) => msg === bMessages[i]);
+}
+
 export const TaskBlock = React.memo<TaskBlockProps>(
   ({
     task,
     agentic_tool,
     sessionModel,
-    userById = new Map(),
+    userById = EMPTY_USER_MAP,
     currentUserId,
     isExpanded,
     onExpandChange,
@@ -408,8 +432,24 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       );
     }, [taskMessages, streamingForTask, streamingMessages]);
 
-    // Group messages into blocks
-    const blocks = useMemo(() => groupMessagesIntoBlocks(messages), [messages]);
+    // Group messages into blocks, then reconcile against the previous render:
+    // a streaming chunk rebuilds `messages` (new array identity) every frame,
+    // but only the streamed message's block actually changed. Reusing the
+    // previous block objects — and crucially their `messages` arrays, which
+    // are minted fresh by groupMessagesIntoBlocks — keeps the props of the
+    // memoized AgentChain/CompactionBlock children reference-stable, so the
+    // untouched (often large) tool-chain subtrees bail out of re-rendering.
+    const prevBlocksRef = useRef<Block[]>([]);
+    const blocks = useMemo(() => {
+      const next = groupMessagesIntoBlocks(messages);
+      const prevByKey = new Map(prevBlocksRef.current.map((b) => [getBlockKey(b), b]));
+      const reconciled = next.map((block) => {
+        const prev = prevByKey.get(getBlockKey(block));
+        return prev && blocksHaveSameMessages(prev, block) ? prev : block;
+      });
+      prevBlocksRef.current = reconciled;
+      return reconciled;
+    }, [messages]);
 
     // Index of the last agent-chain block — used for isLatest so that a streaming
     // text bubble appearing after the chain doesn't prematurely collapse it
@@ -599,7 +639,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                     </div>
                   )}
 
-                  {/* Render all blocks (messages and agent chains) */}
+                  {/* Render all blocks (messages and agent chains). Each block
+                      gets a `data-conversation-block` wrapper: in-session
+                      search's MutationObserver keys off these boundaries to
+                      tell structural transcript changes (new message/chain,
+                      task hydration) apart from per-frame streaming churn
+                      inside a block. */}
                   {!messagesLoading &&
                     blocks.map((block, blockIndex) => {
                       if (block.type === 'message') {
@@ -624,11 +669,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
                         if (isSdkStatusMessage(block.message)) {
                           return (
-                            <RateLimitBlock
-                              key={block.message.message_id}
-                              message={block.message}
-                              agentic_tool={agentic_tool}
-                            />
+                            <div key={block.message.message_id} data-conversation-block>
+                              <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
+                            </div>
                           );
                         }
 
@@ -638,44 +681,47 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           blockIndex === blocks.length - 1;
 
                         return (
-                          <MessageBlock
-                            key={block.message.message_id}
-                            message={block.message}
-                            agentic_tool={agentic_tool}
-                            userById={userById}
-                            currentUserId={task.created_by}
-                            isTaskRunning={task.status === TaskStatus.RUNNING}
-                            sessionId={sessionId}
-                            onPermissionDecision={onPermissionDecision}
-                            isFirstPendingPermission={isFirstPending}
-                            isLatestMessage={isLatestMessage}
-                            taskId={task.task_id}
-                            assistantEmoji={assistantEmoji}
-                            client={client}
-                          />
+                          <div key={block.message.message_id} data-conversation-block>
+                            <MessageBlock
+                              message={block.message}
+                              agentic_tool={agentic_tool}
+                              userById={userById}
+                              currentUserId={task.created_by}
+                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              sessionId={sessionId}
+                              onPermissionDecision={onPermissionDecision}
+                              isFirstPendingPermission={isFirstPending}
+                              isLatestMessage={isLatestMessage}
+                              taskId={task.task_id}
+                              assistantEmoji={assistantEmoji}
+                              client={client}
+                            />
+                          </div>
                         );
                       }
                       if (block.type === 'agent-chain') {
                         // Use first message ID as key for agent chain
                         const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
                         return (
-                          <AgentChain
-                            key={blockKey}
-                            messages={block.messages}
-                            isTaskRunning={task.status === TaskStatus.RUNNING}
-                            isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
-                          />
+                          <div key={blockKey} data-conversation-block>
+                            <AgentChain
+                              messages={block.messages}
+                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
+                            />
+                          </div>
                         );
                       }
                       if (block.type === 'compaction') {
                         // Render compaction block with aggregated messages
                         const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
                         return (
-                          <CompactionBlock
-                            key={blockKey}
-                            messages={block.messages}
-                            agentic_tool={agentic_tool}
-                          />
+                          <div key={blockKey} data-conversation-block>
+                            <CompactionBlock
+                              messages={block.messages}
+                              agentic_tool={agentic_tool}
+                            />
+                          </div>
                         );
                       }
                       return null;
@@ -684,9 +730,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   {/* Keep latest TODO visible even after completion (Claude parity). */}
                   <StickyTodoRenderer messages={messages} taskStatus={task.status} />
 
-                  {/* Show typing indicator whenever task is actively running */}
+                  {/* Show typing indicator whenever task is actively running.
+                      Marked as a conversation block so its unmount at stream
+                      end gives search one final structural re-scan that picks
+                      up the finished message text. */}
                   {task.status === TaskStatus.RUNNING && (
-                    <div style={{ margin: `${token.sizeUnit}px 0` }}>
+                    <div data-conversation-block style={{ margin: `${token.sizeUnit}px 0` }}>
                       <Bubble
                         placement="start"
                         avatar={
