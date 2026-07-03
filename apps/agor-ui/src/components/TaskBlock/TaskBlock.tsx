@@ -359,6 +359,20 @@ function getBlockKey(block: Block): string {
     : `${block.type}:${block.messages[0]?.message_id || 'unknown'}`;
 }
 
+/**
+ * Marker value for a block's `data-conversation-block` wrapper. In-session
+ * search re-scans on the 'streaming' → 'settled' attribute flip: a message
+ * that finishes streaming settles inside the SAME wrapper node (same key), so
+ * without the flip its final text would only become findable at the next
+ * block mount/unmount.
+ */
+function getBlockMarker(block: Block): 'streaming' | 'settled' {
+  const messages = block.type === 'message' ? [block.message] : block.messages;
+  return messages.some((m) => (m as { isStreaming?: boolean }).isStreaming === true)
+    ? 'streaming'
+    : 'settled';
+}
+
 /** Same composition: identical message references in identical order. */
 function blocksHaveSameMessages(a: Block, b: Block): boolean {
   if (a.type !== b.type) return false;
@@ -643,8 +657,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       gets a `data-conversation-block` wrapper: in-session
                       search's MutationObserver keys off these boundaries to
                       tell structural transcript changes (new message/chain,
-                      task hydration) apart from per-frame streaming churn
-                      inside a block. */}
+                      task hydration, a block settling after streaming) apart
+                      from per-frame streaming churn inside a block. */}
                   {!messagesLoading &&
                     blocks.map((block, blockIndex) => {
                       if (block.type === 'message') {
@@ -669,7 +683,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
                         if (isSdkStatusMessage(block.message)) {
                           return (
-                            <div key={block.message.message_id} data-conversation-block>
+                            <div
+                              key={block.message.message_id}
+                              data-conversation-block={getBlockMarker(block)}
+                            >
                               <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
                             </div>
                           );
@@ -681,7 +698,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           blockIndex === blocks.length - 1;
 
                         return (
-                          <div key={block.message.message_id} data-conversation-block>
+                          <div
+                            key={block.message.message_id}
+                            data-conversation-block={getBlockMarker(block)}
+                          >
                             <MessageBlock
                               message={block.message}
                               agentic_tool={agentic_tool}
@@ -703,7 +723,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         // Use first message ID as key for agent chain
                         const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
                         return (
-                          <div key={blockKey} data-conversation-block>
+                          <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                             <AgentChain
                               messages={block.messages}
                               isTaskRunning={task.status === TaskStatus.RUNNING}
@@ -716,7 +736,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         // Render compaction block with aggregated messages
                         const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
                         return (
-                          <div key={blockKey} data-conversation-block>
+                          <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                             <CompactionBlock
                               messages={block.messages}
                               agentic_tool={agentic_tool}

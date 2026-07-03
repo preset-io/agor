@@ -3,7 +3,7 @@ import { escapeRegExp } from '../components/HighlightMatch/HighlightMatch';
 
 const HIGHLIGHT_NAME = 'agor-search';
 const CURRENT_HIGHLIGHT_NAME = 'agor-search-current';
-const REBUILD_DEBOUNCE_MS = 160;
+export const REBUILD_DEBOUNCE_MS = 160;
 
 export interface SessionSearchColors {
   /** Base color for every match (rendered translucent). */
@@ -87,9 +87,18 @@ function buildRanges(container: HTMLElement, query: string): Range[] {
  * TreeWalker re-scan per animation frame is exactly the cost this avoids.
  */
 const STRUCTURAL_BLOCK_SELECTOR = '[data-task-block], [data-conversation-block]';
+const BLOCK_MARKER_ATTRIBUTE = 'data-conversation-block';
 
 export function isStructuralMutation(records: MutationRecord[]): boolean {
   for (const record of records) {
+    // A message that finishes streaming settles *in place*: same wrapper node,
+    // marker value flips 'streaming' → 'settled' (see TaskBlock). That's the
+    // one boundary change with no childList signal, and it's exactly when the
+    // fully-streamed text must become findable.
+    if (record.type === 'attributes') {
+      if (record.attributeName === BLOCK_MARKER_ATTRIBUTE) return true;
+      continue;
+    }
     if (record.type !== 'childList') continue;
     for (const nodes of [record.addedNodes, record.removedNodes]) {
       for (const node of nodes) {
@@ -270,13 +279,19 @@ export function useSessionSearch(
     // mutations aren't observed and intra-block childList churn is filtered
     // out: while an agent streams, both fire once per frame, and each reset of
     // the debounce both starves the pending scan and queues a full-transcript
-    // TreeWalker pass per quiet gap. Text still streaming when the last
-    // structural scan ran becomes searchable at the next boundary change (new
-    // block, or the typing indicator unmounting at stream end).
+    // TreeWalker pass per quiet gap. Boundary changes that DO re-scan: a block
+    // mounting/unmounting (childList) and a block's marker value flipping when
+    // its message finishes streaming (attribute) — so late-streamed text is
+    // findable at message completion, not at the next mount.
     const observer = new MutationObserver((records) => {
       if (isStructuralMutation(records)) scheduleRebuild(false);
     });
-    observer.observe(container, { childList: true, subtree: true });
+    observer.observe(container, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [BLOCK_MARKER_ATTRIBUTE],
+    });
 
     return () => {
       observer.disconnect();
