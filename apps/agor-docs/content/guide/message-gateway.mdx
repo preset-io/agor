@@ -95,6 +95,10 @@ Slack DM                    Agor Daemon                    Agent
 
 The outbound routing is a lightweight after-hook on message creation. For sessions without a gateway mapping (the vast majority), it's a single database lookup that returns immediately — effectively a no-op.
 
+### Outbound branch binding
+
+Proactive outbound emits (`agor_gateway_emit_message`) and Slack thread history reads made from a session are bound to that session's own branch: the gateway channel's target branch must match the calling session's branch, and there is no admin-role bypass. `agor_gateway_outbound_targets_list` only returns channels a session can actually use. Calls made without session context (personal API keys) follow the regular user-permission model instead.
+
 ## Slack thread behavior
 
 In Slack channels, Agor uses a hard mention rule:

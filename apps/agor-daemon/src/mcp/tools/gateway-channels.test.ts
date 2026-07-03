@@ -1,6 +1,7 @@
 import {
   BranchRepository,
   GatewayChannelRepository,
+  SessionRepository,
   ThreadSessionMapRepository,
 } from '@agor/core/db';
 import {
@@ -37,7 +38,11 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<{
   isError?: boolean;
 }>;
 
-async function captureTools(role: 'admin' | 'member' = 'admin', app = makeFakeApp({})) {
+async function captureTools(
+  role: 'admin' | 'member' = 'admin',
+  app = makeFakeApp({}),
+  sessionId: string | null = 'sess-1'
+) {
   const { registerGatewayChannelTools } = await import('./gateway-channels.js');
   const tools: Record<string, { cfg: any; handler: ToolHandler }> = {};
   const fakeServer = {
@@ -49,11 +54,22 @@ async function captureTools(role: 'admin' | 'member' = 'admin', app = makeFakeAp
     app: app as any,
     db: {} as any,
     userId: 'user-1' as any,
-    sessionId: 'sess-1' as any,
+    ...(sessionId ? { sessionId: sessionId as any } : {}),
     authenticatedUser: { user_id: 'user-1', role } as any,
     baseServiceParams: { authenticated: true, user: { user_id: 'user-1', role } } as any,
   });
   return tools;
+}
+
+/**
+ * The caller session used for session-branch binding: ctx.sessionId ('sess-1')
+ * resolves to a session on the given branch. null simulates a stale/missing
+ * session, which the binding must treat as fail-closed.
+ */
+function spyCallerSessionBranch(branchId: string | null) {
+  return vi
+    .spyOn(SessionRepository.prototype, 'findById')
+    .mockResolvedValue((branchId ? { session_id: 'sess-1', branch_id: branchId } : null) as any);
 }
 
 const slackChannel = {
@@ -518,6 +534,7 @@ describe('agor_gateway_channels MCP tools', () => {
       ],
     }));
     vi.mocked(getConnector).mockReturnValue({ fetchThreadHistory } as any);
+    spyCallerSessionBranch('branch-1');
     vi.spyOn(ThreadSessionMapRepository.prototype, 'findBySession').mockResolvedValue(
       threadMapping as any
     );
@@ -600,6 +617,7 @@ describe('agor_gateway_channels MCP tools', () => {
       ],
     }));
     vi.mocked(getConnector).mockReturnValue({ fetchThreadHistory } as any);
+    spyCallerSessionBranch('branch-1');
     vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
     vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
     vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
@@ -637,6 +655,7 @@ describe('agor_gateway_channels MCP tools', () => {
   });
 
   it('denies mapped explicit Slack thread history without branch all permission', async () => {
+    spyCallerSessionBranch('branch-1');
     vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
     vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread').mockResolvedValue(
       threadMapping as any
@@ -657,6 +676,7 @@ describe('agor_gateway_channels MCP tools', () => {
   });
 
   it('denies unmapped explicit Slack thread history to non-admins even with branch all permission', async () => {
+    spyCallerSessionBranch('branch-1');
     vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
     vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread').mockResolvedValue(
       null
@@ -684,6 +704,7 @@ describe('agor_gateway_channels MCP tools', () => {
       messages: [],
     }));
     vi.mocked(getConnector).mockReturnValue({ fetchThreadHistory } as any);
+    spyCallerSessionBranch('branch-1');
     vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
     vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread').mockResolvedValue(
       null
@@ -710,6 +731,7 @@ describe('agor_gateway_channels MCP tools', () => {
   });
 
   it('rejects Slack history for non-Slack gateway mappings before connector use', async () => {
+    spyCallerSessionBranch('branch-1');
     vi.spyOn(ThreadSessionMapRepository.prototype, 'findBySession').mockResolvedValue(
       threadMapping as any
     );
@@ -803,6 +825,210 @@ describe('agor_gateway_channels MCP tools', () => {
       target: 'thread:C123:171234.000100',
     });
     expect(existingThread.success).toBe(false);
+  });
+});
+
+describe('gateway session branch binding (MCP)', () => {
+  const outboundChannelBranch1 = {
+    ...slackChannel,
+    id: 'chan-b1',
+    target_branch_id: 'branch-1',
+    config: { ...slackChannel.config, outbound_enabled: true, default_outbound_target: '#eng' },
+  };
+  const outboundChannelBranch2 = {
+    ...slackChannel,
+    id: 'chan-b2',
+    target_branch_id: 'branch-2',
+    config: { ...slackChannel.config, outbound_enabled: true },
+  };
+
+  function spyOutboundChannels() {
+    vi.spyOn(GatewayChannelRepository.prototype, 'findAll').mockResolvedValue([
+      outboundChannelBranch1,
+      outboundChannelBranch2,
+    ] as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockImplementation(
+      async (id) => ({ branch_id: id, name: `wt-${id}`, others_can: 'view' }) as any
+    );
+  }
+
+  it('emit inputSchema rejects injected session/user attribution fields', async () => {
+    const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage: vi.fn() } }));
+
+    for (const extra of [
+      { emittedBySessionId: 'sess-evil' },
+      { sessionId: 'sess-evil' },
+      { emittedByUserId: 'user-evil' },
+    ]) {
+      const parsed = tools.agor_gateway_emit_message.cfg.inputSchema.safeParse({
+        gatewayChannelId: 'chan-1',
+        message: 'Hello',
+        ...extra,
+      });
+      expect(parsed.success).toBe(false);
+    }
+  });
+
+  it('scopes outbound targets to the calling session branch even for admins', async () => {
+    spyCallerSessionBranch('branch-1');
+    spyOutboundChannels();
+
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_outbound_targets_list.handler({});
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.channels).toHaveLength(1);
+    expect(payload.channels[0]).toMatchObject({
+      gateway_channel_id: 'chan-b1',
+      target_branch_id: 'branch-1',
+    });
+    expect(payload.hint).toBeUndefined();
+  });
+
+  it('returns empty with a binding note when branchId conflicts with the session branch', async () => {
+    spyCallerSessionBranch('branch-1');
+    spyOutboundChannels();
+
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_outbound_targets_list.handler({
+      branchId: 'branch-2',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.channels).toEqual([]);
+    expect(payload.binding).toContain("scoped to the calling session's branch");
+  });
+
+  it('keeps unscoped outbound targets for callers without session context', async () => {
+    const sessionSpy = spyCallerSessionBranch('branch-1');
+    spyOutboundChannels();
+
+    const tools = await captureTools('admin', makeFakeApp({}), null);
+    const result = await tools.agor_gateway_outbound_targets_list.handler({});
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(
+      payload.channels.map((c: { gateway_channel_id: string }) => c.gateway_channel_id)
+    ).toEqual(['chan-b1', 'chan-b2']);
+    expect(sessionSpy).not.toHaveBeenCalled();
+  });
+
+  it('hints when no outbound channel targets the session branch', async () => {
+    spyCallerSessionBranch('branch-3');
+    spyOutboundChannels();
+
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_outbound_targets_list.handler({});
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.channels).toEqual([]);
+    expect(payload.hint).toContain('No outbound-enabled channel targets');
+  });
+
+  it('fails closed when the calling session cannot be loaded', async () => {
+    spyCallerSessionBranch(null);
+    spyOutboundChannels();
+
+    const tools = await captureTools('admin');
+    await expect(tools.agor_gateway_outbound_targets_list.handler({})).rejects.toThrow(
+      'calling session not found'
+    );
+  });
+
+  it('denies session-mapped thread history across branches even for admins', async () => {
+    spyCallerSessionBranch('branch-1');
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findBySession').mockResolvedValue({
+      ...threadMapping,
+      branch_id: 'branch-2',
+    } as any);
+    const sessionsGet = vi.fn(async () => ({ session_id: 'sess-42', branch_id: 'branch-2' }));
+
+    const tools = await captureTools('admin', makeFakeApp({ sessions: { get: sessionsGet } }));
+    const error: Error = await tools.agor_gateway_slack_thread_history_get
+      .handler({ sessionId: 'sess-42' })
+      .then(() => {
+        throw new Error('expected thread history read to be denied');
+      })
+      .catch((err: Error) => err);
+
+    expect(error.message).toContain('Gateway read denied');
+    expect(error.message).not.toContain('branch-2');
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('denies session-mapped thread history when the channel was retargeted to another branch', async () => {
+    spyCallerSessionBranch('branch-1');
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findBySession').mockResolvedValue({
+      ...threadMapping,
+      branch_id: 'branch-1',
+    } as any);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue({
+      ...slackChannel,
+      target_branch_id: 'branch-2',
+    } as any);
+    const sessionsGet = vi.fn(async () => ({ session_id: 'sess-42', branch_id: 'branch-1' }));
+
+    const tools = await captureTools('admin', makeFakeApp({ sessions: { get: sessionsGet } }));
+    const error: Error = await tools.agor_gateway_slack_thread_history_get
+      .handler({ sessionId: 'sess-42' })
+      .then(() => {
+        throw new Error('expected thread history read to be denied');
+      })
+      .catch((err: Error) => err);
+
+    expect(error.message).toContain('Gateway read denied');
+    expect(error.message).not.toContain('branch-2');
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('denies explicit thread history when the channel targets another branch, even for admins', async () => {
+    spyCallerSessionBranch('branch-1');
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue({
+      ...slackChannel,
+      target_branch_id: 'branch-2',
+    } as any);
+    const findMapping = vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread');
+
+    const tools = await captureTools('admin');
+    await expect(
+      tools.agor_gateway_slack_thread_history_get.handler({
+        gatewayChannelId: 'chan-1',
+        threadId: 'C123-171234.000100',
+      })
+    ).rejects.toThrow('Gateway read denied');
+
+    expect(findMapping).not.toHaveBeenCalled();
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('keeps the no-session admin path for unmapped explicit thread reads', async () => {
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: 'C123-171234.000100',
+      channel: 'C123',
+      thread_ts: '171234.000100',
+      has_more: false,
+      messages: [],
+    }));
+    vi.mocked(getConnector).mockReturnValue({ fetchThreadHistory } as any);
+    const sessionSpy = spyCallerSessionBranch('branch-1');
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findByChannelAndThread').mockResolvedValue(
+      null
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('admin', makeFakeApp({}), null);
+    const result = await tools.agor_gateway_slack_thread_history_get.handler({
+      gatewayChannelId: 'chan-1',
+      threadId: 'C123-171234.000100',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(sessionSpy).not.toHaveBeenCalled();
+    expect(payload.thread).toMatchObject({
+      source: 'explicit',
+      thread_id: 'C123-171234.000100',
+    });
   });
 });
 
