@@ -48,7 +48,7 @@
     "@feathersjs/feathers": "^5.0.45",
     "@feathersjs/rest-client": "^5.0.45",
     "@feathersjs/socketio-client": "^5.0.45",
-    "js-yaml": "^5.2.0",
+    "js-yaml": "^5.2.1",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {

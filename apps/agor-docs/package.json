@@ -17,7 +17,7 @@
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.1",
     "katex": "^0.17.0",
-    "next": "^15.5.19",
+    "next": "^15.5.20",
     "nextra": "^4.6.1",
     "nextra-theme-docs": "^4.6.1",
     "react": "^19.2.7",
