@@ -70,7 +70,7 @@ interface ZoneNodeData {
   x: number;
   y: number;
   trigger?: BoardObject extends { type: 'zone'; trigger?: infer T } ? T : never;
-  sessionCount?: number;
+  pinnedItemCount?: number;
   onUpdate?: (objectId: string, objectData: BoardObject) => void;
   onDelete?: (objectId: string, deleteAssociatedSessions: boolean) => void;
   onReorder?: (objectId: string, op: LayerOp) => void;
@@ -923,7 +923,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           }
         }}
         zoneName={data.label}
-        sessionCount={data.sessionCount || 0}
+        pinnedItemCount={data.pinnedItemCount || 0}
       />
     </>
   );

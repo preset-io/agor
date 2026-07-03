@@ -249,10 +249,19 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
           <Content
             style={{
               overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
               padding: 'clamp(16px, 3vw, 28px) clamp(16px, 3vw, 32px) 80px',
             }}
           >
-            <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                height: '100%',
+                minHeight: 0,
+              }}
+            >
               {/* Greeting */}
               <header
                 style={{

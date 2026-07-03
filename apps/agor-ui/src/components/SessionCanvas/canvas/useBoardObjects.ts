@@ -2,15 +2,8 @@
  * Hook for managing board objects (text labels, zones, etc.)
  */
 
-import type {
-  AgorClient,
-  Board,
-  BoardEntityObject,
-  BoardObject,
-  Branch,
-  Session,
-} from '@agor-live/client';
-import { useCallback, useMemo, useRef } from 'react';
+import type { AgorClient, Board, BoardEntityObject, BoardObject } from '@agor-live/client';
+import { useCallback, useRef } from 'react';
 import type { Node } from 'reactflow';
 import { useThemedMessage } from '../../../utils/message';
 import {
@@ -23,13 +16,10 @@ import {
 interface UseBoardObjectsProps {
   board: Board | null;
   client: AgorClient | null;
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
-  branches: Branch[];
   boardObjectsForBoard: BoardEntityObject[];
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   deletedObjectsRef: React.MutableRefObject<Set<string>>;
   eraserMode?: boolean;
-  selectedSessionId?: string | null;
   /** Artifact ID currently targeted by an `/a/<…>/` deep link. Used to
    *  flag the matching ArtifactNode so it can render the dashed
    *  "selected" outline. */
@@ -40,13 +30,10 @@ interface UseBoardObjectsProps {
 export const useBoardObjects = ({
   board,
   client,
-  sessionsByBranch,
-  branches,
   boardObjectsForBoard,
   setNodes,
   deletedObjectsRef,
   eraserMode = false,
-  selectedSessionId,
   activeUrlTargetArtifactId,
   onEditMarkdown,
 }: UseBoardObjectsProps) => {
@@ -56,24 +43,10 @@ export const useBoardObjects = ({
 
   const { showError } = useThemedMessage();
 
-  // Stabilize board.objects reference using deep equality comparison
-  // This prevents unnecessary re-renders when board object changes but content is identical
-  const boardObjectsJson = board?.objects ? JSON.stringify(board.objects) : null;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Intentionally using JSON serialization for deep equality
-  const boardObjects = useMemo(() => board?.objects, [boardObjectsJson]);
-
-  // Get session IDs for this board (branch-centric model)
-  const _boardSessionIds = useMemo(() => {
-    if (!board) return [];
-    const boardBranchIds = branches
-      .filter((w) => w.board_id === board.board_id)
-      .map((w) => w.branch_id);
-
-    // Use O(1) Map lookups to get sessions for each branch
-    return boardBranchIds
-      .flatMap((branchId) => sessionsByBranch.get(branchId) || [])
-      .map((s) => s.session_id);
-  }, [board, branches, sessionsByBranch]);
+  // Use the board object's reference directly. The store already preserves
+  // unchanged board references, and serializing every object on every canvas
+  // render is prohibitively expensive on large boards.
+  const boardObjects = board?.objects;
 
   /**
    * Update an existing board object
@@ -356,17 +329,16 @@ export const useBoardObjects = ({
           };
         }
 
-        // Calculate branch count for this zone (branch-centric model)
-        let sessionCount = 0;
+        // Count entities pinned to this zone via board_objects.zone_id.
+        // Deliberately avoid subscribing the whole canvas to sessionsByBranch:
+        // streaming session patches are high-frequency and should only update
+        // the affected BranchCard's per-branch selector, not rebuild every
+        // React Flow node on the board.
+        let pinnedItemCount = 0;
         if (objectData.type === 'zone') {
-          // Count branches pinned to this zone via board_objects.zone_id
           for (const boardObj of boardObjectsForBoard) {
-            if (boardObj.zone_id === objectId) {
-              // Count sessions in this branch using O(1) Map lookup
-              const branchSessions = boardObj.branch_id
-                ? sessionsByBranch.get(boardObj.branch_id) || []
-                : [];
-              sessionCount += branchSessions.length;
+            if (boardObj.zone_id === objectId && (boardObj.branch_id || boardObj.card_id)) {
+              pinnedItemCount += 1;
             }
           }
         }
@@ -408,7 +380,7 @@ export const useBoardObjects = ({
             x: objectData.x, // Include position in data for updates
             y: objectData.y,
             trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
-            sessionCount,
+            pinnedItemCount,
             onUpdate: handleUpdateObject,
             onDelete: deleteZone,
             onReorder: reorderObject,
@@ -416,9 +388,8 @@ export const useBoardObjects = ({
         };
       });
   }, [
-    boardObjects, // Use stabilized boardObjects instead of board?.objects
+    boardObjects,
     boardObjectsForBoard,
-    sessionsByBranch,
     handleUpdateObject,
     deleteZone,
     deleteObject,

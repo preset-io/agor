@@ -1,8 +1,14 @@
 import type { Board, Branch, Session } from '@agor-live/client';
-import { ClockCircleOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import {
+  ClockCircleOutlined,
+  LeftOutlined,
+  PlusOutlined,
+  RightOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import { Button, Empty, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { formatRelativeTime } from '../../utils/time';
 import { glassCardStyle } from './homeStyles';
 import type { HomeSectionProps } from './types';
@@ -10,6 +16,7 @@ import type { HomeSectionProps } from './types';
 const { Text } = Typography;
 
 const HOME_BOARDS_LIMIT = 50;
+const BOARDS_PER_PAGE = 4;
 
 interface BoardHomeRow {
   board: Board;
@@ -169,8 +176,7 @@ export const HomeBoardsSection: React.FC<
   onBoardClick,
   onOpenCreateDialog,
 }) => {
-  const gridRef = useRef<HTMLDivElement>(null);
-  const [columns, setColumns] = useState(4);
+  const [page, setPage] = useState(0);
 
   const rows = useMemo(() => {
     const visitRank = new Map((recentBoardIds ?? []).map((boardId, index) => [boardId, index]));
@@ -206,18 +212,11 @@ export const HomeBoardsSection: React.FC<
       .slice(0, HOME_BOARDS_LIMIT);
   }, [boardById, recentBoardIds, branchById, sessionsByBranch]);
 
-  const hasBoards = rows.length > 0;
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: hasBoards is a sentinel dep — re-attaches observer when board count transitions between 0 and >0 (gridRef only mounts with boards)
-  useEffect(() => {
-    if (!gridRef.current) return;
-    const observer = new ResizeObserver(([entry]) => {
-      const w = entry.contentRect.width;
-      setColumns(w < 400 ? 1 : w < 700 ? 2 : 4);
-    });
-    observer.observe(gridRef.current);
-    return () => observer.disconnect();
-  }, [hasBoards]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / BOARDS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages - 1);
+  const pageStart = currentPage * BOARDS_PER_PAGE;
+  const visibleRows = rows.slice(pageStart, pageStart + BOARDS_PER_PAGE);
+  const showPager = rows.length > BOARDS_PER_PAGE;
 
   return (
     <section aria-label="Boards" style={{ marginBottom: 24 }}>
@@ -232,15 +231,40 @@ export const HomeBoardsSection: React.FC<
         <Text strong style={{ fontSize: 14 }}>
           Boards
         </Text>
-        <Button
-          type="link"
-          size="small"
-          icon={<PlusOutlined />}
-          style={{ padding: 0 }}
-          onClick={() => onOpenCreateDialog('board')}
-        >
-          New board
-        </Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {showPager && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Button
+                type="text"
+                size="small"
+                icon={<LeftOutlined />}
+                aria-label="Previous boards"
+                disabled={currentPage === 0}
+                onClick={() => setPage(Math.max(0, currentPage - 1))}
+              />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {currentPage + 1} / {totalPages}
+              </Text>
+              <Button
+                type="text"
+                size="small"
+                icon={<RightOutlined />}
+                aria-label="Next boards"
+                disabled={currentPage >= totalPages - 1}
+                onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
+              />
+            </div>
+          )}
+          <Button
+            type="link"
+            size="small"
+            icon={<PlusOutlined />}
+            style={{ padding: 0 }}
+            onClick={() => onOpenCreateDialog('board')}
+          >
+            New board
+          </Button>
+        </div>
       </div>
 
       {rows.length === 0 ? (
@@ -255,14 +279,13 @@ export const HomeBoardsSection: React.FC<
         </Empty>
       ) : (
         <div
-          ref={gridRef}
           style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
             gap: 12,
           }}
         >
-          {rows.map(({ board, branches, sessions }) => (
+          {visibleRows.map(({ board, branches, sessions }) => (
             <BoardHomeCard
               key={board.board_id}
               board={board}
