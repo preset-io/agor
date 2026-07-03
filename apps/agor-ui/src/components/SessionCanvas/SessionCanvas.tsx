@@ -1178,19 +1178,26 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onCommentSelect,
     ]);
 
-    // Helper: Apply local position overrides to a set of incoming nodes (branches or cards)
+    // Helper: Apply local position overrides to a set of incoming nodes (branches or cards).
+    // Lookups go through Maps so a full board sync stays O(n) instead of
+    // O(n²) per-node array scans.
     const applyLocalPositions = useCallback(
-      (incomingNodes: Node[], currentNodes: Node[], zoneNodes: Node[]) => {
+      (incomingNodes: Node[], currentNodesById: Map<string, Node>, zoneNodes: Node[]) => {
+        // Incoming nodes take precedence over zones on id collision (insertion
+        // order below makes them overwrite), matching parent resolution that
+        // consults incoming nodes first.
+        const parentById = new Map<string, Node>();
+        for (const node of zoneNodes) parentById.set(node.id, node);
+        for (const node of incomingNodes) parentById.set(node.id, node);
+
         return incomingNodes.map((newNode) => {
-          const existingNode = currentNodes.find((n) => n.id === newNode.id);
+          const existingNode = currentNodesById.get(newNode.id);
           const localPosition = localPositionsRef.current[newNode.id];
 
           if (localPosition) {
             let incomingAbsolutePosition = newNode.position;
             if (newNode.parentId) {
-              const parentNode = [...incomingNodes, ...zoneNodes].find(
-                (n) => n.id === newNode.parentId
-              );
+              const parentNode = parentById.get(newNode.parentId);
               if (parentNode) {
                 incomingAbsolutePosition = relativeToAbsolute(
                   newNode.position,
@@ -1214,9 +1221,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
             let positionToUse = localPosition;
             if (newNode.parentId) {
-              const parentNode = [...incomingNodes, ...zoneNodes].find(
-                (n) => n.id === newNode.parentId
-              );
+              const parentNode = parentById.get(newNode.parentId);
               if (parentNode) {
                 positionToUse = absoluteToRelative(localPosition, parentNode.position);
               }
@@ -1272,16 +1277,39 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       ]
     );
 
-    // Helper: Partition nodes by type
+    // Helper: Partition nodes by type in a single pass (this runs inside every
+    // node-sync setNodes updater, so per-type .filter sweeps add up on large boards)
     const partitionNodesByType = useCallback((nodes: Node[]) => {
-      return {
-        zones: nodes.filter((n) => n.type === 'zone'),
-        markdown: nodes.filter((n) => n.type === 'markdown'),
-        branches: nodes.filter((n) => n.type === 'branchNode'),
-        cards: nodes.filter((n) => n.type === 'cardNode'),
-        apps: nodes.filter((n) => n.type === 'appNode' || n.type === 'artifactNode'),
-        comments: nodes.filter((n) => n.type === 'comment'),
-      };
+      const zones: Node[] = [];
+      const markdown: Node[] = [];
+      const branches: Node[] = [];
+      const cards: Node[] = [];
+      const apps: Node[] = [];
+      const comments: Node[] = [];
+      for (const node of nodes) {
+        switch (node.type) {
+          case 'zone':
+            zones.push(node);
+            break;
+          case 'markdown':
+            markdown.push(node);
+            break;
+          case 'branchNode':
+            branches.push(node);
+            break;
+          case 'cardNode':
+            cards.push(node);
+            break;
+          case 'appNode':
+          case 'artifactNode':
+            apps.push(node);
+            break;
+          case 'comment':
+            comments.push(node);
+            break;
+        }
+      }
+      return { zones, markdown, branches, cards, apps, comments };
     }, []);
 
     // Helper: Apply consistent z-ordering to nodes
@@ -1317,11 +1345,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
       setNodes((currentNodes) => {
         const { comments } = partitionNodesByType(currentNodes);
+        const currentNodesById = new Map(currentNodes.map((n) => [n.id, n]));
 
         const zones = boardObjectNodes
           .filter((n) => n.type === 'zone' && !deletedObjectsRef.current.has(n.id))
           .map((newZone) => {
-            const existingZone = currentNodes.find((n) => n.id === newZone.id);
+            const existingZone = currentNodesById.get(newZone.id);
             // Honor the persisted/default base order from board data (`newZone`),
             // and re-apply the +1 selection bump if the zone is currently
             // selected. Reading the base from `newZone` (not the stale runtime
@@ -1338,7 +1367,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         const markdown = boardObjectNodes
           .filter((n) => n.type === 'markdown' && !deletedObjectsRef.current.has(n.id))
           .map((newMarkdown) => {
-            const existingMarkdown = currentNodes.find((n) => n.id === newMarkdown.id);
+            const existingMarkdown = currentNodesById.get(newMarkdown.id);
             return { ...newMarkdown, selected: existingMarkdown?.selected };
           });
 
@@ -1349,12 +1378,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               !deletedObjectsRef.current.has(n.id)
           )
           .map((newApp) => {
-            const existingApp = currentNodes.find((n) => n.id === newApp.id);
+            const existingApp = currentNodesById.get(newApp.id);
             return { ...newApp, selected: existingApp?.selected };
           });
 
-        const updatedBranches = applyLocalPositions(initialNodes, currentNodes, zones);
-        const updatedCards = applyLocalPositions(cardNodes, currentNodes, zones);
+        const updatedBranches = applyLocalPositions(initialNodes, currentNodesById, zones);
+        const updatedCards = applyLocalPositions(cardNodes, currentNodesById, zones);
 
         return applyZOrder(zones, markdown, updatedBranches, updatedCards, comments, apps);
       });
@@ -1375,6 +1404,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setNodes((currentNodes) => {
         const { zones, markdown, branches, cards, apps } = partitionNodesByType(currentNodes);
 
+        // Comment parents are branches or zones; branches take precedence on id
+        // collision (insertion order below makes them overwrite).
+        const parentById = new Map<string, Node>();
+        for (const node of zones) parentById.set(node.id, node);
+        for (const node of branches) parentById.set(node.id, node);
+
         // Apply local position overrides to comment nodes (to prevent flicker during drag)
         const commentsWithLocalPositions = commentNodes.map((newNode) => {
           const localPosition = localPositionsRef.current[newNode.id];
@@ -1384,7 +1419,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // If node has parentId, position is relative to parent - must convert to absolute
             let incomingAbsolutePosition = newNode.position;
             if (newNode.parentId) {
-              const parentNode = [...branches, ...zones].find((n) => n.id === newNode.parentId);
+              const parentNode = parentById.get(newNode.parentId);
               if (parentNode) {
                 incomingAbsolutePosition = relativeToAbsolute(
                   newNode.position,
@@ -1408,7 +1443,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // If node now has parentId, convert local absolute position to relative
             let positionToUse = localPosition;
             if (newNode.parentId) {
-              const parentNode = [...branches, ...zones].find((n) => n.id === newNode.parentId);
+              const parentNode = parentById.get(newNode.parentId);
               if (parentNode) {
                 positionToUse = absoluteToRelative(localPosition, parentNode.position);
               }
