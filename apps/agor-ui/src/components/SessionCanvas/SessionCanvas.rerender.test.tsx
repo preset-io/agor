@@ -8,9 +8,10 @@ import type {
   Session,
 } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { useStableCallback } from '../../hooks/useStableCallback';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { sessionPatched } from '../../store/agorRealtimeActions';
 import { agorStore } from '../../store/agorStore';
@@ -298,22 +299,86 @@ describe('SessionCanvas store-selector re-render isolation', () => {
     expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
     expect(cardNodeRenders).toBe(cardNodeBaseline);
   });
-});
 
-// Mirror of AppContent's `useStableCallback`: freeze a handler's identity across
-// renders while delegating to the latest impl via a ref. This is the exact
-// mechanism AppContent uses to keep SessionCanvas's action handlers stable, so
-// reproducing it here exercises the real prop-stabilization contract.
-function useStableCallback<TFn extends (...args: never[]) => unknown>(
-  callback: TFn | undefined
-): TFn | undefined {
-  const callbackRef = useRef(callback);
-  useLayoutEffect(() => {
-    callbackRef.current = callback;
+  it('a repoById patch that leaves displayed repos untouched does not re-render branch cards', async () => {
+    render(
+      <ConnectionProvider value={CONNECTION_VALUE}>
+        <SessionCanvas board={board} client={null} branches={BRANCHES} />
+      </ConnectionProvider>
+    );
+
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+    });
+
+    const canvasBaseline = sessionCanvasRenders;
+    const branchABaseline = branchCardRenders.get('A') ?? 0;
+    const branchBBaseline = branchCardRenders.get('B') ?? 0;
+
+    // A repo that is not on the board is added: the map reference changes (so
+    // the canvas re-renders and rebuilds its node array) but each displayed
+    // branch's repo object keeps its identity.
+    act(() => {
+      agorStore.setState({
+        repoById: new Map([
+          [REPO_ID, repo],
+          ['repo-2', { repo_id: 'repo-2', name: 'other', slug: 'other' } as unknown as Repo],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(sessionCanvasRenders).toBeGreaterThan(canvasBaseline);
+    });
+
+    // BranchNode's areEqual holds field-by-field (same branch, same repo
+    // object, stable handlers), so no branch card pays for the map churn.
+    expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
+    expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
   });
-  const stable = useCallback(((...args: never[]) => callbackRef.current?.(...args)) as TFn, []);
-  return callback ? stable : undefined;
-}
+
+  it('board-object churn with unchanged values does not re-render branch cards', async () => {
+    render(
+      <ConnectionProvider value={CONNECTION_VALUE}>
+        <SessionCanvas board={board} client={null} branches={BRANCHES} />
+      </ConnectionProvider>
+    );
+
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+    });
+
+    const canvasBaseline = sessionCanvasRenders;
+    const branchABaseline = branchCardRenders.get('A') ?? 0;
+    const branchBBaseline = branchCardRenders.get('B') ?? 0;
+
+    // Fresh array/object references with identical values — the placement maps
+    // derived from them rebuild, which is exactly what would hand every branch
+    // node a fresh `onUnpin` identity if that handler were not stabilized.
+    act(() => {
+      agorStore.setState({
+        boardObjectsByBoardId: new Map([
+          [
+            BOARD_ID,
+            boardObjects.map(
+              (object) =>
+                ({ ...object, position: { ...object.position } }) as unknown as BoardEntityObject
+            ),
+          ],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(sessionCanvasRenders).toBeGreaterThan(canvasBaseline);
+    });
+
+    expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
+    expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
+  });
+});
 
 // Lets a test trigger a parent re-render without touching SessionCanvas's props.
 let triggerParentRerender: () => void = () => {};

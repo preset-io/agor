@@ -40,6 +40,7 @@ import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
+import { useStableCallback } from '../../hooks/useStableCallback';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
 import { type ActiveUrlTarget, useUrlState } from '../../hooks/useUrlState';
 import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
@@ -230,25 +231,6 @@ const getSessionPanelMinSizePercent = (viewportWidth: number) =>
 
 const clampPercent = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
-
-// Freeze a callback's identity for the component's lifetime while always
-// invoking the latest implementation. Several action props arrive from the
-// parent (`AppContent`) as plain consts that get a fresh identity on every
-// store-driven re-render. Passing them straight to the memoized SessionCanvas
-// would defeat its `React.memo` (and the inner BranchNode / `initialNodes`
-// memoization) on every live patch. The wrapper's identity is stable; a ref
-// keeps it delegating to the current impl, so behavior is unchanged. Preserves
-// `undefined` so optional handlers stay absent (no spurious enabled UI).
-function useStableCallback<TFn extends (...args: never[]) => unknown>(
-  callback: TFn | undefined
-): TFn | undefined {
-  const callbackRef = useRef(callback);
-  useLayoutEffect(() => {
-    callbackRef.current = callback;
-  });
-  const stable = useCallback(((...args: never[]) => callbackRef.current?.(...args)) as TFn, []);
-  return callback ? stable : undefined;
-}
 
 export const App: React.FC<AppProps> = ({
   client,

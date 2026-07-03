@@ -22,4 +22,5 @@ export * from './useServicesConfig';
 export * from './useSessionActions';
 export * from './useSettingsRoute';
 export * from './useSharedReactiveSession';
+export * from './useStableCallback';
 export * from './useUrlState';
