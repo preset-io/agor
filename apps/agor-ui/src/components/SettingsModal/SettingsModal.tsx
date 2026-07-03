@@ -2,16 +2,12 @@ import type {
   AgorClient,
   Artifact,
   Board,
-  BoardEntityObject,
   Branch,
-  CardType,
-  CardWithType,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
   CreateUserInput,
   GatewayChannel,
-  MCPServer,
   Repo,
   Session,
   UpdateUserInput,
@@ -36,8 +32,23 @@ import type { MenuProps } from 'antd';
 import { Layout, Menu, Modal, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
+import { mapToArray } from '@/utils/mapHelpers';
 import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectArtifactById,
+  selectBoardById,
+  selectBoardObjectById,
+  selectBranchById,
+  selectCardById,
+  selectCardTypeById,
+  selectGatewayChannelById,
+  selectMcpServerById,
+  selectRepoById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
@@ -60,15 +71,6 @@ export interface SettingsModalProps {
   onClose: () => void;
   client: AgorClient | null; // Still needed for BranchModal
   currentUser?: User | null; // Current logged-in user
-  boardById: Map<string, Board>;
-  boardObjects: BoardEntityObject[];
-  repoById: Map<string, Repo>;
-  branchById: Map<string, Branch>;
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
-  userById: Map<string, User>;
-  mcpServerById: Map<string, MCPServer>;
-  cardById?: Map<string, CardWithType>;
-  cardTypeById?: Map<string, CardType>;
   activeTab?: string; // Control which tab is shown when modal opens
   onTabChange?: (tabKey: string) => void;
   onCreateBoard?: (board: Partial<Board>) => void;
@@ -110,11 +112,9 @@ export interface SettingsModalProps {
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
   onDeleteMCPServer?: (serverId: string) => void;
-  gatewayChannelById?: Map<string, GatewayChannel>;
   onCreateGatewayChannel?: (data: Partial<GatewayChannel>) => void;
   onUpdateGatewayChannel?: (channelId: string, updates: Partial<GatewayChannel>) => void;
   onDeleteGatewayChannel?: (channelId: string) => void;
-  artifactById?: Map<string, Artifact>;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
   onCreateAssistant?: () => void;
@@ -126,15 +126,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onClose,
   client,
   currentUser,
-  boardById,
-  boardObjects,
-  repoById,
-  branchById,
-  sessionsByBranch,
-  userById,
-  mcpServerById,
-  cardById = new Map(),
-  cardTypeById = new Map(),
   activeTab = 'boards',
   onTabChange,
   onCreateBoard,
@@ -157,16 +148,31 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onDeleteUser,
   onCreateMCPServer,
   onDeleteMCPServer,
-  gatewayChannelById = new Map(),
   onCreateGatewayChannel,
   onUpdateGatewayChannel,
   onDeleteGatewayChannel,
-  artifactById = new Map(),
   onUpdateArtifact,
   onDeleteArtifact,
   onCreateAssistant,
   branchStorageConfig,
 }) => {
+  // Entity maps come straight from the store rather than through App props:
+  // the modal only mounts while open (the exported wrapper returns null when
+  // closed), so these subscriptions cost the always-mounted shell nothing and
+  // re-render only the open modal on entity patches.
+  const boardById = useAgorStore(selectBoardById);
+  const boardObjectById = useAgorStore(selectBoardObjectById);
+  const repoById = useAgorStore(selectRepoById);
+  const branchById = useAgorStore(selectBranchById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const userById = useAgorStore(selectUserById);
+  const mcpServerById = useAgorStore(selectMcpServerById);
+  const cardById = useAgorStore(selectCardById);
+  const cardTypeById = useAgorStore(selectCardTypeById);
+  const gatewayChannelById = useAgorStore(selectGatewayChannelById);
+  const artifactById = useAgorStore(selectArtifactById);
+  const boardObjects = useMemo(() => mapToArray(boardObjectById), [boardObjectById]);
+
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
   const [branchSessions, setBranchSessions] = useState<Session[]>([]);
