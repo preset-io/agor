@@ -902,6 +902,72 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   }
 
   /**
+   * Shallow-merge field patches into existing board objects in a single
+   * read-modify-write.
+   *
+   * Unlike upsertBoardObject (which fully replaces the object value, dropping
+   * omitted fields), this overwrites ONLY the provided keys and leaves the rest
+   * of each object intact — so a narrow change (e.g. a zIndex reorder) has a
+   * smaller blast radius and won't clobber a field edited via a different patch
+   * call. Multiple objects in one call are merged before a single write, so a
+   * forward/backward swap touches both neighbors in one update.
+   *
+   * Objects that no longer exist are SKIPPED, never re-created — so a swap can't
+   * resurrect a neighbor deleted between the client's read and this write.
+   *
+   * Only an explicit allowlist of fields can be merged (currently just `zIndex`,
+   * which is also clamped into the board-object band [1, 499] so it can never be
+   * pushed onto the card (500) / comment (1000) layers). Any other key in a
+   * patch is ignored, so this narrow action cannot reshape an object (e.g. flip
+   * its `type`) the way a full upsert could.
+   *
+   * NOTE: this is NOT atomic against concurrent writers. Like every other board
+   * writer, the findById → update sequence has a lost-update window: a write
+   * that lands between the read and the update can be overwritten (last-write-
+   * wins). Merging only the patched keys narrows that window's blast radius
+   * versus a full-object upsert, but does not close it.
+   */
+  async mergeBoardObjectFields(
+    boardId: string,
+    patches: Record<string, Partial<BoardObject>>
+  ): Promise<Board> {
+    // Board objects stay strictly below the card (500) / comment (1000) layers.
+    const Z_MIN = 1;
+    const Z_MAX = 499;
+    try {
+      const fullId = await this.resolveId(boardId);
+
+      const current = await this.findById(fullId);
+      if (!current) {
+        throw new EntityNotFoundError('Board', boardId);
+      }
+
+      const updatedObjects = { ...(current.objects || {}) };
+      for (const [objectId, fields] of Object.entries(patches)) {
+        const existing = updatedObjects[objectId];
+        if (!existing) continue; // never resurrect a concurrently-deleted object
+
+        // Allowlist: only `zIndex` is mergeable, and it is clamped server-side.
+        // Everything else in the patch is ignored so this action can't reshape
+        // an object's persisted fields.
+        const { zIndex } = fields as { zIndex?: unknown };
+        if (typeof zIndex !== 'number' || !Number.isFinite(zIndex)) continue;
+        const safeZIndex = Math.min(Z_MAX, Math.max(Z_MIN, zIndex));
+        updatedObjects[objectId] = { ...existing, zIndex: safeZIndex } as BoardObject;
+      }
+
+      return this.update(fullId, { objects: updatedObjects });
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to merge board object fields: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * DEPRECATED: Delete a zone and handle associated sessions
    * TODO: Reimplement using board-objects table
    */

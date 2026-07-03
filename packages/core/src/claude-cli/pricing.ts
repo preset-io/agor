@@ -41,6 +41,18 @@ export interface ClaudeModelPricing {
  * entry even if Anthropic mints a `-7-1` patch revision.
  */
 const PRICING: ReadonlyArray<{ prefix: string; price: ClaudeModelPricing }> = [
+  // Fable 5 — most capable tier, priced above Opus. Cache-write is 1.25x
+  // input and cache-read is 0.1x input, matching every other entry here.
+  {
+    prefix: 'claude-fable-5',
+    price: {
+      inputPerMTok: 10,
+      outputPerMTok: 50,
+      cacheWritePerMTok: 12.5,
+      cacheReadPerMTok: 1,
+      webSearchPerRequest: 0.01,
+    },
+  },
   // Sonnet 5 introductory pricing through 2026-08-31.
   {
     prefix: 'claude-sonnet-5',
@@ -175,6 +187,9 @@ export function computeCost(
  */
 export function getContextWindowLimit(modelId: string | null | undefined): number {
   if (!modelId) return 200_000;
+  // Fable 5 ships a 1M context window natively — it's the default (and only)
+  // mode, not a beta opt-in, so the bare id already means 1M.
+  if (modelId.startsWith('claude-fable')) return 1_000_000;
   // 1M context beta — encoded as a model-id suffix in Agor; bare `claude-*`
   // ids without the `[1m]` suffix get the standard 200K window.
   if (modelId.includes('[1m]') || modelId.endsWith('-1m')) return 1_000_000;

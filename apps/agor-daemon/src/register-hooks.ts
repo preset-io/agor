@@ -2990,6 +2990,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             return context;
           }
 
+          if (_action === 'mergeObjectFields' && objects) {
+            if (!context.id) throw new Error('Board ID required');
+            const result = await boardsService!.mergeBoardObjectFields(
+              context.id as string,
+              objects
+            );
+            context.result = result;
+            // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            app.service('boards').emit('patched', result);
+            // Skip normal patch flow to prevent double emit
+            context.dispatch = result;
+            return context;
+          }
+
           if (_action === 'deleteZone' && objectId) {
             if (!context.id) throw new Error('Board ID required');
             const result = await boardsService!.deleteZone(

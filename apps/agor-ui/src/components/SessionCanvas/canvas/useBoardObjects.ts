@@ -2,28 +2,24 @@
  * Hook for managing board objects (text labels, zones, etc.)
  */
 
-import type {
-  AgorClient,
-  Board,
-  BoardEntityObject,
-  BoardObject,
-  Branch,
-  Session,
-} from '@agor-live/client';
-import { useCallback, useMemo, useRef } from 'react';
+import type { AgorClient, Board, BoardEntityObject, BoardObject } from '@agor-live/client';
+import { useCallback, useRef } from 'react';
 import type { Node } from 'reactflow';
-import { ZONE_BASE_Z_INDEX } from './zIndex';
+import { useThemedMessage } from '../../../utils/message';
+import {
+  computeLayerChanges,
+  DEFAULT_BOARD_OBJECT_Z_INDEX,
+  type LayerOp,
+  sanitizeZIndex,
+} from './zOrder';
 
 interface UseBoardObjectsProps {
   board: Board | null;
   client: AgorClient | null;
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
-  branches: Branch[];
   boardObjectsForBoard: BoardEntityObject[];
   setNodes: React.Dispatch<React.SetStateAction<Node[]>>;
   deletedObjectsRef: React.MutableRefObject<Set<string>>;
   eraserMode?: boolean;
-  selectedSessionId?: string | null;
   /** Artifact ID currently targeted by an `/a/<…>/` deep link. Used to
    *  flag the matching ArtifactNode so it can render the dashed
    *  "selected" outline. */
@@ -34,13 +30,10 @@ interface UseBoardObjectsProps {
 export const useBoardObjects = ({
   board,
   client,
-  sessionsByBranch,
-  branches,
   boardObjectsForBoard,
   setNodes,
   deletedObjectsRef,
   eraserMode = false,
-  selectedSessionId,
   activeUrlTargetArtifactId,
   onEditMarkdown,
 }: UseBoardObjectsProps) => {
@@ -48,24 +41,12 @@ export const useBoardObjects = ({
   const boardRef = useRef(board);
   boardRef.current = board;
 
-  // Stabilize board.objects reference using deep equality comparison
-  // This prevents unnecessary re-renders when board object changes but content is identical
-  const boardObjectsJson = board?.objects ? JSON.stringify(board.objects) : null;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Intentionally using JSON serialization for deep equality
-  const boardObjects = useMemo(() => board?.objects, [boardObjectsJson]);
+  const { showError } = useThemedMessage();
 
-  // Get session IDs for this board (branch-centric model)
-  const _boardSessionIds = useMemo(() => {
-    if (!board) return [];
-    const boardBranchIds = branches
-      .filter((w) => w.board_id === board.board_id)
-      .map((w) => w.branch_id);
-
-    // Use O(1) Map lookups to get sessions for each branch
-    return boardBranchIds
-      .flatMap((branchId) => sessionsByBranch.get(branchId) || [])
-      .map((s) => s.session_id);
-  }, [board, branches, sessionsByBranch]);
+  // Use the board object's reference directly. The store already preserves
+  // unchanged board references, and serializing every object on every canvas
+  // render is prohibitively expensive on large boards.
+  const boardObjects = board?.objects;
 
   /**
    * Update an existing board object
@@ -86,6 +67,67 @@ export const useBoardObjects = ({
       }
     },
     [client] // Only depend on client, not board
+  );
+
+  /**
+   * Reorder a board object relative to its peers (To Front / Bring Forward /
+   * Send Backward / To Back). Computes the new zIndex via the pure helper and
+   * persists it.
+   *
+   * Peers are scoped to board objects of the SAME type as the target (zones
+   * reorder only against zones). This is intentional: only zones expose reorder
+   * controls, so ranking a zone against markdown/app objects — which have no
+   * reorder UI — would strand them and let a zone intercept their clicks.
+   * Same-type scoping does NOT strictly isolate the per-type default bands:
+   * a zone can be pushed above a lower-default markdown (300) / app (400) under
+   * deliberate or MCP/import input. The only hard guarantee is the clamp to
+   * [1, 499], so a zone can never reach the card (500) / comment (1000) layers.
+   *
+   * Persistence sends ONLY the changed `zIndex` per object via a narrow field
+   * merge (`mergeObjectFields`), not a full stale copy. The server shallow-
+   * merges into the freshest stored object and skips any object that was
+   * deleted concurrently, so a swap can't resurrect a just-deleted neighbor and
+   * unrelated fields edited elsewhere aren't reverted. The merge persists all
+   * touched objects in one read-modify-write (last-write-wins vs concurrent
+   * writers, like every other board writer — not atomic).
+   */
+  const reorderObject = useCallback(
+    async (objectId: string, op: LayerOp) => {
+      const currentBoard = boardRef.current;
+      if (!currentBoard || !client) return;
+
+      const objects = currentBoard.objects ?? {};
+      const target = objects[objectId];
+      if (!target) return;
+
+      const peers = Object.entries(objects)
+        .filter(([, obj]) => obj.type === target.type)
+        .map(([id, obj]) => ({
+          id,
+          zIndex: sanitizeZIndex(obj.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX[obj.type]),
+        }));
+
+      const changes = computeLayerChanges(op, objectId, peers);
+      if (changes.length === 0) return;
+
+      const patches: Record<string, Partial<BoardObject>> = {};
+      for (const { id, zIndex } of changes) {
+        if (!objects[id]) continue;
+        patches[id] = { zIndex };
+      }
+      if (Object.keys(patches).length === 0) return;
+
+      try {
+        await client.service('boards').patch(currentBoard.board_id, {
+          _action: 'mergeObjectFields',
+          objects: patches,
+        } as unknown as Partial<Board>);
+      } catch (error) {
+        console.error('Failed to reorder object:', error);
+        showError('Failed to reorder zone');
+      }
+    },
+    [client, showError]
   );
 
   /**
@@ -216,7 +258,8 @@ export const useBoardObjects = ({
             position: { x: objectData.x, y: objectData.y },
             // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
             selectable: true,
-            zIndex: 400, // Above markdown (300), below branches (500)
+            // Above markdown (300), below branches (500) by default.
+            zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.app),
             className: eraserMode ? 'eraser-mode' : undefined,
             data: {
               objectId,
@@ -247,7 +290,7 @@ export const useBoardObjects = ({
             // from canvas-level nodesDraggable (mutationGate.canMutate).
             ...(isLocked ? { draggable: false } : {}),
             selectable: true,
-            zIndex: 400,
+            zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.artifact),
             className: eraserMode ? 'eraser-mode' : undefined,
             data: {
               objectId,
@@ -272,7 +315,8 @@ export const useBoardObjects = ({
             position: { x: objectData.x, y: objectData.y },
             // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
             selectable: true,
-            zIndex: 300, // Above zones (100), below branches (500)
+            // Above zones (100), below branches (500) by default.
+            zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.markdown),
             className: eraserMode ? 'eraser-mode' : undefined,
             data: {
               objectId,
@@ -285,17 +329,16 @@ export const useBoardObjects = ({
           };
         }
 
-        // Calculate branch count for this zone (branch-centric model)
-        let sessionCount = 0;
+        // Count entities pinned to this zone via board_objects.zone_id.
+        // Deliberately avoid subscribing the whole canvas to sessionsByBranch:
+        // streaming session patches are high-frequency and should only update
+        // the affected BranchCard's per-branch selector, not rebuild every
+        // React Flow node on the board.
+        let pinnedItemCount = 0;
         if (objectData.type === 'zone') {
-          // Count branches pinned to this zone via board_objects.zone_id
           for (const boardObj of boardObjectsForBoard) {
-            if (boardObj.zone_id === objectId) {
-              // Count sessions in this branch using O(1) Map lookup
-              const branchSessions = boardObj.branch_id
-                ? sessionsByBranch.get(boardObj.branch_id) || []
-                : [];
-              sessionCount += branchSessions.length;
+            if (boardObj.zone_id === objectId && (boardObj.branch_id || boardObj.card_id)) {
+              pinnedItemCount += 1;
             }
           }
         }
@@ -309,7 +352,8 @@ export const useBoardObjects = ({
           // Locked zones are never draggable. Unlocked zones inherit from
           // canvas-level nodesDraggable (mutationGate.canMutate).
           ...(isLocked ? { draggable: false } : {}),
-          zIndex: ZONE_BASE_Z_INDEX, // Zones behind branches and comments
+          // Zones behind branches and comments by default; honor explicit order.
+          zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
           className: eraserMode ? 'eraser-mode' : undefined,
           // Set dimensions both as direct props (for collision detection) and style (for rendering)
           width: objectData.width,
@@ -328,23 +372,29 @@ export const useBoardObjects = ({
             color: objectData.color, // Backwards compatibility
             status: objectData.type === 'zone' ? objectData.status : undefined,
             locked: isLocked,
+            fontSize: objectData.type === 'zone' ? objectData.fontSize : undefined,
+            // Effective base zIndex (persisted or per-type default). Consumed by
+            // the selection-bump logic in SessionCanvas so a selected zone
+            // restores to its own order on deselect.
+            zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
             x: objectData.x, // Include position in data for updates
             y: objectData.y,
             trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
-            sessionCount,
+            pinnedItemCount,
             onUpdate: handleUpdateObject,
             onDelete: deleteZone,
+            onReorder: reorderObject,
           },
         };
       });
   }, [
-    boardObjects, // Use stabilized boardObjects instead of board?.objects
+    boardObjects,
     boardObjectsForBoard,
-    sessionsByBranch,
     handleUpdateObject,
     deleteZone,
     deleteObject,
     deleteArtifact,
+    reorderObject,
     eraserMode,
     activeUrlTargetArtifactId,
     onEditMarkdown,
@@ -370,7 +420,7 @@ export const useBoardObjects = ({
           type: 'zone',
           position: { x, y },
           // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
-          zIndex: ZONE_BASE_Z_INDEX, // Zones behind branches and comments
+          zIndex: DEFAULT_BOARD_OBJECT_Z_INDEX.zone, // Zones behind branches and comments
           style: {
             width,
             height,
@@ -458,6 +508,7 @@ export const useBoardObjects = ({
     addZoneNode,
     deleteObject,
     deleteZone,
+    reorderObject,
     batchUpdateObjectPositions,
   };
 };
