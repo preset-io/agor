@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@theguild/remark-mermaid": "^0.3.0",
-    "@tsparticles/engine": "^3.9.1",
+    "@tsparticles/engine": "^4.3.1",
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.1",
     "katex": "^0.17.0",

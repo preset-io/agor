@@ -268,11 +268,11 @@ importers:
         specifier: ^0.3.0
         version: 0.3.0(react@19.2.7)
       '@tsparticles/engine':
-        specifier: ^3.9.1
-        version: 3.9.1
+        specifier: ^4.3.1
+        version: 4.3.1
       '@tsparticles/react':
         specifier: ^3.0.0
-        version: 3.0.0(@tsparticles/engine@3.9.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        version: 3.0.0(@tsparticles/engine@4.3.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tsparticles/slim':
         specifier: ^3.9.1
         version: 3.9.1
@@ -344,11 +344,11 @@ importers:
         specifier: ^2.20.0
         version: 2.20.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tsparticles/engine':
-        specifier: ^3.9.0
-        version: 3.9.1
+        specifier: ^4.3.1
+        version: 4.3.1
       '@tsparticles/react':
         specifier: ^3.0.0
-        version: 3.0.0(@tsparticles/engine@3.9.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        version: 3.0.0(@tsparticles/engine@4.3.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tsparticles/slim':
         specifier: ^3.9.0
         version: 3.9.1
@@ -4069,6 +4069,9 @@ packages:
   '@tsparticles/engine@3.9.1':
     resolution: {integrity: sha512-DpdgAhWMZ3Eh2gyxik8FXS6BKZ8vyea+Eu5BC4epsahqTGY9V3JGGJcXC6lRJx6cPMAx1A0FaQAojPF3v6rkmQ==}
     deprecated: Please update to version 4.1.1
+
+  '@tsparticles/engine@4.3.1':
+    resolution: {integrity: sha512-WB8oyO0uUNSN+cbNCqqeolc1/qt0IONKD5vlRpNuIf4R2D5d4vjYSjQBzRbmS8MuldrUQZygMWwjx6yd3nkGNA==}
 
   '@tsparticles/interaction-external-attract@3.9.1':
     resolution: {integrity: sha512-5AJGmhzM9o4AVFV24WH5vSqMBzOXEOzIdGLIr+QJf4fRh9ZK62snsusv/ozKgs2KteRYQx+L7c5V3TqcDy2upg==}
@@ -13141,6 +13144,8 @@ snapshots:
 
   '@tsparticles/engine@3.9.1': {}
 
+  '@tsparticles/engine@4.3.1': {}
+
   '@tsparticles/interaction-external-attract@3.9.1':
     dependencies:
       '@tsparticles/engine': 3.9.1
@@ -13217,9 +13222,9 @@ snapshots:
     dependencies:
       '@tsparticles/engine': 3.9.1
 
-  '@tsparticles/react@3.0.0(@tsparticles/engine@3.9.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+  '@tsparticles/react@3.0.0(@tsparticles/engine@4.3.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      '@tsparticles/engine': 3.9.1
+      '@tsparticles/engine': 4.3.1
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
 
