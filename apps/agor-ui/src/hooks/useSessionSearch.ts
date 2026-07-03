@@ -79,6 +79,31 @@ function buildRanges(container: HTMLElement, query: string): Range[] {
   return ranges;
 }
 
+/**
+ * Transcript boundaries that mark a *structural* change worth a re-scan:
+ * a task mounting/unmounting, task hydration, or a new message/agent-chain
+ * block appearing. Mutations inside an existing block (per-frame streaming
+ * markdown growth) don't move these boundaries and are ignored — a full
+ * TreeWalker re-scan per animation frame is exactly the cost this avoids.
+ */
+const STRUCTURAL_BLOCK_SELECTOR = '[data-task-block], [data-conversation-block]';
+
+export function isStructuralMutation(records: MutationRecord[]): boolean {
+  for (const record of records) {
+    if (record.type !== 'childList') continue;
+    for (const nodes of [record.addedNodes, record.removedNodes]) {
+      for (const node of nodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        const el = node as Element;
+        if (el.matches(STRUCTURAL_BLOCK_SELECTOR) || el.querySelector(STRUCTURAL_BLOCK_SELECTOR)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 function scrollRangeIntoView(range: Range) {
   const node = range.startContainer;
   const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
@@ -241,8 +266,17 @@ export function useSessionSearch(
 
     scheduleRebuild(true);
 
-    const observer = new MutationObserver(() => scheduleRebuild(false));
-    observer.observe(container, { childList: true, subtree: true, characterData: true });
+    // Only block-level structural changes reschedule the scan. Character-level
+    // mutations aren't observed and intra-block childList churn is filtered
+    // out: while an agent streams, both fire once per frame, and each reset of
+    // the debounce both starves the pending scan and queues a full-transcript
+    // TreeWalker pass per quiet gap. Text still streaming when the last
+    // structural scan ran becomes searchable at the next boundary change (new
+    // block, or the typing indicator unmounting at stream end).
+    const observer = new MutationObserver((records) => {
+      if (isStructuralMutation(records)) scheduleRebuild(false);
+    });
+    observer.observe(container, { childList: true, subtree: true });
 
     return () => {
       observer.disconnect();
