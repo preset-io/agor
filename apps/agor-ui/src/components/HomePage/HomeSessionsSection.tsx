@@ -2,8 +2,10 @@ import type { Board, Branch, Session } from '@agor-live/client';
 import { ForkOutlined } from '@ant-design/icons';
 import { Card, Empty, List, Space, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useAgorStore } from '../../store/agorStore';
+import { selectBoardById, selectBranchById, selectSessionById } from '../../store/selectors';
 import {
   isSessionSearchActive,
   SESSION_SORT_STORAGE_KEY,
@@ -17,18 +19,25 @@ import { BoardPill, BranchPill } from '../Pill';
 import { SessionSearchToolbar } from '../SessionSearchControls';
 import { glassCardStyle } from './homeStyles';
 import { StatusDot } from './StatusDot';
-import type { HomeSectionProps } from './types';
+import type { HomePageProps } from './types';
 
 const { Text } = Typography;
 
 const HOME_SESSIONS_LIMIT = 100;
 
-const HomeSessionRow: React.FC<{
+// Memo'd so a patch to one session leaves every other row's DOM untouched:
+// unaffected rows keep their entity references and bail out of the re-render.
+const HomeSessionRow = memo(function HomeSessionRow({
+  session,
+  branch,
+  board,
+  onSessionClick,
+}: {
   session: Session;
   branch?: Branch;
   board?: Board;
-  onClick: () => void;
-}> = ({ session, branch, board, onClick }) => {
+  onSessionClick: (sessionId: string) => void;
+}) {
   const { token } = theme.useToken();
   const title = getSessionDisplayTitle(session, { includeAgentFallback: true });
   const isForked = !!(
@@ -39,7 +48,7 @@ const HomeSessionRow: React.FC<{
 
   return (
     <List.Item
-      onClick={onClick}
+      onClick={() => onSessionClick(session.session_id)}
       style={{
         cursor: 'pointer',
         padding: '8px 14px',
@@ -75,15 +84,15 @@ const HomeSessionRow: React.FC<{
       )}
     </List.Item>
   );
-};
+});
 
 export const HomeSessionsSection: React.FC<
-  Pick<
-    HomeSectionProps,
-    'sessionById' | 'branchById' | 'boardById' | 'currentUserId' | 'onSessionClick'
-  >
-> = ({ sessionById, branchById, boardById, currentUserId, onSessionClick }) => {
+  Pick<HomePageProps, 'currentUserId' | 'onSessionClick'>
+> = ({ currentUserId, onSessionClick }) => {
   const { token } = theme.useToken();
+  const sessionById = useAgorStore(selectSessionById);
+  const branchById = useAgorStore(selectBranchById);
+  const boardById = useAgorStore(selectBoardById);
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
   const allSessions = useMemo(
@@ -169,7 +178,7 @@ export const HomeSessionsSection: React.FC<
                   session={session}
                   branch={branch}
                   board={board}
-                  onClick={() => onSessionClick(session.session_id)}
+                  onSessionClick={onSessionClick}
                 />
               );
             }}

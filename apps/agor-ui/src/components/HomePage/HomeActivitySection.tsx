@@ -20,11 +20,18 @@ import {
 } from 'antd';
 import type React from 'react';
 import { useCallback, useMemo, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectBoardById,
+  selectBranchById,
+  selectSessionById,
+  selectUserById,
+} from '../../store/selectors';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { AssistantPill, BoardPill, BranchPill, SessionPill, UserPill } from '../Pill';
 import { glassCardStyle } from './homeStyles';
-import type { HomeSectionProps } from './types';
+import type { HomePageProps } from './types';
 
 const { Text } = Typography;
 
@@ -69,25 +76,12 @@ const ActivityFeedItem: React.FC<{
 };
 
 export const HomeActivitySection: React.FC<
-  Pick<
-    HomeSectionProps,
-    | 'branchById'
-    | 'boardById'
-    | 'sessionById'
-    | 'userById'
-    | 'onBoardClick'
-    | 'onBranchClick'
-    | 'onSessionClick'
-  >
-> = ({
-  branchById,
-  boardById,
-  sessionById,
-  userById,
-  onBoardClick,
-  onBranchClick,
-  onSessionClick,
-}) => {
+  Pick<HomePageProps, 'onBoardClick' | 'onBranchClick' | 'onSessionClick'>
+> = ({ onBoardClick, onBranchClick, onSessionClick }) => {
+  const branchById = useAgorStore(selectBranchById);
+  const boardById = useAgorStore(selectBoardById);
+  const sessionById = useAgorStore(selectSessionById);
+  const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
   const cardGlassStyle = glassCardStyle(token);
   const [filter, setFilter] = useState<ActivityFilter>('all');

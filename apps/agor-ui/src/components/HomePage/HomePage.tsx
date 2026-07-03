@@ -1,20 +1,11 @@
-import type { SessionStatus } from '@agor-live/client';
 import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
-import { useAgorStore } from '../../store/agorStore';
-import {
-  selectBoardById,
-  selectBranchById,
-  selectMcpServerById,
-  selectRepoById,
-  selectSessionById,
-  selectSessionsByBranch,
-  selectUserById,
-} from '../../store/selectors';
+import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
+import { selectBoardById } from '../../store/selectors';
 import { isDarkTheme } from '../../utils/theme';
 import { HomeActivitySection } from './HomeActivitySection';
 import { HomeBoardsSection } from './HomeBoardsSection';
@@ -35,8 +26,6 @@ const SIDEBAR_DEFAULT = 340;
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX_RATIO = 0.5;
 
-const AWAITING_STATUSES = new Set<SessionStatus>(['awaiting_permission', 'awaiting_input']);
-
 const NEW_MENU_ITEMS: MenuProps['items'] = [
   { key: 'assistant', label: 'New assistant', icon: <RobotOutlined /> },
   { key: 'branch', label: 'New branch', icon: <BranchesOutlined /> },
@@ -47,20 +36,21 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
   const { token } = theme.useToken();
   const homeBackground = DEFAULT_BACKGROUNDS[isDarkTheme(token) ? 'dark' : 'light'];
 
+  // HomePage deliberately subscribes to NOTHING session-shaped: sections that
+  // display session data subscribe themselves, so a streaming session patch
+  // wakes only those sections — never this whole page. Boards are the one
+  // whole-map subscription left (board options + default board for the create
+  // modal); board patches are rare.
   const boardById = useAgorStore(selectBoardById);
-  const branchById = useAgorStore(selectBranchById);
-  const repoById = useAgorStore(selectRepoById);
-  const sessionById = useAgorStore(selectSessionById);
-  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
-  const userById = useAgorStore(selectUserById);
-  const mcpServerById = useAgorStore(selectMcpServerById);
 
   const [onboardingHidden, setOnboardingHidden] = useState(
     () => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === 'true'
   );
 
-  const currentUser = props.currentUserId ? userById.get(props.currentUserId) : null;
-  const username = currentUser?.name || 'there';
+  const currentUserName = useAgorStore((s) =>
+    props.currentUserId ? s.userById.get(props.currentUserId)?.name : undefined
+  );
+  const username = currentUserName || 'there';
 
   // Resizable sidebar
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -135,17 +125,6 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
   // Tear down an in-progress drag if the page unmounts mid-drag.
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
-  const waitingSessions = useMemo(
-    () =>
-      Array.from(sessionById.values()).filter(
-        (s) =>
-          !s.archived &&
-          AWAITING_STATUSES.has(s.status) &&
-          (!props.currentUserId || s.created_by === props.currentUserId)
-      ),
-    [sessionById, props.currentUserId]
-  );
-
   const defaultBoardId = useMemo(() => {
     const firstRecent = (props.recentBoardIds ?? []).find(
       (id) => boardById.get(id)?.archived === false
@@ -183,14 +162,24 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     props.onOpenCreateDialog(createType, selectedBoardId);
   }, [props.onOpenCreateDialog, createType, selectedBoardId]);
 
+  // Booleans with shallow equality: entity patches only re-render HomePage
+  // when a step actually flips (e.g. first repo connected), not on every
+  // write to the underlying maps.
+  const { hasBoards, hasRepos, hasMcp, hasTeammates, hasSessions } = useStoreWithEqualityFn(
+    agorStore,
+    (state) => ({
+      hasBoards: state.boardById.size > 0,
+      hasRepos: state.repoById.size > 0,
+      hasMcp: state.mcpServerById.size > 0,
+      hasTeammates: state.userById.size > 1,
+      hasSessions: Array.from(state.sessionById.values()).some(
+        (s) => !s.archived && (!props.currentUserId || s.created_by === props.currentUserId)
+      ),
+    }),
+    shallow
+  );
+
   const onboardingSteps = useMemo(() => {
-    const hasBoards = boardById.size > 0;
-    const hasRepos = repoById.size > 0;
-    const hasMcp = (mcpServerById?.size ?? 0) > 0;
-    const hasTeammates = userById.size > 1;
-    const hasSessions = Array.from(sessionById.values()).some(
-      (s) => !s.archived && (!props.currentUserId || s.created_by === props.currentUserId)
-    );
     return [
       {
         id: 'repo',
@@ -229,12 +218,11 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
       },
     ];
   }, [
-    boardById,
-    sessionById,
-    repoById,
-    userById,
-    mcpServerById,
-    props.currentUserId,
+    hasBoards,
+    hasRepos,
+    hasMcp,
+    hasTeammates,
+    hasSessions,
     props.onOpenCreateDialog,
     props.onOpenSettings,
     handleNewSession,
@@ -310,26 +298,17 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                 />
               )}
 
-              {/* Jump back in — awaiting sessions */}
-              {waitingSessions.length > 0 && (
-                <JumpBackInSection
-                  sessions={waitingSessions}
-                  onSessionClick={props.onSessionClick}
-                />
-              )}
+              {/* Jump back in — awaiting sessions (renders nothing when none) */}
+              <JumpBackInSection
+                currentUserId={props.currentUserId}
+                onSessionClick={props.onSessionClick}
+              />
 
               {/* Workspace stats */}
-              <HomeStatsBar
-                sessionById={sessionById}
-                currentUserId={props.currentUserId}
-                teamSize={userById.size}
-              />
+              <HomeStatsBar currentUserId={props.currentUserId} />
 
               {/* My Sessions — flex: 1 fills remaining viewport height */}
               <HomeSessionsSection
-                sessionById={sessionById}
-                branchById={branchById}
-                boardById={boardById}
                 currentUserId={props.currentUserId}
                 onSessionClick={props.onSessionClick}
               />
@@ -337,10 +316,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
               {/* Boards grid */}
               <div style={{ marginTop: 24 }}>
                 <HomeBoardsSection
-                  boardById={boardById}
                   recentBoardIds={props.recentBoardIds}
-                  branchById={branchById}
-                  sessionsByBranch={sessionsByBranch}
                   onBoardClick={props.onBoardClick}
                   onOpenCreateDialog={props.onOpenCreateDialog}
                 />
@@ -421,10 +397,6 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                 }}
               >
                 <HomeActivitySection
-                  branchById={branchById}
-                  boardById={boardById}
-                  sessionById={sessionById}
-                  userById={userById}
                   onBoardClick={props.onBoardClick}
                   onBranchClick={props.onBranchClick}
                   onSessionClick={props.onSessionClick}

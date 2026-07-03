@@ -20,7 +20,7 @@ import type {
 } from '@agor-live/client';
 import { boardPath, ENTITY_PATH_SEGMENTS, sessionPath } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider } from 'antd';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
@@ -315,6 +315,13 @@ function AppContent() {
   // ConnectionStatus (amber tag with a refresh tooltip) and AboutTab (debug
   // rows). Mounted exactly once so all consumers share the same baseline.
   const { capturedSha, currentSha, outOfSync } = useServerVersion(client);
+
+  // Referentially stable context value: without the memo, every App render
+  // hands consumers a fresh object and defeats their own memoization.
+  const connectionContextValue = useMemo(
+    () => ({ connected, connecting, outOfSync, capturedSha, currentSha }),
+    [connected, connecting, outOfSync, capturedSha, currentSha]
+  );
 
   const directSessionIdFromPath = location.pathname.match(/^\/s\/([^/]+)\/?$/)?.[1] ?? null;
 
@@ -1654,7 +1661,7 @@ function AppContent() {
   // Render main app
   return (
     <ServicesConfigContext.Provider value={servicesConfig}>
-      <ConnectionProvider value={{ connected, connecting, outOfSync, capturedSha, currentSha }}>
+      <ConnectionProvider value={connectionContextValue}>
         {/* Force Password Change Modal - shown when user.must_change_password is true */}
         <ForcePasswordChangeModal
           open={!!currentUser?.must_change_password}

@@ -8,20 +8,29 @@ import {
 } from '@ant-design/icons';
 import { Button, Empty, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import { selectBoardById, selectBranchById, selectSessionsByBranch } from '../../store/selectors';
 import { formatRelativeTime } from '../../utils/time';
 import { glassCardStyle } from './homeStyles';
-import type { HomeSectionProps } from './types';
+import type { HomePageProps } from './types';
 
 const { Text } = Typography;
 
 const HOME_BOARDS_LIMIT = 50;
 const BOARDS_PER_PAGE = 4;
 
+/**
+ * Everything below `board` is a primitive so the memo'd card bails out of
+ * re-renders unless ITS board's display data actually changed — passing the
+ * per-board branch/session arrays instead would defeat the memo (they're
+ * rebuilt fresh on every derivation pass).
+ */
 interface BoardHomeRow {
   board: Board;
-  branches: Branch[];
-  sessions: Session[];
+  branchCount: number;
+  activeCount: number;
+  latestSessionAt: Session['last_updated'] | null;
   latest: number;
   visitRank: number;
 }
@@ -54,28 +63,27 @@ const activeSessions = (sessions: Session[]) =>
       s.status === 'running' || s.status === 'awaiting_permission' || s.status === 'awaiting_input'
   );
 
-const BoardHomeCard: React.FC<{
+const BoardHomeCard = memo(function BoardHomeCard({
+  board,
+  branchCount,
+  activeCount,
+  latestSessionAt,
+  onBoardClick,
+}: {
   board: Board;
-  branches: Branch[];
-  sessions: Session[];
-  onClick: () => void;
-}> = ({ board, branches, sessions, onClick }) => {
+  branchCount: number;
+  activeCount: number;
+  latestSessionAt: Session['last_updated'] | null;
+  onBoardClick: (boardId: string) => void;
+}) {
   const { token } = theme.useToken();
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
-  const activeCount = activeSessions(sessions).length;
-  const latestSession = useMemo(
-    () =>
-      [...sessions].sort(
-        (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
-      )[0],
-    [sessions]
-  );
 
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={() => onBoardClick(board.board_id)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setFocused(true)}
@@ -135,7 +143,7 @@ const BoardHomeCard: React.FC<{
           </Tooltip>
           <div style={{ display: 'flex', gap: 10 }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {branches.length} branch{branches.length !== 1 ? 'es' : ''}
+              {branchCount} branch{branchCount !== 1 ? 'es' : ''}
             </Text>
             {activeCount > 0 && (
               <Text type="secondary" style={{ fontSize: 12 }}>
@@ -147,8 +155,8 @@ const BoardHomeCard: React.FC<{
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <ClockCircleOutlined style={{ fontSize: 11, color: token.colorTextSecondary }} />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {latestSession
-                ? `Last session ${formatRelativeTime(latestSession.last_updated)}`
+              {latestSessionAt
+                ? `Last session ${formatRelativeTime(latestSessionAt)}`
                 : 'No sessions yet'}
             </Text>
           </div>
@@ -156,26 +164,14 @@ const BoardHomeCard: React.FC<{
       </div>
     </button>
   );
-};
+});
 
 export const HomeBoardsSection: React.FC<
-  Pick<
-    HomeSectionProps,
-    | 'boardById'
-    | 'recentBoardIds'
-    | 'branchById'
-    | 'sessionsByBranch'
-    | 'onBoardClick'
-    | 'onOpenCreateDialog'
-  >
-> = ({
-  boardById,
-  recentBoardIds = [],
-  branchById,
-  sessionsByBranch,
-  onBoardClick,
-  onOpenCreateDialog,
-}) => {
+  Pick<HomePageProps, 'recentBoardIds' | 'onBoardClick' | 'onOpenCreateDialog'>
+> = ({ recentBoardIds = [], onBoardClick, onOpenCreateDialog }) => {
+  const boardById = useAgorStore(selectBoardById);
+  const branchById = useAgorStore(selectBranchById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const [page, setPage] = useState(0);
 
   const rows = useMemo(() => {
@@ -190,15 +186,25 @@ export const HomeBoardsSection: React.FC<
         const sessions = branches.flatMap(
           (branch) => visibleSessionsByBranch.get(branch.branch_id) ?? []
         );
+        let latestSessionAt: BoardHomeRow['latestSessionAt'] = null;
+        let latestSessionTime = Number.NEGATIVE_INFINITY;
+        for (const session of sessions) {
+          const time = new Date(session.last_updated).getTime();
+          if (time > latestSessionTime) {
+            latestSessionTime = time;
+            latestSessionAt = session.last_updated;
+          }
+        }
         const latest = Math.max(
           new Date(board.last_updated).getTime(),
           ...branches.map((branch) => new Date(branch.updated_at || branch.created_at).getTime()),
-          ...sessions.map((session) => new Date(session.last_updated).getTime())
+          latestSessionTime
         );
         return {
           board,
-          branches,
-          sessions,
+          branchCount: branches.length,
+          activeCount: activeSessions(sessions).length,
+          latestSessionAt,
           latest: Number.isFinite(latest) ? latest : 0,
           visitRank: visitRank.get(board.board_id) ?? Number.POSITIVE_INFINITY,
         };
@@ -285,13 +291,14 @@ export const HomeBoardsSection: React.FC<
             gap: 12,
           }}
         >
-          {visibleRows.map(({ board, branches, sessions }) => (
+          {visibleRows.map(({ board, branchCount, activeCount, latestSessionAt }) => (
             <BoardHomeCard
               key={board.board_id}
               board={board}
-              branches={branches}
-              sessions={sessions}
-              onClick={() => onBoardClick(board.board_id)}
+              branchCount={branchCount}
+              activeCount={activeCount}
+              latestSessionAt={latestSessionAt}
+              onBoardClick={onBoardClick}
             />
           ))}
         </div>

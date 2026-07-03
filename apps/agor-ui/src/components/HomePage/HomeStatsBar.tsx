@@ -1,8 +1,8 @@
-import type { Session } from '@agor-live/client';
 import { RiseOutlined, TeamOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { glassCardStyle } from './homeStyles';
 
 const { Text } = Typography;
@@ -76,10 +76,8 @@ const StatCard: React.FC<{
 };
 
 export const HomeStatsBar: React.FC<{
-  sessionById: Map<string, Session>;
   currentUserId?: string;
-  teamSize?: number;
-}> = ({ sessionById, currentUserId, teamSize }) => {
+}> = ({ currentUserId }) => {
   const { token } = theme.useToken();
   const [now, setNow] = useState(() => Date.now());
 
@@ -88,45 +86,54 @@ export const HomeStatsBar: React.FC<{
     return () => clearInterval(id);
   }, []);
 
-  const { activeTeammates, myThisWeek, runningNow, activeThisWeek } = useMemo(() => {
-    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const teamSize = useAgorStore((s) => s.userById.size);
 
-    const activeUserIds = new Set<string>();
-    let myThisWeek = 0;
-    let runningNow = 0;
-    let activeThisWeek = 0;
+  // Derived counts with shallow equality: session patches that don't change
+  // any count (e.g. streaming updates to an already-active session) leave the
+  // stats bar un-rendered.
+  const { activeTeammates, myThisWeek, runningNow, activeThisWeek } = useStoreWithEqualityFn(
+    agorStore,
+    (state) => {
+      const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-    for (const s of sessionById.values()) {
-      if (s.archived) continue;
+      const activeUserIds = new Set<string>();
+      let myThisWeek = 0;
+      let runningNow = 0;
+      let activeThisWeek = 0;
 
-      const updatedAt = s.last_updated
-        ? new Date(s.last_updated).getTime()
-        : s.created_at
-          ? new Date(s.created_at).getTime()
-          : Number.NaN;
+      for (const s of state.sessionById.values()) {
+        if (s.archived) continue;
 
-      if (s.status === 'running') {
-        runningNow++;
-      }
+        const updatedAt = s.last_updated
+          ? new Date(s.last_updated).getTime()
+          : s.created_at
+            ? new Date(s.created_at).getTime()
+            : Number.NaN;
 
-      if (!Number.isNaN(updatedAt) && updatedAt > weekAgo) {
-        activeThisWeek++;
-        if (s.created_by) activeUserIds.add(s.created_by);
-        if (s.created_by === currentUserId) {
-          myThisWeek++;
+        if (s.status === 'running') {
+          runningNow++;
+        }
+
+        if (!Number.isNaN(updatedAt) && updatedAt > weekAgo) {
+          activeThisWeek++;
+          if (s.created_by) activeUserIds.add(s.created_by);
+          if (s.created_by === currentUserId) {
+            myThisWeek++;
+          }
         }
       }
-    }
 
-    return {
-      activeTeammates: activeUserIds.size,
-      myThisWeek,
-      runningNow,
-      activeThisWeek,
-    };
-  }, [sessionById, currentUserId, now]);
+      return {
+        activeTeammates: activeUserIds.size,
+        myThisWeek,
+        runningNow,
+        activeThisWeek,
+      };
+    },
+    shallow
+  );
 
-  const isMultiUser = (teamSize ?? 0) > 1;
+  const isMultiUser = teamSize > 1;
   const weekValue =
     isMultiUser && currentUserId && activeThisWeek > 0
       ? `${myThisWeek}/${activeThisWeek}`
