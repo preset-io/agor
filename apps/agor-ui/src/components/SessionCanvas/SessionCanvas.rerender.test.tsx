@@ -6,6 +6,7 @@ import type {
   CardWithType,
   Repo,
   Session,
+  User,
 } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
 import { useState } from 'react';
@@ -377,6 +378,46 @@ describe('SessionCanvas store-selector re-render isolation', () => {
 
     expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
     expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
+  });
+
+  it('a userById patch re-renders branch cards WITHOUT rebuilding node data (documented contract)', async () => {
+    render(
+      <ConnectionProvider value={CONNECTION_VALUE}>
+        <SessionCanvas board={board} client={null} branches={BRANCHES} />
+      </ConnectionProvider>
+    );
+
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+      expect(cardNodeRenders).toBeGreaterThanOrEqual(1);
+    });
+
+    const branchABaseline = branchCardRenders.get('A') ?? 0;
+    const branchBBaseline = branchCardRenders.get('B') ?? 0;
+    const cardNodeBaseline = cardNodeRenders;
+
+    act(() => {
+      agorStore.setState({
+        userById: new Map([['user-x', { user_id: 'user-x', username: 'x' } as unknown as User]]),
+      });
+    });
+
+    // Documented contract, the weaker of the two possible pins: BranchNode
+    // subscribes to the WHOLE user map (BranchCard renders arbitrary users —
+    // session and message authors resolved deep inside its session tree — so
+    // the set of relevant user ids is not derivable at subscription time, and
+    // a narrower per-branch selector is not mechanical). Any user-map change
+    // therefore re-renders every branch card...
+    await waitFor(() => {
+      expect(branchCardRenders.get('A') ?? 0).toBeGreaterThan(branchABaseline);
+      expect(branchCardRenders.get('B') ?? 0).toBeGreaterThan(branchBBaseline);
+    });
+
+    // ...but the map lives outside node `data`, so the node array is NOT
+    // rebuilt: card nodes (which do not consume users) keep their `data`
+    // references and stay un-rendered.
+    expect(cardNodeRenders).toBe(cardNodeBaseline);
   });
 });
 
