@@ -817,7 +817,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
                         '--agor-link-icon-color': disabled
                           ? token.colorTextDisabled
                           : token.colorTextTertiary,
-                        '--agor-link-row-hover-bg': token.colorFillQuaternary,
+                        '--agor-link-row-hover-bg': 'transparent',
                         '--agor-link-row-hover-color': token.colorPrimary,
                         borderColor: token.colorBorderSecondary,
                         borderRadius: token.borderRadius,

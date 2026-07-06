@@ -237,8 +237,8 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                       : isBranchCard
                         ? token.colorTextTertiary
                         : token.colorPrimary,
-                    '--agor-link-chip-hover-bg': token.colorPrimaryBgHover,
-                    '--agor-link-chip-hover-border': token.colorPrimary,
+                    '--agor-link-chip-hover-bg': token.colorPrimaryBg,
+                    '--agor-link-chip-hover-border': token.colorPrimaryBorder,
                     '--agor-link-chip-hover-color': token.colorPrimary,
                     height: chipHeight,
                     minWidth: 0,

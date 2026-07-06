@@ -368,7 +368,7 @@ export function LinkRow({
         {
           '--agor-link-title-color': isActionable ? token.colorText : token.colorTextSecondary,
           '--agor-link-icon-color': token.colorTextTertiary,
-          '--agor-link-row-hover-bg': token.colorFillQuaternary,
+          '--agor-link-row-hover-bg': 'transparent',
           '--agor-link-row-hover-color': token.colorPrimary,
           display: 'flex',
           alignItems: 'center',
@@ -1003,7 +1003,7 @@ function QuickLinkRow({
       style={
         {
           '--agor-link-icon-color': disabled ? token.colorTextDisabled : token.colorTextTertiary,
-          '--agor-link-row-hover-bg': token.colorFillQuaternary,
+          '--agor-link-row-hover-bg': 'transparent',
           '--agor-link-row-hover-color': token.colorPrimary,
           display: 'grid',
           gridTemplateColumns: '34px minmax(0, 1fr) 52px 28px',
@@ -1231,8 +1231,8 @@ export const PinnedLinksStrip: React.FC<PinnedLinksStripProps> = ({
                       '--agor-link-chip-accent-color': disabled
                         ? token.colorTextDisabled
                         : token.colorPrimary,
-                      '--agor-link-chip-hover-bg': token.colorPrimaryBgHover,
-                      '--agor-link-chip-hover-border': token.colorPrimary,
+                      '--agor-link-chip-hover-bg': token.colorPrimaryBg,
+                      '--agor-link-chip-hover-border': token.colorPrimaryBorder,
                       '--agor-link-chip-hover-color': token.colorPrimary,
                       height: 26,
                       minWidth: 0,

@@ -36,20 +36,22 @@
 }
 
 .agor-action-link-row:not([aria-disabled="true"]):hover {
-  --agor-link-row-bg: var(--agor-link-row-hover-bg, var(--ant-color-fill-quaternary));
+  --agor-link-row-bg: var(--agor-link-row-hover-bg, transparent);
   --agor-link-title-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
   --agor-link-icon-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
-}
-
-.agor-action-link-row:not([aria-disabled="true"]):hover .agor-action-link-title {
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 .agor-action-link-title:hover {
   --agor-link-title-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.agor-action-link-row:not([aria-disabled="true"]):hover .agor-action-link-title,
+.agor-action-link-row:not([aria-disabled="true"]) .agor-action-link-title:hover,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover .agor-action-link-title,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]) .agor-action-link-title:hover {
+  text-decoration: none;
 }
 
 .agor-action-link-chip {
