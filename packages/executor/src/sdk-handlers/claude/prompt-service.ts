@@ -215,7 +215,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
     // Get session for reference (needed to check existing sdk_session_id)
     const session = await this.sessionsRepo?.findById(sessionId);
-    const existingSdkSessionId = session?.sdk_session_id;
+    const existingSdkSessionId = session?.sdk_session_id ?? undefined;
 
     // Create message processor for this query
     const processor = new SDKMessageProcessor({
@@ -381,7 +381,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
     // Get session for reference
     const session = await this.sessionsRepo?.findById(sessionId);
-    const existingSdkSessionId = session?.sdk_session_id;
+    const existingSdkSessionId = session?.sdk_session_id ?? undefined;
 
     // Create message processor
     const processor = new SDKMessageProcessor({

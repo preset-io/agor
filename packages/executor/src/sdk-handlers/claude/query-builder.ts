@@ -217,7 +217,12 @@ export async function setupQuery(
     console.warn(`⚠️  Session ${sessionId} has no branch_id, using process.cwd(): ${cwd}`);
   }
 
-  logPromptStart(sessionId, prompt, cwd, resume ? session.sdk_session_id : undefined);
+  logPromptStart(
+    sessionId,
+    prompt,
+    cwd,
+    resume ? (session.sdk_session_id ?? undefined) : undefined
+  );
 
   // Validate CWD exists before calling SDK
   try {
