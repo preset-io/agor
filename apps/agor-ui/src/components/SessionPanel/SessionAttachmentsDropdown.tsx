@@ -420,7 +420,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               border: 0,
               borderRadius: token.borderRadius,
               cursor: disabled ? 'not-allowed' : 'pointer',
-              padding: `${token.sizeXXS}px ${token.sizeSM}px ${token.sizeXXS}px ${token.sizeXS}px`,
+              padding: `${token.sizeXXS}px ${token.sizeXS}px`,
               textAlign: 'left',
             } as React.CSSProperties
           }
@@ -641,7 +641,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             marginTop: token.sizeSM,
             maxHeight: 308,
             overflowY: 'auto',
-            paddingRight: token.sizeXS,
+            paddingRight: token.sizeXXS,
           }}
         >
           {quickItems.map(renderQuietRow)}
