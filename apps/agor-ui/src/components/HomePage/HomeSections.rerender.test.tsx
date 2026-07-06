@@ -5,6 +5,7 @@ import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
+import { HomeActivitySection } from './HomeActivitySection';
 import { HomeBoardsSection } from './HomeBoardsSection';
 import { HomeSessionsSection } from './HomeSessionsSection';
 
@@ -70,6 +71,51 @@ describe('HomeSessionsSection row re-render isolation', () => {
     // Streaming-style patch to s1: new object identity, s2 untouched. The
     // section re-renders (it displays session data), but only s1's row may
     // re-render — s2's row keeps every prop reference and bails out.
+    const s1Patched = { ...s1, status: 'running' } as Session;
+    act(() => {
+      agorStore.setState({
+        sessionById: new Map([
+          [s1.session_id, s1Patched],
+          [s2.session_id, s2],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(titleRendersFor(s1Patched)).toBeGreaterThanOrEqual(1);
+    });
+    expect(titleRendersFor(s2)).toBe(s2Baseline);
+  });
+});
+
+describe('HomeActivitySection row re-render isolation', () => {
+  it('patching one session leaves the other activity rows un-rendered', async () => {
+    const s1 = makeSession('s-1', '2026-07-01T10:00:00.000Z', {
+      created_at: '2026-07-01T10:00:00.000Z',
+    });
+    const s2 = makeSession('s-2', '2026-07-01T09:00:00.000Z', {
+      created_at: '2026-07-01T09:00:00.000Z',
+    });
+    agorStore.setState({
+      sessionById: new Map([
+        [s1.session_id, s1],
+        [s2.session_id, s2],
+      ]),
+    });
+
+    render(<HomeActivitySection onBoardClick={noop} onBranchClick={noop} onSessionClick={noop} />);
+
+    await waitFor(() => {
+      expect(titleRendersFor(s2)).toBeGreaterThanOrEqual(1);
+    });
+    const s2Baseline = titleRendersFor(s2);
+
+    // Streaming-style patch to s1: new object identity, same last_updated (so
+    // feed order is unchanged), s2 untouched. The section re-renders (it builds
+    // the feed from sessions), but each row is a memo'd component fed resolved
+    // entity refs — so only s1's row rebuilds its message. If the row weren't
+    // memo'd (or its message builders depended on the whole maps, as before),
+    // s2's row would re-render too and this would fail.
     const s1Patched = { ...s1, status: 'running' } as Session;
     act(() => {
       agorStore.setState({
