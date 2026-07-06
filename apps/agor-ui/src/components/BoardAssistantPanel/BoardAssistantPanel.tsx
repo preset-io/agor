@@ -45,7 +45,7 @@ import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 
 export type BoardAssistantPanelTab = 'assistant' | 'all-sessions' | 'comments';
-const ASSISTANT_PINNED_LINK_INLINE_LIMIT = 3;
+const ASSISTANT_PINNED_LINK_INLINE_LIMIT = 6;
 
 function AssistantPinnedLinksBlock({
   links,
@@ -53,12 +53,14 @@ function AssistantPinnedLinksBlock({
   error,
   onTogglePinned,
   pinningLinkId,
+  onOpenMore,
 }: {
   links: Link[];
   loading: boolean;
   error: string | null;
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
   pinningLinkId?: string | null;
+  onOpenMore?: () => void;
 }) {
   const { token } = theme.useToken();
   const { busyLinkId, preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
@@ -74,6 +76,7 @@ function AssistantPinnedLinksBlock({
     () => pinnedItems.slice(0, ASSISTANT_PINNED_LINK_INLINE_LIMIT),
     [pinnedItems]
   );
+  const hiddenCount = pinnedItems.length - inlineItems.length;
 
   if (!loading && !error && pinnedItems.length === 0) return null;
 
@@ -124,6 +127,21 @@ function AssistantPinnedLinksBlock({
                 pinning={item.linkId === pinningLinkId}
               />
             ))}
+            {hiddenCount > 0 && (
+              <Button
+                type="link"
+                size="small"
+                onClick={onOpenMore}
+                style={{
+                  alignSelf: 'flex-start',
+                  height: 24,
+                  padding: `0 ${token.sizeUnit * 1.5}px`,
+                  fontSize: 12,
+                }}
+              >
+                +{hiddenCount} more
+              </Button>
+            )}
           </Space>
         ) : loading ? (
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -494,6 +512,7 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
             error={assistantLinksError}
             onTogglePinned={handleToggleAssistantPinned}
             pinningLinkId={assistantPinningLinkId}
+            onOpenMore={() => onOpenSettings?.(primaryAssistantBranch.branch_id, 'links')}
           />
 
           <BranchSessionSections
