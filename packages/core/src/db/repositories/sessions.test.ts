@@ -1018,6 +1018,29 @@ describe('SessionRepository.update', () => {
     expect(updated.status).toBe(created.status);
     expect(updated.branch_id).toBe(created.branch_id);
   });
+
+  dbTest('should require null, not undefined, to clear sdk_session_id', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const data = createSessionData({
+      branch_id: branch.branch_id,
+      sdk_session_id: 'dirty-thread-id',
+    });
+    const created = await repo.create(data);
+
+    const undefinedPatch = await repo.update(created.session_id, {
+      sdk_session_id: undefined,
+    });
+    expect(undefinedPatch.sdk_session_id).toBe('dirty-thread-id');
+
+    const nullPatch = await repo.update(created.session_id, {
+      sdk_session_id: null,
+    });
+    expect(nullPatch.sdk_session_id).toBeNull();
+
+    const reloaded = await repo.findById(created.session_id);
+    expect(reloaded?.sdk_session_id).toBeNull();
+  });
 });
 
 // ============================================================================

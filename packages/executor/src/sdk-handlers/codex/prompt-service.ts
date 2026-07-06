@@ -106,6 +106,31 @@ function applyGatewayMcpStartupGuard(config: CodexConfigObject, requireMcpServer
   config.startup_timeout_ms = GATEWAY_MCP_STARTUP_TIMEOUT_MS;
 }
 
+function stringifyCodexStreamError(event: { message?: unknown; error?: unknown }): string {
+  const raw = event.message ?? event.error ?? 'unknown';
+  if (typeof raw === 'string') return raw;
+  if (raw instanceof Error) return raw.message;
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return String(raw);
+  }
+}
+
+function isCodexReconnectProgressMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return /^reconnecting\.\.\.\s*\d+\s*\/\s*\d+/.test(normalized);
+}
+
+function isCodexPreTerminalDisconnectMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('stream disconnected before completion') ||
+    normalized.includes('before response.completed') ||
+    normalized.includes('websocket closed by server before response.completed')
+  );
+}
+
 function getCodexHome(): string {
   return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 }
@@ -953,6 +978,24 @@ export class CodexPromptService {
     );
   }
 
+  private async clearDirtyCodexResumeState(
+    sessionId: SessionID,
+    session: { sdk_session_id?: string | null },
+    reason: string
+  ): Promise<void> {
+    const dirtyThreadId = session.sdk_session_id;
+    if (!dirtyThreadId) return;
+
+    console.warn(
+      `⚠️  [Codex] Clearing dirty resume thread ${shortId(dirtyThreadId)} for session ${shortId(
+        sessionId
+      )}: ${reason}`
+    );
+
+    await this.sessionsRepo.update(sessionId, { sdk_session_id: null });
+    session.sdk_session_id = null;
+  }
+
   /**
    * Execute prompt with streaming support
    *
@@ -1127,9 +1170,9 @@ export class CodexPromptService {
       );
 
       // Clear SDK session ID to force fresh start with new MCP config
-      await this.sessionsRepo.update(sessionId, { sdk_session_id: undefined });
+      await this.sessionsRepo.update(sessionId, { sdk_session_id: null });
       // Update local session object to reflect the change
-      session.sdk_session_id = undefined;
+      session.sdk_session_id = null;
     }
 
     // Check if we need to update thread settings due to approval policy change
@@ -1198,6 +1241,7 @@ export class CodexPromptService {
       const turnOptions = abortController ? { signal: abortController.signal } : undefined;
       const { events } = await thread.runStreamed(prompt, turnOptions);
       codexDebug(`✅ [Codex] runStreamed() returned, starting event iteration`);
+      let submittedTurnIsUnsafeToResume = true;
 
       const currentMessage: Array<{
         type: string;
@@ -1217,6 +1261,7 @@ export class CodexPromptService {
 
       let eventCount = 0;
       let didStop = false;
+      let reconnectProgressMessage: string | undefined;
 
       for await (const event of events) {
         eventCount++;
@@ -1293,6 +1338,7 @@ export class CodexPromptService {
             codexDebug(
               `✅ [Codex] terminal event_msg (${payloadType}) received for session ${shortId(sessionId)}`
             );
+            submittedTurnIsUnsafeToResume = false;
 
             yield {
               type: 'complete',
@@ -1452,6 +1498,7 @@ export class CodexPromptService {
             const mappedUsage = extractCodexTokenUsage((event as { usage?: unknown }).usage);
             const contextUsage =
               latestContextUsage ?? (await extractLatestContextUsageFromRollout(thread.id || ''));
+            submittedTurnIsUnsafeToResume = false;
 
             // Yield complete message with all tool uses
             yield {
@@ -1497,16 +1544,33 @@ export class CodexPromptService {
             throw new Error(`Codex execution failed: ${errorMessage}`);
           }
 
-          case 'error':
+          case 'error': {
+            const errorMessage = stringifyCodexStreamError(
+              event as { message?: unknown; error?: unknown }
+            );
+
+            if (isCodexReconnectProgressMessage(errorMessage)) {
+              reconnectProgressMessage = errorMessage;
+              console.warn(
+                `⚠️  [Codex] Stream reconnect progress for session ${shortId(
+                  sessionId
+                )}: ${errorMessage}`
+              );
+              continue;
+            }
+
+            if (isCodexPreTerminalDisconnectMessage(errorMessage)) {
+              await this.clearDirtyCodexResumeState(
+                sessionId,
+                session,
+                `pre-terminal stream disconnect: ${errorMessage}`
+              );
+            }
+
             // Fatal stream-level error from Codex SDK.
             // Surface this as a task failure so users see it in the conversation.
-            throw new Error(
-              `Codex stream error: ${
-                (event as { message?: unknown; error?: unknown }).message ||
-                (event as { message?: unknown; error?: unknown }).error ||
-                'unknown'
-              }`
-            );
+            throw new Error(`Codex stream error: ${errorMessage}`);
+          }
 
           default:
             // Ignore other event types silently
@@ -1519,6 +1583,15 @@ export class CodexPromptService {
       // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
+        if (submittedTurnIsUnsafeToResume) {
+          await this.clearDirtyCodexResumeState(
+            sessionId,
+            session,
+            reconnectProgressMessage
+              ? `stream ended before terminal completion after reconnect progress: ${reconnectProgressMessage}`
+              : 'stream ended before terminal completion'
+          );
+        }
         throw new Error(
           'Codex stream ended without a terminal completion event (turn.completed, task_complete, or turn_complete). ' +
             'The Codex process may have exited unexpectedly (check the executor logs for exit code 0 clues). ' +

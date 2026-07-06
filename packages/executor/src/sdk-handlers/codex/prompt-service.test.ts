@@ -49,10 +49,41 @@ let mockInstanceConfigs: Array<unknown> = [];
 let mockClosedInstanceIds: number[] = [];
 let mockStreamEvents: Array<Record<string, unknown>> = [];
 let mockStartThreadId: string | undefined = 'mock-thread-id';
+let mockStartedThreadOptions: Array<unknown> = [];
+let mockResumedThreadIds: Array<string> = [];
 
 async function* streamMockEvents() {
   for (const event of mockStreamEvents) {
     yield event;
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+function applySessionRepositoryUpdateSemanticsForTest(
+  target: Record<string, unknown>,
+  patch: Record<string, unknown>
+) {
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) {
+      // Match SessionRepository.update() -> deepMerge(): undefined means "preserve".
+      continue;
+    }
+
+    const currentValue = target[key];
+    if (isPlainRecord(value) && isPlainRecord(currentValue)) {
+      applySessionRepositoryUpdateSemanticsForTest(currentValue, value);
+      continue;
+    }
+
+    target[key] = value;
   }
 }
 
@@ -80,7 +111,8 @@ vi.mock('@agor/core/sdk', () => {
       mockClosedInstanceIds.push(this.instanceId);
     }
 
-    startThread() {
+    startThread(options?: unknown) {
+      mockStartedThreadOptions.push(options);
       return {
         id: mockStartThreadId,
         run: vi.fn(),
@@ -89,6 +121,7 @@ vi.mock('@agor/core/sdk', () => {
     }
 
     resumeThread(threadId: string) {
+      mockResumedThreadIds.push(threadId);
       return {
         id: threadId,
         run: vi.fn(),
@@ -112,6 +145,7 @@ const mockSessionsRepo = {
 } as any;
 const mockSessionMCPServerRepo = {
   listServers: vi.fn().mockResolvedValue([]),
+  listServersWithMetadata: vi.fn().mockResolvedValue([]),
 } as any;
 const mockBranchesRepo = {
   findById: vi.fn(),
@@ -126,6 +160,8 @@ describe('CodexPromptService - SDK Instance Caching (issue #133)', () => {
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
     mockStartThreadId = 'mock-thread-id';
+    mockStartedThreadOptions = [];
+    mockResumedThreadIds = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -248,6 +284,8 @@ describe('CodexPromptService - OPENAI_BASE_URL handling', () => {
     mockInstanceConfigs = [];
     mockClosedInstanceIds = [];
     delete process.env.OPENAI_BASE_URL;
+    mockStartedThreadOptions = [];
+    mockResumedThreadIds = [];
     vi.clearAllMocks();
   });
 
@@ -316,6 +354,8 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     mockInstanceConfigs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
+    mockStartedThreadOptions = [];
+    mockResumedThreadIds = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
   });
@@ -466,6 +506,8 @@ describe('CodexPromptService - forked sessions', () => {
     mockInstanceConfigs = [];
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
+    mockStartedThreadOptions = [];
+    mockResumedThreadIds = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
@@ -705,6 +747,84 @@ describe('CodexPromptService - Todo normalization', () => {
 });
 
 describe('CodexPromptService - tool payload mapping', () => {
+  async function makeStreamingService(
+    sessionOverrides: Partial<{
+      session_id: string;
+      sdk_session_id: string | null;
+      created_at: string;
+    }> = {}
+  ) {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    mockSessionsRepo.findById.mockReset();
+    mockSessionsRepo.update.mockReset();
+    mockSessionMCPServerRepo.listServersWithMetadata.mockReset();
+    mockSessionMCPServerRepo.listServersWithMetadata.mockResolvedValue([]);
+    mockBranchesRepo.findById.mockReset();
+    mockStartThreadId = 'mock-thread-id';
+    mockStartedThreadOptions = [];
+    mockResumedThreadIds = [];
+
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    const sessionRecord = {
+      session_id: sessionOverrides.session_id ?? 'session-1',
+      branch_id: 'branch-1',
+      created_at: sessionOverrides.created_at ?? new Date().toISOString(),
+      sdk_session_id: sessionOverrides.sdk_session_id ?? null,
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    };
+
+    mockSessionsRepo.findById.mockResolvedValue(sessionRecord);
+    mockSessionsRepo.update.mockImplementation(
+      async (_id: string, patch: Record<string, unknown>) => {
+        applySessionRepositoryUpdateSemanticsForTest(sessionRecord, patch);
+        return sessionRecord;
+      }
+    );
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
+      path: process.cwd(),
+    });
+
+    return { service, sessionRecord };
+  }
+
+  it('models SessionRepository deepMerge clearing semantics in streaming tests', () => {
+    const sessionRecord: Record<string, unknown> = { sdk_session_id: 'dirty-thread-id' };
+
+    applySessionRepositoryUpdateSemanticsForTest(sessionRecord, {
+      sdk_session_id: undefined,
+    });
+    expect(sessionRecord.sdk_session_id).toBe('dirty-thread-id');
+
+    applySessionRepositoryUpdateSemanticsForTest(sessionRecord, {
+      sdk_session_id: null,
+    });
+    expect(sessionRecord.sdk_session_id).toBeNull();
+  });
+
   it('captures token_count context snapshot and forwards it on turn completion', async () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
@@ -1161,6 +1281,119 @@ describe('CodexPromptService - tool payload mapping', () => {
       })()
     ).rejects.toThrow('Codex stream error: stream exploded');
   });
+
+  it('treats recognized reconnect-progress stream errors as non-fatal when the turn later completes', async () => {
+    const { service } = await makeStreamingService();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'error',
+        message:
+          'Reconnecting... 2/5 (stream disconnected before completion: websocket closed by server before response.completed)',
+      },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 3, cached_input_tokens: 0, output_tokens: 4 },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'review')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
+      threadId: 'mock-thread-id',
+    });
+    expect(mockSessionsRepo.update).not.toHaveBeenCalledWith('session-1', {
+      sdk_session_id: null,
+    });
+  });
+
+  it('clears a dirty Codex resume thread after a true pre-terminal stream disconnect before the next prompt', async () => {
+    const { service, sessionRecord } = await makeStreamingService({
+      sdk_session_id: 'dirty-thread-id',
+    });
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'error',
+        message:
+          'stream disconnected before completion: websocket closed by server before response.completed',
+      },
+    ];
+
+    await expect(
+      (async () => {
+        for await (const _event of service.promptSessionStreaming('session-1' as any, 'review')) {
+          // drain
+        }
+      })()
+    ).rejects.toThrow(
+      'Codex stream error: stream disconnected before completion: websocket closed by server before response.completed'
+    );
+
+    expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
+      sdk_session_id: null,
+    });
+    expect(sessionRecord.sdk_session_id).toBeNull();
+
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'continue')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    expect(mockResumedThreadIds).toEqual(['dirty-thread-id']);
+    expect(mockStartedThreadOptions).toHaveLength(1);
+    expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
+      threadId: 'mock-thread-id',
+    });
+  });
+
+  it('clears a stale Codex MCP resume thread with null before starting a fresh thread', async () => {
+    const { service, sessionRecord } = await makeStreamingService({
+      sdk_session_id: 'stale-mcp-thread-id',
+      created_at: '2026-07-06T12:00:00.000Z',
+    });
+    mockSessionMCPServerRepo.listServersWithMetadata.mockResolvedValueOnce([
+      {
+        enabled: true,
+        added_at: new Date('2026-07-06T12:05:00.000Z').getTime(),
+        server: { name: 'new-server' },
+      },
+    ]);
+
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'continue')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
+      sdk_session_id: null,
+    });
+    expect(sessionRecord.sdk_session_id).toBeNull();
+    expect(mockResumedThreadIds).toEqual([]);
+    expect(mockStartedThreadOptions).toHaveLength(1);
+    expect(emitted.find((event) => event.type === 'complete')).toMatchObject({
+      threadId: 'mock-thread-id',
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1215,6 +1448,8 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     mockClosedInstanceIds = [];
     mockStreamEvents = [];
     mockStartThreadId = 'mock-thread-id';
+    mockStartedThreadOptions = [];
+    mockResumedThreadIds = [];
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
