@@ -89,4 +89,33 @@ describe('buildSessionMaps reference stability', () => {
     expect(built.sessionById.get('s1')?.session_id).toBe('s1');
     expect(built.sessionsByBranch.get('A')).toHaveLength(1);
   });
+
+  it('preserves remote surrogate rows when rebuilding against prev', () => {
+    const source = {
+      ...makeSession('source', 'A'),
+      remote_relationships: {
+        as_source: [
+          {
+            relationship_type: 'remote_create',
+            source_session_id: 'source',
+            target_session_id: 'target',
+          },
+        ],
+      },
+    } as unknown as Session;
+    const target = makeSession('target', 'B');
+    const prev = buildSessionMaps([source, target]);
+
+    const rebuilt = buildSessionMaps([{ ...source }, { ...target }], prev);
+    const sourceBucket = rebuilt.sessionsByBranch.get('A') ?? [];
+    const surrogate = sourceBucket.find(
+      (session) => session.session_id === 'target' && session.remote_surrogate
+    );
+
+    expect(surrogate).toBeDefined();
+    expect(surrogate?.branch_id).toBe('A');
+    expect(surrogate?.genealogy?.parent_session_id).toBe('source');
+    expect(surrogate?.remote_surrogate?.source_session_id).toBe('source');
+    expect(surrogate?.remote_surrogate?.target_branch_id).toBe('B');
+  });
 });

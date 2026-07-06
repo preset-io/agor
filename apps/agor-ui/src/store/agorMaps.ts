@@ -262,6 +262,12 @@ export function buildSessionMaps(
   for (const [branchId, bucket] of sessionsByBranchId) {
     let remapped = bucket;
     for (let i = 0; i < bucket.length; i++) {
+      // Remote surrogate rows intentionally reuse the target session id while
+      // overriding branch_id / genealogy / remote_surrogate so they render under
+      // the source branch. Do not canonicalize them back to `sessionById`, or a
+      // full-session hydration rebuild will erase the surrogate projection.
+      if (bucket[i].remote_surrogate) continue;
+
       const canonical = sessionById.get(bucket[i].session_id);
       if (canonical && canonical !== bucket[i]) {
         if (remapped === bucket) remapped = bucket.slice();
