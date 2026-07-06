@@ -131,12 +131,13 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
   );
 
   return (
-    <div style={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Search Bar */}
       <div
         style={{
           padding: '16px 24px',
           borderBottom: `1px solid ${token.colorBorder}`,
+          flexShrink: 0,
         }}
       >
         <SessionSearchToolbar
@@ -149,7 +150,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
       </div>
 
       {/* Session List */}
-      <div style={{ padding: '8px 0' }}>
+      <div style={{ padding: '8px 0', flex: 1, overflowY: 'auto' }}>
         {displaySessions.length === 0 ? (
           searchActive ? (
             <div
@@ -331,10 +332,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
       {board && (
         <div
           style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
+            flexShrink: 0,
             padding: '16px 24px',
             borderTop: `1px solid ${token.colorBorder}`,
             background: token.colorBgContainer,
