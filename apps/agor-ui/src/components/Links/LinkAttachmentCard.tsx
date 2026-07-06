@@ -11,11 +11,11 @@ import {
 } from '@ant-design/icons';
 import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { buildKnowledgeRoutePath } from '../../utils/knowledgeRoutes';
 import { useThemedMessage } from '../../utils/message';
 import type { LinkImagePreviewTarget } from './LinkImagePreviewModal';
 import { LinkImageThumbnail } from './LinkImageThumbnail';
 import { downloadLinkContent, getSafeLinkContentLabel } from './linkContent';
+import { routeForKnowledgeRefUri } from './linkDisplay';
 
 export interface LinkAttachmentTarget {
   href: string;
@@ -67,11 +67,7 @@ const extensionFromPath = (value?: string | null): string => {
 };
 
 export function routeForKnowledgeUri(uri?: string | null, basePath = '/kb'): string | null {
-  if (!uri?.startsWith(KNOWLEDGE_PREFIX)) return null;
-  const rest = uri.slice(KNOWLEDGE_PREFIX.length);
-  const [namespaceSlug, ...pathParts] = rest.split('/').filter(Boolean);
-  if (!namespaceSlug || namespaceSlug === 'document') return null;
-  return buildKnowledgeRoutePath(basePath, namespaceSlug, pathParts.join('/'));
+  return routeForKnowledgeRefUri(uri, basePath);
 }
 
 export function targetForLinkAttachment(args: {
