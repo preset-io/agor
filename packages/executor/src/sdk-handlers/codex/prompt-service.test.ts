@@ -1359,6 +1359,43 @@ describe('CodexPromptService - tool payload mapping', () => {
     });
   });
 
+  it('clears a freshly captured Codex thread when a stream disconnects before terminal completion', async () => {
+    const { service, sessionRecord } = await makeStreamingService();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'item.started',
+        item: { id: 'cmd-1', type: 'command_execution', command: 'ls' },
+      },
+      {
+        type: 'error',
+        message:
+          'stream disconnected before completion: websocket closed by server before response.completed',
+      },
+    ];
+
+    await expect(
+      (async () => {
+        for await (const event of service.promptSessionStreaming('session-1' as any, 'review')) {
+          if ('threadId' in event && event.threadId) {
+            await mockSessionsRepo.update('session-1', { sdk_session_id: event.threadId });
+          }
+        }
+      })()
+    ).rejects.toThrow(
+      'Codex stream error: stream disconnected before completion: websocket closed by server before response.completed'
+    );
+
+    expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
+      sdk_session_id: 'mock-thread-id',
+    });
+    expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
+      sdk_session_id: null,
+    });
+    expect(sessionRecord.sdk_session_id).toBeNull();
+  });
+
   it('clears a stale Codex MCP resume thread with null before starting a fresh thread', async () => {
     const { service, sessionRecord } = await makeStreamingService({
       sdk_session_id: 'stale-mcp-thread-id',

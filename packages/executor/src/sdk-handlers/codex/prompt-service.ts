@@ -981,9 +981,10 @@ export class CodexPromptService {
   private async clearDirtyCodexResumeState(
     sessionId: SessionID,
     session: { sdk_session_id?: string | null },
-    reason: string
+    reason: string,
+    fallbackThreadId?: string
   ): Promise<void> {
-    const dirtyThreadId = session.sdk_session_id;
+    const dirtyThreadId = session.sdk_session_id ?? fallbackThreadId;
     if (!dirtyThreadId) return;
 
     console.warn(
@@ -1563,7 +1564,8 @@ export class CodexPromptService {
               await this.clearDirtyCodexResumeState(
                 sessionId,
                 session,
-                `pre-terminal stream disconnect: ${errorMessage}`
+                `pre-terminal stream disconnect: ${errorMessage}`,
+                thread.id || undefined
               );
             }
 
@@ -1589,7 +1591,8 @@ export class CodexPromptService {
             session,
             reconnectProgressMessage
               ? `stream ended before terminal completion after reconnect progress: ${reconnectProgressMessage}`
-              : 'stream ended before terminal completion'
+              : 'stream ended before terminal completion',
+            thread.id || undefined
           );
         }
         throw new Error(
