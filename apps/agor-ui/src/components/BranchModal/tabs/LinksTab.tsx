@@ -1,13 +1,9 @@
 import type { AgorClient, Branch, Link } from '@agor-live/client';
 import {
-  DownloadOutlined,
   EllipsisOutlined,
-  ExportOutlined,
-  EyeOutlined,
   GithubOutlined,
   PushpinFilled,
   PushpinOutlined,
-  RightOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -25,7 +21,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import { useThemedMessage } from '../../../utils/message';
 import {
   LinkImagePreviewModal,
@@ -279,103 +275,6 @@ function BranchTitle({
   );
 }
 
-function BranchAction({
-  item,
-  busy = false,
-  onPreview,
-  onDownload,
-}: {
-  item: LinkDisplayItem;
-  busy?: boolean;
-  onPreview: (item: LinkDisplayItem) => void;
-  onDownload: (item: LinkDisplayItem) => void;
-}) {
-  const { token } = theme.useToken();
-  const title = getCompactLinkDisplayName(item);
-  const contentAction = getLinkContentAction(item);
-  const disabledReason = getUnavailableReason(item);
-  const iconLinkStyle: React.CSSProperties = {
-    width: 24,
-    height: 24,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
-    borderRadius: token.borderRadiusSM,
-  };
-
-  if (contentAction) {
-    return (
-      <Tooltip title={contentAction === 'preview' ? 'Preview' : 'Download'}>
-        <Button
-          className="agor-action-link-affordance"
-          type="text"
-          size="small"
-          loading={busy}
-          aria-label={`${contentAction === 'preview' ? 'Preview' : 'Download'} ${title}`}
-          icon={contentAction === 'preview' ? <EyeOutlined /> : <DownloadOutlined />}
-          onClick={() => {
-            if (contentAction === 'preview') onPreview(item);
-            else onDownload(item);
-          }}
-          style={{
-            width: 24,
-            minWidth: 24,
-            height: 24,
-            padding: 0,
-            color: `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
-          }}
-        />
-      </Tooltip>
-    );
-  }
-
-  if (item.href && item.navigation === 'spa') {
-    return (
-      <Tooltip title="Open link">
-        <RouterLink
-          className="agor-action-link-affordance"
-          aria-label="Open link"
-          to={item.href}
-          style={iconLinkStyle}
-        >
-          <RightOutlined />
-        </RouterLink>
-      </Tooltip>
-    );
-  }
-
-  if (item.href) {
-    return (
-      <Tooltip title="Open link">
-        <a
-          className="agor-action-link-affordance"
-          aria-label="Open link"
-          href={item.href}
-          target="_blank"
-          rel="noreferrer"
-          style={iconLinkStyle}
-        >
-          <ExportOutlined />
-        </a>
-      </Tooltip>
-    );
-  }
-
-  return (
-    <Tooltip title={disabledReason ?? 'No route available'}>
-      <span
-        className="agor-action-link-affordance"
-        role="img"
-        aria-label={`No route available for ${title}`}
-        style={{ ...iconLinkStyle, color: token.colorTextDisabled }}
-      >
-        <StopOutlined />
-      </span>
-    </Tooltip>
-  );
-}
-
 function BranchStatusPill({
   item,
   onTogglePinned,
@@ -496,8 +395,13 @@ function BranchAssistantPromotionAction({
   );
 }
 
+function shouldIgnoreRowActivation(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('a,button,[role="button"]'));
+}
+
 const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranchId = null }) => {
   const { token } = theme.useToken();
+  const navigate = useNavigate();
   const { showError } = useThemedMessage();
   const [links, setLinks] = useState<Link[]>([]);
   const [loading, setLoading] = useState(true);
@@ -669,6 +573,28 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
     [busyLinkId, showError]
   );
 
+  const openItem = useCallback(
+    (item: LinkDisplayItem) => {
+      const contentAction = getLinkContentAction(item);
+      if (contentAction === 'preview') {
+        openPreview(item);
+        return;
+      }
+      if (contentAction === 'download') {
+        void downloadItem(item);
+        return;
+      }
+      if (item.href && item.navigation === 'spa') {
+        navigate(item.href);
+        return;
+      }
+      if (item.href) {
+        window.open(item.href, '_blank', 'noopener,noreferrer');
+      }
+    },
+    [downloadItem, navigate, openPreview]
+  );
+
   const handleTogglePinned = useCallback(
     async (item: LinkDisplayItem) => {
       if (!client || !item.linkId || pinningLinkId) return;
@@ -808,7 +734,19 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
                   <List.Item
                     className="agor-action-link-row"
                     key={item.key}
+                    role={disabled ? undefined : 'link'}
+                    tabIndex={disabled ? -1 : 0}
                     aria-disabled={disabled || undefined}
+                    onClick={(event) => {
+                      if (disabled || shouldIgnoreRowActivation(event.target)) return;
+                      openItem(item);
+                    }}
+                    onKeyDown={(event) => {
+                      if (disabled || shouldIgnoreRowActivation(event.target)) return;
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      openItem(item);
+                    }}
                     style={
                       {
                         '--agor-link-title-color': disabled
@@ -821,17 +759,11 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
                         '--agor-link-row-hover-color': token.colorPrimary,
                         borderColor: token.colorBorderSecondary,
                         borderRadius: token.borderRadius,
+                        cursor: disabled ? 'default' : 'pointer',
                         paddingRight: token.sizeSM,
                       } as React.CSSProperties
                     }
                     actions={[
-                      <BranchAction
-                        key="open"
-                        item={item}
-                        busy={item.linkId === busyLinkId}
-                        onPreview={openPreview}
-                        onDownload={downloadItem}
-                      />,
                       <BranchStatusPill
                         key="state"
                         item={item}

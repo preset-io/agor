@@ -33,10 +33,9 @@ describe('LinkRow', () => {
       </MemoryRouter>
     );
 
-    const previewButtons = screen.getAllByRole('button', { name: /preview notes\.md/i });
-    expect(previewButtons).toHaveLength(2);
+    const previewButton = screen.getByRole('button', { name: /preview notes\.md/i });
 
-    fireEvent.click(previewButtons[0]);
+    fireEvent.click(previewButton);
     expect(onPreview).toHaveBeenCalledTimes(1);
     expect(onDownload).not.toHaveBeenCalled();
     expect(onTogglePinned).not.toHaveBeenCalled();
@@ -45,7 +44,7 @@ describe('LinkRow', () => {
     expect(onPreview).toHaveBeenCalledTimes(1);
     expect(onTogglePinned).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(previewButtons[1]);
+    fireEvent.click(previewButton);
     expect(onPreview).toHaveBeenCalledTimes(2);
     expect(onTogglePinned).toHaveBeenCalledTimes(1);
   });

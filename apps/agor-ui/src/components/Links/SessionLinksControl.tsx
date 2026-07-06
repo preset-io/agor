@@ -1,12 +1,8 @@
 import {
-  DownloadOutlined,
-  ExportOutlined,
-  EyeOutlined,
   GithubOutlined,
   LinkOutlined,
   PushpinFilled,
   PushpinOutlined,
-  RightOutlined,
   StopOutlined,
 } from '@ant-design/icons';
 import {
@@ -191,7 +187,6 @@ export function LinkRow({
   onPreview,
   onDownload,
   onTogglePinned,
-  busy = false,
   pinning = false,
 }: {
   item: LinkDisplayItem;
@@ -232,24 +227,6 @@ export function LinkRow({
     </Tooltip>
   ) : null;
 
-  const actionButton = contentAction ? (
-    <Tooltip title={contentAction === 'preview' ? 'Preview' : 'Download'}>
-      <Button
-        type="text"
-        size="small"
-        loading={busy}
-        aria-label={`${contentAction === 'preview' ? 'Preview' : 'Download'} ${title}`}
-        icon={contentAction === 'preview' ? <EyeOutlined /> : <DownloadOutlined />}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (contentAction === 'preview') onPreview?.(item);
-          else onDownload?.(item);
-        }}
-        style={{ color: 'var(--agor-link-icon-color)', flex: '0 0 auto' }}
-      />
-    </Tooltip>
-  ) : null;
 
   const showPassivePinIndicator = item.isPinned && !canTogglePin;
   const isActionable = Boolean(item.href || contentAction);
@@ -292,19 +269,6 @@ export function LinkRow({
           </Typography.Text>
         )}
       </span>
-      {item.href ? (
-        item.navigation === 'spa' ? (
-          <RightOutlined
-            className="agor-action-link-affordance"
-            style={{ color: 'var(--agor-link-icon-color)', fontSize: 12 }}
-          />
-        ) : (
-          <ExportOutlined
-            className="agor-action-link-affordance"
-            style={{ color: 'var(--agor-link-icon-color)', fontSize: 12 }}
-          />
-        )
-      ) : null}
     </span>
   );
 
@@ -384,7 +348,6 @@ export function LinkRow({
     >
       {mainTarget}
       {pinActionButton}
-      {actionButton}
     </span>
   );
 
@@ -723,6 +686,38 @@ function TypePill({ item, compact = false }: { item: LinkDisplayItem; compact?: 
   );
 }
 
+
+function shouldIgnoreRowActivation(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('a,button,[role="button"]'));
+}
+
+function activateLinkItem(
+  item: LinkDisplayItem,
+  navigate: (to: string) => void,
+  onPreview?: (item: LinkDisplayItem) => void,
+  onDownload?: (item: LinkDisplayItem) => void,
+  onNavigate?: () => void
+) {
+  const contentAction = getLinkContentAction(item);
+  if (contentAction === 'preview') {
+    onPreview?.(item);
+    return;
+  }
+  if (contentAction === 'download') {
+    onDownload?.(item);
+    return;
+  }
+  if (item.href && item.navigation === 'spa') {
+    onNavigate?.();
+    navigate(item.href);
+    return;
+  }
+  if (item.href) {
+    onNavigate?.();
+    window.open(item.href, '_blank', 'noopener,noreferrer');
+  }
+}
+
 function activateContentAction(
   item: LinkDisplayItem,
   onPreview?: (item: LinkDisplayItem) => void,
@@ -834,108 +829,6 @@ function TitleTarget({
   );
 }
 
-function ActionControl({
-  item,
-  onPreview,
-  onDownload,
-  onNavigate,
-  busy = false,
-}: {
-  item: LinkDisplayItem;
-  onPreview?: (item: LinkDisplayItem) => void;
-  onDownload?: (item: LinkDisplayItem) => void;
-  onNavigate?: () => void;
-  busy?: boolean;
-}) {
-  const { token } = theme.useToken();
-  const title = getCompactLinkDisplayName(item);
-  const contentAction = getLinkContentAction(item);
-  const disabledReason = getUnavailableReason(item);
-  const iconLinkStyle: React.CSSProperties = {
-    width: 22,
-    height: 22,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
-    borderRadius: token.borderRadiusSM,
-  };
-
-  if (contentAction) {
-    return (
-      <Tooltip title={contentAction === 'preview' ? 'Preview' : 'Download'}>
-        <Button
-          className="agor-action-link-affordance"
-          type="text"
-          size="small"
-          loading={busy}
-          aria-label={`${contentAction === 'preview' ? 'Preview' : 'Download'} ${title}`}
-          icon={contentAction === 'preview' ? <EyeOutlined /> : <DownloadOutlined />}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            activateContentAction(item, onPreview, onDownload);
-          }}
-          style={{
-            width: 22,
-            minWidth: 22,
-            height: 22,
-            padding: 0,
-            color: `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
-          }}
-        />
-      </Tooltip>
-    );
-  }
-
-  if (item.href && item.navigation === 'spa') {
-    return (
-      <Tooltip title="Open link">
-        <RouterLink
-          className="agor-action-link-affordance"
-          aria-label="Open link"
-          to={item.href}
-          onClick={onNavigate}
-          style={iconLinkStyle}
-        >
-          <RightOutlined />
-        </RouterLink>
-      </Tooltip>
-    );
-  }
-
-  if (item.href) {
-    return (
-      <Tooltip title="Open link">
-        <a
-          className="agor-action-link-affordance"
-          aria-label="Open link"
-          href={item.href}
-          target="_blank"
-          rel="noreferrer"
-          onClick={onNavigate}
-          style={iconLinkStyle}
-        >
-          <ExportOutlined />
-        </a>
-      </Tooltip>
-    );
-  }
-
-  return (
-    <Tooltip title={disabledReason ?? 'No route available'}>
-      <span
-        className="agor-action-link-affordance"
-        role="img"
-        aria-label={`No route available for ${title}`}
-        style={{ ...iconLinkStyle, color: token.colorTextDisabled }}
-      >
-        <StopOutlined />
-      </span>
-    </Tooltip>
-  );
-}
-
 function PinAction({
   item,
   onTogglePinned,
@@ -986,31 +879,43 @@ function QuickLinkRow({
   onPreview,
   onDownload,
   onNavigate,
-  busy = false,
 }: {
   item: LinkDisplayItem;
   onPreview?: (item: LinkDisplayItem) => void;
   onDownload?: (item: LinkDisplayItem) => void;
   onNavigate?: () => void;
-  busy?: boolean;
 }) {
   const { token } = theme.useToken();
+  const navigate = useNavigate();
   const disabled = Boolean(getUnavailableReason(item));
   return (
     <div
       className="agor-action-link-row"
+      role={disabled ? undefined : 'link'}
+      tabIndex={disabled ? -1 : 0}
       aria-disabled={disabled || undefined}
+      onClick={(event) => {
+        if (disabled || shouldIgnoreRowActivation(event.target)) return;
+        activateLinkItem(item, navigate, onPreview, onDownload, onNavigate);
+      }}
+      onKeyDown={(event) => {
+        if (disabled || shouldIgnoreRowActivation(event.target)) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        activateLinkItem(item, navigate, onPreview, onDownload, onNavigate);
+      }}
       style={
         {
           '--agor-link-icon-color': disabled ? token.colorTextDisabled : token.colorTextTertiary,
           '--agor-link-row-hover-bg': 'transparent',
           '--agor-link-row-hover-color': token.colorPrimary,
           display: 'grid',
-          gridTemplateColumns: '34px minmax(0, 1fr) 52px 28px',
+          gridTemplateColumns: '34px minmax(0, 1fr) 52px',
           columnGap: token.sizeSM,
           alignItems: 'center',
           minWidth: 0,
           minHeight: 58,
+          cursor: disabled ? 'default' : 'pointer',
           padding: `${token.sizeXS}px ${token.sizeXS}px`,
           borderRadius: token.borderRadius,
         } as React.CSSProperties
@@ -1040,13 +945,6 @@ function QuickLinkRow({
         </Typography.Text>
       </span>
       <TypePill item={item} compact />
-      <ActionControl
-        item={item}
-        onPreview={onPreview}
-        onDownload={onDownload}
-        onNavigate={onNavigate}
-        busy={busy}
-      />
     </div>
   );
 }
@@ -1057,7 +955,6 @@ function ManagementLinkRow({
   onDownload,
   onTogglePinned,
   onNavigate,
-  busy = false,
   pinning = false,
 }: {
   item: LinkDisplayItem;
@@ -1065,22 +962,36 @@ function ManagementLinkRow({
   onDownload?: (item: LinkDisplayItem) => void;
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
   onNavigate?: () => void;
-  busy?: boolean;
   pinning?: boolean;
 }) {
   const { token } = theme.useToken();
+  const navigate = useNavigate();
   const targetLabel = getLinkDisplaySecondaryLabel(item);
   const disabledReason = getUnavailableReason(item);
   const disabled = Boolean(disabledReason);
   return (
     <div
+      role={disabled ? undefined : 'link'}
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled || undefined}
+      onClick={(event) => {
+        if (disabled || shouldIgnoreRowActivation(event.target)) return;
+        activateLinkItem(item, navigate, onPreview, onDownload, onNavigate);
+      }}
+      onKeyDown={(event) => {
+        if (disabled || shouldIgnoreRowActivation(event.target)) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        activateLinkItem(item, navigate, onPreview, onDownload, onNavigate);
+      }}
       style={{
         display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1.35fr) minmax(110px, 0.45fr) 94px 28px 24px',
+        gridTemplateColumns: 'minmax(0, 1.35fr) minmax(110px, 0.45fr) 94px 24px',
         columnGap: token.sizeMD,
         alignItems: 'center',
         padding: `${token.sizeSM}px 0`,
         borderBottom: `1px solid ${token.colorBorderSecondary}`,
+        cursor: disabled ? 'default' : 'pointer',
         minWidth: 0,
       }}
     >
@@ -1117,13 +1028,6 @@ function ManagementLinkRow({
         {getScopeDomainLabel(item)}
       </Typography.Text>
       <TypePill item={item} />
-      <ActionControl
-        item={item}
-        onPreview={onPreview}
-        onDownload={onDownload}
-        onNavigate={onNavigate}
-        busy={busy}
-      />
       <PinAction item={item} onTogglePinned={onTogglePinned} pinning={pinning} />
     </div>
   );
@@ -1359,7 +1263,7 @@ export const LinksManagementDrawer: React.FC<LinksManagementDrawerProps> = ({
   width = 720,
 }) => {
   const { token } = theme.useToken();
-  const { busyLinkId, preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
+  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
   const [activeFilter, setActiveFilter] = useState<LinkManagementFilter>('all');
 
   const sortedItems = useMemo(() => [...items].sort(compareManagementItems), [items]);
@@ -1427,7 +1331,6 @@ export const LinksManagementDrawer: React.FC<LinksManagementDrawerProps> = ({
                     onDownload={downloadItem}
                     onTogglePinned={onTogglePinned}
                     onNavigate={onClose}
-                    busy={item.linkId === busyLinkId}
                     pinning={item.linkId === pinningLinkId}
                   />
                 ))}
@@ -1460,7 +1363,7 @@ export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
   const { token } = theme.useToken();
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const { busyLinkId, preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
+  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
   const quickItems = useMemo(() => selectQuickItems(items, quickLimit), [items, quickLimit]);
   const hiddenCount = Math.max(items.length - quickItems.length, 0);
 
@@ -1517,7 +1420,6 @@ export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
               onPreview={handlePreview}
               onDownload={handleDownload}
               onNavigate={closePopover}
-              busy={item.linkId === busyLinkId}
             />
           ))}
         </div>

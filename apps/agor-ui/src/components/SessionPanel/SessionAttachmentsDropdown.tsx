@@ -1,8 +1,6 @@
 import {
   BookOutlined,
-  DownloadOutlined,
   EllipsisOutlined,
-  ExportOutlined,
   FileImageOutlined,
   FileTextOutlined,
   GithubOutlined,
@@ -391,7 +389,14 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     return (
       <Tooltip
         key={item.key}
-        title={disabledReason ?? (canPreviewImage(item) ? 'Preview image' : 'Open link')}
+        title={
+          disabledReason ??
+          (canPreviewImage(item)
+            ? 'Preview image'
+            : canDownloadFile(item)
+              ? 'Download file'
+              : 'Open link')
+        }
         placement="left"
       >
         <div
@@ -421,7 +426,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
           <span
             style={{
               display: 'grid',
-              gridTemplateColumns: '34px minmax(0, 1fr) 20px 20px',
+              gridTemplateColumns: '34px minmax(0, 1fr) 20px',
               columnGap: token.sizeXS,
               alignItems: 'center',
               minWidth: 0,
@@ -452,32 +457,6 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
                 {item.name}
               </Typography.Text>
             </span>
-            {canDownloadFile(item) && item.linkId ? (
-              <Tooltip title="Download file">
-                <Button
-                  className="agor-action-link-affordance"
-                  type="text"
-                  size="small"
-                  aria-label={`Download ${item.name}`}
-                  icon={<DownloadOutlined />}
-                  onClick={(event) => {
-                    stopNavigation(event);
-                    downloadLinkContent(item.linkId!, item.name).catch((err) => {
-                      showError(err instanceof Error ? err.message : 'Download failed');
-                    });
-                  }}
-                  style={{
-                    width: 20,
-                    height: 20,
-                    minWidth: 20,
-                    padding: 0,
-                    color: 'var(--agor-link-icon-color)',
-                  }}
-                />
-              </Tooltip>
-            ) : (
-              <span aria-hidden />
-            )}
             {renderMiniPin(item)}
           </span>
         </div>
@@ -548,7 +527,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
         onKeyDown={handleRowKeyDown(item)}
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) 40px 32px 32px',
+          gridTemplateColumns: 'minmax(0, 1fr) 32px 32px',
           gap: token.sizeSM,
           alignItems: 'center',
           padding: `${token.sizeSM}px 0`,
@@ -601,33 +580,6 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             )}
           </span>
         </div>
-        <Button
-          type="text"
-          size="small"
-          aria-label={
-            disabled
-              ? 'No route available'
-              : canPreviewImage(item)
-                ? `Preview ${item.name}`
-                : canDownloadFile(item)
-                  ? `Download ${item.name}`
-                  : `Open ${item.name}`
-          }
-          icon={
-            disabled ? (
-              <StopOutlined />
-            ) : canDownloadFile(item) ? (
-              <DownloadOutlined />
-            ) : (
-              <ExportOutlined />
-            )
-          }
-          disabled={disabled}
-          onClick={(event) => {
-            event.stopPropagation();
-            openTarget(item);
-          }}
-        />
         {renderMiniPin(item)}
         {renderAssistantPromotionMenu(item)}
       </div>
