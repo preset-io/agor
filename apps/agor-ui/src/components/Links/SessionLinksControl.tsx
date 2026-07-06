@@ -86,13 +86,14 @@ export function LinkGlyph({ item }: { item: LinkDisplayItem }) {
   const isGitHubLink = item.category === 'issue' || item.category === 'pr';
   return (
     <span
+      className="agor-action-link-icon"
       aria-hidden="true"
       style={{
         width: 34,
         height: 24,
         borderRadius: token.borderRadiusSM,
         background: token.colorFillTertiary,
-        color: token.colorTextSecondary,
+        color: `var(--agor-link-icon-color, ${token.colorTextSecondary})`,
         border: `1px solid ${token.colorBorderSecondary}`,
         display: 'inline-flex',
         alignItems: 'center',
@@ -117,13 +118,16 @@ function SmallLinkGlyph({ item, disabled = false }: { item: LinkDisplayItem; dis
   const isGitHubLink = item.category === 'issue' || item.category === 'pr';
   return (
     <span
+      className="agor-action-link-icon"
       aria-hidden="true"
       style={{
         width: 24,
         height: 24,
         borderRadius: token.borderRadiusLG,
         background: token.colorFillTertiary,
-        color: disabled ? token.colorTextDisabled : token.colorTextTertiary,
+        color: disabled
+          ? token.colorTextDisabled
+          : `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -209,6 +213,7 @@ export function LinkRow({
   const pinActionButton = canTogglePin ? (
     <Tooltip title={pinActionLabel}>
       <Button
+        className="agor-action-link-affordance"
         type="text"
         size="small"
         loading={pinning}
@@ -241,12 +246,13 @@ export function LinkRow({
           if (contentAction === 'preview') onPreview?.(item);
           else onDownload?.(item);
         }}
-        style={{ color: token.colorTextTertiary, flex: '0 0 auto' }}
+        style={{ color: 'var(--agor-link-icon-color)', flex: '0 0 auto' }}
       />
     </Tooltip>
   ) : null;
 
   const showPassivePinIndicator = item.isPinned && !canTogglePin;
+  const isActionable = Boolean(item.href || contentAction);
 
   const linkBody = (
     <span
@@ -261,7 +267,15 @@ export function LinkRow({
       <LinkGlyph item={item} />
       <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit, minWidth: 0 }}>
-          <Typography.Text ellipsis style={{ lineHeight: 1.25, flex: 1 }}>
+          <Typography.Text
+            className={isActionable ? 'agor-action-link-title' : undefined}
+            ellipsis
+            style={{
+              color: 'var(--agor-link-title-color)',
+              lineHeight: 1.25,
+              flex: 1,
+            }}
+          >
             {title}
           </Typography.Text>
           {showPassivePinIndicator && (
@@ -280,9 +294,15 @@ export function LinkRow({
       </span>
       {item.href ? (
         item.navigation === 'spa' ? (
-          <RightOutlined style={{ color: token.colorTextTertiary, fontSize: 12 }} />
+          <RightOutlined
+            className="agor-action-link-affordance"
+            style={{ color: 'var(--agor-link-icon-color)', fontSize: 12 }}
+          />
         ) : (
-          <ExportOutlined style={{ color: token.colorTextTertiary, fontSize: 12 }} />
+          <ExportOutlined
+            className="agor-action-link-affordance"
+            style={{ color: 'var(--agor-link-icon-color)', fontSize: 12 }}
+          />
         )
       ) : null}
     </span>
@@ -302,7 +322,12 @@ export function LinkRow({
   const nonNavigableStyle: React.CSSProperties = {
     ...commonStyle,
     color: contentAction ? token.colorText : token.colorTextSecondary,
-    cursor: 'default',
+    cursor: contentAction ? 'pointer' : 'default',
+    border: 0,
+    background: 'transparent',
+    padding: 0,
+    font: 'inherit',
+    textAlign: 'left',
   };
 
   const mainTarget =
@@ -314,28 +339,48 @@ export function LinkRow({
       <a href={item.href} target="_blank" rel="noreferrer" style={commonStyle} title={title}>
         {linkBody}
       </a>
-    ) : (
-      <span
-        aria-disabled={contentAction ? undefined : true}
+    ) : contentAction ? (
+      <button
+        type="button"
+        aria-label={`${contentAction === 'preview' ? 'Preview' : 'Download'} ${title}`}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (contentAction === 'preview') onPreview?.(item);
+          else onDownload?.(item);
+        }}
         style={nonNavigableStyle}
         title={title}
       >
+        {linkBody}
+      </button>
+    ) : (
+      <span aria-disabled style={nonNavigableStyle} title={title}>
         {linkBody}
       </span>
     );
 
   const row = (
     <span
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: token.sizeUnit * 2,
-        minWidth: 0,
-        width: inline ? 'auto' : '100%',
-        padding: compact
-          ? `${token.sizeUnit}px ${token.sizeUnit * 1.5}px`
-          : `${token.sizeUnit}px 0`,
-      }}
+      className="agor-action-link-row"
+      aria-disabled={isActionable ? undefined : true}
+      style={
+        {
+          '--agor-link-title-color': isActionable ? token.colorText : token.colorTextSecondary,
+          '--agor-link-icon-color': token.colorTextTertiary,
+          '--agor-link-row-hover-bg': token.colorFillQuaternary,
+          '--agor-link-row-hover-color': token.colorPrimary,
+          display: 'flex',
+          alignItems: 'center',
+          gap: token.sizeUnit * 2,
+          minWidth: 0,
+          width: inline ? 'auto' : '100%',
+          borderRadius: token.borderRadiusSM,
+          padding: compact
+            ? `${token.sizeUnit}px ${token.sizeUnit * 1.5}px`
+            : `${token.sizeUnit}px 0`,
+        } as React.CSSProperties
+      }
     >
       {mainTarget}
       {pinActionButton}
@@ -726,12 +771,15 @@ function TitleTarget({
     fontWeight: 600,
     fontSize: 13,
     lineHeight: 1.25,
-    color: disabled ? token.colorTextDisabled : accent ? token.colorPrimary : token.colorText,
+    color: disabled
+      ? token.colorTextDisabled
+      : `var(--agor-link-title-color, ${accent ? token.colorPrimary : token.colorText})`,
   };
 
   if (item.href && item.navigation === 'spa') {
     return (
       <RouterLink
+        className="agor-action-link-title"
         to={item.href}
         onClick={onNavigate}
         style={{ ...baseStyle, textDecoration: 'none' }}
@@ -745,6 +793,7 @@ function TitleTarget({
   if (item.href) {
     return (
       <a
+        className="agor-action-link-title"
         href={item.href}
         target="_blank"
         rel="noreferrer"
@@ -760,6 +809,7 @@ function TitleTarget({
   if (contentAction) {
     return (
       <button
+        className="agor-action-link-title"
         type="button"
         onClick={() => activateContentAction(item, onPreview, onDownload)}
         style={{
@@ -807,7 +857,7 @@ function ActionControl({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: token.colorTextTertiary,
+    color: `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
     borderRadius: token.borderRadiusSM,
   };
 
@@ -815,6 +865,7 @@ function ActionControl({
     return (
       <Tooltip title={contentAction === 'preview' ? 'Preview' : 'Download'}>
         <Button
+          className="agor-action-link-affordance"
           type="text"
           size="small"
           loading={busy}
@@ -830,7 +881,7 @@ function ActionControl({
             minWidth: 22,
             height: 22,
             padding: 0,
-            color: token.colorTextTertiary,
+            color: `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
           }}
         />
       </Tooltip>
@@ -841,6 +892,7 @@ function ActionControl({
     return (
       <Tooltip title="Open link">
         <RouterLink
+          className="agor-action-link-affordance"
           aria-label="Open link"
           to={item.href}
           onClick={onNavigate}
@@ -856,6 +908,7 @@ function ActionControl({
     return (
       <Tooltip title="Open link">
         <a
+          className="agor-action-link-affordance"
           aria-label="Open link"
           href={item.href}
           target="_blank"
@@ -872,6 +925,7 @@ function ActionControl({
   return (
     <Tooltip title={disabledReason ?? 'No route available'}>
       <span
+        className="agor-action-link-affordance"
         role="img"
         aria-label={`No route available for ${title}`}
         style={{ ...iconLinkStyle, color: token.colorTextDisabled }}
@@ -944,15 +998,23 @@ function QuickLinkRow({
   const disabled = Boolean(getUnavailableReason(item));
   return (
     <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '34px minmax(0, 1fr) 52px 28px',
-        columnGap: token.sizeSM,
-        alignItems: 'center',
-        minWidth: 0,
-        minHeight: 58,
-        padding: `${token.sizeXS}px ${token.sizeXS}px`,
-      }}
+      className="agor-action-link-row"
+      aria-disabled={disabled || undefined}
+      style={
+        {
+          '--agor-link-icon-color': disabled ? token.colorTextDisabled : token.colorTextTertiary,
+          '--agor-link-row-hover-bg': token.colorFillQuaternary,
+          '--agor-link-row-hover-color': token.colorPrimary,
+          display: 'grid',
+          gridTemplateColumns: '34px minmax(0, 1fr) 52px 28px',
+          columnGap: token.sizeSM,
+          alignItems: 'center',
+          minWidth: 0,
+          minHeight: 58,
+          padding: `${token.sizeXS}px ${token.sizeXS}px`,
+          borderRadius: token.borderRadius,
+        } as React.CSSProperties
+      }
     >
       <SmallLinkGlyph item={item} disabled={disabled} />
       <span
@@ -1153,24 +1215,39 @@ export const PinnedLinksStrip: React.FC<PinnedLinksStripProps> = ({
             return (
               <Tooltip key={item.key} title={tooltipTitle} mouseEnterDelay={0.45}>
                 <span
-                  style={{
-                    height: 26,
-                    minWidth: 0,
-                    maxWidth: 156,
-                    border: `1px solid ${
-                      disabled ? token.colorBorderSecondary : token.colorPrimaryBorder
-                    }`,
-                    borderRadius: 999,
-                    background: disabled ? token.colorFillQuaternary : token.colorPrimaryBg,
-                    color: disabled ? token.colorTextDisabled : token.colorText,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    lineHeight: 1,
-                    flex: '0 1 auto',
-                    opacity: isBusy ? 0.65 : 1,
-                    overflow: 'hidden',
-                  }}
+                  className="agor-action-link-chip"
+                  aria-disabled={disabled || undefined}
+                  style={
+                    {
+                      '--agor-link-chip-bg': disabled
+                        ? token.colorFillQuaternary
+                        : token.colorPrimaryBg,
+                      '--agor-link-chip-border': disabled
+                        ? token.colorBorderSecondary
+                        : token.colorPrimaryBorder,
+                      '--agor-link-chip-color': disabled
+                        ? token.colorTextDisabled
+                        : token.colorText,
+                      '--agor-link-chip-accent-color': disabled
+                        ? token.colorTextDisabled
+                        : token.colorPrimary,
+                      '--agor-link-chip-hover-bg': token.colorPrimaryBgHover,
+                      '--agor-link-chip-hover-border': token.colorPrimary,
+                      '--agor-link-chip-hover-color': token.colorPrimary,
+                      height: 26,
+                      minWidth: 0,
+                      maxWidth: 156,
+                      border: '1px solid var(--agor-link-chip-border)',
+                      borderRadius: 999,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      lineHeight: 1,
+                      flex: '0 1 auto',
+                      opacity: isBusy ? 0.65 : 1,
+                      overflow: 'hidden',
+                    } as React.CSSProperties
+                  }
                 >
                   <button
                     type="button"
@@ -1186,7 +1263,7 @@ export const PinnedLinksStrip: React.FC<PinnedLinksStripProps> = ({
                       height: 24,
                       border: 0,
                       background: 'transparent',
-                      color: disabled ? token.colorTextDisabled : token.colorPrimary,
+                      color: 'var(--agor-link-chip-accent-color)',
                       cursor: canTogglePin && !isPinning ? 'pointer' : 'default',
                       padding: '0 0 0 8px',
                       display: 'inline-flex',
@@ -1215,7 +1292,7 @@ export const PinnedLinksStrip: React.FC<PinnedLinksStripProps> = ({
                       minWidth: 0,
                       border: 0,
                       background: 'transparent',
-                      color: 'inherit',
+                      color: 'var(--agor-link-chip-color)',
                       cursor: disabled || isBusy ? 'not-allowed' : 'pointer',
                       padding: `0 ${token.paddingXS}px 0 0`,
                       display: 'inline-flex',
@@ -1229,9 +1306,10 @@ export const PinnedLinksStrip: React.FC<PinnedLinksStripProps> = ({
                   >
                     <span
                       aria-hidden="true"
+                      className="agor-action-link-icon"
                       style={{
                         width: 18,
-                        color: disabled ? token.colorTextDisabled : token.colorPrimary,
+                        color: 'var(--agor-link-chip-accent-color)',
                         display: 'inline-flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -1248,11 +1326,12 @@ export const PinnedLinksStrip: React.FC<PinnedLinksStripProps> = ({
                       )}
                     </span>
                     <Typography.Text
+                      className={disabled ? undefined : 'agor-action-link-title'}
                       ellipsis
                       style={{
                         fontSize: 12,
                         maxWidth: 96,
-                        color: disabled ? token.colorTextDisabled : token.colorText,
+                        color: 'var(--agor-link-chip-color)',
                       }}
                     >
                       {title}

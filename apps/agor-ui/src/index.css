@@ -13,6 +13,77 @@
   align-items: center;
 }
 
+.agor-action-link-row {
+  --agor-link-row-bg: transparent;
+  --agor-link-title-color: inherit;
+  --agor-link-icon-color: inherit;
+  background-color: var(--agor-link-row-bg);
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease;
+}
+
+.agor-action-link-title {
+  transition:
+    color 0.16s ease,
+    text-decoration-color 0.16s ease;
+}
+
+.agor-action-link-icon,
+.agor-action-link-affordance {
+  transition: color 0.16s ease;
+}
+
+.agor-action-link-row:not([aria-disabled="true"]):hover {
+  --agor-link-row-bg: var(--agor-link-row-hover-bg, var(--ant-color-fill-quaternary));
+  --agor-link-title-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
+  --agor-link-icon-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
+}
+
+.agor-action-link-row:not([aria-disabled="true"]):hover .agor-action-link-title {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agor-action-link-title:hover {
+  --agor-link-title-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agor-action-link-chip {
+  --agor-link-chip-bg: transparent;
+  --agor-link-chip-border: transparent;
+  --agor-link-chip-color: inherit;
+  --agor-link-chip-accent-color: inherit;
+  border-color: var(--agor-link-chip-border);
+  background: var(--agor-link-chip-bg);
+  color: var(--agor-link-chip-color);
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover {
+  --agor-link-chip-bg: var(--agor-link-chip-hover-bg, var(--ant-color-primary-bg));
+  --agor-link-chip-border: var(--agor-link-chip-hover-border, var(--ant-color-primary));
+  --agor-link-chip-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
+  --agor-link-chip-accent-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
+}
+
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover .agor-action-link-title {
+  --agor-link-title-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
+}
+
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover .agor-action-link-icon,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover
+  .agor-action-link-affordance {
+  --agor-link-icon-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
+}
+
 /* Prevent long text from causing horizontal scroll in collapse headers,
    but allow vertical overflow so flex-wrapped pill rows aren't clipped (#869). */
 .ant-collapse-header {

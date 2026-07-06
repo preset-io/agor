@@ -147,13 +147,16 @@ function BranchGlyph({ item, disabled = false }: { item: LinkDisplayItem; disabl
   const isGitHubLink = item.category === 'issue' || item.category === 'pr';
   return (
     <span
+      className="agor-action-link-icon"
       aria-hidden="true"
       style={{
         width: 28,
         height: 28,
         borderRadius: token.borderRadiusLG,
         background: token.colorFillTertiary,
-        color: disabled ? token.colorTextDisabled : token.colorTextTertiary,
+        color: disabled
+          ? token.colorTextDisabled
+          : `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -210,14 +213,21 @@ function BranchTitle({
   const contentAction = getLinkContentAction(item);
   const disabled = Boolean(getUnavailableReason(item));
   const style: React.CSSProperties = {
-    color: disabled ? token.colorTextDisabled : token.colorPrimary,
+    color: disabled
+      ? token.colorTextDisabled
+      : `var(--agor-link-title-color, ${token.colorPrimary})`,
     fontWeight: 600,
     lineHeight: 1.25,
   };
 
   if (item.href && item.navigation === 'spa') {
     return (
-      <RouterLink to={item.href} style={{ ...style, textDecoration: 'none' }} title={title}>
+      <RouterLink
+        className="agor-action-link-title"
+        to={item.href}
+        style={{ ...style, textDecoration: 'none' }}
+        title={title}
+      >
         {title}
       </RouterLink>
     );
@@ -226,6 +236,7 @@ function BranchTitle({
   if (item.href) {
     return (
       <a
+        className="agor-action-link-title"
         href={item.href}
         target="_blank"
         rel="noreferrer"
@@ -240,6 +251,7 @@ function BranchTitle({
   if (contentAction) {
     return (
       <button
+        className="agor-action-link-title"
         type="button"
         onClick={() => {
           if (contentAction === 'preview') onPreview(item);
@@ -288,7 +300,7 @@ function BranchAction({
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: token.colorTextTertiary,
+    color: `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
     borderRadius: token.borderRadiusSM,
   };
 
@@ -296,6 +308,7 @@ function BranchAction({
     return (
       <Tooltip title={contentAction === 'preview' ? 'Preview' : 'Download'}>
         <Button
+          className="agor-action-link-affordance"
           type="text"
           size="small"
           loading={busy}
@@ -310,7 +323,7 @@ function BranchAction({
             minWidth: 24,
             height: 24,
             padding: 0,
-            color: token.colorTextTertiary,
+            color: `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
           }}
         />
       </Tooltip>
@@ -320,7 +333,12 @@ function BranchAction({
   if (item.href && item.navigation === 'spa') {
     return (
       <Tooltip title="Open link">
-        <RouterLink aria-label="Open link" to={item.href} style={iconLinkStyle}>
+        <RouterLink
+          className="agor-action-link-affordance"
+          aria-label="Open link"
+          to={item.href}
+          style={iconLinkStyle}
+        >
           <RightOutlined />
         </RouterLink>
       </Tooltip>
@@ -331,6 +349,7 @@ function BranchAction({
     return (
       <Tooltip title="Open link">
         <a
+          className="agor-action-link-affordance"
           aria-label="Open link"
           href={item.href}
           target="_blank"
@@ -346,6 +365,7 @@ function BranchAction({
   return (
     <Tooltip title={disabledReason ?? 'No route available'}>
       <span
+        className="agor-action-link-affordance"
         role="img"
         aria-label={`No route available for ${title}`}
         style={{ ...iconLinkStyle, color: token.colorTextDisabled }}
@@ -786,8 +806,24 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
                 const targetLabel = getLinkDisplaySecondaryLabel(item);
                 return (
                   <List.Item
+                    className="agor-action-link-row"
                     key={item.key}
-                    style={{ borderColor: token.colorBorderSecondary, paddingRight: token.sizeSM }}
+                    aria-disabled={disabled || undefined}
+                    style={
+                      {
+                        '--agor-link-title-color': disabled
+                          ? token.colorTextDisabled
+                          : token.colorPrimary,
+                        '--agor-link-icon-color': disabled
+                          ? token.colorTextDisabled
+                          : token.colorTextTertiary,
+                        '--agor-link-row-hover-bg': token.colorFillQuaternary,
+                        '--agor-link-row-hover-color': token.colorPrimary,
+                        borderColor: token.colorBorderSecondary,
+                        borderRadius: token.borderRadius,
+                        paddingRight: token.sizeSM,
+                      } as React.CSSProperties
+                    }
                     actions={[
                       <BranchAction
                         key="open"

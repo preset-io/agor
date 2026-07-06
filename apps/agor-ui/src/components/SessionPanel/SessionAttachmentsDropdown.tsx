@@ -395,20 +395,28 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
         placement="left"
       >
         <div
+          className="agor-action-link-row"
           role={disabled ? undefined : 'link'}
           tabIndex={disabled ? -1 : 0}
           aria-disabled={disabled || undefined}
           onClick={() => openTarget(item)}
           onKeyDown={handleRowKeyDown(item)}
-          style={{
-            width: '100%',
-            border: 0,
-            borderRadius: token.borderRadius,
-            background: 'transparent',
-            cursor: disabled ? 'not-allowed' : 'pointer',
-            padding: `${token.sizeXXS}px ${token.sizeXS}px`,
-            textAlign: 'left',
-          }}
+          style={
+            {
+              '--agor-link-title-color': disabled ? token.colorTextDisabled : token.colorText,
+              '--agor-link-icon-color': disabled
+                ? token.colorTextDisabled
+                : token.colorTextTertiary,
+              '--agor-link-row-hover-bg': token.colorFillQuaternary,
+              '--agor-link-row-hover-color': token.colorPrimary,
+              width: '100%',
+              border: 0,
+              borderRadius: token.borderRadius,
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              padding: `${token.sizeXXS}px ${token.sizeXS}px`,
+              textAlign: 'left',
+            } as React.CSSProperties
+          }
         >
           <span
             style={{
@@ -420,9 +428,10 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             }}
           >
             <span
+              className="agor-action-link-icon"
               style={{
                 width: 34,
-                color: disabled ? token.colorTextDisabled : token.colorTextTertiary,
+                color: 'var(--agor-link-icon-color)',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -432,10 +441,11 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             </span>
             <span style={{ minWidth: 0, flex: 1 }}>
               <Typography.Text
+                className={disabled ? undefined : 'agor-action-link-title'}
                 ellipsis
                 style={{
                   display: 'block',
-                  color: disabled ? token.colorTextDisabled : token.colorText,
+                  color: disabled ? token.colorTextDisabled : 'var(--agor-link-title-color)',
                   fontSize: 13,
                 }}
               >
@@ -445,12 +455,13 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             {canDownloadFile(item) && item.linkId ? (
               <Tooltip title="Download file">
                 <Button
+                  className="agor-action-link-affordance"
                   type="text"
                   size="small"
                   aria-label={`Download ${item.name}`}
                   icon={<DownloadOutlined />}
                   onClick={(event) => {
-                    event.stopPropagation();
+                    stopNavigation(event);
                     downloadLinkContent(item.linkId!, item.name).catch((err) => {
                       showError(err instanceof Error ? err.message : 'Download failed');
                     });
@@ -460,7 +471,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
                     height: 20,
                     minWidth: 20,
                     padding: 0,
-                    color: token.colorTextTertiary,
+                    color: 'var(--agor-link-icon-color)',
                   }}
                 />
               </Tooltip>

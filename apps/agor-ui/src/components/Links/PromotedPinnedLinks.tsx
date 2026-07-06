@@ -209,6 +209,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
               mouseEnterDelay={0.45}
             >
               <button
+                className="agor-action-link-chip"
                 type="button"
                 disabled={disabled}
                 aria-label={
@@ -218,42 +219,59 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                   event.stopPropagation();
                   openItem(item);
                 }}
-                style={{
-                  height: chipHeight,
-                  minWidth: 0,
-                  maxWidth: chipMaxWidth,
-                  border: `1px solid ${disabled ? token.colorBorderSecondary : token.colorPrimaryBorder}`,
-                  borderRadius: 999,
-                  background: disabled ? token.colorFillQuaternary : token.colorPrimaryBg,
-                  color: disabled ? token.colorTextDisabled : token.colorText,
-                  cursor: disabled ? 'not-allowed' : canPreviewImage(item) ? 'zoom-in' : 'pointer',
-                  padding: `0 ${token.paddingXS}px`,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  font: 'inherit',
-                  lineHeight: 1,
-                  flex: '0 1 auto',
-                }}
-              >
-                <PushpinFilled
-                  style={{
-                    color: disabled
+                style={
+                  {
+                    '--agor-link-chip-bg': disabled
+                      ? token.colorFillQuaternary
+                      : token.colorPrimaryBg,
+                    '--agor-link-chip-border': disabled
+                      ? token.colorBorderSecondary
+                      : token.colorPrimaryBorder,
+                    '--agor-link-chip-color': disabled
+                      ? token.colorTextDisabled
+                      : isBranchCard
+                        ? token.colorTextSecondary
+                        : token.colorText,
+                    '--agor-link-chip-accent-color': disabled
                       ? token.colorTextDisabled
                       : isBranchCard
                         ? token.colorTextTertiary
                         : token.colorPrimary,
+                    '--agor-link-chip-hover-bg': token.colorPrimaryBgHover,
+                    '--agor-link-chip-hover-border': token.colorPrimary,
+                    '--agor-link-chip-hover-color': token.colorPrimary,
+                    height: chipHeight,
+                    minWidth: 0,
+                    maxWidth: chipMaxWidth,
+                    border: '1px solid var(--agor-link-chip-border)',
+                    borderRadius: 999,
+                    cursor: disabled
+                      ? 'not-allowed'
+                      : canPreviewImage(item)
+                        ? 'zoom-in'
+                        : 'pointer',
+                    padding: `0 ${token.paddingXS}px`,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    font: 'inherit',
+                    lineHeight: 1,
+                    flex: '0 1 auto',
+                  } as React.CSSProperties
+                }
+              >
+                <PushpinFilled
+                  className="agor-action-link-affordance"
+                  style={{
+                    color: 'var(--agor-link-chip-accent-color)',
                     fontSize: isBranchCard ? 10 : 11,
                   }}
                 />
                 <span
+                  className="agor-action-link-icon"
                   style={{
                     width: 14,
-                    color: disabled
-                      ? token.colorTextDisabled
-                      : isBranchCard
-                        ? token.colorTextTertiary
-                        : token.colorPrimary,
+                    color: 'var(--agor-link-chip-accent-color)',
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -263,15 +281,12 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                   {getIcon(item, disabled)}
                 </span>
                 <Typography.Text
+                  className={disabled ? undefined : 'agor-action-link-title'}
                   ellipsis
                   style={{
                     fontSize: isBranchCard ? 11 : 12,
                     maxWidth: chipMaxWidth - 50,
-                    color: disabled
-                      ? token.colorTextDisabled
-                      : isBranchCard
-                        ? token.colorTextSecondary
-                        : token.colorText,
+                    color: 'var(--agor-link-chip-color)',
                   }}
                 >
                   {item.name.replace(/^(Issue|PR|Knowledge|Saved URL):\s*/i, '')}
