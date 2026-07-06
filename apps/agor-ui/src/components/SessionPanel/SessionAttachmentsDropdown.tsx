@@ -371,6 +371,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
+            justifySelf: 'center',
             width: 18,
             flex: '0 0 auto',
             cursor: toggleable && !isPinning ? 'pointer' : 'default',
@@ -415,10 +416,11 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               '--agor-link-row-hover-bg': 'transparent',
               '--agor-link-row-hover-color': token.colorPrimary,
               width: '100%',
+              boxSizing: 'border-box',
               border: 0,
               borderRadius: token.borderRadius,
               cursor: disabled ? 'not-allowed' : 'pointer',
-              padding: `${token.sizeXXS}px ${token.sizeXS}px`,
+              padding: `${token.sizeXXS}px ${token.sizeSM}px ${token.sizeXXS}px ${token.sizeXS}px`,
               textAlign: 'left',
             } as React.CSSProperties
           }
@@ -426,7 +428,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
           <span
             style={{
               display: 'grid',
-              gridTemplateColumns: '34px minmax(0, 1fr) 20px',
+              gridTemplateColumns: '34px minmax(0, 1fr) 24px',
               columnGap: token.sizeXS,
               alignItems: 'center',
               minWidth: 0,
@@ -639,7 +641,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             marginTop: token.sizeSM,
             maxHeight: 308,
             overflowY: 'auto',
-            paddingRight: 2,
+            paddingRight: token.sizeXS,
           }}
         >
           {quickItems.map(renderQuietRow)}
