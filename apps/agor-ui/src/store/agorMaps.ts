@@ -285,6 +285,170 @@ export function buildSessionMaps(
   return { sessionById, sessionsByBranch };
 }
 
+// Apply a single `session:patched` (incl. archive) to the branch-bucket map,
+// returning `prevBuckets` unchanged when nothing moved. Split out of
+// `applySessionPatchToMaps` only for readability; it carries the branch-
+// migration cleanup, the muted remote-surrogate projection, and the content-
+// equal bail that keeps a no-op patch from minting a fresh bucket array (so a
+// `makeSessionsForBranchSelector` consumer doesn't re-render on an idempotent
+// patch). Inserts on a missing id by design — the caller's tombstone/keyed
+// queue, not this reducer, is what prevents a stale patch from resurrecting a
+// removed session.
+function applySessionPatchToBranchBuckets(
+  prevBuckets: Map<string, Session[]>,
+  session: Session,
+  oldBranchId: string | null,
+  isArchived: boolean
+): Map<string, Session[]> {
+  let changed = false;
+  const next = new Map(prevBuckets);
+  const newBranchId = session.branch_id;
+
+  const removeFromBranch = (branchId: string) => {
+    const bucket = next.get(branchId) || [];
+    const filtered = bucket.filter((s) => s.session_id !== session.session_id);
+    if (filtered.length !== bucket.length) {
+      changed = true;
+      if (filtered.length > 0) next.set(branchId, filtered);
+      else next.delete(branchId);
+    }
+  };
+
+  if (isArchived) {
+    for (const [branchId, bucket] of next) {
+      if (bucket.some((item) => item.session_id === session.session_id)) {
+        removeFromBranch(branchId);
+      }
+    }
+    return changed ? next : prevBuckets;
+  }
+
+  // Session moved between branches — drop it from the old bucket first.
+  const branchMigrated = oldBranchId && oldBranchId !== newBranchId;
+  if (branchMigrated) removeFromBranch(oldBranchId!);
+
+  const branchSessions = next.get(newBranchId) || [];
+  const index = branchSessions.findIndex((s) => s.session_id === session.session_id);
+  let sourceSessionForRemoteProjection = session;
+
+  if (index === -1) {
+    next.set(newBranchId, [...branchSessions, session]);
+    changed = true;
+  } else {
+    const mergedSession = preserveSessionRelationshipFields(session, branchSessions[index]);
+    sourceSessionForRemoteProjection = mergedSession;
+
+    // Content-equal to what we hold — leave the bucket ref untouched.
+    if (
+      branchSessions[index] === mergedSession ||
+      shallowEqualEntity(branchSessions[index], mergedSession)
+    ) {
+      return changed ? next : prevBuckets;
+    }
+
+    const updatedSessions = [...branchSessions];
+    updatedSessions[index] = mergedSession;
+    next.set(newBranchId, updatedSessions);
+    changed = true;
+
+    // Refresh any remote/surrogate projections of this session that live in
+    // other branch buckets, preserving their local tree placement.
+    for (const [branchId, bucket] of next) {
+      if (branchId === newBranchId) continue;
+
+      let bucketChanged = false;
+      const refreshedBucket = bucket.map((item) => {
+        if (item.session_id !== session.session_id) return item;
+        bucketChanged = true;
+        return {
+          ...preserveSessionRelationshipFields(session, item),
+          branch_id: item.branch_id,
+          genealogy: item.genealogy,
+          remote_surrogate: item.remote_surrogate,
+        };
+      });
+
+      if (bucketChanged) {
+        next.set(branchId, refreshedBucket);
+        changed = true;
+      }
+    }
+  }
+
+  // Project a `remote_create` source row into muted remote-surrogate children
+  // now, rather than doing relationship work during render.
+  for (const relationship of sourceSessionForRemoteProjection.remote_relationships?.as_source ??
+    []) {
+    if (relationship.relationship_type !== 'remote_create') continue;
+
+    const targetSession = findSessionInBranchBuckets(next, relationship.target_session_id);
+    if (!targetSession) continue;
+
+    const sourceBranchSessions = next.get(sourceSessionForRemoteProjection.branch_id) ?? [];
+    if (
+      sourceBranchSessions.some((candidate) => candidate.session_id === targetSession.session_id)
+    ) {
+      continue;
+    }
+
+    const remoteSurrogate = createRemoteSurrogateSession(
+      sourceSessionForRemoteProjection,
+      targetSession,
+      relationship
+    );
+    if (!remoteSurrogate) continue;
+
+    next.set(sourceSessionForRemoteProjection.branch_id, [
+      ...sourceBranchSessions,
+      remoteSurrogate,
+    ]);
+    changed = true;
+  }
+
+  return changed ? next : prevBuckets;
+}
+
+// Pure `session:patched` reducer over the whole data-map object: updates
+// `sessionById` + `sessionsByBranch` in one pass and returns `prev` untouched on
+// a no-op (so `applyMaps`' whole-object short-circuit preserves references).
+// Archive removes the session from the active maps but leaves the branch-bucket
+// pruning to the buckets helper. This is the shared reducer for BOTH the direct
+// `sessionPatched` action and the frame-coalesced flush, which composes many of
+// these into a single store write.
+export function applySessionPatchToMaps(prev: DataMaps, session: Session): DataMaps {
+  const isArchived = session.archived === true;
+  const existing = prev.sessionById.get(session.session_id);
+  const oldBranchId = existing?.branch_id ?? null;
+
+  let sessionById = prev.sessionById;
+  if (isArchived) {
+    if (existing) {
+      sessionById = new Map(prev.sessionById);
+      sessionById.delete(session.session_id);
+    }
+  } else {
+    const mergedSession = preserveSessionRelationshipFields(session, existing);
+    // Content-equal idempotent patch — keep the prior ref (safe false negative
+    // on nested fields the daemon reserializes; see `replaceIfChanged`).
+    if (!existing || !shallowEqualEntity(existing, mergedSession)) {
+      sessionById = new Map(prev.sessionById);
+      sessionById.set(session.session_id, mergedSession);
+    }
+  }
+
+  const sessionsByBranch = applySessionPatchToBranchBuckets(
+    prev.sessionsByBranch,
+    session,
+    oldBranchId,
+    isArchived
+  );
+
+  if (sessionById === prev.sessionById && sessionsByBranch === prev.sessionsByBranch) {
+    return prev;
+  }
+  return { ...prev, sessionById, sessionsByBranch };
+}
+
 export function removeBoardObjectFromBoardBucket(
   buckets: Map<string, BoardEntityObject[]>,
   boardObject: BoardEntityObject
