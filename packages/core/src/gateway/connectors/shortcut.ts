@@ -36,7 +36,12 @@
  * thread id so outbound replies stay in-thread.
  */
 
-import type { ChannelType, SlackTestFailure, SlackTestResult } from '../../types/gateway';
+import type {
+  ChannelType,
+  GatewayEnvVar,
+  SlackTestFailure,
+  SlackTestResult,
+} from '../../types/gateway';
 import type { GatewayConnector, InboundMessage } from '../connector';
 import { addToRingBuffer, escapeRegex } from './shared';
 
@@ -571,5 +576,19 @@ export class ShortcutConnector implements GatewayConnector {
   /** Shortcut comments support markdown — pass through with no conversion. */
   formatMessage(markdown: string): string {
     return markdown;
+  }
+
+  /**
+   * Credentials the in-session Shortcut skills read from the environment. The
+   * `media-intake` skill fetches ticket attachments with
+   * `curl -H "Shortcut-Token: $SHORTCUT_API_TOKEN"`, so a gateway session needs
+   * the channel's token without the operator wiring it by hand. Returned as
+   * defaults — operator `agentic_config.envVars` still override.
+   */
+  sessionEnv(): GatewayEnvVar[] {
+    return [
+      { key: 'SHORTCUT_API_TOKEN', value: this.config.api_token, forceOverride: true },
+      { key: 'SHORTCUT_API_BASE', value: SHORTCUT_API_BASE, forceOverride: true },
+    ];
   }
 }

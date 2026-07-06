@@ -249,3 +249,15 @@ describe('testConnection', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('sessionEnv', () => {
+  it('exposes the API token + base so in-session skills (media-intake) can fetch attachments', () => {
+    const connector = new ShortcutConnector({ api_token: 'tok' });
+    const env = connector.sessionEnv();
+    const byKey = Object.fromEntries(env.map((e) => [e.key, e.value]));
+    expect(byKey.SHORTCUT_API_TOKEN).toBe('tok');
+    expect(byKey.SHORTCUT_API_BASE).toBe('https://api.app.shortcut.com/api/v3');
+    // Service defaults — always applied unless an operator env var overrides them.
+    expect(env.every((e) => e.forceOverride)).toBe(true);
+  });
+});

@@ -832,6 +832,20 @@ function createExecuteHandler(
             })(),
           }));
         }
+        // Merge connector-provided session credentials (e.g. Shortcut's API
+        // token, which the media-intake skill uses to fetch ticket
+        // attachments) as defaults. Operator `agentic_config.envVars` above
+        // take precedence — a key already present is not overwritten.
+        if (channel) {
+          const { getConnector } = await import('@agor/core/gateway');
+          const connectorEnv =
+            getConnector(channel.channel_type, channel.config).sessionEnv?.() ?? [];
+          if (connectorEnv.length > 0) {
+            const present = new Set((gatewayEnv ?? []).map((e) => e.key));
+            const defaults = connectorEnv.filter((e) => !present.has(e.key));
+            if (defaults.length > 0) gatewayEnv = [...(gatewayEnv ?? []), ...defaults];
+          }
+        }
       } catch {
         // Non-fatal
       }
