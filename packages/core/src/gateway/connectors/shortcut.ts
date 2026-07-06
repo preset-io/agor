@@ -36,7 +36,7 @@
  * thread id so outbound replies stay in-thread.
  */
 
-import type { ChannelType } from '../../types/gateway';
+import type { ChannelType, SlackTestFailure, SlackTestResult } from '../../types/gateway';
 import type { GatewayConnector, InboundMessage } from '../connector';
 import { addToRingBuffer, escapeRegex } from './shared';
 
@@ -190,6 +190,16 @@ function toSearchDate(iso: string): string {
   return iso.slice(0, 10);
 }
 
+/**
+ * The things a Shortcut connection probe fundamentally cannot prove. Surfaced
+ * verbatim in {@link SlackTestResult.notVerifiable} so a green result is never
+ * read as "fully verified".
+ */
+const SHORTCUT_NOT_VERIFIABLE = [
+  'Whether the people who summon the agent can @-mention this member in their Shortcut workspace.',
+  "Whether commenters' Shortcut email addresses match Agor accounts — only relevant when user alignment is enabled.",
+];
+
 // ============================================================================
 // ShortcutConnector
 // ============================================================================
@@ -249,6 +259,69 @@ export class ShortcutConnector implements GatewayConnector {
       console.warn(`[shortcut] Failed to fetch member ${memberId}:`, err);
       return null;
     }
+  }
+
+  // ── Connection probe ──────────────────────────────────────
+
+  /**
+   * Best-effort probe of the configured Shortcut credentials and reachability.
+   *
+   * `GET /member` validates the api_token and identifies the token owner. The
+   * mention target — the configured `agent_member_id` or the token owner — is
+   * then resolved via `GET /members/{id}` to surface the agent's `@handle` (the
+   * current-member endpoint omits `mention_name`). An explicit `agent_member_id`
+   * that Shortcut cannot resolve is a real failure: the per-comment mention
+   * check would silently match nothing. Never returns the token.
+   */
+  async testConnection(): Promise<SlackTestResult> {
+    const failures: SlackTestFailure[] = [];
+    const notVerifiable = [...SHORTCUT_NOT_VERIFIABLE];
+
+    // 1. Validate the token: GET /member returns the token owner (or 401s).
+    let me: ShortcutMember;
+    try {
+      me = await this.request<ShortcutMember>('/member');
+    } catch (error) {
+      failures.push({
+        capability: 'api_token',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      return { ok: false, failures, notVerifiable };
+    }
+
+    // 2. Resolve/validate the mention target. Always verify an *explicit*
+    //    agent_member_id (a bad one silently matches no comments); for the token
+    //    owner, only look it up when we still need its @handle (GET /member omits
+    //    mention_name). This mirrors the poll loop's discovery-handle resolution.
+    const agentMemberId = this.config.agent_member_id ?? me.id;
+    let handle = this.config.mention_name?.trim() || undefined;
+    if (this.config.agent_member_id || !handle) {
+      try {
+        const agent = await this.request<ShortcutMember>(`/members/${agentMemberId}`);
+        handle = handle ?? agent.profile?.mention_name ?? undefined;
+      } catch (error) {
+        if (this.config.agent_member_id) {
+          failures.push({
+            capability: 'agent_member_id',
+            reason: `Could not resolve agent_member_id "${agentMemberId}": ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          });
+        }
+      }
+    }
+    if (!handle) {
+      notVerifiable.push(
+        'The agent @handle used to narrow the mention search could not be resolved — discovery falls back to scanning all recently-updated stories. Set mention_name to make the search precise.'
+      );
+    }
+
+    return {
+      ok: failures.length === 0,
+      bot: { userId: agentMemberId, name: handle ? `@${handle}` : agentMemberId },
+      failures,
+      notVerifiable,
+    };
   }
 
   // ── Listening (poll loop) ─────────────────────────────────

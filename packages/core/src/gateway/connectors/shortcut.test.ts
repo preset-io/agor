@@ -169,3 +169,83 @@ describe('sendMessage', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ text: 'final reply' });
   });
 });
+
+describe('testConnection', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  it('validates the token and resolves the @handle from the member profile', async () => {
+    const fetchMock = vi.fn(async (url: string | URL, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith('/member')) return json({ id: 'owner-1' });
+      if (u.includes('/members/owner-1'))
+        return json({ id: 'owner-1', profile: { mention_name: 'agorithm' } });
+      return json({ message: 'not found' }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok' });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(true);
+    expect(result.failures).toEqual([]);
+    expect(result.bot).toEqual({ userId: 'owner-1', name: '@agorithm' });
+    // GET /member sends the auth header.
+    expect((fetchMock.mock.calls[0][1]?.headers as Record<string, string>)['Shortcut-Token']).toBe(
+      'tok'
+    );
+  });
+
+  it('fails with an api_token capability when GET /member is rejected', async () => {
+    const fetchMock = vi.fn(async () => json({ message: 'Unauthorized' }, 401));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'bad' });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((f) => f.capability)).toContain('api_token');
+    // A rejected token short-circuits — no member lookup is attempted.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails on an explicit agent_member_id that Shortcut cannot resolve', async () => {
+    const fetchMock = vi.fn(async (url: string | URL, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith('/member')) return json({ id: 'owner-1' });
+      return json({ message: 'not found' }, 404); // /members/bad-id
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok', agent_member_id: 'bad-id' });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(false);
+    expect(result.failures.map((f) => f.capability)).toContain('agent_member_id');
+    expect(result.bot?.userId).toBe('bad-id');
+  });
+
+  it('uses a configured mention_name without a second member lookup', async () => {
+    const fetchMock = vi.fn(async (url: string | URL, _init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith('/member')) return json({ id: 'owner-1' });
+      return json({ message: 'not found' }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok', mention_name: 'custom' });
+    const result = await connector.testConnection();
+
+    expect(result.ok).toBe(true);
+    expect(result.bot).toEqual({ userId: 'owner-1', name: '@custom' });
+    // Handle came from config — only GET /member was called.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

@@ -391,7 +391,7 @@ function createStepFields(type: ChannelType, step: number, alignSlackUsers: bool
  * of them makes a previously-passing test result stale, so the green result is
  * cleared when one changes.
  */
-const SLACK_PROBE_FIELDS = new Set<string>([
+const CONNECTION_PROBE_FIELDS = new Set<string>([
   'bot_token',
   'app_token',
   'slack_app_name',
@@ -402,6 +402,10 @@ const SLACK_PROBE_FIELDS = new Set<string>([
   'outbound_enabled',
   'slack_public_scope',
   'allowed_channel_ids',
+  // Shortcut probe inputs
+  'shortcut_api_token',
+  'shortcut_agent_member_id',
+  'shortcut_mention_name',
 ]);
 
 /**
@@ -435,11 +439,12 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 }
 
 /**
- * Honest rendering of a Slack connection probe. A green result is advisory:
- * `notVerifiable` is surfaced as a warning so success is never read as "fully
- * verified".
+ * Honest rendering of a connection probe ({@link SlackTestResult}, shared by
+ * the Slack and Shortcut connectors). A green result is advisory: `notVerifiable`
+ * is surfaced as a warning so success is never read as "fully verified".
+ * Slack-only fields (`appTokenValid`, `channelAccess`) render only when present.
  */
-const SlackTestResultView: React.FC<{ result: SlackTestResult }> = ({ result }) => {
+const ConnectionTestResultView: React.FC<{ result: SlackTestResult }> = ({ result }) => {
   const hasFollowups = result.failures.length > 0 || result.notVerifiable.length > 0;
   return (
     <div style={{ marginBottom: 16 }}>
@@ -460,10 +465,12 @@ const SlackTestResultView: React.FC<{ result: SlackTestResult }> = ({ result }) 
                 Bot: <strong>{result.bot.name}</strong> ({result.bot.userId})
               </div>
             )}
-            <div>
-              App token (Socket Mode):{' '}
-              <strong>{result.appTokenValid ? 'valid' : 'not verified'}</strong>
-            </div>
+            {result.appTokenValid !== undefined && (
+              <div>
+                App token (Socket Mode):{' '}
+                <strong>{result.appTokenValid ? 'valid' : 'not verified'}</strong>
+              </div>
+            )}
             {result.channelAccess && result.channelAccess.length > 0 && (
               <div style={{ marginTop: 4 }}>
                 Sampled channel access:
@@ -507,7 +514,7 @@ const SlackTestResultView: React.FC<{ result: SlackTestResult }> = ({ result }) 
           description={
             <div style={{ fontSize: 12 }}>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                A green result does not guarantee these — confirm them in Slack:
+                A green result does not guarantee these — confirm them on the platform:
               </Typography.Text>
               <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
                 {result.notVerifiable.map((n) => (
@@ -876,7 +883,7 @@ const SlackSetupWizard: React.FC<{
           Test connection
         </Button>
 
-        {testResult && <SlackTestResultView result={testResult} />}
+        {testResult && <ConnectionTestResultView result={testResult} />}
 
         {!testResult?.ok && (
           <Alert
@@ -973,9 +980,10 @@ const ChannelFormFields: React.FC<{
   githubLoading: boolean;
   githubError: string | null;
   /** Slack guided-setup state (create mode only). */
-  slackTestResult: SlackTestResult | null;
-  slackTestLoading: boolean;
+  connectionTestResult: SlackTestResult | null;
+  connectionTestLoading: boolean;
   onSlackTest: () => void;
+  onShortcutTest: () => void;
 }> = ({
   form,
   mode,
@@ -990,9 +998,10 @@ const ChannelFormFields: React.FC<{
   createStep,
   githubLoading,
   githubError,
-  slackTestResult,
-  slackTestLoading,
+  connectionTestResult,
+  connectionTestLoading,
   onSlackTest,
+  onShortcutTest,
 }) => {
   const { showError } = useThemedMessage();
 
@@ -1779,6 +1788,32 @@ const ChannelFormFields: React.FC<{
                       }
                       style={{ fontSize: 12 }}
                     />
+
+                    <Button
+                      icon={<ThunderboltOutlined />}
+                      loading={connectionTestLoading}
+                      onClick={async () => {
+                        // The token is required only on create; in edit the stored
+                        // token backs the redacted field, so skip validation there.
+                        if (mode === 'create') {
+                          try {
+                            await form.validateFields(['shortcut_api_token']);
+                          } catch {
+                            return;
+                          }
+                        }
+                        onShortcutTest();
+                      }}
+                      style={{ marginTop: 12 }}
+                    >
+                      Test connection
+                    </Button>
+
+                    {connectionTestResult && (
+                      <div style={{ marginTop: 12 }}>
+                        <ConnectionTestResultView result={connectionTestResult} />
+                      </div>
+                    )}
                   </>
                 ),
               },
@@ -1940,8 +1975,8 @@ const ChannelFormFields: React.FC<{
             selectedAgent={selectedAgent}
             onAgentChange={onAgentChange}
             step={createStep - 1}
-            testResult={slackTestResult}
-            testLoading={slackTestLoading}
+            testResult={connectionTestResult}
+            testLoading={connectionTestLoading}
             onTest={onSlackTest}
           />
         )}
@@ -2316,8 +2351,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [githubError, setGithubError] = useState<string | null>(null);
 
   // ── Slack guided-setup state (create mode) ──
-  const [slackTestLoading, setSlackTestLoading] = useState(false);
-  const [slackTestResult, setSlackTestResult] = useState<SlackTestResult | null>(null);
+  const [connectionTestLoading, setConnectionTestLoading] = useState(false);
+  const [connectionTestResult, setConnectionTestResult] = useState<SlackTestResult | null>(null);
 
   // Keep referenced target branches resolvable in CRUD even when archived branches
   // are excluded from the core store.
@@ -2393,32 +2428,32 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setGithubError(null);
   }, []);
 
-  const resetSlackState = useCallback(() => {
-    setSlackTestLoading(false);
-    setSlackTestResult(null);
+  const resetConnectionTest = useCallback(() => {
+    setConnectionTestLoading(false);
+    setConnectionTestResult(null);
   }, []);
 
   // Reset the whole create flow back to its universal first step.
   const resetCreateFlow = useCallback(() => {
     setCreateStep(0);
     resetGithubState();
-    resetSlackState();
-  }, [resetGithubState, resetSlackState]);
+    resetConnectionTest();
+  }, [resetGithubState, resetConnectionTest]);
 
-  const invalidateSlackTest = useCallback(() => {
-    setSlackTestResult(null);
+  const invalidateConnectionTest = useCallback(() => {
+    setConnectionTestResult(null);
   }, []);
 
   // Clear a passing Slack test result the moment any probe-affecting field is
   // edited. Driven by the Form's onValuesChange (real edits only) rather than a
   // useWatch effect, so it never races the async probe that sets the result.
-  const handleCreateValuesChange = useCallback(
+  const handleProbeFieldsChange = useCallback(
     (changed: Record<string, unknown>) => {
-      if (Object.keys(changed).some((field) => SLACK_PROBE_FIELDS.has(field))) {
-        invalidateSlackTest();
+      if (Object.keys(changed).some((field) => CONNECTION_PROBE_FIELDS.has(field))) {
+        invalidateConnectionTest();
       }
     },
-    [invalidateSlackTest]
+    [invalidateConnectionTest]
   );
 
   // Switching channel type changes the step structure, so snap back to the
@@ -2431,16 +2466,47 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     [resetCreateFlow]
   );
 
-  // Probe the entered Slack tokens against the live workspace via the
-  // `gateway-channels/test` service. No gatewayChannelId — the channel doesn't
-  // exist yet, so the probe runs purely against the supplied config.
+  // Run the connector-agnostic `gateway-channels/test` probe against a supplied
+  // config and record the result. In edit mode, pass the channel id so the
+  // service can fall back to the stored (decrypted) credential when a sensitive
+  // field is left at the redaction sentinel.
+  const runConnectionProbe = useCallback(
+    async (config: Record<string, unknown>, gatewayChannelId?: string) => {
+      if (!client) {
+        showError('Not connected to server');
+        return;
+      }
+      setConnectionTestLoading(true);
+      setConnectionTestResult(null);
+      try {
+        const result = (await client
+          .service('gateway-channels/test')
+          .create(gatewayChannelId ? { gatewayChannelId, config } : { config })) as SlackTestResult;
+        setConnectionTestResult(result);
+      } catch (error) {
+        setConnectionTestResult({
+          ok: false,
+          failures: [
+            {
+              capability: 'connection',
+              reason: error instanceof Error ? error.message : String(error),
+            },
+          ],
+          notVerifiable: [],
+        });
+      } finally {
+        setConnectionTestLoading(false);
+      }
+    },
+    [client, showError]
+  );
+
+  // Probe the entered Slack tokens against the live workspace. No
+  // gatewayChannelId — the create wizard's channel doesn't exist yet, so the
+  // probe runs purely against the supplied config.
   const handleSlackTest = useCallback(async () => {
-    if (!client) {
-      showError('Not connected to server');
-      return;
-    }
     const values = createForm.getFieldsValue(true);
-    const config: Record<string, unknown> = {
+    await runConnectionProbe({
       bot_token: values.bot_token,
       app_token: values.app_token,
       enable_channels: values.enable_channels ?? false,
@@ -2449,29 +2515,22 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       align_slack_users: values.align_slack_users ?? false,
       allowed_channel_ids: values.allowed_channel_ids ?? [],
       outbound_enabled: values.outbound_enabled ?? false,
-    };
-    setSlackTestLoading(true);
-    setSlackTestResult(null);
-    try {
-      const result = (await client
-        .service('gateway-channels/test')
-        .create({ config })) as SlackTestResult;
-      setSlackTestResult(result);
-    } catch (error) {
-      setSlackTestResult({
-        ok: false,
-        failures: [
-          {
-            capability: 'connection',
-            reason: error instanceof Error ? error.message : String(error),
-          },
-        ],
-        notVerifiable: [],
-      });
-    } finally {
-      setSlackTestLoading(false);
-    }
-  }, [client, createForm, showError]);
+    });
+  }, [createForm, runConnectionProbe]);
+
+  // Probe the Shortcut API token (and mention target) via GET /member +
+  // GET /members/{id}. Only the fields the probe reads are sent. Works in both
+  // create and edit; in edit the stored token backs the redacted field, so the
+  // channel id is passed for the stored-credential fallback.
+  const handleShortcutTest = useCallback(async () => {
+    const form = editModalOpen ? editForm : createForm;
+    const values = form.getFieldsValue(true);
+    const config: Record<string, unknown> = {};
+    if (values.shortcut_api_token) config.api_token = values.shortcut_api_token;
+    if (values.shortcut_agent_member_id) config.agent_member_id = values.shortcut_agent_member_id;
+    if (values.shortcut_mention_name) config.mention_name = values.shortcut_mention_name;
+    await runConnectionProbe(config, editModalOpen ? (editingChannel?.id ?? undefined) : undefined);
+  }, [editModalOpen, editForm, createForm, editingChannel, runConnectionProbe]);
 
   // Pre-populate agentic config form with user defaults when agent changes
   useEffect(() => {
@@ -2703,6 +2762,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   };
 
   const handleEdit = (channel: GatewayChannel) => {
+    resetConnectionTest();
     setEditingChannel(channel);
     setChannelType(channel.channel_type);
     const agent = channel.agentic_config?.agent || 'claude-code';
@@ -2949,7 +3009,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 360 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              resetConnectionTest();
+              setCreateModalOpen(true);
+            }}
+          >
             Add Channel
           </Button>
         </Space>
@@ -3034,7 +3101,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           form={createForm}
           layout="vertical"
           preserve
-          onValuesChange={handleCreateValuesChange}
+          onValuesChange={handleProbeFieldsChange}
           style={{ marginTop: 16 }}
         >
           <ChannelFormFields
@@ -3050,9 +3117,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             createStep={createStep}
             githubLoading={githubLoading}
             githubError={githubError}
-            slackTestResult={slackTestResult}
-            slackTestLoading={slackTestLoading}
+            connectionTestResult={connectionTestResult}
+            connectionTestLoading={connectionTestLoading}
             onSlackTest={handleSlackTest}
+            onShortcutTest={handleShortcutTest}
           />
         </Form>
       </Modal>
@@ -3072,7 +3140,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         okText="Save"
         width={600}
       >
-        <Form form={editForm} layout="vertical" preserve style={{ marginTop: 16 }}>
+        <Form
+          form={editForm}
+          layout="vertical"
+          preserve
+          onValuesChange={handleProbeFieldsChange}
+          style={{ marginTop: 16 }}
+        >
           <ChannelFormFields
             form={editForm}
             mode="edit"
@@ -3087,9 +3161,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             createStep={0}
             githubLoading={false}
             githubError={null}
-            slackTestResult={null}
-            slackTestLoading={false}
+            connectionTestResult={connectionTestResult}
+            connectionTestLoading={connectionTestLoading}
             onSlackTest={() => {}}
+            onShortcutTest={handleShortcutTest}
           />
         </Form>
       </Modal>
