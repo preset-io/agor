@@ -2467,11 +2467,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   );
 
   // Run the connector-agnostic `gateway-channels/test` probe against a supplied
-  // config and record the result. In edit mode, pass the channel id so the
-  // service can fall back to the stored (decrypted) credential when a sensitive
+  // config and record the result. In create mode the channel does not exist yet,
+  // so the connector type is stated explicitly; in edit mode the channel id is
+  // passed instead, which lets the service resolve the type from the stored
+  // channel AND fall back to the stored (decrypted) credential when a sensitive
   // field is left at the redaction sentinel.
   const runConnectionProbe = useCallback(
-    async (config: Record<string, unknown>, gatewayChannelId?: string) => {
+    async (
+      channelType: ChannelType,
+      config: Record<string, unknown>,
+      gatewayChannelId?: string
+    ) => {
       if (!client) {
         showError('Not connected to server');
         return;
@@ -2481,7 +2487,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       try {
         const result = (await client
           .service('gateway-channels/test')
-          .create(gatewayChannelId ? { gatewayChannelId, config } : { config })) as SlackTestResult;
+          .create(
+            gatewayChannelId ? { gatewayChannelId, config } : { channelType, config }
+          )) as SlackTestResult;
         setConnectionTestResult(result);
       } catch (error) {
         setConnectionTestResult({
@@ -2506,7 +2514,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // probe runs purely against the supplied config.
   const handleSlackTest = useCallback(async () => {
     const values = createForm.getFieldsValue(true);
-    await runConnectionProbe({
+    await runConnectionProbe('slack', {
       bot_token: values.bot_token,
       app_token: values.app_token,
       enable_channels: values.enable_channels ?? false,
@@ -2529,7 +2537,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     if (values.shortcut_api_token) config.api_token = values.shortcut_api_token;
     if (values.shortcut_agent_member_id) config.agent_member_id = values.shortcut_agent_member_id;
     if (values.shortcut_mention_name) config.mention_name = values.shortcut_mention_name;
-    await runConnectionProbe(config, editModalOpen ? (editingChannel?.id ?? undefined) : undefined);
+    await runConnectionProbe(
+      'shortcut',
+      config,
+      editModalOpen ? (editingChannel?.id ?? undefined) : undefined
+    );
   }, [editModalOpen, editForm, createForm, editingChannel, runConnectionProbe]);
 
   // Pre-populate agentic config form with user defaults when agent changes

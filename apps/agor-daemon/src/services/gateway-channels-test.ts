@@ -18,6 +18,12 @@ import { GATEWAY_REDACTED_SENTINEL, GATEWAY_SENSITIVE_CONFIG_FIELDS } from '@ago
 
 export interface GatewayChannelTestInput {
   gatewayChannelId?: string;
+  /**
+   * Connector type to probe when the channel does not exist yet (create wizard).
+   * Ignored when `gatewayChannelId` is provided — the stored channel's type wins.
+   * Defaults to `slack` for backward compatibility.
+   */
+  channelType?: ChannelType;
   config?: Record<string, unknown>;
 }
 
@@ -56,7 +62,9 @@ export function createGatewayChannelsTestService(db: TenantScopeAwareDatabase) {
       data: GatewayChannelTestInput,
       _params?: AuthenticatedParams
     ): Promise<SlackTestResult> {
-      let channelType: ChannelType = 'slack';
+      // Create wizard: no channel exists yet, so the caller states the type.
+      // Edit: the stored channel's type is authoritative and overrides it below.
+      let channelType: ChannelType = data.channelType ?? 'slack';
       let storedConfig: Record<string, unknown> = {};
 
       if (data.gatewayChannelId) {
