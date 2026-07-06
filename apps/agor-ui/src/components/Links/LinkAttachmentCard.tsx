@@ -1,4 +1,4 @@
-import type { LinkKind, LinkSource } from '@agor-live/client';
+import { getSafeWebUrl, type LinkKind, type LinkSource } from '@agor-live/client';
 import {
   BookOutlined,
   CodeOutlined,
@@ -82,7 +82,8 @@ export function targetForLinkAttachment(args: {
     const route = routeForKnowledgeUri(args.refUri);
     return route ? { href: route, navigation: 'spa' } : null;
   }
-  if (args.url) return { href: args.url, navigation: 'external' };
+  const safeUrl = getSafeWebUrl(args.url);
+  if (safeUrl) return { href: safeUrl, navigation: 'external' };
   return null;
 }
 

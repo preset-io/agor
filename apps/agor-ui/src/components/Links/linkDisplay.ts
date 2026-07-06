@@ -1,5 +1,6 @@
 import type { Branch, Link, LinkKind, LinkSource } from '@agor-live/client';
 import {
+  getSafeWebUrl,
   normalizeFileTargetKey,
   normalizeRefTargetKey,
   normalizeUrlTargetKey,
@@ -116,7 +117,8 @@ export function targetForLinkDisplay(args: {
 }): LinkDisplayTarget | null {
   const route = routeForKnowledgeRefUri(args.refUri);
   if (route) return { href: route, navigation: 'spa' };
-  if (args.url) return { href: args.url, navigation: 'external' };
+  const safeUrl = getSafeWebUrl(args.url);
+  if (safeUrl) return { href: safeUrl, navigation: 'external' };
   return null;
 }
 
@@ -417,6 +419,7 @@ function branchUrlToDisplayItem(args: {
   kind: Extract<LinkKind, 'issue' | 'pr'>;
 }): LinkDisplayItem {
   const label = args.kind === 'issue' ? 'Issue' : 'PR';
+  const safeUrl = getSafeWebUrl(args.url);
   return {
     key: args.key,
     name: `${label}: ${getUrlDisplayLabel(args.url)}`,
@@ -427,8 +430,8 @@ function branchUrlToDisplayItem(args: {
     ownerScope: 'branch',
     isPinned: false,
     url: args.url,
-    href: args.url,
-    navigation: 'external',
+    href: safeUrl ?? undefined,
+    navigation: safeUrl ? 'external' : undefined,
   };
 }
 

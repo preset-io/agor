@@ -150,6 +150,7 @@ const HTTP_URL_RE = /https?:\/\/[^\s<>"')]+/gi;
 const TRAILING_PUNCTUATION_RE = /[.,;:!?\]}]+$/;
 const GITHUB_ISSUE_RE = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+(?:[/?#].*)?$/i;
 const GITHUB_PR_RE = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+(?:[/?#].*)?$/i;
+const SAFE_WEB_URL_PROTOCOLS = new Set(['http:', 'https:']);
 
 export function isLinkKind(value: unknown): value is LinkKind {
   return typeof value === 'string' && (LINK_KINDS as readonly string[]).includes(value);
@@ -187,6 +188,24 @@ export function countLinkTargets(data: {
   }).length;
 }
 
+export function getSafeWebUrl(url?: string | null): string | null {
+  const trimmed = url?.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!SAFE_WEB_URL_PROTOCOLS.has(parsed.protocol.toLowerCase())) return null;
+    if (!parsed.hostname) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+export function isSafeWebUrl(url?: string | null): boolean {
+  return getSafeWebUrl(url) !== null;
+}
+
 export function getLinkTargetCompatibilityError(data: {
   kind: LinkKind;
   source: LinkSource;
@@ -208,6 +227,10 @@ export function getLinkTargetCompatibilityError(data: {
 
   if (!LINK_SOURCE_TARGET_FIELDS[data.source].some((field) => field === target)) {
     return `Link source ${data.source} cannot use target ${target}`;
+  }
+
+  if (target === 'url' && !isSafeWebUrl(data.url)) {
+    return 'Link URL must be an absolute http(s) URL';
   }
 
   const hasObjectType = Boolean(data.target_object_type);

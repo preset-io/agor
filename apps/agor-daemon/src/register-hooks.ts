@@ -81,7 +81,10 @@ import { gatewayRouteHook } from './hooks/gateway-route.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
-import { ingestParsedLinksAfterMessageCreate } from './services/links.js';
+import {
+  associateUploadLinksAfterMessageCreate,
+  ingestParsedLinksAfterMessageCreate,
+} from './services/links.js';
 import { linksHooks } from './services/links-hooks.js';
 import {
   isRemoteRelationshipsEnrichedResult,
@@ -750,7 +753,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
     after: {
-      create: [gatewayRouteHook, ingestParsedLinksAfterMessageCreate(app)],
+      create: [
+        gatewayRouteHook,
+        ingestParsedLinksAfterMessageCreate(app),
+        associateUploadLinksAfterMessageCreate(app),
+      ],
       patch: [
         async (context: HookContext<Board>) => {
           // Detect permission resolution and notify executor via IPC

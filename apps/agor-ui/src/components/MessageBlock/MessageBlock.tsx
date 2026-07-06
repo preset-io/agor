@@ -392,6 +392,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   // Determine if this should be displayed as user or agent message
   const isUser = message.role === 'user' && !isTaskPrompt && !isTaskResult;
   const isAgent = message.role === 'assistant' || isTaskPrompt || isTaskResult || isSystem;
+  const hasUserAttachments = isUser && attachmentLinks.length > 0;
 
   // Check if message is currently streaming
   const isStreaming = 'isStreaming' in message && message.isStreaming === true;
@@ -410,12 +411,15 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
 
   // Skip rendering if message has no content
-  if (!message.content || (typeof message.content === 'string' && message.content.trim() === '')) {
+  if (
+    (!message.content || (typeof message.content === 'string' && message.content.trim() === '')) &&
+    !hasUserAttachments
+  ) {
     return null;
   }
 
   // Skip rendering if message has empty content array (can happen during patch events)
-  if (Array.isArray(message.content) && message.content.length === 0) {
+  if (Array.isArray(message.content) && message.content.length === 0 && !hasUserAttachments) {
     return null;
   }
 
@@ -627,7 +631,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
 
-  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools) {
+  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools && !hasUserAttachments) {
     return null;
   }
 
@@ -649,7 +653,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       )}
 
       {/* Text before tools (if any) - rare but possible */}
-      {hasTextBefore &&
+      {(hasTextBefore || hasUserAttachments) &&
         (() => {
           const avatar = isUser ? (
             <UserIdentityAvatar user={currentUser} />

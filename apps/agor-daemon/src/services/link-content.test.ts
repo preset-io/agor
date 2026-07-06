@@ -1,12 +1,15 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Forbidden } from '@agor/core/feathers';
 import type { Link } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import type { Request, Response } from 'express';
+import { describe, expect, it, vi } from 'vitest';
 import {
   chooseLinkContentDisposition,
   contentDispositionHeader,
   LinkContentError,
+  registerLinkContentRoute,
   resolveUploadedLinkContentFile,
 } from './link-content';
 
@@ -114,5 +117,70 @@ describe('link content route helpers', () => {
     expect(contentDispositionHeader('attachment', 'report "q1".pdf')).toContain(
       'attachment; filename="report _q1_.pdf"'
     );
+  });
+
+  it('requires bearer auth before resolving link content', async () => {
+    let handler: (req: Request, res: Response) => Promise<void> = async () => {};
+    const app = {
+      get: vi.fn((_path: string, routeHandler: typeof handler) => {
+        handler = routeHandler;
+      }),
+      service: vi.fn(),
+    };
+    registerLinkContentRoute(app as never);
+    const json = vi.fn();
+    const status = vi.fn(() => ({ json }));
+
+    await handler(
+      { headers: {}, params: { linkId: 'link-1' }, query: {} } as unknown as Request,
+      { status } as unknown as Response
+    );
+
+    expect(status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith({ error: 'Authentication required' });
+    expect(app.service).not.toHaveBeenCalledWith('links');
+  });
+
+  it('propagates link visibility/RBAC denials from links.get', async () => {
+    let handler: (req: Request, res: Response) => Promise<void> = async () => {};
+    const linksGet = vi.fn(async () => {
+      throw new Forbidden('Link not visible');
+    });
+    const app = {
+      get: vi.fn((_path: string, routeHandler: typeof handler) => {
+        handler = routeHandler;
+      }),
+      service: vi.fn((pathName: string) => {
+        if (pathName === 'authentication') {
+          return {
+            create: vi.fn(async () => ({
+              user: { user_id: 'user-1' },
+              authentication: { strategy: 'jwt' },
+            })),
+          };
+        }
+        if (pathName === 'links') return { get: linksGet };
+        throw new Error(`Unexpected service: ${pathName}`);
+      }),
+    };
+    registerLinkContentRoute(app as never);
+    const json = vi.fn();
+    const status = vi.fn(() => ({ json }));
+
+    await handler(
+      {
+        headers: { authorization: 'Bearer token' },
+        params: { linkId: 'link-1' },
+        query: {},
+      } as unknown as Request,
+      { status } as unknown as Response
+    );
+
+    expect(linksGet).toHaveBeenCalledWith(
+      'link-1',
+      expect.objectContaining({ provider: 'rest', user: { user_id: 'user-1' } })
+    );
+    expect(status).toHaveBeenCalledWith(403);
+    expect(json).toHaveBeenCalledWith({ error: 'Link not visible' });
   });
 });

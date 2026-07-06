@@ -1,7 +1,7 @@
 import { FileImageOutlined } from '@ant-design/icons';
-import { Alert, Spin, Tooltip, Typography, theme } from 'antd';
-import React from 'react';
-import { fetchLinkImageObjectUrl, type LinkImagePreviewTarget } from './LinkImagePreviewModal';
+import { Tooltip, Typography, theme } from 'antd';
+import type React from 'react';
+import type { LinkImagePreviewTarget } from './LinkImagePreviewModal';
 import { getSafeLinkContentLabel } from './linkContent';
 
 interface LinkImageThumbnailProps {
@@ -18,52 +18,17 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
   onOpen,
 }) => {
   const { token } = theme.useToken();
-  const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(true);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    let createdUrl: string | null = null;
-    setLoading(true);
-    setError(null);
-    setObjectUrl(null);
-
-    fetchLinkImageObjectUrl(linkId)
-      .then((url) => {
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        createdUrl = url;
-        setObjectUrl(url);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Preview failed');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      if (createdUrl) URL.revokeObjectURL(createdUrl);
-    };
-  }, [linkId]);
-
   const safeSubtitle = getSafeLinkContentLabel(subtitle);
 
   const handleOpen = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!objectUrl || error) return;
     onOpen({ linkId, title, subtitle: safeSubtitle });
   };
 
   return (
     <button
       type="button"
-      disabled={!objectUrl || Boolean(error)}
       aria-label={`Open image preview for ${title}`}
       onClick={handleOpen}
       style={{
@@ -76,7 +41,7 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
         borderRadius: token.borderRadiusLG,
         background: token.colorBgContainer,
         overflow: 'hidden',
-        cursor: objectUrl && !error ? 'zoom-in' : 'default',
+        cursor: 'zoom-in',
         color: token.colorText,
         font: 'inherit',
         textAlign: 'left',
@@ -92,30 +57,20 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
           background: token.colorFillQuaternary,
         }}
       >
-        {loading && <Spin size="small" />}
-        {error && (
-          <Alert
-            type="warning"
-            showIcon
-            message="Preview unavailable"
-            description={error}
-            style={{ margin: token.marginXS, maxWidth: 240 }}
-          />
-        )}
-        {objectUrl && !error && (
-          <img
-            src={objectUrl}
-            alt={title}
-            style={{
-              display: 'block',
-              maxWidth: 320,
-              maxHeight: 180,
-              width: 'auto',
-              height: 'auto',
-              objectFit: 'contain',
-            }}
-          />
-        )}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: token.sizeXS,
+            color: token.colorTextTertiary,
+          }}
+        >
+          <FileImageOutlined style={{ fontSize: 28 }} />
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            Click to preview
+          </Typography.Text>
+        </div>
       </div>
       <Tooltip title={safeSubtitle || title} mouseEnterDelay={0.6}>
         <div

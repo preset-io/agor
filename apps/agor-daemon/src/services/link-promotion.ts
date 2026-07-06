@@ -151,22 +151,23 @@ export async function promoteLinkToAssistant(
   const promotedAt = new Date().toISOString();
   const promotedBy = (params?.user?.user_id as UUID | undefined) ?? null;
   const target = getSourceTarget(source);
-  const promoted = await linksService.create(
-    {
-      branch_id: assistantBranch.branch_id,
-      session_id: null,
-      source_message_id: null,
-      kind: source.kind,
-      source: source.file_path ? source.source : 'manual',
-      ...target,
-      is_pinned: true,
-      title: source.title ?? null,
-      mime_type: source.mime_type ?? null,
-      metadata: buildPromotedMetadata({ source, promotedAt, promotedBy }),
-      created_by: promotedBy,
-    },
-    { ...(params as Params), provider: undefined }
-  );
+  const promotedDraft = {
+    branch_id: assistantBranch.branch_id,
+    session_id: null,
+    source_message_id: null,
+    kind: source.kind,
+    source: source.file_path ? source.source : 'manual',
+    ...target,
+    is_pinned: true,
+    title: source.title ?? null,
+    mime_type: source.mime_type ?? null,
+    metadata: buildPromotedMetadata({ source, promotedAt, promotedBy }),
+    created_by: promotedBy,
+  } as Partial<LinkCreate>;
+  const promoted = await linksService.create(promotedDraft, {
+    ...(params as Params),
+    provider: undefined,
+  });
 
   return Array.isArray(promoted) ? promoted[0] : promoted;
 }

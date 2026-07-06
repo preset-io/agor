@@ -1113,43 +1113,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           type: isCallback ? 'system' : 'user',
           metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
         });
-        const createdMessage = (await app
-          .service('messages')
-          .create(userMessage, params)) as Message;
-        const uploadLinkIds = Array.isArray(task.metadata?.upload_link_ids)
-          ? task.metadata.upload_link_ids.filter(
-              (id): id is NonNullable<typeof id> => typeof id === 'string'
-            )
-          : [];
-        if (uploadLinkIds.length > 0) {
-          const linksService = app.service('links');
-          await Promise.all(
-            uploadLinkIds.map(async (linkId) => {
-              try {
-                const link = (await linksService.get(linkId, {
-                  ...params,
-                  provider: undefined,
-                } as Params)) as Link;
-                if (
-                  link.session_id !== task.session_id ||
-                  link.source !== 'upload' ||
-                  link.source_message_id
-                ) {
-                  return;
-                }
-                await linksService.patch(linkId, { source_message_id: createdMessage.message_id }, {
-                  ...params,
-                  provider: undefined,
-                } as Params);
-              } catch (linkErr) {
-                console.warn(
-                  `⚠️  [Daemon] Failed to associate upload link ${String(linkId).slice(0, 8)} with message ${shortId(createdMessage.message_id)}:`,
-                  linkErr
-                );
-              }
-            })
-          );
-        }
+        await app.service('messages').create(userMessage, params);
       } catch (msgErr) {
         // Don't fail the spawn — the executor's createUserMessage fallback
         // (with skip-if-exists) will write the row when it connects.

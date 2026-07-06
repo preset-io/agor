@@ -71,6 +71,22 @@ describe('link display KB routing', () => {
     expect(targetForLinkDisplay({ refUri: 'agor://kb/document/0190a000' })).toBeNull();
   });
 
+  it('only creates external targets for absolute http(s) URLs', () => {
+    expect(targetForLinkDisplay({ url: 'https://example.com/docs?q=1#top' })).toEqual({
+      href: 'https://example.com/docs?q=1#top',
+      navigation: 'external',
+    });
+    expect(targetForLinkDisplay({ url: 'http://example.com/docs' })).toEqual({
+      href: 'http://example.com/docs',
+      navigation: 'external',
+    });
+    expect(targetForLinkDisplay({ url: 'javascript:alert(1)' })).toBeNull();
+    expect(targetForLinkDisplay({ url: 'data:text/html,<script>alert(1)</script>' })).toBeNull();
+    expect(targetForLinkDisplay({ url: 'blob:https://example.com/id' })).toBeNull();
+    expect(targetForLinkDisplay({ url: 'https://%' })).toBeNull();
+    expect(targetForLinkDisplay({ url: '/relative/path' })).toBeNull();
+  });
+
   it('keeps KB document refs visible even when they are not directly routable', () => {
     const refUri = 'agor://kb/document/0190a000-0000-7000-8000-0000000000aa';
     const item = linkToDisplayItem(
@@ -88,6 +104,25 @@ describe('link display KB routing', () => {
       category: 'knowledge',
       refUri,
       href: undefined,
+    });
+  });
+
+  it('keeps unsafe persisted URL rows visible but without navigable hrefs', () => {
+    const item = linkToDisplayItem(
+      makeLink({
+        link_id: 'link-unsafe-url' as Link['link_id'],
+        kind: 'url',
+        source: 'manual',
+        url: 'javascript:alert(1)',
+      })
+    );
+
+    expect(item).toMatchObject({
+      name: 'URL: alert(1)',
+      category: 'url',
+      url: 'javascript:alert(1)',
+      href: undefined,
+      navigation: undefined,
     });
   });
 });

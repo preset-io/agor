@@ -4,6 +4,7 @@ import {
   extractLinksFromMessage,
   getLinkTargetCompatibilityError,
   getLinkTargetField,
+  getSafeWebUrl,
   LINK_KIND_TARGET_FIELD,
   LINK_SOURCE_TARGET_FIELDS,
   normalizeLinkTargetKey,
@@ -159,5 +160,38 @@ describe('link target semantics', () => {
         ref_uri: 'agor://session/01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
       })
     ).toBe('Internal links require target_object_type and target_object_id');
+  });
+
+  it('only allows absolute http(s) URL link targets', () => {
+    expect(getSafeWebUrl('https://example.com/docs?q=1#top')).toBe(
+      'https://example.com/docs?q=1#top'
+    );
+    expect(getSafeWebUrl('http://example.com/docs')).toBe('http://example.com/docs');
+
+    for (const url of [
+      'javascript:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'blob:https://example.com/id',
+      'https://%',
+      '/relative/path',
+    ]) {
+      expect(getSafeWebUrl(url), url).toBeNull();
+      expect(
+        getLinkTargetCompatibilityError({
+          kind: 'url',
+          source: 'manual',
+          url,
+        }),
+        url
+      ).toBe('Link URL must be an absolute http(s) URL');
+    }
+
+    expect(
+      getLinkTargetCompatibilityError({
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/docs',
+      })
+    ).toBeNull();
   });
 });

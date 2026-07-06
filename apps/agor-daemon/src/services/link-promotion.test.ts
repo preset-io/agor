@@ -5,9 +5,9 @@ import {
   SessionRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { Branch, BranchID, SessionID, UUID } from '@agor/core/types';
+import type { Branch, BranchID, Link, SessionID, UUID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import type { Database } from '../../../../packages/core/src/db/client';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
@@ -256,6 +256,67 @@ describe('promoteLinkToAssistant', () => {
           } as never,
         })
       ).rejects.toThrow(/all' permission/);
+    }
+  );
+
+  dbTest(
+    'loads the source with caller params and creates assistant copy internally',
+    async ({ db }) => {
+      const assistant = await seedBranch(db, { assistant: true });
+      const source = {
+        link_id: generateId(),
+        branch_id: null,
+        session_id: generateId(),
+        source_message_id: null,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/visible-source',
+        ref_uri: null,
+        file_path: null,
+        target_key: 'url:https://example.com/visible-source',
+        is_pinned: false,
+        title: 'Visible source',
+        mime_type: null,
+        metadata: null,
+        created_by: null,
+        created_at: '2026-07-06T00:00:00.000Z',
+        updated_at: '2026-07-06T00:00:00.000Z',
+      } as Link;
+      const get = vi.fn(async () => source);
+      const create = vi.fn(async (data: unknown) => ({
+        ...source,
+        ...data,
+        link_id: generateId(),
+      }));
+      const params = {
+        provider: 'rest',
+        user: { user_id: generateId(), role: ROLES.MEMBER },
+        tenant: { tenant_id: 'tenant-a' },
+      } as never;
+
+      await promoteLinkToAssistant(
+        {
+          linksService: { get, create },
+          branchRepository: new BranchRepository(db),
+          branchRbacEnabled: false,
+          superadminOpts: { allowSuperadmin: true },
+        },
+        {
+          sourceLinkId: source.link_id,
+          assistantBranchId: assistant.branch_id,
+          params,
+        }
+      );
+
+      expect(get).toHaveBeenCalledWith(source.link_id, params);
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch_id: assistant.branch_id,
+          url: source.url,
+          is_pinned: true,
+        }),
+        expect.objectContaining({ provider: undefined, tenant: { tenant_id: 'tenant-a' } })
+      );
     }
   );
 });

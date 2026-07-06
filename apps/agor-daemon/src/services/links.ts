@@ -22,9 +22,10 @@ import type {
   Params,
   QueryParams,
   SessionID,
+  Task,
   UUID,
 } from '@agor/core/types';
-import { extractLinksFromMessage } from '@agor/core/types';
+import { extractLinksFromMessage, shortId } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 
 export const LINKS_SERVICE_METHODS = ['find', 'get', 'create', 'patch', 'remove'] as const;
@@ -151,6 +152,84 @@ export function ingestParsedLinksAfterMessageCreate(app: Application) {
         provider: undefined,
       } as Params);
     }
+    return context;
+  };
+}
+
+function uploadLinkIdsFromTask(task: Pick<Task, 'metadata'> | null | undefined): string[] {
+  const ids = task?.metadata?.upload_link_ids;
+  if (!Array.isArray(ids)) return [];
+  const result: string[] = [];
+  for (const id of ids) {
+    if (typeof id === 'string' && id.length > 0) result.push(id);
+  }
+  return result;
+}
+
+export async function associateUploadLinksWithMessage(
+  app: Application,
+  message: Message,
+  params?: Params
+): Promise<void> {
+  if (!message.task_id) return;
+
+  const task = (await app
+    .service('tasks')
+    .get(message.task_id, {
+      ...params,
+      provider: undefined,
+    } as Params)
+    .catch((err: unknown) => {
+      console.warn(
+        `⚠️  [Links] Failed to load task ${shortId(message.task_id as string)} for upload link association:`,
+        err
+      );
+      return null;
+    })) as Task | null;
+  const uploadLinkIds = uploadLinkIdsFromTask(task);
+  if (uploadLinkIds.length === 0) return;
+
+  const linksService = app.service('links') as unknown as {
+    get(id: string, params?: Params): Promise<Link>;
+    patch(id: string, data: Partial<Link>, params?: Params): Promise<Link | Link[]>;
+  };
+
+  await Promise.all(
+    uploadLinkIds.map(async (linkId) => {
+      try {
+        const link = await linksService.get(linkId, {
+          ...params,
+          provider: undefined,
+        } as Params);
+        if (
+          link.session_id !== message.session_id ||
+          link.source !== 'upload' ||
+          link.source_message_id
+        ) {
+          return;
+        }
+        await linksService.patch(linkId, { source_message_id: message.message_id }, {
+          ...params,
+          provider: undefined,
+        } as Params);
+      } catch (linkErr) {
+        console.warn(
+          `⚠️  [Links] Failed to associate upload link ${String(linkId).slice(0, 8)} with message ${shortId(message.message_id)}:`,
+          linkErr
+        );
+      }
+    })
+  );
+}
+
+export function associateUploadLinksAfterMessageCreate(app: Application) {
+  return async (context: HookContext): Promise<HookContext> => {
+    const messages = normalizeCreatedMessages(context.result);
+    if (messages.length === 0) return context;
+
+    await Promise.all(
+      messages.map((message) => associateUploadLinksWithMessage(app, message, context.params))
+    );
     return context;
   };
 }

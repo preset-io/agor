@@ -4,6 +4,7 @@ import {
   MessagesRepository,
   RepoRepository,
   SessionRepository,
+  TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
 import type { BranchID, Link, Message, MessageID, SessionID, UUID } from '@agor/core/types';
@@ -11,7 +12,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Database } from '../../../../packages/core/src/db/client';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
-import { ingestParsedLinksAfterMessageCreate, LINKS_SERVICE_METHODS, LinksService } from './links';
+import {
+  associateUploadLinksAfterMessageCreate,
+  ingestParsedLinksAfterMessageCreate,
+  LINKS_SERVICE_METHODS,
+  LinksService,
+} from './links';
 
 async function seedUser(db: Database, userId: UUID, email: string) {
   await new UsersRepository(db).create({ user_id: userId, email, name: email });
@@ -236,6 +242,135 @@ describe('LinksService', () => {
         tenant,
         authentication: { payload: { tenant_id: 'tenant-a' } },
       })
+    );
+  });
+
+  dbTest('associates task upload links from the message-create hook', async ({ db }) => {
+    const branch = await seedBranch(db, 'view');
+    const session = await seedSession(db, branch.branch_id);
+    const task = await new TaskRepository(db).create({
+      session_id: session.session_id,
+      created_by: 'owner' as UUID,
+      full_prompt: '',
+      metadata: {
+        upload_link_ids: [],
+      },
+    });
+    const upload = await new LinksRepository(db).create({
+      session_id: session.session_id,
+      kind: 'document',
+      source: 'upload',
+      file_path: '/home/agor/.agor/uploads/session/spec.pdf',
+      mime_type: 'application/pdf',
+    });
+    const parsed = await new LinksRepository(db).create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'parsed',
+      url: 'https://example.com/not-upload',
+    });
+    const otherSession = await seedSession(db, branch.branch_id);
+    const otherUpload = await new LinksRepository(db).create({
+      session_id: otherSession.session_id,
+      kind: 'document',
+      source: 'upload',
+      file_path: '/home/agor/.agor/uploads/other/spec.pdf',
+      mime_type: 'application/pdf',
+    });
+    await new TaskRepository(db).update(task.task_id, {
+      metadata: {
+        upload_link_ids: [upload.link_id, parsed.link_id, otherUpload.link_id],
+      },
+    });
+
+    const linksService = new LinksService(db);
+    const app = {
+      service: vi.fn((path: string) => {
+        if (path === 'links') return linksService;
+        if (path === 'tasks') {
+          return {
+            get: (id: string) => new TaskRepository(db).findById(id),
+          };
+        }
+        throw new Error(`Unexpected service: ${path}`);
+      }),
+    };
+    const hook = associateUploadLinksAfterMessageCreate(app as never);
+    const message = {
+      message_id: generateId() as MessageID,
+      session_id: session.session_id,
+      task_id: task.task_id,
+      type: 'user',
+      role: 'user',
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content_preview: '',
+      content: '',
+    } as Message;
+    await new MessagesRepository(db).create(message);
+
+    await hook({ result: message, params: { provider: 'rest' } } as never);
+
+    await expect(new LinksRepository(db).findById(upload.link_id)).resolves.toMatchObject({
+      source_message_id: message.message_id,
+    });
+    await expect(new LinksRepository(db).findById(parsed.link_id)).resolves.toMatchObject({
+      source_message_id: null,
+    });
+    await expect(new LinksRepository(db).findById(otherUpload.link_id)).resolves.toMatchObject({
+      source_message_id: null,
+    });
+  });
+
+  it('uses internal provider context when associating upload links', async () => {
+    const taskId = generateId();
+    const message = {
+      message_id: generateId() as MessageID,
+      session_id: generateId() as SessionID,
+      task_id: taskId,
+      type: 'user',
+      role: 'user',
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content_preview: '',
+      content: '',
+    } as Message;
+    const getTask = vi.fn(async () => ({
+      task_id: taskId,
+      metadata: { upload_link_ids: ['link-1'] },
+    }));
+    const getLink = vi.fn(async () => ({
+      link_id: 'link-1',
+      session_id: message.session_id,
+      source: 'upload',
+      source_message_id: null,
+    }));
+    const patchLink = vi.fn(async () => ({}));
+    const app = {
+      service: vi.fn((path: string) => {
+        if (path === 'tasks') return { get: getTask };
+        if (path === 'links') return { get: getLink, patch: patchLink };
+        throw new Error(`Unexpected service: ${path}`);
+      }),
+    };
+
+    await associateUploadLinksAfterMessageCreate(app as never)({
+      result: message,
+      params: { provider: 'rest', tenant: { tenant_id: 'tenant-a' } },
+    } as never);
+
+    expect(getTask).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ provider: undefined, tenant: { tenant_id: 'tenant-a' } })
+    );
+    expect(getLink).toHaveBeenCalledWith(
+      'link-1',
+      expect.objectContaining({ provider: undefined, tenant: { tenant_id: 'tenant-a' } })
+    );
+    expect(patchLink).toHaveBeenCalledWith(
+      'link-1',
+      { source_message_id: message.message_id },
+      expect.objectContaining({ provider: undefined, tenant: { tenant_id: 'tenant-a' } })
     );
   });
 });
