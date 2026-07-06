@@ -227,7 +227,6 @@ export function LinkRow({
     </Tooltip>
   ) : null;
 
-
   const showPassivePinIndicator = item.isPinned && !canTogglePin;
   const isActionable = Boolean(item.href || contentAction);
 
@@ -685,7 +684,6 @@ function TypePill({ item, compact = false }: { item: LinkDisplayItem; compact?: 
     </span>
   );
 }
-
 
 function shouldIgnoreRowActivation(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest('a,button,[role="button"]'));
