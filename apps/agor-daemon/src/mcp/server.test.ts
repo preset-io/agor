@@ -756,4 +756,108 @@ describe('POST /mcp with personal API keys', () => {
       expect(result.user_id).toBe('user-1');
     });
   });
+
+  // The MCP boundary must attach the app-level tenant to baseServiceParams the
+  // same way the REST/socket tenant around-hook does. Without it, custom methods
+  // like branches.startEnvironment defer executor work whose
+  // deferWithTenantDatabaseScope call can't resolve a tenant and throws.
+  it('attaches the resolved app tenant to baseServiceParams (static mode)', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
+
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
+        const resp = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            'Content-Type': 'application/json',
+            'X-API-Key': 'agor_sk_valid',
+            'X-Agor-Session-Id': 'session-short',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 3,
+            method: 'tools/call',
+            params: { name: 'agor_users_get_current', arguments: {} },
+          }),
+        });
+
+        expect(resp.status).toBe(200);
+        // The params that reach service calls (and, downstream, startEnvironment)
+        // carry the resolved tenant — this is what deferred executor work reads.
+        expect(getSession).toHaveBeenCalledWith(
+          'session-short',
+          expect.objectContaining({
+            tenant: expect.objectContaining({ tenant_id: 'default', source: 'static' }),
+          })
+        );
+      }
+    );
+  });
+
+  it('rejects an MCP request whose tenant cannot be resolved in cloud mode (401)', async () => {
+    await mockPersonalApiKeyUser();
+    // A required_from_auth tenant that must come from an auth claim the user
+    // lacks — resolution fails and the request is refused before any tool runs.
+    const cloudMultiTenancy = {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default',
+      auth_claim: 'tenant_id',
+    } as unknown as Parameters<typeof setupMCPRoutes>[4];
+
+    const webApp = express();
+    webApp.use(express.json());
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+    }));
+    (webApp as unknown as { service: (name: string) => unknown }).service = (name: string) => {
+      if (name !== 'users') throw new Error(`Unexpected service lookup: ${name}`);
+      return { get: getUser };
+    };
+
+    setupMCPRoutes(
+      webApp as never,
+      {} as never,
+      /* toolSearchEnabled */ false,
+      undefined,
+      cloudMultiTenancy
+    );
+
+    const httpServer = webApp.listen(0);
+    try {
+      const address = httpServer.address();
+      if (!address || typeof address === 'string') throw new Error('no listen address');
+      const resp = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'X-API-Key': 'agor_sk_valid',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 4,
+          method: 'tools/call',
+          params: { name: 'agor_users_get_current', arguments: {} },
+        }),
+      });
+
+      expect(resp.status).toBe(401);
+      const body = (await resp.json()) as { error?: { message?: string } };
+      expect(body.error?.message).toMatch(/tenant/i);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
 });
