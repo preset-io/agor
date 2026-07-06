@@ -90,6 +90,39 @@ test('local login receives a browser access + refresh token pair', async () => {
   expect(refreshPayload.sub).toBe('user-1');
 });
 
+test('api-key login (no JWT payload) receives a browser access + refresh token pair', async () => {
+  const context = makeContext(undefined, 'api-key');
+
+  const result = (await makeHook()(context)).result;
+
+  expect(result.accessToken).not.toBe(ORIGINAL_TOKEN);
+  expect(result.refreshToken).toEqual(expect.any(String));
+  expectRedactedUser(result.user);
+
+  const accessPayload = verifyToken(result.accessToken);
+  expect(accessPayload.type).toBe('access');
+  expect(accessPayload.sub).toBe('user-1');
+});
+
+test('params.tenant tenant_id propagates into both minted tokens', async () => {
+  const context = makeContext(undefined, 'local');
+  context.params = { tenant: { tenant_id: 'tenant-1' } };
+
+  const result = (await makeHook()(context)).result;
+
+  expect(verifyToken(result.accessToken).tenant_id).toBe('tenant-1');
+  expect(verifyToken(result.refreshToken).tenant_id).toBe('tenant-1');
+});
+
+test('user.tenant_id is the fallback tenant claim when params carry no tenant', async () => {
+  const context = makeContext(undefined, 'local');
+  context.result.user = { ...makeUser(), tenant_id: 'tenant-2' };
+
+  const result = (await makeHook()(context)).result;
+
+  expect(verifyToken(result.accessToken).tenant_id).toBe('tenant-2');
+});
+
 test('browser jwt re-auth (payload.type=access) still receives a fresh token pair', async () => {
   const context = makeContext('access');
 
