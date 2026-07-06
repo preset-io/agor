@@ -3,6 +3,7 @@ import { Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useEffect, useState } from 'react';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
+import { getTimeMs } from '../../utils/entityTime';
 import { glassCardStyle } from './homeStyles';
 
 const { Text } = Typography;
@@ -104,11 +105,8 @@ export const HomeStatsBar: React.FC<{
       for (const s of state.sessionById.values()) {
         if (s.archived) continue;
 
-        const updatedAt = s.last_updated
-          ? new Date(s.last_updated).getTime()
-          : s.created_at
-            ? new Date(s.created_at).getTime()
-            : Number.NaN;
+        const lastUpdated = getTimeMs(s, 'last_updated');
+        const updatedAt = Number.isNaN(lastUpdated) ? getTimeMs(s, 'created_at') : lastUpdated;
 
         if (s.status === 'running') {
           runningNow++;

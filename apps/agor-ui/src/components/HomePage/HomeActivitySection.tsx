@@ -1,4 +1,4 @@
-import type { Branch, Session } from '@agor-live/client';
+import type { Board, Branch, Session, User } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import {
   BranchesOutlined,
@@ -19,7 +19,7 @@ import {
   theme,
 } from 'antd';
 import type React from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import {
   selectBoardById,
@@ -27,6 +27,7 @@ import {
   selectSessionById,
   selectUserById,
 } from '../../store/selectors';
+import { getTimeMs } from '../../utils/entityTime';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { AssistantPill, BoardPill, BranchPill, SessionPill, UserPill } from '../Pill';
@@ -40,19 +41,161 @@ const HOME_ACTIVITY_LIMIT = 100;
 type ActivityFilter = 'all' | 'branches' | 'sessions' | 'assistants';
 type ActivityEventType = Exclude<ActivityFilter, 'all'>;
 
+// `t` is the numeric sort key, parsed once via the shared memoized util so the
+// comparator never touches `new Date` — the whole feed is rebuilt on every
+// store notify, and a Date-per-comparison there was the hot path.
 interface ActivityEvent {
   id: string;
   type: ActivityEventType;
   dttm: string | Date;
+  t: number;
   entityId: string;
 }
 
-const ActivityFeedItem: React.FC<{
-  icon: React.ReactNode;
-  message: React.ReactNode;
-  time?: string | Date | null;
-}> = ({ icon, message, time }) => {
+type ActivityCallbacks = Pick<HomePageProps, 'onBoardClick' | 'onBranchClick' | 'onSessionClick'>;
+
+// Module-level constants: passing referentially-stable style objects keeps the
+// pills (and the memo'd rows below) from churning on unrelated store notifies.
+const CLICKABLE_PILL_STYLE: React.CSSProperties = { cursor: 'pointer', marginInlineEnd: 0 };
+const SESSION_PILL_STYLE: React.CSSProperties = {
+  ...CLICKABLE_PILL_STYLE,
+  display: 'inline-flex',
+  alignItems: 'center',
+  paddingInline: 6,
+};
+
+const activityIcon = (type: ActivityEventType): React.ReactNode => {
+  if (type === 'sessions') return <UnorderedListOutlined />;
+  if (type === 'assistants') return <RobotOutlined />;
+  return <BranchesOutlined />;
+};
+
+/**
+ * One activity row. Receives the already-resolved entity object references
+ * (session/branch/board/user) plus stable callbacks, and builds its message
+ * content HERE — so a store notify re-renders only the rows whose entities
+ * actually changed. Because these props are entity references (not the whole
+ * maps), `memo` bails out for every unaffected row: a single session:patched no
+ * longer rebuilds all 100 rows.
+ */
+const ActivityRow = memo(function ActivityRow({
+  type,
+  dttm,
+  session,
+  branch,
+  board,
+  actor,
+  onBoardClick,
+  onBranchClick,
+  onSessionClick,
+}: ActivityCallbacks & {
+  type: ActivityEventType;
+  dttm: string | Date;
+  session?: Session;
+  branch?: Branch;
+  board?: Board;
+  actor?: User;
+}) {
   const { token } = theme.useToken();
+
+  let message: React.ReactNode = null;
+
+  if (type === 'sessions') {
+    if (!session) return null;
+    const sessionTitle = getSessionDisplayTitle(session, {
+      includeAgentFallback: true,
+      includeIdFallback: true,
+    });
+    const verb =
+      Math.abs(getTimeMs(session, 'last_updated') - getTimeMs(session, 'created_at')) < 1000
+        ? 'started'
+        : 'updated';
+
+    message = (
+      <Space size={4} wrap>
+        {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
+        <Text type="secondary">{verb}</Text>
+        <Popover
+          trigger="hover"
+          title={<Text style={{ maxWidth: 320, display: 'block' }}>{sessionTitle}</Text>}
+          content={
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {session.agentic_tool} · {session.status.replaceAll('_', ' ')}
+            </Text>
+          }
+        >
+          <SessionPill
+            ariaLabel={sessionTitle}
+            title={sessionTitle}
+            onClick={() => onSessionClick(session.session_id)}
+            style={SESSION_PILL_STYLE}
+          />
+        </Popover>
+        {branch && (
+          <>
+            <Text type="secondary">in</Text>
+            <BranchPill
+              branch={branch.name}
+              compact
+              onClick={() => onBranchClick(branch.branch_id)}
+            />
+          </>
+        )}
+        {board && (
+          <>
+            <Text type="secondary">on</Text>
+            <BoardPill
+              board={board}
+              compact
+              onClick={() => onBoardClick(board.board_id)}
+              style={CLICKABLE_PILL_STYLE}
+            />
+          </>
+        )}
+      </Space>
+    );
+  } else {
+    if (!branch) return null;
+    const assistant = type === 'assistants';
+    const assistantConfig = getAssistantConfig(branch);
+    const branchLabel = assistantConfig?.displayName ?? branch.name;
+
+    message = (
+      <Space size={4} wrap>
+        {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
+        <Text type="secondary">created</Text>
+        {assistant ? (
+          <AssistantPill
+            name={branchLabel}
+            emoji={assistantConfig?.emoji}
+            compact
+            title={branch.name}
+            onClick={() => onBranchClick(branch.branch_id)}
+            style={CLICKABLE_PILL_STYLE}
+          />
+        ) : (
+          <BranchPill
+            branch={branchLabel}
+            compact
+            title={branch.name}
+            onClick={() => onBranchClick(branch.branch_id)}
+          />
+        )}
+        {board && (
+          <>
+            <Text type="secondary">on</Text>
+            <BoardPill
+              board={board}
+              compact
+              onClick={() => onBoardClick(board.board_id)}
+              style={CLICKABLE_PILL_STYLE}
+            />
+          </>
+        )}
+      </Space>
+    );
+  }
+
   return (
     <List.Item style={{ padding: '10px 0' }}>
       <Space align="start">
@@ -60,24 +203,26 @@ const ActivityFeedItem: React.FC<{
           size="small"
           style={{ background: token.colorFillSecondary, color: token.colorText }}
         >
-          {icon}
+          {activityIcon(type)}
         </Avatar>
         <div>
           <div>{message}</div>
-          {time && (
+          {dttm && (
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {formatRelativeTime(time)}
+              {formatRelativeTime(dttm)}
             </Text>
           )}
         </div>
       </Space>
     </List.Item>
   );
-};
+});
 
-export const HomeActivitySection: React.FC<
-  Pick<HomePageProps, 'onBoardClick' | 'onBranchClick' | 'onSessionClick'>
-> = ({ onBoardClick, onBranchClick, onSessionClick }) => {
+export const HomeActivitySection: React.FC<ActivityCallbacks> = ({
+  onBoardClick,
+  onBranchClick,
+  onSessionClick,
+}) => {
   const branchById = useAgorStore(selectBranchById);
   const boardById = useAgorStore(selectBoardById);
   const sessionById = useAgorStore(selectSessionById);
@@ -85,181 +230,36 @@ export const HomeActivitySection: React.FC<
   const { token } = theme.useToken();
   const cardGlassStyle = glassCardStyle(token);
   const [filter, setFilter] = useState<ActivityFilter>('all');
-  const clickablePillStyle = useMemo<React.CSSProperties>(
-    () => ({
-      cursor: 'pointer',
-      marginInlineEnd: 0,
-    }),
-    []
-  );
-
-  const branchMessage = useCallback(
-    (branch: Branch, assistant: boolean) => {
-      const board = branch.board_id ? boardById.get(branch.board_id) : undefined;
-      const actor = userById.get(branch.created_by);
-      const assistantConfig = getAssistantConfig(branch);
-      const branchLabel = assistantConfig?.displayName ?? branch.name;
-
-      return (
-        <Space size={4} wrap>
-          {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
-          <Text type="secondary">created</Text>
-          {assistant ? (
-            <AssistantPill
-              name={branchLabel}
-              emoji={assistantConfig?.emoji}
-              compact
-              title={branch.name}
-              onClick={() => onBranchClick(branch.branch_id)}
-              style={clickablePillStyle}
-            />
-          ) : (
-            <BranchPill
-              branch={branchLabel}
-              compact
-              title={branch.name}
-              onClick={() => onBranchClick(branch.branch_id)}
-            />
-          )}
-          {board && (
-            <>
-              <Text type="secondary">on</Text>
-              <BoardPill
-                board={board}
-                compact
-                onClick={() => onBoardClick(board.board_id)}
-                style={clickablePillStyle}
-              />
-            </>
-          )}
-        </Space>
-      );
-    },
-    [boardById, clickablePillStyle, onBoardClick, onBranchClick, userById]
-  );
-
-  const sessionMessage = useCallback(
-    (session: Session) => {
-      const branch = branchById.get(session.branch_id);
-      const board = branch?.board_id ? boardById.get(branch.board_id) : undefined;
-      const actor = userById.get(session.created_by);
-      const sessionTitle = getSessionDisplayTitle(session, {
-        includeAgentFallback: true,
-        includeIdFallback: true,
-      });
-      const createdAt = new Date(session.created_at).getTime();
-      const updatedAt = new Date(session.last_updated).getTime();
-      const verb = Math.abs(updatedAt - createdAt) < 1000 ? 'started' : 'updated';
-
-      return (
-        <Space size={4} wrap>
-          {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
-          <Text type="secondary">{verb}</Text>
-          <Popover
-            trigger="hover"
-            title={<Text style={{ maxWidth: 320, display: 'block' }}>{sessionTitle}</Text>}
-            content={
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {session.agentic_tool} · {session.status.replaceAll('_', ' ')}
-              </Text>
-            }
-          >
-            <SessionPill
-              ariaLabel={sessionTitle}
-              title={sessionTitle}
-              onClick={() => onSessionClick(session.session_id)}
-              style={{
-                ...clickablePillStyle,
-                display: 'inline-flex',
-                alignItems: 'center',
-                paddingInline: 6,
-              }}
-            />
-          </Popover>
-          {branch && (
-            <>
-              <Text type="secondary">in</Text>
-              <BranchPill
-                branch={branch.name}
-                compact
-                onClick={() => onBranchClick(branch.branch_id)}
-              />
-            </>
-          )}
-          {board && (
-            <>
-              <Text type="secondary">on</Text>
-              <BoardPill
-                board={board}
-                compact
-                onClick={() => onBoardClick(board.board_id)}
-                style={clickablePillStyle}
-              />
-            </>
-          )}
-        </Space>
-      );
-    },
-    [
-      boardById,
-      branchById,
-      onBoardClick,
-      onBranchClick,
-      onSessionClick,
-      clickablePillStyle,
-      userById,
-    ]
-  );
 
   const items = useMemo(() => {
-    const events: ActivityEvent[] = [
-      ...Array.from(branchById.values())
-        .filter((branch) => !branch.archived)
-        .map((branch): ActivityEvent => {
-          const assistant = isAssistant(branch);
-          return {
-            id: `branch:${branch.branch_id}`,
-            type: assistant ? 'assistants' : 'branches',
-            dttm: branch.created_at,
-            entityId: branch.branch_id,
-          };
-        }),
-      ...Array.from(sessionById.values())
-        .filter((session) => !session.archived)
-        .map(
-          (session): ActivityEvent => ({
-            id: `session:${session.session_id}`,
-            type: 'sessions',
-            dttm: session.last_updated,
-            entityId: session.session_id,
-          })
-        ),
-    ];
+    const events: ActivityEvent[] = [];
+    for (const branch of branchById.values()) {
+      if (branch.archived) continue;
+      const assistant = isAssistant(branch);
+      events.push({
+        id: `branch:${branch.branch_id}`,
+        type: assistant ? 'assistants' : 'branches',
+        dttm: branch.created_at,
+        t: getTimeMs(branch, 'created_at'),
+        entityId: branch.branch_id,
+      });
+    }
+    for (const session of sessionById.values()) {
+      if (session.archived) continue;
+      events.push({
+        id: `session:${session.session_id}`,
+        type: 'sessions',
+        dttm: session.last_updated,
+        t: getTimeMs(session, 'last_updated'),
+        entityId: session.session_id,
+      });
+    }
 
     return events
       .filter((event) => filter === 'all' || event.type === filter)
-      .sort((a, b) => new Date(b.dttm).getTime() - new Date(a.dttm).getTime())
+      .sort((a, b) => b.t - a.t)
       .slice(0, HOME_ACTIVITY_LIMIT);
   }, [branchById, sessionById, filter]);
-
-  const renderActivityIcon = useCallback((event: ActivityEvent) => {
-    if (event.type === 'sessions') return <UnorderedListOutlined />;
-    if (event.type === 'assistants') return <RobotOutlined />;
-    return <BranchesOutlined />;
-  }, []);
-
-  const renderActivityMessage = useCallback(
-    (event: ActivityEvent): React.ReactNode => {
-      if (event.type === 'sessions') {
-        const session = sessionById.get(event.entityId);
-        return session ? sessionMessage(session) : null;
-      }
-
-      const branch = branchById.get(event.entityId);
-      return branch ? branchMessage(branch, event.type === 'assistants') : null;
-    },
-    [branchById, branchMessage, sessionById, sessionMessage]
-  );
 
   return (
     <section
@@ -343,13 +343,38 @@ export const HomeActivitySection: React.FC<
             rowKey="id"
             dataSource={items}
             renderItem={(item) => {
-              const message = renderActivityMessage(item);
-              if (!message) return null;
+              if (item.type === 'sessions') {
+                const session = sessionById.get(item.entityId);
+                const branch = session ? branchById.get(session.branch_id) : undefined;
+                const board = branch?.board_id ? boardById.get(branch.board_id) : undefined;
+                const actor = session ? userById.get(session.created_by) : undefined;
+                return (
+                  <ActivityRow
+                    type="sessions"
+                    dttm={item.dttm}
+                    session={session}
+                    branch={branch}
+                    board={board}
+                    actor={actor}
+                    onBoardClick={onBoardClick}
+                    onBranchClick={onBranchClick}
+                    onSessionClick={onSessionClick}
+                  />
+                );
+              }
+              const branch = branchById.get(item.entityId);
+              const board = branch?.board_id ? boardById.get(branch.board_id) : undefined;
+              const actor = branch ? userById.get(branch.created_by) : undefined;
               return (
-                <ActivityFeedItem
-                  icon={renderActivityIcon(item)}
-                  message={message}
-                  time={item.dttm}
+                <ActivityRow
+                  type={item.type}
+                  dttm={item.dttm}
+                  branch={branch}
+                  board={board}
+                  actor={actor}
+                  onBoardClick={onBoardClick}
+                  onBranchClick={onBranchClick}
+                  onSessionClick={onSessionClick}
                 />
               );
             }}

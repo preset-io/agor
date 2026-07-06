@@ -4,7 +4,13 @@ import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme }
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
-import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
+import {
+  type AgorState,
+  agorStore,
+  shallow,
+  useAgorStore,
+  useStoreWithEqualityFn,
+} from '../../store/agorStore';
 import { selectBoardById } from '../../store/selectors';
 import { isDarkTheme } from '../../utils/theme';
 import { HomeActivitySection } from './HomeActivitySection';
@@ -25,6 +31,15 @@ const SIDEBAR_STORAGE_KEY = 'agor:homepage-sidebar-width';
 const SIDEBAR_DEFAULT = 340;
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX_RATIO = 0.5;
+
+// Direct map-value iteration with an early exit — avoids materializing an array
+// of every session on each store notify just to test for one visible match.
+function hasVisibleSession(sessionById: AgorState['sessionById'], currentUserId?: string): boolean {
+  for (const s of sessionById.values()) {
+    if (!s.archived && (!currentUserId || s.created_by === currentUserId)) return true;
+  }
+  return false;
+}
 
 const NEW_MENU_ITEMS: MenuProps['items'] = [
   { key: 'assistant', label: 'New assistant', icon: <RobotOutlined /> },
@@ -59,9 +74,7 @@ const HomeOnboarding: React.FC<{
       hasRepos: state.repoById.size > 0,
       hasMcp: state.mcpServerById.size > 0,
       hasTeammates: state.userById.size > 1,
-      hasSessions: Array.from(state.sessionById.values()).some(
-        (s) => !s.archived && (!currentUserId || s.created_by === currentUserId)
-      ),
+      hasSessions: hasVisibleSession(state.sessionById, currentUserId),
     }),
     shallow
   );

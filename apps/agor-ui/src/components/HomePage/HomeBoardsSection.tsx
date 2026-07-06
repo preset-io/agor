@@ -11,8 +11,9 @@ import type React from 'react';
 import { memo, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectSessionsByBranch } from '../../store/selectors';
+import { getTimeMs } from '../../utils/entityTime';
 import { formatRelativeTime } from '../../utils/time';
-import { glassCardStyle } from './homeStyles';
+import { glassSurfaceStyle } from './homeStyles';
 import type { HomePageProps } from './types';
 
 const { Text } = Typography;
@@ -46,12 +47,26 @@ const groupBranchesByBoard = (branchById: Map<string, Branch>): Map<string, Bran
   return grouped;
 };
 
+// Keyed by the per-branch session bucket array reference. The store preserves
+// untouched buckets by reference across patches, so a session:patched on one
+// branch leaves every other branch's filtered result cached — no re-filter of
+// the whole workspace on every notify.
+const visibleSessionsCache = new WeakMap<Session[], Session[]>();
+
+const filterVisibleSessions = (sessions: Session[]): Session[] => {
+  const cached = visibleSessionsCache.get(sessions);
+  if (cached) return cached;
+  const visible = sessions.filter((session) => !session.archived);
+  visibleSessionsCache.set(sessions, visible);
+  return visible;
+};
+
 const groupVisibleSessionsByBranch = (
   sessionsByBranch: Map<string, Session[]>
 ): Map<string, Session[]> => {
   const grouped = new Map<string, Session[]>();
   for (const [branchId, sessions] of sessionsByBranch) {
-    const visibleSessions = sessions.filter((session) => !session.archived);
+    const visibleSessions = filterVisibleSessions(sessions);
     if (visibleSessions.length > 0) grouped.set(branchId, visibleSessions);
   }
   return grouped;
@@ -81,88 +96,104 @@ const BoardHomeCard = memo(function BoardHomeCard({
   const [focused, setFocused] = useState(false);
 
   return (
-    <button
-      type="button"
-      onClick={() => onBoardClick(board.board_id)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-      style={{
-        display: 'block',
-        width: '100%',
-        height: '100%',
-        textAlign: 'left',
-        border: `1px solid ${hovered ? token.colorPrimary : token.colorBorderSecondary}`,
-        borderRadius: token.borderRadiusLG,
-        padding: '12px 14px',
-        cursor: 'pointer',
-        ...glassCardStyle(token, 0.3),
-        boxShadow: hovered
-          ? `${token.boxShadowSecondary}, inset 0 1px 0 rgba(255, 255, 255, 0.12)`
-          : undefined,
-        outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
-        outlineOffset: focused ? 2 : undefined,
-        transition: 'border-color 0.2s, box-shadow 0.2s',
-        fontFamily: 'inherit',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-        {/* Board icon */}
-        <div
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 8,
-            background: token.colorFillTertiary,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 20,
-            flexShrink: 0,
-          }}
-        >
-          {board.icon || '📋'}
-        </div>
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* Static blurred glass fill on its own layer, painted behind the
+          interactive button. Hover/focus never touch this element, so its
+          expensive backdrop-filter is never re-blurred. */}
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          borderRadius: token.borderRadiusLG,
+          ...glassSurfaceStyle(token, 0.3),
+          pointerEvents: 'none',
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => onBoardClick(board.board_id)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        style={{
+          position: 'relative',
+          display: 'block',
+          width: '100%',
+          height: '100%',
+          textAlign: 'left',
+          border: `1px solid ${hovered ? token.colorPrimary : token.colorBorderSecondary}`,
+          borderRadius: token.borderRadiusLG,
+          padding: '12px 14px',
+          cursor: 'pointer',
+          background: 'transparent',
+          boxShadow: hovered
+            ? `${token.boxShadowSecondary}, inset 0 1px 0 rgba(255, 255, 255, 0.12)`
+            : undefined,
+          outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
+          outlineOffset: focused ? 2 : undefined,
+          transition: 'border-color 0.2s, box-shadow 0.2s',
+          fontFamily: 'inherit',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          {/* Board icon */}
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              background: token.colorFillTertiary,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 20,
+              flexShrink: 0,
+            }}
+          >
+            {board.icon || '📋'}
+          </div>
 
-        {/* Name + meta — all aligned under each other, to the right of the icon */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Tooltip title={board.name}>
-            <Text
-              strong
-              style={{
-                fontSize: 14,
-                display: 'block',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {board.name}
-            </Text>
-          </Tooltip>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {branchCount} branch{branchCount !== 1 ? 'es' : ''}
-            </Text>
-            {activeCount > 0 && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                <ThunderboltOutlined style={{ marginRight: 2 }} />
-                {activeCount} active
+          {/* Name + meta — all aligned under each other, to the right of the icon */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <Tooltip title={board.name}>
+              <Text
+                strong
+                style={{
+                  fontSize: 14,
+                  display: 'block',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {board.name}
               </Text>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <ClockCircleOutlined style={{ fontSize: 11, color: token.colorTextSecondary }} />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {latestSessionAt
-                ? `Last session ${formatRelativeTime(latestSessionAt)}`
-                : 'No sessions yet'}
-            </Text>
+            </Tooltip>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {branchCount} branch{branchCount !== 1 ? 'es' : ''}
+              </Text>
+              {activeCount > 0 && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  <ThunderboltOutlined style={{ marginRight: 2 }} />
+                  {activeCount} active
+                </Text>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <ClockCircleOutlined style={{ fontSize: 11, color: token.colorTextSecondary }} />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {latestSessionAt
+                  ? `Last session ${formatRelativeTime(latestSessionAt)}`
+                  : 'No sessions yet'}
+              </Text>
+            </div>
           </div>
         </div>
-      </div>
-    </button>
+      </button>
+    </div>
   );
 });
 
@@ -189,15 +220,17 @@ export const HomeBoardsSection: React.FC<
         let latestSessionAt: BoardHomeRow['latestSessionAt'] = null;
         let latestSessionTime = Number.NEGATIVE_INFINITY;
         for (const session of sessions) {
-          const time = new Date(session.last_updated).getTime();
+          const time = getTimeMs(session, 'last_updated');
           if (time > latestSessionTime) {
             latestSessionTime = time;
             latestSessionAt = session.last_updated;
           }
         }
         const latest = Math.max(
-          new Date(board.last_updated).getTime(),
-          ...branches.map((branch) => new Date(branch.updated_at || branch.created_at).getTime()),
+          getTimeMs(board, 'last_updated'),
+          ...branches.map((branch) =>
+            getTimeMs(branch, branch.updated_at ? 'updated_at' : 'created_at')
+          ),
           latestSessionTime
         );
         return {
