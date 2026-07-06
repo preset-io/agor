@@ -43,6 +43,7 @@ import type {
   AuthenticatedParams,
   DaemonServicesConfig,
   HookContext,
+  Link,
   LinkCreate,
   Message,
   MessageSource,
@@ -94,6 +95,8 @@ import type {
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
 import type { GatewayService } from './services/gateway.js';
+import { registerLinkContentRoute } from './services/link-content.js';
+import { LinkPromotionService, type LinksServiceForPromotion } from './services/link-promotion.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -1110,7 +1113,43 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           type: isCallback ? 'system' : 'user',
           metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
         });
-        await app.service('messages').create(userMessage, params);
+        const createdMessage = (await app
+          .service('messages')
+          .create(userMessage, params)) as Message;
+        const uploadLinkIds = Array.isArray(task.metadata?.upload_link_ids)
+          ? task.metadata.upload_link_ids.filter(
+              (id): id is NonNullable<typeof id> => typeof id === 'string'
+            )
+          : [];
+        if (uploadLinkIds.length > 0) {
+          const linksService = app.service('links');
+          await Promise.all(
+            uploadLinkIds.map(async (linkId) => {
+              try {
+                const link = (await linksService.get(linkId, {
+                  ...params,
+                  provider: undefined,
+                } as Params)) as Link;
+                if (
+                  link.session_id !== task.session_id ||
+                  link.source !== 'upload' ||
+                  link.source_message_id
+                ) {
+                  return;
+                }
+                await linksService.patch(linkId, { source_message_id: createdMessage.message_id }, {
+                  ...params,
+                  provider: undefined,
+                } as Params);
+              } catch (linkErr) {
+                console.warn(
+                  `⚠️  [Daemon] Failed to associate upload link ${String(linkId).slice(0, 8)} with message ${shortId(createdMessage.message_id)}:`,
+                  linkErr
+                );
+              }
+            })
+          );
+        }
       } catch (msgErr) {
         // Don't fail the spawn — the executor's createUserMessage fallback
         // (with skip-if-exists) will write the row when it connects.
@@ -1838,6 +1877,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
 
   // ============================================================================
+  // Uploaded link content endpoint
+  // ============================================================================
+
+  registerLinkContentRoute(app);
+
+  registerAuthenticatedRoute(
+    app,
+    '/links/:id/promote',
+    new LinkPromotionService({
+      linksService: app.service('links') as unknown as LinksServiceForPromotion,
+      branchRepository,
+      branchRbacEnabled,
+      superadminOpts,
+    }),
+    {
+      create: { role: ROLES.MEMBER, action: 'promote links to assistant' },
+    },
+    requireAuth
+  );
+
+  // ============================================================================
   // File upload endpoint
   // ============================================================================
 
@@ -1972,10 +2032,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         created_by: (params.user?.user_id as UUID | undefined) ?? null,
       }));
 
+      const createdUploadLinks: Link[] = [];
       if (uploadLinks.length > 0) {
-        await app
+        const created = (await app
           .service('links')
-          .create(uploadLinks, { ...params, provider: undefined } as Params);
+          .create(uploadLinks, { ...params, provider: undefined } as Params)) as Link | Link[];
+        createdUploadLinks.push(...(Array.isArray(created) ? created : [created]));
       }
 
       let notificationError: string | null = null;
@@ -1994,7 +2056,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             route: { id: sessionId },
             user: params.user,
           };
-          await promptService.create({ prompt: promptText }, promptParams);
+          await promptService.create(
+            {
+              prompt: promptText,
+              metadata:
+                createdUploadLinks.length > 0
+                  ? { upload_link_ids: createdUploadLinks.map((link) => link.link_id) }
+                  : undefined,
+            },
+            promptParams
+          );
         } catch (error) {
           console.error('❌ [Upload Handler] Failed to notify agent:', error);
           notificationError =

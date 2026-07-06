@@ -1,4 +1,4 @@
-import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
+import type { AgorClient, Branch, Link, Repo, Session, SpawnConfig, User } from '@agor-live/client';
 import { getAssistantConfig, isAssistant, isSessionExecuting } from '@agor-live/client';
 import {
   BranchesOutlined,
@@ -13,6 +13,7 @@ import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useThemedMessage } from '../../utils/message';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
@@ -21,6 +22,16 @@ import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { EnvironmentPill } from '../EnvironmentPill';
+import {
+  buildLinkDisplayItems,
+  isBranchOwnedLink,
+  type LinkDisplayItem,
+  normalizeLinkFindResult,
+  reconcilePinnedBranchLink,
+  removeLinkById,
+} from '../Links/linkDisplay';
+import { dispatchLinkMutation, listenForLinkMutations } from '../Links/linkEvents';
+import { LinkPreviewModal, LinkRow, useLinkFileActions } from '../Links/SessionLinksControl';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -30,6 +41,67 @@ import { BranchSessionSections } from './BranchSessionSections';
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
+const BRANCH_CARD_PINNED_LINK_INLINE_LIMIT = 6;
+
+function BranchCardPinnedLinksBlock({
+  items,
+  onTogglePinned,
+  pinningLinkId,
+}: {
+  items: LinkDisplayItem[];
+  onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
+  pinningLinkId?: string | null;
+}) {
+  const { token } = theme.useToken();
+  const { busyLinkId, preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
+  const inlineItems = useMemo(() => items.slice(0, BRANCH_CARD_PINNED_LINK_INLINE_LIMIT), [items]);
+
+  if (items.length === 0) return null;
+
+  return (
+    <>
+      <div
+        data-testid="branch-card-pinned-links"
+        className={REACT_FLOW_NO_DRAG_CLASS}
+        style={{
+          margin: `${token.sizeUnit}px 0 ${token.sizeUnit * 3}px`,
+          padding: `${token.sizeUnit * 0.5}px 0 ${token.sizeUnit * 2}px`,
+          borderBottom: `1px dashed ${token.colorBorderSecondary}`,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: token.sizeUnit,
+            marginBottom: token.sizeUnit,
+          }}
+        >
+          <PushpinFilled style={{ color: token.colorTextTertiary, fontSize: 11 }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 600 }}>
+            Pinned links
+          </Typography.Text>
+        </div>
+
+        <Space direction="vertical" size={2} style={{ width: '100%' }}>
+          {inlineItems.map((item) => (
+            <LinkRow
+              key={item.key}
+              item={item}
+              compact
+              onPreview={openPreview}
+              onDownload={downloadItem}
+              onTogglePinned={onTogglePinned}
+              busy={item.linkId === busyLinkId}
+              pinning={item.linkId === pinningLinkId}
+            />
+          ))}
+        </Space>
+      </div>
+      <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
+    </>
+  );
+}
 
 interface BranchCardProps {
   branch: Branch;
@@ -104,10 +176,13 @@ const BranchCardComponent = ({
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
+  const { showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [pinnedBranchLinks, setPinnedBranchLinks] = useState<Link[]>([]);
+  const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
 
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
@@ -174,6 +249,95 @@ const BranchCardComponent = ({
       updatePeekedSessionIds(next);
     },
     [peekedSessionIdSet, peekedSessionIds, updatePeekedSessionIds]
+  );
+
+  useEffect(() => {
+    if (!client || !branch.branch_id) {
+      setPinnedBranchLinks([]);
+      return;
+    }
+
+    let active = true;
+    const linksService = client.service('links');
+
+    const upsertBranchPinnedLink = (link: Link) => {
+      setPinnedBranchLinks((prev) => reconcilePinnedBranchLink(prev, link, branch.branch_id));
+    };
+
+    const removeBranchLink = (link: Link) => {
+      setPinnedBranchLinks((prev) => removeLinkById(prev, link));
+    };
+
+    const fetchPinnedLinks = async () => {
+      try {
+        const result = await linksService.find({
+          query: { branch_id: branch.branch_id, is_pinned: true, $limit: 20 },
+        });
+        if (active) {
+          setPinnedBranchLinks(
+            normalizeLinkFindResult(result).filter(
+              (link) => isBranchOwnedLink(link, branch.branch_id) && link.is_pinned
+            )
+          );
+        }
+      } catch (error) {
+        if (!active) return;
+        console.error('[BranchCard] Failed to fetch pinned links:', error);
+        setPinnedBranchLinks([]);
+      }
+    };
+
+    fetchPinnedLinks();
+    linksService.on('created', upsertBranchPinnedLink);
+    linksService.on('patched', upsertBranchPinnedLink);
+    linksService.on('updated', upsertBranchPinnedLink);
+    linksService.on('removed', removeBranchLink);
+    const stopListeningForLocalMutations = listenForLinkMutations(({ link, mutation }) => {
+      if (mutation === 'removed') {
+        removeBranchLink(link);
+      } else {
+        upsertBranchPinnedLink(link);
+      }
+    });
+
+    return () => {
+      active = false;
+      linksService.off('created', upsertBranchPinnedLink);
+      linksService.off('patched', upsertBranchPinnedLink);
+      linksService.off('updated', upsertBranchPinnedLink);
+      linksService.off('removed', removeBranchLink);
+      stopListeningForLocalMutations();
+    };
+  }, [branch.branch_id, client]);
+
+  const pinnedBranchLinkItems = useMemo(
+    () =>
+      buildLinkDisplayItems({
+        links: pinnedBranchLinks,
+        includeBranchLinks: false,
+      }).filter((item) => item.ownerScope === 'branch' && item.isPinned),
+    [pinnedBranchLinks]
+  );
+
+  const handleToggleLinkPinned = useCallback(
+    async (item: LinkDisplayItem) => {
+      if (!client || !item.linkId || pinningLinkId) return;
+      setPinningLinkId(item.linkId);
+      try {
+        const updated = await client.service('links').patch(item.linkId, {
+          is_pinned: !item.isPinned,
+        });
+        setPinnedBranchLinks((prev) => reconcilePinnedBranchLink(prev, updated, branch.branch_id));
+        dispatchLinkMutation({ link: updated, mutation: 'patched' });
+      } catch (error) {
+        showError(
+          `Failed to update pin: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        setPinningLinkId(null);
+      }
+    },
+    [branch.branch_id, client, pinningLinkId, showError]
   );
 
   // Filter out archived sessions from board card display
@@ -547,6 +711,14 @@ const BranchCardComponent = ({
             </Button>
           )}
         </div>
+      )}
+
+      {pinnedBranchLinkItems.length > 0 && (
+        <BranchCardPinnedLinksBlock
+          items={pinnedBranchLinkItems}
+          onTogglePinned={handleToggleLinkPinned}
+          pinningLinkId={pinningLinkId}
+        />
       )}
 
       {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}

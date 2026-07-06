@@ -10,7 +10,14 @@
  * - Auto-scrolling to latest content
  */
 
-import type { AgorClient, Message, PermissionScope, SessionID, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Link,
+  Message,
+  PermissionScope,
+  SessionID,
+  User,
+} from '@agor-live/client';
 import { shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
@@ -117,6 +124,11 @@ export interface ConversationViewProps {
    * Emoji override for assistant avatar in message bubbles
    */
   assistantEmoji?: string;
+
+  /**
+   * Uploaded image links keyed by the user message that introduced them.
+   */
+  attachmentLinksByMessageId?: Map<string, Link[]>;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -136,6 +148,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     isActive = true,
     genealogy,
     assistantEmoji,
+    attachmentLinksByMessageId,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -496,6 +509,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               assistantEmoji={assistantEmoji}
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}
+              attachmentLinksByMessageId={attachmentLinksByMessageId}
             />
           ))}
         </div>

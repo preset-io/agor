@@ -11,6 +11,7 @@ import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
 import { KnowledgeTab } from './tabs/KnowledgeTab';
+import { LinksTab } from './tabs/LinksTab';
 import { PermissionsTab } from './tabs/PermissionsTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
@@ -23,6 +24,7 @@ export type BranchModalTab =
   | 'sessions'
   | 'environment'
   | 'files'
+  | 'links'
   | 'permissions'
   | 'schedule';
 
@@ -205,6 +207,17 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       key: 'files',
       label: 'Files',
       children: <FilesTab branch={branch} client={client} />,
+    },
+    {
+      key: 'links',
+      label: 'Links',
+      children: (
+        <LinksTab
+          branch={branch}
+          client={client}
+          assistantBranchId={branchBoard?.primary_assistant_id ?? null}
+        />
+      ),
     },
     // Permissions tab — shown for RBAC-capable admins/owners. Keep it visible
     // while owner data is loading so confirmed owners do not see the tab

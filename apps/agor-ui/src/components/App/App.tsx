@@ -1302,6 +1302,7 @@ export const App: React.FC<AppProps> = ({
                           session={selectedSession}
                           branch={selectedSessionBranch}
                           currentUserId={user?.user_id}
+                          primaryAssistantId={primaryAssistantId}
                           sessionMcpServerIds={
                             sessionMcpServerIds.get(effectiveSelectedSessionId) ??
                             EMPTY_STRING_ARRAY

@@ -1,5 +1,5 @@
 // src/types/task.ts
-import type { MessageID, SessionID, TaskID } from './id';
+import type { LinkID, MessageID, SessionID, TaskID } from './id';
 import type { MessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
@@ -65,6 +65,13 @@ export interface TaskMetadata {
    * this prompt. Links the task back to the originating widget for audit.
    */
   widget_id?: MessageID;
+  /**
+   * Uploaded link IDs that should be associated with the task's initial
+   * user-message row when the task starts. Used by the upload route so queued
+   * uploads attach to the eventual chat message instead of relying on a
+   * transient message row at upload time.
+   */
+  upload_link_ids?: LinkID[];
 }
 
 /**

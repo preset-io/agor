@@ -13,6 +13,7 @@ import {
   type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
+  type Link,
   type Message,
   type PermissionRequestContent,
   PermissionScope,
@@ -25,6 +26,7 @@ import { Bubble } from '@ant-design/x';
 import { Tooltip, theme } from 'antd';
 
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
@@ -32,6 +34,16 @@ import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { CopyableContent } from '../CopyableContent';
+import {
+  LinkAttachmentCard,
+  type LinkAttachmentTarget,
+  routeForKnowledgeUri,
+} from '../Links/LinkAttachmentCard';
+import { LinkImagePreviewModal, type LinkImagePreviewTarget } from '../Links/LinkImagePreviewModal';
+import {
+  LinkMarkdownPreviewModal,
+  type LinkMarkdownPreviewTarget,
+} from '../Links/LinkMarkdownPreviewModal';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { SystemMessage } from '../SystemMessage';
@@ -93,6 +105,7 @@ interface MessageBlockProps {
   assistantEmoji?: string; // Emoji override for assistant avatar (replaces tool icon)
   /** Authenticated Feathers client, forwarded to WidgetBlock for inline-form submission. */
   client?: AgorClient | null;
+  attachmentLinks?: Link[];
   onPermissionDecision?: (
     sessionId: string,
     requestId: string,
@@ -234,6 +247,37 @@ function getAgentAvatar({
   );
 }
 
+function getAttachmentTitle(link: Link): string {
+  const metadata = link.metadata && typeof link.metadata === 'object' ? link.metadata : null;
+  const originalName =
+    metadata && typeof metadata.originalName === 'string' ? metadata.originalName : null;
+  if (originalName) return originalName;
+  if (link.title) return link.title;
+  if (link.file_path) return link.file_path.split('/').pop() || link.file_path;
+  if (link.kind === 'kb_ref') return 'Knowledge link';
+  if (link.kind === 'document') return 'Uploaded document';
+  return 'Uploaded file';
+}
+
+function getAttachmentSubtitle(link: Link): string | null {
+  if (link.ref_uri) return link.ref_uri;
+  if (link.url) return link.url;
+  if (link.kind === 'image' && link.file_path) return link.file_path;
+  return null;
+}
+
+function getAttachmentUnavailableReason(link: Link): string | null {
+  if (link.kind === 'image' && link.source === 'upload' && link.file_path && link.link_id)
+    return null;
+  if (link.source === 'upload' && link.file_path && link.link_id) return null;
+  if (link.kind === 'document' || link.file_path || link.source === 'upload')
+    return 'Preview/download unavailable';
+  if (link.kind === 'kb_ref' && !routeForKnowledgeUri(link.ref_uri)) {
+    return 'No safe Knowledge route available';
+  }
+  return null;
+}
+
 // Memoized: every text block / tool block of every message in the conversation
 // re-rendered on every streaming chunk because TaskBlock's `messages` array
 // gets a fresh reference each tick. Default shallow compare is sufficient
@@ -259,8 +303,25 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   onPermissionDecision,
   assistantEmoji,
   client = null,
+  attachmentLinks = [],
 }) => {
   const { token } = theme.useToken();
+  const navigate = useNavigate();
+  const [previewTarget, setPreviewTarget] = React.useState<LinkImagePreviewTarget | null>(null);
+  const [markdownTarget, setMarkdownTarget] = React.useState<LinkMarkdownPreviewTarget | null>(
+    null
+  );
+
+  const openAttachmentTarget = React.useCallback(
+    (target: LinkAttachmentTarget) => {
+      if (target.navigation === 'spa') {
+        navigate(target.href);
+        return;
+      }
+      window.open(target.href, '_blank', 'noopener,noreferrer');
+    },
+    [navigate]
+  );
 
   // Handle permission request messages specially
   if (message.type === 'permission_request') {
@@ -648,6 +709,40 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                           </div>
                         );
                       })}
+                      {isUser && attachmentLinks.length > 0 && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: token.sizeUnit,
+                            alignItems: 'flex-start',
+                          }}
+                        >
+                          {attachmentLinks.map((link) => (
+                            <LinkAttachmentCard
+                              key={link.link_id}
+                              kind={link.kind}
+                              source={link.source}
+                              linkId={link.link_id}
+                              title={getAttachmentTitle(link)}
+                              subtitle={getAttachmentSubtitle(link)}
+                              url={link.url}
+                              refUri={link.ref_uri}
+                              filePath={link.file_path}
+                              mimeType={link.mime_type}
+                              ownerLabel="This session"
+                              stateLabel={link.source === 'upload' ? 'Upload' : 'Collected'}
+                              disabledReason={getAttachmentUnavailableReason(link)}
+                              compact
+                              onDark={isUser}
+                              imageThumbnail
+                              onOpenImage={setPreviewTarget}
+                              onOpenMarkdown={setMarkdownTarget}
+                              onOpenTarget={openAttachmentTarget}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </CopyableContent>
                 }
@@ -794,6 +889,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
             </div>
           );
         })()}
+      <LinkImagePreviewModal target={previewTarget} onClose={() => setPreviewTarget(null)} />
+      <LinkMarkdownPreviewModal target={markdownTarget} onClose={() => setMarkdownTarget(null)} />
     </>
   );
 };

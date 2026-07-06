@@ -4,6 +4,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  Link,
   PermissionMode,
   Session,
   SessionID,
@@ -48,11 +49,25 @@ import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessi
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
+import {
+  buildLinkDisplayItems,
+  getLinkDisplaySecondaryLabel,
+  isBranchOwnedLink,
+  type LinkDisplayItem,
+  normalizeLinkFindResult,
+  removeLinkById,
+  upsertLinkById,
+} from '../Links/linkDisplay';
+import { dispatchLinkMutation, listenForLinkMutations } from '../Links/linkEvents';
+import {
+  findAssistantLinkForTarget,
+  getAssistantPromotionState as getLinkAssistantPromotionState,
+  promoteLinkToAssistant,
+} from '../Links/linkPromotion';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
-import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
-import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
+import type { SessionAttachmentItem, SessionAttachmentKind } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
@@ -214,6 +229,45 @@ PromptInput.displayName = 'PromptInput';
 
 // ---------------------------------------------------------------------------
 
+function sessionAttachmentKindForDisplayItem(
+  item: Pick<LinkDisplayItem, 'category' | 'filePath' | 'refUri' | 'url'>
+): SessionAttachmentKind {
+  switch (item.category) {
+    case 'issue':
+    case 'pr':
+    case 'image':
+    case 'internal':
+    case 'url':
+      return item.category;
+    case 'knowledge':
+      return 'kb_ref';
+    default:
+      if (item.filePath) return 'document';
+      if (item.refUri) return 'internal';
+      return 'url';
+  }
+}
+
+function displayItemToSessionAttachmentItem(item: LinkDisplayItem): SessionAttachmentItem {
+  const isUnsupportedFileBacked = Boolean(item.filePath) && item.source !== 'upload';
+  return {
+    key: item.key,
+    name: item.name,
+    url: item.url,
+    refUri: item.refUri,
+    filePath: item.filePath,
+    mimeType: item.mimeType,
+    linkId: item.linkId,
+    targetKey: item.targetKey,
+    kind: sessionAttachmentKindForDisplayItem(item),
+    source: item.source === 'branch' ? 'branch' : item.source,
+    ownerScope: item.ownerScope,
+    isPinned: item.isPinned,
+    disabled: isUnsupportedFileBacked,
+    subtitle: getLinkDisplaySecondaryLabel(item) ?? undefined,
+    note: isUnsupportedFileBacked ? 'Preview/download unavailable' : undefined,
+  };
+}
 // ---------------------------------------------------------------------------
 
 export interface SessionPanelProps {
@@ -221,6 +275,7 @@ export interface SessionPanelProps {
   session: Session | null;
   branch?: Branch | null;
   currentUserId?: string;
+  primaryAssistantId?: string | null;
   sessionMcpServerIds?: string[];
   open: boolean;
   onClose: () => void;
@@ -231,6 +286,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   session,
   branch = null,
   currentUserId,
+  primaryAssistantId = null,
   sessionMcpServerIds = [],
   open,
   onClose,
@@ -344,6 +400,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
+  const [sessionLinks, setSessionLinks] = React.useState<Link[]>([]);
+  const [pinningLinkId, setPinningLinkId] = React.useState<string | null>(null);
+  const openPinnedLinksManagerRef = React.useRef<(() => void) | null>(null);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
@@ -352,6 +411,129 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   });
 
   const tasks = reactiveSessionState?.tasks || [];
+
+  // Load session-owned persisted links for the organizer; branch issue/PR rows
+  // are merged separately from the current branch through the display helpers.
+  React.useEffect(() => {
+    if (!client || !session || !open) {
+      setSessionLinks([]);
+      return;
+    }
+
+    let cancelled = false;
+    const linksService = client.service('links');
+
+    const fetchSessionLinks = async () => {
+      try {
+        const result = await linksService.find({
+          query: { session_id: session.session_id, $limit: 200 },
+        });
+        if (!cancelled) setSessionLinks(normalizeLinkFindResult(result));
+      } catch (error) {
+        // Links should not break the session panel if an older local daemon
+        // does not have the service yet.
+        console.warn('[SessionPanel] Failed to fetch session links:', error);
+        if (!cancelled) setSessionLinks([]);
+      }
+    };
+
+    const upsertIfCurrentSession = (link: Link) => {
+      if (link.session_id === session.session_id) {
+        setSessionLinks((prev) => upsertLinkById(prev, link));
+      } else {
+        setSessionLinks((prev) => removeLinkById(prev, link));
+      }
+    };
+
+    const removeIfCurrentSession = (link: Link) => {
+      setSessionLinks((prev) => removeLinkById(prev, link));
+    };
+
+    void fetchSessionLinks();
+    linksService.on('created', upsertIfCurrentSession);
+    linksService.on('patched', upsertIfCurrentSession);
+    linksService.on('updated', upsertIfCurrentSession);
+    linksService.on('removed', removeIfCurrentSession);
+    const stopListeningForLocalMutations = listenForLinkMutations(({ link, mutation }) => {
+      if (mutation === 'removed') {
+        removeIfCurrentSession(link);
+      } else {
+        upsertIfCurrentSession(link);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      linksService.removeListener('created', upsertIfCurrentSession);
+      linksService.removeListener('patched', upsertIfCurrentSession);
+      linksService.removeListener('updated', upsertIfCurrentSession);
+      linksService.removeListener('removed', removeIfCurrentSession);
+      stopListeningForLocalMutations();
+    };
+  }, [client, session, open]);
+
+  const [assistantLinks, setAssistantLinks] = React.useState<Link[]>([]);
+  const [assistantPromotionBusyKey, setAssistantPromotionBusyKey] = React.useState<string | null>(
+    null
+  );
+
+  React.useEffect(() => {
+    if (!client || !primaryAssistantId || !open) {
+      setAssistantLinks([]);
+      return;
+    }
+
+    let cancelled = false;
+    const linksService = client.service('links');
+
+    const upsertIfAssistantLink = (link: Link) => {
+      setAssistantLinks((prev) => {
+        if (isBranchOwnedLink(link, primaryAssistantId)) return upsertLinkById(prev, link);
+        return removeLinkById(prev, link);
+      });
+    };
+
+    const removeAssistantLink = (link: Link) => {
+      setAssistantLinks((prev) => removeLinkById(prev, link));
+    };
+
+    const fetchAssistantLinks = async () => {
+      try {
+        const result = await linksService.find({
+          query: { branch_id: primaryAssistantId, $limit: 200 },
+        });
+        if (!cancelled) {
+          setAssistantLinks(
+            normalizeLinkFindResult(result).filter((link) =>
+              isBranchOwnedLink(link, primaryAssistantId)
+            )
+          );
+        }
+      } catch (error) {
+        console.warn('[SessionPanel] Failed to fetch assistant links:', error);
+        if (!cancelled) setAssistantLinks([]);
+      }
+    };
+
+    void fetchAssistantLinks();
+    linksService.on('created', upsertIfAssistantLink);
+    linksService.on('patched', upsertIfAssistantLink);
+    linksService.on('updated', upsertIfAssistantLink);
+    linksService.on('removed', removeAssistantLink);
+    const stopListeningForLocalMutations = listenForLinkMutations(({ link, mutation }) => {
+      if (mutation === 'removed') removeAssistantLink(link);
+      else upsertIfAssistantLink(link);
+    });
+
+    return () => {
+      cancelled = true;
+      linksService.removeListener('created', upsertIfAssistantLink);
+      linksService.removeListener('patched', upsertIfAssistantLink);
+      linksService.removeListener('updated', upsertIfAssistantLink);
+      linksService.removeListener('removed', removeAssistantLink);
+      stopListeningForLocalMutations();
+    };
+  }, [client, open, primaryAssistantId]);
 
   // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
@@ -465,24 +647,129 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return null;
   }, [tasks, session?.agentic_tool]);
 
+  const linkDisplayItems = React.useMemo(
+    () => buildLinkDisplayItems({ branch, links: sessionLinks }),
+    [branch, sessionLinks]
+  );
   const attachmentItems = React.useMemo((): SessionAttachmentItem[] => {
-    const acc: SessionAttachmentItem[] = [];
-    if (branch?.issue_url) {
-      acc.push({
-        key: 'issue',
-        name: `Issue: ${getUrlDisplayLabel(branch.issue_url)}`,
-        url: branch.issue_url,
-      });
+    return linkDisplayItems.map(displayItemToSessionAttachmentItem);
+  }, [linkDisplayItems]);
+  const promotedPinnedSessionItems = React.useMemo(
+    () => attachmentItems.filter((item) => item.ownerScope === 'session' && item.isPinned),
+    [attachmentItems]
+  );
+
+  const attachmentLinksByMessageId = React.useMemo(() => {
+    const byMessageId = new Map<string, Link[]>();
+    for (const link of sessionLinks) {
+      if (link.source !== 'upload' || !link.source_message_id) continue;
+      const isUploadAttachment =
+        Boolean(link.file_path) && (link.kind === 'image' || link.kind === 'document');
+      if (!isUploadAttachment) continue;
+
+      const existing = byMessageId.get(link.source_message_id) ?? [];
+      existing.push(link);
+      byMessageId.set(link.source_message_id, existing);
     }
-    if (branch?.pull_request_url) {
-      acc.push({
-        key: 'pr',
-        name: `PR: ${getUrlDisplayLabel(branch.pull_request_url)}`,
-        url: branch.pull_request_url,
-      });
-    }
-    return acc;
-  }, [branch?.issue_url, branch?.pull_request_url]);
+    return byMessageId;
+  }, [sessionLinks]);
+
+  const handleToggleAttachmentPinned = React.useCallback(
+    async (item: SessionAttachmentItem) => {
+      if (!client || !item.linkId || item.ownerScope !== 'session' || pinningLinkId) return;
+
+      setPinningLinkId(item.linkId);
+      try {
+        const updated = await client.service('links').patch(item.linkId, {
+          is_pinned: !item.isPinned,
+        });
+        if (updated.session_id === session?.session_id) {
+          setSessionLinks((prev) => upsertLinkById(prev, updated));
+        } else {
+          setSessionLinks((prev) => removeLinkById(prev, updated));
+        }
+        dispatchLinkMutation({ link: updated, mutation: 'patched' });
+      } catch (error) {
+        showError(
+          `Failed to update pin: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        setPinningLinkId(null);
+      }
+    },
+    [client, pinningLinkId, session?.session_id, showError]
+  );
+
+  const getAttachmentAssistantPromotionState = React.useCallback(
+    (item: SessionAttachmentItem) =>
+      getLinkAssistantPromotionState({
+        item: { linkId: item.linkId ?? undefined, targetKey: item.targetKey ?? item.key },
+        assistantBranchId: primaryAssistantId,
+        assistantLinks,
+        sourceBranchId: item.ownerScope === 'branch' ? branch?.branch_id : null,
+      }),
+    [assistantLinks, branch?.branch_id, primaryAssistantId]
+  );
+
+  const handlePromoteAttachmentToAssistant = React.useCallback(
+    async (item: SessionAttachmentItem) => {
+      if (!client || !primaryAssistantId || !item.linkId || assistantPromotionBusyKey) return;
+      setAssistantPromotionBusyKey(item.linkId);
+      try {
+        const promoted = await promoteLinkToAssistant({
+          client,
+          sourceLinkId: item.linkId,
+          assistantBranchId: primaryAssistantId,
+        });
+        setAssistantLinks((prev) => upsertLinkById(prev, promoted));
+        dispatchLinkMutation({ link: promoted, mutation: 'patched' });
+        showSuccess('Promoted to assistant');
+      } catch (error) {
+        showError(
+          `Failed to promote link: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        setAssistantPromotionBusyKey(null);
+      }
+    },
+    [assistantPromotionBusyKey, client, primaryAssistantId, showError, showSuccess]
+  );
+
+  const handleRemoveAttachmentFromAssistant = React.useCallback(
+    async (item: SessionAttachmentItem) => {
+      if (!client || !primaryAssistantId || assistantPromotionBusyKey) return;
+      const assistantLink = findAssistantLinkForTarget(
+        { targetKey: item.targetKey ?? item.key },
+        assistantLinks
+      );
+      if (!assistantLink) return;
+      setAssistantPromotionBusyKey(assistantLink.link_id);
+      try {
+        const removed = (await client.service('links').remove(assistantLink.link_id)) as Link;
+        setAssistantLinks((prev) => removeLinkById(prev, assistantLink));
+        dispatchLinkMutation({ link: removed, mutation: 'removed' });
+        showSuccess('Removed from assistant');
+      } catch (error) {
+        showError(
+          `Failed to remove assistant link: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        setAssistantPromotionBusyKey(null);
+      }
+    },
+    [assistantLinks, assistantPromotionBusyKey, client, primaryAssistantId, showError, showSuccess]
+  );
+
+  const handleRegisterOpenPinnedManager = React.useCallback(
+    (openPinnedManager: (() => void) | null) => {
+      openPinnedLinksManagerRef.current = openPinnedManager;
+    },
+    []
+  );
+
+  const handleOpenPinnedManager = React.useCallback(() => {
+    openPinnedLinksManagerRef.current?.();
+  }, []);
 
   const footerGradient = React.useMemo(() => {
     if (!latestContextWindow) return undefined;
@@ -944,7 +1231,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </Space>
           <Space size={4}>
-            <SessionAttachmentsDropdown items={attachmentItems} />
+            <SessionAttachmentsDropdown
+              items={attachmentItems}
+              pinningLinkId={pinningLinkId}
+              onTogglePinned={handleToggleAttachmentPinned}
+              onRegisterOpenPinnedManager={handleRegisterOpenPinnedManager}
+              getAssistantPromotionState={getAttachmentAssistantPromotionState}
+              onPromoteToAssistant={handlePromoteAttachmentToAssistant}
+              onRemoveFromAssistant={handleRemoveAttachmentFromAssistant}
+              assistantPromotionBusyKey={assistantPromotionBusyKey}
+            />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
                 <Button type="text" icon={<EllipsisOutlined />} />
@@ -991,6 +1287,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           isOpen={open}
           cliViewMode={cliViewMode}
           setCliViewMode={setCliViewMode}
+          attachmentLinksByMessageId={attachmentLinksByMessageId}
+          pinnedSessionLinks={promotedPinnedSessionItems}
+          onPinnedOverflow={handleOpenPinnedManager}
         />
 
         {/* Footer — rendered outside SessionPanelContent so that
