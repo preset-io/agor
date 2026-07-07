@@ -26,9 +26,10 @@ describe('getMcpServersForSession', () => {
     const servers = await getMcpServersForSession('session-a' as SessionID, {
       mcpServerRepo: { findAll } as never,
       sessionMCPRepo: { listEffectiveServers, listServers } as never,
+      forUserId: 'user-a',
     });
 
-    expect(listEffectiveServers).toHaveBeenCalledWith('session-a', true);
+    expect(listEffectiveServers).toHaveBeenCalledWith('session-a', true, 'user-a');
     expect(findAll).not.toHaveBeenCalled();
     expect(listServers).not.toHaveBeenCalled();
     expect(servers).toEqual([
@@ -75,5 +76,34 @@ describe('getMcpServersForSession', () => {
       'session-a',
       'session-b',
     ]);
+  });
+
+  it('hydrates OAuth access tokens through the trusted executor auth-header route', async () => {
+    const oauthServer = {
+      ...makeServer('oauth-server', 'session', 'oauth'),
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'per_user',
+        oauth_access_token: '••••••••',
+      },
+    } as MCPServer;
+    const tokenServer = makeServer('token-server', 'global', 'token');
+    const listEffectiveServers = vi.fn().mockResolvedValue([oauthServer, tokenServer]);
+    const getAuthHeaders = vi.fn().mockResolvedValue({
+      'oauth-server': { authorization: 'Bearer real-oauth-token' },
+    });
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: { listEffectiveServers } as never,
+      mcpOAuthAuthHeadersRepo: { getAuthHeaders } as never,
+    });
+
+    expect(getAuthHeaders).toHaveBeenCalledWith(['oauth-server']);
+    const hydrated = servers.find(({ server }) => server.mcp_server_id === 'oauth-server')?.server;
+    expect(hydrated?.auth).toMatchObject({
+      type: 'oauth',
+      oauth_access_token: 'real-oauth-token',
+    });
   });
 });

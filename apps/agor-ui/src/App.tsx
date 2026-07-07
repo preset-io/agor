@@ -19,23 +19,21 @@ import type {
   User,
   UUID,
 } from '@agor-live/client';
-import {
-  boardPath,
-  ENTITY_PATH_SEGMENTS,
-  getRepoReferenceOptions,
-  sessionPath,
-} from '@agor-live/client';
+import { boardPath, ENTITY_PATH_SEGMENTS, sessionPath } from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider } from 'antd';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
+import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { OnboardingWizard, type WizardStep } from './components/OnboardingWizard';
+import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
+import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
 import { ServicesConfigContext } from './contexts/ServicesConfigContext';
@@ -51,6 +49,7 @@ import {
   useSessionActions,
 } from './hooks';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
+import { agorStore, useAgorStore } from './store/agorStore';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
@@ -59,7 +58,9 @@ import {
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
+import type { CreateRepoOptions } from './types';
 import { isMobileDevice } from './utils/deviceDetection';
+import { completeForcedPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
 import { getRouterBasename } from './utils/uiRoutes';
@@ -317,6 +318,13 @@ function AppContent() {
   // rows). Mounted exactly once so all consumers share the same baseline.
   const { capturedSha, currentSha, outOfSync } = useServerVersion(client);
 
+  // Referentially stable context value: without the memo, every App render
+  // hands consumers a fresh object and defeats their own memoization.
+  const connectionContextValue = useMemo(
+    () => ({ connected, connecting, outOfSync, capturedSha, currentSha }),
+    [connected, connecting, outOfSync, capturedSha, currentSha]
+  );
+
   const directSessionIdFromPath = location.pathname.match(/^\/s\/([^/]+)\/?$/)?.[1] ?? null;
 
   // Pass the stable client lifetime, not `connected ? client : null`:
@@ -325,22 +333,6 @@ function AppContent() {
   // failure chain we're avoiding.
   // Skip data fetch if user needs to change password — the ForcePasswordChangeModal handles that.
   const {
-    sessionById,
-    sessionsByBranch,
-    boardById,
-    boardObjectById,
-    boardObjectsByBoardId,
-    commentById,
-    cardById,
-    cardTypeById,
-    repoById,
-    branchById,
-    userById,
-    mcpServerById,
-    gatewayChannelById,
-    artifactById,
-    sessionMcpServerIds,
-    userAuthenticatedMcpServerIds,
     initialLoadItems,
     initialLoadComplete,
     loadingStage,
@@ -350,6 +342,13 @@ function AppContent() {
     enabled: workspaceSurfaceShouldRun && !user?.must_change_password,
     directSessionId: directSessionIdFromPath,
   });
+
+  // Entity maps are NOT subscribed here. Each surface that needs a whole map
+  // (MobileApp, OnboardingWizard, KnowledgePage) self-subscribes via
+  // `useAgorStore(selectX)` at its own top, so the outer shell re-renders only
+  // on load-state — not on every entity write. Outer App's own handler-time
+  // lookups read imperatively through `agorStore.getState()`, and the single
+  // render-time entity read (currentUser) uses a narrow by-id selector below.
 
   // Session actions
   const { createSession, forkSession, btwForkSession, spawnSession, updateSession, deleteSession } =
@@ -420,10 +419,19 @@ function AppContent() {
     <InitialLoadingScreen message="Loading surface…" />
   );
 
-  // Get current user from users Map (real-time updates via WebSocket)
-  // This ensures we get the latest onboarding_completed status
-  // Fall back to user from auth if users Map hasn't loaded yet
-  const currentUser = user ? userById.get(user.user_id) || user : null;
+  // Get current user from users Map (real-time updates via WebSocket).
+  // Narrow by-id selector: subscribes to this ONE user entity, not the whole
+  // userById map, so unrelated user writes don't re-render the shell. Falls
+  // back to the auth user until the map has loaded that row.
+  const storedCurrentUser = useAgorStore((s) =>
+    user ? (s.userById.get(user.user_id) ?? null) : null
+  );
+  const currentUser = user ? storedCurrentUser || user : null;
+
+  // Narrow selector for the OnboardingBanners integrations check — subscribes
+  // to the MCP server count only, not the whole map, so unrelated MCP writes
+  // don't re-render the shell.
+  const mcpServerCount = useAgorStore((s) => s.mcpServerById.size);
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
@@ -508,7 +516,12 @@ function AppContent() {
     if (result.sessionId) {
       navigate(sessionPath(result.sessionId as SessionID));
     } else if (result.boardId) {
-      navigate(boardPath(result.boardId as BoardID, boardById.get(result.boardId)?.slug));
+      navigate(
+        boardPath(
+          result.boardId as BoardID,
+          agorStore.getState().boardById.get(result.boardId)?.slug
+        )
+      );
     } else {
       navigate('/');
     }
@@ -664,9 +677,14 @@ function AppContent() {
         throw new Error('Branch ID is required to create a session');
       }
 
+      // Files pasted/dropped into the New Session modal ride along on the
+      // config but must never enter the session-create REST payload — strip
+      // them out and upload them once the session (and its ID) exists.
+      const { attachmentFiles, ...sessionConfig } = config;
+
       // Create the session with the branch_id
       const session = await createSession({
-        ...config,
+        ...sessionConfig,
         branch_id,
       });
 
@@ -691,8 +709,43 @@ function AppContent() {
 
         showSuccess('Session created!');
 
-        // If there's an initial prompt, send it to the agent
-        if (config.initialPrompt?.trim()) {
+        // Upload any pasted/dropped files to the freshly created session, then
+        // fold their server paths into the initial prompt. A screenshot with no
+        // typed text is valid — the attachment block becomes the message — so we
+        // send whenever there is prompt text OR at least one attachment.
+        const trimmedPrompt = config.initialPrompt?.trim() ?? '';
+        if (attachmentFiles?.length) {
+          try {
+            const uploaded = await uploadFilesToSession({
+              sessionId: session.session_id,
+              daemonUrl: getDaemonUrl(),
+              files: attachmentFiles,
+              notifyAgent: false,
+            });
+            const finalPrompt = buildPromptWithAttachments(
+              config.initialPrompt ?? '',
+              uploaded.files.map((file) => file.path)
+            );
+            if (finalPrompt.trim()) {
+              await handleSendPrompt(session.session_id, finalPrompt, config.permissionMode);
+            }
+          } catch (error) {
+            // Never silently drop the user's words: surface the upload failure
+            // but still send the text-only prompt so their typing isn't lost.
+            showError(
+              `Failed to upload attachments: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+            if (trimmedPrompt) {
+              await handleSendPrompt(
+                session.session_id,
+                config.initialPrompt,
+                config.permissionMode
+              );
+            }
+          }
+        } else if (trimmedPrompt) {
           await handleSendPrompt(session.session_id, config.initialPrompt, config.permissionMode);
         }
 
@@ -795,8 +848,8 @@ function AppContent() {
     sessionId: string,
     prompt: string,
     permissionMode?: PermissionMode
-  ) => {
-    if (!client) return;
+  ): Promise<boolean> => {
+    if (!client) return false;
 
     try {
       await client.sessions.prompt(sessionId, prompt, {
@@ -806,9 +859,11 @@ function AppContent() {
 
       // Clear the draft after sending
       handleClearDraft(sessionId);
+      return true;
     } catch (error) {
       showError(`Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`);
       console.error('Prompt error:', error);
+      return false;
     }
   };
 
@@ -900,12 +955,22 @@ function AppContent() {
   // Handle forced password change (from ForcePasswordChangeModal)
   const handleForcePasswordChange = async (userId: string, newPassword: string) => {
     if (!client) throw new Error('Not connected');
-    // This will auto-clear must_change_password flag on the backend
-    await client.service('users').patch(userId, { password: newPassword } as Partial<User>);
-    showSuccess('Password changed successfully!');
-    // Re-authenticate to refresh user state with must_change_password: false
-    // This will dismiss the modal and allow the user to continue
-    await reAuthenticate();
+    if (!currentUser?.email) throw new Error('Current user is unavailable');
+
+    const signedIn = await completeForcedPasswordChange({
+      client,
+      userId,
+      email: currentUser.email,
+      newPassword,
+      login,
+      logout,
+    });
+
+    showSuccess(
+      signedIn
+        ? 'Password changed successfully!'
+        : 'Password changed successfully. Please sign in again.'
+    );
   };
 
   // Handle board CRUD
@@ -952,7 +1017,7 @@ function AppContent() {
   };
 
   // Handle repo CRUD
-  const handleCreateRepo = async (data: CreateRepoRequest) => {
+  const handleCreateRepo = async (data: CreateRepoRequest, options: CreateRepoOptions = {}) => {
     if (!client) {
       showError('Not connected to daemon — cannot clone repository');
       return;
@@ -967,7 +1032,7 @@ function AppContent() {
     // executors that don't patch still surface failures.
     const toastKey = `clone-repo-${data.slug}`;
     const CLONE_TIMEOUT_MS = 120_000;
-    showLoading(`Cloning ${data.slug}...`, { key: toastKey });
+    if (!options.silent) showLoading(`Cloning ${data.slug}...`, { key: toastKey });
 
     const reposService = client.service('repos');
     let settled = false;
@@ -985,14 +1050,14 @@ function AppContent() {
       // and any direct executor-path that bypasses the placeholder.
       if (repo.clone_status === 'cloning') return;
       settled = true;
-      showSuccess(`Cloned ${data.slug}`, { key: toastKey });
+      if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
       cleanup();
     };
     const handlePatched = (repo: Repo) => {
       if (settled || repo.slug !== data.slug) return;
       if (repo.clone_status === 'ready') {
         settled = true;
-        showSuccess(`Cloned ${data.slug}`, { key: toastKey });
+        if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
         cleanup();
       } else if (repo.clone_status === 'failed') {
         settled = true;
@@ -1004,9 +1069,11 @@ function AppContent() {
           err?.category === 'auth_failed'
             ? ' — configure GITHUB_TOKEN in Settings → API Keys for private repos'
             : '';
-        showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
-          key: toastKey,
-        });
+        if (!options.silent) {
+          showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
+            key: toastKey,
+          });
+        }
         cleanup();
       }
     };
@@ -1014,17 +1081,21 @@ function AppContent() {
       if (settled) return;
       if (payload.slug !== data.slug && payload.url !== data.url) return;
       settled = true;
-      showError(`Failed to clone ${data.slug}: ${payload.error ?? 'unknown error'}`, {
-        key: toastKey,
-      });
+      if (!options.silent) {
+        showError(`Failed to clone ${data.slug}: ${payload.error ?? 'unknown error'}`, {
+          key: toastKey,
+        });
+      }
       cleanup();
     };
     const timeoutHandle = setTimeout(() => {
       if (settled) return;
       settled = true;
-      showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
-        key: toastKey,
-      });
+      if (!options.silent) {
+        showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
+          key: toastKey,
+        });
+      }
       cleanup();
     }, CLONE_TIMEOUT_MS);
 
@@ -1044,16 +1115,21 @@ function AppContent() {
       // resolve the loading toast here instead of waiting for the timeout.
       if (result?.status === 'exists' && !settled) {
         settled = true;
-        showWarning(`Repository "${data.slug}" is already added`, { key: toastKey });
+        if (!options.silent) {
+          showWarning(`Repository "${data.slug}" is already added`, { key: toastKey });
+        }
         cleanup();
       }
+      return result;
     } catch (error) {
       if (!settled) {
         settled = true;
-        showError(
-          `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
-          { key: toastKey }
-        );
+        if (!options.silent) {
+          showError(
+            `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
+            { key: toastKey }
+          );
+        }
         cleanup();
       }
       throw error;
@@ -1430,7 +1506,7 @@ function AppContent() {
 
     try {
       // Get current session-MCP relationships for this session
-      const currentIds = sessionMcpServerIds.get(sessionId) || [];
+      const currentIds = agorStore.getState().sessionMcpServerIds.get(sessionId) || [];
       await updateSessionMcpServers(client, sessionId, currentIds, mcpServerIds);
 
       // Note: Don't show success message here - it's part of the session settings save
@@ -1462,7 +1538,7 @@ function AppContent() {
   const handleResolveComment = async (commentId: string) => {
     if (!client) return;
     try {
-      const comment = commentById.get(commentId);
+      const comment = agorStore.getState().commentById.get(commentId);
       await client.service('board-comments').patch(commentId, {
         resolved: !comment?.resolved,
       });
@@ -1513,14 +1589,6 @@ function AppContent() {
     }
   };
 
-  // Generate repo reference options for dropdowns
-  const allOptions = getRepoReferenceOptions(
-    Array.from(repoById.values()),
-    Array.from(branchById.values())
-  );
-  const _branchOptions = allOptions.filter((opt) => opt.type === 'managed-branch');
-  const _repoOptions = allOptions.filter((opt) => opt.type === 'managed');
-
   // Modal close handlers
   const handleSettingsClose = () => {
     setSettingsTabToOpen(null);
@@ -1538,7 +1606,6 @@ function AppContent() {
     <KnowledgePage
       client={client}
       currentUser={currentUser}
-      userById={userById}
       onUserSettingsClick={() => setOpenUserSettings(true)}
       onLogout={logout}
     />
@@ -1564,21 +1631,7 @@ function AppContent() {
       user={currentUser}
       connected={connected}
       connecting={connecting}
-      sessionById={sessionById}
-      sessionsByBranch={sessionsByBranch}
       availableAgents={AVAILABLE_AGENTS}
-      boardById={boardById}
-      boardObjectById={boardObjectById}
-      boardObjectsByBoardId={boardObjectsByBoardId}
-      commentById={commentById}
-      cardById={cardById}
-      cardTypeById={cardTypeById}
-      repoById={repoById}
-      branchById={branchById}
-      userById={userById}
-      mcpServerById={mcpServerById}
-      sessionMcpServerIds={sessionMcpServerIds}
-      userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
       openSettingsTab={settingsTabToOpen}
       onSettingsClose={handleSettingsClose}
       openUserSettings={openUserSettings}
@@ -1615,11 +1668,9 @@ function AppContent() {
       onDeleteUser={handleDeleteUser}
       onCreateMCPServer={handleCreateMCPServer}
       onDeleteMCPServer={handleDeleteMCPServer}
-      gatewayChannelById={gatewayChannelById}
       onCreateGatewayChannel={handleCreateGatewayChannel}
       onUpdateGatewayChannel={handleUpdateGatewayChannel}
       onDeleteGatewayChannel={handleDeleteGatewayChannel}
-      artifactById={artifactById}
       onUpdateArtifact={handleUpdateArtifact}
       onDeleteArtifact={handleDeleteArtifact}
       onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
@@ -1639,7 +1690,7 @@ function AppContent() {
       topBanner={
         <OnboardingBanners
           user={currentUser}
-          mcpServerCount={mcpServerById.size}
+          mcpServerCount={mcpServerCount}
           onOpenUserSettings={(tab) => {
             setUserSettingsInitialTab(tab);
             setOpenUserSettings(true);
@@ -1654,7 +1705,7 @@ function AppContent() {
   // Render main app
   return (
     <ServicesConfigContext.Provider value={servicesConfig}>
-      <ConnectionProvider value={{ connected, connecting, outOfSync, capturedSha, currentSha }}>
+      <ConnectionProvider value={connectionContextValue}>
         {/* Force Password Change Modal - shown when user.must_change_password is true */}
         <ForcePasswordChangeModal
           open={!!currentUser?.must_change_password}
@@ -1675,7 +1726,6 @@ function AppContent() {
             }}
             user={currentUser}
             client={client}
-            mcpServerById={mcpServerById}
             onUpdateUser={handleUpdateUser}
             onRefreshCurrentUser={reAuthenticate}
             onRestartOnboarding={handleRestartOnboarding}
@@ -1694,9 +1744,6 @@ function AppContent() {
           key={`${currentUser?.user_id ?? '__anon__'}:${onboardingWizardInstance}`}
           open={onboardingWizardOpen}
           onComplete={handleOnboardingComplete}
-          repoById={repoById}
-          branchById={branchById}
-          boardById={boardById}
           user={currentUser}
           client={client}
           onCreateRepo={handleCreateRepo}
@@ -1740,13 +1787,6 @@ function AppContent() {
                 <MobileApp
                   client={client}
                   user={user}
-                  sessionById={sessionById}
-                  sessionsByBranch={sessionsByBranch}
-                  boardById={boardById}
-                  commentById={commentById}
-                  repoById={repoById}
-                  branchById={branchById}
-                  userById={userById}
                   onSendPrompt={handleSendPrompt}
                   onSendComment={handleSendComment}
                   onReplyComment={handleReplyComment}

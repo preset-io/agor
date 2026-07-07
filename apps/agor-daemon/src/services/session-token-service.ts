@@ -11,7 +11,12 @@
  * built-in JWT authentication infrastructure, avoiding the complexity of custom strategies.
  */
 
+import { getCurrentTenantId } from '@agor/core/db';
 import jwt from 'jsonwebtoken';
+import {
+  EXECUTOR_SESSION_TOKEN_PURPOSE,
+  EXECUTOR_SESSION_TOKEN_TYPE,
+} from '../auth/executor-session-token.js';
 
 const DEBUG_SESSION_TOKENS =
   process.env.AGOR_DEBUG_SESSION_TOKENS === '1' || process.env.DEBUG?.includes('session-token');
@@ -77,17 +82,18 @@ export class SessionTokenService {
 
     const now = new Date();
     const expiresAt = new Date(now.getTime() + this.config.expiration_ms);
+    const tenantId = getCurrentTenantId();
 
     // Create a JWT payload matching Feathers authentication format
     // This JWT will work seamlessly with the standard JWT strategy
     const payload = {
       sub: userId, // Standard JWT subject claim (used by Feathers for user lookup)
-      type: 'executor-session',
-      purpose: 'executor-task',
-      sessionId: sessionId, // Custom claim for session tracking
+      type: EXECUTOR_SESSION_TOKEN_TYPE,
+      purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
       session_id: sessionId,
       task_id: scope.taskId,
       branch_id: scope.branchId,
+      ...(tenantId ? { tenant_id: tenantId } : {}),
       iat: Math.floor(now.getTime() / 1000), // Issued at
       exp: Math.floor(expiresAt.getTime() / 1000), // Expiration
       aud: 'https://agor.dev', // Must match Feathers jwtOptions.audience

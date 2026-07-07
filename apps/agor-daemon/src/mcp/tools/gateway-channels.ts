@@ -5,10 +5,14 @@ import {
   ThreadSessionMapRepository,
 } from '@agor/core/db';
 import {
+  buildSlackManifest,
   getConnector,
+  requiredBotEvents,
+  requiredBotScopes,
   type SlackThreadHistoryMessage,
   type SlackThreadHistoryRequest,
   type SlackThreadHistoryResult,
+  type SlackWizardOptions,
 } from '@agor/core/gateway';
 import {
   type Branch,
@@ -535,6 +539,74 @@ function toServiceUpdateData(args: z.infer<typeof gatewayChannelUpdateSchema>) {
   return updates;
 }
 
+const slackManifestGenerateSchema = z.strictObject({
+  appName: mcpRequiredString('appName', 'Slack app display name, e.g. "Agor".'),
+  botDisplayName: mcpOptionalNonEmptyString(
+    'botDisplayName',
+    'Bot user display name. Defaults to appName.'
+  ),
+  publicChannels: z
+    .boolean()
+    .default(false)
+    .describe('Listen in public channels (#channel) via @mention.'),
+  privateChannels: z
+    .boolean()
+    .default(false)
+    .describe('Listen in private channels (groups) via @mention.'),
+  groupDms: z
+    .boolean()
+    .default(false)
+    .describe('Listen in group DMs (multi-person IMs) via @mention.'),
+  alignUsers: z
+    .boolean()
+    .default(false)
+    .describe('Resolve Slack user email → Agor user (adds the users:read.email scope).'),
+  outbound: z
+    .boolean()
+    .default(false)
+    .describe('Proactive outbound: post to channels by name and DM users by email.'),
+  restrictToChannelIds: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      'Slack channel ID whitelist. Maps to config.allowed_channel_ids when you call agor_gateway_channels_create; it does NOT change the manifest scopes or events.'
+    ),
+});
+
+function toSlackWizardOptions(
+  args: z.infer<typeof slackManifestGenerateSchema>
+): SlackWizardOptions {
+  return {
+    appName: args.appName,
+    ...(args.botDisplayName ? { botDisplayName: args.botDisplayName } : {}),
+    publicChannels: args.publicChannels,
+    privateChannels: args.privateChannels,
+    groupDms: args.groupDms,
+    alignUsers: args.alignUsers,
+    outbound: args.outbound,
+  };
+}
+
+/**
+ * Channel config the agent passes to agor_gateway_channels_create, derived from
+ * the same toggles. Secrets (bot_token, app_token) are write-only and obtained
+ * from the manual setup steps, so they are intentionally absent here — the agent
+ * adds them to config when creating the channel.
+ */
+function toCreateChannelConfigHint(args: z.infer<typeof slackManifestGenerateSchema>) {
+  const config: Record<string, unknown> = {
+    enable_channels: args.publicChannels,
+    enable_groups: args.privateChannels,
+    enable_mpim: args.groupDms,
+    align_slack_users: args.alignUsers,
+    outbound_enabled: args.outbound,
+  };
+  if (args.restrictToChannelIds && args.restrictToChannelIds.length > 0) {
+    config.allowed_channel_ids = args.restrictToChannelIds;
+  }
+  return { channel_type: 'slack' as const, config };
+}
+
 export function registerGatewayChannelTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_gateway_channels_list',
@@ -605,6 +677,39 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         next_steps: [
           'Verify the channel in Settings > Gateway Channels or with agor_gateway_channels_list.',
           'Channel credentials, env vars, and inbound channel keys are intentionally redacted from MCP responses.',
+        ],
+      });
+    }
+  );
+
+  server.registerTool(
+    'agor_gateway_slack_manifest_generate',
+    {
+      description:
+        'Generate a ready-to-install Slack app manifest from desired gateway capabilities (admin-only). The agent-driven equivalent of the Slack setup wizard, backed by the same core generator. Returns the manifest JSON, the derived bot scopes/events, ordered setup steps, and the channel config to pass to agor_gateway_channels_create. This is pure: it creates no Slack app, no Agor channel, and validates no tokens.',
+      annotations: { readOnlyHint: true },
+      inputSchema: slackManifestGenerateSchema,
+    },
+    async (args) => {
+      requireAdmin(ctx, 'generate Slack app manifests');
+      const options = toSlackWizardOptions(args);
+
+      return textResult({
+        manifest: buildSlackManifest(options),
+        bot_scopes: requiredBotScopes(options),
+        bot_events: requiredBotEvents(options),
+        setup_steps: [
+          'Open https://api.slack.com/apps?new_app=1 and choose "Create New App".',
+          'Select "From a manifest", pick the target workspace, paste the manifest JSON below, and click "Create".',
+          'Install the app to the workspace, then open OAuth & Permissions and copy the Bot User OAuth Token (starts with "xoxb-").',
+          'Open Basic Information → App-Level Tokens → Generate Token and Scopes, add the connections:write scope, generate it, and copy the App-Level Token (starts with "xapp-").',
+          'Call agor_gateway_channels_create with channel_type "slack", the xoxb- bot_token, the xapp- app_token, and create_channel_config_hint below.',
+        ],
+        create_channel_config_hint: toCreateChannelConfigHint(args),
+        caveats: [
+          'GENERATED ONLY — no Slack app created, no Agor channel created, no tokens validated, no event delivery verified.',
+          'The app-level connections:write token is generated manually and is NOT part of the manifest bot scopes.',
+          'restrictToChannelIds maps to config.allowed_channel_ids when you call create — it does NOT change the manifest scopes or events.',
         ],
       });
     }

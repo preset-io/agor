@@ -5,9 +5,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { RepoEnvironment, RepoEnvironmentConfigV1 } from '../types/branch';
 import { parseAgorYml, resolveVariant, writeAgorYml } from './agor-yml';
+
+const REPO_ROOT_AGOR_YML = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../../.agor.yml'
+);
 
 function withTmpFile<T>(fn: (filePath: string) => T): T {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agor-yml-test-'));
@@ -258,6 +264,36 @@ describe('parseAgorYml — misc', () => {
       fs.writeFileSync(file, `invalid: yaml: syntax:`);
       expect(() => parseAgorYml(file)).toThrow(/Invalid YAML/);
     });
+  });
+});
+
+describe('parseAgorYml — repo .agor.yml demo variants', () => {
+  it('resolves sqlite-demo / postgres-demo with LOAD_FIXTURES and required start/stop', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+    // Additive only — the default stays sqlite.
+    expect(env?.default).toBe('sqlite');
+
+    for (const name of ['sqlite-demo', 'postgres-demo']) {
+      const resolved = resolveVariant(env!, name);
+      expect(resolved, `${name} resolves`).not.toBeNull();
+      expect(resolved!.start, `${name}.start`).toMatch(/SEED=true LOAD_FIXTURES=true/);
+      expect(resolved!.stop, `${name}.stop`).toBeTruthy();
+      // extends: sqlite is resolved away.
+      expect(
+        (resolved as RepoEnvironment['variants'][string] & { extends?: string }).extends
+      ).toBeUndefined();
+    }
+
+    // The demo variants differ from their siblings by exactly LOAD_FIXTURES=true.
+    const withFixtures = (start: string | undefined) =>
+      start?.replace('SEED=true', 'SEED=true LOAD_FIXTURES=true');
+    expect(resolveVariant(env!, 'sqlite-demo')!.start).toBe(
+      withFixtures(resolveVariant(env!, 'sqlite')!.start)
+    );
+    expect(resolveVariant(env!, 'postgres-demo')!.start).toBe(
+      withFixtures(resolveVariant(env!, 'postgres')!.start)
+    );
   });
 });
 

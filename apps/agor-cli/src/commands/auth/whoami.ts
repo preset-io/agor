@@ -14,6 +14,8 @@ export default class Whoami extends Command {
   static examples = ['<%= config.bin %> <%= command.id %>'];
 
   async run(): Promise<void> {
+    await this.parse(Whoami);
+
     const storedAuth = await loadToken();
 
     if (!storedAuth) {

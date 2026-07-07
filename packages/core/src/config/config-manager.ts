@@ -8,10 +8,11 @@ import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { resolveExecutorHeartbeatConfig } from './executor-heartbeat';
+import { assertValidMultiTenancyConfig } from './multitenancy';
 import {
   type AgorConfig,
   BRANCH_STORAGE_MODES,
@@ -138,6 +139,10 @@ export function __resetConfigCacheForTests(): void {
  * the same invalid inputs (e.g. deprecated `unix_user_mode: opportunistic`).
  */
 function parseAndValidateConfig(content: string): AgorConfig {
+  if (content.trim() === '') {
+    return {};
+  }
+
   const parsed = yaml.load(content) as AgorConfig | undefined | null;
   const finalConfig = parsed || {};
   validateConfig(finalConfig);
@@ -197,6 +202,8 @@ function validateConfig(config: AgorConfig): void {
       `Config error: execution.managed_envs_execution_mode must be one of: hybrid, webhook-only`
     );
   }
+
+  assertValidMultiTenancyConfig(config);
 
   validateOptionalHttpUrl(
     config.external_launch as Record<string, unknown> | undefined,
@@ -363,6 +370,11 @@ export function getDefaultConfig(): AgorConfig {
       executor_heartbeat: resolveExecutorHeartbeatConfig(),
     },
     analytics: getDefaultAnalyticsConfig(),
+    telemetry: {},
+    multi_tenancy: {
+      mode: 'static',
+      static_tenant_id: 'default',
+    },
   };
 }
 
@@ -417,6 +429,7 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     execution: { ...defaults.execution, ...config.execution },
     paths: { ...defaults.paths, ...config.paths },
     analytics: { ...defaults.analytics, ...config.analytics },
+    telemetry: { ...defaults.telemetry, ...config.telemetry },
   };
 
   const parts = key.split('.');
@@ -756,7 +769,7 @@ export function getCredential(key: ConfigCredentialKey): string | undefined {
  * @example
  * ```ts
  * const daemonUser = getDaemonUser();
- * if (daemonUser && isBranchRbacEnabled()) {
+ * if (daemonUser && isUnixGroupRefreshNeeded()) {
  *   runAsUser('git status', { asUser: daemonUser });
  * }
  * ```
@@ -791,14 +804,14 @@ export function requireDaemonUser(config: AgorConfig): string {
     return config.daemon.unix_user;
   }
 
-  // 2. Check if Unix isolation is enabled - if so, require explicit config
-  const unixIsolationEnabled =
-    config.execution?.branch_rbac === true ||
-    (config.execution?.unix_user_mode && config.execution.unix_user_mode !== 'simple');
+  // 2. Check if Unix impersonation/isolation is enabled - if so, require explicit config.
+  // Branch RBAC alone is logical app-level authorization and does not require
+  // Unix users/groups in Cloud simple mode.
+  const unixIsolationEnabled = resolveExecutionSecurityMode(config).requiresDaemonUnixUser;
 
   if (unixIsolationEnabled) {
     throw new Error(
-      'Unix isolation is enabled (branch_rbac or unix_user_mode) but daemon.unix_user is not configured.\n' +
+      'Unix isolation is enabled (execution.unix_user_mode is insulated or strict) but daemon.unix_user is not configured.\n' +
         'Please set daemon.unix_user in ~/.agor/config.yaml to the user running the daemon.\n' +
         'Example:\n' +
         '  daemon:\n' +
@@ -817,17 +830,60 @@ export function requireDaemonUser(config: AgorConfig): string {
   return user;
 }
 
+export interface ResolvedExecutionSecurityMode {
+  /** App-layer branch ownership/visibility/action enforcement. */
+  appRbacEnabled: boolean;
+  /** Configured Unix execution mode with default applied. */
+  unixUserMode: import('./types').UnixUserMode;
+  /** Whether executors/terminals may run as non-daemon OS users. */
+  unixImpersonationEnabled: boolean;
+  /** Whether branch filesystem permissions/groups should be materialized. */
+  unixFsIsolationEnabled: boolean;
+  /** Whether git/executor spawns need fresh supplemental Unix groups. */
+  unixGroupRefreshNeeded: boolean;
+  /** Whether daemon.unix_user must be explicitly configured. */
+  requiresDaemonUnixUser: boolean;
+  /** Whether new repos/branches should initialize Unix groups. */
+  shouldInitUnixGroups: boolean;
+}
+
 /**
- * Check if branch RBAC is enabled
+ * Resolve the execution security posture from config.
  *
- * When RBAC is enabled, git operations need to run via sudo to get fresh group memberships.
+ * Keep this as the single semantic boundary between app-layer RBAC and
+ * OS/filesystem isolation:
+ * - `branch_rbac` controls Agor app permissions only.
+ * - non-`simple` `unix_user_mode` controls Unix impersonation/groups/FS ACLs.
+ */
+export function resolveExecutionSecurityMode(
+  config: AgorConfig = loadConfigSync()
+): ResolvedExecutionSecurityMode {
+  const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
+  const unixIsolationEnabled = unixUserMode !== 'simple';
+
+  return {
+    appRbacEnabled: config.execution?.branch_rbac === true,
+    unixUserMode,
+    unixImpersonationEnabled: unixIsolationEnabled,
+    unixFsIsolationEnabled: unixIsolationEnabled,
+    unixGroupRefreshNeeded: unixIsolationEnabled,
+    requiresDaemonUnixUser: unixIsolationEnabled,
+    shouldInitUnixGroups: unixIsolationEnabled,
+  };
+}
+
+/**
+ * Check if logical branch RBAC is enabled.
+ *
+ * This controls app-level branch ownership/visibility. It does not necessarily
+ * imply Unix group/ACL setup; Cloud simple mode may enable branch RBAC while
+ * running all filesystem work as the daemon user.
  *
  * @returns true if branch_rbac is enabled in config
  */
 export function isBranchRbacEnabled(): boolean {
   try {
-    const config = loadConfigSync();
-    return config.execution?.branch_rbac === true;
+    return resolveExecutionSecurityMode().appRbacEnabled;
   } catch {
     return false;
   }
@@ -841,9 +897,7 @@ export function isBranchRbacEnabled(): boolean {
  */
 export function isUnixImpersonationEnabled(): boolean {
   try {
-    const config = loadConfigSync();
-    const mode = config.execution?.unix_user_mode;
-    return mode !== undefined && mode !== 'simple';
+    return resolveExecutionSecurityMode().unixImpersonationEnabled;
   } catch {
     return false;
   }
@@ -906,20 +960,13 @@ export function ensureBranchStorageModeAllowed(mode: import('./types').BranchSto
  * Whether the daemon needs to wrap git operations in `sudo -u` to pick up
  * supplemental Unix groups created after daemon startup.
  *
- * `sudo -u` is the only way to force a fresh `initgroups()` on a long-running
- * daemon process — without it, `agor_wt_*` groups added at runtime are
- * invisible and ACL-gated git operations fail with permission errors.
+ * Cloud simple mode can enable logical `branch_rbac` without Unix groups. Only
+ * non-simple Unix modes require group refresh / sudo wrapping.
  *
- * Why: Issue #1140 — in the open-access default (no RBAC, simple unix mode)
- * no supplemental groups are ever created, so wrapping in sudo is pure
- * overhead AND breaks for users who never configured passwordless sudoers.
- *
- * Returns true when:
- * - `branch_rbac` is enabled (RBAC creates `agor_wt_*` groups), OR
- * - `unix_user_mode` is `insulated` or `strict` (per-user impersonation)
+ * Returns true when `unix_user_mode` is `insulated` or `strict`.
  */
 export function isUnixGroupRefreshNeeded(): boolean {
-  return isBranchRbacEnabled() || isUnixImpersonationEnabled();
+  return resolveExecutionSecurityMode().unixGroupRefreshNeeded;
 }
 
 // =============================================================================

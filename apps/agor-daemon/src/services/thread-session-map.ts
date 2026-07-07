@@ -6,7 +6,7 @@
  */
 
 import { PAGINATION } from '@agor/core/config';
-import { type Database, ThreadSessionMapRepository } from '@agor/core/db';
+import { type TenantScopeAwareDatabase, ThreadSessionMapRepository } from '@agor/core/db';
 import type { ThreadSessionMap } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 
@@ -16,7 +16,7 @@ export class ThreadSessionMapService extends DrizzleService<
 > {
   private threadMapRepo: ThreadSessionMapRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const repo = new ThreadSessionMapRepository(db);
     super(repo, {
       id: 'id',
@@ -41,6 +41,8 @@ export class ThreadSessionMapService extends DrizzleService<
 /**
  * Service factory function
  */
-export function createThreadSessionMapService(db: Database): ThreadSessionMapService {
+export function createThreadSessionMapService(
+  db: TenantScopeAwareDatabase
+): ThreadSessionMapService {
   return new ThreadSessionMapService(db);
 }

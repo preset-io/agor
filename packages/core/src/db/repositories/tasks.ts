@@ -6,7 +6,7 @@
 
 import type { SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
-import { eq, inArray, like, sql } from 'drizzle-orm';
+import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
@@ -19,6 +19,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
+import { visibleSessionReferenceAccessExists } from './branch-access';
 import { deepMerge } from './merge-utils';
 
 /**
@@ -201,9 +202,29 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   /**
    * Find all tasks
    */
-  async findAll(): Promise<Task[]> {
+  async findAll(filter?: {
+    sessionId?: SessionID;
+    sessionIds?: SessionID[];
+    status?: Task['status'];
+    visibleToUserId?: UUID;
+  }): Promise<Task[]> {
     try {
-      const rows = await select(this.db).from(tasks).all();
+      if (filter?.sessionIds !== undefined && filter.sessionIds.length === 0) return [];
+
+      const conditions = [];
+      if (filter?.sessionId) conditions.push(eq(tasks.session_id, filter.sessionId));
+      if (filter?.sessionIds !== undefined)
+        conditions.push(inArray(tasks.session_id, filter.sessionIds));
+      if (filter?.status) conditions.push(eq(tasks.status, filter.status));
+      if (filter?.visibleToUserId) {
+        conditions.push(
+          visibleSessionReferenceAccessExists(this.db, filter.visibleToUserId, tasks.session_id)
+        );
+      }
+
+      const query = select(this.db).from(tasks);
+      const rows =
+        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
       return rows.map((row: TaskRow) => this.rowToTask(row));
     } catch (error) {
       throw new RepositoryError(

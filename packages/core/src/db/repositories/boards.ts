@@ -8,13 +8,14 @@ import type {
   Board,
   BoardAccessMode,
   BoardExportBlob,
+  BoardID,
   BoardObject,
   Branch,
   BranchPermissionLevel,
   UUID,
 } from '@agor/core/types';
 import { isAssistant } from '@agor/core/types';
-import { and, eq, exists, isNull, like, ne, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like, ne, type SQL } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -22,27 +23,26 @@ import { generateSlug } from '../../lib/slugs';
 import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import {
   type BoardInsert,
   type BoardRow,
   boardGroupGrants,
   boardOwners,
   boards,
-  branches,
-  branchOwners,
   groupMemberships,
   groups,
 } from '../schema';
 import {
   AmbiguousIdError,
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBranchAccessCondition } from './branch-access';
+import { visibleBoardAccessCondition } from './branch-access';
 import { BranchRepository } from './branches';
 
 const BOARD_ACCESS_MODES = ['private', 'shared'] as const;
@@ -80,8 +80,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    *
    * @param row - Database row
    * @param baseUrl - Base URL for generating board URLs
+   * @param options.lean - Omit the heavy `objects` / `custom_css` annotations
+   *   (used by the boards list path; single-board reads always stay full).
    */
-  private rowToBoard(row: BoardRow, baseUrl?: string): Board {
+  private rowToBoard(row: BoardRow, baseUrl?: string, options?: { lean?: boolean }): Board {
     const data = row.data as {
       description?: string;
       color?: string;
@@ -100,29 +102,38 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     const slug = row.slug !== null ? row.slug : undefined;
     const url = baseUrl ? getBoardUrl(boardId, slug, baseUrl) : '';
 
-    return {
-      board_id: boardId,
-      name: row.name,
-      slug,
-      primary_assistant_id:
-        (row.primary_assistant_id as Board['primary_assistant_id']) ?? undefined,
-      created_at: new Date(row.created_at).toISOString(),
-      last_updated: row.updated_at
-        ? new Date(row.updated_at).toISOString()
-        : new Date(row.created_at).toISOString(),
-      created_by: row.created_by,
-      url,
-      archived: Boolean(row.archived),
-      archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
-      archived_by: row.archived_by ?? undefined,
-      ...data,
-      icon: normalizeExactEmojiShortcode(data.icon),
-      access_mode: data.access_mode ?? 'shared',
-      default_others_can: data.default_others_can ?? 'session',
-      default_others_fs_access: data.default_others_fs_access ?? 'read',
-      default_dangerously_allow_session_sharing:
-        data.default_dangerously_allow_session_sharing ?? false,
-    };
+    // Lean projection drops the two heavy JSON fields nested in `data` (zones /
+    // text / markdown annotations + per-board CSS). A client `$select` can't do
+    // this — they live inside the `data` column, not as top-level columns.
+    const { objects: _objects, custom_css: _customCss, ...leanData } = data;
+    const effectiveData = options?.lean ? leanData : data;
+
+    return attachHiddenTenant(
+      {
+        board_id: boardId,
+        name: row.name,
+        slug,
+        primary_assistant_id:
+          (row.primary_assistant_id as Board['primary_assistant_id']) ?? undefined,
+        created_at: new Date(row.created_at).toISOString(),
+        last_updated: row.updated_at
+          ? new Date(row.updated_at).toISOString()
+          : new Date(row.created_at).toISOString(),
+        created_by: row.created_by,
+        url,
+        archived: Boolean(row.archived),
+        archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
+        archived_by: row.archived_by ?? undefined,
+        ...effectiveData,
+        icon: normalizeExactEmojiShortcode(data.icon),
+        access_mode: data.access_mode ?? 'shared',
+        default_others_can: data.default_others_can ?? 'session',
+        default_others_fs_access: data.default_others_fs_access ?? 'read',
+        default_dangerously_allow_session_sharing:
+          data.default_dangerously_allow_session_sharing ?? false,
+      },
+      row
+    );
   }
 
   /**
@@ -328,14 +339,58 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     return this.findById(param);
   }
 
+  private visibleBoardCondition(userId: UUID): SQL {
+    return visibleBoardAccessCondition(this.db, userId);
+  }
+
   /**
-   * Find all boards
+   * Find all boards (with optional filters and projection).
+   *
+   * The `boardIds`, `archived`, and `visibleToUserId` filters let the list read
+   * path (`BoardsService.find` via the adapter's `fetchData`) push
+   * high-selectivity predicates — including board RBAC visibility — into SQL so
+   * it no longer materializes the whole table before filtering in memory.
+   *
+   * @param filter - Optional filters and projection
+   * @param filter.archived - Filter to an exact archived state
+   * @param filter.boardIds - Restrict to a set of board IDs (empty set yields no
+   *   rows, matching an `{ $in: [] }` filter)
+   * @param filter.visibleToUserId - Restrict to boards visible to this user
+   *   under branch RBAC.
+   * @param filter.lean - Omit each board's heavy `objects` / `custom_css`
+   *   annotations from the result. The displayed board's full record is fetched
+   *   separately via `findById`, so the list path never needs them. RBAC and
+   *   the id pushdown stay in force, so the lean list can never widen visibility.
    */
-  async findAll(): Promise<Board[]> {
+  async findAll(filter?: {
+    archived?: boolean;
+    boardIds?: BoardID[];
+    visibleToUserId?: UUID;
+    lean?: boolean;
+  }): Promise<Board[]> {
     try {
+      // An explicit empty id set can never match a row; short-circuit so we skip
+      // the read entirely and avoid emitting an empty `IN ()` predicate.
+      if (filter?.boardIds !== undefined && filter.boardIds.length === 0) {
+        return [];
+      }
+
+      const conditions = [];
+      if (filter?.archived !== undefined) {
+        conditions.push(eq(boards.archived, filter.archived));
+      }
+      if (filter?.boardIds !== undefined) {
+        conditions.push(inArray(boards.board_id, filter.boardIds));
+      }
+      if (filter?.visibleToUserId) {
+        conditions.push(this.visibleBoardCondition(filter.visibleToUserId));
+      }
+
       const baseUrl = await getBaseUrl();
-      const rows = await select(this.db).from(boards).all();
-      return rows.map((row: BoardRow) => this.rowToBoard(row, baseUrl));
+      const query = select(this.db).from(boards);
+      const rows =
+        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
+      return rows.map((row: BoardRow) => this.rowToBoard(row, baseUrl, { lean: filter?.lean }));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all boards: ${error instanceof Error ? error.message : String(error)}`,
@@ -366,57 +421,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * @returns Array of board ids the user can see
    */
   async findVisibleBoardIds(userId: UUID): Promise<string[]> {
-    // Raw drizzle builder for the EXISTS subquery — `exists()` expects a
-    // drizzle SelectQueryBuilder, not the cross-dialect wrapper shape, and
-    // the subquery doesn't need `.all()` / `.one()` execution methods.
-    const accessibleBranchExists = exists(
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-      (this.db as any)
-        .select({ _: sql`1` })
-        .from(branches)
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
-        .where(
-          and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition(this.db, userId))
-        )
-    );
-    const accessiblePrimaryAssistantExists = exists(
-      // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-      (this.db as any)
-        .select({ _: sql`1` })
-        .from(branches)
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
-        .where(
-          and(
-            eq(branches.branch_id, boards.primary_assistant_id),
-            visibleBranchAccessCondition(this.db, userId)
-          )
-        )
-    );
     const rows = await select(this.db, { board_id: boards.board_id })
       .from(boards)
-      .where(
-        or(
-          eq(boards.created_by, userId),
-          exists(
-            // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-            (this.db as any)
-              .select({ _: sql`1` })
-              .from(boardOwners)
-              .where(
-                and(eq(boardOwners.board_id, boards.board_id), eq(boardOwners.user_id, userId))
-              )
-          ),
-          sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared') = 'shared'`,
-          accessibleBranchExists,
-          accessiblePrimaryAssistantExists
-        )
-      )
+      .where(this.visibleBoardCondition(userId))
       .all();
     return rows.map((r: { board_id: string }) => r.board_id);
   }
@@ -889,6 +896,72 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to batch upsert board objects: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Shallow-merge field patches into existing board objects in a single
+   * read-modify-write.
+   *
+   * Unlike upsertBoardObject (which fully replaces the object value, dropping
+   * omitted fields), this overwrites ONLY the provided keys and leaves the rest
+   * of each object intact — so a narrow change (e.g. a zIndex reorder) has a
+   * smaller blast radius and won't clobber a field edited via a different patch
+   * call. Multiple objects in one call are merged before a single write, so a
+   * forward/backward swap touches both neighbors in one update.
+   *
+   * Objects that no longer exist are SKIPPED, never re-created — so a swap can't
+   * resurrect a neighbor deleted between the client's read and this write.
+   *
+   * Only an explicit allowlist of fields can be merged (currently just `zIndex`,
+   * which is also clamped into the board-object band [1, 499] so it can never be
+   * pushed onto the card (500) / comment (1000) layers). Any other key in a
+   * patch is ignored, so this narrow action cannot reshape an object (e.g. flip
+   * its `type`) the way a full upsert could.
+   *
+   * NOTE: this is NOT atomic against concurrent writers. Like every other board
+   * writer, the findById → update sequence has a lost-update window: a write
+   * that lands between the read and the update can be overwritten (last-write-
+   * wins). Merging only the patched keys narrows that window's blast radius
+   * versus a full-object upsert, but does not close it.
+   */
+  async mergeBoardObjectFields(
+    boardId: string,
+    patches: Record<string, Partial<BoardObject>>
+  ): Promise<Board> {
+    // Board objects stay strictly below the card (500) / comment (1000) layers.
+    const Z_MIN = 1;
+    const Z_MAX = 499;
+    try {
+      const fullId = await this.resolveId(boardId);
+
+      const current = await this.findById(fullId);
+      if (!current) {
+        throw new EntityNotFoundError('Board', boardId);
+      }
+
+      const updatedObjects = { ...(current.objects || {}) };
+      for (const [objectId, fields] of Object.entries(patches)) {
+        const existing = updatedObjects[objectId];
+        if (!existing) continue; // never resurrect a concurrently-deleted object
+
+        // Allowlist: only `zIndex` is mergeable, and it is clamped server-side.
+        // Everything else in the patch is ignored so this action can't reshape
+        // an object's persisted fields.
+        const { zIndex } = fields as { zIndex?: unknown };
+        if (typeof zIndex !== 'number' || !Number.isFinite(zIndex)) continue;
+        const safeZIndex = Math.min(Z_MAX, Math.max(Z_MIN, zIndex));
+        updatedObjects[objectId] = { ...existing, zIndex: safeZIndex } as BoardObject;
+      }
+
+      return this.update(fullId, { objects: updatedObjects });
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to merge board object fields: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

@@ -1,14 +1,4 @@
-import type {
-  AgorClient,
-  Board,
-  BoardComment,
-  BoardObject,
-  Branch,
-  Repo,
-  Session,
-  SpawnConfig,
-  User,
-} from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
 import { getAssistantConfig, isAssistant } from '@agor-live/client';
 import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -17,6 +7,7 @@ import {
   Button,
   Empty,
   Select,
+  Skeleton,
   Space,
   Spin,
   Tabs,
@@ -25,7 +16,16 @@ import {
   theme,
 } from 'antd';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectBranchById,
+  selectCommentById,
+  selectRepoById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
+import { mapToArray } from '../../utils/mapHelpers';
 import { BranchSessionSections } from '../BranchCard';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardSessionList } from '../BranchListDrawer';
@@ -44,10 +44,6 @@ interface BoardAssistantPanelProps {
   primaryAssistantBranch?: Branch;
   primaryAssistantRepo?: Repo;
   primaryAssistantInaccessible: boolean;
-  sessionsByBranch: Map<string, Session[]>;
-  branchById: Map<string, Branch>;
-  repoById: Map<string, Repo>;
-  userById: Map<string, User>;
   currentUserId?: string;
   selectedSessionId?: string | null;
   onSessionClick: (sessionId: string) => void;
@@ -69,8 +65,6 @@ interface BoardAssistantPanelProps {
   onViewLogs?: (branchId: string) => void;
   onNukeEnvironment?: (branchId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
-  comments?: BoardComment[];
-  boardObjects?: Record<string, BoardObject>;
   onSendComment?: (content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -79,20 +73,18 @@ interface BoardAssistantPanelProps {
   hoveredCommentId?: string | null;
   selectedCommentId?: string | null;
   onCollapse?: () => void;
+  deferSessionDetails?: boolean;
+  onDeferredDetailsHydrated?: () => void;
   client: AgorClient | null;
 }
 
-export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
+const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
   board,
   activeTab: controlledActiveTab,
   onTabChange,
   primaryAssistantBranch,
   primaryAssistantRepo,
   primaryAssistantInaccessible,
-  sessionsByBranch,
-  branchById,
-  repoById,
-  userById,
   currentUserId,
   selectedSessionId,
   onSessionClick,
@@ -101,8 +93,6 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
   onSpawnSession,
   onOpenSettings,
   onOpenSessionSettings,
-  comments = [],
-  boardObjects,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -111,10 +101,20 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
   hoveredCommentId,
   selectedCommentId,
   onCollapse,
+  deferSessionDetails = false,
+  onDeferredDetailsHydrated,
   client,
 }) => {
   const { token } = theme.useToken();
   const { message } = AntApp.useApp();
+  // Subscribe to entity maps by slice from the store: each selector only wakes
+  // this panel when its own slice changes.
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const branchById = useAgorStore(selectBranchById);
+  const repoById = useAgorStore(selectRepoById);
+  const userById = useAgorStore(selectUserById);
+  const commentById = useAgorStore(selectCommentById);
+  const boardObjects = board?.objects;
   const defaultTab: BoardAssistantPanelTab = primaryAssistantInaccessible
     ? 'all-sessions'
     : 'assistant';
@@ -122,10 +122,52 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
     useState<BoardAssistantPanelTab>(defaultTab);
   const isControlled = controlledActiveTab !== undefined;
   const activeTab = controlledActiveTab ?? uncontrolledActiveTab;
+  const [sessionDetailsHydrated, setSessionDetailsHydrated] = useState(() => !deferSessionDetails);
+  useEffect(() => {
+    setSessionDetailsHydrated(!deferSessionDetails);
+  }, [deferSessionDetails]);
+
+  const hydrateDeferredDetails = useCallback(() => {
+    if (sessionDetailsHydrated) return;
+    setSessionDetailsHydrated(true);
+    onDeferredDetailsHydrated?.();
+  }, [onDeferredDetailsHydrated, sessionDetailsHydrated]);
+
+  useEffect(() => {
+    if (!deferSessionDetails || sessionDetailsHydrated) return;
+
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    let idleCallbackId: number | undefined;
+    const hydrate = () => hydrateDeferredDetails();
+
+    if ('requestIdleCallback' in window) {
+      idleCallbackId = window.requestIdleCallback(hydrate, { timeout: 2500 });
+    } else {
+      fallbackTimer = globalThis.setTimeout(hydrate, 2000);
+    }
+
+    return () => {
+      if (idleCallbackId !== undefined) window.cancelIdleCallback?.(idleCallbackId);
+      if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
+    };
+  }, [deferSessionDetails, hydrateDeferredDetails, sessionDetailsHydrated]);
+
   const setActiveTab = (tab: BoardAssistantPanelTab) => {
+    hydrateDeferredDetails();
     setUncontrolledActiveTab(tab);
     onTabChange?.(tab);
   };
+
+  // Derive board comments only when the comments tab is actually visible. The
+  // default assistant tab does not need to scan the global comment map during
+  // Home → board navigation.
+  const comments = useMemo(
+    () =>
+      activeTab === 'comments'
+        ? mapToArray(commentById).filter((c) => c.board_id === board?.board_id)
+        : [],
+    [activeTab, commentById, board?.board_id]
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset the tab when switching boards, even if the default tab string is unchanged.
   useEffect(() => {
@@ -135,29 +177,29 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
     }
   }, [defaultTab, board?.board_id, isControlled, onTabChange]);
 
-  const assistantOptions = useMemo(
-    () =>
-      Array.from(branchById.values())
-        .filter((branch) => isAssistant(branch) && !branch.archived)
-        .sort((a, b) => {
-          const aConfig = getAssistantConfig(a);
-          const bConfig = getAssistantConfig(b);
-          return (aConfig?.displayName ?? a.name).localeCompare(bConfig?.displayName ?? b.name);
-        })
-        .map((branch) => {
-          const config = getAssistantConfig(branch);
-          const repo = repoById.get(branch.repo_id);
-          const label = config?.displayName ?? branch.name;
-          return {
-            value: branch.branch_id,
-            label,
-            searchText: `${label} ${branch.name} ${repo?.slug ?? ''}`,
-            branch,
-            repo,
-          };
-        }),
-    [branchById, repoById]
-  );
+  const assistantOptions = useMemo(() => {
+    if (primaryAssistantBranch || primaryAssistantInaccessible) return [];
+
+    return Array.from(branchById.values())
+      .filter((branch) => isAssistant(branch) && !branch.archived)
+      .sort((a, b) => {
+        const aConfig = getAssistantConfig(a);
+        const bConfig = getAssistantConfig(b);
+        return (aConfig?.displayName ?? a.name).localeCompare(bConfig?.displayName ?? b.name);
+      })
+      .map((branch) => {
+        const config = getAssistantConfig(branch);
+        const repo = repoById.get(branch.repo_id);
+        const label = config?.displayName ?? branch.name;
+        return {
+          value: branch.branch_id,
+          label,
+          searchText: `${label} ${branch.name} ${repo?.slug ?? ''}`,
+          branch,
+          repo,
+        };
+      });
+  }, [branchById, primaryAssistantBranch, primaryAssistantInaccessible, repoById]);
   const [selectedAssistantId, setSelectedAssistantId] = useState<string | undefined>();
   const [assigningAssistant, setAssigningAssistant] = useState(false);
 
@@ -294,20 +336,40 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
             )}
           </div>
 
-          <BranchSessionSections
-            branch={primaryAssistantBranch}
-            sessions={assistantSessions}
-            userById={userById}
-            currentUserId={currentUserId}
-            selectedSessionId={selectedSessionId}
-            onSessionClick={onSessionClick}
-            onCreateSession={onCreateSession}
-            onForkSession={onForkSession}
-            onSpawnSession={onSpawnSession}
-            onOpenSessionSettings={onOpenSessionSettings}
-            mode="panel"
-            client={client}
-          />
+          {sessionDetailsHydrated ? (
+            <BranchSessionSections
+              branch={primaryAssistantBranch}
+              sessions={assistantSessions}
+              userById={userById}
+              currentUserId={currentUserId}
+              selectedSessionId={selectedSessionId}
+              onSessionClick={onSessionClick}
+              onCreateSession={onCreateSession}
+              onForkSession={onForkSession}
+              onSpawnSession={onSpawnSession}
+              onOpenSessionSettings={onOpenSessionSettings}
+              defaultExpanded={false}
+              mode="panel"
+              client={client}
+            />
+          ) : (
+            <div style={{ paddingTop: 8 }}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Loading sessions…
+                </Typography.Text>
+                <Skeleton active paragraph={{ rows: 3 }} title={false} />
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={hydrateDeferredDetails}
+                  style={{ padding: 0 }}
+                >
+                  Show now
+                </Button>
+              </Space>
+            </div>
+          )}
         </div>
       );
     }
@@ -393,14 +455,20 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
             label: 'All sessions',
             children: board ? (
               <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
-                <BoardSessionList
-                  board={board}
-                  currentBoardId={board.board_id}
-                  branchById={branchById}
-                  repoById={repoById}
-                  sessionsByBranch={sessionsByBranch}
-                  onSessionClick={onSessionClick}
-                />
+                {sessionDetailsHydrated ? (
+                  <BoardSessionList
+                    board={board}
+                    currentBoardId={board.board_id}
+                    branchById={branchById}
+                    repoById={repoById}
+                    sessionsByBranch={sessionsByBranch}
+                    onSessionClick={onSessionClick}
+                  />
+                ) : (
+                  <div style={{ padding: 16 }}>
+                    <Skeleton active paragraph={{ rows: 4 }} title={false} />
+                  </div>
+                )}
               </div>
             ) : (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No board selected" />
@@ -452,5 +520,10 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
     </div>
   );
 };
+
+// Memoized: the inner App stabilizes every handler prop it passes (via
+// useStableCallback), so React.memo bails out of re-renders driven by unrelated
+// store patches and only re-renders when a value prop it draws actually changes.
+export const BoardAssistantPanel = memo(BoardAssistantPanelComponent);
 
 export default BoardAssistantPanel;

@@ -9,7 +9,7 @@ import {
   type BoardObjectFindFilters,
   type BoardObjectFindOptions,
   BoardObjectRepository,
-  type Database,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type {
   BoardEntityObject,
@@ -18,6 +18,7 @@ import type {
   BranchID,
   CardID,
   QueryParams,
+  UUID,
 } from '@agor/core/types';
 
 export type BoardObjectPatchedEventPayload = Omit<BoardEntityObject, 'zone_id'> & {
@@ -42,7 +43,10 @@ export type BoardObjectParams = QueryParams<{
   card_id?: CardID;
   zone_id?: string;
   entity_type?: BoardEntityType;
-}>;
+}> & {
+  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+  _agorSqlBoardAccessUserId?: UUID;
+};
 
 export interface NormalizedBoardObjectFindQuery {
   filters: BoardObjectFindFilters;
@@ -81,7 +85,7 @@ export class BoardObjectsService {
   private boardObjectRepo: BoardObjectRepository;
   public emit?: (event: string, data: BoardEntityObject, params?: BoardObjectParams) => void;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     this.boardObjectRepo = new BoardObjectRepository(db);
   }
 
@@ -126,10 +130,22 @@ export class BoardObjectsService {
    */
   async find(params?: BoardObjectParams) {
     const normalized = normalizeBoardObjectFindQuery(params?.query);
-    const [total, data] = await Promise.all([
-      this.boardObjectRepo.count(normalized.filters),
-      this.boardObjectRepo.findAll(normalized.filters, normalized.pagination),
-    ]);
+    const visibleToUserId = params?._agorSqlBoardAccessUserId;
+    const [total, data] = await Promise.all(
+      visibleToUserId
+        ? [
+            this.boardObjectRepo.countVisibleToUser(visibleToUserId, normalized.filters),
+            this.boardObjectRepo.findVisibleToUser(
+              visibleToUserId,
+              normalized.filters,
+              normalized.pagination
+            ),
+          ]
+        : [
+            this.boardObjectRepo.count(normalized.filters),
+            this.boardObjectRepo.findAll(normalized.filters, normalized.pagination),
+          ]
+    );
 
     return {
       total,
@@ -271,6 +287,6 @@ export class BoardObjectsService {
 /**
  * Service factory function
  */
-export function createBoardObjectsService(db: Database): BoardObjectsService {
+export function createBoardObjectsService(db: TenantScopeAwareDatabase): BoardObjectsService {
   return new BoardObjectsService(db);
 }

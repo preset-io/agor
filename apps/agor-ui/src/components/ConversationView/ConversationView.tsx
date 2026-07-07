@@ -24,6 +24,9 @@ import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
+// Default-param `= new Map()` would mint a fresh Map on every render and
+// defeat every TaskBlock's React.memo whenever the prop is omitted.
+const EMPTY_USER_MAP = new Map<string, User>();
 // Shared empty-array sentinel so TaskBlock's `taskMessages` prop keeps a stable
 // reference for tasks whose messages haven't been loaded — otherwise `|| []`
 // would mint a fresh array on every render and thrash TaskBlock's React.memo.
@@ -117,6 +120,11 @@ export interface ConversationViewProps {
    * Emoji override for assistant avatar in message bubbles
    */
   assistantEmoji?: string;
+
+  /**
+   * When true, all task blocks are force-expanded (used by in-session search)
+   */
+  forceExpandAll?: boolean;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -125,7 +133,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     sessionId,
     agentic_tool,
     sessionModel,
-    userById = new Map(),
+    userById = EMPTY_USER_MAP,
     currentUserId,
     onScrollRef,
     onPermissionDecision,
@@ -136,6 +144,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     isActive = true,
     genealogy,
     assistantEmoji,
+    forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -156,8 +165,15 @@ export const ConversationView = React.memo<ConversationViewProps>(
     // resume-on-send wiring in SessionPanel. Wrap to a plain `() => void` so we
     // don't leak the library's optional ScrollToBottom options to callers.
     const handleScrollToBottom = useCallback(() => {
+      // The library's scrollToBottom() sets isAtBottom=true but never clears
+      // escapedFromLock, so a prior scroll-up leaves the bottom lock half-engaged:
+      // the resize-driven re-pin that follows late/streamed content is gated on
+      // isAtBottom, which a stale escapedFromLock keeps flipping back to false.
+      // Clearing the escape on an explicit go-to-bottom intent lets the pin
+      // survive until the round-tripped/streamed content actually arrives.
+      state.escapedFromLock = false;
       scrollToBottom();
-    }, [scrollToBottom]);
+    }, [state, scrollToBottom]);
 
     // Scroll to top. While content is still streaming/growing, the library's
     // persistent observer can re-pin to the bottom before our scrollTop write
@@ -188,21 +204,6 @@ export const ConversationView = React.memo<ConversationViewProps>(
     );
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
 
-    // Land at the bottom on panel open / session switch.
-    //
-    // ConversationView stays MOUNTED while the panel is closed (SessionPanel
-    // renders it with display:none), so the library's `initial` scroll fires
-    // once at mount while the view is hidden (0 height ⇒ no-op) and does NOT
-    // re-run when the panel later opens. This effect re-engages the bottom lock
-    // whenever the view becomes active or the session changes; the library's
-    // persistent observer then follows lazy task/message growth from there
-    // (covers behaviors 1, 2, 4).
-    useEffect(() => {
-      if (isActive && sessionId) {
-        scrollToBottom();
-      }
-    }, [isActive, sessionId, scrollToBottom]);
-
     // Queued tasks belong to the queue drawer, not the conversation. They
     // haven't run yet — there's no message_range, no user-message row, no
     // assistant output to render — so showing them here as TaskBlocks just
@@ -216,6 +217,20 @@ export const ConversationView = React.memo<ConversationViewProps>(
       () => (currentReactiveState?.tasks || []).filter((t) => t.status !== TaskStatus.QUEUED),
       [currentReactiveState?.tasks]
     );
+
+    // Land at the bottom on panel open / session switch — but only once real
+    // content is mounted. On a cold open ConversationView early-returns <Spin/>
+    // (scrollRef/contentRef unmounted), so firing before tasks exist is a no-op
+    // that never re-runs; gating on tasks.length>0 fires it when the container
+    // mounts. handleScrollToBottom also clears the escape so the library's
+    // persistent observer reliably follows lazy/streamed growth from there.
+    const hasContent = tasks.length > 0;
+    useEffect(() => {
+      if (isActive && sessionId && hasContent) {
+        handleScrollToBottom();
+      }
+    }, [isActive, sessionId, hasContent, handleScrollToBottom]);
+
     const allStreamingMessages =
       currentReactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
     const loading = currentReactiveState ? currentReactiveState.loading : !!sessionId;
@@ -473,7 +488,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               sessionModel={sessionModel}
               userById={userById}
               currentUserId={currentUserId}
-              isExpanded={expandedTaskIds.has(task.task_id)}
+              isExpanded={forceExpandAll || expandedTaskIds.has(task.task_id)}
               onExpandChange={handleTaskExpandChange}
               sessionId={sessionId}
               onPermissionDecision={onPermissionDecision}

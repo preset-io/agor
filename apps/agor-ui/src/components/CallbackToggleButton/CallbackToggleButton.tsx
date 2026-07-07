@@ -4,7 +4,8 @@ import { ArrowUpOutlined, LinkOutlined } from '@ant-design/icons';
 import { Badge, Button, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useAppLiveData } from '../../contexts/AppDataContext';
+import { useAgorStore } from '../../store/agorStore';
+import { selectSessionById } from '../../store/selectors';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 
 interface CallbackToggleButtonProps {
@@ -44,14 +45,14 @@ function getCallbackEnabled(session: Session): boolean {
  * session has callbacks enabled. Clicking disables callbacks (one click,
  * no confirmation — re-enable lives in Session Settings).
  *
- * Lives in its own component so the `useAppLiveData()` subscription needed
+ * Lives in its own component so the `sessionById` store subscription needed
  * to look up the callback-target session's title doesn't pull SessionPanel
- * into the live-data subscription graph (see AppDataContext docs).
+ * into the live-data subscription graph.
  */
 export const CallbackToggleButton: React.FC<CallbackToggleButtonProps> = ({ session }) => {
   const { token } = theme.useToken();
   const { onUpdateSession, onSessionClick } = useAppActions();
-  const { sessionById } = useAppLiveData();
+  const sessionById = useAgorStore(selectSessionById);
 
   const targetId = getCallbackTargetSessionId(session);
   // Default in core: spawned sessions (have parent_session_id) have callbacks
@@ -132,7 +133,7 @@ export const CallbackToggleButton: React.FC<CallbackToggleButtonProps> = ({ sess
 export const RemoteParentButton: React.FC<CallbackToggleButtonProps> = ({ session }) => {
   const { token } = theme.useToken();
   const { onSessionClick } = useAppActions();
-  const { sessionById } = useAppLiveData();
+  const sessionById = useAgorStore(selectSessionById);
 
   const remoteParentId = getRemoteParentSessionId(session);
   if (!remoteParentId || !onSessionClick) return null;

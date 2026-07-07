@@ -15,6 +15,7 @@
  * mock, so we exercise the full state machine with a hand-rolled stub.
  */
 
+import { BadRequest } from '@agor/core/feathers';
 import type { Branch, Message, Session, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -445,6 +446,32 @@ describe('resolveWidget', () => {
         { app: app as never, isBranchOwner: async () => false }
       )
     ).rejects.toThrow(/Invalid submit/);
+  });
+
+  it('propagates structured per-field applySubmit errors without patching the widget', async () => {
+    const { applySubmit } = registerTestWidget(
+      vi.fn(async () => {
+        throw new BadRequest('Field validation failed', {
+          field_errors: { HUBSPOT_API_KEY: 'Invalid saved value selection' },
+        });
+      })
+    );
+    const fixtures = makeFixtures();
+    const { app, calls } = makeApp(fixtures);
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+        { user_id: 'creator-user-id' as UserID },
+        { app: app as never, isBranchOwner: async () => false }
+      )
+    ).rejects.toMatchObject({
+      data: { field_errors: { HUBSPOT_API_KEY: 'Invalid saved value selection' } },
+    });
+
+    expect(applySubmit).toHaveBeenCalledTimes(1);
+    expect(calls.find((c) => c.service === 'messages' && c.method === 'patch')).toBeUndefined();
   });
 
   it('serializes concurrent resolutions on the same widget — only one applySubmit fires', async () => {

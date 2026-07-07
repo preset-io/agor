@@ -1164,6 +1164,454 @@ describe('CodexPromptService - tool payload mapping', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// event_msg terminal handling (issue #1749)
+//
+// New Codex rollout format emits terminal completion via `event_msg` payloads
+// with payload.type === "agent_message" or "task_complete" instead of the SDK
+// event turn.completed. Without handling these, the adapter left the task
+// running until the daemon safety-net (~15 min later) marked it failed.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('CodexPromptService - event_msg terminal handling (issue #1749)', () => {
+  function makeStreamingService() {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-mock.md');
+    serviceWithPrivates.buildMcpServersConfig = vi
+      .fn()
+      .mockResolvedValue({ servers: {}, total: 0 });
+
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-1',
+      branch_id: 'branch-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: null,
+      permission_config: { codex: {} },
+      model_config: {},
+      mcp_token: 'test-token',
+    });
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
+      path: process.cwd(),
+    });
+
+    return service;
+  }
+
+  beforeEach(() => {
+    mockInstanceCount = 0;
+    mockInstanceBaseUrls = [];
+    mockInstanceConfigs = [];
+    mockClosedInstanceIds = [];
+    mockStreamEvents = [];
+    mockStartThreadId = 'mock-thread-id';
+    delete process.env.OPENAI_BASE_URL;
+    vi.clearAllMocks();
+    appServerMocks.forkCodexThreadViaAppServer.mockReset();
+  });
+
+  it('surfaces event_msg agent_message via the actual "message" field (real rollout shape)', async () => {
+    // Actual payload shape from failed-run logs:
+    //   { type: "agent_message", message: "...", phase: "...", memory_citation: ... }
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'All changes have been applied.',
+          phase: 'completed',
+          memory_citation: null,
+        },
+      },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const textBlocks = emitted.filter(
+      (e) =>
+        e.type === 'complete' &&
+        Array.isArray(e.content) &&
+        (e.content as Array<{ type: string; text?: string }>).some(
+          (c) => c.type === 'text' && c.text === 'All changes have been applied.'
+        )
+    );
+    expect(textBlocks.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('treats event_msg task_complete (real rollout shape) as terminal success', async () => {
+    // Actual payload shape from failed-run logs:
+    //   { type: "task_complete", turn_id: "...", last_agent_message: "...",
+    //     duration_ms: 900000, time_to_first_token_ms: 1234, completed_at: "..." }
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'cmd-1',
+          type: 'command_execution',
+          command: 'echo hi',
+          aggregated_output: 'hi\n',
+          status: 'success',
+        },
+      },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-abc123',
+          last_agent_message: 'Done. The script ran successfully.',
+          duration_ms: 900000,
+          time_to_first_token_ms: 1234,
+          completed_at: '2026-07-01T13:00:00Z',
+        },
+      },
+      // No turn.completed — this is the new rollout format.
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const completeEvents = emitted.filter((e) => e.type === 'complete');
+    expect(completeEvents.length).toBeGreaterThanOrEqual(1);
+
+    const last = completeEvents.at(-1);
+    expect(last?.threadId).toBe('mock-thread-id');
+
+    // last_agent_message must appear in content when no prior agent_message pushed text
+    const content = last?.content as Array<{ type: string; text?: string }>;
+    expect(
+      content.some((c) => c.type === 'text' && c.text === 'Done. The script ran successfully.')
+    ).toBe(true);
+  });
+
+  it('treats event_msg turn_complete alias as terminal success', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'turn_complete',
+          turn_id: 'turn-v2',
+          last_agent_message: 'Done via turn_complete.',
+        },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const last = emitted.filter((e) => e.type === 'complete').at(-1);
+    const content = last?.content as Array<{ type: string; text?: string }>;
+    expect(content.some((c) => c.type === 'text' && c.text === 'Done via turn_complete.')).toBe(
+      true
+    );
+  });
+
+  it('uses last_agent_message from task_complete when no prior agent_message event provided text', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-xyz',
+          last_agent_message: 'Task completed successfully.',
+          duration_ms: 12000,
+          time_to_first_token_ms: 500,
+          completed_at: '2026-07-01T13:00:05Z',
+        },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const last = emitted.filter((e) => e.type === 'complete').at(-1);
+    const content = last?.content as Array<{ type: string; text?: string }>;
+    expect(
+      content.some((c) => c.type === 'text' && c.text === 'Task completed successfully.')
+    ).toBe(true);
+  });
+
+  it('does not duplicate text when agent_message already pushed the same content before task_complete', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    const finalText = 'All done!';
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        // agent_message pushes the text first
+        payload: { type: 'agent_message', message: finalText, phase: 'completed' },
+      },
+      {
+        type: 'event_msg',
+        // task_complete carries the same text in last_agent_message
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-dup',
+          last_agent_message: finalText,
+          duration_ms: 5000,
+          time_to_first_token_ms: 200,
+          completed_at: '2026-07-01T13:00:10Z',
+        },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const completeEvents = emitted.filter((e) => e.type === 'complete');
+    expect(completeEvents).toHaveLength(1);
+
+    const finalComplete = completeEvents.at(-1);
+    const content = finalComplete?.content as Array<{ type: string; text?: string }>;
+    // There should be exactly one text block with finalText, not two.
+    const textOccurrences = content.filter((c) => c.type === 'text' && c.text === finalText);
+    expect(textOccurrences).toHaveLength(1);
+  });
+
+  it('preserves distinct agent_message and last_agent_message text blocks', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        payload: { type: 'agent_message', message: 'Progress update.', phase: 'running' },
+      },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          turn_id: 'turn-final',
+          last_agent_message: 'Final answer.',
+        },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const finalComplete = emitted.filter((e) => e.type === 'complete').at(-1);
+    const content = finalComplete?.content as Array<{ type: string; text?: string }>;
+    expect(content.filter((c) => c.type === 'text').map((c) => c.text)).toEqual([
+      'Progress update.',
+      'Final answer.',
+    ]);
+  });
+
+  it('carries event_msg token_count context snapshot into the task_complete complete event', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            last_token_usage: { total_tokens: 30_000 },
+            model_context_window: 272_000,
+          },
+        },
+      },
+      {
+        type: 'event_msg',
+        payload: { type: 'task_complete' },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    const last = emitted.filter((e) => e.type === 'complete').at(-1);
+    expect(last?.rawContextUsage).toMatchObject({
+      totalTokens: 30_000,
+      maxTokens: 272_000,
+    });
+  });
+
+  it('throws a clear actionable error when stream ends without any terminal event', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    // Stream ends with no terminal event — simulates process exit with code 0
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      { type: 'item.started', item: { id: 'cmd-1', type: 'command_execution', command: 'ls' } },
+      // Stream just ends — no turn.completed, turn.failed, task_complete, or error
+    ];
+
+    await expect(
+      (async () => {
+        for await (const _event of service.promptSessionStreaming('session-1' as any, 'go')) {
+          // drain
+        }
+      })()
+    ).rejects.toThrow('Codex stream ended without a terminal completion event');
+  });
+
+  it('does not throw when stream ends after a user-requested stop', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    // The service clears stale stop flags before streaming starts, so calling
+    // stopTask() before promptSessionStreaming() has no effect. Instead, we
+    // override the mock Codex thread to signal the stop mid-stream (between
+    // yields) — the same ordering that occurs in production when the UI calls
+    // stopTask() while events are streaming.
+    const mockCodexClient = serviceWithPrivates.codex;
+    mockCodexClient.startThread = vi.fn(() => ({
+      id: 'mock-thread-id',
+      run: vi.fn(),
+      runStreamed: vi.fn().mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.started' };
+          // Signal stop after the first event — before the next event is
+          // processed the for-await loop will check stopRequested and break.
+          service.stopTask('session-1' as any);
+          yield {
+            type: 'item.started',
+            item: { id: 'x', type: 'command_execution', command: 'ls' },
+          };
+          // This event is never reached because the stop check fires first.
+          yield { type: 'turn.completed', usage: {} };
+        })(),
+      }),
+    }));
+
+    const emitted: Array<Record<string, unknown>> = [];
+    await expect(
+      (async () => {
+        for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+          emitted.push(event as Record<string, unknown>);
+        }
+      })()
+    ).resolves.toBeUndefined();
+
+    expect(emitted.some((e) => e.type === 'stopped')).toBe(true);
+  });
+
+  it('ignores unknown event_msg payload types without throwing', async () => {
+    const service = makeStreamingService();
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      { type: 'event_msg', payload: { type: 'some_future_payload_type', data: {} } },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 },
+      },
+    ];
+
+    const emitted: Array<Record<string, unknown>> = [];
+    for await (const event of service.promptSessionStreaming('session-1' as any, 'go')) {
+      emitted.push(event as Record<string, unknown>);
+    }
+
+    expect(emitted.some((e) => e.type === 'complete')).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MCP server config builder
 //
 // Regression coverage for the fix in this PR: every Codex MCP server config
@@ -1209,6 +1657,23 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       url: 'http://localhost:3030/mcp',
       default_tools_approval_mode: 'approve',
     });
+  });
+
+  it('passes forUserId to shared MCP scoping for per-user OAuth injection', async () => {
+    const service = makeService();
+
+    await (service as any).buildMcpServersConfig(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      undefined,
+      '019e3700-user-user-user-user00000001'
+    );
+
+    expect(mcpScopingMocks.getMcpServersForSession).toHaveBeenCalledWith(
+      '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+      expect.objectContaining({
+        forUserId: '019e3700-user-user-user-user00000001',
+      })
+    );
   });
 
   it('emits default_tools_approval_mode=approve on a stdio server', async () => {

@@ -97,7 +97,7 @@ the real `agor` repo (or its `test-branch`) created by `SEED`.
 ### Usage
 
 ```bash
-# Docker — recommended combo (real branch + rich fakes)
+# Docker — recommended combo (real branch + rich fakes), run directly on a host
 SEED=true LOAD_FIXTURES=true docker compose up
 
 # Just the demo data
@@ -108,6 +108,20 @@ pnpm load:fixtures
 pnpm load:fixtures --skip-if-exists
 pnpm tsx scripts/load-fixtures.ts --skip-if-exists --user-id <admin-uuid>
 ```
+
+#### In an Agor-managed env
+
+Agor-managed environments start from a pre-rendered command in [`.agor.yml`](../../../../.agor.yml),
+so you can't inject `LOAD_FIXTURES` by hand. Instead, pick a demo variant — these
+are the `sqlite` / `postgres` variants with `LOAD_FIXTURES=true` added alongside
+`SEED=true`:
+
+- **`sqlite-demo`** — SQLite + demo fixtures.
+- **`postgres-demo`** — Postgres + demo fixtures.
+
+Select one via the **Branch → Environment** tab variant picker, the MCP call
+`agor_environment_set({ branchId, variant: "sqlite-demo", andStart: true })`, or at
+branch creation with `variant: "sqlite-demo"`.
 
 The docker entrypoint runs `LOAD_FIXTURES` **after** `SEED`. Passing
 `--user-id <admin-uuid>` (the entrypoint passes the bootstrapped admin) also adds

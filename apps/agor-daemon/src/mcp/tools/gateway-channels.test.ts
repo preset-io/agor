@@ -3,7 +3,12 @@ import {
   GatewayChannelRepository,
   ThreadSessionMapRepository,
 } from '@agor/core/db';
-import { getConnector } from '@agor/core/gateway';
+import {
+  buildSlackManifest,
+  getConnector,
+  requiredBotEvents,
+  requiredBotScopes,
+} from '@agor/core/gateway';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -679,5 +684,134 @@ describe('agor_gateway_channels MCP tools', () => {
       target: 'thread:C123:171234.000100',
     });
     expect(existingThread.success).toBe(false);
+  });
+});
+
+describe('agor_gateway_slack_manifest_generate MCP tool', () => {
+  const dmOnly = {
+    appName: 'Agor',
+    publicChannels: false,
+    privateChannels: false,
+    groupDms: false,
+    alignUsers: false,
+    outbound: false,
+  };
+
+  it('marks the manifest generator read-only', async () => {
+    const tools = await captureTools('admin');
+    expect(tools.agor_gateway_slack_manifest_generate.cfg.annotations).toMatchObject({
+      readOnlyHint: true,
+    });
+  });
+
+  it('generates a DM-only manifest matching the core generator', async () => {
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler(dmOnly);
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.manifest).toEqual(buildSlackManifest(dmOnly));
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(dmOnly));
+    expect(payload.bot_events).toEqual(requiredBotEvents(dmOnly));
+    expect(payload.bot_scopes).not.toContain('app_mentions:read');
+    expect(payload.bot_events).toEqual(['message.im']);
+    expect(payload.create_channel_config_hint).toEqual({
+      channel_type: 'slack',
+      config: {
+        enable_channels: false,
+        enable_groups: false,
+        enable_mpim: false,
+        align_slack_users: false,
+        outbound_enabled: false,
+      },
+    });
+    expect(Array.isArray(payload.setup_steps)).toBe(true);
+    expect(payload.caveats).toEqual(
+      expect.arrayContaining([expect.stringContaining('GENERATED ONLY')])
+    );
+
+    // Secrets must never flow into the create payload the agent would paste —
+    // setup_steps reference the xoxb-/xapp- token names as instructions, so the
+    // no-token invariant is scoped to create_channel_config_hint.
+    const hintConfig = payload.create_channel_config_hint.config;
+    expect(hintConfig).not.toHaveProperty('bot_token');
+    expect(hintConfig).not.toHaveProperty('app_token');
+    const serializedHint = JSON.stringify(payload.create_channel_config_hint);
+    expect(serializedHint).not.toContain('bot_token');
+    expect(serializedHint).not.toContain('app_token');
+    expect(serializedHint).not.toContain('xoxb');
+    expect(serializedHint).not.toContain('xapp');
+  });
+
+  it('adds outbound scopes and config when outbound is enabled', async () => {
+    const opts = { ...dmOnly, outbound: true };
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler(opts);
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.manifest).toEqual(buildSlackManifest(opts));
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(opts));
+    expect(payload.bot_scopes).toEqual(expect.arrayContaining(['chat:write.public', 'im:write']));
+    expect(payload.create_channel_config_hint.config.outbound_enabled).toBe(true);
+  });
+
+  it('generates an all-on manifest and maps restrictToChannelIds to allowed_channel_ids', async () => {
+    const opts = {
+      appName: 'Agor',
+      botDisplayName: 'Agor Bot',
+      publicChannels: true,
+      privateChannels: true,
+      groupDms: true,
+      alignUsers: true,
+      outbound: true,
+    };
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler({
+      ...opts,
+      restrictToChannelIds: ['C123', 'C456'],
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.manifest).toEqual(buildSlackManifest(opts));
+    expect(payload.manifest.features.bot_user.display_name).toBe('Agor Bot');
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(opts));
+    expect(payload.bot_events).toEqual(requiredBotEvents(opts));
+    expect(payload.bot_events).toEqual(expect.arrayContaining(['app_mention', 'message.im']));
+    expect(payload.create_channel_config_hint.config).toMatchObject({
+      enable_channels: true,
+      enable_groups: true,
+      enable_mpim: true,
+      align_slack_users: true,
+      outbound_enabled: true,
+      allowed_channel_ids: ['C123', 'C456'],
+    });
+    expect(payload.caveats).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('restrictToChannelIds maps to config.allowed_channel_ids'),
+      ])
+    );
+    expect(payload.caveats).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/restrictToChannelIds.*does NOT change the manifest scopes/),
+      ])
+    );
+  });
+
+  it('applies schema defaults so omitted toggles yield a DM-only manifest', async () => {
+    const tools = await captureTools('admin');
+    const parsed = tools.agor_gateway_slack_manifest_generate.cfg.inputSchema.parse({
+      appName: 'Agor',
+    });
+    const result = await tools.agor_gateway_slack_manifest_generate.handler(parsed);
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.manifest).toEqual(buildSlackManifest(dmOnly));
+    expect(payload.create_channel_config_hint.config).not.toHaveProperty('allowed_channel_ids');
+  });
+
+  it('denies the manifest generator for non-admin users', async () => {
+    const tools = await captureTools('member');
+    await expect(tools.agor_gateway_slack_manifest_generate.handler(dmOnly)).rejects.toThrow(
+      'admin role required'
+    );
   });
 });

@@ -7,11 +7,10 @@
 import type {
   AgenticToolName,
   AuthCheckResult,
-  Board,
   Branch,
+  CloneRepositoryResult,
   CreateLocalRepoRequest,
   CreateRepoRequest,
-  Repo,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -26,6 +25,9 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import { selectBoardById } from '../../store/selectors';
+import type { CreateRepoOptions } from '../../types';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 
@@ -457,14 +459,14 @@ export interface OnboardingWizardProps {
   /** Called when the user dismisses the wizard without completing it. */
   onDismiss?: () => void;
 
-  repoById: Map<string, Repo>;
-  branchById: Map<string, Branch>;
-  boardById: Map<string, Board>;
   user?: User | null;
   // biome-ignore lint/suspicious/noExplicitAny: AgorClient type varies across package boundaries.
   client: any;
 
-  onCreateRepo: (data: CreateRepoRequest) => Promise<void>;
+  onCreateRepo: (
+    data: CreateRepoRequest,
+    options?: CreateRepoOptions
+  ) => Promise<CloneRepositoryResult | undefined>;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateBranch: (
     repoId: string,
@@ -520,7 +522,6 @@ export function OnboardingWizard({
   open,
   onComplete,
   onDismiss,
-  boardById,
   user,
   client,
   onCreateRepo: _onCreateRepo,
@@ -534,6 +535,12 @@ export function OnboardingWizard({
   void _onCreateBranch;
   void _onCreateSession;
 
+  // Self-subscribe to the board entity map this wizard reads (only
+  // repoById/branchById existed pre-redesign; boardById is still needed to
+  // detect whether the user already has a board). Subscribing here — rather
+  // than receiving it as a prop from the outer App shell — keeps the shell
+  // from re-rendering on every board write (see App/App.tsx's perf refactor).
+  const boardById = useAgorStore(selectBoardById);
   const { token } = useToken();
 
   // ── Token-derived styles (live, theme-aware) ────────────────────────────
@@ -1907,18 +1914,18 @@ export function OnboardingWizard({
         keyboard={false}
         footer={null}
         width={600}
+        style={{
+          background: MODAL_BG,
+          borderRadius: 20,
+          padding: 0,
+          boxShadow: '0 48px 120px rgba(0,0,0,0.95), inset 0 1px 0 rgba(255,255,255,0.14)',
+          overflow: 'hidden',
+        }}
         styles={{
           mask: {
             backdropFilter: 'blur(8px)',
             WebkitBackdropFilter: 'blur(8px)',
             background: 'rgba(0,0,0,0.35)',
-          },
-          content: {
-            background: MODAL_BG,
-            borderRadius: 20,
-            padding: 0,
-            boxShadow: '0 48px 120px rgba(0,0,0,0.95), inset 0 1px 0 rgba(255,255,255,0.14)',
-            overflow: 'hidden',
           },
           body: { padding: 0 },
         }}

@@ -21,8 +21,8 @@ vi.mock('@agor/core/config', async () => {
   };
 });
 
-vi.mock('@agor/core/git', async () => {
-  const actual = await vi.importActual<Record<string, unknown>>('@agor/core/git');
+vi.mock('../git/index.js', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('../git/index.js');
   return {
     ...actual,
     createGit: vi.fn(() => ({ git: { addConfig: mocks.addConfig, raw: mocks.gitRaw } })),

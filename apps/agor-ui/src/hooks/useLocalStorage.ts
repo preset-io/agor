@@ -26,21 +26,29 @@ export function useLocalStorage<T>(
   const keyRef = useRef(key);
   keyRef.current = key;
 
+  // Mirror the latest value into a ref so the functional form of `setValue` can
+  // resolve against it WITHOUT persisting + dispatching from inside the
+  // `setStoredValue` updater. React runs updaters during the render phase, so a
+  // change event dispatched there would make a sibling hook's listener call
+  // setState mid-render; keeping the side effects in the setter body (an
+  // event/effect context) keeps them out of render.
+  const storedValueRef = useRef(storedValue);
+  storedValueRef.current = storedValue;
+
   // Stable setter that persists to localStorage
   const setValue = useCallback((value: T | ((val: T) => T)) => {
     try {
-      setStoredValue((prev) => {
-        const valueToStore = value instanceof Function ? value(prev) : value;
-        writeLocalStorageJson(keyRef.current, valueToStore);
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(
-            new CustomEvent<LocalStorageChangeDetail>(LOCAL_STORAGE_CHANGE_EVENT, {
-              detail: { key: keyRef.current, value: valueToStore },
-            })
-          );
-        }
-        return valueToStore;
-      });
+      const valueToStore =
+        value instanceof Function ? (value as (val: T) => T)(storedValueRef.current) : value;
+      writeLocalStorageJson(keyRef.current, valueToStore);
+      setStoredValue(valueToStore);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent<LocalStorageChangeDetail>(LOCAL_STORAGE_CHANGE_EVENT, {
+            detail: { key: keyRef.current, value: valueToStore },
+          })
+        );
+      }
     } catch (error) {
       console.error(`Error setting localStorage key "${keyRef.current}":`, error);
     }

@@ -23,6 +23,7 @@ import type { Part as OpenCodePart } from '@opencode-ai/sdk';
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
@@ -101,7 +102,8 @@ export class OpenCodeTool implements ITool {
     config: OpenCodeConfig,
     messagesService?: MessagesService,
     sessionMCPRepo?: SessionMCPServerRepository,
-    mcpServerRepo?: MCPServerRepository
+    mcpServerRepo?: MCPServerRepository,
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     this.config = config;
     this.messagesService = messagesService;
@@ -239,6 +241,7 @@ export class OpenCodeTool implements ITool {
         const servers = await getMcpServersForSession(sessionId as SessionID, {
           sessionMCPRepo: this.sessionMCPRepo,
           mcpServerRepo: this.mcpServerRepo,
+          mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
         });
 
         for (const { server } of servers) {

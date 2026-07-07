@@ -1,5 +1,5 @@
 import { loadConfigSync } from '@agor/core/config';
-import { type Database, UsersRepository } from '@agor/core/db';
+import { type TenantScopeAwareDatabase, UsersRepository } from '@agor/core/db';
 import type { User, UserID } from '@agor/core/types';
 
 /**
@@ -12,7 +12,7 @@ import type { User, UserID } from '@agor/core/types';
  * requesting user.
  */
 export async function resolveExecutorReadAsUser(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   userOrId: User | UserID | undefined | null
 ): Promise<string | undefined> {
   const config = loadConfigSync();

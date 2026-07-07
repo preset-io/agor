@@ -263,7 +263,8 @@ Before enabling RBAC + Unix integration, ensure:
 ```yaml
 # ~/.agor/config.yaml
 execution:
-  # Enable RBAC + Unix integration
+  # Enable app-level RBAC. This does not create Unix groups or require sudoers
+  # unless paired with a non-simple unix_user_mode.
   branch_rbac: true
 
   # Unix user mode (choose one):
@@ -894,7 +895,7 @@ GET    /messages/:id                            # 403 if no view permission on s
 
 ## Conclusion
 
-Agor's RBAC + Unix integration brings back the benefits of shared development environments while adding modern multi-tenant security. By coupling app-layer permission checks with OS-layer enforcement, teams can collaborate closely while maintaining proper isolation and audit trails.
+Agor's RBAC and Unix integration bring back the benefits of shared development environments while adding modern multi-tenant security. App-layer permissions and OS-layer enforcement are configured independently: teams can enable RBAC for organization, then add Unix isolation when they need filesystem/process enforcement.
 
 **Start simple** (Mode 1: Open Access), **add RBAC when you need organization** (Mode 2: Soft Privacy), and **enable Unix integration when you need true security** (Mode 3: Hard Security).
 

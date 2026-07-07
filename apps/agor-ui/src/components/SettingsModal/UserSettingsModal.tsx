@@ -5,7 +5,6 @@ import type {
   EnvVarScope,
   Group,
   GroupMembership,
-  MCPServer,
   UpdateUserInput,
   User,
 } from '@agor-live/client';
@@ -40,6 +39,8 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import { selectMcpServerById } from '../../store/selectors';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import {
@@ -76,7 +77,6 @@ export interface UserSettingsModalProps {
   open: boolean;
   onClose: () => void;
   user: User | null;
-  mcpServerById: Map<string, MCPServer>;
   client: AgorClient | null;
   currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
@@ -88,13 +88,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   open,
   onClose,
   user,
-  mcpServerById,
   client,
   currentUser,
   onUpdate,
   onRestartOnboarding,
   initialTab,
 }) => {
+  // Entity maps are read from the store rather than drilled through props so
+  // the App shell doesn't have to forward them into every modal.
+  const mcpServerById = useAgorStore(selectMcpServerById);
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState<string>(initialTab ?? 'general');
   const initializedUserIdRef = useRef<string | null>(null);
@@ -196,6 +198,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         unix_username: userData.unix_username,
         groupIds: [],
         eventStreamEnabled: userData.preferences?.eventStream?.enabled ?? true,
+        useSlackAvatar: userData.preferences?.use_slack_avatar !== false,
         must_change_password: userData.must_change_password ?? false,
       });
     },
@@ -251,6 +254,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Hydrate tab-specific forms only after that tab has rendered its
   // corresponding <Form>. Calling setFieldsValue on never-mounted form
   // instances triggers Ant's "useForm is not connected" console warning.
+  //
+  // `agenticConfigDraftByTool` is intentionally NOT a dependency: it is read as
+  // a "prefer the in-progress edit over the persisted config" source, but must
+  // not itself re-trigger hydration. On tab switch the effect already re-runs
+  // (via `activeTab`) with a fresh closure over the latest draft. Including the
+  // draft in the deps caused a post-save revert (#1769): `saveAgenticConfigs`
+  // clears the draft immediately after the patch resolves, which re-ran this
+  // effect against a `user` prop that had not yet been refreshed by the realtime
+  // `patched` event — reapplying the stale/empty config and wiping the just-saved
+  // model. Reacting only to `activeTab`/`user`/`open` keeps hydration correct
+  // while leaving the saved value in place until fresh `user` data arrives.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: draft is read-only here; see comment above.
   useEffect(() => {
     if (!open || !user) return;
 
@@ -272,7 +287,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
       });
     }
-  }, [activeTab, agenticConfigDraftByTool, audioForm, agenticFormByTool, open, user]);
+  }, [activeTab, audioForm, agenticFormByTool, open, user]);
 
   // Rehydrate per-tool credential presence and env-var metadata from the
   // server every time the modal opens, so flags reflect the latest patch.
@@ -375,18 +390,25 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     try {
       await form.validateFields(['email', 'name', 'emoji', 'role', 'unix_username']);
       const values = form.getFieldsValue();
+      const nextPreferences: NonNullable<UpdateUserInput['preferences']> = {
+        ...user.preferences,
+        eventStream: {
+          enabled: values.eventStreamEnabled ?? true,
+        },
+      };
+      if (values.useSlackAvatar === false) {
+        nextPreferences.use_slack_avatar = false;
+      } else {
+        delete nextPreferences.use_slack_avatar;
+      }
+
       const updates: UpdateUserInput = {
         email: values.email,
         name: values.name,
         emoji: values.emoji,
         role: values.role,
         unix_username: values.unix_username,
-        preferences: {
-          ...user.preferences,
-          eventStream: {
-            enabled: values.eventStreamEnabled ?? true,
-          },
-        },
+        preferences: nextPreferences,
       };
       if (values.password?.trim()) {
         updates.password = values.password;
@@ -765,6 +787,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 name="eventStreamEnabled"
                 valuePropName="checked"
                 tooltip="Show/hide the event stream icon in the navbar. When enabled, you can view live WebSocket events for debugging."
+              >
+                <Switch />
+              </Form.Item>
+
+              <Form.Item
+                label="Use Slack avatar when available"
+                name="useSlackAvatar"
+                valuePropName="checked"
+                tooltip="When enabled, Agor shows your Slack-synced profile image. Turn this off to keep using your emoji tile."
               >
                 <Switch />
               </Form.Item>

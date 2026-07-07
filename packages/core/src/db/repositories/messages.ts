@@ -6,10 +6,11 @@
  */
 
 import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { type MessageInsert, type MessageRow, messages } from '../schema';
+import { visibleSessionReferenceAccessExists } from './branch-access';
 
 export class MessagesRepository {
   constructor(private db: Database) {}
@@ -90,8 +91,32 @@ export class MessagesRepository {
   /**
    * Get all messages (used by FeathersJS service adapter)
    */
-  async findAll(): Promise<Message[]> {
-    const rows = await select(this.db).from(messages).orderBy(messages.index).all();
+  async findAll(filter?: {
+    sessionId?: SessionID;
+    sessionIds?: SessionID[];
+    taskId?: TaskID;
+    type?: Message['type'];
+    role?: Message['role'];
+    visibleToUserId?: UUID;
+  }): Promise<Message[]> {
+    if (filter?.sessionIds !== undefined && filter.sessionIds.length === 0) return [];
+
+    const conditions = [];
+    if (filter?.sessionId) conditions.push(eq(messages.session_id, filter.sessionId));
+    if (filter?.sessionIds !== undefined)
+      conditions.push(inArray(messages.session_id, filter.sessionIds));
+    if (filter?.taskId) conditions.push(eq(messages.task_id, filter.taskId));
+    if (filter?.type) conditions.push(eq(messages.type, filter.type));
+    if (filter?.role) conditions.push(eq(messages.role, filter.role));
+    if (filter?.visibleToUserId) {
+      conditions.push(
+        visibleSessionReferenceAccessExists(this.db, filter.visibleToUserId, messages.session_id)
+      );
+    }
+
+    let query = select(this.db).from(messages);
+    if (conditions.length > 0) query = query.where(and(...conditions));
+    const rows = await query.orderBy(messages.index).all();
     return rows.map((r: MessageRow) => this.rowToMessage(r));
   }
 

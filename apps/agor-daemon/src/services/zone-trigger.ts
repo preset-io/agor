@@ -11,13 +11,14 @@
  * same session-defaults resolution, same MCP-attach behaviour.
  */
 
-import type { Database } from '@agor/core/db';
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-context';
 import type { AgenticToolName, Branch, Session, Task, User } from '@agor/core/types';
 import { inspectBranchViaExecutor } from '../utils/branch-inspect.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
+import { serviceTokenScopeForParams } from '../utils/spawn-executor.js';
 
 export interface FireAlwaysNewZoneTriggerInput {
   // biome-ignore lint/suspicious/noExplicitAny: Feathers app type varies across callers
@@ -87,12 +88,13 @@ export async function fireAlwaysNewZoneTrigger(
     mcp_server_ids: inheritedMcpIds,
   } = resolveSessionDefaults({ agenticTool, user, branch });
 
-  const db = (app.get('database') ?? app.get('db')) as Database | undefined;
+  const db = (app.get('database') ?? app.get('db')) as TenantScopeAwareDatabase | undefined;
   const asUser = db ? await resolveExecutorReadAsUser(db, user) : undefined;
 
   const { currentSha, currentRef } = await inspectBranchViaExecutor(app, branch.branch_id, {
     asUser,
     logPrefix: `[zone-trigger ${branch.name}]`,
+    serviceTokenScope: serviceTokenScopeForParams(params),
   });
 
   const newSession: Session = await app.service('sessions').create(

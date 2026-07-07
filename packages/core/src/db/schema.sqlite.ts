@@ -221,6 +221,7 @@ export const sessions = sqliteTable(
   },
   (table) => ({
     statusIdx: index('sessions_status_idx').on(table.status),
+    statusReadyIdx: index('sessions_status_ready_idx').on(table.status, table.ready_for_prompt),
     agenticToolIdx: index('sessions_agentic_tool_idx').on(table.agentic_tool),
     boardIdx: index('sessions_board_idx').on(table.board_id),
     branchIdx: index('sessions_branch_idx').on(table.branch_id),
@@ -278,6 +279,9 @@ export const sessionRelationships = sqliteTable(
     sourceIdx: index('session_relationships_source_idx').on(table.source_session_id),
     targetIdx: index('session_relationships_target_idx').on(table.target_session_id),
     callbackIdx: index('session_relationships_callback_idx').on(table.callback_session_id),
+    // Note: no tenant_source/tenant_target composite indexes here — SQLite schema
+    // has no tenant column on this table (RLS is Postgres-only). The standalone
+    // source/target indexes above are sufficient for SQLite.
     sourceTargetTypeUnique: uniqueIndex('session_relationships_source_target_type_unique').on(
       table.source_session_id,
       table.target_session_id,
@@ -474,6 +478,11 @@ export const messages = sqliteTable(
     sessionIdx: index('messages_session_id_idx').on(table.session_id),
     taskIdx: index('messages_task_id_idx').on(table.task_id),
     sessionIndexIdx: index('messages_session_index_idx').on(table.session_id, table.index),
+    timestampIdx: index('messages_timestamp_idx').on(table.timestamp),
+    sessionTimestampIdx: index('messages_session_timestamp_idx').on(
+      table.session_id,
+      table.timestamp
+    ),
   })
 );
 
@@ -912,11 +921,19 @@ export const users = sqliteTable(
     // Force password change flag (admin-settable, auto-cleared on password change)
     must_change_password: t.bool('must_change_password').notNull().default(false),
 
+    // Auth invalidation marker. Password changes set this timestamp so any
+    // previously issued browser access or refresh token is rejected.
+    tokens_valid_after: t.timestamp('tokens_valid_after'),
+
     // JSON blob for profile/preferences
     data: t
       .json<unknown>('data')
       .$type<{
         avatar?: string;
+        avatar_url?: string;
+        avatar_source?: string;
+        avatar_source_id?: string;
+        avatar_synced_at?: string;
         preferences?: Record<string, unknown>;
         // Stable external-auth identity mappings used by generic launch-code auth.
         external_identities?: UserExternalIdentity[];

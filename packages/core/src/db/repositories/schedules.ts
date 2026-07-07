@@ -17,7 +17,15 @@ import type {
 import { and, asc, desc, eq, isNull, like, lte, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  isPostgresDatabase,
+  lockRowForUpdate,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
 import {
   branches,
   branchOwners,
@@ -26,6 +34,7 @@ import {
   schedules,
 } from '../schema';
 import {
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
@@ -34,6 +43,11 @@ import {
 } from './base';
 import { visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
+
+export interface DueScheduleRef {
+  schedule_id: ScheduleID;
+  tenant_id?: string;
+}
 
 export class ScheduleRepository implements BaseRepository<Schedule, Partial<Schedule>> {
   constructor(private db: Database) {}
@@ -50,26 +64,29 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         ? (JSON.parse(row.agentic_tool_config) as ScheduleAgenticToolConfig)
         : (row.agentic_tool_config as ScheduleAgenticToolConfig);
 
-    return {
-      schedule_id: row.schedule_id as ScheduleID,
-      branch_id: row.branch_id as BranchID,
-      name: row.name,
-      description: row.description ?? undefined,
-      cron_expression: row.cron_expression,
-      timezone_mode: row.timezone_mode as TimezoneMode,
-      timezone: row.timezone ?? undefined,
-      prompt: row.prompt,
-      agentic_tool_config: config,
-      enabled: Boolean(row.enabled),
-      allow_concurrent_runs: Boolean(row.allow_concurrent_runs),
-      retention: row.retention,
-      last_run_at: row.last_run_at ?? undefined,
-      last_run_session_id: (row.last_run_session_id as SessionID | null) ?? undefined,
-      next_run_at: row.next_run_at ?? undefined,
-      created_at: new Date(row.created_at).toISOString(),
-      updated_at: new Date(row.updated_at).toISOString(),
-      created_by: row.created_by as UUID,
-    };
+    return attachHiddenTenant(
+      {
+        schedule_id: row.schedule_id as ScheduleID,
+        branch_id: row.branch_id as BranchID,
+        name: row.name,
+        description: row.description ?? undefined,
+        cron_expression: row.cron_expression,
+        timezone_mode: row.timezone_mode as TimezoneMode,
+        timezone: row.timezone ?? undefined,
+        prompt: row.prompt,
+        agentic_tool_config: config,
+        enabled: Boolean(row.enabled),
+        allow_concurrent_runs: Boolean(row.allow_concurrent_runs),
+        retention: row.retention,
+        last_run_at: row.last_run_at ?? undefined,
+        last_run_session_id: (row.last_run_session_id as SessionID | null) ?? undefined,
+        next_run_at: row.next_run_at ?? undefined,
+        created_at: new Date(row.created_at).toISOString(),
+        updated_at: new Date(row.updated_at).toISOString(),
+        created_by: row.created_by as UUID,
+      },
+      row
+    );
   }
 
   private scheduleToInsert(s: Partial<Schedule>): ScheduleInsert {
@@ -204,18 +221,46 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
    *
    * Uses the `schedules_enabled_next_run_idx` covering index.
    */
+  private dueCondition(now: number) {
+    return and(
+      eq(schedules.enabled, true),
+      or(isNull(schedules.next_run_at), lte(schedules.next_run_at, now))
+    );
+  }
+
   async findDue(now: number = Date.now()): Promise<Schedule[]> {
     const rows = await select(this.db)
       .from(schedules)
-      .where(
-        and(
-          eq(schedules.enabled, true),
-          or(isNull(schedules.next_run_at), lte(schedules.next_run_at, now))
-        )
-      )
+      .where(this.dueCondition(now))
       .orderBy(asc(schedules.next_run_at))
       .all();
     return rows.map((row: ScheduleRow) => this.rowToSchedule(row));
+  }
+
+  /**
+   * Scheduler discovery query. Returns only routing metadata so background
+   * workers can enter the correct tenant DB scope before loading schedule
+   * contents or spawning sessions.
+   */
+  async findDueRefs(now: number = Date.now()): Promise<DueScheduleRef[]> {
+    const tenantColumn = (schedules as unknown as { tenant_id?: unknown }).tenant_id;
+    const columns =
+      isPostgresDatabase(this.db) && tenantColumn
+        ? { schedule_id: schedules.schedule_id, tenant_id: tenantColumn }
+        : { schedule_id: schedules.schedule_id };
+
+    const rows = await select(this.db, columns)
+      .from(schedules)
+      .where(this.dueCondition(now))
+      .orderBy(asc(schedules.next_run_at))
+      .all();
+
+    return (rows as Array<{ schedule_id: string; tenant_id?: unknown }>).map((row) => ({
+      schedule_id: row.schedule_id as ScheduleID,
+      ...(typeof row.tenant_id === 'string' && row.tenant_id.length > 0
+        ? { tenant_id: row.tenant_id }
+        : {}),
+    }));
   }
 
   /**

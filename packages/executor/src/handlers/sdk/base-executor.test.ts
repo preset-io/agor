@@ -25,9 +25,46 @@ function makeClient(error: unknown) {
   } as never;
 }
 
+function makeSuccessfulClient(capture: { data?: unknown }) {
+  return {
+    executorSessionToken: 'executor-jwt',
+    service(name: string) {
+      if (name !== 'config/resolve-api-key') {
+        throw new Error(`unexpected service ${name}`);
+      }
+      return {
+        create: vi.fn(async (data: unknown) => {
+          capture.data = data;
+          return { apiKey: 'daemon-key', source: 'user', useNativeAuth: false };
+        }),
+      };
+    },
+  } as never;
+}
+
 describe('resolveApiKeyForTask', () => {
   beforeEach(() => {
     vi.mocked(resolveApiKey).mockReset();
+  });
+
+  it('sends the executor session token as explicit task-scoped proof', async () => {
+    const capture: { data?: unknown } = {};
+
+    await expect(
+      resolveApiKeyForTask(
+        'OPENAI_API_KEY',
+        makeSuccessfulClient(capture),
+        'task-1' as never,
+        'codex' as never
+      )
+    ).resolves.toMatchObject({ apiKey: 'daemon-key', source: 'user' });
+
+    expect(capture.data).toMatchObject({
+      taskId: 'task-1',
+      keyName: 'OPENAI_API_KEY',
+      tool: 'codex',
+      executorSessionToken: 'executor-jwt',
+    });
   });
 
   it('does not fall back to local secret resolution after daemon authorization rejection', async () => {

@@ -11,7 +11,11 @@ import type { BranchModalTab } from '../components/BranchModal/BranchModal';
  */
 export interface AppActionsContextValue {
   // Session actions
-  onSendPrompt?: (sessionId: string, prompt: string, permissionMode?: PermissionMode) => void;
+  onSendPrompt?: (
+    sessionId: string,
+    prompt: string,
+    permissionMode?: PermissionMode
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onFork?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;
   onSubsession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;

@@ -4,7 +4,7 @@
  * Effort level controls how much reasoning Claude applies.
  * Maps to Claude API's output_config.effort and the Claude Code CLI's --effort flag.
  */
-export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 import type {
   AgenticToolName,

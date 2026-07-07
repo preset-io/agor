@@ -1,20 +1,19 @@
 import type { KnowledgeDocument as CoreKnowledgeDocument } from '@agor/core/types';
-import type { AgorClient, Board, Branch, Repo, Session, User } from '@agor-live/client';
+import type { AgorClient } from '@agor-live/client';
 
 export interface HomePageProps {
   client: AgorClient | null;
   connected?: boolean;
-  boardById: Map<string, Board>;
   recentBoardIds?: string[];
-  branchById: Map<string, Branch>;
-  repoById: Map<string, Repo>;
-  sessionById: Map<string, Session>;
-  sessionsByBranch: Map<string, Session[]>;
-  userById: Map<string, User>;
   currentUserId?: string;
   onBoardClick: (boardId: string) => void;
   onBranchClick: (branchId: string) => void;
   onSessionClick: (sessionId: string) => void;
+  onOpenCreateDialog: (
+    tab: 'assistant' | 'branch' | 'board' | 'repository',
+    boardId?: string
+  ) => void;
+  onOpenSettings: (section: 'repos' | 'mcp' | 'users') => void;
 }
 
 export interface KnowledgeDocument

@@ -5,7 +5,7 @@
  * Uses the repository pattern from @agor/core/db for type-safe database operations.
  */
 
-import type { Id, NullableId, Paginated, Params } from '@agor/core/types';
+import type { Id, NullableId, Paginated, Params, TenantContext } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 
 /**
@@ -81,6 +81,38 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   // Event emitter for FeathersJS (will be injected by framework)
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS event system
   emit?: (event: string, ...args: any[]) => boolean;
+
+  /** Extract resolved tenant context from Feathers params. */
+  private getTenant(params?: P): TenantContext | undefined {
+    return (params as (P & { tenant?: TenantContext }) | undefined)?.tenant;
+  }
+
+  /**
+   * Whether a row belongs to the current tenant. Rows from pre-migration test
+   * fixtures that do not expose tenant_id are treated as visible so existing
+   * single-tenant unit tests keep working; migrated DB rows always carry it.
+   */
+  private rowBelongsToTenant(row: T, tenant: TenantContext | undefined): boolean {
+    if (!tenant) return true;
+    const record = row as Record<string, unknown>;
+    if (!('tenant_id' in record)) return true;
+    return record.tenant_id === tenant.tenant_id;
+  }
+
+  /** Stamp tenant_id onto created rows and prevent client-supplied drift. */
+  private withTenant(data: D | Partial<T>, params?: P): D | Partial<T> {
+    const tenant = this.getTenant(params);
+    if (!tenant || !data || typeof data !== 'object' || Array.isArray(data)) return data;
+    return { ...(data as Record<string, unknown>), tenant_id: tenant.tenant_id } as D | Partial<T>;
+  }
+
+  /** Never allow a patch/update to move a row across tenants. */
+  private stripTenantMutation(data: D | Partial<T>): D | Partial<T> {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+    const clone = { ...(data as Record<string, unknown>) };
+    delete clone.tenant_id;
+    return clone as D | Partial<T>;
+  }
 
   constructor(
     private repository: Repository<T>,
@@ -215,13 +247,32 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   }
 
   /**
+   * Resolve the candidate row set that `find` filters, sorts, and paginates.
+   *
+   * The base implementation reads the whole table and relies on `filterData` to
+   * narrow it in memory. Subclasses may override this to push high-selectivity
+   * predicates into SQL; because `find` always re-applies every query filter via
+   * `filterData`, an override only needs to return a superset of the matching
+   * rows for the result to stay identical.
+   */
+  protected async fetchData(_query: Query, _params?: P): Promise<T[]> {
+    return this.repository.findAll();
+  }
+
+  /**
    * Find records
    */
   async find(params?: P): Promise<Paginated<T> | T[]> {
     const query = this.getQuery(params);
 
-    // Get all data from repository
-    let data = await this.repository.findAll();
+    // Get the candidate row set (whole table by default; subclasses may push
+    // predicates into SQL — filterData below still applies every query filter)
+    let data = await this.fetchData(query, params);
+
+    const tenant = this.getTenant(params);
+    if (tenant) {
+      data = data.filter((row) => this.rowBelongsToTenant(row, tenant));
+    }
 
     // Apply filters
     data = this.filterData(data, query);
@@ -263,12 +314,17 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       prefetched &&
       prefetched.idField === this.id &&
       prefetched.id === String(id) &&
-      String((prefetched.record as Record<string, unknown>)[this.id]) === String(id)
+      String((prefetched.record as Record<string, unknown>)[this.id]) === String(id) &&
+      this.rowBelongsToTenant(prefetched.record, this.getTenant(_params))
     ) {
       return prefetched.record;
     }
 
     const result = await this.repository.findById(String(id));
+
+    if (result && !this.rowBelongsToTenant(result, this.getTenant(_params))) {
+      throw new NotFoundError(this.resourceType, String(id));
+    }
 
     if (!result) {
       throw new NotFoundError(this.resourceType, String(id));
@@ -284,7 +340,9 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     if (Array.isArray(data)) {
       // Bulk create
       const results = await Promise.all(
-        data.map((item) => this.repository.create(item as Partial<T>))
+        data.map((item) =>
+          this.repository.create(this.withTenant(item as Partial<T>, params) as Partial<T>)
+        )
       );
       // Emit created event for each item
       for (const result of results) {
@@ -293,7 +351,9 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       return results;
     }
 
-    const result = await this.repository.create(data as Partial<T>);
+    const result = await this.repository.create(
+      this.withTenant(data as Partial<T>, params) as Partial<T>
+    );
     this.emit?.('created', result, params);
     return result;
   }
@@ -312,7 +372,10 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     // Verify record exists (throws NotFoundError if not found)
     await this.get(id, params);
 
-    const result = await this.repository.update(String(id), data as Partial<T>);
+    const result = await this.repository.update(
+      String(id),
+      this.stripTenantMutation(data as Partial<T>) as Partial<T>
+    );
     this.emit?.('updated', result, params);
     return result;
   }
@@ -330,13 +393,15 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       // Find all matching records and patch them
       const query = this.getQuery(params);
       let records = await this.repository.findAll();
+      const tenant = this.getTenant(params);
+      if (tenant) records = records.filter((row) => this.rowBelongsToTenant(row, tenant));
       records = this.filterData(records, query);
 
       const results = await Promise.all(
         records.map((record) =>
           this.repository.update(
             (record as Record<string, unknown>)[this.id] as string,
-            data as Partial<T>
+            this.stripTenantMutation(data as Partial<T>) as Partial<T>
           )
         )
       );
@@ -353,7 +418,10 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     // Verify record exists (throws NotFoundError if not found)
     await this.get(id, params);
 
-    const result = await this.repository.update(String(id), data as Partial<T>);
+    const result = await this.repository.update(
+      String(id),
+      this.stripTenantMutation(data as Partial<T>) as Partial<T>
+    );
     this.emit?.('patched', result, params);
     return result;
   }
@@ -371,6 +439,8 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       // Find all matching records and remove them
       const query = this.getQuery(params);
       let records = await this.repository.findAll();
+      const tenant = this.getTenant(params);
+      if (tenant) records = records.filter((row) => this.rowBelongsToTenant(row, tenant));
       records = this.filterData(records, query);
 
       // biome-ignore lint/suspicious/noExplicitAny: Need to access ID field dynamically

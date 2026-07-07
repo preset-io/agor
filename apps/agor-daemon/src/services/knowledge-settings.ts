@@ -1,11 +1,11 @@
 import { type AgorKnowledgeSettings, loadConfig, saveConfig } from '@agor/core/config';
 import {
   AppVariableRepository,
-  type Database,
   executeRaw,
   isPostgresDatabase,
   kbDocumentUnits,
   sql,
+  type TenantScopeAwareDatabase,
   update,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -57,7 +57,7 @@ export class KnowledgeSettingsService {
   private variables: AppVariableRepository;
 
   constructor(
-    private db: Database,
+    private db: TenantScopeAwareDatabase,
     private app?: Application
   ) {
     this.variables = new AppVariableRepository(db);
@@ -258,7 +258,7 @@ export class KnowledgeSettingsService {
 }
 
 export function createKnowledgeSettingsService(
-  db: Database,
+  db: TenantScopeAwareDatabase,
   app?: Application
 ): KnowledgeSettingsService {
   return new KnowledgeSettingsService(db, app);

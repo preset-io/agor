@@ -4,10 +4,10 @@
 
 import { PAGINATION } from '@agor/core/config';
 import {
-  type Database,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
   KnowledgeNamespaceRepository,
+  type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import {
@@ -42,7 +42,7 @@ export class KnowledgeVersionsService extends DrizzleService<
   private documents: KnowledgeDocumentRepository;
   private namespaces: KnowledgeNamespaceRepository;
 
-  constructor(db: Database) {
+  constructor(db: TenantScopeAwareDatabase) {
     const versions = new KnowledgeDocumentVersionRepository(db);
     super(versions, {
       id: 'version_id',
@@ -115,6 +115,8 @@ export class KnowledgeVersionsService extends DrizzleService<
   }
 }
 
-export function createKnowledgeVersionsService(db: Database): KnowledgeVersionsService {
+export function createKnowledgeVersionsService(
+  db: TenantScopeAwareDatabase
+): KnowledgeVersionsService {
   return new KnowledgeVersionsService(db);
 }

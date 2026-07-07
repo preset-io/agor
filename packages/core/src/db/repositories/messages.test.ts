@@ -15,6 +15,7 @@ import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
+import { UsersRepository } from './users';
 
 // Counter to ensure unique repo/branch names across tests
 let testCounter = 0;
@@ -286,6 +287,68 @@ describe('MessagesRepository.findAll', () => {
     expect(all[0].index).toBe(0);
     expect(all[1].index).toBe(1);
     expect(all[2].index).toBe(2);
+  });
+
+  dbTest('should restrict by visibleToUserId through session branch access', async ({ db }) => {
+    const messages = new MessagesRepository(db);
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branches = new BranchRepository(db);
+    const sessions = new SessionRepository(db);
+    const viewerId = generateId() as UUID;
+    await users.create({
+      user_id: viewerId,
+      email: 'messages-visible@example.com',
+      name: 'Messages Viewer',
+    });
+    const repo = await repos.create({
+      slug: `messages-visible-${testCounter++}`,
+      name: 'Messages Visible',
+      repo_type: 'remote',
+      remote_url: 'https://github.com/test/repo.git',
+      local_path: `/tmp/messages-visible-${testCounter}`,
+      default_branch: 'main',
+    });
+    const visibleBranch = await branches.create({
+      repo_id: repo.repo_id,
+      name: `visible-${testCounter}`,
+      path: `/tmp/visible-${testCounter}`,
+      ref: 'main',
+      branch_unique_id: testCounter++,
+      created_by: 'test-user' as UUID,
+      permission_source: 'override',
+      others_can: 'none',
+    });
+    const hiddenBranch = await branches.create({
+      repo_id: repo.repo_id,
+      name: `hidden-${testCounter}`,
+      path: `/tmp/hidden-${testCounter}`,
+      ref: 'main',
+      branch_unique_id: testCounter++,
+      created_by: 'test-user' as UUID,
+      permission_source: 'override',
+      others_can: 'none',
+    });
+    await branches.addOwner(visibleBranch.branch_id, viewerId);
+    const visibleSession = await sessions.create({
+      branch_id: visibleBranch.branch_id,
+      title: 'visible',
+      created_by: 'test-user' as UUID,
+    });
+    const hiddenSession = await sessions.create({
+      branch_id: hiddenBranch.branch_id,
+      title: 'hidden',
+      created_by: 'test-user' as UUID,
+    });
+    const visibleMessage = await messages.create(
+      createMessageData({ session_id: visibleSession.session_id as SessionID, index: 0 })
+    );
+    await messages.create(
+      createMessageData({ session_id: hiddenSession.session_id as SessionID, index: 1 })
+    );
+
+    const visible = await messages.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((m) => m.message_id)).toEqual([visibleMessage.message_id]);
   });
 });
 

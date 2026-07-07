@@ -41,7 +41,6 @@ function encEntry(value: string, scope: StoredEnvVar['scope']): StoredEnvVar {
   };
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: test helper
 async function createUserWithEnv(db: any, envVars: Record<string, unknown>): Promise<UserID> {
   const usersRepo = new UsersRepository(db);
   const user = await usersRepo.create({
@@ -61,7 +60,6 @@ async function createUserWithEnv(db: any, envVars: Record<string, unknown>): Pro
   return user.user_id as UserID;
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: test helper
 async function createSessionForUser(db: any, userId: UserID): Promise<SessionID> {
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);
@@ -215,7 +213,6 @@ describe('resolveUserEnvironment — per-tool credential scoping', () => {
    * we can verify that selecting one tool does not surface another's keys.
    * Mirrors the on-disk shape: `data.agentic_tools[tool][envVarName] = encrypted`.
    */
-  // biome-ignore lint/suspicious/noExplicitAny: test helper
   async function createUserWithToolCreds(db: any): Promise<UserID> {
     const usersRepo = new UsersRepository(db);
     const user = await usersRepo.create({

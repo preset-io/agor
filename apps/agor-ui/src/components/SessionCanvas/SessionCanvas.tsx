@@ -62,6 +62,19 @@ import {
 } from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
+import { useStableCallback } from '../../hooks/useStableCallback';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  makeBoardObjectsForBoardSelector,
+  makeSessionsForBranchSelector,
+  selectBranchById,
+  selectCardById,
+  selectCommentById,
+  selectMcpServerById,
+  selectRepoById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
 import { REACT_FLOW_DRAG_HANDLE_SELECTOR } from '../../utils/reactFlowDragClasses';
 import { sanitizeBoardCss } from '../../utils/sanitizeCss';
@@ -90,21 +103,17 @@ import {
 } from './canvas/utils/coordinateTransforms';
 import { getValidZoneParentId, sanitizeOrphanedNodeParents } from './canvas/utils/nodeParentUtils';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
+import { DEFAULT_BOARD_OBJECT_Z_INDEX, selectedZIndex } from './canvas/zOrder';
 
 interface SessionCanvasProps {
   board: Board | null;
   client: AgorClient | null;
-  sessionById: Map<string, Session>; // O(1) ID lookups
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
-  userById: Map<string, User>; // Map-based user storage
-  repoById: Map<string, Repo>; // Map-based repo storage
+  // Entity maps (sessions, branches, repos, users, board objects, comments,
+  // cards, MCP servers) are read from the zustand store via narrow selector
+  // subscriptions rather than props — the canvas re-renders only for the slices
+  // it actually consumes.
   branches: Branch[];
   primaryAssistantId?: string | null;
-  branchById: Map<string, Branch>;
-  boardObjectById: Map<string, BoardEntityObject>; // Map-based board object storage
-  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
-  commentById: Map<string, BoardComment>; // Map-based comment storage
-  cardById: Map<string, CardWithType>; // Map-based card storage for this board
   currentUserId?: string;
   selectedSessionId?: string | null;
   /** Branch currently targeted by a `/w/<…>/` deep link — folds into
@@ -114,8 +123,6 @@ interface SessionCanvasProps {
    *  ArtifactNode's dashed "selected" outline. */
   activeUrlTargetArtifactId?: string | null;
   availableAgents?: AgenticToolOption[];
-  mcpServerById?: Map<string, MCPServer>; // Map-based MCP server storage
-  sessionMcpServerIds?: Map<string, string[]>; // Map sessionId -> mcpServerIds[]
   onSessionClick?: (sessionId: string) => void;
   onTaskClick?: (taskId: string) => void;
   onSessionUpdate?: (sessionId: string, updates: Partial<Session>) => void;
@@ -168,12 +175,13 @@ interface SessionNodeData {
   parentZoneId?: string;
   zoneName?: string;
   zoneColor?: string;
+  isActiveUrlTarget?: boolean;
 }
 
-// Shared empty array for branches that have no sessions. Without this,
-// `sessionsByBranch.get(id) || []` produces a new `[]` on every render,
-// breaking referential equality and forcing memoized children to re-render
-// on every unrelated socket event.
+// Shared empty array for branches that have no sessions. Without this, a
+// per-branch session selector returning `undefined` would fall back to a fresh
+// `[]` on every render, breaking referential equality and forcing memoized
+// children to re-render on every unrelated socket event.
 const EMPTY_SESSIONS: Session[] = [];
 
 // Custom node component that renders SessionCard (memoized to prevent re-renders on unrelated node changes)
@@ -201,8 +209,7 @@ const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
 interface BranchNodeData {
   branch: Branch;
   repo: Repo;
-  sessions: Session[];
-  userById: Map<string, User>;
+  boardId?: string | null;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
@@ -253,18 +260,37 @@ const CardNodeWrapper = React.memo(({ data }: { data: CardNodeData }) => {
 // — even unrelated ones. We supply a custom areEqual that compares the
 // individual fields of `data` shallowly so unrelated socket events don't
 // invalidate this node. This is the primary fix for board jank during
-// streaming socket traffic. (The empty-sessions array is stabilized in
-// `initialNodes` via EMPTY_SESSIONS so unrelated patches keep
-// `data.sessions` referentially equal too.)
+// streaming socket traffic.
+//
+// This branch's session list — the highest-frequency entity read (a
+// `session:patched` arrives on every streaming token batch) — is sourced
+// directly from the store by branch id rather than carried in `data`. A patch
+// to another branch's sessions leaves this branch's array reference untouched,
+// so this card's subscription stays quiet; a patch to this branch re-renders
+// only this card without rebuilding (and re-allocating) every branch's node
+// `data` in the parent `initialNodes` memo. EMPTY_SESSIONS keeps the prop
+// referentially stable for branches with no sessions.
 const BranchNode = React.memo(
   ({ data }: { data: BranchNodeData }) => {
+    const sessionsSelector = useMemo(
+      () => makeSessionsForBranchSelector(data.branch.branch_id),
+      [data.branch.branch_id]
+    );
+    const sessions = useAgorStore(sessionsSelector) ?? EMPTY_SESSIONS;
+    // Sourced from the store rather than carried in `data`: BranchCard reads
+    // arbitrary users (session/message authors), so the whole map is the
+    // narrowest mechanical slice. Keeping it out of `data` keeps the map out
+    // of the parent's node-building dependencies, so a user patch updates the
+    // affected cards without rebuilding every node's `data` on the board.
+    const userById = useAgorStore(selectUserById);
     return (
       <div className="branch-node">
         <BranchCard
           branch={data.branch}
           repo={data.repo}
-          sessions={data.sessions}
-          userById={data.userById}
+          sessions={sessions}
+          progressiveMountKey={data.boardId ?? 'no-board'}
+          userById={userById}
           currentUserId={data.currentUserId}
           selectedSessionId={data.selectedSessionId}
           isActiveUrlTarget={data.isActiveUrlTarget}
@@ -302,8 +328,7 @@ const BranchNode = React.memo(
     return (
       p.branch === n.branch &&
       p.repo === n.repo &&
-      p.sessions === n.sessions &&
-      p.userById === n.userById &&
+      p.boardId === n.boardId &&
       p.currentUserId === n.currentUserId &&
       p.selectedSessionId === n.selectedSessionId &&
       p.isActiveUrlTarget === n.isActiveUrlTarget &&
@@ -347,28 +372,75 @@ const EMPTY_BOARD_ENTITY_OBJECTS: BoardEntityObject[] = Object.freeze(
   [] as BoardEntityObject[]
 ) as BoardEntityObject[];
 
-const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
+interface BranchZoneTriggerModalProps {
+  modal: {
+    branchId: BranchID;
+    zoneName: string;
+    zoneId: string;
+    trigger: ZoneTrigger;
+  };
+  client: AgorClient | null;
+  branches: Branch[];
+  board: Board | null;
+  availableAgents: AgenticToolOption[];
+  mcpServerById: Map<string, MCPServer>;
+  currentUser: User | null;
+  onCancel: () => void;
+  onExecute: React.ComponentProps<typeof ZoneTriggerModal>['onExecute'];
+}
+
+// The zone-trigger modal needs the full sessionsByBranch map to offer source
+// session choices, but that map changes on every streaming session patch. Keep
+// that subscription behind this tiny conditional child so the main canvas does
+// not rebuild every React Flow node while the modal is closed.
+const BranchZoneTriggerModal = React.memo(
+  ({
+    modal,
+    client,
+    branches,
+    board,
+    availableAgents,
+    mcpServerById,
+    currentUser,
+    onCancel,
+    onExecute,
+  }: BranchZoneTriggerModalProps) => {
+    const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+
+    return (
+      <ZoneTriggerModal
+        open={true}
+        onCancel={onCancel}
+        client={client}
+        branchId={modal.branchId}
+        branch={branches.find((wt) => wt.branch_id === modal.branchId)}
+        sessionsByBranch={sessionsByBranch}
+        zoneName={modal.zoneName}
+        trigger={modal.trigger}
+        boardName={board?.name}
+        boardDescription={board?.description}
+        boardCustomContext={board?.custom_context}
+        availableAgents={availableAgents}
+        mcpServerById={mcpServerById}
+        currentUser={currentUser}
+        onExecute={onExecute}
+      />
+    );
+  }
+);
+
+const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   (
     {
       board,
       client,
-      sessionById,
-      sessionsByBranch,
-      repoById,
       branches,
       primaryAssistantId,
-      branchById,
-      boardObjectsByBoardId,
-      commentById,
-      cardById,
-      userById,
       currentUserId,
       selectedSessionId,
       activeUrlTargetBranchId,
       activeUrlTargetArtifactId,
       availableAgents = [],
-      mcpServerById = new Map(),
-      sessionMcpServerIds = new Map(),
       onSessionClick,
       onTaskClick,
       onSessionUpdate,
@@ -397,6 +469,17 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   ) => {
     const { token } = theme.useToken();
     const mutationGate = useMutationGate();
+
+    // Entity state via narrow store subscriptions. Each whole-map selector is a
+    // stable module-level reference, so a slice only re-renders the canvas when
+    // its own reference changes (idempotent writes are short-circuited upstream).
+    const repoById = useAgorStore(selectRepoById);
+    const branchById = useAgorStore(selectBranchById);
+    const commentById = useAgorStore(selectCommentById);
+    const cardById = useAgorStore(selectCardById);
+    const userById = useAgorStore(selectUserById);
+    const mcpServerById = useAgorStore(selectMcpServerById);
+
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
     const hasCustomCss = Boolean(board?.custom_css?.trim());
@@ -419,17 +502,15 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return sanitizeBoardCss(bgRule + (board?.custom_css || ''), `.${boardCssClass}`);
     }, [board?.custom_css, board?.background_color, boardCssClass, hasUserStyling, hasUserBg]);
 
-    // Note: sessionsByBranch is now passed as prop (no longer computed locally)
-    // This enables efficient O(1) lookups and stable references across re-renders
-
+    // Board-scoped board objects: subscribe to only THIS board's bucket so
+    // other boards' object churn never re-renders the canvas. The factory is
+    // memoized per boardId so the selector reference is stable across renders.
     const boardId = board?.board_id;
-    const boardObjectsForBoard = useMemo(
-      () =>
-        boardId
-          ? boardObjectsByBoardId.get(boardId) || EMPTY_BOARD_ENTITY_OBJECTS
-          : EMPTY_BOARD_ENTITY_OBJECTS,
-      [boardId, boardObjectsByBoardId]
+    const boardObjectsSelector = useMemo(
+      () => makeBoardObjectsForBoardSelector(boardId),
+      [boardId]
     );
+    const boardObjectsForBoard = useAgorStore(boardObjectsSelector) || EMPTY_BOARD_ENTITY_OBJECTS;
 
     // Board-scoped placement maps: rebuild only when this board's object array
     // changes. This replaces the old global scan + JSON.stringify stabilizer.
@@ -452,9 +533,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Card modal state
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
     const [cardModalOpen, setCardModalOpen] = useState(false);
-
-    // Note: branchById is now passed as prop from parent (no longer computed locally)
-    // This enables efficient O(1) lookups and stable references across re-renders
 
     // Tool state for canvas annotations
     const [activeTool, setActiveTool] = useState<
@@ -582,13 +660,10 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const { getBoardObjectNodes, batchUpdateObjectPositions, deleteObject } = useBoardObjects({
       board,
       client,
-      sessionsByBranch,
-      branches,
       boardObjectsForBoard,
       setNodes,
       deletedObjectsRef,
       eraserMode: activeTool === 'eraser',
-      selectedSessionId,
       activeUrlTargetArtifactId,
       onEditMarkdown: handleEditMarkdownNote,
     });
@@ -603,7 +678,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         }
       });
       return labels;
-    }, [board]);
+    }, [board?.objects]);
 
     const warnedInvalidZoneRefsRef = useRef<Set<string>>(new Set());
     const warnInvalidZoneRef = useCallback(
@@ -625,62 +700,62 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       []
     );
 
-    // Handler to unpin a branch from its zone
-    const handleUnpinBranch = useCallback(
-      async (branchId: string) => {
-        if (!board || !client) return;
+    // Handler to unpin a branch from its zone. Identity-stabilized because it
+    // feeds every branch node's `data.onUnpin`: a fresh identity (its closure
+    // reads `board` and the placement map, which change on every board patch)
+    // would defeat BranchNode's areEqual for all branches at once.
+    const handleUnpinBranch = useStableCallback(async (branchId: string) => {
+      if (!board || !client) return;
 
-        // Find the board_object for this branch
-        const boardObject = boardObjectByBranch.get(branchId);
+      // Find the board_object for this branch
+      const boardObject = boardObjectByBranch.get(branchId);
 
-        if (!boardObject?.zone_id) {
-          return;
-        }
+      if (!boardObject?.zone_id) {
+        return;
+      }
 
-        // Get zone position from board.objects
-        const zone = board.objects?.[boardObject.zone_id];
+      // Get zone position from board.objects
+      const zone = board.objects?.[boardObject.zone_id];
 
-        if (!zone) {
-          console.error('Cannot unpin: zone not found', {
-            zoneId: boardObject.zone_id,
-          });
-          return;
-        }
-
-        // Calculate absolute position from relative position
-        // Branch's position is relative to zone when pinned, so add zone's position
-        const absoluteX = boardObject.position.x + zone.x;
-        const absoluteY = boardObject.position.y + zone.y;
-
-        // Optimistically store absolute position in localPositionsRef
-        // This will be used by the node sync effect until WebSocket confirms
-        localPositionsRef.current[branchId] = {
-          x: absoluteX,
-          y: absoluteY,
-        };
-
-        // Trigger immediate React Flow update
-        setNodes((currentNodes) =>
-          currentNodes.map((node) => {
-            if (node.id === branchId) {
-              return {
-                ...node,
-                position: { x: absoluteX, y: absoluteY },
-                parentId: undefined, // Remove parent relationship
-              };
-            }
-            return node;
-          })
-        );
-
-        // Update with absolute position and clear zone_id
-        await client.service('board-objects').patch(boardObject.object_id, {
-          position: { x: absoluteX, y: absoluteY },
-          zone_id: null, // null serializes correctly, undefined gets stripped
+      if (!zone) {
+        console.error('Cannot unpin: zone not found', {
+          zoneId: boardObject.zone_id,
         });
-      },
-      [board, client, boardObjectByBranch, setNodes]
-    );
+        return;
+      }
+
+      // Calculate absolute position from relative position
+      // Branch's position is relative to zone when pinned, so add zone's position
+      const absoluteX = boardObject.position.x + zone.x;
+      const absoluteY = boardObject.position.y + zone.y;
+
+      // Optimistically store absolute position in localPositionsRef
+      // This will be used by the node sync effect until WebSocket confirms
+      localPositionsRef.current[branchId] = {
+        x: absoluteX,
+        y: absoluteY,
+      };
+
+      // Trigger immediate React Flow update
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          if (node.id === branchId) {
+            return {
+              ...node,
+              position: { x: absoluteX, y: absoluteY },
+              parentId: undefined, // Remove parent relationship
+            };
+          }
+          return node;
+        })
+      );
+
+      // Update with absolute position and clear zone_id
+      await client.service('board-objects').patch(boardObject.object_id, {
+        position: { x: absoluteX, y: absoluteY },
+        zone_id: null, // null serializes correctly, undefined gets stripped
+      });
+    });
 
     // Convert branches to React Flow nodes (branch-centric approach)
     const initialNodes: Node[] = useMemo(() => {
@@ -721,11 +796,6 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             ? zoneObj.borderColor || zoneObj.color // Backwards compat: borderColor first, then fall back to deprecated color
             : undefined;
 
-        // Get sessions for this branch. Use EMPTY_SESSIONS (shared
-        // constant) instead of inline `|| []` so branches without sessions
-        // keep a referentially stable `sessions` prop across renders.
-        const branchSessions = sessionsByBranch.get(branch.branch_id) || EMPTY_SESSIONS;
-
         // Get repo for this branch
         const repo = repoById.get(branch.repo_id);
         if (!repo) {
@@ -750,8 +820,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           data: {
             branch,
             repo,
-            sessions: branchSessions,
-            userById,
+            boardId: board?.board_id ?? null,
             currentUserId,
             selectedSessionId,
             isActiveUrlTarget: branch.branch_id === activeUrlTargetBranchId,
@@ -781,12 +850,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
       return nodes;
     }, [
-      board,
+      board?.objects,
+      board?.board_id,
       branches,
       primaryAssistantId,
       boardObjectByBranch,
       repoById,
-      sessionsByBranch,
       currentUserId,
       selectedSessionId,
       activeUrlTargetBranchId,
@@ -807,53 +876,48 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       handleUnpinBranch,
       zoneLabels,
       warnInvalidZoneRef,
-      userById,
       client,
     ]);
 
-    // Handler to open card modal
-    const handleCardClick = useCallback(
-      (cardId: string) => {
-        const card = cardById.get(cardId);
-        if (card) {
-          setSelectedCard(card);
-          setCardModalOpen(true);
-        }
-      },
-      [cardById]
-    );
+    // Handler to open card modal. Identity-stabilized so card-map churn does
+    // not hand every card node a fresh `data.onClick`.
+    const handleCardClick = useStableCallback((cardId: string) => {
+      const card = cardById.get(cardId);
+      if (card) {
+        setSelectedCard(card);
+        setCardModalOpen(true);
+      }
+    });
 
-    // Handler to unpin a card from its zone
-    const handleUnpinCard = useCallback(
-      async (cardId: string) => {
-        if (!board || !client) return;
-        const boardObject = boardObjectByCard.get(cardId);
-        if (!boardObject?.zone_id) return;
+    // Handler to unpin a card from its zone. Identity-stabilized for the same
+    // reason as handleUnpinBranch.
+    const handleUnpinCard = useStableCallback(async (cardId: string) => {
+      if (!board || !client) return;
+      const boardObject = boardObjectByCard.get(cardId);
+      if (!boardObject?.zone_id) return;
 
-        const zone = board.objects?.[boardObject.zone_id];
-        if (!zone) return;
+      const zone = board.objects?.[boardObject.zone_id];
+      if (!zone) return;
 
-        const absoluteX = boardObject.position.x + zone.x;
-        const absoluteY = boardObject.position.y + zone.y;
+      const absoluteX = boardObject.position.x + zone.x;
+      const absoluteY = boardObject.position.y + zone.y;
 
-        localPositionsRef.current[`card-${cardId}`] = { x: absoluteX, y: absoluteY };
+      localPositionsRef.current[`card-${cardId}`] = { x: absoluteX, y: absoluteY };
 
-        setNodes((currentNodes) =>
-          currentNodes.map((node) => {
-            if (node.id === `card-${cardId}`) {
-              return { ...node, position: { x: absoluteX, y: absoluteY }, parentId: undefined };
-            }
-            return node;
-          })
-        );
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          if (node.id === `card-${cardId}`) {
+            return { ...node, position: { x: absoluteX, y: absoluteY }, parentId: undefined };
+          }
+          return node;
+        })
+      );
 
-        await client.service('board-objects').patch(boardObject.object_id, {
-          position: { x: absoluteX, y: absoluteY },
-          zone_id: null,
-        });
-      },
-      [board, client, boardObjectByCard, setNodes]
-    );
+      await client.service('board-objects').patch(boardObject.object_id, {
+        position: { x: absoluteX, y: absoluteY },
+        zone_id: null,
+      });
+    });
 
     // Build card nodes from board_objects that have card_id set
     const cardNodes: Node[] = useMemo(() => {
@@ -899,7 +963,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
       return nodes;
     }, [
-      board,
+      board?.objects,
       boardObjectByCard,
       cardById,
       zoneLabels,
@@ -1114,19 +1178,26 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onCommentSelect,
     ]);
 
-    // Helper: Apply local position overrides to a set of incoming nodes (branches or cards)
+    // Helper: Apply local position overrides to a set of incoming nodes (branches or cards).
+    // Lookups go through Maps so a full board sync stays O(n) instead of
+    // O(n²) per-node array scans.
     const applyLocalPositions = useCallback(
-      (incomingNodes: Node[], currentNodes: Node[], zoneNodes: Node[]) => {
+      (incomingNodes: Node[], currentNodesById: Map<string, Node>, zoneNodes: Node[]) => {
+        // Incoming nodes take precedence over zones on id collision (insertion
+        // order below makes them overwrite), matching parent resolution that
+        // consults incoming nodes first.
+        const parentById = new Map<string, Node>();
+        for (const node of zoneNodes) parentById.set(node.id, node);
+        for (const node of incomingNodes) parentById.set(node.id, node);
+
         return incomingNodes.map((newNode) => {
-          const existingNode = currentNodes.find((n) => n.id === newNode.id);
+          const existingNode = currentNodesById.get(newNode.id);
           const localPosition = localPositionsRef.current[newNode.id];
 
           if (localPosition) {
             let incomingAbsolutePosition = newNode.position;
             if (newNode.parentId) {
-              const parentNode = [...incomingNodes, ...zoneNodes].find(
-                (n) => n.id === newNode.parentId
-              );
+              const parentNode = parentById.get(newNode.parentId);
               if (parentNode) {
                 incomingAbsolutePosition = relativeToAbsolute(
                   newNode.position,
@@ -1150,9 +1221,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
             let positionToUse = localPosition;
             if (newNode.parentId) {
-              const parentNode = [...incomingNodes, ...zoneNodes].find(
-                (n) => n.id === newNode.parentId
-              );
+              const parentNode = parentById.get(newNode.parentId);
               if (parentNode) {
                 positionToUse = absoluteToRelative(localPosition, parentNode.position);
               }
@@ -1208,16 +1277,39 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       ]
     );
 
-    // Helper: Partition nodes by type
+    // Helper: Partition nodes by type in a single pass (this runs inside every
+    // node-sync setNodes updater, so per-type .filter sweeps add up on large boards)
     const partitionNodesByType = useCallback((nodes: Node[]) => {
-      return {
-        zones: nodes.filter((n) => n.type === 'zone'),
-        markdown: nodes.filter((n) => n.type === 'markdown'),
-        branches: nodes.filter((n) => n.type === 'branchNode'),
-        cards: nodes.filter((n) => n.type === 'cardNode'),
-        apps: nodes.filter((n) => n.type === 'appNode' || n.type === 'artifactNode'),
-        comments: nodes.filter((n) => n.type === 'comment'),
-      };
+      const zones: Node[] = [];
+      const markdown: Node[] = [];
+      const branches: Node[] = [];
+      const cards: Node[] = [];
+      const apps: Node[] = [];
+      const comments: Node[] = [];
+      for (const node of nodes) {
+        switch (node.type) {
+          case 'zone':
+            zones.push(node);
+            break;
+          case 'markdown':
+            markdown.push(node);
+            break;
+          case 'branchNode':
+            branches.push(node);
+            break;
+          case 'cardNode':
+            cards.push(node);
+            break;
+          case 'appNode':
+          case 'artifactNode':
+            apps.push(node);
+            break;
+          case 'comment':
+            comments.push(node);
+            break;
+        }
+      }
+      return { zones, markdown, branches, cards, apps, comments };
     }, []);
 
     // Helper: Apply consistent z-ordering to nodes
@@ -1253,18 +1345,29 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
       setNodes((currentNodes) => {
         const { comments } = partitionNodesByType(currentNodes);
+        const currentNodesById = new Map(currentNodes.map((n) => [n.id, n]));
 
         const zones = boardObjectNodes
           .filter((n) => n.type === 'zone' && !deletedObjectsRef.current.has(n.id))
           .map((newZone) => {
-            const existingZone = currentNodes.find((n) => n.id === newZone.id);
-            return { ...newZone, selected: existingZone?.selected };
+            const existingZone = currentNodesById.get(newZone.id);
+            // Honor the persisted/default base order from board data (`newZone`),
+            // and re-apply the +1 selection bump if the zone is currently
+            // selected. Reading the base from `newZone` (not the stale runtime
+            // value) means layer-control changes that arrive over WebSocket take
+            // effect immediately instead of being clobbered.
+            const base = (newZone.zIndex as number) ?? DEFAULT_BOARD_OBJECT_Z_INDEX.zone;
+            return {
+              ...newZone,
+              selected: existingZone?.selected,
+              zIndex: selectedZIndex(base, !!existingZone?.selected),
+            };
           });
 
         const markdown = boardObjectNodes
           .filter((n) => n.type === 'markdown' && !deletedObjectsRef.current.has(n.id))
           .map((newMarkdown) => {
-            const existingMarkdown = currentNodes.find((n) => n.id === newMarkdown.id);
+            const existingMarkdown = currentNodesById.get(newMarkdown.id);
             return { ...newMarkdown, selected: existingMarkdown?.selected };
           });
 
@@ -1275,12 +1378,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               !deletedObjectsRef.current.has(n.id)
           )
           .map((newApp) => {
-            const existingApp = currentNodes.find((n) => n.id === newApp.id);
+            const existingApp = currentNodesById.get(newApp.id);
             return { ...newApp, selected: existingApp?.selected };
           });
 
-        const updatedBranches = applyLocalPositions(initialNodes, currentNodes, zones);
-        const updatedCards = applyLocalPositions(cardNodes, currentNodes, zones);
+        const updatedBranches = applyLocalPositions(initialNodes, currentNodesById, zones);
+        const updatedCards = applyLocalPositions(cardNodes, currentNodesById, zones);
 
         return applyZOrder(zones, markdown, updatedBranches, updatedCards, comments, apps);
       });
@@ -1301,6 +1404,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setNodes((currentNodes) => {
         const { zones, markdown, branches, cards, apps } = partitionNodesByType(currentNodes);
 
+        // Comment parents are branches or zones; branches take precedence on id
+        // collision (insertion order below makes them overwrite).
+        const parentById = new Map<string, Node>();
+        for (const node of zones) parentById.set(node.id, node);
+        for (const node of branches) parentById.set(node.id, node);
+
         // Apply local position overrides to comment nodes (to prevent flicker during drag)
         const commentsWithLocalPositions = commentNodes.map((newNode) => {
           const localPosition = localPositionsRef.current[newNode.id];
@@ -1310,7 +1419,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // If node has parentId, position is relative to parent - must convert to absolute
             let incomingAbsolutePosition = newNode.position;
             if (newNode.parentId) {
-              const parentNode = [...branches, ...zones].find((n) => n.id === newNode.parentId);
+              const parentNode = parentById.get(newNode.parentId);
               if (parentNode) {
                 incomingAbsolutePosition = relativeToAbsolute(
                   newNode.position,
@@ -1334,7 +1443,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // If node now has parentId, convert local absolute position to relative
             let positionToUse = localPosition;
             if (newNode.parentId) {
-              const parentNode = [...branches, ...zones].find((n) => n.id === newNode.parentId);
+              const parentNode = parentById.get(newNode.parentId);
               if (parentNode) {
                 positionToUse = absoluteToRelative(localPosition, parentNode.position);
               }
@@ -1393,6 +1502,36 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const onNodesChange = useCallback(
       // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
       (changes: any) => {
+        // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+        const selectChanges = changes.filter((c: any) => c.type === 'select');
+        if (selectChanges.length > 0) {
+          setNodes((currentNodes) => {
+            // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+            const zoneSelectById = new Map(selectChanges.map((c: any) => [c.id, c]));
+            let changed = false;
+            const nextNodes = currentNodes.map((n) => {
+              if (n.type !== 'zone') return n;
+              // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
+              const change = zoneSelectById.get(n.id) as any;
+              if (!change) return n;
+
+              // Bump above the zone's own base order while selected; restore the
+              // persisted/default base on deselect so custom layering survives.
+              const base = (n.data?.zIndex as number) ?? DEFAULT_BOARD_OBJECT_Z_INDEX.zone;
+              const nextZIndex = selectedZIndex(base, !!change.selected);
+              if (n.zIndex === nextZIndex) return n;
+
+              changed = true;
+              return { ...n, zIndex: nextZIndex };
+            });
+
+            // React Flow can emit select changes while reconciling the controlled
+            // nodes prop. Returning the same array for no-op zIndex transitions
+            // avoids a controlled-update feedback loop (React #185).
+            return changed ? nextNodes : currentNodes;
+          });
+        }
+
         // Detect resize by checking for dimensions changes
         // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
         changes.forEach((change: any) => {
@@ -1466,7 +1605,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Call the original handler
         onNodesChangeInternal(changes);
       },
-      [board, client, onNodesChangeInternal]
+      [board, client, onNodesChangeInternal, setNodes]
     );
 
     // Handle node drag start
@@ -1984,7 +2123,7 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               type: 'zone',
               position,
               // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
-              zIndex: 100, // Zones behind branches and comments
+              zIndex: DEFAULT_BOARD_OBJECT_Z_INDEX.zone, // Zones behind branches and comments
               style: { width, height },
               data: {
                 objectId,
@@ -2740,18 +2879,12 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         {/* Branch Zone Trigger Modal */}
         {branchTriggerModal && (
-          <ZoneTriggerModal
-            open={true}
+          <BranchZoneTriggerModal
+            modal={branchTriggerModal}
             onCancel={() => setBranchTriggerModal(null)}
             client={client}
-            branchId={branchTriggerModal.branchId}
-            branch={branches.find((wt) => wt.branch_id === branchTriggerModal.branchId)}
-            sessionsByBranch={sessionsByBranch}
-            zoneName={branchTriggerModal.zoneName}
-            trigger={branchTriggerModal.trigger}
-            boardName={board?.name}
-            boardDescription={board?.description}
-            boardCustomContext={board?.custom_context}
+            branches={branches}
+            board={board}
             availableAgents={availableAgents}
             mcpServerById={mcpServerById}
             currentUser={currentUserId ? userById.get(currentUserId) || null : null}
@@ -2899,6 +3032,13 @@ const SessionCanvas = forwardRef<SessionCanvasRef, SessionCanvasProps>(
   }
 );
 
-SessionCanvas.displayName = 'SessionCanvas';
+SessionCanvasInner.displayName = 'SessionCanvas';
+
+// Memoized so the canvas is insulated from its parent's top-down re-renders:
+// AgorApp re-renders on every live store patch, but SessionCanvas re-renders only
+// when one of its own props actually changes OR one of its `useAgorStore`
+// selector slices fires. The bailout holds only while the parent keeps every
+// prop referentially stable (see the stabilized handlers at the App render site).
+const SessionCanvas = React.memo(SessionCanvasInner);
 
 export default SessionCanvas;

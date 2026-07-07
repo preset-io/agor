@@ -5,7 +5,7 @@
  * board object management (zones/text), and JSON field handling.
  */
 
-import type { Board, BoardObject, UUID } from '@agor/core/types';
+import type { Board, BoardID, BoardObject, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
@@ -540,6 +540,65 @@ describe('BoardRepository.findAll', () => {
     expect(found.color).toBe('#1677ff');
     expect(found.created_at).toBeDefined();
     expect(found.last_updated).toBeDefined();
+  });
+
+  dbTest('should filter by exact archived state', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const active = await repo.create(createBoardData({ name: 'Active', slug: 'active' }));
+    const archived = await repo.create(createBoardData({ name: 'Archived', slug: 'archived' }));
+    await repo.update(archived.board_id, { archived: true });
+
+    const activeOnly = await repo.findAll({ archived: false });
+    expect(activeOnly.map((b) => b.board_id)).toEqual([active.board_id]);
+
+    const archivedOnly = await repo.findAll({ archived: true });
+    expect(archivedOnly.map((b) => b.board_id)).toEqual([archived.board_id]);
+  });
+
+  dbTest('should restrict to an explicit boardIds set', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const b1 = await repo.create(createBoardData({ name: 'B1', slug: 'b1' }));
+    const b2 = await repo.create(createBoardData({ name: 'B2', slug: 'b2' }));
+    await repo.create(createBoardData({ name: 'B3', slug: 'b3' }));
+
+    const scoped = await repo.findAll({
+      boardIds: [b1.board_id as BoardID, b2.board_id as BoardID],
+    });
+    expect(scoped.map((b) => b.name).sort()).toEqual(['B1', 'B2']);
+  });
+
+  dbTest('should return no rows for an empty boardIds set', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    await repo.create(createBoardData({ name: 'B1', slug: 'b1' }));
+
+    expect(await repo.findAll({ boardIds: [] })).toEqual([]);
+  });
+
+  dbTest('should push board visibility directly into findAll SQL', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const viewerId = generateId() as UUID;
+
+    const ownedPrivate = await repo.create(
+      createBoardData({
+        name: 'Owned private',
+        slug: 'owned-private',
+        access_mode: 'private',
+        created_by: viewerId,
+      })
+    );
+    await repo.create(
+      createBoardData({
+        name: 'Other private',
+        slug: 'other-private',
+        access_mode: 'private',
+        created_by: generateId() as UUID,
+      })
+    );
+
+    const visible = await repo.findAll({ visibleToUserId: viewerId });
+    expect(visible.map((b) => b.board_id)).toEqual([ownedPrivate.board_id]);
   });
 });
 
@@ -1202,6 +1261,134 @@ describe('BoardRepository.batchUpsertBoardObjects', () => {
     expect(updated.objects).toEqual({
       'text-1': { type: 'text', x: 100, y: 200, content: 'Existing' },
     });
+  });
+});
+
+describe('BoardRepository.mergeBoardObjectFields', () => {
+  dbTest('merges only the given fields, preserving the rest of the object', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': {
+            type: 'zone',
+            x: 10,
+            y: 20,
+            width: 500,
+            height: 400,
+            label: 'Zone',
+            trigger: { template: 'hi', behavior: 'always_new' },
+          },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { zIndex: 250 },
+    });
+
+    // zIndex applied; label/trigger/position untouched (no field-drop).
+    expect(updated.objects?.['zone-1']).toEqual({
+      type: 'zone',
+      x: 10,
+      y: 20,
+      width: 500,
+      height: 400,
+      label: 'Zone',
+      trigger: { template: 'hi', behavior: 'always_new' },
+      zIndex: 250,
+    });
+  });
+
+  dbTest('applies patches to multiple objects in a single write', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+          'zone-2': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'B', zIndex: 105 },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { zIndex: 105 },
+      'zone-2': { zIndex: 100 },
+    });
+
+    expect(updated.objects?.['zone-1']?.zIndex).toBe(105);
+    expect(updated.objects?.['zone-2']?.zIndex).toBe(100);
+  });
+
+  dbTest('skips objects that no longer exist (never resurrects a deletion)', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { zIndex: 200 },
+      // 'zone-gone' was deleted concurrently — must not be re-created as a stub.
+      'zone-gone': { zIndex: 50 },
+    });
+
+    expect(updated.objects?.['zone-1']?.zIndex).toBe(200);
+    expect(updated.objects?.['zone-gone']).toBeUndefined();
+  });
+
+  dbTest('should throw EntityNotFoundError for non-existent board', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    await expect(
+      repo.mergeBoardObjectFields('99999999', { 'zone-1': { zIndex: 1 } })
+    ).rejects.toThrow(EntityNotFoundError);
+  });
+
+  dbTest(
+    'ignores non-zIndex fields and clamps zIndex into the board-object band',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const board = await repo.create(
+        createBoardData({
+          objects: {
+            'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+          },
+        })
+      );
+
+      const updated = await repo.mergeBoardObjectFields(board.board_id, {
+        // `type`/`label` are NOT mergeable — the narrow action must not reshape the
+        // object; only the clamped zIndex applies (600 → 499).
+        'zone-1': { type: 'markdown', label: 'hacked', zIndex: 600 } as never,
+      });
+
+      const obj = updated.objects?.['zone-1'];
+      expect(obj?.type).toBe('zone'); // type untouched
+      expect((obj as { label?: string })?.label).toBe('A'); // label untouched
+      expect(obj?.zIndex).toBe(499); // clamped below the card layer
+    }
+  );
+
+  dbTest('skips a patch whose zIndex is missing or non-finite', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { label: 'noop' } as never,
+    });
+
+    // No mergeable field → object left exactly as-is.
+    expect(updated.objects?.['zone-1']?.zIndex).toBe(100);
+    expect((updated.objects?.['zone-1'] as { label?: string })?.label).toBe('A');
   });
 });
 

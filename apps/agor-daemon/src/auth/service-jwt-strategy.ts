@@ -11,8 +11,63 @@
  */
 
 import { JWTStrategy } from '@agor/core/feathers';
-import type { Params } from '@agor/core/types';
+import type { Params, UserAuthMetadata } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import type { SessionTokenService } from '../services/session-token-service.js';
+import { markAuthenticationUserLookup } from '../services/users.js';
+import {
+  getExecutorSessionTokenSessionId,
+  isExecutorSessionTokenPayload,
+} from './executor-session-token.js';
+import { readRuntimeTenantClaim } from './runtime-tokens.js';
+import { assertUserTokenNotInvalidated, type UserAuthTokenPayload } from './token-invalidation.js';
+
+type JwtConnectionState = {
+  authentication?: { strategy?: string; accessToken?: string; payload?: unknown };
+  feathers?: { authentication?: { strategy?: string; accessToken?: string; payload?: unknown } };
+};
+
+function persistExecutorJwtPayloadOnConnection(
+  params: unknown,
+  accessToken: string | undefined,
+  payload: unknown
+): void {
+  const connection = (params as { connection?: JwtConnectionState } | undefined)?.connection;
+  if (!connection) return;
+
+  // For Socket.io, Feathers service params are built from the per-socket
+  // `feathers` connection object on subsequent calls. Depending on the call
+  // path, `params.connection` may be that object directly, or the socket-like
+  // wrapper that owns it. Persist the decoded executor JWT payload in whichever
+  // object will become future `params.authentication`, otherwise the executor
+  // reconnects as the session creator user but loses the task-scoped claims.
+  let target: JwtConnectionState;
+  if ('feathers' in connection) {
+    connection.feathers ??= {};
+    target = connection.feathers;
+  } else {
+    target = connection;
+  }
+  target.authentication = {
+    ...(target.authentication ?? {}),
+    strategy: 'jwt',
+    ...(accessToken ? { accessToken } : {}),
+    payload,
+  };
+}
+
+function propagateTenantFromJwtPayload(
+  params: Params,
+  payload: UserAuthTokenPayload | null | undefined,
+  tenantClaim?: string
+): void {
+  const tenantId = readRuntimeTenantClaim(payload ?? undefined, tenantClaim);
+  if (!tenantId) return;
+  const tenantParams = params as Params & {
+    tenant?: { tenant_id: string; source: 'auth_claim' };
+  };
+  tenantParams.tenant ??= { tenant_id: tenantId, source: 'auth_claim' };
+}
 
 /**
  * Extended JWT Strategy that handles service tokens
@@ -21,7 +76,10 @@ import type { SessionTokenService } from '../services/session-token-service.js';
  * for privileged operations (unix.sync-*, git.*, etc.)
  */
 export class ServiceJWTStrategy extends JWTStrategy {
-  constructor(private sessionTokenService?: SessionTokenService) {
+  constructor(
+    private sessionTokenService?: SessionTokenService,
+    private tenantClaim?: string
+  ) {
     super();
   }
   /**
@@ -43,7 +101,17 @@ export class ServiceJWTStrategy extends JWTStrategy {
       };
     }
 
-    // Regular user token - use standard lookup
+    // Regular user token validation needs backend-only auth metadata. In
+    // required_from_auth mode the Users service is tenant-scoped, so propagate
+    // the tenant claim from the already-verified JWT payload before the
+    // strategy asks the service to load the user entity.
+    propagateTenantFromJwtPayload(
+      params,
+      (params.authentication as { payload?: UserAuthTokenPayload } | undefined)?.payload,
+      this.tenantClaim
+    );
+
+    markAuthenticationUserLookup(params);
     return super.getEntity(id, params);
   }
 
@@ -55,20 +123,26 @@ export class ServiceJWTStrategy extends JWTStrategy {
    */
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
   async authenticate(authentication: any, params: any): Promise<any> {
+    const decoded = jwt.decode(authentication?.accessToken) as UserAuthTokenPayload | null;
+    propagateTenantFromJwtPayload(params, decoded, this.tenantClaim);
+
     // Call parent to verify JWT signature and get payload
-    const result = await super.authenticate(authentication, params);
+    const result = (await super.authenticate(authentication, params)) as {
+      accessToken?: string;
+      authentication?: { payload?: unknown };
+      user?: UserAuthMetadata;
+      [key: string]: unknown;
+    };
 
     // Check if this is a service token by looking at the decoded payload
     const payload = result.authentication?.payload as
-      | {
-          sub?: string;
-          type?: string;
+      | (UserAuthTokenPayload & {
           session_id?: string;
           sessionId?: string;
           task_id?: string;
           branch_id?: string;
           purpose?: string;
-        }
+        })
       | undefined;
 
     if (payload?.type === 'service' && payload?.sub === 'executor-service') {
@@ -88,14 +162,14 @@ export class ServiceJWTStrategy extends JWTStrategy {
     }
 
     if (payload?.type === 'executor-session') {
-      if (payload.purpose !== 'executor-task') {
+      if (!isExecutorSessionTokenPayload(payload)) {
         throw new Error('Invalid executor token purpose');
       }
       const token = authentication?.accessToken;
       if (!token || !this.sessionTokenService) {
         throw new Error('Executor token validation unavailable');
       }
-      const sessionId = payload.session_id ?? payload.sessionId;
+      const sessionId = getExecutorSessionTokenSessionId(payload);
       const sessionInfo = await this.sessionTokenService.validateToken(token, {
         sessionId,
         taskId: payload.task_id,
@@ -104,6 +178,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
       if (!sessionInfo) {
         throw new Error('Invalid or expired executor token');
       }
+      persistExecutorJwtPayloadOnConnection(params, token, payload);
       return {
         ...result,
         session_id: sessionInfo.session_id,
@@ -117,6 +192,10 @@ export class ServiceJWTStrategy extends JWTStrategy {
       !['access', 'service', 'executor-session'].includes(payload.type)
     ) {
       throw new Error('JWT type is not valid for daemon API authentication');
+    }
+
+    if (result.user) {
+      assertUserTokenNotInvalidated(result.user, payload);
     }
 
     return result;

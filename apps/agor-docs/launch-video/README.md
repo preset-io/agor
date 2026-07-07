@@ -12,17 +12,17 @@ committed — see [What's here](#whats-here).
 
 ## What's here
 
-| Path | Committed? | Notes |
-| --- | --- | --- |
-| `composition/index.html` | ✅ | The composition (timeline, layout, GSAP) — source of truth |
-| `composition/design.md` | ✅ | Brand colors/fonts (mirrors agor.live) |
-| `composition/assets/sfx/**` | ✅ | SFX actually used (CC0, Kenney.nl) |
-| `composition/assets/music/cues/**` | ✅ | Beat/cue presets for the track |
-| `composition/assets/music/audio-data.js` | ✅ | Pre-extracted per-frame audio data (drives the audio-reactive glow) — so no re-extraction needed |
-| `brag-plan.md`, `composition-brief.md`, `share-copy.txt` | ✅ | Plan, brief, and the social caption |
-| `composition/assets/screenshots/**`, `assets/tools/**` | ❌ gitignored | Copies of files already in `../public` — restored by `recreate-assets.sh` |
-| `composition/assets/music/*.mp3` | ❌ gitignored | The track + baked 40s bed — see [Music](#music) |
-| `brag.mp4` | ❌ gitignored | Final render — on YouTube |
+| Path                                                     | Committed?    | Notes                                                                                            |
+| -------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------ |
+| `composition/index.html`                                 | ✅            | The composition (timeline, layout, GSAP) — source of truth                                       |
+| `composition/design.md`                                  | ✅            | Brand colors/fonts (mirrors agor.live)                                                           |
+| `composition/assets/sfx/**`                              | ✅            | SFX actually used (CC0, Kenney.nl)                                                               |
+| `composition/assets/music/cues/**`                       | ✅            | Beat/cue presets for the track                                                                   |
+| `composition/assets/music/audio-data.js`                 | ✅            | Pre-extracted per-frame audio data (drives the audio-reactive glow) — so no re-extraction needed |
+| `brag-plan.md`, `composition-brief.md`, `share-copy.txt` | ✅            | Plan, brief, and the social caption                                                              |
+| `composition/assets/screenshots/**`, `assets/tools/**`   | ❌ gitignored | Copies of files already in `../public` — restored by `recreate-assets.sh`                        |
+| `composition/assets/music/*.mp3`                         | ❌ gitignored | The track + baked 40s bed — see [Music](#music)                                                  |
+| `brag.mp4`                                               | ❌ gitignored | Final render — on YouTube                                                                        |
 
 ## Recreate / re-render
 

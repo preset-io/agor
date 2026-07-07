@@ -395,25 +395,38 @@ describeIntegration('MCP Tools - Branch Tools', () => {
     const branch = branches.data[0];
     const branchId = branch.branch_id;
 
-    const updated = await callMCPTool('agor_branches_update', {
-      branchId,
-      issueUrl: 'https://example.com/issues/123',
-      pullRequestUrl: null,
-      notes: 'Updated via MCP test',
-    });
+    try {
+      const updated = await callMCPTool('agor_branches_update', {
+        branchId,
+        issueUrl: 'https://example.com/issues/123',
+        pullRequestUrl: null,
+        notes: 'Updated via MCP test',
+        needsAttention: false,
+      });
 
-    expect(updated.branch.branch_id).toBe(branchId);
-    expect(updated.branch.issue_url).toBe('https://example.com/issues/123');
-    expect(updated.branch.pull_request_url).toBeNull();
-    expect(updated.branch.notes).toBe('Updated via MCP test');
+      expect(updated.branch.branch_id).toBe(branchId);
+      expect(updated.branch.issue_url).toBe('https://example.com/issues/123');
+      expect(updated.branch.pull_request_url).toBeNull();
+      expect(updated.branch.notes).toBe('Updated via MCP test');
+      expect(updated.branch.needs_attention).toBe(false);
 
-    // Restore original state
-    await callMCPTool('agor_branches_update', {
-      branchId,
-      issueUrl: branch.issue_url ?? null,
-      pullRequestUrl: branch.pull_request_url ?? null,
-      notes: branch.notes ?? null,
-    });
+      const attentionUpdated = await callMCPTool('agor_branches_update', {
+        branchId,
+        needsAttention: true,
+      });
+
+      expect(attentionUpdated.branch.branch_id).toBe(branchId);
+      expect(attentionUpdated.branch.needs_attention).toBe(true);
+    } finally {
+      // Restore original state
+      await callMCPTool('agor_branches_update', {
+        branchId,
+        issueUrl: branch.issue_url ?? null,
+        pullRequestUrl: branch.pull_request_url ?? null,
+        notes: branch.notes ?? null,
+        needsAttention: branch.needs_attention,
+      });
+    }
   });
 });
 

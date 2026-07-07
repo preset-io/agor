@@ -1,6 +1,9 @@
+import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
 import { SessionTokenService } from './session-token-service';
+
+const scopeOnlyDb = { run: () => undefined } as unknown as TenantScopeAwareDatabase;
 
 describe('SessionTokenService runtime scoping', () => {
   it('issues executor-purpose tokens with task/session/branch scope and enforces max uses', async () => {
@@ -57,5 +60,23 @@ describe('SessionTokenService runtime scoping', () => {
         branchId: 'branch-1',
       })
     ).resolves.toMatchObject({ session_id: 'session-1', task_id: 'task-1' });
+  });
+
+  it('copies the ambient tenant scope into executor-session token claims', async () => {
+    const service = new SessionTokenService({ expiration_ms: 60_000, max_uses: 1 });
+    service.setJwtSecret('session-token-test-secret');
+
+    const token = await runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+      service.generateToken('session-1', 'user-1', {
+        taskId: 'task-1',
+        branchId: 'branch-1',
+      })
+    );
+    const decoded = jwt.verify(token, 'session-token-test-secret', {
+      issuer: 'agor',
+      audience: 'https://agor.dev',
+    }) as jwt.JwtPayload;
+
+    expect(decoded.tenant_id).toBe('tenant-a');
   });
 });

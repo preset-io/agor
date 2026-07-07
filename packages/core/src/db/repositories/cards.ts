@@ -161,9 +161,30 @@ export class CardRepository implements BaseRepository<Card, Partial<Card>> {
     };
   }
 
-  async findAll(): Promise<Card[]> {
+  /**
+   * Find all cards (with optional filters).
+   *
+   * The `board_id` and `archived` filters let the list read path
+   * (`CardsService.find`) push its high-selectivity predicates into SQL so it no
+   * longer materializes the whole table before filtering in memory.
+   *
+   * @param filter - Optional filters
+   * @param filter.board_id - Filter to a single board
+   * @param filter.archived - Filter to an exact archived state
+   */
+  async findAll(filter?: { board_id?: BoardID; archived?: boolean }): Promise<Card[]> {
     try {
-      const rows = await select(this.db).from(cards).all();
+      const conditions = [];
+      if (filter?.board_id) {
+        conditions.push(eq(cards.board_id, filter.board_id));
+      }
+      if (filter?.archived !== undefined) {
+        conditions.push(eq(cards.archived, filter.archived));
+      }
+
+      const query = select(this.db).from(cards);
+      const rows =
+        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
       return rows.map((row: CardRow) => this.rowToCard(row));
     } catch (error) {
       throw new RepositoryError(
