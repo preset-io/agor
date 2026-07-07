@@ -38,7 +38,7 @@
 .agor-action-link-row:not([aria-disabled="true"]):hover {
   --agor-link-row-bg: var(--agor-link-row-hover-bg, transparent);
   --agor-link-title-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
-  --agor-link-icon-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
+  --agor-link-icon-color: var(--agor-link-row-hover-icon-color, var(--ant-color-text-tertiary));
 }
 
 .agor-action-link-title:hover {
@@ -73,7 +73,10 @@
   --agor-link-chip-bg: var(--agor-link-chip-hover-bg, var(--ant-color-primary-bg));
   --agor-link-chip-border: var(--agor-link-chip-hover-border, var(--ant-color-primary));
   --agor-link-chip-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
-  --agor-link-chip-accent-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
+  --agor-link-chip-accent-color: var(
+    --agor-link-chip-hover-accent-color,
+    var(--ant-color-text-tertiary)
+  );
 }
 
 .agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover .agor-action-link-title {
@@ -84,6 +87,21 @@
 .agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover
   .agor-action-link-affordance {
   --agor-link-icon-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
+}
+
+.agor-link-category-tabs .ant-tabs-nav {
+  margin-bottom: 0;
+}
+
+.agor-link-category-tabs .ant-tabs-nav-list {
+  width: 100%;
+  display: flex;
+}
+
+.agor-link-category-tabs .ant-tabs-tab {
+  flex: 1 1 0;
+  justify-content: center;
+  margin: 0;
 }
 
 /* Prevent long text from causing horizontal scroll in collapse headers,

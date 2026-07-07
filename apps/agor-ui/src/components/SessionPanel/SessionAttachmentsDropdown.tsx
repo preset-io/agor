@@ -19,8 +19,9 @@ import {
   Dropdown,
   Empty,
   Popover,
-  Segmented,
+  Select,
   Space,
+  Tabs,
   Tooltip,
   Typography,
   theme,
@@ -41,6 +42,14 @@ import {
   type LinkMarkdownPreviewTarget,
 } from '../Links/LinkMarkdownPreviewModal';
 import { downloadLinkContent, getSafeLinkContentLabel } from '../Links/linkContent';
+import {
+  LINK_CATEGORY_TAB_LABELS,
+  LINK_OWNER_FILTER_LABELS,
+  LINK_SORT_LABELS,
+  type LinkCategoryTabKey,
+  type LinkOwnerFilterKey,
+  type LinkSortKey,
+} from '../Links/linkDisplay';
 import type { AssistantPromotionState } from '../Links/linkPromotion';
 
 export type SessionAttachmentKind =
@@ -53,7 +62,9 @@ export type SessionAttachmentKind =
   | 'url';
 export type SessionAttachmentSource = 'branch' | 'manual' | 'parsed' | 'upload';
 
-type LinksFilter = 'all' | 'branch' | 'session' | 'pinned' | 'files' | 'knowledge' | 'issues';
+type LinksCategoryTab = LinkCategoryTabKey;
+type LinksSourceFilter = LinkOwnerFilterKey;
+type LinksSort = LinkSortKey;
 
 export interface SessionAttachmentItem {
   key: string;
@@ -68,6 +79,8 @@ export interface SessionAttachmentItem {
   source?: SessionAttachmentSource;
   ownerScope?: 'branch' | 'session';
   isPinned?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
   disabled?: boolean;
   subtitle?: string;
   note?: string;
@@ -161,6 +174,10 @@ function isIssuePrItem(item: SessionAttachmentItem): boolean {
   return item.kind === 'issue' || item.kind === 'pr';
 }
 
+function isWebLinkItem(item: SessionAttachmentItem): boolean {
+  return !isFileItem(item) && !isKnowledgeItem(item) && !isIssuePrItem(item);
+}
+
 function getIcon(item: SessionAttachmentItem): React.ReactNode {
   if (isKnowledgeItem(item)) return <BookOutlined />;
   if (item.kind === 'image') return <FileImageOutlined />;
@@ -214,23 +231,64 @@ function plural(count: number, singular: string, pluralLabel = `${singular}s`): 
   return `${count} ${count === 1 ? singular : pluralLabel}`;
 }
 
-function filterItems(items: SessionAttachmentItem[], filter: LinksFilter): SessionAttachmentItem[] {
-  switch (filter) {
-    case 'branch':
-      return items.filter((item) => getOwnerScope(item) === 'branch');
-    case 'session':
-      return items.filter((item) => getOwnerScope(item) === 'session');
-    case 'pinned':
-      return items.filter((item) => item.isPinned);
+function getCategoryCounts(items: SessionAttachmentItem[]): Record<LinksCategoryTab, number> {
+  return {
+    all: items.length,
+    files: items.filter(isFileItem).length,
+    links: items.filter(isWebLinkItem).length,
+    knowledge: items.filter(isKnowledgeItem).length,
+    issues: items.filter(isIssuePrItem).length,
+  };
+}
+
+function getCategorySummary(items: SessionAttachmentItem[]): string {
+  const counts = getCategoryCounts(items);
+  return [
+    plural(counts.files, 'file'),
+    plural(counts.links, 'link'),
+    `${counts.knowledge} knowledge`,
+    `${counts.issues} ${counts.issues === 1 ? 'issue/PR' : 'issues/PRs'}`,
+  ].join(' · ');
+}
+
+function matchesCategory(item: SessionAttachmentItem, category: LinksCategoryTab): boolean {
+  switch (category) {
     case 'files':
-      return items.filter(isFileItem);
+      return isFileItem(item);
+    case 'links':
+      return isWebLinkItem(item);
     case 'knowledge':
-      return items.filter(isKnowledgeItem);
+      return isKnowledgeItem(item);
     case 'issues':
-      return items.filter(isIssuePrItem);
+      return isIssuePrItem(item);
     default:
-      return items;
+      return true;
   }
+}
+
+function matchesSourceFilter(
+  item: SessionAttachmentItem,
+  sourceFilter: LinksSourceFilter
+): boolean {
+  return sourceFilter === 'all' || getOwnerScope(item) === sourceFilter;
+}
+
+function getItemTimestamp(item: SessionAttachmentItem): string {
+  return item.updatedAt || item.createdAt || '';
+}
+
+function compareDrawerItems(a: SessionAttachmentItem, b: SessionAttachmentItem, sort: LinksSort) {
+  if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+
+  const nameOrder = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  if (sort === 'za') return nameOrder !== 0 ? -nameOrder : a.key.localeCompare(b.key);
+
+  if (sort === 'recent' || sort === 'oldest') {
+    const timestampOrder = getItemTimestamp(a).localeCompare(getItemTimestamp(b));
+    if (timestampOrder !== 0) return sort === 'recent' ? -timestampOrder : timestampOrder;
+  }
+
+  return nameOrder || a.key.localeCompare(b.key);
 }
 
 export const SessionAttachmentsDropdown: React.FC<Props> = ({
@@ -248,7 +306,9 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   const { showError } = useThemedMessage();
   const [popoverOpen, setPopoverOpen] = React.useState(false);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
-  const [activeFilter, setActiveFilter] = React.useState<LinksFilter>('all');
+  const [activeCategory, setActiveCategory] = React.useState<LinksCategoryTab>('all');
+  const [sourceFilter, setSourceFilter] = React.useState<LinksSourceFilter>('all');
+  const [sortOrder, setSortOrder] = React.useState<LinksSort>('az');
   const [previewTarget, setPreviewTarget] = React.useState<LinkImagePreviewTarget | null>(null);
   const [markdownTarget, setMarkdownTarget] = React.useState<LinkMarkdownPreviewTarget | null>(
     null
@@ -258,12 +318,20 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   const hasItems = visibleItems.length > 0;
   const pinnedItems = visibleItems.filter((item) => item.isPinned);
   const files = visibleItems.filter(isFileItem);
-  const knowledgeItems = visibleItems.filter(isKnowledgeItem);
-  const issuePrItems = visibleItems.filter(isIssuePrItem);
   const nonPinnedNonFiles = visibleItems.filter((item) => !item.isPinned && !isFileItem(item));
+  const categoryCounts = React.useMemo(() => getCategoryCounts(visibleItems), [visibleItems]);
+  const categoryTabs = React.useMemo(
+    () =>
+      (['all', 'files', 'links', 'knowledge', 'issues'] as const).map((key) => ({
+        key,
+        label: `${LINK_CATEGORY_TAB_LABELS[key]} ${categoryCounts[key]}`,
+      })),
+    [categoryCounts]
+  );
 
   const openPinnedManager = React.useCallback(() => {
-    setActiveFilter('pinned');
+    setActiveCategory('all');
+    setSourceFilter('all');
     setDrawerOpen(true);
   }, []);
 
@@ -274,11 +342,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
   if (!hasItems) return null;
 
-  const summary = `${plural(visibleItems.length, 'link')} · ${plural(
-    pinnedItems.length,
-    'pinned',
-    'pinned'
-  )} · ${plural(files.length, 'file')}`;
+  const summary = getCategorySummary(visibleItems);
 
   const fileReserve = files.length > 0 ? Math.min(2, files.length) : 0;
   const quickPinned = pinnedItems.slice(0, Math.min(3, pinnedItems.length));
@@ -367,7 +431,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             border: 0,
             background: 'transparent',
             padding: 0,
-            color: item.isPinned ? token.colorPrimary : token.colorTextQuaternary,
+            color: item.isPinned ? token.colorWarning : token.colorTextQuaternary,
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -544,7 +608,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               height: 28,
               borderRadius: token.borderRadius,
               background: token.colorFillTertiary,
-              color: disabled ? token.colorTextDisabled : token.colorPrimary,
+              color: disabled ? token.colorTextDisabled : token.colorTextTertiary,
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -588,26 +652,10 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     );
   };
 
-  const drawerItems = filterItems(visibleItems, activeFilter).sort((a, b) => {
-    const nameOrder = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-    if (a.isPinned === b.isPinned) return nameOrder;
-    return a.isPinned ? -1 : 1;
-  });
-  const filterOptions = [
-    { label: `All ${visibleItems.length}`, value: 'all' },
-    {
-      label: `Branch ${visibleItems.filter((item) => getOwnerScope(item) === 'branch').length}`,
-      value: 'branch',
-    },
-    {
-      label: `This session ${visibleItems.filter((item) => getOwnerScope(item) === 'session').length}`,
-      value: 'session',
-    },
-    { label: `Files ${files.length}`, value: 'files' },
-    { label: `Knowledge ${knowledgeItems.length}`, value: 'knowledge' },
-    { label: `Issues/PRs ${issuePrItems.length}`, value: 'issues' },
-    { label: `Pinned ${pinnedItems.length}`, value: 'pinned' },
-  ];
+  const drawerItems = visibleItems
+    .filter((item) => matchesCategory(item, activeCategory))
+    .filter((item) => matchesSourceFilter(item, sourceFilter))
+    .sort((a, b) => compareDrawerItems(a, b, sortOrder));
 
   const quickContent = (
     <div style={{ width: 312 }} data-testid="links-organizer-popover">
@@ -689,7 +737,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               <Button
                 type="text"
                 aria-label="Open links organizer"
-                icon={<LinkOutlined style={{ color: token.colorPrimary }} />}
+                icon={<LinkOutlined style={{ color: token.colorTextSecondary }} />}
               />
             </Badge>
           </Tooltip>
@@ -708,11 +756,46 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
       >
         <div data-testid="links-organizer-manage">
           <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
-            <Segmented
-              value={activeFilter}
-              onChange={(value) => setActiveFilter(value as LinksFilter)}
-              options={filterOptions}
+            <Tabs
+              className="agor-link-category-tabs"
+              activeKey={activeCategory}
+              items={categoryTabs}
+              onChange={(key) => setActiveCategory(key as LinksCategoryTab)}
             />
+            <Space wrap size={token.sizeSM} style={{ width: '100%' }}>
+              <Space size={token.sizeXS}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Sort
+                </Typography.Text>
+                <Select<LinksSort>
+                  size="small"
+                  value={sortOrder}
+                  options={(Object.keys(LINK_SORT_LABELS) as LinksSort[]).map((key) => ({
+                    value: key,
+                    label: LINK_SORT_LABELS[key],
+                  }))}
+                  onChange={setSortOrder}
+                  style={{ width: 128 }}
+                />
+              </Space>
+              <Space size={token.sizeXS}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Location
+                </Typography.Text>
+                <Select<LinksSourceFilter>
+                  size="small"
+                  value={sourceFilter}
+                  options={(Object.keys(LINK_OWNER_FILTER_LABELS) as LinksSourceFilter[]).map(
+                    (key) => ({
+                      value: key,
+                      label: LINK_OWNER_FILTER_LABELS[key],
+                    })
+                  )}
+                  onChange={setSourceFilter}
+                  style={{ width: 142 }}
+                />
+              </Space>
+            </Space>
             {drawerItems.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links in this view." />
             ) : (

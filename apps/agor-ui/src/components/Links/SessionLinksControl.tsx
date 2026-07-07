@@ -12,9 +12,10 @@ import {
   Empty,
   Modal,
   Popover,
-  Segmented,
+  Select,
   Space,
   Spin,
+  Tabs,
   Tooltip,
   Typography,
   theme,
@@ -31,11 +32,23 @@ import {
   type LinkPreviewKind,
 } from './linkContent';
 import {
+  compareLinkDisplayItemsBySort,
   getCompactLinkDisplayName,
+  getLinkCategoryCounts,
+  getLinkCategorySummary,
   getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
-  type LinkDisplayCategory,
+  isFileLinkDisplayItem,
+  isKnowledgeLinkDisplayItem,
+  LINK_CATEGORY_TAB_LABELS,
+  LINK_OWNER_FILTER_LABELS,
+  LINK_SORT_LABELS,
+  type LinkCategoryTabKey,
   type LinkDisplayItem,
+  type LinkOwnerFilterKey,
+  type LinkSortKey,
+  matchesLinkCategoryTab,
+  matchesLinkOwnerFilter,
 } from './linkDisplay';
 
 const QUICK_LINK_LIMIT = 7;
@@ -458,75 +471,16 @@ export function LinkPreviewModal({
   );
 }
 
-type LinkManagementFilter =
-  | 'all'
-  | 'branch'
-  | 'session'
-  | 'files'
-  | 'knowledge'
-  | 'issues'
-  | 'pinned';
-
-const LINK_DOCUMENT_CATEGORIES = new Set<LinkDisplayCategory>([
-  'pdf',
-  'spreadsheet',
-  'csv',
-  'document',
-  'markdown',
-  'text',
-  'code',
-  'json',
-  'log',
-]);
-
-function plural(count: number, singular: string, pluralLabel = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : pluralLabel}`;
-}
+type LinkManagementCategory = LinkCategoryTabKey;
+type LinkManagementSourceFilter = LinkOwnerFilterKey;
+type LinkManagementSort = LinkSortKey;
 
 function isFileDisplayItem(item: LinkDisplayItem): boolean {
-  return (
-    item.category === 'image' ||
-    Boolean(item.filePath) ||
-    LINK_DOCUMENT_CATEGORIES.has(item.category)
-  );
+  return isFileLinkDisplayItem(item);
 }
 
 function isKnowledgeDisplayItem(item: LinkDisplayItem): boolean {
-  return item.category === 'knowledge' || Boolean(item.refUri?.startsWith('agor://kb/'));
-}
-
-function isIssuePrDisplayItem(item: LinkDisplayItem): boolean {
-  return item.category === 'issue' || item.category === 'pr';
-}
-
-function matchesManagementFilter(item: LinkDisplayItem, filter: LinkManagementFilter): boolean {
-  switch (filter) {
-    case 'branch':
-      return item.ownerScope === 'branch';
-    case 'session':
-      return item.ownerScope === 'session';
-    case 'files':
-      return isFileDisplayItem(item);
-    case 'knowledge':
-      return isKnowledgeDisplayItem(item);
-    case 'issues':
-      return isIssuePrDisplayItem(item);
-    case 'pinned':
-      return item.isPinned;
-    default:
-      return true;
-  }
-}
-
-function compareManagementItems(a: LinkDisplayItem, b: LinkDisplayItem): number {
-  if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
-  const nameOrder = getCompactLinkDisplayName(a).localeCompare(
-    getCompactLinkDisplayName(b),
-    undefined,
-    { sensitivity: 'base' }
-  );
-  if (nameOrder !== 0) return nameOrder;
-  return a.key.localeCompare(b.key);
+  return isKnowledgeLinkDisplayItem(item);
 }
 
 function getQuickCategoryRank(item: LinkDisplayItem): number {
@@ -569,9 +523,7 @@ function selectQuickItems(items: LinkDisplayItem[], limit: number): LinkDisplayI
 }
 
 function getSummary(items: LinkDisplayItem[]): string {
-  const pinnedCount = items.filter((item) => item.isPinned).length;
-  const fileCount = items.filter(isFileDisplayItem).length;
-  return `${plural(items.length, 'link')} · ${plural(pinnedCount, 'pinned', 'pinned')} · ${plural(fileCount, 'file')}`;
+  return getLinkCategorySummary(items);
 }
 
 function getTypeLabel(item: LinkDisplayItem): string {
@@ -734,7 +686,7 @@ function getPinnedChipActionLabel(item: LinkDisplayItem): string {
 }
 
 function getPinnedChipTitle(item: LinkDisplayItem): string {
-  return getCompactLinkDisplayName(item).replace(/^(Issue|PR|Knowledge|Saved URL):\s*/i, '');
+  return getCompactLinkDisplayName(item).replace(/^(Issue|PR|Knowledge|Link|URL):\s*/i, '');
 }
 
 function TitleTarget({
@@ -862,7 +814,7 @@ function PinAction({
           alignItems: 'center',
           justifyContent: 'center',
           cursor: canTogglePin && !pinning ? 'pointer' : 'default',
-          color: item.isPinned ? token.colorPrimary : token.colorTextQuaternary,
+          color: item.isPinned ? token.colorWarning : token.colorTextQuaternary,
           opacity: pinning ? 0.55 : 1,
         }}
       >
@@ -1262,36 +1214,30 @@ export const LinksManagementDrawer: React.FC<LinksManagementDrawerProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
-  const [activeFilter, setActiveFilter] = useState<LinkManagementFilter>('all');
+  const [activeCategory, setActiveCategory] = useState<LinkManagementCategory>('all');
+  const [sourceFilter, setSourceFilter] = useState<LinkManagementSourceFilter>('all');
+  const [sortOrder, setSortOrder] = useState<LinkManagementSort>('az');
 
-  const sortedItems = useMemo(() => [...items].sort(compareManagementItems), [items]);
-  const visibleItems = useMemo(
-    () => sortedItems.filter((item) => matchesManagementFilter(item, activeFilter)),
-    [activeFilter, sortedItems]
+  const sortedItems = useMemo(
+    () => [...items].sort((a, b) => compareLinkDisplayItemsBySort(a, b, sortOrder)),
+    [items, sortOrder]
   );
-  const filterOptions = useMemo(
-    () => [
-      { label: `All ${items.length}`, value: 'all' as const },
-      {
-        label: `Branch ${items.filter((item) => item.ownerScope === 'branch').length}`,
-        value: 'branch' as const,
-      },
-      {
-        label: `This session ${items.filter((item) => item.ownerScope === 'session').length}`,
-        value: 'session' as const,
-      },
-      { label: `Files ${items.filter(isFileDisplayItem).length}`, value: 'files' as const },
-      {
-        label: `Knowledge ${items.filter(isKnowledgeDisplayItem).length}`,
-        value: 'knowledge' as const,
-      },
-      {
-        label: `Issues/PRs ${items.filter(isIssuePrDisplayItem).length}`,
-        value: 'issues' as const,
-      },
-      { label: `Pinned ${items.filter((item) => item.isPinned).length}`, value: 'pinned' as const },
-    ],
-    [items]
+  const visibleItems = useMemo(
+    () =>
+      sortedItems.filter(
+        (item) =>
+          matchesLinkCategoryTab(item, activeCategory) && matchesLinkOwnerFilter(item, sourceFilter)
+      ),
+    [activeCategory, sourceFilter, sortedItems]
+  );
+  const categoryCounts = useMemo(() => getLinkCategoryCounts(items), [items]);
+  const categoryTabs = useMemo(
+    () =>
+      (['all', 'files', 'links', 'knowledge', 'issues'] as const).map((key) => ({
+        key,
+        label: `${LINK_CATEGORY_TAB_LABELS[key]} ${categoryCounts[key]}`,
+      })),
+    [categoryCounts]
   );
 
   return (
@@ -1310,14 +1256,48 @@ export const LinksManagementDrawer: React.FC<LinksManagementDrawerProps> = ({
       >
         {items.length > 0 ? (
           <Space direction="vertical" size={token.sizeLG} style={{ width: '100%' }}>
-            <div data-testid="links-management-filter-row">
-              <Segmented<LinkManagementFilter>
-                size="middle"
-                value={activeFilter}
-                options={filterOptions}
-                onChange={setActiveFilter}
+            <div data-testid="links-management-category-row">
+              <Tabs
+                className="agor-link-category-tabs"
+                activeKey={activeCategory}
+                items={categoryTabs}
+                onChange={(key) => setActiveCategory(key as LinkManagementCategory)}
               />
             </div>
+            <Space wrap size={token.sizeSM} style={{ width: '100%' }}>
+              <Space size={token.sizeXS}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Sort
+                </Typography.Text>
+                <Select<LinkManagementSort>
+                  size="small"
+                  value={sortOrder}
+                  options={(Object.keys(LINK_SORT_LABELS) as LinkManagementSort[]).map((key) => ({
+                    value: key,
+                    label: LINK_SORT_LABELS[key],
+                  }))}
+                  onChange={setSortOrder}
+                  style={{ width: 128 }}
+                />
+              </Space>
+              <Space size={token.sizeXS}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Location
+                </Typography.Text>
+                <Select<LinkManagementSourceFilter>
+                  size="small"
+                  value={sourceFilter}
+                  options={(
+                    Object.keys(LINK_OWNER_FILTER_LABELS) as LinkManagementSourceFilter[]
+                  ).map((key) => ({
+                    value: key,
+                    label: LINK_OWNER_FILTER_LABELS[key],
+                  }))}
+                  onChange={setSourceFilter}
+                  style={{ width: 142 }}
+                />
+              </Space>
+            </Space>
 
             {visibleItems.length > 0 ? (
               <div>
@@ -1466,7 +1446,7 @@ export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
               type="text"
               aria-label="Links"
               loading={loading}
-              icon={<LinkOutlined style={{ color: token.colorPrimary }} />}
+              icon={<LinkOutlined style={{ color: token.colorTextSecondary }} />}
             />
           </Badge>
         </Tooltip>

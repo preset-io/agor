@@ -13,8 +13,10 @@ import {
   Dropdown,
   Empty,
   List,
+  Select,
   Space,
   Spin,
+  Tabs,
   Tooltip,
   Typography,
   theme,
@@ -38,12 +40,20 @@ import {
 } from '../../Links/linkContent';
 import {
   buildLinkDisplayItems,
+  compareLinkDisplayItemsBySort,
   getCompactLinkDisplayName,
+  getLinkCategoryCounts,
+  getLinkCategorySummary,
   getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
   isBranchOwnedLink,
-  type LinkDisplayCategory,
+  isFileLinkDisplayItem,
+  LINK_CATEGORY_TAB_LABELS,
+  LINK_SORT_LABELS,
+  type LinkCategoryTabKey,
   type LinkDisplayItem,
+  type LinkSortKey,
+  matchesLinkCategoryTab,
   normalizeLinkFindResult,
   removeLinkById,
   upsertLinkById,
@@ -61,22 +71,8 @@ interface LinksTabProps {
   assistantBranchId?: string | null;
 }
 
-const DOCUMENT_CATEGORIES = new Set<LinkDisplayCategory>([
-  'pdf',
-  'spreadsheet',
-  'csv',
-  'document',
-  'markdown',
-  'text',
-  'code',
-  'json',
-  'log',
-]);
-
 function isFileItem(item: LinkDisplayItem): boolean {
-  return (
-    item.category === 'image' || Boolean(item.filePath) || DOCUMENT_CATEGORIES.has(item.category)
-  );
+  return isFileLinkDisplayItem(item);
 }
 
 function getUnavailableReason(item: LinkDisplayItem): string | null {
@@ -94,7 +90,7 @@ function getTypeLabel(item: LinkDisplayItem): string {
     case 'knowledge':
       return 'Knowledge';
     case 'url':
-      return 'Saved URL';
+      return 'Link';
     case 'image':
       return 'Image';
     case 'pdf':
@@ -287,7 +283,7 @@ function BranchStatusPill({
   const { token } = theme.useToken();
   const title = getCompactLinkDisplayName(item);
   const canTogglePin = Boolean(item.linkId);
-  const label = item.isPinned ? 'pinned' : 'saved';
+  const label = item.isPinned ? 'Pinned' : 'Branch';
   const actionLabel = item.isPinned ? 'Unpin from branch card' : 'Pin to branch card';
   return (
     <Tooltip title={canTogglePin ? actionLabel : label}>
@@ -309,8 +305,8 @@ function BranchStatusPill({
           padding: '0 8px',
           border: 0,
           borderRadius: token.borderRadiusSM,
-          background: item.isPinned ? token.colorPrimaryBg : token.colorFillTertiary,
-          color: item.isPinned ? token.colorPrimary : token.colorTextSecondary,
+          background: item.isPinned ? token.colorWarningBg : token.colorFillTertiary,
+          color: item.isPinned ? token.colorWarning : token.colorTextSecondary,
           fontSize: 12,
           cursor: canTogglePin && !pinning ? 'pointer' : 'default',
           opacity: pinning ? 0.55 : 1,
@@ -412,6 +408,8 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
   const [busyLinkId, setBusyLinkId] = useState<string | null>(null);
   const [previewTarget, setPreviewTarget] = useState<LinkImagePreviewTarget | null>(null);
   const [markdownTarget, setMarkdownTarget] = useState<LinkMarkdownPreviewTarget | null>(null);
+  const [activeCategory, setActiveCategory] = useState<LinkCategoryTabKey>('all');
+  const [sortOrder, setSortOrder] = useState<LinkSortKey>('az');
 
   useEffect(() => {
     if (!client) {
@@ -542,6 +540,22 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
   const assistantPromotionLinks = assistantBranchId === branch.branch_id ? links : assistantLinks;
 
   const items = useMemo(() => buildLinkDisplayItems({ branch, links }), [branch, links]);
+  const categoryCounts = useMemo(() => getLinkCategoryCounts(items), [items]);
+  const categoryTabs = useMemo(
+    () =>
+      (['all', 'files', 'links', 'knowledge', 'issues'] as const).map((key) => ({
+        key,
+        label: `${LINK_CATEGORY_TAB_LABELS[key]} ${categoryCounts[key]}`,
+      })),
+    [categoryCounts]
+  );
+  const visibleItems = useMemo(
+    () =>
+      items
+        .filter((item) => matchesLinkCategoryTab(item, activeCategory))
+        .sort((a, b) => compareLinkDisplayItemsBySort(a, b, sortOrder)),
+    [activeCategory, items, sortOrder]
+  );
 
   const openPreview = useCallback((item: LinkDisplayItem) => {
     if (!item.linkId) return;
@@ -703,6 +717,11 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
               Durable resources owned by this branch. Session-owned pins stay promoted in session
               headers, not on the branch card.
             </Typography.Text>
+            {items.length > 0 && (
+              <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+                {getLinkCategorySummary(items)}
+              </Typography.Text>
+            )}
           </div>
 
           {error && (
@@ -723,106 +742,142 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
               <Spin />
             </div>
           ) : items.length > 0 ? (
-            <List
-              style={{ padding: `0 ${token.paddingLG}px` }}
-              dataSource={items}
-              renderItem={(item) => {
-                const disabledReason = getUnavailableReason(item);
-                const disabled = Boolean(disabledReason);
-                const targetLabel = getLinkDisplaySecondaryLabel(item);
-                return (
-                  <List.Item
-                    className="agor-action-link-row"
-                    key={item.key}
-                    role={disabled ? undefined : 'link'}
-                    tabIndex={disabled ? -1 : 0}
-                    aria-disabled={disabled || undefined}
-                    onClick={(event) => {
-                      if (disabled || shouldIgnoreRowActivation(event.target)) return;
-                      openItem(item);
-                    }}
-                    onKeyDown={(event) => {
-                      if (disabled || shouldIgnoreRowActivation(event.target)) return;
-                      if (event.key !== 'Enter' && event.key !== ' ') return;
-                      event.preventDefault();
-                      openItem(item);
-                    }}
-                    style={
-                      {
-                        '--agor-link-title-color': disabled
-                          ? token.colorTextDisabled
-                          : token.colorPrimary,
-                        '--agor-link-icon-color': disabled
-                          ? token.colorTextDisabled
-                          : token.colorTextTertiary,
-                        '--agor-link-row-hover-bg': 'transparent',
-                        '--agor-link-row-hover-color': token.colorPrimary,
-                        borderColor: token.colorBorderSecondary,
-                        borderRadius: token.borderRadius,
-                        cursor: disabled ? 'default' : 'pointer',
-                        paddingRight: token.sizeSM,
-                      } as React.CSSProperties
-                    }
-                    actions={[
-                      <BranchStatusPill
-                        key="state"
-                        item={item}
-                        onTogglePinned={handleTogglePinned}
-                        pinning={item.linkId === pinningLinkId}
-                      />,
-                      <BranchAssistantPromotionAction
-                        key="assistant"
-                        item={item}
-                        assistantBranchId={assistantBranchId}
-                        assistantLinks={assistantPromotionLinks}
-                        sourceBranchId={branch.branch_id}
-                        busyKey={assistantPromotionBusyKey}
-                        onPromote={handlePromoteToAssistant}
-                        onRemove={handleRemoveFromAssistant}
-                      />,
-                    ]}
-                  >
-                    <List.Item.Meta
-                      avatar={<BranchGlyph item={item} disabled={disabled} />}
-                      title={
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: token.sizeXS,
-                            minWidth: 0,
-                          }}
-                        >
-                          <BranchTitle
+            <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
+              <div style={{ padding: `0 ${token.paddingLG}px` }}>
+                <Tabs
+                  className="agor-link-category-tabs"
+                  activeKey={activeCategory}
+                  items={categoryTabs}
+                  onChange={(key) => setActiveCategory(key as LinkCategoryTabKey)}
+                />
+                <Space size={token.sizeXS} style={{ marginTop: token.sizeSM }}>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Sort
+                  </Typography.Text>
+                  <Select<LinkSortKey>
+                    size="small"
+                    value={sortOrder}
+                    options={(Object.keys(LINK_SORT_LABELS) as LinkSortKey[]).map((key) => ({
+                      value: key,
+                      label: LINK_SORT_LABELS[key],
+                    }))}
+                    onChange={setSortOrder}
+                    style={{ width: 128 }}
+                  />
+                </Space>
+              </div>
+              {visibleItems.length > 0 ? (
+                <List
+                  style={{ padding: `0 ${token.paddingLG}px` }}
+                  dataSource={visibleItems}
+                  renderItem={(item) => {
+                    const disabledReason = getUnavailableReason(item);
+                    const disabled = Boolean(disabledReason);
+                    const targetLabel = getLinkDisplaySecondaryLabel(item);
+                    return (
+                      <List.Item
+                        className="agor-action-link-row"
+                        key={item.key}
+                        role={disabled ? undefined : 'link'}
+                        tabIndex={disabled ? -1 : 0}
+                        aria-disabled={disabled || undefined}
+                        onClick={(event) => {
+                          if (disabled || shouldIgnoreRowActivation(event.target)) return;
+                          openItem(item);
+                        }}
+                        onKeyDown={(event) => {
+                          if (disabled || shouldIgnoreRowActivation(event.target)) return;
+                          if (event.key !== 'Enter' && event.key !== ' ') return;
+                          event.preventDefault();
+                          openItem(item);
+                        }}
+                        style={
+                          {
+                            '--agor-link-title-color': disabled
+                              ? token.colorTextDisabled
+                              : token.colorPrimary,
+                            '--agor-link-icon-color': disabled
+                              ? token.colorTextDisabled
+                              : token.colorTextTertiary,
+                            '--agor-link-row-hover-bg': 'transparent',
+                            '--agor-link-row-hover-color': token.colorPrimary,
+                            borderColor: token.colorBorderSecondary,
+                            borderRadius: token.borderRadius,
+                            cursor: disabled ? 'default' : 'pointer',
+                            paddingRight: token.sizeSM,
+                          } as React.CSSProperties
+                        }
+                        actions={[
+                          <BranchStatusPill
+                            key="state"
                             item={item}
-                            onPreview={openPreview}
-                            onDownload={downloadItem}
-                          />
-                          <BranchTypePill item={item} />
-                        </span>
-                      }
-                      description={
-                        <span>
-                          {targetLabel && (
-                            <Typography.Text type="secondary" ellipsis style={{ display: 'block' }}>
-                              {targetLabel}
-                            </Typography.Text>
-                          )}
-                          {disabledReason && (
-                            <Typography.Text
-                              type="warning"
-                              style={{ display: 'block', fontSize: 12, marginTop: 2 }}
+                            onTogglePinned={handleTogglePinned}
+                            pinning={item.linkId === pinningLinkId}
+                          />,
+                          <BranchAssistantPromotionAction
+                            key="assistant"
+                            item={item}
+                            assistantBranchId={assistantBranchId}
+                            assistantLinks={assistantPromotionLinks}
+                            sourceBranchId={branch.branch_id}
+                            busyKey={assistantPromotionBusyKey}
+                            onPromote={handlePromoteToAssistant}
+                            onRemove={handleRemoveFromAssistant}
+                          />,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          avatar={<BranchGlyph item={item} disabled={disabled} />}
+                          title={
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: token.sizeXS,
+                                minWidth: 0,
+                              }}
                             >
-                              {disabledReason}
-                            </Typography.Text>
-                          )}
-                        </span>
-                      }
-                    />
-                  </List.Item>
-                );
-              }}
-            />
+                              <BranchTitle
+                                item={item}
+                                onPreview={openPreview}
+                                onDownload={downloadItem}
+                              />
+                              <BranchTypePill item={item} />
+                            </span>
+                          }
+                          description={
+                            <span>
+                              {targetLabel && (
+                                <Typography.Text
+                                  type="secondary"
+                                  ellipsis
+                                  style={{ display: 'block' }}
+                                >
+                                  {targetLabel}
+                                </Typography.Text>
+                              )}
+                              {disabledReason && (
+                                <Typography.Text
+                                  type="warning"
+                                  style={{ display: 'block', fontSize: 12, marginTop: 2 }}
+                                >
+                                  {disabledReason}
+                                </Typography.Text>
+                              )}
+                            </span>
+                          }
+                        />
+                      </List.Item>
+                    );
+                  }}
+                />
+              ) : (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="No links match this view."
+                />
+              )}
+            </Space>
           ) : (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}

@@ -263,6 +263,8 @@ function displayItemToSessionAttachmentItem(item: LinkDisplayItem): SessionAttac
     source: item.source === 'branch' ? 'branch' : item.source,
     ownerScope: item.ownerScope,
     isPinned: item.isPinned,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
     disabled: isUnsupportedFileBacked,
     subtitle: getLinkDisplaySecondaryLabel(item) ?? undefined,
     note: isUnsupportedFileBacked ? 'Preview/download unavailable' : undefined,

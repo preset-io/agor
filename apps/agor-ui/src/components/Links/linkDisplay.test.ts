@@ -3,13 +3,17 @@ import { normalizeRefTargetKey, normalizeUrlTargetKey } from '@agor-live/client'
 import { describe, expect, it } from 'vitest';
 import {
   buildLinkDisplayItems,
+  compareLinkDisplayItemsBySort,
   getCompactLinkDisplayName,
+  getLinkCategoryCounts,
+  getLinkCategorySummary,
   getLinkDisplayCategory,
   getLinkDisplayGlyphLabel,
   getLinkDisplayPillLabel,
   getLinkDisplaySecondaryLabel,
   type LinkDisplayItem,
   linkToDisplayItem,
+  matchesLinkCategoryTab,
   routeForKnowledgeRefUri,
   sortLinkDisplayItems,
   targetForLinkDisplay,
@@ -231,12 +235,50 @@ describe('link display categories', () => {
     expect(getLinkDisplayPillLabel('issue')).toBe('Issue');
     expect(getLinkDisplayPillLabel('pr')).toBe('PR');
     expect(getLinkDisplayPillLabel('knowledge')).toBe('Knowledge');
-    expect(getLinkDisplayPillLabel('url')).toBe('Saved URL');
+    expect(getLinkDisplayPillLabel('url')).toBe('Link');
     expect(getLinkDisplayPillLabel('image')).toBe('Image');
     expect(getLinkDisplayPillLabel('document')).toBe('Doc');
     expect(getLinkDisplayPillLabel('spreadsheet')).toBe('XLS');
     expect(getLinkDisplayPillLabel('csv')).toBe('CSV');
     expect(getLinkDisplayPillLabel('markdown')).toBe('MD');
+  });
+
+  it('splits organizer categories into tabs without losing ordinary web links', () => {
+    const items: LinkDisplayItem[] = [
+      item('web', 'Docs', false),
+      { ...item('kb', 'Knowledge', false), category: 'knowledge', refUri: 'agor://kb/team/doc.md' },
+      { ...item('file', 'Plan', false), category: 'pdf', filePath: '/uploads/plan.pdf' },
+      { ...item('pr', 'PR', false), category: 'pr' },
+    ];
+
+    expect(getLinkCategoryCounts(items)).toEqual({
+      all: 4,
+      files: 1,
+      links: 1,
+      knowledge: 1,
+      issues: 1,
+    });
+    expect(matchesLinkCategoryTab(items[0], 'links')).toBe(true);
+    expect(getLinkCategorySummary(items)).toBe('1 file · 1 link · 1 knowledge · 1 issue/PR');
+  });
+
+  it('keeps pinned rows first when applying alternate sort orders', () => {
+    const items: LinkDisplayItem[] = [
+      { ...item('old-z', 'Zebra', false), createdAt: '2026-01-01T00:00:00.000Z' },
+      { ...item('new-a', 'Alpha', false), createdAt: '2026-02-01T00:00:00.000Z' },
+      { ...item('pinned-m', 'Middle', true), createdAt: '2025-01-01T00:00:00.000Z' },
+    ];
+
+    expect(
+      [...items]
+        .sort((a, b) => compareLinkDisplayItemsBySort(a, b, 'recent'))
+        .map((entry) => entry.name)
+    ).toEqual(['Middle', 'Alpha', 'Zebra']);
+    expect(
+      [...items]
+        .sort((a, b) => compareLinkDisplayItemsBySort(a, b, 'za'))
+        .map((entry) => entry.name)
+    ).toEqual(['Middle', 'Zebra', 'Alpha']);
   });
 
   it('renders uploaded file rows with useful labels but no preview href', () => {
