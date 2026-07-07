@@ -26,6 +26,7 @@ describe('analytics payload builders', () => {
       board_id: 'board-1',
       ref_type: 'branch',
       new_branch: true,
+      is_teammate: true,
       is_assistant: true,
     });
     expect(payload).not.toHaveProperty('name');

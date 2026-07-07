@@ -1219,10 +1219,10 @@ describe('agor_assistants_list', () => {
         },
       },
     };
-    const findAssistantBranches = vi
-      .spyOn(BranchRepository.prototype, 'findAssistantBranches')
+    const findTeammateBranches = vi
+      .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([hodorLikeBranch] as Awaited<
-        ReturnType<BranchRepository['findAssistantBranches']>
+        ReturnType<BranchRepository['findTeammateBranches']>
       >);
     const app = {
       service(name: string) {
@@ -1239,7 +1239,7 @@ describe('agor_assistants_list', () => {
     const result = await listAssistants({ limit: 200 });
     const parsed = JSON.parse(result.content[0].text);
 
-    expect(findAssistantBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
+    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
     expect(parsed.total).toBe(1);
     expect(parsed.assistants).toEqual([
       expect.objectContaining({
@@ -1268,9 +1268,9 @@ describe('agor_assistants_list', () => {
       archived: false,
       storage_mode: 'clone',
     };
-    vi.spyOn(BranchRepository.prototype, 'findAssistantBranches').mockResolvedValue([
+    vi.spyOn(BranchRepository.prototype, 'findTeammateBranches').mockResolvedValue([
       scheduledLegacyBranch,
-    ] as Awaited<ReturnType<BranchRepository['findAssistantBranches']>>);
+    ] as Awaited<ReturnType<BranchRepository['findTeammateBranches']>>);
     const app = {
       service(name: string) {
         throw new Error(`Unexpected service call: ${name}`);
@@ -1303,8 +1303,8 @@ describe('agor_assistants_list', () => {
       execution: { allow_superadmin: true },
     } as Awaited<ReturnType<typeof configModule.loadConfig>>);
 
-    const findAssistantBranches = vi
-      .spyOn(BranchRepository.prototype, 'findAssistantBranches')
+    const findTeammateBranches = vi
+      .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);
     const app = {
       service(name: string) {
@@ -1324,7 +1324,7 @@ describe('agor_assistants_list', () => {
 
     await listAssistants({});
 
-    expect(findAssistantBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
+    expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
   });
 
   it('scopes assistant discovery for superadmins when superadmin bypass is disabled', async () => {
@@ -1333,8 +1333,8 @@ describe('agor_assistants_list', () => {
       execution: { allow_superadmin: false },
     } as Awaited<ReturnType<typeof configModule.loadConfig>>);
 
-    const findAssistantBranches = vi
-      .spyOn(BranchRepository.prototype, 'findAssistantBranches')
+    const findTeammateBranches = vi
+      .spyOn(BranchRepository.prototype, 'findTeammateBranches')
       .mockResolvedValue([]);
     const app = {
       service(name: string) {
@@ -1354,7 +1354,7 @@ describe('agor_assistants_list', () => {
 
     await listAssistants({});
 
-    expect(findAssistantBranches).toHaveBeenCalledWith({
+    expect(findTeammateBranches).toHaveBeenCalledWith({
       archived: false,
       userId: 'superadmin-1',
       limit: 200,
