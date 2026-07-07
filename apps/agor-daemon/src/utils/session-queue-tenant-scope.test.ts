@@ -65,6 +65,62 @@ describe('session queue tenant scope', () => {
     expect(seen).toEqual(['tenant:tenant-active', 'params:tenant-active']);
   });
 
+  it('uses a trusted tenant hint when params and active scope are absent', async () => {
+    const { db } = makePgDb();
+    const seen: string[] = [];
+
+    await runWithSessionQueueTenantScope(
+      {
+        db: db as never,
+        config: {
+          database: { dialect: 'postgresql' },
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        },
+        sessionId: 'session-1' as SessionID,
+        params: {},
+        tenantIdHint: 'tenant-from-row',
+        label: 'test hinted drain',
+      },
+      async (params) => {
+        seen.push(`tenant:${getCurrentTenantId()}`);
+        seen.push(`params:${params.tenant?.tenant_id}`);
+        seen.push(`source:${params.tenant?.source}`);
+      }
+    );
+
+    expect(seen).toEqual(['tenant:tenant-from-row', 'params:tenant-from-row', 'source:explicit']);
+  });
+
+  it('prefers params tenant over trusted tenant hint', async () => {
+    const { db } = makePgDb();
+    const seen: string[] = [];
+
+    await runWithSessionQueueTenantScope(
+      {
+        db: db as never,
+        config: {
+          database: { dialect: 'postgresql' },
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        },
+        sessionId: 'session-1' as SessionID,
+        params: { tenant: { tenant_id: 'tenant-from-params', source: 'auth_claim' } },
+        tenantIdHint: 'tenant-from-row',
+        label: 'test hinted drain',
+      },
+      async (params) => {
+        seen.push(`tenant:${getCurrentTenantId()}`);
+        seen.push(`params:${params.tenant?.tenant_id}`);
+        seen.push(`source:${params.tenant?.source}`);
+      }
+    );
+
+    expect(seen).toEqual([
+      'tenant:tenant-from-params',
+      'params:tenant-from-params',
+      'source:auth_claim',
+    ]);
+  });
+
   it('uses configured static tenant mode when params and active scope are absent', async () => {
     const { db } = makePgDb();
     const seen: string[] = [];
@@ -167,5 +223,35 @@ describe('session queue tenant scope', () => {
 
     expect(work).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.any(String) }));
+  });
+
+  it('defers request-less queue drains with a trusted tenant hint', async () => {
+    const { db } = makePgDb();
+    const seen: string[] = [];
+
+    const drained = new Promise<void>((resolve, reject) => {
+      deferWithSessionQueueTenantScope(
+        {
+          db: db as never,
+          config: {
+            database: { dialect: 'postgresql' },
+            multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+          },
+          sessionId: 'session-1' as SessionID,
+          params: {},
+          tenantIdHint: 'tenant-from-row',
+          label: 'session after.patch drain',
+        },
+        async (params) => {
+          seen.push(`tenant:${getCurrentTenantId()}`);
+          seen.push(`params:${params.tenant?.tenant_id}`);
+          resolve();
+        },
+        reject
+      );
+    });
+    await drained;
+
+    expect(seen).toEqual(['tenant:tenant-from-row', 'params:tenant-from-row']);
   });
 });

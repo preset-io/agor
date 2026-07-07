@@ -330,6 +330,11 @@ export function shouldDrainQueueAfterSessionPostTurnPatch(
   );
 }
 
+export function getTrustedSessionTenantId(session: unknown): string | undefined {
+  const tenantId = (session as { tenant_id?: unknown } | undefined)?.tenant_id;
+  return typeof tenantId === 'string' && tenantId.length > 0 ? tenantId : undefined;
+}
+
 export async function enrichSessionFindResultWithRemoteRelationships(
   result: Paginated<Session> | Session[],
   sessionsService: Pick<SessionsServiceImpl, 'enrichRemoteRelationships'>
@@ -2727,17 +2732,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             });
 
             if (shouldDrainQueueAfterSessionPostTurnPatch(session, context.params)) {
+              const sessionTenantId = getTrustedSessionTenantId(session);
               // Same fresh-scope pattern: queue processing must run outside the
               // outer transaction but still inside the session tenant for RLS.
               // Some completion/background paths have minimal params, so this
-              // relies on params.tenant, current tenant ALS, or static tenant
-              // config and otherwise fails closed.
+              // relies on params.tenant, current tenant ALS, the already-returned
+              // session row tenant_id, or static tenant config and otherwise
+              // fails closed.
               deferWithSessionQueueTenantScope(
                 {
                   db,
                   config,
                   sessionId: session.session_id,
                   params: context.params,
+                  tenantIdHint: sessionTenantId,
                   label: 'SessionsService.after.patch queue drain',
                 },
                 async (queueParams) => {

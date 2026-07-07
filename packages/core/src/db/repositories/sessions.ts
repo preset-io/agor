@@ -22,6 +22,7 @@ import {
 } from '../schema';
 import {
   AmbiguousIdError,
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
@@ -77,41 +78,44 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     // resolve the session but have nowhere to switch the canvas to.
     const url = baseUrl && boardId ? getSessionUrl(sessionId, baseUrl) : null;
 
-    return {
-      session_id: sessionId,
-      status: row.status,
-      agentic_tool: row.agentic_tool,
-      created_at: new Date(row.created_at).toISOString(),
-      last_updated: row.updated_at
-        ? new Date(row.updated_at).toISOString()
-        : new Date(row.created_at).toISOString(),
-      created_by: row.created_by,
-      unix_username: row.unix_username || null,
-      branch_id: row.branch_id as UUID,
-      branch_board_id: boardId,
-      url,
-      ...row.data,
-      tasks: row.data.tasks.map((id) => id as UUID),
-      genealogy: {
-        parent_session_id: row.parent_session_id as UUID | undefined,
-        forked_from_session_id: row.forked_from_session_id as UUID | undefined,
-        fork_point_task_id: genealogyData.fork_point_task_id as UUID | undefined,
-        fork_point_message_index: genealogyData.fork_point_message_index,
-        spawn_point_task_id: genealogyData.spawn_point_task_id as UUID | undefined,
-        spawn_point_message_index: genealogyData.spawn_point_message_index,
-        children: genealogyData.children.map((id) => id as UUID),
+    return attachHiddenTenant(
+      {
+        session_id: sessionId,
+        status: row.status,
+        agentic_tool: row.agentic_tool,
+        created_at: new Date(row.created_at).toISOString(),
+        last_updated: row.updated_at
+          ? new Date(row.updated_at).toISOString()
+          : new Date(row.created_at).toISOString(),
+        created_by: row.created_by,
+        unix_username: row.unix_username || null,
+        branch_id: row.branch_id as UUID,
+        branch_board_id: boardId,
+        url,
+        ...row.data,
+        tasks: row.data.tasks.map((id) => id as UUID),
+        genealogy: {
+          parent_session_id: row.parent_session_id as UUID | undefined,
+          forked_from_session_id: row.forked_from_session_id as UUID | undefined,
+          fork_point_task_id: genealogyData.fork_point_task_id as UUID | undefined,
+          fork_point_message_index: genealogyData.fork_point_message_index,
+          spawn_point_task_id: genealogyData.spawn_point_task_id as UUID | undefined,
+          spawn_point_message_index: genealogyData.spawn_point_message_index,
+          children: genealogyData.children.map((id) => id as UUID),
+        },
+        permission_config: row.data.permission_config,
+        scheduled_run_at: row.scheduled_run_at ?? undefined,
+        scheduled_from_branch: row.scheduled_from_branch ?? false,
+        schedule_id: (row.schedule_id as UUID | null) ?? undefined,
+        ready_for_prompt: row.ready_for_prompt ?? false,
+        archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
+        archived_reason: row.archived_reason ?? undefined,
+        current_context_usage: row.data.current_context_usage,
+        context_window_limit: row.data.context_window_limit,
+        last_context_update_at: row.data.last_context_update_at,
       },
-      permission_config: row.data.permission_config,
-      scheduled_run_at: row.scheduled_run_at ?? undefined,
-      scheduled_from_branch: row.scheduled_from_branch ?? false,
-      schedule_id: (row.schedule_id as UUID | null) ?? undefined,
-      ready_for_prompt: row.ready_for_prompt ?? false,
-      archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
-      archived_reason: row.archived_reason ?? undefined,
-      current_context_usage: row.data.current_context_usage,
-      context_window_limit: row.data.context_window_limit,
-      last_context_update_at: row.data.last_context_update_at,
-    };
+      row
+    );
   }
 
   /**
@@ -688,9 +692,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           throw new RepositoryError('Session update did not produce an updated_at timestamp');
         }
 
-        // Return merged session with the persisted timestamp.
+        // Return merged session with the persisted timestamp and hidden tenant
+        // metadata preserved from the tenant-owned row. The in-memory merge uses
+        // object spread, so it intentionally does not carry non-enumerable
+        // properties from rowToSession(currentRow).
         merged.last_updated = insertData.updated_at.toISOString();
-        return merged;
+        return attachHiddenTenant(merged, currentRow);
       });
 
       return result;

@@ -15,12 +15,23 @@ export interface SessionQueueTenantScopeOptions {
   config: AgorConfig;
   sessionId: SessionID;
   params?: Params;
+  /**
+   * Trusted tenant id from an already-loaded tenant-owned row (for example a
+   * Postgres sessions/tasks patch result). Do not populate this from request
+   * payloads or request-less tenant discovery reads.
+   */
+  tenantIdHint?: string;
   label: string;
 }
 
 function staticTenantId(config: AgorConfig): string | undefined {
   const multiTenancy = resolveMultiTenancyConfig(config);
   return multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined;
+}
+
+function trustedTenantIdHint(options: SessionQueueTenantScopeOptions): string | undefined {
+  const hint = options.tenantIdHint?.trim();
+  return hint || undefined;
 }
 
 export function queueTenantParams(
@@ -48,6 +59,12 @@ export async function runWithSessionQueueTenantScope<T>(
   if (capturedTenantId) {
     const scopedParams = queueTenantParams(options.params, capturedTenantId, 'explicit');
     return runWithTenantDatabaseScope(options.db, capturedTenantId, () => work(scopedParams));
+  }
+
+  const tenantIdHint = trustedTenantIdHint(options);
+  if (tenantIdHint) {
+    const scopedParams = queueTenantParams(options.params, tenantIdHint, 'explicit');
+    return runWithTenantDatabaseScope(options.db, tenantIdHint, () => work(scopedParams));
   }
 
   const configuredStaticTenantId = staticTenantId(options.config);
@@ -78,6 +95,13 @@ export function deferWithSessionQueueTenantScope(
   const capturedTenantId = resolveTenantIdForDeferredScope(options.params);
   if (capturedTenantId) {
     const scopedParams = queueTenantParams(options.params, capturedTenantId, 'explicit');
+    deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), onError);
+    return;
+  }
+
+  const tenantIdHint = trustedTenantIdHint(options);
+  if (tenantIdHint) {
+    const scopedParams = queueTenantParams(options.params, tenantIdHint, 'explicit');
     deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), onError);
     return;
   }
