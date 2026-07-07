@@ -4,6 +4,7 @@ import type {
   LinkCreate,
   LinkID,
   LinkKind,
+  LinkOwnerScope,
   LinkPatch,
   LinkSource,
   LinkTargetObjectType,
@@ -11,7 +12,7 @@ import type {
   SessionID,
   UUID,
 } from '@agor/core/types';
-import { and, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, eq, exists, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import {
   countLinkTargets,
@@ -23,7 +24,7 @@ import {
 import type { Database } from '../client';
 import { isUniqueConstraintError } from '../constraint-errors';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type LinkInsert, type LinkRow, links } from '../schema';
+import { branches, type LinkInsert, type LinkRow, links, sessions } from '../schema';
 import { attachHiddenTenant, RepositoryError } from './base';
 import {
   visibleBranchReferenceAccessExists,
@@ -31,6 +32,8 @@ import {
 } from './branch-access';
 
 export interface LinkFindFilter {
+  boardId?: UUID;
+  ownerScope?: LinkOwnerScope;
   branchId?: BranchID;
   branchIds?: BranchID[];
   sessionId?: SessionID;
@@ -85,6 +88,60 @@ function preserveExistingSourceMessageOnDedupe(
 ): Partial<LinkCreate> {
   if (!existing.source_message_id || data.source_message_id === undefined) return data;
   return { ...data, source_message_id: existing.source_message_id };
+}
+
+function branchOwnerOnBoardExists(db: Database, boardId: UUID) {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads.
+    (db as any)
+      .select({ _: sql`1` })
+      .from(branches)
+      .where(
+        and(
+          eq(branches.branch_id, links.branch_id),
+          eq(branches.board_id, boardId),
+          eq(branches.archived, false)
+        )
+      )
+  );
+}
+
+function activeBranchOwnerExists(db: Database) {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads.
+    (db as any)
+      .select({ _: sql`1` })
+      .from(branches)
+      .where(and(eq(branches.branch_id, links.branch_id), eq(branches.archived, false)))
+  );
+}
+
+function sessionOwnerOnBoardExists(db: Database, boardId: UUID) {
+  return exists(
+    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads.
+    (db as any)
+      .select({ _: sql`1` })
+      .from(sessions)
+      .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
+      .where(
+        and(
+          eq(sessions.session_id, links.session_id),
+          eq(branches.board_id, boardId),
+          eq(branches.archived, false),
+          eq(sessions.archived, false)
+        )
+      )
+  );
+}
+
+function isGlobalPinnedBranchLifecycleFilter(filter: LinkFindFilter): boolean {
+  return (
+    filter.ownerScope === 'branch' &&
+    filter.isPinned === true &&
+    !filter.boardId &&
+    !filter.branchId &&
+    filter.branchIds === undefined
+  );
 }
 
 export class LinksRepository {
@@ -231,6 +288,18 @@ export class LinksRepository {
     if (filter?.sessionIds !== undefined && filter.sessionIds.length === 0) return [];
 
     const conditions = [];
+    if (filter?.ownerScope === 'branch') conditions.push(isNotNull(links.branch_id));
+    if (filter?.ownerScope === 'session') conditions.push(isNotNull(links.session_id));
+    if (filter && isGlobalPinnedBranchLifecycleFilter(filter)) {
+      conditions.push(activeBranchOwnerExists(this.db));
+    }
+    if (filter?.boardId) {
+      const branchScope = branchOwnerOnBoardExists(this.db, filter.boardId);
+      const sessionScope = sessionOwnerOnBoardExists(this.db, filter.boardId);
+      if (filter.ownerScope === 'branch') conditions.push(branchScope);
+      else if (filter.ownerScope === 'session') conditions.push(sessionScope);
+      else conditions.push(or(branchScope, sessionScope));
+    }
     if (filter?.branchId) conditions.push(eq(links.branch_id, filter.branchId));
     if (filter?.branchIds !== undefined)
       conditions.push(inArray(links.branch_id, filter.branchIds));

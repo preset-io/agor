@@ -267,10 +267,23 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   }
 
   /**
+   * Query shape used by the generic in-memory filter after `fetchData`.
+   *
+   * Most services can re-apply the original Feathers query verbatim. Services
+   * that push derived, non-row fields into SQL (for example board-scoped
+   * predicates) may strip those keys here so the generic field-equality pass
+   * does not reject otherwise matching rows.
+   */
+  protected filterQueryForInMemory(query: Query): Query {
+    return query;
+  }
+
+  /**
    * Find records
    */
   async find(params?: P): Promise<Paginated<T> | T[]> {
     const query = this.getQuery(params);
+    const filterQuery = this.filterQueryForInMemory(query);
 
     // Get the candidate row set (whole table by default; subclasses may push
     // predicates into SQL — filterData below still applies every query filter)
@@ -282,7 +295,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     }
 
     // Apply filters
-    data = this.filterData(data, query);
+    data = this.filterData(data, filterQuery);
 
     // Get total count after filtering (reflects the actual matching records)
     const total = data.length;

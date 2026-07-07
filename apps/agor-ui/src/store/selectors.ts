@@ -11,7 +11,7 @@
  * one board's bucket: a patch to another board's objects leaves this board's
  * array reference untouched, so the subscription doesn't fire.
  */
-import type { BoardEntityObject, Session } from '@agor-live/client';
+import type { BoardEntityObject, Link, Session } from '@agor-live/client';
 import type { AgorState } from './agorStore';
 
 export const selectSessionById = (s: AgorState) => s.sessionById;
@@ -30,6 +30,9 @@ export const selectGatewayChannelById = (s: AgorState) => s.gatewayChannelById;
 export const selectUserAuthenticatedMcpServerIds = (s: AgorState) =>
   s.userAuthenticatedMcpServerIds;
 export const selectArtifactById = (s: AgorState) => s.artifactById;
+export const selectLinkById = (s: AgorState) => s.linkById;
+export const selectLinksByBranch = (s: AgorState) => s.linksByBranch;
+export const selectLinksBySession = (s: AgorState) => s.linksBySession;
 export const selectSessionMcpServerIds = (s: AgorState) => s.sessionMcpServerIds;
 
 /**
@@ -55,4 +58,14 @@ export function makeSessionsForBranchSelector(
   branchId: string
 ): (s: AgorState) => Session[] | undefined {
   return (s) => s.sessionsByBranch.get(branchId);
+}
+
+export function makeLinksForBranchSelector(branchId: string): (s: AgorState) => Link[] | undefined {
+  return (s) => s.linksByBranch.get(branchId);
+}
+
+export function makeLinksForSessionSelector(
+  sessionId: string
+): (s: AgorState) => Link[] | undefined {
+  return (s) => s.linksBySession.get(sessionId);
 }

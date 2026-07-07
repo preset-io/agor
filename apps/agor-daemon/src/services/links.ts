@@ -14,6 +14,7 @@ import type {
   Link,
   LinkCreate,
   LinkKind,
+  LinkOwnerScope,
   LinkSource,
   LinkTargetObjectType,
   Message,
@@ -30,6 +31,8 @@ import { DrizzleService, type Query } from '../adapters/drizzle';
 export const LINKS_SERVICE_METHODS = ['find', 'get', 'create', 'patch', 'remove'] as const;
 
 export type LinkParams = QueryParams<{
+  board_id?: UUID;
+  owner_scope?: LinkOwnerScope;
   branch_id?: BranchID;
   session_id?: SessionID;
   source_message_id?: MessageID;
@@ -61,6 +64,14 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
 
   protected async fetchData(query: Query, params?: LinkParams): Promise<Link[]> {
     const filter: Parameters<LinksRepository['findAll']>[0] = {};
+    if (typeof query.board_id === 'string') filter.boardId = query.board_id as UUID;
+    if (
+      query.owner_scope === 'branch' ||
+      query.owner_scope === 'session' ||
+      query.owner_scope === 'all'
+    ) {
+      filter.ownerScope = query.owner_scope;
+    }
     if (typeof query.branch_id === 'string') filter.branchId = query.branch_id as BranchID;
     if (typeof query.session_id === 'string') filter.sessionId = query.session_id as SessionID;
     if (typeof query.source_message_id === 'string') {
@@ -77,6 +88,11 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
     }
     if (params?._agorSqlLinkAccessUserId) filter.visibleToUserId = params._agorSqlLinkAccessUserId;
     return this.linksRepo.findAll(filter);
+  }
+
+  protected filterQueryForInMemory(query: Query): Query {
+    const { board_id: _boardId, owner_scope: _ownerScope, ...rowBackedQuery } = query;
+    return rowBackedQuery;
   }
 
   async create(data: Partial<Link> | Partial<Link>[], params?: LinkParams): Promise<Link | Link[]> {

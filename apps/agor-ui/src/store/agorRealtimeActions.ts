@@ -32,6 +32,7 @@ import type {
   CardType,
   CardWithType,
   GatewayChannel,
+  Link,
   MCPServer,
   Repo,
   Session,
@@ -44,8 +45,10 @@ import {
   findSessionInBranchBuckets,
   preserveSessionRelationshipFields,
   removeBoardObjectFromMaps,
+  removeLinkFromMaps,
   replaceIfChanged,
   upsertBoardObjectInMaps,
+  upsertLinkInMaps,
 } from './agorMaps';
 import { type AgorState, agorStore } from './agorStore';
 
@@ -58,6 +61,22 @@ const setMap: AgorState['setMap'] = (key, value) => agorStore.getState().setMap(
 const applyMaps: AgorState['applyMaps'] = (updater) => agorStore.getState().applyMaps(updater);
 const evictBranchAndSessions: AgorState['evictBranchAndSessions'] = (branchId) =>
   agorStore.getState().evictBranchAndSessions(branchId);
+
+function evictSessionLinks(sessionId: string) {
+  const bucket = agorStore.getState().linksBySession.get(sessionId);
+  setMap('linksBySession', (prev) => {
+    if (!prev.has(sessionId)) return prev;
+    const next = new Map(prev);
+    next.delete(sessionId);
+    return next;
+  });
+  setMap('linkById', (prev) => {
+    if (!bucket?.length) return prev;
+    const next = new Map(prev);
+    for (const link of bucket) next.delete(link.link_id);
+    return next;
+  });
+}
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 export function sessionCreated(session: Session) {
@@ -92,6 +111,10 @@ export function sessionPatched(session: Session) {
   // resurrect an archive with a pre-archive snapshot.
   bumpRevision('sessions');
   const isArchived = session.archived === true;
+  if (isArchived) {
+    bumpRevision('links');
+    evictSessionLinks(session.session_id);
+  }
   // Track old branch_id for migration detection
   let oldBranchId: string | null = null;
 
@@ -245,6 +268,8 @@ export function sessionPatched(session: Session) {
 
 export function sessionRemoved(session: Session) {
   bumpRevision('sessions');
+  bumpRevision('links');
+  evictSessionLinks(session.session_id);
   // Update sessionById — bail out when the id isn't tracked so the
   // wrapper short-circuit prevents the spurious `maps` update.
   setMap('sessionById', (prev) => {
@@ -358,6 +383,7 @@ export function branchPatched(branch: Branch) {
     // hydration in flight could resurrect the evicted sessions with a
     // pre-eviction snapshot.
     bumpRevision('sessions');
+    bumpRevision('links');
     evictBranchAndSessions(branch.branch_id);
     return;
   }
@@ -369,7 +395,22 @@ export function branchRemoved(branch: Branch) {
   // Mirror the archive path: a hard delete should also evict any sessions we
   // still track on that branch (and bump `sessions` for the cascade).
   bumpRevision('sessions');
+  bumpRevision('links');
   evictBranchAndSessions(branch.branch_id);
+}
+
+// ── Links ──────────────────────────────────────────────────────────────────
+export function linkCreated(link: Link) {
+  bumpRevision('links');
+  applyMaps((prev) => upsertLinkInMaps(prev, link));
+}
+export function linkPatched(link: Link) {
+  bumpRevision('links');
+  applyMaps((prev) => upsertLinkInMaps(prev, link));
+}
+export function linkRemoved(link: Link) {
+  bumpRevision('links');
+  applyMaps((prev) => removeLinkFromMaps(prev, link));
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────--

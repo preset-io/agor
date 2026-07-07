@@ -5,7 +5,7 @@
  * `useStore`; React consumers can also bind to narrow selector subscriptions.
  *
  * Design notes:
- * - State shape reuses the canonical `DataMaps` type (17 maps + 1 set) from
+ * - State shape reuses the canonical `DataMaps` type from
  *   `agorMaps` — held as top-level fields alongside load/meta fields.
  * - A VANILLA `createStore` (not React `create`) so the hook keeps owning
  *   lifecycle; React binds via `useStore`.
@@ -79,12 +79,10 @@ interface AgorActions {
    */
   applyMaps: (updater: (prev: DataMaps) => DataMaps) => void;
   /**
-   * CASCADE (immer): drop a branch from `branchById` and prune every session
-   * that lived on it from `sessionById` / `sessionsByBranch`. Shared between the
-   * `archived: true` patch path and the hard-delete `removed` path. Expressed
-   * as a single immer draft (breadth=immer): structural sharing leaves
-   * untouched maps reference-stable and a no-op (unknown branch) produces no new
-   * state, matching the old three-`setState` version.
+   * CASCADE (immer): drop a branch from `branchById`, prune every session that
+   * lived on it from `sessionById` / `sessionsByBranch`, and evict branch-owned
+   * plus child-session-owned links. Shared between the `archived: true` patch
+   * path and the hard-delete `removed` path.
    */
   evictBranchAndSessions: (branchId: string) => void;
 }
@@ -180,6 +178,18 @@ export const agorStore = createStore<AgorState>()(
           if (session.branch_id === branchId) orphanIds.push(sessionId);
         }
         for (const sessionId of orphanIds) draft.sessionById.delete(sessionId);
+        if (draft.linksByBranch.has(branchId)) {
+          for (const link of draft.linksByBranch.get(branchId) ?? []) {
+            draft.linkById.delete(link.link_id);
+          }
+          draft.linksByBranch.delete(branchId);
+        }
+        for (const sessionId of orphanIds) {
+          for (const link of draft.linksBySession.get(sessionId) ?? []) {
+            draft.linkById.delete(link.link_id);
+          }
+          draft.linksBySession.delete(sessionId);
+        }
       }),
   }))
 );

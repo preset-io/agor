@@ -1,4 +1,5 @@
 import {
+  BoardRepository,
   BranchRepository,
   LinksRepository,
   MessagesRepository,
@@ -6,7 +7,15 @@ import {
   SessionRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { BranchID, Link, Message, MessageID, SessionID, UUID } from '@agor/core/types';
+import type {
+  BoardID,
+  BranchID,
+  Link,
+  Message,
+  MessageID,
+  SessionID,
+  UUID,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { Database } from '../../../../packages/core/src/db/client';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -17,7 +26,19 @@ async function seedUser(db: Database, userId: UUID, email: string) {
   await new UsersRepository(db).create({ user_id: userId, email, name: email });
 }
 
-async function seedBranch(db: Database, othersCan: 'none' | 'view' = 'none') {
+async function seedBoard(db: Database, boardId: BoardID) {
+  await new BoardRepository(db).create({
+    board_id: boardId,
+    name: `Links Service Board ${boardId}`,
+    created_by: 'owner' as UUID,
+  });
+}
+
+async function seedBranch(
+  db: Database,
+  othersCan: 'none' | 'view' = 'none',
+  options?: { boardId?: BoardID; archived?: boolean }
+) {
   const repo = await new RepoRepository(db).create({
     repo_id: generateId() as UUID,
     slug: `links-service-repo-${generateId()}`,
@@ -34,9 +55,11 @@ async function seedBranch(db: Database, othersCan: 'none' | 'view' = 'none') {
     ref: 'refs/heads/test',
     branch_unique_id: 1,
     path: `/tmp/${generateId()}`,
+    board_id: options?.boardId,
     created_by: 'owner' as UUID,
     permission_source: 'override',
     others_can: othersCan,
+    archived: options?.archived,
   });
 }
 
@@ -143,6 +166,80 @@ describe('LinksService', () => {
     const rows = Array.isArray(result) ? result : result.data;
     expect(rows.map((link) => link.link_id)).toEqual([visible.link_id]);
   });
+
+  dbTest(
+    'maps board_id and owner_scope query params into board-scoped link filters',
+    async ({ db }) => {
+      const boardId = generateId() as BoardID;
+      const otherBoardId = generateId() as BoardID;
+      await seedBoard(db, boardId);
+      await seedBoard(db, otherBoardId);
+      const branch = await seedBranch(db, 'view', { boardId });
+      const otherBranch = await seedBranch(db, 'view', { boardId: otherBoardId });
+      const session = await seedSession(db, branch.branch_id);
+      const repo = new LinksRepository(db);
+      const branchPinned = await repo.create({
+        branch_id: branch.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/branch-pinned',
+        is_pinned: true,
+      });
+      await repo.create({
+        branch_id: otherBranch.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/other-board',
+        is_pinned: true,
+      });
+      await repo.create({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/session-pinned',
+        is_pinned: true,
+      });
+
+      const service = new LinksService(db);
+      const result = await service.find({
+        query: { board_id: boardId, owner_scope: 'branch', is_pinned: true },
+      });
+
+      const rows = Array.isArray(result) ? result : result.data;
+      expect(rows.map((link) => link.link_id)).toEqual([branchPinned.link_id]);
+    }
+  );
+
+  dbTest(
+    'excludes archived branch owners from global pinned branch lifecycle queries',
+    async ({ db }) => {
+      const activeBranch = await seedBranch(db, 'view');
+      const archivedBranch = await seedBranch(db, 'view', { archived: true });
+      const repo = new LinksRepository(db);
+      const activePinned = await repo.create({
+        branch_id: activeBranch.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/active-branch-pinned',
+        is_pinned: true,
+      });
+      await repo.create({
+        branch_id: archivedBranch.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/archived-branch-pinned',
+        is_pinned: true,
+      });
+
+      const service = new LinksService(db);
+      const result = await service.find({
+        query: { owner_scope: 'branch', is_pinned: true },
+      });
+
+      const rows = Array.isArray(result) ? result : result.data;
+      expect(rows.map((link) => link.link_id)).toEqual([activePinned.link_id]);
+    }
+  );
 
   dbTest('ingests parsed links after single and array message creates', async ({ db }) => {
     const branch = await seedBranch(db, 'view');

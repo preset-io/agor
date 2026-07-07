@@ -16,6 +16,9 @@ export type LinkKind = (typeof LINK_KINDS)[number];
 export const LINK_SOURCES = ['manual', 'parsed', 'upload'] as const;
 export type LinkSource = (typeof LINK_SOURCES)[number];
 
+export const LINK_OWNER_SCOPES = ['branch', 'session', 'all'] as const;
+export type LinkOwnerScope = (typeof LINK_OWNER_SCOPES)[number];
+
 export const LINK_TARGET_FIELDS = ['url', 'ref_uri', 'file_path'] as const;
 export type LinkTargetField = (typeof LINK_TARGET_FIELDS)[number];
 

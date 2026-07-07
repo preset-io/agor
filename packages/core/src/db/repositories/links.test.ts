@@ -1,4 +1,5 @@
 import {
+  type BoardID,
   type BranchID,
   type Link,
   type MessageID,
@@ -13,6 +14,7 @@ import type { Database } from '../client';
 import { insert } from '../database-wrapper';
 import { type LinkInsert, type LinkRow, links } from '../schema';
 import { dbTest } from '../test-helpers';
+import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
 import { LinksRepository } from './links';
 import { MessagesRepository } from './messages';
@@ -24,9 +26,22 @@ async function seedUser(db: Database, userId: UUID, email: string) {
   await new UsersRepository(db).create({ user_id: userId, email, name: email });
 }
 
+async function seedBoard(db: Database, boardId: BoardID) {
+  await new BoardRepository(db).create({
+    board_id: boardId,
+    name: `Links Board ${boardId}`,
+    created_by: 'owner' as UUID,
+  });
+}
+
 async function seedBranch(
   db: Database,
-  options?: { createdBy?: UUID; othersCan?: 'none' | 'view' | 'session' | 'prompt' | 'all' }
+  options?: {
+    boardId?: BoardID;
+    createdBy?: UUID;
+    othersCan?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+    archived?: boolean;
+  }
 ) {
   const repo = await new RepoRepository(db).create({
     repo_id: generateId() as UUID,
@@ -44,9 +59,11 @@ async function seedBranch(
     ref: 'refs/heads/test',
     branch_unique_id: 1,
     path: `/tmp/${generateId()}`,
+    board_id: options?.boardId,
     created_by: options?.createdBy ?? ('owner' as UUID),
     permission_source: 'override',
     others_can: options?.othersCan ?? 'view',
+    archived: options?.archived,
   });
 }
 
@@ -409,6 +426,8 @@ describe('LinksRepository', () => {
     const branchB = await seedBranch(db);
     const sessionA = await seedSession(db, branchA.branch_id, 'owner' as UUID);
     const sessionB = await seedSession(db, branchB.branch_id, 'owner' as UUID);
+    const archivedSession = await seedSession(db, branchA.branch_id, 'owner' as UUID);
+    await new SessionRepository(db).update(archivedSession.session_id, { archived: true });
 
     await repo.create({
       session_id: sessionA.session_id,
@@ -436,6 +455,142 @@ describe('LinksRepository', () => {
       'https://example.com/branch-a',
     ]);
   });
+
+  dbTest(
+    'filters pinned links by board-derived owner scope without links.board_id',
+    async ({ db }) => {
+      const repo = new LinksRepository(db);
+      const boardA = generateId() as BoardID;
+      const boardB = generateId() as BoardID;
+      await seedBoard(db, boardA);
+      await seedBoard(db, boardB);
+      const branchA = await seedBranch(db, { boardId: boardA });
+      const branchB = await seedBranch(db, { boardId: boardB });
+      const archivedBranch = await seedBranch(db, { boardId: boardA, archived: true });
+      const sessionA = await seedSession(db, branchA.branch_id, 'owner' as UUID);
+      const sessionB = await seedSession(db, branchB.branch_id, 'owner' as UUID);
+      const archivedSession = await seedSession(db, branchA.branch_id, 'owner' as UUID);
+      await new SessionRepository(db).update(archivedSession.session_id, { archived: true });
+
+      const boardBranchPinned = await repo.create({
+        branch_id: branchA.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/board-branch-pinned',
+        is_pinned: true,
+      });
+      await repo.create({
+        branch_id: branchA.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/board-branch-unpinned',
+        is_pinned: false,
+      });
+      await repo.create({
+        branch_id: branchB.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/other-board',
+        is_pinned: true,
+      });
+      await repo.create({
+        branch_id: archivedBranch.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/archived-branch',
+        is_pinned: true,
+      });
+      const boardSessionPinned = await repo.create({
+        session_id: sessionA.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/board-session-pinned',
+        is_pinned: true,
+      });
+      await repo.create({
+        session_id: sessionB.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/other-board-session',
+        is_pinned: true,
+      });
+      await repo.create({
+        session_id: archivedSession.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/archived-session',
+        is_pinned: true,
+      });
+
+      expect(
+        (await repo.findAll({ boardId: boardA, ownerScope: 'branch', isPinned: true })).map(
+          (link) => link.link_id
+        )
+      ).toEqual([boardBranchPinned.link_id]);
+      expect(
+        (await repo.findAll({ boardId: boardA, ownerScope: 'session', isPinned: true })).map(
+          (link) => link.link_id
+        )
+      ).toEqual([boardSessionPinned.link_id]);
+      expect(
+        (await repo.findAll({ boardId: boardA, ownerScope: 'all', isPinned: true }))
+          .map((link) => link.link_id)
+          .sort()
+      ).toEqual([boardBranchPinned.link_id, boardSessionPinned.link_id].sort());
+    }
+  );
+
+  dbTest(
+    'filters archived branch owners from global pinned branch lifecycle queries',
+    async ({ db }) => {
+      const repo = new LinksRepository(db);
+      const activeBranch = await seedBranch(db);
+      const archivedBranch = await seedBranch(db, { archived: true });
+      const session = await seedSession(db, activeBranch.branch_id, 'owner' as UUID);
+
+      const activePinned = await repo.create({
+        branch_id: activeBranch.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/active-branch-pinned',
+        is_pinned: true,
+      });
+      const archivedPinned = await repo.create({
+        branch_id: archivedBranch.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/archived-branch-pinned',
+        is_pinned: true,
+      });
+      await repo.create({
+        branch_id: activeBranch.branch_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/active-branch-unpinned',
+        is_pinned: false,
+      });
+      await repo.create({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/session-pinned',
+        is_pinned: true,
+      });
+
+      expect(
+        (await repo.findAll({ ownerScope: 'branch', isPinned: true })).map((link) => link.link_id)
+      ).toEqual([activePinned.link_id]);
+      expect(
+        (
+          await repo.findAll({
+            branchId: archivedBranch.branch_id,
+            ownerScope: 'branch',
+            isPinned: true,
+          })
+        ).map((link) => link.link_id)
+      ).toEqual([archivedPinned.link_id]);
+    }
+  );
 
   dbTest('stores uploaded image and document metadata', async ({ db }) => {
     const repo = new LinksRepository(db);

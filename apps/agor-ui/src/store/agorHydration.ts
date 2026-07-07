@@ -55,6 +55,7 @@ export type HydratedCollection =
   | 'boardObjects'
   | 'cards'
   | 'comments'
+  | 'links'
   | 'mcpServers'
   | 'sessionMcp'
   | 'gatewayChannels'
@@ -72,6 +73,7 @@ export const FIRST_PAINT_MERGE_COLLECTIONS = [
   'boardObjects',
   'cards',
   'comments',
+  'links',
 ] as const;
 
 const makeZeroCounters = (): Record<HydratedCollection, number> => ({
@@ -81,6 +83,7 @@ const makeZeroCounters = (): Record<HydratedCollection, number> => ({
   boardObjects: 0,
   cards: 0,
   comments: 0,
+  links: 0,
   mcpServers: 0,
   sessionMcp: 0,
   gatewayChannels: 0,

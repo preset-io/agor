@@ -224,6 +224,10 @@ export const boardObjectQuerySchema = createQuerySchema(
 export const linkQuerySchema = createQuerySchema(
   Type.Object({
     link_id: Type.Optional(CommonSchemas.uuid),
+    board_id: Type.Optional(CommonSchemas.uuid),
+    owner_scope: Type.Optional(
+      Type.Union([Type.Literal('branch'), Type.Literal('session'), Type.Literal('all')])
+    ),
     branch_id: Type.Optional(CommonSchemas.uuid),
     session_id: Type.Optional(CommonSchemas.uuid),
     source_message_id: Type.Optional(CommonSchemas.uuid),
