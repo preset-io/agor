@@ -861,10 +861,14 @@ export function OnboardingWizard({
           return;
         }
         if (!user || !apiKey.trim()) return;
-        const patternErr = validateLlmKeyPattern(selectedAgent, apiKey.trim());
-        if (patternErr) {
-          setLlmError(patternErr);
-          return;
+        // Subscription tokens have no fixed format (see primaryEnabled/disabledReason
+        // above, which already treat them as exempt) — only pattern-validate API keys.
+        if (authMethod !== 'claude-subscription-token') {
+          const patternErr = validateLlmKeyPattern(selectedAgent, apiKey.trim());
+          if (patternErr) {
+            setLlmError(patternErr);
+            return;
+          }
         }
         setLlmSaving(true);
         setLlmError(null);

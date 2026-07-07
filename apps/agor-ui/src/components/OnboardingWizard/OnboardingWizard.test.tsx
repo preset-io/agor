@@ -1,7 +1,32 @@
-import type { Board, Branch, Repo, User } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+/**
+ * Tests for the redesigned 5-step OnboardingWizard (persona → llm → workspace →
+ * integrations → done).
+ *
+ * The wizard no longer clones a "framework" repo, auto-creates a branch/session,
+ * or offers "continue without key" / codex-cli-auth / provider-combobox affordances
+ * inline — that entire auto-provisioning subsystem was removed as part of the
+ * redesign (see OnboardingWizard.tsx header comment + commit history). Repo /
+ * branch / session creation is deferred to normal in-app flows: the wizard only
+ * ever calls onComplete with an empty branchId/sessionId and whatever boardId it
+ * created or reused. onCreateRepo / onCreateBranch / onCreateSession are accepted
+ * as props (for prop-shape compatibility with the app shell) but are unused by
+ * the component (`void`-ed immediately), so this file asserts they are never
+ * invoked rather than asserting on their call args.
+ *
+ * Note on query style: this file intentionally avoids `getByRole('button', ...)`
+ * / `queryByRole(...)` for interacting with buttons. The LLM and integrations
+ * steps render `antd` `Tag` elements, and computing an accessible name for ANY
+ * button while one is mounted walks into the Tag's stylesheet rule
+ * (`border: var(--ant-line-width) ...`), which crashes jsdom's `cssstyle`
+ * (5.3.2) — a pre-existing environment/library incompatibility (antd v6 default
+ * `cssVar` theming + a jsdom `cssstyle` shorthand-parsing bug), not a bug in the
+ * component. Plain text queries (`getByText(...).closest('button')`) sidestep
+ * the accessible-name computation entirely and are used throughout instead.
+ */
+
+import type { Board, User } from '@agor-live/client';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
-import { FRAMEWORK_REPO_SLUG } from '../../hooks/useFrameworkRepo';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { OnboardingWizard } from './OnboardingWizard';
@@ -12,16 +37,6 @@ vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
       {value}
     </button>
   ),
-}));
-
-vi.mock('../../utils/startAssistantBootstrapSession', () => ({
-  startAssistantBootstrapSession: vi.fn(async ({ onCreateSession, sessionConfig, boardId }) => {
-    return (await onCreateSession(sessionConfig, boardId)) || 'session-1';
-  }),
-}));
-
-vi.mock('../../utils/assistantWelcomeNote', () => ({
-  ensureAssistantWelcomeNote: vi.fn(async () => undefined),
 }));
 
 function makeUser(overrides: Partial<User> = {}): User {
@@ -38,486 +53,361 @@ function makeUser(overrides: Partial<User> = {}): User {
   } as unknown as User;
 }
 
-function makeRepo(overrides: Partial<Repo> = {}): Repo {
+function makeBoard(overrides: Partial<Board> = {}): Board {
   return {
-    repo_id: 'repo-1',
-    slug: FRAMEWORK_REPO_SLUG,
-    remote_url: 'https://github.com/preset-io/agor-assistant.git',
-    clone_status: 'ready',
-    default_branch: 'main',
+    board_id: 'board-existing',
+    name: 'Existing board',
     ...overrides,
-  } as Repo;
+  } as Board;
 }
 
-function makeBranch(overrides: Partial<Branch> = {}): Branch {
-  return {
-    branch_id: 'branch-1',
-    repo_id: 'repo-1',
-    name: 'private-my-assistant',
-    ref: 'private-my-assistant',
-    created_by: 'user-1',
-    ...overrides,
-  } as Branch;
-}
-
-// The wizard now self-subscribes to repoById / branchById / boardById from the
-// store instead of receiving them as props, so the harness seeds those slices
-// into the store rather than passing them through. Map seeds may be supplied
-// alongside the component-prop overrides; they're split out here.
+// The wizard self-subscribes to boardById from the store (rather than receiving
+// it as a prop), so the harness seeds that slice into the store rather than
+// passing it through as a component prop.
 function renderWizard(
   overrides: Partial<ComponentProps<typeof OnboardingWizard>> & {
-    repoById?: Map<string, Repo>;
-    branchById?: Map<string, Branch>;
     boardById?: Map<string, Board>;
   } = {}
 ) {
-  const { repoById, branchById, boardById, ...componentOverrides } = overrides;
+  const { boardById, ...componentOverrides } = overrides;
   agorStore.setState({
     ...EMPTY_MAPS,
-    ...(repoById ? { repoById } : {}),
-    ...(branchById ? { branchById } : {}),
     ...(boardById ? { boardById } : {}),
   });
 
   const boardsService = {
     create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
-    setPrimaryAssistant: vi.fn(async () => undefined),
-    ensureAssistantWelcomeNote: vi.fn(async () => undefined),
-  };
-  const reposService = {
-    find: vi.fn(async () => ({ data: [] })),
-    get: vi.fn(async () => undefined),
-    on: vi.fn(),
-    removeListener: vi.fn(),
   };
   const client = {
     io: { on: vi.fn(), off: vi.fn() },
-    service: vi.fn((name: string) => (name === 'boards' ? boardsService : reposService)),
+    service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
   };
+  const onCreateRepo = vi.fn(async () => undefined);
+  const onCreateBranch = vi.fn(async () => null);
+  const onCreateSession = vi.fn(async () => null);
   const props = {
     open: true,
     onComplete: vi.fn(),
     user: makeUser(),
     client,
-    onCreateRepo: vi.fn(async () => undefined),
+    onCreateRepo,
     onCreateLocalRepo: vi.fn(),
-    onCreateBranch: vi.fn(async () => makeBranch()),
-    onCreateSession: vi.fn(async () => 'session-1'),
+    onCreateBranch,
+    onCreateSession,
     onUpdateUser: vi.fn(async () => undefined),
     ...componentOverrides,
   } satisfies ComponentProps<typeof OnboardingWizard>;
 
-  return { ...render(<OnboardingWizard {...props} />), props, client, boardsService };
+  return {
+    ...render(<OnboardingWizard {...props} />),
+    props,
+    client,
+    boardsService,
+    onCreateRepo,
+    onCreateBranch,
+    onCreateSession,
+  };
+}
+
+// Finds the ancestor <button> for a given piece of text and clicks it. Several
+// onboarding cards render the whole card (emoji/title/description) as one
+// clickable button, so `getByText` (which finds the innermost element holding
+// the exact text) + `closest('button')` is more robust than role-based
+// queries here — see the file-level note above for why role queries are
+// avoided entirely in this file.
+function clickButton(text: string | RegExp) {
+  const el = screen.getByText(text);
+  const button = el.closest('button');
+  if (!button) throw new Error(`No ancestor <button> found for text "${text}"`);
+  fireEvent.click(button);
+}
+
+async function findAndClickButton(text: string | RegExp) {
+  const el = await screen.findByText(text);
+  const button = el.closest('button');
+  if (!button) throw new Error(`No ancestor <button> found for text "${text}"`);
+  fireEvent.click(button);
 }
 
 describe('OnboardingWizard', () => {
-  it('starts on assistant name and emoji only, then advances to LLM setup', async () => {
+  it('starts on the persona step; selecting a persona advances to LLM and saves onboarding progress', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
-    expect(screen.getByText(/Welcome to Agor/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Agor assistant/i })).toHaveAttribute(
-      'href',
-      'https://agor.live/guide/assistants'
-    );
-    expect(screen.getByText('Your assistant can help:')).toBeInTheDocument();
-    expect(screen.getByText(/Connect tools and credentials/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /emoji picker/i })).toBeInTheDocument();
-    expect(screen.getByDisplayValue('My Assistant')).toBeInTheDocument();
-    expect(screen.queryByText(/Add Your Repository/i)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Branch name/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
+    expect(screen.getByText('I write code')).toBeInTheDocument();
+    expect(screen.getByText('I manage projects')).toBeInTheDocument();
+    // Persona step is optional — no back button on the first step.
+    expect(screen.queryByText('Back')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByDisplayValue('My Assistant'), { target: { value: 'Scout' } });
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    clickButton('I write code');
+    clickButton(/this is me/i);
 
-    expect(await screen.findByText(/Choose your LLM/i)).toBeInTheDocument();
-    expect(screen.getByText(/Step 2 of 2/i)).toBeInTheDocument();
-    expect(onUpdateUser).toHaveBeenCalledWith(
-      'user-1',
-      expect.objectContaining({
-        preferences: expect.objectContaining({
-          onboarding: expect.objectContaining({
-            path: 'assistant',
-            assistantDisplayName: 'Scout',
-            assistantEmoji: '🤖',
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(onUpdateUser).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          preferences: expect.objectContaining({
+            onboarding: expect.objectContaining({ persona: 'developer' }),
           }),
-        }),
-      })
-    );
-  });
-
-  it('can skip setup after confirmation', async () => {
-    const onComplete = vi.fn();
-    const onCreateRepo = vi.fn(async () => undefined);
-    renderWizard({ onComplete, onCreateRepo });
-
-    fireEvent.click(screen.getByRole('button', { name: /skip setup/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /skip anyway/i }));
-
-    expect(onComplete).toHaveBeenCalledWith({
-      branchId: '',
-      sessionId: '',
-      boardId: '',
-      path: 'assistant',
+        })
+      );
     });
-    expect(onCreateRepo).not.toHaveBeenCalled();
   });
 
-  it('keeps onboarding open when skip confirmation is cancelled', async () => {
-    const onComplete = vi.fn();
-    renderWizard({ onComplete });
+  it('persona selection is optional — Continue advances without saving anything', async () => {
+    const onUpdateUser = vi.fn(async () => undefined);
+    renderWizard({ onUpdateUser });
 
-    fireEvent.click(screen.getByRole('button', { name: /skip setup/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /go back/i }));
+    clickButton(/^continue/i);
 
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(screen.getByText(/Welcome to Agor/i)).toBeInTheDocument();
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
-  it('shows recommended provider cards plus a secondary selector', async () => {
-    const { baseElement } = renderWizard();
+  it('LLM step lists all providers with Claude recommended, and lets the user switch selection', async () => {
+    renderWizard({ initialStep: 'llm' });
 
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
+    expect(screen.getByText('Connect your AI')).toBeInTheDocument();
+    expect(screen.getByText('Claude')).toBeInTheDocument();
+    expect(screen.getByText('GPT')).toBeInTheDocument();
+    expect(screen.getByText('Gemini')).toBeInTheDocument();
+    expect(screen.getByText('Custom')).toBeInTheDocument();
+    expect(screen.getByText('Recommended')).toBeInTheDocument();
 
-    expect(await screen.findByText('Choose your LLM')).toBeInTheDocument();
-    expect(screen.getByText('Claude Code')).toBeInTheDocument();
-    expect(screen.getByText('Codex')).toBeInTheDocument();
-    expect(screen.getByAltText('claude-code logo')).toBeInTheDocument();
-    expect(screen.getByAltText('codex logo')).toBeInTheDocument();
-    const providerOptions = Array.from(
-      baseElement.querySelectorAll<HTMLInputElement>('input[name="recommended-agent"]')
-    );
-    const claudeOption = providerOptions.find((option) => option.value === 'claude-code');
-    const codexOption = providerOptions.find((option) => option.value === 'codex');
-    expect(claudeOption).toBeChecked();
-    expect(screen.getAllByText(/ANTHROPIC_API_KEY/).length).toBeGreaterThan(0);
+    // No key input until a provider is selected.
+    expect(screen.queryByLabelText(/API key/i)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Subscription'));
+    clickButton('GPT');
+    expect(screen.getByLabelText('OpenAI API key')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('sk-proj-…')).toBeInTheDocument();
+  });
+
+  it('validates the API key format for the selected provider before enabling Connect', async () => {
+    renderWizard({ initialStep: 'llm' });
+
+    clickButton('Claude');
+    const input = screen.getByLabelText('Anthropic API key');
+    fireEvent.change(input, { target: { value: 'not-a-real-key' } });
+
+    const errorText = await screen.findByText(/Claude keys start with sk-ant-/i);
+    expect(errorText).toBeInTheDocument();
+    const connectButton = screen.getByText(/^connect →/i).closest('button');
+    expect(connectButton).toBeDisabled();
+  });
+
+  it('saves a valid Claude API key via onCheckAuth + onUpdateUser and advances to workspace', async () => {
+    const onUpdateUser = vi.fn(async () => undefined);
+    const onCheckAuth = vi.fn(async () => ({ authenticated: true }));
+    renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
+
+    clickButton('Claude');
+    const validKey = `sk-ant-api03-${'x'.repeat(40)}`;
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
+      target: { value: validKey },
+    });
+    clickButton(/^connect →/i);
+
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code', validKey));
+    await waitFor(() => {
+      expect(onUpdateUser).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: validKey } },
+        })
+      );
+    });
+    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+  });
+
+  it('can save a Claude subscription token instead of an API key', async () => {
+    const onUpdateUser = vi.fn(async () => undefined);
+    renderWizard({ initialStep: 'llm', onUpdateUser });
+
+    clickButton('Claude');
+    clickButton('Subscription token');
     expect(screen.getByText(/claude setup-token/)).toBeInTheDocument();
 
-    fireEvent.click(codexOption as HTMLInputElement);
-    expect(codexOption).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: /use a different provider/i })).toBeInTheDocument();
-    expect(screen.queryByText('Other LLM providers')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('checkbox', { name: /use a different provider/i }));
-    expect(screen.getByText('Other LLM providers')).toBeInTheDocument();
-  });
-
-  it('can save a Claude subscription token during onboarding', async () => {
-    const onUpdateUser = vi.fn(async () => undefined);
-    renderWizard({ onUpdateUser });
-
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    fireEvent.click(await screen.findByText('Subscription'));
-    fireEvent.change(screen.getByPlaceholderText('sk-ant-oat01-...'), {
-      target: { value: 'sk-ant-oat01-test' },
+    fireEvent.change(screen.getByLabelText('Claude subscription token'), {
+      target: { value: 'token-from-cli' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /save & continue/i }));
+    clickButton(/^connect →/i);
 
     await waitFor(() => {
       expect(onUpdateUser).toHaveBeenCalledWith(
         'user-1',
         expect.objectContaining({
-          agentic_tools: {
-            'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-test' },
-          },
+          agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'token-from-cli' } },
         })
       );
     });
   });
 
-  it('uses one bounded modal body for input and loading steps', async () => {
-    renderWizard();
-    const body = document.querySelector('.ant-modal-body') as HTMLElement;
-    expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
-
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    expect(document.querySelector('.ant-modal-body')).toBe(body);
-    expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
-
-    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
-    expect(await screen.findByText(/Setting up Agor/i)).toBeInTheDocument();
-    expect(screen.getByText(/Cloning assistant framework/i)).toBeInTheDocument();
-    expect(document.querySelector('.ant-modal-body')).toBe(body);
-    expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
-  });
-
-  it('ignores stale failed framework repo rows when retrying setup', async () => {
-    const repoById = new Map<string, Repo>([
-      [
-        'failed-old',
-        makeRepo({
-          repo_id: 'failed-old',
-          clone_status: 'failed',
-          clone_error: { message: 'old failure', exit_code: 1 },
-        }),
-      ],
-    ]);
-    const onCreateRepo = vi.fn(async () => undefined);
-    renderWizard({ repoById, onCreateRepo });
-
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
-
-    await waitFor(() => expect(onCreateRepo).toHaveBeenCalled());
-    expect(screen.getByText(/Cloning assistant framework/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Setup failed/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/old failure/i)).not.toBeInTheDocument();
-
-    const nextRepoById = new Map(repoById);
-    nextRepoById.set(
-      'failed-new',
-      makeRepo({
-        repo_id: 'failed-new',
-        clone_status: 'failed',
-        clone_error: { message: 'new failure', exit_code: 1 },
-      })
-    );
-    act(() => {
-      agorStore.setState({ repoById: nextRepoById });
-    });
-
-    expect(await screen.findByText(/Setup failed/i)).toBeInTheDocument();
-    expect(screen.getByText(/new failure/i)).toBeInTheDocument();
-  });
-
-  it('continues when clone returns an existing ready framework repo not yet in local state', async () => {
-    const readyRepo = makeRepo({ repo_id: 'repo-existing' });
-    const reposService = {
-      get: vi.fn(async () => readyRepo),
-      find: vi.fn(async () => ({ data: [readyRepo] })),
-      on: vi.fn(),
-      removeListener: vi.fn(),
-    };
-    const boardsService = {
-      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
-      setPrimaryAssistant: vi.fn(async () => undefined),
-    };
-    const client = {
-      io: { on: vi.fn(), off: vi.fn() },
-      service: vi.fn((name: string) => {
-        if (name === 'boards') return boardsService;
-        if (name === 'repos') return reposService;
-        return { find: vi.fn(async () => ({ data: [] })) };
-      }),
-    };
-    const onCreateRepo = vi.fn(async () => ({
-      status: 'exists' as const,
-      slug: FRAMEWORK_REPO_SLUG,
-      repo_id: 'repo-existing',
-    }));
-    const onCreateBranch = vi.fn(async () => makeBranch({ repo_id: 'repo-existing' }));
-
-    renderWizard({ client, onCreateRepo, onCreateBranch });
-
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
-
-    await waitFor(() =>
-      expect(onCreateRepo).toHaveBeenCalledWith(
-        expect.objectContaining({ slug: FRAMEWORK_REPO_SLUG }),
-        { silent: true }
-      )
-    );
-    await waitFor(() => expect(reposService.get).toHaveBeenCalledWith('repo-existing'));
-    await waitFor(() => expect(onCreateBranch).toHaveBeenCalled());
-    expect(onCreateBranch.mock.calls[0]?.[0]).toBe('repo-existing');
-  });
-
-  it('reuses an existing framework repo when duplicate clone returns no repo id', async () => {
-    const readyRepo = makeRepo({ repo_id: 'repo-existing', default_branch: 'develop' });
-    const reposService = {
-      find: vi.fn(async () => ({ data: [readyRepo] })),
-      get: vi.fn(async () => undefined),
-      on: vi.fn(),
-      removeListener: vi.fn(),
-    };
-    const boardsService = {
-      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
-      setPrimaryAssistant: vi.fn(async () => undefined),
-    };
-    const client = {
-      io: { on: vi.fn(), off: vi.fn() },
-      service: vi.fn((name: string) => {
-        if (name === 'boards') return boardsService;
-        if (name === 'repos') return reposService;
-        return { find: vi.fn(async () => ({ data: [] })) };
-      }),
-    };
-    const onCreateRepo = vi.fn(async () => ({
-      status: 'exists' as const,
-      slug: FRAMEWORK_REPO_SLUG,
-    }));
-    const onCreateBranch = vi.fn(async () => makeBranch({ repo_id: 'repo-existing' }));
-    const onComplete = vi.fn();
-
-    renderWizard({ client, onCreateRepo, onCreateBranch, onComplete });
-
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
-
-    await waitFor(() => expect(reposService.find).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(onCreateBranch).toHaveBeenCalledWith(
-        'repo-existing',
-        expect.objectContaining({ sourceBranch: 'develop' })
-      )
-    );
-    expect(screen.queryByText(/Cloning assistant framework/i)).not.toBeInTheDocument();
-    await waitFor(() =>
-      expect(onComplete).toHaveBeenCalledWith({
-        branchId: 'branch-1',
-        sessionId: 'session-1',
-        boardId: 'board-1',
-        path: 'assistant',
-      })
-    );
-  });
-
-  it('reuses an existing assistant branch and session when retrying setup', async () => {
-    const repoById = new Map<string, Repo>([['repo-1', makeRepo()]]);
-    const existingBranch = makeBranch({ board_id: 'board-existing' } as Partial<Branch>);
-    const branchesService = { find: vi.fn(async () => ({ data: [existingBranch] })) };
-    const sessionsService = {
-      find: vi.fn(async () => ({ data: [{ session_id: 'session-existing' }] })),
-    };
-    const boardsService = {
-      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
-      setPrimaryAssistant: vi.fn(async () => undefined),
-    };
-    const client = {
-      io: { on: vi.fn(), off: vi.fn() },
-      service: vi.fn((name: string) => {
-        if (name === 'boards') return boardsService;
-        if (name === 'branches') return branchesService;
-        if (name === 'sessions') return sessionsService;
-        return { on: vi.fn(), removeListener: vi.fn() };
-      }),
-    };
-    const onCreateBranch = vi.fn(async () => makeBranch());
-    const onCreateSession = vi.fn(async () => 'session-new');
-    const onComplete = vi.fn();
-
-    renderWizard({ repoById, client, onCreateBranch, onCreateSession, onComplete });
-
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
-
-    await waitFor(() => expect(branchesService.find).toHaveBeenCalled());
-    expect(onCreateBranch).not.toHaveBeenCalled();
-    expect(onCreateSession).not.toHaveBeenCalled();
-    await waitFor(() =>
-      expect(onComplete).toHaveBeenCalledWith({
-        branchId: 'branch-1',
-        sessionId: 'session-existing',
-        boardId: 'board-existing',
-        path: 'assistant',
-      })
-    );
-  });
-
-  it('uses an existing ready framework repo without cloning it again', async () => {
-    const repoById = new Map<string, Repo>([['repo-1', makeRepo()]]);
-    const onCreateRepo = vi.fn(async () => undefined);
-    const onCreateBranch = vi.fn(async () => makeBranch());
-    renderWizard({ repoById, onCreateRepo, onCreateBranch });
-
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
-
-    await waitFor(() => expect(onCreateBranch).toHaveBeenCalled());
-    expect(onCreateRepo).not.toHaveBeenCalled();
-  });
-
-  it('creates setup resources with a user-suffixed assistant branch name and preserves model defaults', async () => {
-    const repoById = new Map<string, Repo>();
-    const onCreateBranch = vi.fn(async () =>
-      makeBranch({ name: 'private-scout-user1', ref: 'private-scout-user1' })
-    );
-    const onCreateSession = vi.fn(async () => 'session-1');
-    const onComplete = vi.fn();
-    const user = makeUser({
-      default_agentic_config: {
-        codex: {
-          modelConfig: { model: 'gpt-5', effort: 'high' },
-          permissionMode: 'auto',
-          mcpServerIds: ['mcp-1'],
-          codexSandboxMode: 'workspace-write',
-          codexApprovalPolicy: 'on-request',
-          codexNetworkAccess: true,
-        },
-      },
-    } as Partial<User>);
-
-    const view = renderWizard({ repoById, onCreateBranch, onCreateSession, onComplete, user });
-
-    fireEvent.change(screen.getByDisplayValue('My Assistant'), { target: { value: 'Scout' } });
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    const codexOption = Array.from(
-      view.baseElement.querySelectorAll<HTMLInputElement>('input[name="recommended-agent"]')
-    ).find((option) => option.value === 'codex');
-    fireEvent.click(codexOption as HTMLInputElement);
-    fireEvent.click(await screen.findByRole('button', { name: /continue with codex cli auth/i }));
-
-    expect(await screen.findByText(/Cloning assistant framework/i)).toBeInTheDocument();
-    const readyRepoById = new Map(repoById).set('repo-1', makeRepo());
-    act(() => {
-      agorStore.setState({ repoById: readyRepoById });
-    });
-
-    await waitFor(() => {
-      expect(onCreateBranch).toHaveBeenCalledWith(
-        'repo-1',
-        expect.objectContaining({
-          name: 'private-scout-user1',
-          ref: 'private-scout-user1',
-          sourceBranch: 'main',
-          createBranch: true,
-          pullLatest: true,
-          boardId: 'board-1',
-        })
-      );
-    });
-
-    await waitFor(() => {
-      expect(onCreateSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          branch_id: 'branch-1',
-          agent: 'codex',
-          modelConfig: { mode: 'exact', model: 'gpt-5' },
-          effort: 'high',
-          mcpServerIds: ['mcp-1'],
-          permissionMode: 'auto',
-          codexSandboxMode: 'workspace-write',
-          codexApprovalPolicy: 'on-request',
-          codexNetworkAccess: true,
-        }),
-        'board-1'
-      );
-    });
-    expect(onComplete).toHaveBeenCalledWith({
-      branchId: 'branch-1',
-      sessionId: 'session-1',
-      boardId: 'board-1',
-      path: 'assistant',
-    });
-  });
-
-  it('detects an existing Cursor credential when selecting Cursor', async () => {
+  it('shows a previously connected provider as verified and lets the user continue without re-entering a key', async () => {
+    const onCheckAuth = vi.fn(async () => ({ authenticated: true }));
+    const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({
+      initialStep: 'llm',
+      onCheckAuth,
+      onUpdateUser,
       user: makeUser({
-        agentic_tools: {
-          cursor: { CURSOR_API_KEY: true },
-        },
+        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: 'stored-key' } },
       } as Partial<User>),
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
-    fireEvent.click(await screen.findByRole('checkbox', { name: /use a different provider/i }));
-    fireEvent.mouseDown(screen.getByRole('combobox'));
-    fireEvent.click(await screen.findByText('Cursor SDK (Beta)'));
+    // Pre-existing key auto-selects the provider and kicks off a background check.
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code'));
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
 
-    expect(await screen.findByText('Cursor SDK is configured')).toBeInTheDocument();
-  }, 30_000);
+    clickButton(/^continue/i);
+
+    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+    // Continuing with an already-verified key does not re-save it.
+    expect(onUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('workspace step creates a board and saves progress when no board exists yet', async () => {
+    const onUpdateUser = vi.fn(async () => undefined);
+    const { boardsService } = renderWizard({ initialStep: 'workspace', onUpdateUser });
+
+    expect(screen.getByText('Set up your workspace')).toBeInTheDocument();
+    expect(screen.getByDisplayValue("New's board")).toBeInTheDocument();
+
+    clickButton(/create board/i);
+
+    await waitFor(() => {
+      expect(boardsService.create).toHaveBeenCalledWith({ name: "New's board", icon: '📋' });
+    });
+    await waitFor(() => {
+      expect(onUpdateUser).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          preferences: expect.objectContaining({
+            onboarding: expect.objectContaining({ boardId: 'board-1' }),
+          }),
+        })
+      );
+    });
+    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+  });
+
+  it('workspace step skips board creation when the user already has one', async () => {
+    const boardById = new Map<string, Board>([['board-existing', makeBoard()]]);
+    const { boardsService } = renderWizard({
+      initialStep: 'workspace',
+      boardById,
+      user: makeUser({ preferences: { mainBoardId: 'board-existing' } } as Partial<User>),
+    });
+
+    expect(screen.getByText('Board already set up')).toBeInTheDocument();
+    expect(screen.getByText('Existing board')).toBeInTheDocument();
+
+    clickButton(/keep going/i);
+
+    expect(boardsService.create).not.toHaveBeenCalled();
+    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+  });
+
+  it('integrations step shows persona-tailored MCP recommendations', async () => {
+    renderWizard({ initialStep: 'integrations' });
+
+    // No persona chosen — falls back to the default rec set.
+    expect(screen.getByText('Slack')).toBeInTheDocument();
+    expect(screen.getByText('Notion')).toBeInTheDocument();
+  });
+
+  it('completes the full flow and calls onComplete with the created board and requested integrations', async () => {
+    const onComplete = vi.fn();
+    const { onCreateRepo, onCreateBranch, onCreateSession } = renderWizard({ onComplete });
+
+    // persona (optional, skip selection)
+    clickButton(/^continue/i);
+
+    // llm
+    await findAndClickButton('Claude');
+    const validKey = `sk-ant-api03-${'x'.repeat(40)}`;
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
+      target: { value: validKey },
+    });
+    clickButton(/^connect →/i);
+    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+
+    // workspace
+    clickButton(/create board/i);
+    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+
+    // integrations
+    clickButton(/connect when done/i);
+
+    // done
+    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    clickButton(/open my board/i);
+
+    expect(onComplete).toHaveBeenCalledWith({
+      branchId: '',
+      sessionId: '',
+      boardId: 'board-1',
+      path: 'assistant',
+      integrationsToSetup: ['slack'],
+    });
+    // Repo/branch/session provisioning is deferred to normal app flows now —
+    // the wizard itself never invokes these.
+    expect(onCreateRepo).not.toHaveBeenCalled();
+    expect(onCreateBranch).not.toHaveBeenCalled();
+    expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('lets the user skip every step without any confirmation dialog', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete });
+
+    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
+    clickButton(/skip for now/i);
+
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    clickButton(/skip for now/i);
+
+    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+    clickButton(/skip for now/i);
+
+    expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
+    clickButton(/skip for now/i);
+
+    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    // Final step is not skippable.
+    expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
+
+    clickButton(/open my board/i);
+    expect(onComplete).toHaveBeenCalledWith({
+      branchId: '',
+      sessionId: '',
+      boardId: '',
+      path: 'assistant',
+      integrationsToSetup: [],
+    });
+  });
+
+  it('Back navigates to the previous step and preserves prior selections', async () => {
+    renderWizard();
+
+    clickButton(/^continue/i);
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+
+    clickButton('Back');
+    expect(await screen.findByText(/let's make this yours/i)).toBeInTheDocument();
+  });
+
+  it('dismiss button calls onDismiss and is hidden on the final step', async () => {
+    const onDismiss = vi.fn();
+    renderWizard({ onDismiss, initialStep: 'done' });
+
+    expect(document.querySelector('button[aria-label="Close"]')).not.toBeInTheDocument();
+
+    renderWizard({ onDismiss, initialStep: 'persona' });
+    const closeButtons = document.querySelectorAll('button[aria-label="Close"]');
+    expect(closeButtons.length).toBeGreaterThan(0);
+    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
 });
