@@ -136,6 +136,11 @@ const trustItems = [
     href: '/guide/sdk-comparison',
   },
   {
+    label: 'Governance & visibility',
+    body: 'Keep AI work visible, auditable, and compounding across every team in the org.',
+    href: '/guide/boards',
+  },
+  {
     label: 'MCP-native',
     body: 'Anything you can do, an agent can do too, over Agor’s own MCP server.',
     href: '/guide/internal-mcp',
@@ -163,38 +168,47 @@ function GitHubIcon() {
   );
 }
 
-function MultiplayerCollage() {
-  return (
-    <div
-      className={styles.socialCollage}
-      role="img"
-      aria-label="Agor multiplayer presence with facepile, board comments, and live collaboration"
-    >
-      {/* biome-ignore lint/performance/noImgElement: Static product screenshot collage */}
-      <img
-        className={styles.socialMain}
-        src="/screenshots/marketing/agor-marketing-social-comment-context.png"
-        alt="Board comment attached to an active Agor branch card"
-      />
-      {/* biome-ignore lint/performance/noImgElement: Static product screenshot collage */}
-      <img
-        className={styles.socialFacepile}
-        src="/screenshots/marketing/agor-marketing-facepile-tooltip.png"
-        alt="Agor facepile with overflow and active teammate tooltip"
-      />
-      {/* biome-ignore lint/performance/noImgElement: Static product screenshot collage */}
-      <img
-        className={styles.socialCursor}
-        src="/screenshots/marketing/agor-marketing-cursor-indicator.png"
-        alt="Live cursor indicator showing Mina on the board"
-      />
-    </div>
-  );
-}
+// "So much more than a chat box" carousel. The multiplayer collage
+// (comment + facepile + cursor screenshots) leads as slide 1.
+const showcaseSlides = [
+  { label: 'Multiplayer presence', caption: 'live cursors · comments · facepile', collage: true },
+  {
+    label: 'Spatial boards',
+    caption: 'launch board · spatial canvas',
+    image: '/screenshots/board-hero.png',
+  },
+  {
+    label: 'Rich agent sessions',
+    caption: 'session · tool calls with full context',
+    image: '/screenshots/conversation_full_page.png',
+  },
+  {
+    label: 'Message gateway',
+    caption: 'slack · agents where your team already works',
+    image: '/screenshots/marketing/agor-marketing-slack-thread.png',
+  },
+];
+
+// Multiplayer numbered cards (mockup design language, our copy)
+const liveCards = [
+  {
+    title: 'Live presence',
+    body: 'See teammates’ cursors, comments, and reactions as work happens, not after the fact.',
+  },
+  {
+    title: 'Shared dev environments',
+    body: 'Engineers, reviewers, PMs, and QA rally around the same running branch instead of “spin up your own to see it.”',
+  },
+  {
+    title: 'Learn from each other',
+    body: 'Watch how teammates prompt, lift the patterns that work, and standardize them as zone triggers.',
+  },
+];
 
 export function LandingPage() {
   const landingRef = useRef<HTMLDivElement>(null);
   const [isBetaFormOpen, setIsBetaFormOpen] = useState(false);
+  const [activeShot, setActiveShot] = useState(0);
 
   useEffect(() => {
     const landing = landingRef.current;
@@ -256,12 +270,17 @@ export function LandingPage() {
         </div>
         <section className={styles.heroSection}>
           <div className={styles.heroCopy} data-reveal>
-            <p className={styles.kicker}>The command center for AI enablement.</p>
-            <h1>Empower your team with AI assistants.</h1>
+            <p className={styles.heroBadge}>
+              <span className={styles.badgeDot} aria-hidden="true" />
+              The command center for AI enablement
+            </p>
+            <h1>
+              Empower your team with <span className={styles.headingAccent}>AI assistants</span>.
+            </h1>
             <p className={styles.heroProvocation}>
-              Break your team out of the terminal.
+              Break your team free from their terminals.
               <br />
-              Build agentic workflows for business end-users and AI power users alike.
+              Build powerful agents for business users. Let power users get down to business.
             </p>
             <div className={styles.heroActions}>
               <button
@@ -293,7 +312,9 @@ export function LandingPage() {
 
       <div className={styles.auroraBand}>
         <div className={styles.bandAurora} aria-hidden="true">
-          <Aurora colorStops={['#3B82F6', '#06B6D4', '#0408ef']} amplitude={0.9} blend={1} />
+          {/* Warm ramp sampled from the demo board's background — ambient
+              edge-light echo of the hero video, TV-backlight style. */}
+          <Aurora colorStops={['#f12711', '#f5af19', '#ffd166']} amplitude={0.9} blend={1} />
         </div>
         <section className={styles.harnessStrip} data-reveal>
           <span className={styles.harnessLabel}>Built on the harnesses you already use</span>
@@ -320,51 +341,113 @@ export function LandingPage() {
         </section>
 
         <section className={styles.liveSection} data-reveal>
-          <div className={styles.liveCopy}>
-            <span className={styles.eyebrow}>Multiplayer by default</span>
-            <h2>Your team’s agents on one live, Figma-like canvas.</h2>
-            <p>
-              Most agent tools are solo. Agor isn’t. Cursors, comments, and a facepile show who’s
-              here. Sessions, dev environments, and branches are shared. One link, one running
-              thing, everyone looking at the same live work.
-            </p>
-            <ul className={styles.liveHighlights}>
-              <li>
-                <strong>Live presence</strong>
-                <span>
-                  See teammates’ cursors, comments, and reactions as work happens, not after the
-                  fact.
-                </span>
-              </li>
-              <li>
-                <strong>Shared dev environments</strong>
-                <span>
-                  Engineers, reviewers, PMs, and QA rally around the same running branch instead of
-                  “spin up your own to see it.”
-                </span>
-              </li>
-              <li>
-                <strong>Learn from each other</strong>
-                <span>
-                  Watch how teammates prompt, lift the patterns that work, and standardize them as
-                  zone triggers.
-                </span>
-              </li>
-            </ul>
-            <Link href="/guide/multiplayer-social" className={styles.cardLink}>
-              Explore multiplayer →
-            </Link>
+          <span className={styles.eyebrow}>Welcome to multiplayer AI</span>
+          <h2 className={styles.liveStatement}>
+            Don’t let AI tools trap people in their corner.{' '}
+            <span className={styles.headingDim}>
+              Agor puts your whole team on one{' '}
+              <span className={styles.headingAccent}>live, multiplayer canvas</span>.
+            </span>
+          </h2>
+          <div className={styles.liveGrid}>
+            {liveCards.map((card, index) => (
+              <article
+                className={styles.numberedCard}
+                key={card.title}
+                data-reveal
+                style={revealDelay(index)}
+              >
+                <div className={styles.cardNum}>{`0${index + 1}`}</div>
+                <h3>{card.title}</h3>
+                <p>{card.body}</p>
+              </article>
+            ))}
           </div>
-          <div className={styles.liveVisual}>
-            <MultiplayerCollage />
-          </div>
+          <Link href="/guide/multiplayer-social" className={styles.cardLink}>
+            Explore multiplayer →
+          </Link>
         </section>
       </div>
+
+      <section className={styles.showcaseSection} data-reveal>
+        <div className={styles.showcaseHeader}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.eyebrow}>Inside Agor</span>
+            <h2>
+              So much more than a <span className={styles.headingAccent}>chat box</span>.
+            </h2>
+          </div>
+          <div className={styles.showcaseTabs}>
+            {showcaseSlides.map((slide, index) => (
+              <button
+                type="button"
+                key={slide.label}
+                className={
+                  index === activeShot
+                    ? `${styles.showcaseTab} ${styles.showcaseTabActive}`
+                    : styles.showcaseTab
+                }
+                onClick={() => setActiveShot(index)}
+              >
+                {slide.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className={styles.showcaseFrame}>
+          <div className={styles.showcaseChrome}>
+            <span className={styles.chromeDot} style={{ background: '#ff6f5e' }} />
+            <span className={styles.chromeDot} style={{ background: '#ffd166' }} />
+            <span className={styles.chromeDot} style={{ background: '#34e6c4' }} />
+            <span className={styles.chromeCaption}>{showcaseSlides[activeShot].caption}</span>
+          </div>
+          <div className={styles.showcaseViewport}>
+            {/* Track is 400% wide with 25% slides — keep in sync with showcaseSlides.length */}
+            <div
+              className={styles.showcaseTrack}
+              style={{ transform: `translateX(-${activeShot * 25}%)` }}
+            >
+              {showcaseSlides.map((slide) => (
+                <div className={styles.showcaseSlide} key={slide.label}>
+                  {slide.collage ? (
+                    <div className={styles.slideCollage}>
+                      {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+                      <img
+                        className={styles.slideCollageMain}
+                        src="/screenshots/marketing/agor-marketing-social-comment-context.png"
+                        alt="Board comment attached to an active Agor branch card"
+                      />
+                      {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+                      <img
+                        className={styles.slideCollageFacepile}
+                        src="/screenshots/marketing/agor-marketing-facepile-tooltip.png"
+                        alt="Agor facepile with overflow and active teammate tooltip"
+                      />
+                      {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+                      <img
+                        className={styles.slideCollageCursor}
+                        src="/screenshots/marketing/agor-marketing-cursor-indicator.png"
+                        alt="Live cursor indicator showing Mina on the board"
+                      />
+                    </div>
+                  ) : (
+                    /* biome-ignore lint/performance/noImgElement: Static product screenshot */
+                    <img className={styles.slideImage} src={slide.image} alt={slide.label} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Product surfaces</span>
-          <h2>So much more than a chat box.</h2>
+          <h2>
+            Every surface an <span className={styles.headingAccent}>enablement leader</span> needs
+            to orchestrate AI.
+          </h2>
         </div>
         <div className={styles.productGrid}>
           {productPreviews.map((preview, index) => (
@@ -376,8 +459,8 @@ export function LandingPage() {
               style={revealDelay(index)}
             >
               {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-              <img src={preview.image} alt="" />
-              <div>
+              <img className={styles.productShot} src={preview.image} alt="" />
+              <div className={styles.productCardBody}>
                 <h3>{preview.title}</h3>
                 <p>{preview.body}</p>
               </div>
@@ -389,7 +472,10 @@ export function LandingPage() {
       <section className={styles.workspaceSection} data-reveal>
         <div className={styles.workspaceCopy}>
           <span className={styles.eyebrow}>The shared workspace</span>
-          <h2>Raise team assistants with memory, skills, and a place to work.</h2>
+          <h2>
+            Raise <span className={styles.headingAccent}>team assistants</span> with memory, skills,
+            and a place to work.
+          </h2>
           <p>
             One-off prompts don’t compound. In Agor, assistants have durable identities your team
             can teach conversationally, then equip with memory, tools, channels, and schedules as
@@ -425,7 +511,7 @@ export function LandingPage() {
           <h2>
             Everyone’s cranking with AI.
             <br />
-            Now make it compound.
+            Now make it <span className={styles.headingAccent}>compound</span>.
           </h2>
           <p>
             Agor is built for the{' '}
@@ -436,6 +522,16 @@ export function LandingPage() {
             keep your data yours, and give your AI leadership one platform to empower the entire org
             with full agentic power.
           </p>
+          <div className={styles.controlActions}>
+            <Link
+              href={AGOR_CLOUD_DEMO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.secondaryButton}
+            >
+              Talk to us about enterprise
+            </Link>
+          </div>
         </div>
         <ul className={styles.trustList}>
           {trustItems.map((item) => (
@@ -450,27 +546,31 @@ export function LandingPage() {
       </section>
 
       <section className={styles.finalCta} data-reveal>
-        <h2>Give your team’s AI work a place to live.</h2>
-        <p>Agor Cloud is opening to teams now. The open-source build is ready when you are.</p>
-        <div className={styles.heroActions}>
-          <button
-            type="button"
-            className={styles.primaryButton}
-            onClick={() => setIsBetaFormOpen(true)}
-          >
-            Join the private beta
-          </button>
-          <Link
-            href={AGOR_CLOUD_DEMO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.secondaryButton}
-          >
-            Book a demo
-          </Link>
-          <Link href="/guide/getting-started" className={styles.secondaryButton}>
-            Get started
-          </Link>
+        <div className={styles.ctaCard}>
+          <h2>
+            Give your team’s AI work <span className={styles.headingAccent}>a place to live</span>.
+          </h2>
+          <p>Agor Cloud is opening to teams now. The open-source build is ready when you are.</p>
+          <div className={styles.heroActions}>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              onClick={() => setIsBetaFormOpen(true)}
+            >
+              Join the private beta
+            </button>
+            <Link
+              href={AGOR_CLOUD_DEMO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.secondaryButton}
+            >
+              Book a demo
+            </Link>
+            <Link href="/guide/getting-started" className={styles.secondaryButton}>
+              Get started
+            </Link>
+          </div>
         </div>
       </section>
 

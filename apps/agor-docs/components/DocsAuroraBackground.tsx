@@ -30,7 +30,7 @@ export function DocsAuroraBackground() {
         opacity: 0.35,
       }}
     >
-      <Aurora colorStops={['#3B82F6', '#06B6D4', '#0408ef']} amplitude={0.9} blend={1} />
+      <Aurora colorStops={['#2e9a92', '#34e6c4', '#7ad9ff']} amplitude={0.9} blend={1} />
     </div>
   );
 }

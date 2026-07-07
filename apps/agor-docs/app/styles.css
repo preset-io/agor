@@ -116,21 +116,61 @@ main {
   order: 6;
 }
 
-/* The landing page keeps Agor's dark hero treatment even when a reader has
- * selected the light docs theme. Keep the shared navbar dark there so toggling
- * light mode for docs doesn't leave a pale bar floating over the dark hero. */
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar {
-  color: #f8fafc;
+/* ---------------------------------------------------------------------------
+ * Navbar glass treatment — premium tint over Nextra's stock blur layer.
+ * Dark theme (and the landing page, which forces dark) gets a green-black
+ * glass with a faint mint hairline instead of the default gray.
+ */
+.dark .nextra-navbar-blur,
+body:has([class*="landingShell"]) .nextra-navbar-blur {
+  background: rgba(7, 16, 15, 0.72);
+  border-bottom: 1px solid rgba(52, 230, 196, 0.1);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
 }
 
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar-blur {
-  background: rgba(17, 17, 17, 0.72);
-  border-color: rgba(255, 255, 255, 0.12);
+/* Search field: pill shape + mint focus, matching the landing button system */
+.nextra-search input {
+  border-radius: 999px;
+  transition:
+    border-color 0.25s ease,
+    background 0.25s ease;
 }
 
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https://github.com"],
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https://discord.gg"] {
-  color: var(--agor-teal-light);
+.nextra-search input:focus-visible {
+  border-color: rgba(52, 230, 196, 0.5);
+}
+
+.nextra-search kbd {
+  border-radius: 999px;
+}
+
+/* Nav links: mint accent on hover instead of stock opacity-only fade */
+.nextra-navbar nav a {
+  transition:
+    color 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.nextra-navbar nav a:hover {
+  color: var(--agor-teal-light, #7fe8df);
+}
+
+/* GitHub / Discord icons: dimmed grayscale at rest, full color on hover */
+.nextra-navbar nav a[href^="https://github.com"],
+.nextra-navbar nav a[href^="https://discord.gg"] {
+  filter: grayscale(1);
+  opacity: 0.55;
+  transition:
+    filter 0.25s ease,
+    opacity 0.25s ease,
+    color 0.2s ease;
+}
+
+.nextra-navbar nav a[href^="https://github.com"]:hover,
+.nextra-navbar nav a[href^="https://discord.gg"]:hover {
+  filter: grayscale(0);
+  opacity: 1;
 }
 
 html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar .nextra-search input {
@@ -146,4 +186,23 @@ html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar .nextra-search 
   background: rgba(17, 17, 17, 0.9);
   border-color: rgba(255, 255, 255, 0.18);
   color: #cbd5e1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Light-theme landing overrides — kept LAST so specificity ascends file-wide
+ * (biome noDescendingSpecificity). The landing page keeps Agor's dark hero
+ * treatment even when a reader has selected the light docs theme.
+ */
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar {
+  color: #f8fafc;
+}
+
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar-blur {
+  background: rgba(17, 17, 17, 0.72);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https://github.com"],
+html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https://discord.gg"] {
+  color: var(--agor-teal-light);
 }
