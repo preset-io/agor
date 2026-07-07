@@ -28,6 +28,7 @@ export interface RuntimeVitalsReporterOptions {
   client: Pick<AgorClient, 'service'>;
   taskId: string;
   toolName: string;
+  initialSnapshot?: TaskRuntimeVitals;
   now?: () => Date;
   maxEvents?: number;
   minPatchIntervalMs?: number;
@@ -62,6 +63,7 @@ export class TaskRuntimeVitalsReporter {
       Math.floor(options.minPatchIntervalMs ?? DEFAULT_MIN_PATCH_INTERVAL_MS)
     );
     this.warn = options.warn ?? console.warn;
+    this.current = options.initialSnapshot;
   }
 
   get snapshot(): TaskRuntimeVitals | undefined {

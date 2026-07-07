@@ -26,6 +26,7 @@ export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
  * supervisors that read these normalized phase/event fields.
  */
 export const TaskRuntimePhase = {
+  EXECUTOR_STARTING: 'executor_starting',
   EXECUTOR_CONNECTED: 'executor_connected',
   SDK_STARTING: 'sdk_starting',
   AWAITING_FIRST_AGENT_EVENT: 'awaiting_first_agent_event',
@@ -42,6 +43,10 @@ export const TaskRuntimePhase = {
 export type TaskRuntimePhase = (typeof TaskRuntimePhase)[keyof typeof TaskRuntimePhase];
 
 export const TaskRuntimeEventKind = {
+  EXECUTOR_SPAWN_REQUESTED: 'executor_spawn_requested',
+  EXECUTOR_PROCESS_SPAWNED: 'executor_process_spawned',
+  EXECUTOR_SPAWN_FAILED: 'executor_spawn_failed',
+  EXECUTOR_PROCESS_EXITED: 'executor_process_exited',
   EXECUTOR_CONNECTED: 'executor_connected',
   SDK_TURN_STARTED: 'sdk_turn_started',
   FIRST_AGENT_EVENT: 'first_agent_event',
@@ -73,6 +78,12 @@ export interface TaskRuntimeEvent {
   tool_name?: string;
   /** Native tool-call id when available; no arguments or payload. */
   tool_use_id?: string;
+  /** Local child process PID when the daemon knows it is the real local executor. */
+  process_pid?: number;
+  /** Child process exit code observed by the daemon; null means unknown/no code. */
+  exit_code?: number | null;
+  /** Small normalized failure code; never an exception message or raw stderr. */
+  error_code?: string;
 }
 
 export interface TaskRuntimeVitals {

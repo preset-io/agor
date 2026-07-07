@@ -67,6 +67,8 @@ import {
   ROLES,
   SERVICE_GROUP_NAMES,
   SessionStatus,
+  TaskRuntimeEventKind,
+  TaskRuntimePhase,
   TaskStatus,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
@@ -132,6 +134,7 @@ import {
 } from './utils/session-task-state.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
+import { buildDaemonTaskRuntimeVitals } from './utils/task-runtime-vitals.js';
 import {
   createTenantDatabaseScopeAroundHook,
   deferWithTenantDatabaseScope,
@@ -1039,25 +1042,35 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
     // Patch task: queued/created → running, with real ranges. queue_position
     // is cleared here so a draining task is no longer considered queued.
-    const updatedTask = (await app.service('tasks').patch(
-      task.task_id,
-      {
-        status: TaskStatus.RUNNING,
-        started_at: startTimestamp,
-        queue_position: undefined,
-        message_range: {
-          start_index: messageStartIndex,
-          end_index: messageStartIndex + 1,
-          start_timestamp: startTimestamp,
-          end_timestamp: startTimestamp,
-        },
-        git_state: {
-          ref_at_start: refAtStart,
-          sha_at_start: gitStateAtStart,
-        },
+    const runningPatch: Partial<Task> = {
+      status: TaskStatus.RUNNING,
+      started_at: startTimestamp,
+      queue_position: undefined,
+      message_range: {
+        start_index: messageStartIndex,
+        end_index: messageStartIndex + 1,
+        start_timestamp: startTimestamp,
+        end_timestamp: startTimestamp,
       },
-      params
-    )) as Task;
+      git_state: {
+        ref_at_start: refAtStart,
+        sha_at_start: gitStateAtStart,
+      },
+    };
+    if (session.agentic_tool !== 'claude-code-cli') {
+      runningPatch.runtime_vitals = buildDaemonTaskRuntimeVitals(
+        task.runtime_vitals,
+        TaskRuntimeEventKind.EXECUTOR_SPAWN_REQUESTED,
+        {
+          at: startTimestamp,
+          phase: TaskRuntimePhase.EXECUTOR_STARTING,
+        }
+      );
+    }
+
+    const updatedTask = (await app
+      .service('tasks')
+      .patch(task.task_id, runningPatch, params)) as Task;
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
@@ -1268,6 +1281,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             status: TaskStatus.FAILED,
             completed_at: new Date().toISOString(),
             error_message: errorMessage,
+            runtime_vitals: buildDaemonTaskRuntimeVitals(
+              (
+                await app
+                  .service('tasks')
+                  .get(taskId, params)
+                  .catch(() => updatedTask)
+              ).runtime_vitals,
+              TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED,
+              {
+                phase: TaskRuntimePhase.FAILED,
+                errorCode: 'spawn_exception',
+              }
+            ),
           },
           'Task',
           params

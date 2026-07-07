@@ -197,6 +197,34 @@ describe('configured executor spawning', () => {
     );
   });
 
+  it('waits for async onSpawn work before writing the executor payload', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    let resolveOnSpawn!: () => void;
+    const onSpawn = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveOnSpawn = resolve;
+        })
+    );
+    const { spawnExecutor } = await import('./spawn-executor');
+
+    spawnExecutor({ command: 'prompt' }, { onSpawn });
+
+    expect(onSpawn).toHaveBeenCalledWith(proc);
+    expect(proc.written).toBe('');
+
+    resolveOnSpawn();
+
+    await vi.waitFor(() => {
+      expect(proc.written).not.toBe('');
+    });
+    expect(JSON.parse(proc.written)).toMatchObject({
+      command: 'prompt',
+      resolvedConfig: expect.any(Object),
+    });
+  });
+
   it('derives LOG_LEVEL for executor processes when only NODE_ENV is set', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);

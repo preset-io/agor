@@ -48,6 +48,8 @@ import {
   isTaskExecuting,
   ROLES,
   SessionStatus,
+  TaskRuntimeEventKind,
+  TaskRuntimePhase,
   TaskStatus,
 } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
@@ -136,6 +138,10 @@ import {
 } from './utils/session-state.js';
 import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
+import {
+  buildDaemonTaskRuntimeVitals,
+  patchDaemonTaskRuntimeEvent,
+} from './utils/task-runtime-vitals.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -928,6 +934,11 @@ function createExecuteHandler(
     }
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
+    const canRecordLocalPid = !config.execution?.executor_command_template;
+    const tasksRuntimeVitalsService = app.service('tasks') as Parameters<
+      typeof patchDaemonTaskRuntimeEvent
+    >[0];
+    let processSpawnObserved = false;
 
     spawnExecutor(executorPayload, {
       cwd,
@@ -939,7 +950,17 @@ function createExecuteHandler(
         task_id: taskId,
         unix_user: executorUnixUser || undefined,
       },
-      onSpawn: (child) => {
+      onSpawn: async (child) => {
+        processSpawnObserved = true;
+        await patchDaemonTaskRuntimeEvent(
+          tasksRuntimeVitalsService,
+          taskId,
+          TaskRuntimeEventKind.EXECUTOR_PROCESS_SPAWNED,
+          {
+            processPid: canRecordLocalPid ? child.pid : undefined,
+          },
+          params
+        );
         if (child.pid) {
           trackExecutorProcess(sessionId, child.pid);
           console.log(`${logPrefix} PID: ${child.pid}`);
@@ -948,6 +969,7 @@ function createExecuteHandler(
       onExit: async (code) => {
         console.log(`${logPrefix} Exited with code ${code}`);
         untrackExecutorProcess(sessionId);
+        let wroteExitVitals = false;
 
         // Safety net: check if task is still running
         try {
@@ -965,14 +987,28 @@ function createExecuteHandler(
             try {
               const currentTask = await app.service('tasks').get(taskId, params);
               if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
+                const eventKind = processSpawnObserved
+                  ? TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED
+                  : TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED;
+                const runtime_vitals = buildDaemonTaskRuntimeVitals(
+                  currentTask.runtime_vitals,
+                  eventKind,
+                  {
+                    phase: TaskRuntimePhase.FAILED,
+                    exitCode: code,
+                    errorCode: processSpawnObserved ? 'unexpected_exit' : 'spawn_error',
+                  }
+                );
                 await app.service('tasks').patch(
                   taskId,
                   {
                     status: TaskStatus.FAILED,
                     error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+                    runtime_vitals,
                   },
                   params
                 );
+                wroteExitVitals = true;
                 console.log(
                   `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
                 );
@@ -1003,6 +1039,20 @@ function createExecuteHandler(
           }
         } catch (error) {
           console.error(`❌ [Executor] Failed to handle executor exit:`, error);
+        }
+        if (!wroteExitVitals) {
+          await patchDaemonTaskRuntimeEvent(
+            tasksRuntimeVitalsService,
+            taskId,
+            processSpawnObserved || code === 0
+              ? TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED
+              : TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED,
+            {
+              exitCode: code,
+              ...(processSpawnObserved || code === 0 ? {} : { errorCode: 'spawn_error' }),
+            },
+            params
+          );
         }
 
         // Stateless FS mode: serialize session file to DB after executor exits

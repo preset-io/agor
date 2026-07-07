@@ -17,6 +17,7 @@ import type {
   StreamingEventType,
   Task,
   TaskID,
+  TaskRuntimeVitals,
 } from '@agor/core/types';
 import { MessageRole, TaskRuntimeEventKind, TaskRuntimePhase } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
@@ -430,10 +431,21 @@ export async function executeToolTask(params: {
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
 
+  let initialRuntimeVitals: TaskRuntimeVitals | undefined;
+  try {
+    initialRuntimeVitals = (await client.service('tasks').get(taskId)).runtime_vitals;
+  } catch (error) {
+    console.warn(
+      '[runtime-vitals] Failed to read initial task runtime vitals:',
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
   const vitalsReporter = new TaskRuntimeVitalsReporter({
     client,
     taskId,
     toolName,
+    initialSnapshot: initialRuntimeVitals,
   });
   let abortHandler: (() => Promise<void>) | undefined;
 

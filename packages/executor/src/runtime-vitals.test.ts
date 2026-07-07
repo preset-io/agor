@@ -203,6 +203,51 @@ describe('TaskRuntimeVitalsReporter', () => {
     expect(terminalVitals.active_tool).toBeNull();
   });
 
+  it('continues from daemon-written initial snapshots instead of dropping lifecycle events', async () => {
+    const patches: Array<{ id: string; data: Record<string, unknown> }> = [];
+    const reporter = new TaskRuntimeVitalsReporter({
+      client: createClient(patches),
+      taskId: 'task-1',
+      toolName: 'codex',
+      minPatchIntervalMs: 0,
+      now: () => new Date('2026-01-01T00:00:01.000Z'),
+      initialSnapshot: {
+        schema_version: 1,
+        phase: TaskRuntimePhase.EXECUTOR_STARTING,
+        phase_started_at: '2026-01-01T00:00:00.000Z',
+        last_activity_at: '2026-01-01T00:00:00.000Z',
+        last_event: {
+          kind: TaskRuntimeEventKind.EXECUTOR_SPAWN_REQUESTED,
+          at: '2026-01-01T00:00:00.000Z',
+          source: 'daemon',
+          phase: TaskRuntimePhase.EXECUTOR_STARTING,
+        },
+        counters: { events: 1 },
+        recent_events: [
+          {
+            kind: TaskRuntimeEventKind.EXECUTOR_SPAWN_REQUESTED,
+            at: '2026-01-01T00:00:00.000Z',
+            source: 'daemon',
+            phase: TaskRuntimePhase.EXECUTOR_STARTING,
+          },
+        ],
+      },
+    });
+
+    await reporter.record(TaskRuntimeEventKind.SDK_TURN_STARTED, {
+      phase: TaskRuntimePhase.SDK_STARTING,
+      source: 'executor',
+      forceFlush: true,
+    });
+
+    const vitals = patches[0]?.data.runtime_vitals as NonNullable<typeof reporter.snapshot>;
+    expect(vitals.counters?.events).toBe(2);
+    expect(vitals.recent_events?.map((event) => event.kind)).toEqual([
+      TaskRuntimeEventKind.EXECUTOR_SPAWN_REQUESTED,
+      TaskRuntimeEventKind.SDK_TURN_STARTED,
+    ]);
+  });
+
   it('builds terminal vitals without issuing terminal side-effect patches', async () => {
     const patches: Array<{ id: string; data: Record<string, unknown> }> = [];
     const reporter = new TaskRuntimeVitalsReporter({

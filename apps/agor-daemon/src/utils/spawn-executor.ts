@@ -104,7 +104,7 @@ export interface SpawnExecutorOptions {
   templateVariables?: ExecutorTemplateVariables;
   onExit?: (code: number | null) => void;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
-  onSpawn?: (child: ChildProcess) => void;
+  onSpawn?: (child: ChildProcess) => void | Promise<void>;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
   preparedEnv?: Record<string, string>;
   /** Pre-written 0600 env file; bypasses prepareImpersonationEnv(). Only with asUser. */
@@ -271,7 +271,6 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     env = process.env as Record<string, string>,
     logPrefix = '[Executor]',
     asUser: rawAsUser,
-    onSpawn,
     preparedEnv,
     preparedEnvFilePath,
   } = options;
@@ -379,8 +378,6 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // uses `sudo -u <asUser> rm -f` so it works under sticky /tmp.
   attachEnvFileCleanup(executorProcess, { envFilePath: prepared.envFilePath, asUser });
 
-  onSpawn?.(executorProcess);
-
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
     // child_process may emit `error` without a following `exit` when the
@@ -399,8 +396,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     reportExit(code);
   });
 
-  executorProcess.stdin?.write(JSON.stringify(payload));
-  executorProcess.stdin?.end();
+  writePayloadAfterSpawnHook(executorProcess, payload, options, logPrefix);
 }
 
 function spawnExecutorWithTemplate(
@@ -432,8 +428,6 @@ function spawnExecutorWithTemplate(
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
-  options.onSpawn?.(executorProcess);
-
   executorProcess.stdout?.on('data', (data) => {
     console.log(`${logPrefix} ${data.toString().trim()}`);
   });
@@ -460,8 +454,41 @@ function spawnExecutorWithTemplate(
     reportExit(code);
   });
 
-  executorProcess.stdin?.write(JSON.stringify(payload));
-  executorProcess.stdin?.end();
+  writePayloadAfterSpawnHook(executorProcess, payload, options, logPrefix);
+}
+
+function writePayloadAfterSpawnHook(
+  child: ChildProcess,
+  payload: Record<string, unknown>,
+  options: Pick<SpawnExecutorOptions, 'onSpawn'>,
+  logPrefix: string
+): void {
+  const writePayload = () => {
+    child.stdin?.write(JSON.stringify(payload));
+    child.stdin?.end();
+  };
+  const warn = (error: unknown) => {
+    console.warn(
+      `${logPrefix} onSpawn hook failed before executor payload write:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  };
+
+  try {
+    const result = options.onSpawn?.(child);
+    if (result && typeof result.then === 'function') {
+      void result
+        .catch((error) => {
+          warn(error);
+        })
+        .finally(writePayload);
+      return;
+    }
+  } catch (error) {
+    warn(error);
+  }
+
+  writePayload();
 }
 
 const EXECUTOR_RESULT_PREFIX = 'AGOR_EXECUTOR_RESULT ';
