@@ -90,6 +90,14 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
+import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
+import {
+  authenticatedHealthDb,
+  healthMigrations,
+  healthStatus,
+  publicHealthDb,
+} from './health/payload.js';
+import { registerHealthProbeRoutes } from './health/routes.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { GatewayService } from './services/gateway.js';
 import {
@@ -3546,8 +3554,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   app.use('/health', {
     async find(params?: AuthenticatedParams) {
       const publicLaunchAuth = resolvePublicLaunchAuthSettings(config);
+      // `/health` stays 200 always (pre-login UI fetches must not throw), so the
+      // DB signal rides on `status`: ok | degraded. /readyz is the one that 503s.
+      // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
+      const dbProbe = await probeDatabase(db);
       const publicResponse = {
-        status: 'ok',
+        status: healthStatus(dbProbe),
+        db: publicHealthDb(dbProbe),
         timestamp: Date.now(),
         version: DAEMON_VERSION,
         // Build identity for the version-sync banner (apps/agor-ui ConnectionStatus).
@@ -3633,8 +3646,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           databaseInfo = { dialect, path: DB_PATH };
         }
 
+        // Diagnostic only; not in the public payload, doesn't gate readiness.
+        // Gated behind auth like the rest of this block (any authenticated
+        // user, matching the existing `database`/`execution` fields below —
+        // not admin-only).
+        const migrations = await probePendingMigrations(db);
+
         return {
           ...publicResponse,
+          // Full DB probe detail, including the raw error, is authenticated-only
+          // (never in the public payload).
+          db: authenticatedHealthDb(dbProbe),
+          migrations: healthMigrations(migrations),
           database: databaseInfo,
           auth: {
             ...publicResponse.auth,
@@ -3690,6 +3713,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     description: 'Health check endpoint (always public)',
     security: [],
   };
+
+  // Liveness (/livez) and readiness (/readyz) probes — see health/routes.ts.
+  registerHealthProbeRoutes(app, db);
 
   // ============================================================================
   // OpenCode models + health endpoints

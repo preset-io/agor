@@ -85,7 +85,15 @@ const checks = [
       /import\s+(?:type\s+)?{[^}]*(?:\bDatabase\b|\bRawDatabase\b)[^}]*}\s*from\s*['"]@agor\/core\/db(?:\/client)?['"]/gs,
       /import\s+(?:type\s+)?\*\s+as\s+\w+\s+from\s*['"]@agor\/core\/db(?:\/client)?['"]/gs,
     ],
-    baseline: {},
+    baseline: {
+      // Health probes take a Database handle to run a tenant-agnostic
+      // connectivity check (SELECT 1) / migration count. This is explicit
+      // global work: the probe enters an explicit system scope via
+      // runWithSystemDatabaseScope (not a raw tenant-scope bypass), which is
+      // the supported no-tenant path for guarded proxies.
+      'apps/agor-daemon/src/health/db-probe.ts': 1,
+      'apps/agor-daemon/src/health/routes.ts': 1,
+    },
   },
   {
     name: 'raw Drizzle transactions',
