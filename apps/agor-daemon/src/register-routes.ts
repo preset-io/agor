@@ -125,6 +125,10 @@ import {
 } from './utils/mcp-header-secrets.js';
 import { canControlCliSession } from './utils/mcp-token-authorization.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
+import {
+  deferWithSessionQueueTenantScope,
+  runWithSessionQueueTenantScope,
+} from './utils/session-queue-tenant-scope.js';
 import { stopSessionPreserveQueue } from './utils/session-stop.js';
 import {
   sessionCanStartTask,
@@ -2181,6 +2185,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const queueRetryScheduled = new Set<SessionID>();
 
   async function processNextQueuedTask(sessionId: SessionID, params: RouteParams): Promise<void> {
+    await runWithSessionQueueTenantScope(
+      {
+        db,
+        config,
+        sessionId,
+        params,
+        label: 'processNextQueuedTask',
+      },
+      async (scopedParams) => processNextQueuedTaskInTenantScope(sessionId, scopedParams)
+    );
+  }
+
+  async function processNextQueuedTaskInTenantScope(
+    sessionId: SessionID,
+    params: RouteParams
+  ): Promise<void> {
     const existingLock = sessionTurnLocks.get(sessionId);
     if (existingLock) {
       console.log(`⏳ [Queue] Session turn in progress for ${shortId(sessionId)}, waiting...`);
@@ -2208,14 +2228,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       if (!queueRetryScheduled.has(sessionId)) {
         queueRetryScheduled.add(sessionId);
-        deferInFreshTenantScope(params, async () => {
-          queueRetryScheduled.delete(sessionId);
-          try {
-            await processNextQueuedTask(sessionId, params);
-          } catch (error) {
+        deferWithSessionQueueTenantScope(
+          {
+            db,
+            config,
+            sessionId,
+            params,
+            label: 'processNextQueuedTask retry',
+          },
+          async (retryParams) => {
+            queueRetryScheduled.delete(sessionId);
+            try {
+              await processNextQueuedTask(sessionId, retryParams);
+            } catch (error) {
+              console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
+            }
+          },
+          (error) => {
+            queueRetryScheduled.delete(sessionId);
             console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
           }
-        });
+        );
       } else {
         console.log(
           `⏭️  [Queue] Retry already scheduled for session ${shortId(sessionId)}, not queueing another`
