@@ -110,6 +110,7 @@ export interface AppProps {
   openSettingsTab?: string | null; // Open settings modal to a specific tab
   onSettingsClose?: () => void; // Called when settings modal closes
   openUserSettings?: boolean; // Open user settings modal directly (e.g., from onboarding)
+  initialUserSettingsTab?: string; // Deep-link target tab when opening user settings
   onUserSettingsClose?: () => void; // Called when user settings modal closes
   onRestartOnboarding?: () => void | Promise<void>;
   openNewBranchModal?: boolean; // Open new branch modal
@@ -247,6 +248,7 @@ export const App: React.FC<AppProps> = ({
   openSettingsTab,
   onSettingsClose,
   openUserSettings,
+  initialUserSettingsTab,
   onUserSettingsClose,
   openNewBranchModal,
   onNewBranchModalClose,
@@ -1570,6 +1572,7 @@ export const App: React.FC<AppProps> = ({
         <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
         <UserSettingsModal
           open={effectiveUserSettingsOpen}
+          initialTab={initialUserSettingsTab}
           onClose={() => {
             setUserSettingsOpen(false);
             onUserSettingsClose?.();

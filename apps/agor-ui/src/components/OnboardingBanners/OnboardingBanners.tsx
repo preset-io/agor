@@ -15,6 +15,8 @@ export interface OnboardingBannersProps {
   user: User | null | undefined;
   /** Total number of MCP servers configured for this user/instance. */
   mcpServerCount: number;
+  /** Whether the user can reach the MCP settings tab (service enabled + sufficient role). Gates the integrations banner so its CTA is never a dead-end. */
+  canManageMcp: boolean;
   /** Opens the user's personal AI credential settings at the given tool tab. */
   onOpenUserSettings: (tab: string) => void;
   /** Opens workspace settings at the given tab key (used for MCP). */
@@ -60,6 +62,7 @@ function primaryAgentForUser(user: User | null | undefined): AgenticToolName | n
 export function OnboardingBanners({
   user,
   mcpServerCount,
+  canManageMcp,
   onOpenUserSettings,
   onOpenWorkspaceSettings,
   onCheckAuth,
@@ -84,9 +87,17 @@ export function OnboardingBanners({
       setStoredKeyInvalid(false);
       return;
     }
+    let cancelled = false;
     onCheckAuth(primaryAgent)
-      .then((result) => setStoredKeyInvalid(!result.authenticated))
-      .catch(() => setStoredKeyInvalid(false));
+      .then((result) => {
+        if (!cancelled) setStoredKeyInvalid(!result.authenticated);
+      })
+      .catch(() => {
+        if (!cancelled) setStoredKeyInvalid(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [onboardingCompleted, hasLlm, primaryAgent, onCheckAuth, credentialVersion]);
 
   if (!onboardingCompleted) return null;
@@ -94,7 +105,11 @@ export function OnboardingBanners({
   const showAiBanner = !hasLlm;
   const showKeyInvalidBanner = hasLlm && storedKeyInvalid;
   const showIntegrationsBanner =
-    hasLlm && !storedKeyInvalid && mcpServerCount === 0 && !integrationsBannerDismissed;
+    hasLlm &&
+    !storedKeyInvalid &&
+    canManageMcp &&
+    mcpServerCount === 0 &&
+    !integrationsBannerDismissed;
 
   if (!showAiBanner && !showKeyInvalidBanner && !showIntegrationsBanner) return null;
 

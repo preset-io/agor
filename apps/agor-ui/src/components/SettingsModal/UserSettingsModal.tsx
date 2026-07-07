@@ -183,10 +183,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     });
   }, []);
 
-  // Initialize forms when user changes or modal opens
+  // Initialize forms when user changes or modal opens. A deep-linked
+  // `initialTab` must win here, otherwise this init (which runs after the
+  // initialTab effect on open) would reset the modal back to 'general'.
   const initializeForms = useCallback(
     (userData: User) => {
-      setActiveTab('general');
+      setActiveTab(initialTab ?? 'general');
       setDirtyAgenticConfigTools(new Set());
       setAgenticConfigDraftByTool({});
 
@@ -202,7 +204,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         must_change_password: userData.must_change_password ?? false,
       });
     },
-    [form]
+    [form, initialTab]
   );
 
   const loadUserGroups = useCallback(async () => {

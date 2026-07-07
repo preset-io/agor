@@ -19,7 +19,14 @@ import type {
   User,
   UUID,
 } from '@agor-live/client';
-import { boardPath, ENTITY_PATH_SEGMENTS, sessionPath } from '@agor-live/client';
+import {
+  boardPath,
+  ENTITY_PATH_SEGMENTS,
+  hasMinimumRole,
+  isServiceEnabled,
+  ROLES,
+  sessionPath,
+} from '@agor-live/client';
 import { Alert, App as AntApp, ConfigProvider } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -419,6 +426,12 @@ function AppContent() {
   );
   const currentUser = user ? storedCurrentUser || user : null;
   const mcpServerById = useAgorStore((s) => s.mcpServerById);
+  // Whether this user can actually reach the MCP settings tab. Mirrors the tab's
+  // own gate in SettingsModal (`mcpEnabled && isAdmin`), so the "Connect tools"
+  // banner is never a dead-end for users who can't open it.
+  const canManageMcp =
+    isServiceEnabled(servicesConfig, 'mcp_servers') &&
+    hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
@@ -1536,6 +1549,7 @@ function AppContent() {
 
   const handleUserSettingsClose = () => {
     setOpenUserSettings(false);
+    setUserSettingsInitialTab(undefined);
   };
 
   const handleNewBranchModalClose = () => {
@@ -1575,6 +1589,7 @@ function AppContent() {
       openSettingsTab={settingsTabToOpen}
       onSettingsClose={handleSettingsClose}
       openUserSettings={openUserSettings}
+      initialUserSettingsTab={userSettingsInitialTab}
       onUserSettingsClose={handleUserSettingsClose}
       openNewBranchModal={openNewBranch}
       onNewBranchModalClose={handleNewBranchModalClose}
@@ -1583,6 +1598,7 @@ function AppContent() {
         <OnboardingBanners
           user={currentUser}
           mcpServerCount={mcpServerById.size}
+          canManageMcp={canManageMcp}
           onOpenUserSettings={(tab) => {
             setUserSettingsInitialTab(tab);
             setOpenUserSettings(true);
