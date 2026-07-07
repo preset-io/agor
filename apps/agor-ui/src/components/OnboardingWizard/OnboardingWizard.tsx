@@ -1672,21 +1672,6 @@ export function OnboardingWizard({
                   </div>
                 </div>
               </div>
-              <div
-                style={{
-                  borderTop: '1px solid rgba(255,255,255,0.06)',
-                  padding: '7px 16px',
-                }}
-              >
-                <Typography.Link
-                  href={rec.docsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ fontSize: 12, color: TEXT_MUTED }}
-                >
-                  Setup guide →
-                </Typography.Link>
-              </div>
             </div>
           ))}
         </div>
