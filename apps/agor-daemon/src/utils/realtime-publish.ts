@@ -346,6 +346,14 @@ function filterToServiceConnections(authenticated: PublishChannel): PublishChann
  *      already-open tabs keep updating during deploy skew, before a
  *      stale-cached client has re-subscribed after refresh.
  *
+ * Authorization is enforced at PUBLISH time, not just at subscribe time: when
+ * branch RBAC is on, room members AND the owner fallback are filtered through
+ * the current cached branch visibility, so a viewer whose access is revoked
+ * mid-stream stops receiving chunks on the very next event (rather than waiting
+ * for unsubscribe / disconnect). The cache keeps this per-chunk cost cheap, and
+ * room membership is small. With RBAC off there is no visibility model, so
+ * subscription + owner + service delivery stands.
+ *
  * Everything else (created/patched/removed, status transitions) keeps its
  * existing tenant/branch scoping. Malformed events without a resolvable
  * session id fail closed to service connections only.
@@ -354,16 +362,15 @@ async function resolveStreamingDelivery(
   app: Application,
   data: unknown,
   tenantScoped: PublishChannel,
-  accessCache: RealtimeAccessCache
+  accessCache: RealtimeAccessCache,
+  branchRbacEnabled: boolean,
+  allowSuperadmin: boolean
 ): Promise<PublishChannel | PublishChannel[]> {
   const serviceConnections = filterToServiceConnections(tenantScoped);
   const sessionId = extractSessionId(data);
   if (!sessionId) return serviceConnections;
 
-  const channels: PublishChannel[] = [
-    app.channel(sessionStreamChannelName(sessionId)),
-    serviceConnections,
-  ];
+  const room = app.channel(sessionStreamChannelName(sessionId));
 
   let ownerId: string | null = null;
   try {
@@ -372,14 +379,39 @@ async function resolveStreamingDelivery(
     // Best-effort owner fallback; the session room + service connections still
     // deliver even if the owner lookup fails.
   }
-  if (ownerId) {
-    channels.push(
-      tenantScoped.filter(
-        (connection: unknown) => userFromConnection(connection)?.user_id === ownerId
-      )
+  const ownerChannel = (): PublishChannel =>
+    tenantScoped.filter(
+      (connection: unknown) => userFromConnection(connection)?.user_id === ownerId
     );
+
+  // RBAC off: no visibility model — deliver to subscribers + owner + service.
+  if (!branchRbacEnabled) {
+    const channels: PublishChannel[] = [room, serviceConnections];
+    if (ownerId) channels.push(ownerChannel());
+    return channels;
   }
 
+  // RBAC on: enforce CURRENT branch visibility at publish time. Resolving the
+  // branch/visibility fails closed to service connections if unknown.
+  const branchId = await accessCache.getBranchIdForSession(sessionId);
+  const visibility = branchId ? await accessCache.getBranchVisibility(branchId) : null;
+  if (!visibility) return serviceConnections;
+
+  if (visibility.mode === 'allAuthenticated') {
+    const channels: PublishChannel[] = [room, serviceConnections];
+    if (ownerId) channels.push(ownerChannel());
+    return channels;
+  }
+
+  // Explicit-users branch: room members and the owner fallback must currently
+  // hold view access (service accounts and superadmins always pass).
+  const channels: PublishChannel[] = [
+    filterToUserIdsOrSuperadmins(room, visibility.userIds, allowSuperadmin),
+    serviceConnections,
+  ];
+  if (ownerId && visibility.userIds.has(ownerId as UserID)) {
+    channels.push(ownerChannel());
+  }
   return channels;
 }
 
@@ -497,7 +529,14 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     // owner connections) regardless of branch RBAC — this is the always-on
     // firehose the tenant broadcast must not carry.
     if (isStreamingEvent(context)) {
-      return resolveStreamingDelivery(app, data, tenantScoped, accessCache);
+      return resolveStreamingDelivery(
+        app,
+        data,
+        tenantScoped,
+        accessCache,
+        branchRbacEnabled,
+        allowSuperadmin
+      );
     }
 
     if (!branchRbacEnabled) return tenantScoped;

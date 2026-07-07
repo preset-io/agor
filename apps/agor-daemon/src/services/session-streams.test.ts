@@ -35,6 +35,29 @@ describe('session-streams service', () => {
     expect(result).toEqual({ session_id: 's1', subscribed: true });
   });
 
+  it('joins the canonical room id when the caller passes a short id', async () => {
+    // The resolved row carries the full UUID; publishers emit to that room, so
+    // a short-id subscriber must be joined under the canonical id, not the
+    // short id it supplied.
+    const { app, join, channel, get } = makeApp(async () => ({
+      session_id: 'ffffffff-1111-2222-3333-444444444444',
+    }));
+    const service = createSessionStreamsService(app);
+
+    const result = await service.create({ session_id: 'ffffffff' }, {
+      connection,
+      provider: 'socketio',
+    } as never);
+
+    expect(get).toHaveBeenCalledWith('ffffffff', expect.objectContaining({ query: {} }));
+    expect(channel).toHaveBeenCalledWith('session-stream:ffffffff-1111-2222-3333-444444444444');
+    expect(join).toHaveBeenCalledWith(connection);
+    expect(result).toEqual({
+      session_id: 'ffffffff-1111-2222-3333-444444444444',
+      subscribed: true,
+    });
+  });
+
   it('rejects a subscription to an inaccessible session and does not join', async () => {
     const { app, join, get } = makeApp(async () => {
       throw new Error('Forbidden');

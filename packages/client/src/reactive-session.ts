@@ -156,6 +156,13 @@ export class ReactiveSessionHandle {
   private readyPromise: Promise<void>;
   private disposed = false;
 
+  /**
+   * Serializes stream subscribe/unsubscribe so a delayed `create` can't land
+   * after a `remove` and re-join a disposed handle. Every op chains onto this,
+   * and dispose enqueues a compensating `remove` after any in-flight `create`.
+   */
+  private streamOpChain: Promise<void> = Promise.resolve();
+
   private stateSnapshot: ReactiveSessionState;
 
   constructor(client: AgorClient, sessionId: string, options?: ReactiveSessionOptions) {
@@ -180,12 +187,23 @@ export class ReactiveSessionHandle {
     };
 
     this.attachListeners();
-    // Declare interest in this session's streaming channel so the daemon routes
-    // per-chunk streaming events to this connection. The socket is usually
-    // already connected here; reconnects re-subscribe via onSocketConnect
-    // because rooms are per-connection and a reconnect is a new connection.
-    this.subscribeToStream();
-    this.readyPromise = this.bootstrap();
+    // Subscribe to the streaming channel BEFORE hydrating: the subscribe ack is
+    // awaited so any chunk arriving after it lands on top of hydrated state,
+    // and anything earlier is captured by the hydration itself — a viewer
+    // opening mid-stream can't fall into the gap where early chunks arrive with
+    // no streaming state and get dropped. Reconnects re-subscribe the same way
+    // via onSocketConnect (rooms are per-connection; a reconnect is a new one).
+    this.readyPromise = this.subscribeThenHydrate(() => this.bootstrap());
+  }
+
+  /**
+   * Await the streaming subscription, then run the hydration/resync step, so
+   * chunk delivery and state hydration can't interleave into a lost-update gap.
+   */
+  private async subscribeThenHydrate(hydrate: () => Promise<void>): Promise<void> {
+    await this.subscribeToStream();
+    if (this.disposed) return;
+    await hydrate();
   }
 
   get sessionId(): string {
@@ -299,11 +317,12 @@ export class ReactiveSessionHandle {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    // Best-effort: leave the streaming room. The daemon also drops the
-    // connection from the channel automatically on socket disconnect, so this
-    // only matters while the socket stays open (e.g. navigating between
-    // sessions in one tab).
-    this.unsubscribeFromStream();
+    // Best-effort: leave the streaming room. Enqueued after any in-flight
+    // subscribe so a late-landing create is always followed by this remove.
+    // The daemon also drops the connection from the channel on socket
+    // disconnect, so this only matters while the socket stays open (e.g.
+    // navigating between sessions in one tab).
+    void this.unsubscribeFromStream();
     for (const cleanup of this.disposeCallbacks) {
       cleanup();
     }
@@ -311,34 +330,46 @@ export class ReactiveSessionHandle {
     this.listeners.clear();
   }
 
+  /** Run a stream subscribe/unsubscribe op serialized after any in-flight op. */
+  private runStreamOp(op: () => Promise<void>): Promise<void> {
+    const next = this.streamOpChain.then(op, op);
+    // Keep the chain alive regardless of any single op's outcome.
+    this.streamOpChain = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
+  }
+
   /**
    * Join this session's per-connection streaming channel on the daemon.
    * Best-effort: a daemon that predates the `session-streams` service (deploy
    * skew) rejects the call, in which case the daemon's owner-fallback delivery
    * keeps this session's own tabs updating until the daemon is upgraded.
+   * Serialized so it cannot re-join after a dispose-issued unsubscribe.
    */
-  private subscribeToStream(): void {
-    try {
-      void Promise.resolve(
-        this.client.service('session-streams').create({ session_id: this.sessionId })
-      ).catch(() => {
+  private subscribeToStream(): Promise<void> {
+    return this.runStreamOp(async () => {
+      // Skip if disposed: dispose enqueues a compensating unsubscribe after
+      // this op, so ordering alone already prevents stale membership; this just
+      // avoids a pointless round-trip.
+      if (this.disposed) return;
+      try {
+        await this.client.service('session-streams').create({ session_id: this.sessionId });
+      } catch {
         // Ignore — see method doc. Access errors also surface via bootstrap/resync.
-      });
-    } catch {
-      // Service unavailable on this client build — nothing to subscribe to.
-    }
+      }
+    });
   }
 
-  private unsubscribeFromStream(): void {
-    try {
-      void Promise.resolve(this.client.service('session-streams').remove(this.sessionId)).catch(
-        () => {
-          // Ignore — the socket teardown removes room membership regardless.
-        }
-      );
-    } catch {
-      // Service unavailable on this client build — nothing to unsubscribe from.
-    }
+  private unsubscribeFromStream(): Promise<void> {
+    return this.runStreamOp(async () => {
+      try {
+        await this.client.service('session-streams').remove(this.sessionId);
+      } catch {
+        // Ignore — the socket teardown removes room membership regardless.
+      }
+    });
   }
 
   private assertNotDisposed(): void {
@@ -452,9 +483,9 @@ export class ReactiveSessionHandle {
       if (this.disposed) return;
       this.updateState((prev) => ({ ...prev, connected: true }));
       // A reconnect is a new socket connection with no room membership, so
-      // re-declare interest before resyncing state.
-      this.subscribeToStream();
-      this.readyPromise = this.resync();
+      // re-declare interest and await the ack before resyncing — same ordering
+      // as the initial attach so post-subscribe chunks land after hydration.
+      this.readyPromise = this.subscribeThenHydrate(() => this.resync());
     };
     const onSocketDisconnect = () => {
       if (this.disposed) return;

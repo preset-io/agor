@@ -26,9 +26,15 @@ interface MockClientOptions {
   tasks: Task[];
   messagesByTask: Record<string, Message[]>;
   failTaskMessageFetch?: boolean;
+  /** When true, `session-streams.create` blocks until releaseCreate() is called. */
+  deferCreate?: boolean;
 }
 
 function createMockClient(opts: MockClientOptions) {
+  // Records the relative order of subscribe vs. hydrate vs. unsubscribe so
+  // tests can assert the subscribe-before-hydrate ordering and dispose races.
+  const order: string[] = [];
+
   const messageFindAll = vi.fn(async ({ query }: { query: Record<string, unknown> }) => {
     if (typeof query.task_id === 'string') {
       if (opts.failTaskMessageFetch) {
@@ -42,13 +48,31 @@ function createMockClient(opts: MockClientOptions) {
 
   const listener = () => ({ on: vi.fn(), removeListener: vi.fn() });
 
+  let releaseCreate: (() => void) | null = null;
   const sessionStreams = {
-    create: vi.fn(async () => ({ session_id: SESSION_ID, subscribed: true })),
-    remove: vi.fn(async () => ({ session_id: SESSION_ID, subscribed: false })),
+    create: vi.fn(async () => {
+      order.push('subscribe');
+      if (opts.deferCreate) {
+        await new Promise<void>((resolve) => {
+          releaseCreate = resolve;
+        });
+      }
+      return { session_id: SESSION_ID, subscribed: true };
+    }),
+    remove: vi.fn(async () => {
+      order.push('unsubscribe');
+      return { session_id: SESSION_ID, subscribed: false };
+    }),
   };
 
   const services: Record<string, unknown> = {
-    sessions: { get: vi.fn(async () => ({ session_id: SESSION_ID }) as Session), ...listener() },
+    sessions: {
+      get: vi.fn(async () => {
+        order.push('hydrate');
+        return { session_id: SESSION_ID } as Session;
+      }),
+      ...listener(),
+    },
     tasks: { findAll: vi.fn(async () => opts.tasks), ...listener() },
     messages: { findAll: messageFindAll, ...listener() },
     'session-streams': sessionStreams,
@@ -75,7 +99,9 @@ function createMockClient(opts: MockClientOptions) {
     for (const handler of ioHandlers[event] ?? []) handler();
   };
 
-  return { client, messageFindAll, sessionStreams, fireIo };
+  const releaseCreateFn = () => releaseCreate?.();
+
+  return { client, messageFindAll, sessionStreams, fireIo, order, releaseCreate: releaseCreateFn };
 }
 
 async function bootstrapHandle(opts: MockClientOptions, taskHydration: TaskHydrationMode) {
@@ -226,7 +252,49 @@ describe('ReactiveSessionHandle stream subscription', () => {
     await handle.ready();
 
     handle.dispose();
-    expect(sessionStreams.remove).toHaveBeenCalledWith(SESSION_ID);
+    // Unsubscribe is serialized onto the stream-op chain, so it runs on a
+    // microtask after dispose returns.
+    await vi.waitFor(() => {
+      expect(sessionStreams.remove).toHaveBeenCalledWith(SESSION_ID);
+    });
+  });
+
+  it('subscribes before hydrating so mid-stream chunks land after state exists', async () => {
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+
+    // The subscribe ack is awaited before any session-state fetch, so a chunk
+    // arriving right after subscribe cannot precede hydration.
+    expect(mock.order[0]).toBe('subscribe');
+    expect(mock.order).toContain('hydrate');
+    expect(mock.order.indexOf('subscribe')).toBeLessThan(mock.order.indexOf('hydrate'));
+    handle.dispose();
+  });
+
+  it('dispose during an in-flight subscribe leaves no room membership', async () => {
+    const mock = createMockClient({ tasks: [], messagesByTask: {}, deferCreate: true });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+
+    // Let the subscribe op actually start and block inside create() so we
+    // exercise the genuine in-flight race (not the trivial "disposed before the
+    // op ran" case).
+    await vi.waitFor(() => {
+      expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+    });
+
+    // Dispose enqueues the compensating unsubscribe onto the same serialized
+    // chain, behind the in-flight create.
+    handle.dispose();
+    mock.releaseCreate();
+
+    await vi.waitFor(() => {
+      expect(mock.sessionStreams.remove).toHaveBeenCalledTimes(1);
+    });
+    // The create ran once and the unsubscribe ran strictly after it, so the
+    // net membership is empty rather than a stale re-join.
+    expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+    expect(mock.order).toEqual(['subscribe', 'unsubscribe']);
   });
 
   it('re-subscribes after a socket reconnect (new connection has no room membership)', async () => {

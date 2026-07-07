@@ -27,14 +27,23 @@ interface SubscribeData {
 }
 
 export function createSessionStreamsService(app: Application) {
-  const assertAccessible = async (sessionId: string, params: Params): Promise<void> => {
-    // Reuse the canonical session read as the access gate. Neutralize the
-    // query so the sessions query validator doesn't reject control-plane
-    // params, but preserve provider/connection/user/tenant so tenant scoping
-    // and branch-view RBAC still apply.
-    await app
+  // Reuse the canonical session read as the access gate AND to resolve the
+  // caller-supplied id (which may be a short id / alias) to the row's full
+  // session_id. Neutralize the query so the sessions query validator doesn't
+  // reject control-plane params, but preserve provider/connection/user/tenant
+  // so tenant scoping and branch-view RBAC still apply. Returns the canonical
+  // session_id, or null when the row carries none.
+  const resolveAccessibleSessionId = async (
+    sessionId: string,
+    params: Params
+  ): Promise<string | null> => {
+    const session = (await app
       .service('sessions')
-      .get(sessionId as never, { ...(params ?? {}), query: {} } as never);
+      .get(sessionId as never, { ...(params ?? {}), query: {} } as never)) as
+      | { session_id?: string }
+      | null
+      | undefined;
+    return session?.session_id ?? null;
   };
 
   return {
@@ -47,18 +56,31 @@ export function createSessionStreamsService(app: Application) {
       if (!sessionId || typeof sessionId !== 'string') {
         throw new BadRequest('session_id is required');
       }
-      await assertAccessible(sessionId, params);
-      joinSessionStreamChannel(app, sessionId, connection);
-      return { session_id: sessionId, subscribed: true };
+      // Join the CANONICAL room id so short-id / alias callers land in the same
+      // room publishers emit to (they carry the full UUID).
+      const canonicalId = (await resolveAccessibleSessionId(sessionId, params)) ?? sessionId;
+      joinSessionStreamChannel(app, canonicalId, connection);
+      return { session_id: canonicalId, subscribed: true };
     },
 
     async remove(id: string, params: Params): Promise<SessionStreamSubscription> {
       const connection = (params as { connection?: unknown } | undefined)?.connection;
       const sessionId = typeof id === 'string' ? id : '';
-      if (connection && sessionId) {
-        leaveSessionStreamChannel(app, sessionId, connection);
+      if (!connection || !sessionId) {
+        return { session_id: sessionId, subscribed: false };
       }
-      return { session_id: sessionId, subscribed: false };
+      // Resolve to the canonical room id when possible so we leave the room we
+      // actually joined. Unsubscribing must not require access (a revoked user
+      // still needs to leave), so fall back to the raw id if the read fails.
+      let canonicalId = sessionId;
+      try {
+        canonicalId = (await resolveAccessibleSessionId(sessionId, params)) ?? sessionId;
+      } catch {
+        // Best-effort: leave under the supplied id; socket teardown is the
+        // ultimate cleanup regardless.
+      }
+      leaveSessionStreamChannel(app, canonicalId, connection);
+      return { session_id: canonicalId, subscribed: false };
     },
   };
 }

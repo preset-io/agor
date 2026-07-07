@@ -857,4 +857,89 @@ describe('configureRealtimePublish streaming scope', () => {
 
     expect(unionConnections(result)).toEqual([subscribed]);
   });
+
+  it('drops a subscribed connection whose branch access was revoked (RBAC on)', async () => {
+    // Both are in the room, but only `allowed` currently holds view on the
+    // explicit-users branch. Publish-time filtering must exclude `revoked`
+    // rather than trust its stale room membership.
+    const allowed = { user: user('allowed') };
+    const revoked = { user: user('revoked') };
+    const app = makeApp(
+      [allowed, revoked],
+      {},
+      {
+        authenticated: [allowed, revoked],
+        'session-stream:s1': [allowed, revoked],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { allowed: 'view' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([allowed]);
+  });
+
+  it('drops the owner fallback when the owner lost branch access (RBAC on)', async () => {
+    // Nobody is subscribed; the owner is the only candidate, but their view was
+    // revoked, so the owner-fallback must NOT deliver.
+    const owner = { user: user('owner-user') };
+    const viewer = { user: user('viewer') };
+    const app = makeApp(
+      [owner, viewer],
+      {},
+      {
+        authenticated: [owner, viewer],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { viewer: 'view' },
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([]);
+  });
+
+  it('delivers to the owner fallback while they retain branch access (RBAC on)', async () => {
+    const owner = { user: user('owner-user') };
+    const other = { user: user('other') };
+    const app = makeApp(
+      [owner, other],
+      {},
+      {
+        authenticated: [owner, other],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { 'owner-user': 'view' },
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([owner]);
+  });
 });
