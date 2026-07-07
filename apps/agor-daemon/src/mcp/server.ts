@@ -618,6 +618,10 @@ export function setupMCPRoutes(
           user_id: authenticatedUser.user_id,
           email: authenticatedUser.email,
           role: authenticatedUser.role,
+          // Carry the user's tenant claim so required_from_auth resolution below
+          // can read it — REST's api-key strategy passes the full user for the
+          // same reason. Undefined/no-op in static mode.
+          ...(authenticatedUser.tenant_id ? { tenant_id: authenticatedUser.tenant_id } : {}),
         },
         authenticated: true,
         provider: 'mcp',

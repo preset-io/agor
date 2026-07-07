@@ -802,6 +802,78 @@ describe('POST /mcp with personal API keys', () => {
     );
   });
 
+  it('resolves the tenant from the authenticated user claim (required_from_auth boundary)', async () => {
+    await mockPersonalApiKeyUser();
+    // Counterpart to the negative case below: with a tenant claim present on the
+    // user, the boundary resolves it (source 'auth_claim') and threads it into
+    // downstream service params. This proves the negative test rejects for the
+    // right reason (no claim), not because the field is unconditionally dropped.
+    // (End-to-end required_from_auth MCP additionally needs the auth-flow
+    // users.get to be tenant-scoped — a separate concern, out of scope here.)
+    const cloudMultiTenancy = {
+      mode: 'required_from_auth',
+      static_tenant_id: 'default',
+      auth_claim: 'tenant_id',
+    } as unknown as Parameters<typeof setupMCPRoutes>[4];
+
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+      tenant_id: 'tenant-a',
+    }));
+    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
+
+    const webApp = express();
+    webApp.use(express.json());
+    (webApp as unknown as { service: (name: string) => unknown }).service = (name: string) => {
+      if (name === 'users') return { get: getUser };
+      if (name === 'sessions') return { get: getSession };
+      throw new Error(`Unexpected service lookup: ${name}`);
+    };
+
+    setupMCPRoutes(
+      webApp as never,
+      {} as never,
+      /* toolSearchEnabled */ false,
+      undefined,
+      cloudMultiTenancy
+    );
+
+    const httpServer = webApp.listen(0);
+    try {
+      const address = httpServer.address();
+      if (!address || typeof address === 'string') throw new Error('no listen address');
+      const resp = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+          'X-API-Key': 'agor_sk_valid',
+          'X-Agor-Session-Id': 'session-short',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 5,
+          method: 'tools/call',
+          params: { name: 'agor_users_get_current', arguments: {} },
+        }),
+      });
+
+      expect(resp.status).toBe(200);
+      expect(getSession).toHaveBeenCalledWith(
+        'session-short',
+        expect.objectContaining({
+          tenant: expect.objectContaining({ tenant_id: 'tenant-a', source: 'auth_claim' }),
+        })
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it('rejects an MCP request whose tenant cannot be resolved in cloud mode (401)', async () => {
     await mockPersonalApiKeyUser();
     // A required_from_auth tenant that must come from an auth claim the user
