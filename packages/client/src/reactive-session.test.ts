@@ -602,4 +602,81 @@ describe('ReactiveSessionHandle stream subscription', () => {
     expect(handle.getStreamingMessage('m1')?.task_id).toBe('task-1');
     handle.dispose();
   });
+
+  // A minimal client whose session-streams.create always echoes `canonical`
+  // (the full UUID) regardless of the id form the caller supplied.
+  function makeCanonicalClient(canonical: string) {
+    const create = vi.fn(async () => ({ session_id: canonical, subscribed: true }));
+    const remove = vi.fn(async () => ({ session_id: canonical, subscribed: false }));
+    const listener = () => ({ on: vi.fn(), removeListener: vi.fn() });
+    const services: Record<string, unknown> = {
+      sessions: { get: vi.fn(async () => ({ session_id: canonical }) as Session), ...listener() },
+      tasks: { findAll: vi.fn(async () => []), ...listener() },
+      messages: { findAll: vi.fn(async () => []), ...listener() },
+      'session-streams': { create, remove },
+    };
+    const queueService = { find: vi.fn(async () => ({ data: [] })) };
+    const client = {
+      io: { connected: true, on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name.includes('/tasks/queue') ? queueService : services[name]
+      ),
+    } as unknown as AgorClient;
+    return { client, create, remove };
+  }
+
+  it('shares one canonical room across short-id and full-id retains (short first)', async () => {
+    const shortId = 'ffffffff';
+    const canonical = 'ffffffff-1111-2222-3333-444444444444';
+    const { client, create, remove } = makeCanonicalClient(canonical);
+
+    const short = new ReactiveSessionHandle(client, shortId, { taskHydration: 'none' });
+    await short.ready();
+    const full = new ReactiveSessionHandle(client, canonical, { taskHydration: 'lazy' });
+    await full.ready();
+
+    // The full-id retain resolves to the canonical entry the short-id retain
+    // established — reuse, no second create.
+    expect(create).toHaveBeenCalledTimes(1);
+
+    // Disposing one id form must NOT evict the shared room membership.
+    short.dispose();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(remove).not.toHaveBeenCalled();
+
+    // Only the last detach across all id forms removes it — once, canonically.
+    full.dispose();
+    await vi.waitFor(() => {
+      expect(remove).toHaveBeenCalledTimes(1);
+    });
+    expect(remove).toHaveBeenCalledWith(canonical);
+  });
+
+  it('folds a redundant subscription into the canonical room (full first, then short)', async () => {
+    const shortId = 'ffffffff';
+    const canonical = 'ffffffff-1111-2222-3333-444444444444';
+    const { client, create, remove } = makeCanonicalClient(canonical);
+
+    const full = new ReactiveSessionHandle(client, canonical, { taskHydration: 'none' });
+    await full.ready();
+    const short = new ReactiveSessionHandle(client, shortId, { taskHydration: 'lazy' });
+    await short.ready();
+
+    // The client can't know the short id maps to the canonical room without
+    // asking, so a second create is sent — but both join ONE canonical room and
+    // the entries fold together.
+    expect(create).toHaveBeenCalledTimes(2);
+
+    full.dispose();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(remove).not.toHaveBeenCalled();
+
+    short.dispose();
+    await vi.waitFor(() => {
+      expect(remove).toHaveBeenCalledTimes(1);
+    });
+    expect(remove).toHaveBeenCalledWith(canonical);
+  });
 });

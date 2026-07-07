@@ -1097,11 +1097,21 @@ export function attachReactiveSessionApi(client: AgorClient): ReactiveAgorClient
 // each with its own taskHydration) share ONE connection for the same session.
 // If every handle sent its own `remove` on dispose, disposing any one would
 // evict the shared connection from the room and silently kill the others'
-// streams. So subscription is refcounted per (client, session id): the first
-// attach subscribes, the last detach unsubscribes, and a single shared op chain
-// orders create/remove across handles (a late create from a disposing handle
-// can't land after a newer handle's create). On reconnect every still-wanted
+// streams. So subscription is refcounted; a single shared op chain orders
+// create/remove across handles (a late create from a disposing handle can't
+// land after a newer handle's create), and on reconnect every still-wanted
 // session re-subscribes exactly once.
+//
+// The room is keyed by the CANONICAL session id the daemon echoes from
+// `create` — not the caller-supplied id — because deep-link URLs carry short
+// ids while other surfaces use the full UUID, and both resolve to one room.
+// Two mechanisms keep exactly ONE refcounted membership per (client, canonical
+// room): (1) `keyToCanonical` re-keys/aliases an entry to the canonical id once
+// its ack returns, so a later retain of either id form reuses it without a
+// second `create`; (2) `roomWanters` counts the entries currently joined to a
+// canonical room, so `remove` fires only when the LAST retainer across all id
+// forms releases — even in the race where both forms subscribe before either
+// ack lands (their entries merge, and the count still gates the single remove).
 
 interface StreamSubscription {
   refCount: number;
@@ -1109,6 +1119,10 @@ interface StreamSubscription {
   /** Canonical room id echoed by create; used so `remove` leaves the right room. */
   roomId: string | null;
   wantSubscribed: boolean;
+  /** True once this entry has contributed +1 to `roomWanters[roomId]`. */
+  joined: boolean;
+  /** Set when this entry was folded into the canonical entry; its ops no-op. */
+  superseded: boolean;
   /**
    * The re-subscribe op for the CURRENT connection, shared by every handle so a
    * reconnect re-subscribes each session exactly once. Reset to null on socket
@@ -1119,6 +1133,10 @@ interface StreamSubscription {
 
 interface ClientStreamState {
   subs: Map<string, StreamSubscription>;
+  /** Caller-supplied id (short or full) → canonical room id, learned from acks. */
+  keyToCanonical: Map<string, string>;
+  /** Canonical room id → count of entries currently joined to it. */
+  roomWanters: Map<string, number>;
   disconnectHandler: (() => void) | null;
 }
 
@@ -1127,10 +1145,19 @@ const CLIENT_STREAM_STATE = new WeakMap<AgorClient, ClientStreamState>();
 function getClientStreamState(client: AgorClient): ClientStreamState {
   let state = CLIENT_STREAM_STATE.get(client);
   if (!state) {
-    state = { subs: new Map(), disconnectHandler: null };
+    state = {
+      subs: new Map(),
+      keyToCanonical: new Map(),
+      roomWanters: new Map(),
+      disconnectHandler: null,
+    };
     CLIENT_STREAM_STATE.set(client, state);
   }
   return state;
+}
+
+function resolveStreamKey(state: ClientStreamState, sessionId: string): string {
+  return state.keyToCanonical.get(sessionId) ?? sessionId;
 }
 
 /** Serialize a create/remove op onto the subscription's shared chain. */
@@ -1146,30 +1173,77 @@ function runSubscriptionOp(sub: StreamSubscription, op: () => Promise<void>): Pr
 async function createSubscription(
   client: AgorClient,
   sessionId: string,
-  sub: StreamSubscription
+  sub: StreamSubscription,
+  key: string
 ): Promise<void> {
-  // Released before this op ran — nothing to join.
-  if (!sub.wantSubscribed) return;
+  // Released or folded before this op ran — nothing to join.
+  if (!sub.wantSubscribed || sub.superseded) return;
+  let canonical: string | undefined;
   try {
     const result = (await client.service('session-streams').create({ session_id: sessionId })) as
       | { session_id?: string }
       | undefined;
-    if (typeof result?.session_id === 'string' && result.session_id) {
-      sub.roomId = result.session_id;
-    }
+    canonical = typeof result?.session_id === 'string' ? result.session_id : undefined;
   } catch {
     // Deploy skew / access error: the daemon's owner fallback covers the
     // creator's own tabs, and access errors also surface via bootstrap/resync.
   }
+  if (!canonical) return;
+
+  const state = CLIENT_STREAM_STATE.get(client);
+  if (!state) return;
+
+  // Learn the mapping so future retains of either id form resolve to the room.
+  state.keyToCanonical.set(sessionId, canonical);
+  state.keyToCanonical.set(canonical, canonical);
+  if (key !== canonical) state.keyToCanonical.set(key, canonical);
+
+  // Normalize this entry onto the canonical id.
+  let target = sub;
+  if (key !== canonical && state.subs.get(canonical) !== sub) {
+    const existing = state.subs.get(canonical);
+    if (existing) {
+      // Race: another id form already established the canonical entry. Fold
+      // this entry's refcount into it and retire this one (its pending ops
+      // no-op via `superseded`); both joined the same room, so the count is
+      // taken from the canonical entry only.
+      existing.refCount += sub.refCount;
+      existing.wantSubscribed = existing.wantSubscribed || sub.wantSubscribed;
+      sub.superseded = true;
+      if (state.subs.get(key) === sub) state.subs.delete(key);
+      target = existing;
+    } else {
+      if (state.subs.get(key) === sub) state.subs.delete(key);
+      state.subs.set(canonical, sub);
+    }
+  }
+
+  target.roomId = canonical;
+  // The server-side join actually happened, so account for it even if the
+  // entry was released mid-flight — the pending remove (enqueued after this
+  // create) will then leave the room. Skipping this would leak the membership.
+  if (!target.joined) {
+    target.joined = true;
+    state.roomWanters.set(canonical, (state.roomWanters.get(canonical) ?? 0) + 1);
+  }
 }
 
-async function removeSubscription(
-  client: AgorClient,
-  sessionId: string,
-  sub: StreamSubscription
-): Promise<void> {
+async function removeSubscription(client: AgorClient, sub: StreamSubscription): Promise<void> {
+  if (sub.superseded) return;
+  const state = CLIENT_STREAM_STATE.get(client);
+  const roomId = sub.roomId;
+  // Never joined (create failed / not yet acked): nothing to leave.
+  if (!sub.joined || !roomId || !state) return;
+  sub.joined = false;
+  const remaining = (state.roomWanters.get(roomId) ?? 1) - 1;
+  if (remaining > 0) {
+    // Another id-form entry still wants the room — keep the membership.
+    state.roomWanters.set(roomId, remaining);
+    return;
+  }
+  state.roomWanters.delete(roomId);
   try {
-    await client.service('session-streams').remove(sub.roomId ?? sessionId);
+    await client.service('session-streams').remove(roomId);
   } catch {
     // Ignore — socket teardown removes room membership regardless.
   }
@@ -1191,16 +1265,19 @@ function ensureStreamDisconnectHandler(client: AgorClient, state: ClientStreamSt
 
 function retainSessionStream(client: AgorClient, sessionId: string): Promise<void> {
   const state = getClientStreamState(client);
-  let sub = state.subs.get(sessionId);
+  const key = resolveStreamKey(state, sessionId);
+  let sub = state.subs.get(key);
   if (!sub) {
     sub = {
       refCount: 0,
       chain: Promise.resolve(),
       roomId: null,
       wantSubscribed: false,
+      joined: false,
+      superseded: false,
       reconnect: null,
     };
-    state.subs.set(sessionId, sub);
+    state.subs.set(key, sub);
   }
   const was = sub.refCount;
   sub.refCount += 1;
@@ -1210,7 +1287,7 @@ function retainSessionStream(client: AgorClient, sessionId: string): Promise<voi
   // the shared chain) enqueues the create; it lands after any pending remove.
   if (was === 0) {
     const target = sub;
-    return runSubscriptionOp(target, () => createSubscription(client, sessionId, target));
+    return runSubscriptionOp(target, () => createSubscription(client, sessionId, target, key));
   }
   return sub.chain;
 }
@@ -1223,10 +1300,12 @@ function retainSessionStream(client: AgorClient, sessionId: string): Promise<voi
  */
 function resubscribeSessionStream(client: AgorClient, sessionId: string): Promise<void> {
   const state = CLIENT_STREAM_STATE.get(client);
-  const sub = state?.subs.get(sessionId);
+  if (!state) return Promise.resolve();
+  const key = resolveStreamKey(state, sessionId);
+  const sub = state.subs.get(key);
   if (!sub?.wantSubscribed) return Promise.resolve();
   if (!sub.reconnect) {
-    sub.reconnect = runSubscriptionOp(sub, () => createSubscription(client, sessionId, sub));
+    sub.reconnect = runSubscriptionOp(sub, () => createSubscription(client, sessionId, sub, key));
   }
   return sub.reconnect;
 }
@@ -1234,16 +1313,17 @@ function resubscribeSessionStream(client: AgorClient, sessionId: string): Promis
 function releaseSessionStream(client: AgorClient, sessionId: string): void {
   const state = CLIENT_STREAM_STATE.get(client);
   if (!state) return;
-  const sub = state.subs.get(sessionId);
+  const key = resolveStreamKey(state, sessionId);
+  const sub = state.subs.get(key);
   if (!sub || sub.refCount === 0) return;
   sub.refCount -= 1;
   if (sub.refCount > 0) return;
   sub.wantSubscribed = false;
-  void runSubscriptionOp(sub, () => removeSubscription(client, sessionId, sub)).then(() => {
+  void runSubscriptionOp(sub, () => removeSubscription(client, sub)).then(() => {
     // Drop the entry only if nothing re-attached while the remove drained; a
     // re-attach reuses this same sub and its ordered chain.
-    if (sub.refCount === 0 && !sub.wantSubscribed && state.subs.get(sessionId) === sub) {
-      state.subs.delete(sessionId);
+    if (sub.refCount === 0 && !sub.wantSubscribed && state.subs.get(key) === sub) {
+      state.subs.delete(key);
       if (state.subs.size === 0 && state.disconnectHandler) {
         client.io.off('disconnect', state.disconnectHandler);
         state.disconnectHandler = null;
