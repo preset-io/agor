@@ -209,16 +209,23 @@ export type BoardObject =
   | AppBoardObject
   | ArtifactBoardObject;
 
-export interface AssistantWelcomeNoteRequest {
-  /** Board to create/update the bundled assistant welcome note on. */
+export interface TeammateWelcomeNoteRequest {
+  /** Board to create/update the bundled teammate welcome note on. */
   boardId?: BoardID | string;
   /** Alias accepted by Feathers custom method callers. */
   id?: BoardID | string;
-  /** User-provided assistant display name. */
-  assistantName: string;
-  /** Optional user-provided assistant emoji/icon. */
+  /** User-provided teammate display name. */
+  teammateName?: string;
+  /** Optional legacy alias accepted by compatibility callers. */
+  assistantName?: string;
+  /** Optional user-provided teammate emoji/icon. */
+  teammateEmoji?: string | null;
+  /** Optional legacy alias accepted by compatibility callers. */
   assistantEmoji?: string | null;
 }
+
+/** @deprecated Use TeammateWelcomeNoteRequest instead */
+export type AssistantWelcomeNoteRequest = TeammateWelcomeNoteRequest;
 
 export type BoardAccessMode = 'private' | 'shared';
 export type BoardDefaultFsAccess = 'none' | 'read' | 'write';
@@ -242,6 +249,8 @@ export interface Board {
   slug?: string;
 
   description?: string;
+  primary_teammate_id?: BranchID;
+  /** @deprecated Use primary_teammate_id instead */
   primary_assistant_id?: BranchID;
 
   /**

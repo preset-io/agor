@@ -1,7 +1,7 @@
 import type { AgorClient } from '@agor-live/client';
 import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
-export interface StartAssistantBootstrapSessionInput<TSessionConfig> {
+export interface StartTeammateBootstrapSessionInput<TSessionConfig> {
   client: AgorClient | null;
   branchId: string;
   boardId: string;
@@ -11,28 +11,34 @@ export interface StartAssistantBootstrapSessionInput<TSessionConfig> {
 }
 
 /**
- * Shared bootstrap-session runner for newly created assistants.
+ * Shared bootstrap-session runner for newly created AI teammates.
  *
  * Keeps the branch-filesystem readiness wait and first-session create behavior
- * consistent between onboarding and the Assistant create dialog while letting
+ * consistent between onboarding and the Teammate create dialog while letting
  * each caller own its own navigation/fallback UI.
  */
-export async function startAssistantBootstrapSession<TSessionConfig>({
+export async function startTeammateBootstrapSession<TSessionConfig>({
   client,
   branchId,
   boardId,
   sessionConfig,
   onCreateSession,
   onStatusChange,
-}: StartAssistantBootstrapSessionInput<TSessionConfig>): Promise<string> {
-  onStatusChange?.('Preparing assistant worktree…');
+}: StartTeammateBootstrapSessionInput<TSessionConfig>): Promise<string> {
+  onStatusChange?.('Preparing AI teammate worktree…');
   await waitForBranchFilesystemReady(client, branchId);
 
   onStatusChange?.('Starting first session…');
   const sessionId = await onCreateSession(sessionConfig, boardId);
   if (!sessionId) {
-    throw new Error('First assistant session could not be created.');
+    throw new Error('First AI teammate session could not be created.');
   }
 
   return sessionId;
 }
+
+
+/** @deprecated Use StartTeammateBootstrapSessionInput instead. */
+export type StartAssistantBootstrapSessionInput<TSessionConfig> = StartTeammateBootstrapSessionInput<TSessionConfig>;
+/** @deprecated Use startTeammateBootstrapSession instead. */
+export const startAssistantBootstrapSession = startTeammateBootstrapSession;

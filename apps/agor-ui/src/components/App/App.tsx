@@ -60,19 +60,19 @@ import {
   selectSessionById,
 } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
-import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
-import { createAssistantBranch } from '../../utils/assistantCreation';
+import { buildTeammateBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
+import { createTeammateBranch } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
-import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
+import { startTeammateBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { AppHeader } from '../AppHeader';
 import type { BoardAssistantPanelTab } from '../BoardAssistantPanel';
 import { AssistantPanelRail, BoardAssistantPanel } from '../BoardAssistantPanel';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
-import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
+import type { TeammateTabResult } from '../CreateDialog/tabs/AssistantTab';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
@@ -366,8 +366,8 @@ export const App: React.FC<AppProps> = ({
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<
-    'branch' | 'assistant' | 'board' | 'repository'
-  >('assistant');
+    'branch' | 'teammate' | 'assistant' | 'board' | 'repository'
+  >('teammate');
   const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
     x: number;
     y: number;
@@ -697,10 +697,10 @@ export const App: React.FC<AppProps> = ({
   );
 
   const handleHomeOpenCreateDialog = useCallback(
-    (tab?: 'branch' | 'assistant' | 'board' | 'repository', boardId?: string) => {
+    (tab?: 'branch' | 'teammate' | 'assistant' | 'board' | 'repository', boardId?: string) => {
       if (boardId) navigation.goToBoard(boardId);
       setNewBranchDefaultPosition(null);
-      setCreateDialogDefaultTab(tab || 'assistant');
+      setCreateDialogDefaultTab(tab || 'teammate');
       setCreateDialogOpen(true);
     },
     [navigation]
@@ -881,18 +881,18 @@ export const App: React.FC<AppProps> = ({
     }
   };
 
-  const handleCreateAssistant = async (
-    result: AssistantTabResult,
+  const handleCreateTeammate = async (
+    result: TeammateTabResult,
     progress?: CreateDialogProgress
   ) => {
     const repoId = result.repoId;
     if (!repoId || !onCreateBranch || !onUpdateBranch) {
-      throw new Error('Missing repository or branch creation handler for assistant creation.');
+      throw new Error('Missing repository or branch creation handler for AI teammate creation.');
     }
 
-    progress?.onStatusChange?.('Creating assistant branch…');
+    progress?.onStatusChange?.('Creating AI teammate branch…');
 
-    const branch = await createAssistantBranch(
+    const branch = await createTeammateBranch(
       {
         displayName: result.displayName,
         description: result.description,
@@ -906,7 +906,7 @@ export const App: React.FC<AppProps> = ({
 
     if (!branch) {
       throw new Error(
-        'Assistant branch could not be created. Please check the branch details and try again.'
+        'AI teammate branch could not be created. Please check the branch details and try again.'
       );
     }
 
@@ -914,7 +914,7 @@ export const App: React.FC<AppProps> = ({
       branch_id: branch.branch_id,
       agent: result.agent,
       title: `${result.emoji ? `${result.emoji} ` : ''}${result.displayName} bootstrap`,
-      initialPrompt: buildAssistantBootstrapPrompt({
+      initialPrompt: buildTeammateBootstrapPrompt({
         displayName: result.displayName,
         emoji: result.emoji,
         description: result.description,
@@ -934,7 +934,7 @@ export const App: React.FC<AppProps> = ({
       if (!onCreateSession) {
         throw new Error('Missing session creation handler.');
       }
-      const sessionId = await startAssistantBootstrapSession({
+      const sessionId = await startTeammateBootstrapSession({
         client,
         branchId: branch.branch_id,
         boardId: branch.board_id || currentBoardId,
@@ -945,9 +945,9 @@ export const App: React.FC<AppProps> = ({
       navigation.goToSession(sessionId);
       return;
     } catch (error) {
-      console.error('Assistant session bootstrap failed:', error);
+      console.error('AI teammate session bootstrap failed:', error);
       showWarning(
-        `Assistant branch was created, but the first session could not start: ${
+        `AI teammate branch was created, but the first session could not start: ${
           error instanceof Error ? error.message : String(error)
         }. Opening the branch instead.`,
         { key: 'assistant-bootstrap-session', duration: 8 }
@@ -955,9 +955,9 @@ export const App: React.FC<AppProps> = ({
     }
 
     // If the branch was created but the session failed, still take the user
-    // to the assistant branch so the created assistant is not lost. The
+    // to the assistant branch so the created AI teammate is not lost. The
     // top-level create-session handler surfaces the failure toast.
-    progress?.onStatusChange?.('Opening assistant branch…');
+    progress?.onStatusChange?.('Opening AI teammate branch…');
     navigation.goToBranch(branch.branch_id);
   };
 
@@ -1071,7 +1071,7 @@ export const App: React.FC<AppProps> = ({
   const sessionSettingsSession =
     useAgorStore(useMemo(() => makeSessionSelector(sessionSettingsId), [sessionSettingsId])) ??
     null;
-  const primaryAssistantId = currentBoard?.primary_assistant_id ?? null;
+  const primaryAssistantId = currentBoard?.primary_teammate_id ?? currentBoard?.primary_assistant_id ?? null;
   const primaryAssistantBranch = useAgorStore(
     useMemo(() => makeBranchSelector(primaryAssistantId), [primaryAssistantId])
   );
@@ -1507,7 +1507,7 @@ export const App: React.FC<AppProps> = ({
                         onClick={() => {
                           const center = sessionCanvasRef.current?.getViewportCenter();
                           setNewBranchDefaultPosition(center || null);
-                          setCreateDialogDefaultTab('assistant');
+                          setCreateDialogDefaultTab('teammate');
                           setCreateDialogOpen(true);
                         }}
                       />
@@ -1631,11 +1631,11 @@ export const App: React.FC<AppProps> = ({
           onDeleteGatewayChannel={onDeleteGatewayChannel}
           onUpdateArtifact={onUpdateArtifact}
           onDeleteArtifact={onDeleteArtifact}
-          onCreateAssistant={() => {
+          onCreateTeammate={() => {
             closeSettings();
             onSettingsClose?.();
             setNewBranchDefaultPosition(null);
-            setCreateDialogDefaultTab('assistant');
+            setCreateDialogDefaultTab('teammate');
             setCreateDialogOpen(true);
           }}
           branchStorageConfig={branchStorageConfig}
@@ -1686,7 +1686,7 @@ export const App: React.FC<AppProps> = ({
           open={createDialogOpen}
           onClose={() => {
             setCreateDialogOpen(false);
-            setCreateDialogDefaultTab('assistant');
+            setCreateDialogDefaultTab('teammate');
             setNewBranchDefaultPosition(null);
           }}
           defaultTab={createDialogDefaultTab}
@@ -1696,7 +1696,7 @@ export const App: React.FC<AppProps> = ({
           onCreateBoard={handleCreateBoardFromDialog}
           onCreateRepo={(data) => onCreateRepo?.(data)}
           onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
-          onCreateAssistant={handleCreateAssistant}
+          onCreateTeammate={handleCreateTeammate}
           availableAgents={availableAgents}
           currentUser={user}
           client={client}

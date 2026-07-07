@@ -442,6 +442,13 @@
       "when": 1782100000000,
       "tag": "0064_message_timestamp_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "6",
+      "when": 1782200000000,
+      "tag": "0065_primary_teammate_id",
+      "breakpoints": true
     }
   ]
 }

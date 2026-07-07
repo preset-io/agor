@@ -15,15 +15,15 @@ import { DownOutlined } from '@ant-design/icons';
 import { Collapse, Form, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { slugify } from '@/utils/repoSlug';
-import { useAssistantForm } from '../../../hooks/useAssistantForm';
+import { useTeammateForm } from '../../../hooks/useAssistantForm';
 import { useEnsureFrameworkRepo } from '../../../hooks/useEnsureFrameworkRepo';
 import type { AgenticToolOption } from '../../../types';
 import { AgenticToolConfigForm, getFormValuesFromConfig } from '../../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
-import { AssistantFormFields } from '../../forms/AssistantFormFields';
+import { TeammateFormFields } from '../../forms/AssistantFormFields';
 import type { ModelConfig } from '../../ModelSelector';
 
-export interface AssistantTabResult {
+export interface TeammateTabResult {
   displayName: string;
   description?: string;
   emoji?: string;
@@ -40,10 +40,10 @@ export interface AssistantTabResult {
   codexNetworkAccess?: boolean;
 }
 
-export interface AssistantTabProps {
+export interface TeammateTabProps {
   repoById: Map<string, Repo>;
   onValidityChange: (valid: boolean) => void;
-  formRef: React.MutableRefObject<(() => Promise<AssistantTabResult | null>) | null>;
+  formRef: React.MutableRefObject<(() => Promise<TeammateTabResult | null>) | null>;
   onCreateRepo?: (data: CreateRepoRequest) => unknown;
   availableAgents: AgenticToolOption[];
   mcpServerById?: Map<string, MCPServer>;
@@ -51,7 +51,7 @@ export interface AssistantTabProps {
   client?: AgorClient | null;
 }
 
-export const AssistantTab: React.FC<AssistantTabProps> = ({
+export const TeammateTab: React.FC<TeammateTabProps> = ({
   repoById,
   onValidityChange,
   formRef,
@@ -72,7 +72,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
     setCustomRepoSelected,
     validateForm,
     handleDisplayNameChange,
-  } = useAssistantForm(frameworkRepo);
+  } = useTeammateForm(frameworkRepo);
 
   useEffect(() => {
     if (!availableAgents.some((agent) => agent.id === selectedAgent) && availableAgents[0]?.id) {
@@ -106,7 +106,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent);
 
-      const result: AssistantTabResult = {
+      const result: TeammateTabResult = {
         displayName: values.displayName.trim(),
         description: values.description || undefined,
         emoji: values.emoji || undefined,
@@ -149,7 +149,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
       onFieldsChange={validateForm}
       initialValues={{ sourceBranch: 'main' }}
     >
-      <AssistantFormFields
+      <TeammateFormFields
         form={form}
         repos={repos}
         frameworkRepo={frameworkRepo}
@@ -215,3 +215,11 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({
     </Form>
   );
 };
+
+
+/** @deprecated Use TeammateTabResult instead. */
+export type AssistantTabResult = TeammateTabResult;
+/** @deprecated Use TeammateTabProps instead. */
+export type AssistantTabProps = TeammateTabProps;
+/** @deprecated Use TeammateTab instead. */
+export const AssistantTab = TeammateTab;

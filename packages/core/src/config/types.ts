@@ -990,9 +990,11 @@ export interface AgorCredentials {
  * Onboarding settings (consumed by UI wizard; may be set by existing installs)
  */
 export interface AgorOnboardingSettings {
-  /** Whether assistant setup is pending (set by existing installs, consumed by UI wizard) */
+  /** Whether AI teammate setup is pending (canonical key consumed by UI wizard) */
+  teammatePending?: boolean;
+  /** @deprecated Use teammatePending instead */
   assistantPending?: boolean;
-  /** @deprecated Use assistantPending instead */
+  /** @deprecated Use teammatePending instead */
   persistedAgentPending?: boolean;
   /** Clone URL for the framework repo */
   frameworkRepoUrl?: string;

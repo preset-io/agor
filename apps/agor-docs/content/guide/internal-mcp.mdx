@@ -16,7 +16,7 @@ heroImage: '/mcp_self_aware.png'
 
 **Anything a user can do in Agor, an agent can do too.** The same daemon that serves the UI's REST and WebSocket APIs also exposes a built-in **Model Context Protocol (MCP) server** — a structured automation surface that turns every session into a self-aware orchestrator.
 
-This is the foundational layer: [assistants](/guide/assistants), [scheduled prompts](/guide/scheduler), [cards](/guide/cards), [artifacts](/guide/artifacts), and the [message gateway](/guide/message-gateway) are all built on top of it.
+This is the foundational layer: [teammates](/guide/teammates), [scheduled prompts](/guide/scheduler), [cards](/guide/cards), [artifacts](/guide/artifacts), and the [message gateway](/guide/message-gateway) are all built on top of it.
 
 > **The other doorway:** if you're driving Agor from outside an agent — TS/JS scripts, custom dashboards, internal services — reach for the official [`@agor-live/client`](/guide/typescript-client) instead. Same daemon, same types, REST + Socket.IO + a reactive session API.
 
@@ -152,7 +152,7 @@ execution:
 ## Related Reading
 
 - [Sessions & Trees](/guide/sessions) — How agents spawn, fork, and ask side questions through MCP
-- [Assistants](/guide/assistants) — Long-lived agents that drive Agor through MCP
+- [Teammates](/guide/teammates) — Long-lived AI teammates that drive Agor through MCP
 - [Scheduler](/guide/scheduler) — Cron-style triggers that fire prompts via the same surface
 - [TypeScript Client](/guide/typescript-client) — The non-agent doorway: drive Agor from JS/TS apps, scripts, and services
 - [Architecture: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server)

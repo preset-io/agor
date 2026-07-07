@@ -54,7 +54,7 @@ import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
 import { ArtifactsTable } from './ArtifactsTable';
-import { AssistantsTable } from './AssistantsTable';
+import { TeammatesTable } from './AssistantsTable';
 import { BoardsTable } from './BoardsTable';
 import { BranchesTable } from './BranchesTable';
 import { CardsTable } from './CardsTable';
@@ -117,6 +117,8 @@ export interface SettingsModalProps {
   onDeleteGatewayChannel?: (channelId: string) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
+  onCreateTeammate?: () => void;
+  /** @deprecated Use onCreateTeammate instead. */
   onCreateAssistant?: () => void;
   branchStorageConfig?: BranchStorageConfig;
 }
@@ -153,6 +155,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onDeleteGatewayChannel,
   onUpdateArtifact,
   onDeleteArtifact,
+  onCreateTeammate,
   onCreateAssistant,
   branchStorageConfig,
 }) => {
@@ -246,8 +249,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             icon: <BranchesOutlined />,
           },
           {
-            key: 'assistants',
-            label: 'Assistants',
+            key: 'teammates',
+            label: 'Teammates',
             icon: <RobotOutlined />,
           },
           ...(cardsEnabled
@@ -400,9 +403,9 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             branchStorageConfig={branchStorageConfig}
           />
         );
-      case 'assistants':
+      case 'teammates':
         return (
-          <AssistantsTable
+          <TeammatesTable
             branchById={branchById}
             repoById={repoById}
             boardById={boardById}
@@ -410,7 +413,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             userById={userById}
             onArchiveOrDelete={onArchiveOrDeleteBranch}
             onRowClick={handleBranchRowClick}
-            onCreateAssistant={onCreateAssistant}
+            onCreateTeammate={onCreateTeammate ?? onCreateAssistant}
             onClose={onClose}
           />
         );

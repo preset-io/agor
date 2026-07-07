@@ -1,12 +1,12 @@
 import type { Branch, Repo } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
-import { createAssistantBranch } from './assistantCreation';
+import { createTeammateBranch } from './assistantCreation';
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
   return {
     repo_id: 'repo-1',
-    slug: 'preset-io/agor-assistant-framework',
-    name: 'agor-assistant-framework',
+    slug: 'preset-io/agor-teammate-framework',
+    name: 'agor-teammate-framework',
     default_branch: 'main',
     created_at: '2026-05-26T00:00:00.000Z',
     updated_at: '2026-05-26T00:00:00.000Z',
@@ -28,8 +28,8 @@ function makeBranch(overrides: Partial<Branch> = {}): Branch {
   } as Branch;
 }
 
-describe('createAssistantBranch', () => {
-  it('stores assistant identity, including emoji, in the initial branch create payload', async () => {
+describe('createTeammateBranch', () => {
+  it('stores teammate identity, including emoji, in the initial branch create payload', async () => {
     const repo = makeRepo();
     const branch = makeBranch({ board_id: 'board-1' });
     const onCreateBranch = vi.fn().mockResolvedValue(branch);
@@ -41,8 +41,8 @@ describe('createAssistantBranch', () => {
         icon: '🍍',
         objects: {},
       }),
-      ensureAssistantWelcomeNote: vi.fn().mockResolvedValue({}),
-      setPrimaryAssistant: vi.fn().mockResolvedValue({}),
+      ensureTeammateWelcomeNote: vi.fn().mockResolvedValue({}),
+      setPrimaryTeammate: vi.fn().mockResolvedValue({}),
     };
     const client = {
       service: vi.fn((name: string) => {
@@ -51,7 +51,7 @@ describe('createAssistantBranch', () => {
       }),
     };
 
-    await createAssistantBranch(
+    await createTeammateBranch(
       {
         displayName: 'Pineapple Helper',
         emoji: '🍍',
@@ -72,8 +72,8 @@ describe('createAssistantBranch', () => {
         name: 'private-pineapple-helper',
         boardId: 'board-1',
         custom_context: {
-          assistant: expect.objectContaining({
-            kind: 'assistant',
+          teammate: expect.objectContaining({
+            kind: 'teammate',
             displayName: 'Pineapple Helper',
             emoji: '🍍',
           }),
@@ -85,12 +85,12 @@ describe('createAssistantBranch', () => {
       name: "Pineapple Helper's Board",
       icon: '🍍',
     });
-    expect(boardsService.ensureAssistantWelcomeNote).toHaveBeenCalledWith({
+    expect(boardsService.ensureTeammateWelcomeNote).toHaveBeenCalledWith({
       boardId: 'board-1',
-      assistantName: 'Pineapple Helper',
-      assistantEmoji: '🍍',
+      teammateName: 'Pineapple Helper',
+      teammateEmoji: '🍍',
     });
-    expect(boardsService.setPrimaryAssistant).toHaveBeenCalledWith({
+    expect(boardsService.setPrimaryTeammate).toHaveBeenCalledWith({
       boardId: 'board-1',
       branchId: branch.branch_id,
     });

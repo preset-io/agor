@@ -514,7 +514,7 @@ export const boards = pgTable(
     // Materialized for lookups
     name: text('name').notNull(),
     slug: text('slug'),
-    primary_assistant_id: varchar('primary_assistant_id', { length: 36 }).references(
+    primary_teammate_id: varchar('primary_teammate_id', { length: 36 }).references(
       (): AnyPgColumn => branches.branch_id,
       {
         onDelete: 'set null',

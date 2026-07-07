@@ -16,7 +16,7 @@ A=composition/assets
 mkdir -p "$A/screenshots/marketing" "$A/tools" "$A/music"
 
 echo "==> Restoring screenshots from the docs site (../public) ..."
-cp "$PUB"/screenshots/{board-hero,conversation_full_page,scheduler-modal,mcp_environment,assistants-list}.png "$A/screenshots/"
+cp "$PUB"/screenshots/{board-hero,conversation_full_page,scheduler-modal,mcp_environment,teammates-list}.png "$A/screenshots/"
 cp "$PUB"/images/{knowledge-hero,artifacts-hero}.png "$A/screenshots/"
 cp "$PUB"/screenshots/marketing/{agor-marketing-facepile-tooltip,agor-marketing-cursor-indicator,agor-marketing-social-comment-context,agor-marketing-slack-thread}.png "$A/screenshots/marketing/"
 # Scene 4 uses a dimmed duplicate of the hero board (dimmed via CSS at runtime)

@@ -1,5 +1,5 @@
 import type { Board, Branch, Repo, Session, User } from '@agor-live/client';
-import { getAssistantConfig, isAssistant } from '@agor-live/client';
+import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import { Button, Empty, Input, Popover, Space, Table, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
@@ -11,7 +11,7 @@ import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
-interface AssistantsTableProps {
+interface TeammatesTableProps {
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
@@ -25,13 +25,13 @@ interface AssistantsTableProps {
     }
   ) => void;
   onRowClick?: (branch: Branch) => void;
-  onCreateAssistant?: () => void;
+  onCreateTeammate?: () => void;
   /** Close the parent Settings modal so the canvas isn't obscured by
    *  it after recenter. Wired by SettingsModal. */
   onClose?: () => void;
 }
 
-export const AssistantsTable: React.FC<AssistantsTableProps> = ({
+export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   branchById,
   repoById,
   boardById,
@@ -39,23 +39,23 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   userById,
   onArchiveOrDelete,
   onRowClick,
-  onCreateAssistant,
+  onCreateTeammate,
   onClose,
 }) => {
-  // Assistants ARE branches (just branches flagged via
-  // `custom_context.assistant`), so navigation reuses the `/w/<short>/`
-  // URL via `goToBranch` — no separate `/assistant/<short>/` route.
+  // Teammates ARE branches (just branches flagged via
+  // `custom_context.teammate`), so navigation reuses the `/w/<short>/`
+  // URL via `goToBranch` — no separate `/teammate/<short>/` route.
   // Reuses the `branchById` prop directly so we don't read the same
   // data twice (props + context).
   const navigation = useAppNavigation({ boardById, branchById });
 
   const handleRecenter = useCallback(
-    (assistant: Branch) => {
+    (teammate: Branch) => {
       // Close the modal first so the canvas isn't obscured. goToBranch
       // pushes `/w/<short>/`; the URL→state effect handles cross-board
       // switching + recenter.
       onClose?.();
-      navigation.goToBranch(assistant.branch_id);
+      navigation.goToBranch(teammate.branch_id);
     },
     [onClose, navigation]
   );
@@ -66,20 +66,20 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
 
-  const assistants = useMemo(() => {
+  const teammates = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    const assistantBranches = Array.from(branchById.values())
-      .filter((w) => !w.archived && isAssistant(w))
+    const teammateBranches = Array.from(branchById.values())
+      .filter((w) => !w.archived && isTeammate(w))
       .sort((a, b) => {
-        const nameA = getAssistantConfig(a)?.displayName ?? a.name;
-        const nameB = getAssistantConfig(b)?.displayName ?? b.name;
+        const nameA = getTeammateConfig(a)?.displayName ?? a.name;
+        const nameB = getTeammateConfig(b)?.displayName ?? b.name;
         return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
       });
 
-    if (!term) return assistantBranches;
+    if (!term) return teammateBranches;
 
-    return assistantBranches.filter((w) => {
-      const config = getAssistantConfig(w);
+    return teammateBranches.filter((w) => {
+      const config = getTeammateConfig(w);
       const repo = repoById.get(w.repo_id);
       const creator = userById.get(w.created_by);
       const haystacks = [
@@ -97,11 +97,11 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
 
   const columns = [
     {
-      title: 'Assistant',
-      key: 'assistant',
+      title: 'Teammate',
+      key: 'teammate',
       width: 220,
       render: (_: unknown, record: Branch) => {
-        const config = getAssistantConfig(record);
+        const config = getTeammateConfig(record);
         return (
           <Space>
             {config?.emoji ? (
@@ -191,7 +191,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
       render: (_: unknown, record: Branch) => (
         <SettingsActionGroup>
           {record.board_id && (
-            <Tooltip title="Center map on assistant">
+            <Tooltip title="Center map on teammate">
               <Button
                 type="text"
                 size="small"
@@ -203,7 +203,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
               />
             </Tooltip>
           )}
-          <Tooltip title="Edit assistant">
+          <Tooltip title="Edit teammate">
             <Button
               type="text"
               size="small"
@@ -215,7 +215,7 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
             />
           </Tooltip>
           <ArchiveActionButton
-            tooltip="Archive or delete assistant"
+            tooltip="Archive or delete teammate"
             onClick={() => {
               setSelectedBranch(record);
               setArchiveDeleteModalOpen(true);
@@ -234,13 +234,13 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
       >
         <Typography.Text type="secondary">
-          Assistants are persistent AI companions backed by a framework repo. They maintain memory,
+          Teammates are persistent AI companions backed by a framework repo. They maintain memory,
           orchestrate work across branches, and run on scheduled heartbeats.
         </Typography.Text>
         <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
           <Input
             allowClear
-            placeholder="Search assistants..."
+            placeholder="Search teammates..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{ maxWidth: token.sizeUnit * 40 }}
@@ -248,15 +248,15 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={onCreateAssistant}
-            disabled={!onCreateAssistant}
+            onClick={onCreateTeammate}
+            disabled={!onCreateTeammate}
           >
-            Create Assistant
+            Create AI teammate
           </Button>
         </Space>
       </Space>
 
-      {assistants.length === 0 && !searchTerm && (
+      {teammates.length === 0 && !searchTerm && (
         <div
           style={{
             display: 'flex',
@@ -267,18 +267,18 @@ export const AssistantsTable: React.FC<AssistantsTableProps> = ({
         >
           <Empty
             image={<RobotOutlined style={{ fontSize: 48, color: token.colorTextDisabled }} />}
-            description="No assistants yet"
+            description="No teammates yet"
           >
             <Typography.Text type="secondary">
-              Create an assistant to get started, or use the onboarding wizard.
+              Create an AI teammate to get started, or use the onboarding wizard.
             </Typography.Text>
           </Empty>
         </div>
       )}
 
-      {(assistants.length > 0 || searchTerm) && (
+      {(teammates.length > 0 || searchTerm) && (
         <Table
-          dataSource={assistants}
+          dataSource={teammates}
           columns={columns}
           rowKey="branch_id"
           pagination={{ pageSize: 10 }}

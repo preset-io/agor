@@ -4,7 +4,7 @@ import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 
-export interface AssistantFormFieldsProps {
+export interface TeammateFormFieldsProps {
   form: FormInstance;
   repos: Repo[];
   frameworkRepo: Repo | undefined;
@@ -17,13 +17,13 @@ export interface AssistantFormFieldsProps {
 }
 
 /**
- * Shared assistant form fields used by the CreateDialog Assistant tab.
+ * Shared teammate form fields used by the CreateDialog Teammate tab.
  *
- * Renders: Name + icon, assistant board advice Alert, Advanced collapse
+ * Renders: Name + icon, teammate board advice Alert, Advanced collapse
  * (Framework Repository, Branch Name, Source Branch).
  * Does NOT render a <Form> wrapper — the parent owns the form instance.
  */
-export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
+export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
   form,
   repos,
   frameworkRepo,
@@ -41,7 +41,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
 
   return (
     <>
-      <Form.Item label="Name" required tooltip="Human-friendly name and icon for this assistant">
+      <Form.Item label="Name" required tooltip="Human-friendly name and icon for this AI teammate">
         <Space.Compact style={{ display: 'flex' }}>
           <FormEmojiPickerInput form={form} fieldName="emoji" defaultEmoji="🤖" />
           <Form.Item
@@ -62,7 +62,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
       <Form.Item
         name="description"
         label="Description"
-        tooltip="What does this assistant do? Visible to other agents via MCP."
+        tooltip="What does this AI teammate do? Visible to other agents via MCP."
       >
         <Input.TextArea
           placeholder="e.g. Reviews PRs and provides feedback, Monitors CI/CD pipelines"
@@ -76,7 +76,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
         style={{ marginBottom: 16 }}
         title={
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Each assistant gets a fresh board and becomes that board&apos;s primary assistant.
+            Each AI teammate gets a fresh board and becomes that board&apos;s primary teammate.
           </Typography.Text>
         }
       />
@@ -92,7 +92,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
           title="Setting up framework repository"
           description={
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Cloning preset-io/agor-assistant. This usually takes 10-30 seconds.
+              Cloning preset-io/agor-teammate. This usually takes 10-30 seconds.
             </Typography.Text>
           }
         />
@@ -108,8 +108,8 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
             key: 'advanced',
             label: (
               <Space size={6}>
-                <Typography.Text type="secondary">Advanced Assistant Settings</Typography.Text>
-                <Tooltip title="Assistants live in an Agor branch. These settings control the framework repository, branch name, and source branch used to create that assistant branch.">
+                <Typography.Text type="secondary">Advanced Teammate Settings</Typography.Text>
+                <Tooltip title="Teammates live in an Agor branch. These settings control the framework repository, branch name, and source branch used to create that teammate branch.">
                   <InfoCircleOutlined style={{ color: 'var(--ant-color-text-tertiary)' }} />
                 </Tooltip>
               </Space>
@@ -149,9 +149,9 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
                     title="Custom repository selected"
                     description={
                       <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        The repository should be preset-io/agor-assistant or a fork/derivative. It
+                        The repository should be preset-io/agor-teammate or a fork/derivative. It
                         contains an OpenClaw-inspired agent framework adapted for Agor that your
-                        assistant needs to operate.
+                        teammate needs to operate. Legacy agor-assistant forks are still detected.
                       </Typography.Text>
                     }
                   />
@@ -168,7 +168,7 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
                   ]}
                   tooltip="Auto-generated from display name. Override if needed."
                 >
-                  <Input placeholder="private-my-assistant" />
+                  <Input placeholder="private-my-teammate" />
                 </Form.Item>
 
                 <Form.Item name="sourceBranch" label="Source Branch">
@@ -182,3 +182,9 @@ export const AssistantFormFields: React.FC<AssistantFormFieldsProps> = ({
     </>
   );
 };
+
+
+/** @deprecated Use TeammateFormFields instead. */
+export type AssistantFormFieldsProps = TeammateFormFieldsProps;
+/** @deprecated Use TeammateFormFields instead. */
+export const AssistantFormFields = TeammateFormFields;

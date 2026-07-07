@@ -1,20 +1,20 @@
 import type { Branch } from '@agor-live/client';
-import { getAssistantConfig } from '@agor-live/client';
+import { getTeammateConfig } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Space, Typography } from 'antd';
 import { EmojiPickerInput } from '../../EmojiPickerInput/EmojiPickerInput';
 import { Tag } from '../../Tag';
-import type { AssistantFormState } from '../useBranchModalForm';
+import type { TeammateFormState } from '../useBranchModalForm';
 
-interface AssistantTabProps {
+interface TeammateTabProps {
   branch: Branch;
   canEdit: boolean;
-  state: AssistantFormState;
-  setField: <K extends keyof AssistantFormState>(key: K, value: AssistantFormState[K]) => void;
+  state: TeammateFormState;
+  setField: <K extends keyof TeammateFormState>(key: K, value: TeammateFormState[K]) => void;
 }
 
-export const AssistantTab: React.FC<AssistantTabProps> = ({ branch, canEdit, state, setField }) => {
-  const config = getAssistantConfig(branch);
+export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state, setField }) => {
+  const config = getTeammateConfig(branch);
   if (!config) return null;
 
   return (
@@ -27,7 +27,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({ branch, canEdit, sta
             <RobotOutlined style={{ fontSize: 20 }} />
           )}
           <Typography.Text strong style={{ fontSize: 16 }}>
-            Assistant Configuration
+            Teammate Configuration
           </Typography.Text>
         </Space>
 
@@ -37,7 +37,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({ branch, canEdit, sta
             <Input
               value={state.displayName}
               onChange={(e) => setField('displayName', e.target.value)}
-              placeholder="Assistant display name"
+              placeholder="Teammate display name"
               disabled={!canEdit}
             />
           </Form.Item>
@@ -53,12 +53,12 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({ branch, canEdit, sta
             label="Description"
             labelCol={{ span: 6 }}
             wrapperCol={{ span: 18 }}
-            tooltip="What does this assistant do? Visible to other agents via MCP."
+            tooltip="What does this AI teammate do? Visible to other agents via MCP."
           >
             <Input.TextArea
               value={state.description}
               onChange={(e) => setField('description', e.target.value)}
-              placeholder="What does this assistant do?"
+              placeholder="What does this AI teammate do?"
               rows={2}
               disabled={!canEdit}
             />
@@ -89,3 +89,7 @@ export const AssistantTab: React.FC<AssistantTabProps> = ({ branch, canEdit, sta
     </div>
   );
 };
+
+
+/** @deprecated Use TeammateTab instead. */
+export const AssistantTab = TeammateTab;

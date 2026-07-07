@@ -67,7 +67,7 @@ _The board: branches as cards, zones as regions, agent sessions, and — optiona
   model/effort selectors, completion chimes. The terminal experience, in the browser.
 - **MCP-native** — Agor exposes itself over MCP; sessions are auto-issued a token, so agents fork,
   spawn, schedule, and report on their own work.
-- **Long-lived assistants** — persistent coworkers, each with a Knowledge-base namespace for
+- **Long-lived AI teammates** — persistent coworkers, each with a Knowledge-base namespace for
   durable, searchable memory, plus skills and schedules. They collaborate with the team and with
   each other, beyond one-off sessions.
 - **Multiplayer when you want it** — live cursors, comments, and shared sessions/environments for
@@ -120,14 +120,14 @@ Agor is built on three foundational entities — everything else builds on these
 
 |                                                                           |                                                                                                                                                                                                                                                                                       |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **[Assistants](https://agor.live/guide/assistants)**                      | Long-lived AI coworkers, each with its own Knowledge-base namespace for durable, semantically searchable memory — shared with the team and able to collaborate with other assistants. Taught conversationally, then equipped with skills, MCP tools, gateway channels, and schedules. |
+| **[Teammates](https://agor.live/guide/teammates)**                      | Long-lived AI coworkers, each with its own Knowledge-base namespace for durable, semantically searchable memory — shared with the team and able to collaborate with other teammates. Taught conversationally, then equipped with skills, MCP tools, gateway channels, and schedules. |
 | **[Agor MCP Server](https://agor.live/guide/internal-mcp)**               | Agor exposes itself over MCP. Agents introspect sessions, branches, and boards, and drive the system themselves.                                                                                                                                                                      |
 | **[Multiplayer & Social](https://agor.live/guide/multiplayer-social)**    | Live cursors, facepiles, spatial comments, and a shared multiplayer terminal.                                                                                                                                                                                                         |
 | **[Rich Chat UX](https://agor.live/guide/rich-chat-ux)**                  | Per-prompt token + dollar accounting, model/effort selectors, structured tool blocks, completion chimes.                                                                                                                                                                              |
 | **[Environments](https://agor.live/guide/environment-configuration)**     | One-click dev servers per branch with auto-managed unique ports — no more port fights.                                                                                                                                                                                                |
 | **[Security & RBAC](https://agor.live/guide/multiplayer-unix-isolation)** | Branch-scoped permission tiers (ACLs), per-user credentials and env vars, and progressive Unix isolation (`simple` / `insulated` / `strict`).                                                                                                                                         |
 | **[Knowledge](https://agor.live/guide/knowledge)**                        | A shared, searchable markdown knowledge base — one place for decisions, runbooks, prompts, and agent memory.                                                                                                                                                                          |
-| **[Scheduler](https://agor.live/guide/scheduler)**                        | Cron-style triggers for templated prompts. Powers assistant heartbeats, standups, and automated audits.                                                                                                                                                                               |
+| **[Scheduler](https://agor.live/guide/scheduler)**                        | Cron-style triggers for templated prompts. Powers teammate heartbeats, standups, and automated audits.                                                                                                                                                                               |
 | **[Message Gateway](https://agor.live/guide/message-gateway)**            | Slack and GitHub as portals into Agor sessions.                                                                                                                                                                                                                                       |
 | **[Artifacts](https://agor.live/guide/artifacts)**                        | Live, interactive apps (dashboards, mockups, tools) rendered directly on the board.                                                                                                                                                                                                   |
 | **[Cards](https://agor.live/guide/cards)** (Beta)                         | Generic workflow entities for non-code workflows.                                                                                                                                                                                                                                     |
@@ -150,8 +150,8 @@ Agor is built on three foundational entities — everything else builds on these
     </tr>
     <tr>
       <td width="50%">
-        <img src="apps/agor-docs/public/screenshots/assistants-list.png" alt="Persistent assistants list"/>
-        <p align="center"><em>Persistent assistants with memory and skills</em></p>
+        <img src="apps/agor-docs/public/screenshots/teammates-list.png" alt="Persistent AI teammates list"/>
+        <p align="center"><em>Persistent AI teammates with memory and skills</em></p>
       </td>
       <td width="50%">
         <img src="apps/agor-docs/public/screenshots/mcp_environment.png" alt="MCP-native control surface"/>

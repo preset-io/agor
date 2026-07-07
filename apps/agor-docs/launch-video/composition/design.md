@@ -27,7 +27,7 @@ or substitute fonts.
 ## Typography
 
 - **Display:** system sans / Inter, weight **800–900**, very tight tracking **-0.05em**.
-  Mirrors agor.live's `Meet your team of AI assistants.` headline. Big and confident.
+  Mirrors agor.live's `Meet your AI teammates.` headline. Big and confident.
 - **Body / captions:** same family, weight 500–600, normal tracking.
 - **Terminal (scene 1):** a monospace family (ui-monospace / "SF Mono" / Menlo).
 - `font-variant-numeric: tabular-nums` on any numbers.

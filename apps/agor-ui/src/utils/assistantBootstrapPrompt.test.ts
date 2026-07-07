@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildAssistantBootstrapPrompt,
-  buildAssistantBootstrapPromptContext,
+  buildTeammateBootstrapPrompt,
+  buildTeammateBootstrapPromptContext,
 } from './assistantBootstrapPrompt';
 
-describe('buildAssistantBootstrapPrompt', () => {
-  it('formats assistant identity params without browser-side Handlebars rendering', () => {
-    const prompt = buildAssistantBootstrapPrompt({
+describe('buildTeammateBootstrapPrompt', () => {
+  it('formats teammate identity params without browser-side Handlebars rendering', () => {
+    const prompt = buildTeammateBootstrapPrompt({
       displayName: 'PR Reviewer',
       emoji: '🧐',
       description: 'Reviews pull requests',
@@ -14,9 +14,9 @@ describe('buildAssistantBootstrapPrompt', () => {
       userEmail: 'max@example.com',
     });
 
-    expect(prompt).toContain('### First boot instructions for Agor Assistant');
-    expect(prompt).toContain('- Assistant: PR Reviewer 🧐');
-    expect(prompt).toContain('- Assistant description: Reviews pull requests');
+    expect(prompt).toContain('### First boot instructions for Agor AI teammate');
+    expect(prompt).toContain('- AI teammate: PR Reviewer 🧐');
+    expect(prompt).toContain('- AI teammate description: Reviews pull requests');
     expect(prompt).toContain('- User: Max <max@example.com>');
     expect(prompt).toContain('- User: Max <max@example.com>\n\nRead BOOTSTRAP.md');
     expect(prompt).toContain('ask only the next useful questions');
@@ -25,11 +25,11 @@ describe('buildAssistantBootstrapPrompt', () => {
   });
 
   it('normalizes fallback identity values in the prompt context', () => {
-    const context = buildAssistantBootstrapPromptContext({ displayName: '  ', emoji: null });
+    const context = buildTeammateBootstrapPromptContext({ displayName: '  ', emoji: null });
 
     expect(context).toEqual({
-      assistant: {
-        displayName: 'My Assistant',
+      teammate: {
+        displayName: 'My Teammate',
         emoji: '🤖',
       },
       firstSession: true,
@@ -37,9 +37,9 @@ describe('buildAssistantBootstrapPrompt', () => {
   });
 
   it('omits optional user and description lines when absent', () => {
-    const prompt = buildAssistantBootstrapPrompt({ displayName: 'Board Bot', emoji: '🧭' });
+    const prompt = buildTeammateBootstrapPrompt({ displayName: 'Board Bot', emoji: '🧭' });
 
-    expect(prompt).toContain('- Assistant: Board Bot 🧭');
+    expect(prompt).toContain('- AI teammate: Board Bot 🧭');
     expect(prompt).not.toContain('Assistant description:');
     expect(prompt).not.toContain('- User:');
     expect(prompt).not.toContain('- User email:');

@@ -1,5 +1,5 @@
 import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
-import { getAssistantConfig, isAssistant } from '@agor-live/client';
+import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
@@ -181,14 +181,14 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
     if (primaryAssistantBranch || primaryAssistantInaccessible) return [];
 
     return Array.from(branchById.values())
-      .filter((branch) => isAssistant(branch) && !branch.archived)
+      .filter((branch) => isTeammate(branch) && !branch.archived)
       .sort((a, b) => {
-        const aConfig = getAssistantConfig(a);
-        const bConfig = getAssistantConfig(b);
+        const aConfig = getTeammateConfig(a);
+        const bConfig = getTeammateConfig(b);
         return (aConfig?.displayName ?? a.name).localeCompare(bConfig?.displayName ?? b.name);
       })
       .map((branch) => {
-        const config = getAssistantConfig(branch);
+        const config = getTeammateConfig(branch);
         const repo = repoById.get(branch.repo_id);
         const label = config?.displayName ?? branch.name;
         return {
@@ -226,14 +226,14 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
           board_id: board.board_id,
         });
       }
-      await client.service('boards').setPrimaryAssistant({
+      await client.service('boards').setPrimaryTeammate({
         boardId: board.board_id,
         branchId: selectedAssistantId,
       });
-      message.success('Assistant assigned');
+      message.success('Teammate assigned');
     } catch (error) {
       message.error(
-        `Failed to assign assistant: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to assign teammate: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
       setAssigningAssistant(false);
@@ -248,7 +248,7 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
 
   const assistantContent = (() => {
     if (primaryAssistantBranch && primaryAssistantRepo) {
-      const assistantConfig = getAssistantConfig(primaryAssistantBranch);
+      const assistantConfig = getTeammateConfig(primaryAssistantBranch);
       const assistantDescription = primaryAssistantBranch.notes?.trim();
       const isCreating = primaryAssistantBranch.filesystem_status === 'creating';
 
@@ -294,7 +294,7 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
                   {assistantConfig?.displayName ?? primaryAssistantBranch.name}
                 </Typography.Title>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Primary assistant
+                  Primary teammate
                 </Typography.Text>
               </div>
             </div>
@@ -380,8 +380,8 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
           <Alert
             type="info"
             showIcon
-            message="Assistant unavailable"
-            description="This board has a primary assistant, but you do not have access to that assistant branch."
+            message="Teammate unavailable"
+            description="This board has a primary teammate, but you do not have access to that teammate branch."
           />
         </div>
       );
@@ -393,16 +393,16 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={
             <Typography.Text type="secondary">
-              This board does not have a primary assistant yet.
+              This board does not have a primary teammate yet.
             </Typography.Text>
           }
           style={{ padding: '24px 0 16px' }}
         />
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-          <Typography.Text strong>Assign an existing assistant</Typography.Text>
+          <Typography.Text strong>Assign an existing teammate</Typography.Text>
           <Select
             showSearch
-            placeholder="Select an assistant"
+            placeholder="Select a teammate"
             value={selectedAssistantId}
             onChange={setSelectedAssistantId}
             options={assistantOptions}
@@ -412,7 +412,7 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
           />
           {assistantOptions.length === 0 && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              No existing assistants are available to assign.
+              No existing teammates are available to assign.
             </Typography.Text>
           )}
           <Button
@@ -443,7 +443,7 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
         items={[
           {
             key: 'assistant',
-            label: 'Assistant',
+            label: 'Teammate',
             children: (
               <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
                 {assistantContent}

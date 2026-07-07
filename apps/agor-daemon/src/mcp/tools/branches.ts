@@ -11,7 +11,7 @@ import type {
   UUID,
   ZoneBoardObject,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS, getAssistantConfig, isAssistant } from '@agor/core/types';
+import { BRANCH_PERMISSION_LEVELS, getTeammateConfig, isTeammate } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -58,12 +58,12 @@ const CLEANUP_CANDIDATE_FILESYSTEM_STATUSES = [
 ] as const satisfies readonly CleanupCandidateFilesystemStatus[];
 const CLEANUP_CANDIDATE_STORAGE_MODES = ['worktree', 'clone'] as const;
 
-function containsAssistantKnowledgeConfigMutation(customContext: unknown): boolean {
+function containsTeammateKnowledgeConfigMutation(customContext: unknown): boolean {
   if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
     return false;
   }
   const record = customContext as Record<string, unknown>;
-  for (const key of ['assistant', 'agent']) {
+  for (const key of ['teammate', 'assistant', 'agent']) {
     const value = record[key];
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       if (Object.hasOwn(value as Record<string, unknown>, 'kb')) return true;
@@ -111,7 +111,7 @@ function notesPreview(notes: string | undefined, maxLength = 200): string | null
   return `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
-async function shouldScopeAssistantDiscoveryToUser(ctx: McpContext): Promise<boolean> {
+async function shouldScopeTeammateDiscoveryToUser(ctx: McpContext): Promise<boolean> {
   if (!isBranchRbacEnabled()) return false;
   if (ctx.authenticatedUser?._isServiceAccount) return false;
 
@@ -240,7 +240,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'Safely inventory archived branch worktrees that may be candidates for disk cleanup. ' +
         'Read-only: never deletes or mutates anything. This tool ALWAYS restricts results to archived branches, ' +
         'defaults to branches archived more than 7 days ago, excludes filesystem_status="deleted", ' +
-        'and excludes assistant/private branches by default. It returns repo metadata, archive timestamps, ' +
+        'and excludes teammate/private branches by default. It returns repo metadata, archive timestamps, ' +
         'filesystem/storage status, path, and a path_exists boolean computed from the recorded branch path only.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
@@ -269,10 +269,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .enum(CLEANUP_CANDIDATE_STORAGE_MODES)
           .optional()
           .describe('Filter by branch storage mode ("worktree" or "clone").'),
+        excludeTeammates: z
+          .boolean()
+          .optional()
+          .describe('Exclude long-lived teammate branches. Default: true.'),
         excludeAssistants: z
           .boolean()
           .optional()
-          .describe('Exclude long-lived assistant branches. Default: true.'),
+          .describe('Deprecated alias for excludeTeammates.'),
         excludePrivate: z
           .boolean()
           .optional()
@@ -302,7 +306,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             ? [args.filesystemStatus]
             : [...CLEANUP_CANDIDATE_DEFAULT_FILESYSTEM_STATUSES])
       );
-      const excludeAssistants = args.excludeAssistants ?? true;
+      const excludeTeammates = args.excludeTeammates ?? args.excludeAssistants ?? true;
       const excludePrivate = args.excludePrivate ?? true;
       const limit = args.limit ?? 50;
       const skip = args.skip ?? 0;
@@ -352,7 +356,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           if (args.storageMode && (branch.storage_mode ?? 'worktree') !== args.storageMode) {
             return false;
           }
-          if (excludeAssistants && isAssistant(branch)) return false;
+          if (excludeTeammates && isTeammate(branch)) return false;
           if (excludePrivate && branch.others_can === 'none') return false;
           if (args.pathExists !== undefined && pathExists !== args.pathExists) return false;
           return true;
@@ -376,7 +380,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         pull_request_url: branch.pull_request_url ?? null,
         issue_url: branch.issue_url ?? null,
         notes_preview: notesPreview(branch.notes),
-        is_assistant: isAssistant(branch),
+        is_teammate: isTeammate(branch),
+        is_assistant: isTeammate(branch),
         is_private: branch.others_can === 'none',
       }));
 
@@ -393,7 +398,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           archived_older_than_days:
             cutoff.source === 'archivedOlderThanDays' ? cutoff.olderThanDays : null,
           filesystem_statuses: [...statuses],
-          exclude_assistants: excludeAssistants,
+          exclude_teammates: excludeTeammates,
+          exclude_assistants: excludeTeammates,
           exclude_private: excludePrivate,
           path_exists_filter: args.pathExists ?? null,
         },
@@ -845,9 +851,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         updates.board_id = boardIdStr ? await resolveBoardId(ctx, boardIdStr) : null;
       }
       if (args.customContext !== undefined) {
-        if (containsAssistantKnowledgeConfigMutation(args.customContext)) {
+        if (containsTeammateKnowledgeConfigMutation(args.customContext)) {
           throw new Error(
-            'Assistant Knowledge namespace configuration cannot be changed through MCP. Use the BranchModal Knowledge tab or API-only assistant Knowledge config endpoint.'
+            'Teammate Knowledge namespace configuration cannot be changed through MCP. Use the BranchModal Knowledge tab or API-only teammate Knowledge config endpoint.'
           );
         }
         fieldsProvided++;
@@ -1355,52 +1361,65 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
-  // Tool 9: agor_assistants_list
+  const listTeammatesHandler = async (args: { repoId?: string; limit?: number }) => {
+    const limit = args.limit || 200;
+    const repoId = args.repoId ? await resolveRepoId(ctx, args.repoId) : undefined;
+
+    const branchRepo = new BranchRepository(ctx.db);
+    const teammates = await branchRepo.findTeammateBranches({
+      archived: false,
+      ...(repoId ? { repo_id: repoId as UUID } : {}),
+      ...((await shouldScopeTeammateDiscoveryToUser(ctx)) ? { userId: ctx.userId as UUID } : {}),
+      limit,
+    });
+
+    const shaped = teammates.map((w) => {
+      const config = getTeammateConfig(w);
+      return {
+        branch_id: w.branch_id,
+        name: w.name,
+        display_name: config?.displayName ?? w.name,
+        emoji: config?.emoji,
+        description: w.notes || null,
+        board_id: w.board_id || null,
+        repo_id: w.repo_id,
+        last_used: w.last_used,
+      };
+    });
+
+    return textResult({
+      total: shaped.length,
+      teammates: shaped,
+      assistants: shaped,
+    });
+  };
+
+  // Tool 9: agor_teammates_list
+  server.registerTool(
+    'agor_teammates_list',
+    {
+      description:
+        "List all teammates (long-lived AI teammates with schedules). Returns each teammate's name, description, schedule status, and last activity timestamp. Use this to discover other teammates on the platform.",
+      annotations: { readOnlyHint: true },
+      inputSchema: z.object({
+        repoId: mcpOptionalId('repoId', 'Repository', 'Filter teammates by repository ID'),
+        limit: mcpLimit(200),
+      }),
+    },
+    listTeammatesHandler
+  );
+
   server.registerTool(
     'agor_assistants_list',
     {
       description:
-        "List all assistants (long-lived agents with schedules). Returns each assistant's name, description, schedule status, and last activity timestamp. Use this to discover other assistants on the platform.",
+        'Deprecated alias for agor_teammates_list. Assistants are now called teammates.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
-        repoId: mcpOptionalId('repoId', 'Repository', 'Filter assistants by repository ID'),
+        repoId: mcpOptionalId('repoId', 'Repository', 'Filter teammates by repository ID'),
         limit: mcpLimit(200),
       }),
     },
-    async (args) => {
-      const limit = args.limit || 200;
-      const repoId = args.repoId ? await resolveRepoId(ctx, args.repoId) : undefined;
-
-      const branchRepo = new BranchRepository(ctx.db);
-      const assistants = await branchRepo.findAssistantBranches({
-        archived: false,
-        ...(repoId ? { repo_id: repoId as UUID } : {}),
-        ...((await shouldScopeAssistantDiscoveryToUser(ctx)) ? { userId: ctx.userId as UUID } : {}),
-        limit,
-      });
-
-      // Per-branch schedule fields are now in the first-class `schedules`
-      // table; consumers should call `agor_schedules_list({branchId})`
-      // for that. This tool keeps the assistant-discovery shape lean and
-      // omits the (now-multiplexed) schedule summary.
-      const shaped = assistants.map((w) => {
-        const config = getAssistantConfig(w);
-        return {
-          branch_id: w.branch_id,
-          name: w.name,
-          display_name: config?.displayName ?? w.name,
-          emoji: config?.emoji,
-          description: w.notes || null,
-          board_id: w.board_id || null,
-          repo_id: w.repo_id,
-          last_used: w.last_used,
-        };
-      });
-
-      return textResult({
-        total: shaped.length,
-        assistants: shaped,
-      });
-    }
+    listTeammatesHandler
   );
 }

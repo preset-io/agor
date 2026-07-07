@@ -6,7 +6,7 @@
 
 import type {
   Artifact,
-  AssistantWelcomeNoteRequest,
+  TeammateWelcomeNoteRequest,
   AuthenticationResult,
   Board,
   BoardExportBlob,
@@ -415,19 +415,28 @@ export interface BoardsService extends AgorService<Board> {
   ): Promise<Board>;
 
   /**
-   * Set or clear the board's primary assistant branch.
+   * Set or clear the board's primary teammate branch.
    */
+  setPrimaryTeammate(
+    data: { id?: string; boardId?: string; branchId: string },
+    params?: Params
+  ): Promise<Board>;
+  clearPrimaryTeammate(boardId: string, params?: Params): Promise<Board>;
+
+  /**
+   * Create the bundled teammate welcome markdown note when missing. Rendering
+   * happens server-side from a static template; callers only provide values.
+   */
+  ensureTeammateWelcomeNote(data: TeammateWelcomeNoteRequest, params?: Params): Promise<Board>;
+  /** @deprecated Use setPrimaryTeammate instead. */
   setPrimaryAssistant(
     data: { id?: string; boardId?: string; branchId: string },
     params?: Params
   ): Promise<Board>;
+  /** @deprecated Use clearPrimaryTeammate instead. */
   clearPrimaryAssistant(boardId: string, params?: Params): Promise<Board>;
-
-  /**
-   * Create the bundled assistant welcome markdown note when missing. Rendering
-   * happens server-side from a static template; callers only provide values.
-   */
-  ensureAssistantWelcomeNote(data: AssistantWelcomeNoteRequest, params?: Params): Promise<Board>;
+  /** @deprecated Use ensureTeammateWelcomeNote instead. */
+  ensureAssistantWelcomeNote(data: TeammateWelcomeNoteRequest, params?: Params): Promise<Board>;
 }
 
 /**
@@ -462,9 +471,14 @@ export interface BranchesService extends AgorService<Branch> {
   ): Promise<{ unixGroup: string }>;
 
   /**
-   * Create or repair the primary Knowledge namespace for an assistant branch.
-   * API/UI-only; not exposed through assistant MCP config mutation tools.
+   * Create or repair the primary Knowledge namespace for a teammate branch.
+   * API/UI-only; not exposed through teammate MCP config mutation tools.
    */
+  ensureTeammateKnowledgeNamespace(
+    data: { branchId?: string; branch_id?: string } | string,
+    params?: Params
+  ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }>;
+  /** @deprecated Use ensureTeammateKnowledgeNamespace instead. */
   ensureAssistantKnowledgeNamespace(
     data: { branchId?: string; branch_id?: string } | string,
     params?: Params
@@ -623,6 +637,9 @@ function extendBoardsService(client: AgorClient): void {
         'toYaml',
         'fromYaml',
         'clone',
+        'setPrimaryTeammate',
+        'clearPrimaryTeammate',
+        'ensureTeammateWelcomeNote',
         'setPrimaryAssistant',
         'clearPrimaryAssistant',
         'ensureAssistantWelcomeNote'
@@ -841,6 +858,7 @@ function extendBranchesService(client: AgorClient): void {
     branchesService.methods(
       'updateEnvironment',
       'initializeUnixGroup',
+      'ensureTeammateKnowledgeNamespace',
       'ensureAssistantKnowledgeNamespace'
     );
   }

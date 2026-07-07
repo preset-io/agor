@@ -29,8 +29,14 @@ vi.mock('../server.js', () => ({
 
 vi.mock('@agor/core/types', () => ({
   buildKnowledgeDocumentUri: (id: string) => `agor://kb/document/${id}`,
-  getAssistantConfig: (branch: { assistant?: unknown }) => branch.assistant,
-  isAssistant: (branch: { assistant?: unknown }) => Boolean(branch.assistant),
+  getTeammateConfig: (branch: { teammate?: unknown; assistant?: unknown }) =>
+    branch.teammate ?? branch.assistant,
+  getAssistantConfig: (branch: { teammate?: unknown; assistant?: unknown }) =>
+    branch.teammate ?? branch.assistant,
+  isTeammate: (branch: { teammate?: unknown; assistant?: unknown }) =>
+    Boolean(branch.teammate ?? branch.assistant),
+  isAssistant: (branch: { teammate?: unknown; assistant?: unknown }) =>
+    Boolean(branch.teammate ?? branch.assistant),
   KNOWLEDGE_DOCUMENT_KINDS: ['doc', 'note'],
   KNOWLEDGE_DOCUMENT_STATUSES: ['draft', 'published'],
   KNOWLEDGE_DOCUMENT_URI_PREFIX: 'agor://kb/document/',

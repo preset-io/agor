@@ -484,7 +484,7 @@ function AppContent() {
     branchId: string;
     sessionId: string;
     boardId: string;
-    path: 'assistant' | 'own-repo';
+    path: 'teammate' | 'assistant' | 'own-repo';
   }) => {
     setOnboardingWizardOpen(false);
 
@@ -509,10 +509,10 @@ function AppContent() {
       { silent: true }
     ).catch(() => {});
 
-    // Clear the assistant pending flag if applicable
-    if (result.path === 'assistant' && client) {
+    // Clear the AI teammate pending flag if applicable
+    if ((result.path === 'teammate' || result.path === 'assistant') && client) {
       try {
-        await client.service('config').patch(null, { onboarding: { assistantPending: false } });
+        await client.service('config').patch(null, { onboarding: { teammatePending: false } });
       } catch {
         // Non-critical — ignore
       }
@@ -1776,7 +1776,7 @@ function AppContent() {
             }
           }}
           assistantPending={
-            onboardingConfig?.assistantPending ?? onboardingConfig?.persistedAgentPending
+            onboardingConfig?.teammatePending ?? onboardingConfig?.assistantPending ?? onboardingConfig?.persistedAgentPending
           }
           frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
         />

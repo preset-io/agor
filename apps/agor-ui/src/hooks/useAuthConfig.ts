@@ -32,8 +32,10 @@ interface SystemCredentials {
 }
 
 interface OnboardingConfig {
+  teammatePending?: boolean;
+  /** @deprecated Use teammatePending instead */
   assistantPending?: boolean;
-  /** @deprecated Use assistantPending instead */
+  /** @deprecated Use teammatePending instead */
   persistedAgentPending?: boolean;
   frameworkRepoUrl?: string;
   systemCredentials?: SystemCredentials;

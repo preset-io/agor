@@ -9,7 +9,7 @@ export const SETTINGS_SECTIONS = [
   'boards',
   'repos',
   'branches',
-  'assistants',
+  'teammates',
   'cards',
   'artifacts',
   'mcp',
@@ -68,7 +68,8 @@ export function useSettingsRoute() {
       };
     }
 
-    const [, section, itemId] = settingsMatch;
+    const [, rawSection, itemId] = settingsMatch;
+    const section = rawSection === 'assistants' ? 'teammates' : rawSection;
 
     // Validate and normalize section
     const normalizedSection: SettingsSection = SETTINGS_SECTIONS.includes(

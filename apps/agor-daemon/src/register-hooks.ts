@@ -3087,17 +3087,29 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       fromBlob: [requireMinimumRole(ROLES.MEMBER, 'import boards')],
       fromYaml: [requireMinimumRole(ROLES.MEMBER, 'import boards')],
       clone: [requireMinimumRole(ROLES.MEMBER, 'clone boards'), ensureCanViewBoard('clone boards')],
+      setPrimaryTeammate: [
+        requireMinimumRole(ROLES.MEMBER, 'set primary teammate'),
+        ensureCanMutateBoard('set primary teammate'),
+      ],
+      clearPrimaryTeammate: [
+        requireMinimumRole(ROLES.MEMBER, 'clear primary teammate'),
+        ensureCanMutateBoard('clear primary teammate'),
+      ],
+      ensureTeammateWelcomeNote: [
+        requireMinimumRole(ROLES.MEMBER, 'create teammate welcome note'),
+        ensureCanMutateBoard('create teammate welcome note'),
+      ],
       setPrimaryAssistant: [
-        requireMinimumRole(ROLES.MEMBER, 'set primary assistant'),
-        ensureCanMutateBoard('set primary assistant'),
+        requireMinimumRole(ROLES.MEMBER, 'set primary teammate'),
+        ensureCanMutateBoard('set primary teammate'),
       ],
       clearPrimaryAssistant: [
-        requireMinimumRole(ROLES.MEMBER, 'clear primary assistant'),
-        ensureCanMutateBoard('clear primary assistant'),
+        requireMinimumRole(ROLES.MEMBER, 'clear primary teammate'),
+        ensureCanMutateBoard('clear primary teammate'),
       ],
       ensureAssistantWelcomeNote: [
-        requireMinimumRole(ROLES.MEMBER, 'create assistant welcome note'),
-        ensureCanMutateBoard('create assistant welcome note'),
+        requireMinimumRole(ROLES.MEMBER, 'create teammate welcome note'),
+        ensureCanMutateBoard('create teammate welcome note'),
       ],
     },
     after: {
@@ -3200,6 +3212,43 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
+      setPrimaryTeammate: [
+        clearRealtimeBranchVisibility,
+        async (context: HookContext<Board>) => {
+          if (context.result) {
+            app.service('boards').emit('patched', context.result);
+          }
+          return context;
+        },
+      ],
+      clearPrimaryTeammate: [
+        clearRealtimeBranchVisibility,
+        async (context: HookContext<Board>) => {
+          if (context.result) {
+            app.service('boards').emit('patched', context.result);
+          }
+          return context;
+        },
+      ],
+      ensureTeammateWelcomeNote: [
+        clearRealtimeBranchVisibility,
+        async (context: HookContext<Board>) => {
+          const teammateWelcomeNoteMutated = (
+            context.params as typeof context.params & {
+              teammateWelcomeNoteMutated?: boolean;
+              assistantWelcomeNoteMutated?: boolean;
+            }
+          );
+          if (
+            context.result &&
+            (teammateWelcomeNoteMutated.teammateWelcomeNoteMutated ||
+              teammateWelcomeNoteMutated.assistantWelcomeNoteMutated)
+          ) {
+            app.service('boards').emit('patched', context.result);
+          }
+          return context;
+        },
+      ],
       setPrimaryAssistant: [
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
@@ -3221,12 +3270,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ensureAssistantWelcomeNote: [
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
-          const assistantWelcomeNoteMutated = (
+          const welcomeNoteMutated = (
             context.params as typeof context.params & {
+              teammateWelcomeNoteMutated?: boolean;
               assistantWelcomeNoteMutated?: boolean;
             }
-          ).assistantWelcomeNoteMutated;
-          if (context.result && assistantWelcomeNoteMutated) {
+          );
+          if (
+            context.result &&
+            (welcomeNoteMutated.teammateWelcomeNoteMutated ||
+              welcomeNoteMutated.assistantWelcomeNoteMutated)
+          ) {
             app.service('boards').emit('patched', context.result);
           }
           return context;

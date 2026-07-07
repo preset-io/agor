@@ -1,4 +1,4 @@
-export interface AssistantBootstrapPromptInput {
+export interface TeammateBootstrapPromptInput {
   displayName: string;
   emoji?: string | null;
   description?: string | null;
@@ -6,8 +6,8 @@ export interface AssistantBootstrapPromptInput {
   userEmail?: string | null;
 }
 
-export interface AssistantBootstrapPromptContext {
-  assistant: {
+export interface TeammateBootstrapPromptContext {
+  teammate: {
     displayName: string;
     emoji: string;
     description?: string;
@@ -19,16 +19,16 @@ export interface AssistantBootstrapPromptContext {
   firstSession: true;
 }
 
-function formatAssistantBootstrapPrompt(context: AssistantBootstrapPromptContext): string {
+function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext): string {
   const lines = [
-    '### First boot instructions for Agor Assistant',
+    '### First boot instructions for Agor AI teammate',
     '',
     'Context:',
-    `- Assistant: ${context.assistant.displayName} ${context.assistant.emoji}`,
+    `- AI teammate: ${context.teammate.displayName} ${context.teammate.emoji}`,
   ];
 
-  if (context.assistant.description) {
-    lines.push(`- Assistant description: ${context.assistant.description}`);
+  if (context.teammate.description) {
+    lines.push(`- AI teammate description: ${context.teammate.description}`);
   }
 
   if (context.user?.name) {
@@ -41,25 +41,25 @@ function formatAssistantBootstrapPrompt(context: AssistantBootstrapPromptContext
 
   lines.push('');
   lines.push(
-    'Read BOOTSTRAP.md, then say hello and ask only the next useful questions to shape this assistant.'
+    'Read BOOTSTRAP.md, then say hello and ask only the next useful questions to shape this AI teammate.'
   );
 
   return lines.join('\n');
 }
 
-export function buildAssistantBootstrapPromptContext({
+export function buildTeammateBootstrapPromptContext({
   displayName,
   emoji,
   description,
   userName,
   userEmail,
-}: AssistantBootstrapPromptInput): AssistantBootstrapPromptContext {
+}: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
 
   return {
-    assistant: {
-      displayName: displayName.trim() || 'My Assistant',
+    teammate: {
+      displayName: displayName.trim() || 'My Teammate',
       emoji: emoji?.trim() || '🤖',
       ...(description?.trim() ? { description: description.trim() } : {}),
     },
@@ -76,14 +76,23 @@ export function buildAssistantBootstrapPromptContext({
 }
 
 /**
- * First prompt for a newly-created Assistant branch.
+ * First prompt for a newly-created AI teammate branch.
  *
  * Shared by onboarding, the board plus-button creation flow, and Settings →
- * Assistants creation. Keep this deterministic in the browser instead of
+ * Teammates creation. Keep this deterministic in the browser instead of
  * using the shared Handlebars renderer: browser-side Handlebars compilation
  * relies on `new Function`, which can violate CSP. Rich user-authored
  * template rendering should go through the daemon `/templates` service.
  */
-export function buildAssistantBootstrapPrompt(input: AssistantBootstrapPromptInput): string {
-  return formatAssistantBootstrapPrompt(buildAssistantBootstrapPromptContext(input));
+export function buildTeammateBootstrapPrompt(input: TeammateBootstrapPromptInput): string {
+  return formatTeammateBootstrapPrompt(buildTeammateBootstrapPromptContext(input));
 }
+
+/** @deprecated Use TeammateBootstrapPromptInput instead. */
+export type AssistantBootstrapPromptInput = TeammateBootstrapPromptInput;
+/** @deprecated Use TeammateBootstrapPromptContext instead. */
+export type AssistantBootstrapPromptContext = TeammateBootstrapPromptContext;
+/** @deprecated Use buildTeammateBootstrapPromptContext instead. */
+export const buildAssistantBootstrapPromptContext = buildTeammateBootstrapPromptContext;
+/** @deprecated Use buildTeammateBootstrapPrompt instead. */
+export const buildAssistantBootstrapPrompt = buildTeammateBootstrapPrompt;

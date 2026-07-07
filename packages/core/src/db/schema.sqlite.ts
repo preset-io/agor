@@ -502,7 +502,7 @@ export const boards = sqliteTable(
     // Materialized for lookups
     name: text('name').notNull(),
     slug: text('slug').unique(),
-    primary_assistant_id: text('primary_assistant_id', { length: 36 }).references(
+    primary_teammate_id: text('primary_teammate_id', { length: 36 }).references(
       (): AnySQLiteColumn => branches.branch_id,
       {
         onDelete: 'set null',

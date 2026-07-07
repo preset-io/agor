@@ -1,4 +1,4 @@
-import { isAssistant } from '@agor-live/client';
+import { isTeammate } from '@agor-live/client';
 import { useMemo } from 'react';
 import {
   EMPTY_RESULTS,
@@ -22,7 +22,7 @@ type UseRecentsInput = GlobalSearchEntityMaps & {
  * tables). Each section caps at RECENTS_SECTION_LIMIT.
  *
  * Coverage matches the live-search section set: sessions, branches,
- * assistants, artifacts, boards, MCP servers.
+ * teammates, artifacts, boards, MCP servers.
  */
 export function useRecents({
   currentUserId,
@@ -41,13 +41,13 @@ export function useRecents({
       .slice(0, RECENTS_SECTION_LIMIT);
 
     // Pre-sort all the user's branches once, then bucket into branch vs.
-    // assistant — preserves recency order within each sub-type without two
+    // teammate — preserves recency order within each sub-type without two
     // separate passes through the map.
     const myBranches = Array.from(branchById.values())
       .filter((b) => b.created_by === currentUserId)
       .sort(byTimestamp((b) => b.updated_at));
-    const branches = myBranches.filter((b) => !isAssistant(b)).slice(0, RECENTS_SECTION_LIMIT);
-    const assistants = myBranches.filter((b) => isAssistant(b)).slice(0, RECENTS_SECTION_LIMIT);
+    const branches = myBranches.filter((b) => !isTeammate(b)).slice(0, RECENTS_SECTION_LIMIT);
+    const teammates = myBranches.filter((b) => isTeammate(b)).slice(0, RECENTS_SECTION_LIMIT);
 
     const artifacts = Array.from(artifactById.values())
       .filter((a) => !a.archived)
@@ -74,7 +74,7 @@ export function useRecents({
         parentBranch: branchById.get(s.branch_id),
       })),
       branch: branches.map((b) => ({ type: 'branch' as const, item: b })),
-      assistant: assistants.map((b) => ({ type: 'assistant' as const, item: b })),
+      teammate: teammates.map((b) => ({ type: 'teammate' as const, item: b })),
       artifact: artifacts.map((a) => ({
         type: 'artifact' as const,
         item: a,

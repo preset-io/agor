@@ -4,12 +4,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { slugify } from '@/utils/repoSlug';
 
 /**
- * Shared assistant form logic used by CreateDialog's Assistant tab.
+ * Shared teammate form logic used by CreateDialog's Teammate tab.
  *
  * Encapsulates: form instance, validation, display-name-to-branch-name
  * auto-generation, framework repo auto-select, and custom repo tracking.
  */
-export function useAssistantForm(frameworkRepo: Repo | undefined) {
+export function useTeammateForm(frameworkRepo: Repo | undefined) {
   const [form] = Form.useForm();
   const [isFormValid, setIsFormValid] = useState(false);
   const [customRepoSelected, setCustomRepoSelected] = useState(false);
@@ -65,3 +65,7 @@ export function useAssistantForm(frameworkRepo: Repo | undefined) {
     resetForm,
   };
 }
+
+
+/** @deprecated Use useTeammateForm instead. */
+export const useAssistantForm = useTeammateForm;

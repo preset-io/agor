@@ -111,15 +111,19 @@ function createPatchHarness(opts: {
     delete: vi.fn(),
   };
   const boardRepo = {
-    clearPrimaryAssistantIfMatches: vi.fn(async () => ({
+    clearPrimaryTeammateIfMatches: vi.fn(async () => ({
       board_id: opts.current.board_id,
-      primary_assistant_id: undefined,
+      primary_teammate_id: undefined,
     })),
-    setPrimaryAssistantIfUnset: vi.fn(async () => ({
+    setPrimaryTeammateIfUnset: vi.fn(async () => ({
       board_id: opts.updated.board_id,
-      primary_assistant_id: branchId,
+      primary_teammate_id: branchId,
     })),
   };
+  Object.assign(boardRepo, {
+    clearPrimaryAssistantIfMatches: boardRepo.clearPrimaryTeammateIfMatches,
+    setPrimaryAssistantIfUnset: boardRepo.setPrimaryTeammateIfUnset,
+  });
   const service = new BranchesService(createTenantScopeTestDb() as never, app);
   (service as unknown as { repository: typeof repository }).repository = repository;
   (service as unknown as { boardRepo: typeof boardRepo }).boardRepo = boardRepo;
@@ -700,8 +704,8 @@ describe('BranchesService.patch primary assistant invariants', () => {
 
     await service.patch(branchId, { board_id: boardB });
 
-    expect(boardRepo.clearPrimaryAssistantIfMatches).toHaveBeenCalledWith(boardA, branchId);
-    expect(boardRepo.setPrimaryAssistantIfUnset).toHaveBeenCalledWith(boardB, branchId);
+    expect(boardRepo.clearPrimaryTeammateIfMatches).toHaveBeenCalledWith(boardA, branchId);
+    expect(boardRepo.setPrimaryTeammateIfUnset).toHaveBeenCalledWith(boardB, branchId);
     expect(boardsService.emit).toHaveBeenCalledWith(
       'patched',
       expect.objectContaining({ board_id: boardA })
@@ -737,8 +741,8 @@ describe('BranchesService.patch primary assistant invariants', () => {
 
     await service.patch(branchId, { archived: true });
 
-    expect(boardRepo.clearPrimaryAssistantIfMatches).toHaveBeenCalledWith(boardId, branchId);
-    expect(boardRepo.setPrimaryAssistantIfUnset).not.toHaveBeenCalled();
+    expect(boardRepo.clearPrimaryTeammateIfMatches).toHaveBeenCalledWith(boardId, branchId);
+    expect(boardRepo.setPrimaryTeammateIfUnset).not.toHaveBeenCalled();
   });
 
   it('preserves the board object zone pin when a branch is archived via patch', async () => {

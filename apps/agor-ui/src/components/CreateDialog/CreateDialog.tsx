@@ -17,15 +17,16 @@ import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectRepoById } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
-import type { AssistantTabResult } from './tabs/AssistantTab';
-import { AssistantTab } from './tabs/AssistantTab';
+import type { TeammateTabResult } from './tabs/AssistantTab';
+import { TeammateTab } from './tabs/AssistantTab';
 import { BoardTab } from './tabs/BoardTab';
 import type { BranchTabConfig } from './tabs/BranchTab';
 import { BranchTab } from './tabs/BranchTab';
 import type { RepoTabResult } from './tabs/RepoTab';
 import { RepoTab } from './tabs/RepoTab';
 
-type ActiveTab = 'branch' | 'assistant' | 'board' | 'repository';
+type ActiveTab = 'branch' | 'teammate' | 'board' | 'repository';
+type CreateDialogTab = ActiveTab | 'assistant';
 
 export interface CreateDialogProgress {
   onStatusChange?: (status: string) => void;
@@ -33,7 +34,7 @@ export interface CreateDialogProgress {
 
 const INITIAL_VALIDITY: Record<ActiveTab, boolean> = {
   branch: false,
-  assistant: false,
+  teammate: false,
   board: false,
   repository: false,
 };
@@ -50,17 +51,17 @@ const PURPOSE_TEXT: Record<ActiveTab, React.ReactNode> = {
       follow the lifecycle of a given feature.
     </>
   ),
-  assistant:
-    'Assistants are long-lived agents with an identity, purpose, and goals. Think of them like employees. They have memory, can build their own skills, coordinate multiple coding agents, typically operate on their own Agor board, and can act proactively.',
+  teammate:
+    'AI teammates are long-lived agents with an identity, purpose, and goals. They have memory, can build their own skills, coordinate multiple coding agents, typically operate on their own Agor board, and can act proactively.',
   board:
-    'Boards are spatial canvases for organizing work. They contain branches, zones, cards, and other visual elements. Use boards to create workspaces for teams, projects, or assistants.',
+    'Boards are spatial canvases for organizing work. They contain branches, zones, cards, and other visual elements. Use boards to create workspaces for teams, projects, or teammates.',
   repository:
     'Repositories connect your code to Agor. They can be cloned from GitHub or registered from a local path. Once connected, you can create branches for coding tasks.',
 };
 
 const ACTION_LABELS: Record<ActiveTab, string> = {
   branch: 'Create Branch',
-  assistant: 'Create Assistant',
+  teammate: 'Create AI teammate',
   board: 'Create Board',
   repository: 'Add Repository',
 };
@@ -73,13 +74,18 @@ export interface CreateDialogProps {
   availableAgents: AgenticToolOption[];
   currentUser?: User | null;
   client?: AgorClient | null;
-  defaultTab?: ActiveTab;
+  defaultTab?: CreateDialogTab;
   onCreateBranch: (config: BranchTabConfig) => void | Promise<void>;
   onCreateBoard: (board: Partial<Board>) => void | Promise<void>;
   onCreateRepo: (data: CreateRepoRequest) => unknown;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
-  onCreateAssistant: (
-    result: AssistantTabResult,
+  onCreateTeammate?: (
+    result: TeammateTabResult,
+    progress?: CreateDialogProgress
+  ) => void | Promise<void>;
+  /** @deprecated Use onCreateTeammate instead. */
+  onCreateAssistant?: (
+    result: TeammateTabResult,
     progress?: CreateDialogProgress
   ) => void | Promise<void>;
   branchStorageConfig?: BranchStorageConfig;
@@ -102,11 +108,12 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   availableAgents,
   currentUser,
   client,
-  defaultTab = 'assistant',
+  defaultTab = 'teammate',
   onCreateBranch,
   onCreateBoard,
   onCreateRepo,
   onCreateLocalRepo,
+  onCreateTeammate,
   onCreateAssistant,
   branchStorageConfig,
 }) => {
@@ -115,7 +122,8 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const repoById = useAgorStore(selectRepoById);
   const boardById = useAgorStore(selectBoardById);
   const mcpServerById = useAgorStore(selectMcpServerById);
-  const [activeTab, setActiveTab] = useState<ActiveTab>(defaultTab);
+  const normalizeTab = (tab: CreateDialogTab): ActiveTab => (tab === 'assistant' ? 'teammate' : tab);
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => normalizeTab(defaultTab));
   // Validity is tracked per tab so a sibling tab's empty-form state (or a
   // deferred validity push from its init effect) can't clobber the active
   // tab's submit button.
@@ -129,12 +137,12 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const branchFormRef = useRef<(() => Promise<BranchTabConfig | null>) | null>(null);
   const boardFormRef = useRef<(() => Promise<Partial<Board> | null>) | null>(null);
   const repoFormRef = useRef<(() => Promise<RepoTabResult | null>) | null>(null);
-  const assistantFormRef = useRef<(() => Promise<AssistantTabResult | null>) | null>(null);
+  const teammateFormRef = useRef<(() => Promise<TeammateTabResult | null>) | null>(null);
 
   // Sync active tab when opening, reset form state when closing
   useEffect(() => {
     if (open) {
-      setActiveTab(defaultTab);
+      setActiveTab(normalizeTab(defaultTab));
     } else {
       setValidByTab(INITIAL_VALIDITY);
       setIsSubmitting(false);
@@ -149,7 +157,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
 
   const handleBranchValid = useCallback((v: boolean) => setTabValid('branch', v), [setTabValid]);
   const handleAssistantValid = useCallback(
-    (v: boolean) => setTabValid('assistant', v),
+    (v: boolean) => setTabValid('teammate', v),
     [setTabValid]
   );
   const handleBoardValid = useCallback((v: boolean) => setTabValid('board', v), [setTabValid]);
@@ -199,11 +207,11 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           }
           break;
         }
-        case 'assistant': {
-          const result = await assistantFormRef.current?.();
+        case 'teammate': {
+          const result = await teammateFormRef.current?.();
           if (result) {
-            setSubmitStatus('Creating assistant…');
-            await onCreateAssistant(result, { onStatusChange: setSubmitStatus });
+            setSubmitStatus('Creating AI teammate…');
+            await (onCreateTeammate ?? onCreateAssistant)?.(result, { onStatusChange: setSubmitStatus });
             onClose();
           }
           break;
@@ -223,11 +231,11 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
 
   const tabItems = [
     {
-      key: 'assistant',
+      key: 'teammate',
       label: (
         <span>
           <RobotOutlined style={{ marginRight: 8 }} />
-          Assistant
+          Teammate
         </span>
       ),
       children: (
@@ -235,13 +243,13 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           <Alert
             type="info"
             showIcon
-            description={PURPOSE_TEXT.assistant}
+            description={PURPOSE_TEXT.teammate}
             style={{ marginBottom: 16 }}
           />
-          <AssistantTab
+          <TeammateTab
             repoById={repoById}
             onValidityChange={handleAssistantValid}
-            formRef={assistantFormRef}
+            formRef={teammateFormRef}
             onCreateRepo={onCreateRepo}
             availableAgents={availableAgents}
             mcpServerById={mcpServerById}

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensureAssistantWelcomeNote } from './assistantWelcomeNote';
+import { ensureTeammateWelcomeNote } from './assistantWelcomeNote';
 
-describe('ensureAssistantWelcomeNote', () => {
+describe('ensureTeammateWelcomeNote', () => {
   it('delegates welcome-note rendering to the boards service', async () => {
     const boardsService = {
-      ensureAssistantWelcomeNote: vi.fn().mockResolvedValue({}),
+      ensureTeammateWelcomeNote: vi.fn().mockResolvedValue({}),
     };
     const client = {
       service: vi.fn((name: string) => {
@@ -13,39 +13,39 @@ describe('ensureAssistantWelcomeNote', () => {
       }),
     };
 
-    await ensureAssistantWelcomeNote({
+    await ensureTeammateWelcomeNote({
       client: client as never,
       boardId: 'board-1',
-      assistantName: 'Product/Design Agor Board',
-      assistantEmoji: '🧋',
+      teammateName: 'Product/Design Agor Board',
+      teammateEmoji: '🧋',
     });
 
-    expect(boardsService.ensureAssistantWelcomeNote).toHaveBeenCalledWith({
+    expect(boardsService.ensureTeammateWelcomeNote).toHaveBeenCalledWith({
       boardId: 'board-1',
-      assistantName: 'Product/Design Agor Board',
-      assistantEmoji: '🧋',
+      teammateName: 'Product/Design Agor Board',
+      teammateEmoji: '🧋',
     });
   });
 
   it('is best-effort when the daemon-side call fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const boardsService = {
-      ensureAssistantWelcomeNote: vi.fn().mockRejectedValue(new Error('boom')),
+      ensureTeammateWelcomeNote: vi.fn().mockRejectedValue(new Error('boom')),
     };
     const client = {
       service: vi.fn(() => boardsService),
     };
 
     await expect(
-      ensureAssistantWelcomeNote({
+      ensureTeammateWelcomeNote({
         client: client as never,
         boardId: 'board-1',
-        assistantName: 'Helper',
+        teammateName: 'Helper',
       })
     ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledWith(
-      'Failed to create assistant welcome note:',
+      'Failed to create teammate welcome note:',
       expect.any(Error)
     );
     warn.mockRestore();
