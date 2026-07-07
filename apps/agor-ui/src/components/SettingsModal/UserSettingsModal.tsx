@@ -81,6 +81,7 @@ export interface UserSettingsModalProps {
   currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onRestartOnboarding?: () => void | Promise<void>;
+  initialTab?: string;
 }
 
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
@@ -91,12 +92,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   currentUser,
   onUpdate,
   onRestartOnboarding,
+  initialTab,
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
   const mcpServerById = useAgorStore(selectMcpServerById);
   const [form] = Form.useForm();
-  const [activeTab, setActiveTab] = useState<string>('general');
+  const [activeTab, setActiveTab] = useState<string>(initialTab ?? 'general');
   const initializedUserIdRef = useRef<string | null>(null);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
@@ -122,6 +124,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }),
     [claudeCliForm, claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm]
   );
+
+  // Jump to initialTab each time the modal opens (e.g. from a banner deep-link).
+  useEffect(() => {
+    if (open && initialTab) setActiveTab(initialTab);
+  }, [open, initialTab]);
 
   // Per-tool credential presence state, keyed `${tool}.${field}` for spinner
   // tracking. The actual presence map is rebuilt from `user.agentic_tools`
@@ -176,10 +183,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     });
   }, []);
 
-  // Initialize forms when user changes or modal opens
+  // Initialize forms when user changes or modal opens. A deep-linked
+  // `initialTab` must win here, otherwise this init (which runs after the
+  // initialTab effect on open) would reset the modal back to 'general'.
   const initializeForms = useCallback(
     (userData: User) => {
-      setActiveTab('general');
+      setActiveTab(initialTab ?? 'general');
       setDirtyAgenticConfigTools(new Set());
       setAgenticConfigDraftByTool({});
 
@@ -195,7 +204,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         must_change_password: userData.must_change_password ?? false,
       });
     },
-    [form]
+    [form, initialTab]
   );
 
   const loadUserGroups = useCallback(async () => {

@@ -151,11 +151,14 @@ export interface AppProps {
   openSettingsTab?: string | null; // Open settings modal to a specific tab
   onSettingsClose?: () => void; // Called when settings modal closes
   openUserSettings?: boolean; // Open user settings modal directly (e.g., from onboarding)
+  initialUserSettingsTab?: string; // Deep-link target tab when opening user settings
   onUserSettingsClose?: () => void; // Called when user settings modal closes
   onRestartOnboarding?: () => void | Promise<void>;
   openNewBranchModal?: boolean; // Open new branch modal
   onNewBranchModalClose?: () => void; // Called when new branch modal closes
   suppressLeftPanel?: boolean; // Temporarily hide the assistant/comments panel behind modal-first flows
+  /** Rendered between AppHeader and main content (used for onboarding banners). */
+  topBanner?: React.ReactNode;
   onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession?: (sessionId: string, prompt: string) => Promise<void>;
@@ -289,10 +292,12 @@ export const App: React.FC<AppProps> = ({
   openSettingsTab,
   onSettingsClose,
   openUserSettings,
+  initialUserSettingsTab,
   onUserSettingsClose,
   openNewBranchModal,
   onNewBranchModalClose,
   suppressLeftPanel = false,
+  topBanner,
   onCreateSession,
   onForkSession,
   onBtwForkSession,
@@ -1120,12 +1125,6 @@ export const App: React.FC<AppProps> = ({
     useMemo(() => makeBranchesForBoardSelector(currentBoardId), [currentBoardId]),
     shallow
   );
-  // Shared between AppHeader's comments button and the collapsed rail's
-  // Comments item so both surfaces carry the same badge.
-  const unreadCommentsCount = activeComments.filter(
-    (c: BoardComment) => !c.parent_comment_id
-  ).length;
-
   // Comment-derived header scalars. Subscribing to the derived number/boolean
   // (instead of the comment map) keeps comment edits that don't change them —
   // and all comments on other boards — from waking the shell.
@@ -1313,6 +1312,7 @@ export const App: React.FC<AppProps> = ({
           instanceLabel={instanceLabel}
           instanceDescription={instanceDescription}
         />
+        {topBanner}
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
           <PanelGroup
             id="main-layout"
@@ -1592,18 +1592,18 @@ export const App: React.FC<AppProps> = ({
         <SettingsModal
           open={settingsOpen}
           onClose={() => {
-            closeSettings();
+            if (settingsRouteOpen) closeSettings();
             onSettingsClose?.();
           }}
           client={client}
           currentUser={user}
           activeTab={effectiveSettingsTab}
           onTabChange={(newTab) => {
-            setSettingsSection(newTab as Parameters<typeof setSettingsSection>[0]);
-            // Clear openSettingsTab when user manually changes tabs
-            // This allows normal tab switching after opening from onboarding
-            if (openSettingsTab) {
+            if (!settingsRouteOpen && openSettingsTab) {
+              openSettings(newTab as Parameters<typeof setSettingsSection>[0]);
               onSettingsClose?.();
+            } else {
+              setSettingsSection(newTab as Parameters<typeof setSettingsSection>[0]);
             }
           }}
           onCreateBoard={onCreateBoard}
@@ -1713,6 +1713,7 @@ export const App: React.FC<AppProps> = ({
         <ThemeEditorModal open={themeEditorOpen} onClose={() => setThemeEditorOpen(false)} />
         <UserSettingsModal
           open={effectiveUserSettingsOpen}
+          initialTab={initialUserSettingsTab}
           onClose={() => {
             setUserSettingsOpen(false);
             onUserSettingsClose?.();
