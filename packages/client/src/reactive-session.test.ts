@@ -57,19 +57,25 @@ function createMockClient(opts: MockClientOptions) {
       byEvent[event] = handlers;
       serviceHandlers[svc] = byEvent;
     }),
-    removeListener: vi.fn(),
+    removeListener: vi.fn((event: string, handler: (...a: unknown[]) => void) => {
+      const handlers = serviceHandlers[svc]?.[event];
+      if (!handlers) return;
+      const idx = handlers.indexOf(handler);
+      if (idx !== -1) handlers.splice(idx, 1);
+    }),
   });
   const emitServiceEvent = (svc: string, event: string, payload: unknown) => {
-    for (const handler of serviceHandlers[svc]?.[event] ?? []) handler(payload);
+    for (const handler of [...(serviceHandlers[svc]?.[event] ?? [])]) handler(payload);
   };
 
-  let releaseCreate: (() => void) | null = null;
+  // Deferred create() resolvers (queue supports multiple in-flight creates).
+  const createResolvers: Array<() => void> = [];
   const sessionStreams = {
     create: vi.fn(async () => {
       order.push('subscribe');
       if (opts.deferCreate) {
         await new Promise<void>((resolve) => {
-          releaseCreate = resolve;
+          createResolvers.push(resolve);
         });
       }
       return { session_id: SESSION_ID, subscribed: true };
@@ -103,7 +109,12 @@ function createMockClient(opts: MockClientOptions) {
         handlers.push(handler);
         ioHandlers[event] = handlers;
       }),
-      off: vi.fn(),
+      off: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        const handlers = ioHandlers[event];
+        if (!handlers) return;
+        const idx = handlers.indexOf(handler);
+        if (idx !== -1) handlers.splice(idx, 1);
+      }),
     },
     service: vi.fn((name: string) =>
       name.includes('/tasks/queue') ? queueService : services[name]
@@ -111,10 +122,14 @@ function createMockClient(opts: MockClientOptions) {
   } as unknown as AgorClient;
 
   const fireIo = (event: string) => {
-    for (const handler of ioHandlers[event] ?? []) handler();
+    for (const handler of [...(ioHandlers[event] ?? [])]) handler();
   };
 
-  const releaseCreateFn = () => releaseCreate?.();
+  // Release all currently-blocked create() calls (FIFO drain).
+  const releaseCreateFn = () => {
+    const pending = createResolvers.splice(0);
+    for (const resolve of pending) resolve();
+  };
 
   return {
     client,
@@ -426,5 +441,123 @@ describe('ReactiveSessionHandle stream subscription', () => {
       expect(remove).toHaveBeenCalledWith(canonical);
     });
     expect(remove).not.toHaveBeenCalledWith(shortId);
+  });
+
+  it('shares one subscription across handles and only unsubscribes on the last detach', async () => {
+    // Two handles for the same session (different taskHydration) share one
+    // socket connection and thus one room membership.
+    const mock = createMockClient({
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: {},
+    });
+    const a = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    const b = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await a.ready();
+    await b.ready();
+
+    // Single shared subscription — not one per handle.
+    expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+
+    // Disposing one handle must NOT evict the shared connection from the room.
+    a.dispose();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mock.sessionStreams.remove).not.toHaveBeenCalled();
+
+    // The surviving handle still receives chunks.
+    mock.emitServiceEvent('messages', 'streaming:chunk', {
+      message_id: 'm1',
+      session_id: SESSION_ID,
+      chunk: 'still here',
+    });
+    expect(b.getStreamingMessage('m1')?.content).toBe('still here');
+
+    // Last detach actually removes the membership.
+    b.dispose();
+    await vi.waitFor(() => {
+      expect(mock.sessionStreams.remove).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('a late create from a disposing handle cannot evict a newer handle (ordered chain)', async () => {
+    const mock = createMockClient({ tasks: [], messagesByTask: {}, deferCreate: true });
+    const a = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+
+    // a's create is in flight (deferred).
+    await vi.waitFor(() => {
+      expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+    });
+
+    // a disposes (refcount 0 → remove enqueued behind the in-flight create),
+    // then a NEW handle b attaches (refcount 0→1 → create enqueued behind the
+    // remove on the same shared chain).
+    a.dispose();
+    const b = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+
+    // Drain a's create; the remove then runs, then b's create is issued.
+    mock.releaseCreate();
+    await vi.waitFor(() => {
+      expect(mock.sessionStreams.remove).toHaveBeenCalledTimes(1);
+      expect(mock.sessionStreams.create).toHaveBeenCalledTimes(2);
+    });
+    // Drain b's create so the join completes last.
+    mock.releaseCreate();
+    await b.ready();
+
+    // Order proves b's join lands strictly after a's remove — membership is b's.
+    expect(mock.order.filter((o) => o !== 'hydrate')).toEqual([
+      'subscribe',
+      'unsubscribe',
+      'subscribe',
+    ]);
+    b.dispose();
+  });
+
+  it('renders thinking chunks that arrive mid-thinking (attach during a thinking block)', async () => {
+    const mock = createMockClient({
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: {},
+    });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+
+    mock.emitServiceEvent('messages', 'thinking:chunk', {
+      message_id: 'm1',
+      session_id: SESSION_ID,
+      chunk: 'pondering',
+    });
+
+    const streamed = handle.getStreamingMessage('m1');
+    expect(streamed?.thinkingContent).toBe('pondering');
+    expect(streamed?.isThinking).toBe(true);
+    expect(streamed?.task_id).toBe('task-1');
+    handle.dispose();
+  });
+
+  it('re-stamps task_id on streams that arrived before tasks were hydrated', async () => {
+    const mock = createMockClient({
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: {},
+      deferCreate: true,
+    });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+
+    // Subscribe is in flight; tasks are not hydrated yet, so a chunk landing now
+    // initializes the stream with an undefined task_id.
+    await vi.waitFor(() => {
+      expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+    });
+    mock.emitServiceEvent('messages', 'streaming:chunk', {
+      message_id: 'm1',
+      session_id: SESSION_ID,
+      chunk: 'hi',
+    });
+    expect(handle.getStreamingMessage('m1')?.task_id).toBeUndefined();
+
+    // Completing the ack lets bootstrap hydrate tasks and re-stamp the stream.
+    mock.releaseCreate();
+    await handle.ready();
+    expect(handle.getStreamingMessage('m1')?.task_id).toBe('task-1');
+    handle.dispose();
   });
 });

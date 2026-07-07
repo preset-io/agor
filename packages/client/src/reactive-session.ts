@@ -156,21 +156,6 @@ export class ReactiveSessionHandle {
   private readyPromise: Promise<void>;
   private disposed = false;
 
-  /**
-   * Serializes stream subscribe/unsubscribe so a delayed `create` can't land
-   * after a `remove` and re-join a disposed handle. Every op chains onto this,
-   * and dispose enqueues a compensating `remove` after any in-flight `create`.
-   */
-  private streamOpChain: Promise<void> = Promise.resolve();
-
-  /**
-   * Canonical room id echoed back by `session-streams.create` (the resolved
-   * row's full session_id). Used for `remove` so a short-id / alias caller —
-   * including one whose access was later revoked — leaves the room it actually
-   * joined rather than a raw-id room it never entered.
-   */
-  private streamRoomId: string | null = null;
-
   private stateSnapshot: ReactiveSessionState;
 
   constructor(client: AgorClient, sessionId: string, options?: ReactiveSessionOptions) {
@@ -195,21 +180,22 @@ export class ReactiveSessionHandle {
     };
 
     this.attachListeners();
-    // Subscribe to the streaming channel BEFORE hydrating: the subscribe ack is
-    // awaited so any chunk arriving after it lands on top of hydrated state,
-    // and anything earlier is captured by the hydration itself — a viewer
-    // opening mid-stream can't fall into the gap where early chunks arrive with
-    // no streaming state and get dropped. Reconnects re-subscribe the same way
-    // via onSocketConnect (rooms are per-connection; a reconnect is a new one).
+    // Retain the shared per-connection stream subscription for this session and
+    // AWAIT its ack BEFORE hydrating: a chunk arriving after the ack lands on
+    // top of hydrated state, and anything earlier is captured by the hydration
+    // itself — a viewer opening mid-stream can't fall into the gap where early
+    // chunks arrive with no streaming state and get dropped. Reconnects
+    // re-subscribe once via the registry's connect handler (rooms are
+    // per-connection; a reconnect is a new one).
     this.readyPromise = this.subscribeThenHydrate(() => this.bootstrap());
   }
 
   /**
-   * Await the streaming subscription, then run the hydration/resync step, so
-   * chunk delivery and state hydration can't interleave into a lost-update gap.
+   * Await the streaming subscription, then run the hydration step, so chunk
+   * delivery and state hydration can't interleave into a lost-update gap.
    */
   private async subscribeThenHydrate(hydrate: () => Promise<void>): Promise<void> {
-    await this.subscribeToStream();
+    await retainSessionStream(this.client, this.sessionId);
     if (this.disposed) return;
     await hydrate();
   }
@@ -325,66 +311,16 @@ export class ReactiveSessionHandle {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    // Best-effort: leave the streaming room. Enqueued after any in-flight
-    // subscribe so a late-landing create is always followed by this remove.
-    // The daemon also drops the connection from the channel on socket
-    // disconnect, so this only matters while the socket stays open (e.g.
-    // navigating between sessions in one tab).
-    void this.unsubscribeFromStream();
+    // Release this handle's refcount on the shared per-connection subscription.
+    // The last handle for the session sends the actual `remove`; disposing one
+    // of several handles must NOT evict the shared connection from the room and
+    // kill the others' streams.
+    releaseSessionStream(this.client, this.sessionId);
     for (const cleanup of this.disposeCallbacks) {
       cleanup();
     }
     this.disposeCallbacks.length = 0;
     this.listeners.clear();
-  }
-
-  /** Run a stream subscribe/unsubscribe op serialized after any in-flight op. */
-  private runStreamOp(op: () => Promise<void>): Promise<void> {
-    const next = this.streamOpChain.then(op, op);
-    // Keep the chain alive regardless of any single op's outcome.
-    this.streamOpChain = next.then(
-      () => undefined,
-      () => undefined
-    );
-    return next;
-  }
-
-  /**
-   * Join this session's per-connection streaming channel on the daemon.
-   * Best-effort: a daemon that predates the `session-streams` service (deploy
-   * skew) rejects the call, in which case the daemon's owner-fallback delivery
-   * keeps this session's own tabs updating until the daemon is upgraded.
-   * Serialized so it cannot re-join after a dispose-issued unsubscribe.
-   */
-  private subscribeToStream(): Promise<void> {
-    return this.runStreamOp(async () => {
-      // Skip if disposed: dispose enqueues a compensating unsubscribe after
-      // this op, so ordering alone already prevents stale membership; this just
-      // avoids a pointless round-trip.
-      if (this.disposed) return;
-      try {
-        const result = (await this.client
-          .service('session-streams')
-          .create({ session_id: this.sessionId })) as { session_id?: string } | undefined;
-        // Remember the canonical room id so unsubscribe leaves the right room
-        // even for short-id callers or after access is revoked.
-        if (typeof result?.session_id === 'string' && result.session_id) {
-          this.streamRoomId = result.session_id;
-        }
-      } catch {
-        // Ignore — see method doc. Access errors also surface via bootstrap/resync.
-      }
-    });
-  }
-
-  private unsubscribeFromStream(): Promise<void> {
-    return this.runStreamOp(async () => {
-      try {
-        await this.client.service('session-streams').remove(this.streamRoomId ?? this.sessionId);
-      } catch {
-        // Ignore — the socket teardown removes room membership regardless.
-      }
-    });
   }
 
   private assertNotDisposed(): void {
@@ -467,6 +403,9 @@ export class ReactiveSessionHandle {
         tasks,
         messagesByTask,
         loadedTaskIds,
+        // Repair task_id on any stream initialized from a chunk that arrived
+        // before tasks were hydrated (task_id was undefined then).
+        streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
         queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
         loading: false,
         error: null,
@@ -497,10 +436,11 @@ export class ReactiveSessionHandle {
     const onSocketConnect = () => {
       if (this.disposed) return;
       this.updateState((prev) => ({ ...prev, connected: true }));
-      // A reconnect is a new socket connection with no room membership, so
-      // re-declare interest and await the ack before resyncing — same ordering
-      // as the initial attach so post-subscribe chunks land after hydration.
-      this.readyPromise = this.subscribeThenHydrate(() => this.resync());
+      // Re-subscription on reconnect is owned by the shared registry's connect
+      // handler (once per still-wanted session); the handle just resyncs its
+      // state, and the chunk handler initializes any stream that starts before
+      // this resync completes.
+      this.readyPromise = this.resync();
     };
     const onSocketDisconnect = () => {
       if (this.disposed) return;
@@ -878,13 +818,29 @@ export class ReactiveSessionHandle {
       if (event.session_id !== this.sessionId) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
-        if (!current) return prev;
         const nextStreaming = new Map(prev.streamingMessages);
-        nextStreaming.set(event.message_id, {
-          ...current,
-          isThinking: true,
-          thinkingContent: (current.thinkingContent || '') + event.chunk,
-        });
+        if (current) {
+          nextStreaming.set(event.message_id, {
+            ...current,
+            isThinking: true,
+            thinkingContent: (current.thinkingContent || '') + event.chunk,
+          });
+        } else {
+          // Attached mid-thinking (a long thinking block, no start replay):
+          // initialize from this chunk so live thinking renders under the
+          // active task instead of being dropped.
+          nextStreaming.set(event.message_id, {
+            message_id: event.message_id,
+            session_id: event.session_id,
+            task_id: findLatestHydratableTask(prev.tasks)?.task_id,
+            role: 'assistant',
+            content: '',
+            thinkingContent: event.chunk,
+            timestamp: new Date().toISOString(),
+            isStreaming: true,
+            isThinking: true,
+          });
+        }
         return {
           ...prev,
           streamingMessages: nextStreaming,
@@ -1065,6 +1021,7 @@ export class ReactiveSessionHandle {
         queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
         messagesByTask,
         loadedTaskIds,
+        streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
         error: null,
         terminal: false,
         lastSyncedAt: new Date().toISOString(),
@@ -1121,6 +1078,140 @@ export function attachReactiveSessionApi(client: AgorClient): ReactiveAgorClient
   };
 
   return reactiveClient;
+}
+
+// --- Per-connection stream subscription registry ---------------------------
+//
+// A session-stream room membership is per socket CONNECTION, but several
+// ReactiveSessionHandles (e.g. a board peek, an open panel, and a transcript,
+// each with its own taskHydration) share ONE connection for the same session.
+// If every handle sent its own `remove` on dispose, disposing any one would
+// evict the shared connection from the room and silently kill the others'
+// streams. So subscription is refcounted per (client, session id): the first
+// attach subscribes, the last detach unsubscribes, and a single shared op chain
+// orders create/remove across handles (a late create from a disposing handle
+// can't land after a newer handle's create). On reconnect every still-wanted
+// session re-subscribes exactly once.
+
+interface StreamSubscription {
+  refCount: number;
+  chain: Promise<void>;
+  /** Canonical room id echoed by create; used so `remove` leaves the right room. */
+  roomId: string | null;
+  wantSubscribed: boolean;
+}
+
+interface ClientStreamState {
+  subs: Map<string, StreamSubscription>;
+  connectHandler: (() => void) | null;
+}
+
+const CLIENT_STREAM_STATE = new WeakMap<AgorClient, ClientStreamState>();
+
+function getClientStreamState(client: AgorClient): ClientStreamState {
+  let state = CLIENT_STREAM_STATE.get(client);
+  if (!state) {
+    state = { subs: new Map(), connectHandler: null };
+    CLIENT_STREAM_STATE.set(client, state);
+  }
+  return state;
+}
+
+/** Serialize a create/remove op onto the subscription's shared chain. */
+function runSubscriptionOp(sub: StreamSubscription, op: () => Promise<void>): Promise<void> {
+  const next = sub.chain.then(op, op);
+  sub.chain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
+async function createSubscription(
+  client: AgorClient,
+  sessionId: string,
+  sub: StreamSubscription
+): Promise<void> {
+  // Released before this op ran — nothing to join.
+  if (!sub.wantSubscribed) return;
+  try {
+    const result = (await client.service('session-streams').create({ session_id: sessionId })) as
+      | { session_id?: string }
+      | undefined;
+    if (typeof result?.session_id === 'string' && result.session_id) {
+      sub.roomId = result.session_id;
+    }
+  } catch {
+    // Deploy skew / access error: the daemon's owner fallback covers the
+    // creator's own tabs, and access errors also surface via bootstrap/resync.
+  }
+}
+
+async function removeSubscription(
+  client: AgorClient,
+  sessionId: string,
+  sub: StreamSubscription
+): Promise<void> {
+  try {
+    await client.service('session-streams').remove(sub.roomId ?? sessionId);
+  } catch {
+    // Ignore — socket teardown removes room membership regardless.
+  }
+}
+
+function ensureStreamConnectHandler(client: AgorClient, state: ClientStreamState): void {
+  if (state.connectHandler) return;
+  const handler = () => {
+    for (const [sessionId, sub] of state.subs) {
+      if (sub.wantSubscribed) {
+        void runSubscriptionOp(sub, () => createSubscription(client, sessionId, sub));
+      }
+    }
+  };
+  state.connectHandler = handler;
+  client.io.on('connect', handler);
+}
+
+function retainSessionStream(client: AgorClient, sessionId: string): Promise<void> {
+  const state = getClientStreamState(client);
+  let sub = state.subs.get(sessionId);
+  if (!sub) {
+    sub = { refCount: 0, chain: Promise.resolve(), roomId: null, wantSubscribed: false };
+    state.subs.set(sessionId, sub);
+  }
+  const was = sub.refCount;
+  sub.refCount += 1;
+  sub.wantSubscribed = true;
+  ensureStreamConnectHandler(client, state);
+  // First attach (including re-attach while a prior remove is still draining on
+  // the shared chain) enqueues the create; it lands after any pending remove.
+  if (was === 0) {
+    const target = sub;
+    return runSubscriptionOp(target, () => createSubscription(client, sessionId, target));
+  }
+  return sub.chain;
+}
+
+function releaseSessionStream(client: AgorClient, sessionId: string): void {
+  const state = CLIENT_STREAM_STATE.get(client);
+  if (!state) return;
+  const sub = state.subs.get(sessionId);
+  if (!sub || sub.refCount === 0) return;
+  sub.refCount -= 1;
+  if (sub.refCount > 0) return;
+  sub.wantSubscribed = false;
+  void runSubscriptionOp(sub, () => removeSubscription(client, sessionId, sub)).then(() => {
+    // Drop the entry only if nothing re-attached while the remove drained; a
+    // re-attach reuses this same sub and its ordered chain.
+    if (sub.refCount === 0 && !sub.wantSubscribed && state.subs.get(sessionId) === sub) {
+      state.subs.delete(sessionId);
+      if (state.subs.size === 0 && state.connectHandler) {
+        client.io.off('connect', state.connectHandler);
+        state.connectHandler = null;
+        CLIENT_STREAM_STATE.delete(client);
+      }
+    }
+  });
 }
 
 interface SharedReactiveSessionEntry {
@@ -1213,6 +1304,29 @@ function findLatestHydratableTask(tasks: Task[]): Task | undefined {
     if (tasks[i].status !== TaskStatus.QUEUED) return tasks[i];
   }
   return undefined;
+}
+
+/**
+ * Fill in task_id for streaming messages initialized from a chunk that arrived
+ * before task state was hydrated (task_id left undefined). Once tasks are known
+ * the latest hydratable task is the active one, so grouping repairs and the
+ * live text renders under the right TaskBlock. Returns the same map reference
+ * when nothing changed, to preserve downstream memoization.
+ */
+function restampStreamingTaskIds(
+  streamingMessages: ReactiveStreamingMessagesById,
+  tasks: Task[]
+): ReactiveStreamingMessagesById {
+  const activeTaskId = findLatestHydratableTask(tasks)?.task_id;
+  if (!activeTaskId) return streamingMessages;
+  let next = streamingMessages;
+  for (const [id, message] of streamingMessages) {
+    if (!message.task_id) {
+      if (next === streamingMessages) next = new Map(streamingMessages);
+      next.set(id, { ...message, task_id: activeTaskId });
+    }
+  }
+  return next;
 }
 
 function sortMessagesByIndex(messages: Message[]): Message[] {
