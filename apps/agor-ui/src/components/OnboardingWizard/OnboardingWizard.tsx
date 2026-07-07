@@ -1574,12 +1574,13 @@ export function OnboardingWizard({
                 <span style={{ fontSize: 18, flexShrink: 0 }}>🤖</span>
                 <div>
                   <Text style={{ color: TEXT_PRIMARY, fontWeight: 500, fontSize: 13 }}>
-                    Primary assistant
+                    Board's AI tool
                   </Text>
                   <div style={{ color: TEXT_SECONDARY, fontSize: 12, marginTop: 2 }}>
+                    Each board runs on one AI tool for every session created here.
                     {chosenOption
-                      ? `Using ${chosenOption.title}. Change anytime in Settings.`
-                      : 'Each board gets a dedicated AI agent. Connect your AI in the previous step.'}
+                      ? ` Currently: ${chosenOption.title}. Change anytime in Settings.`
+                      : ' Connect your AI in the previous step.'}
                   </div>
                 </div>
               </div>
