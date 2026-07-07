@@ -921,6 +921,7 @@ function ManagementLinkRow({
   const disabled = Boolean(disabledReason);
   return (
     <div
+      className="agor-action-link-row"
       role={disabled ? undefined : 'link'}
       tabIndex={disabled ? -1 : 0}
       aria-disabled={disabled || undefined}
@@ -934,16 +935,22 @@ function ManagementLinkRow({
         event.preventDefault();
         activateLinkItem(item, navigate, onPreview, onDownload, onNavigate);
       }}
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1.35fr) minmax(110px, 0.45fr) 94px 24px',
-        columnGap: token.sizeMD,
-        alignItems: 'center',
-        padding: `${token.sizeSM}px 0`,
-        borderBottom: `1px solid ${token.colorBorderSecondary}`,
-        cursor: disabled ? 'default' : 'pointer',
-        minWidth: 0,
-      }}
+      style={
+        {
+          '--agor-link-title-color': disabled ? token.colorTextDisabled : token.colorText,
+          '--agor-link-icon-color': disabled ? token.colorTextDisabled : token.colorTextTertiary,
+          '--agor-link-row-hover-bg': 'transparent',
+          '--agor-link-row-hover-color': token.colorPrimary,
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1.35fr) minmax(110px, 0.45fr) 94px 24px',
+          columnGap: token.sizeMD,
+          alignItems: 'center',
+          padding: `${token.sizeSM}px 0`,
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          cursor: disabled ? 'default' : 'pointer',
+          minWidth: 0,
+        } as React.CSSProperties
+      }
     >
       <span style={{ display: 'flex', gap: token.sizeSM, minWidth: 0, alignItems: 'flex-start' }}>
         <SmallLinkGlyph item={item} disabled={disabled} />
@@ -1084,10 +1091,11 @@ export const PinnedLinksStrip: React.FC<PinnedLinksStripProps> = ({
                         : token.colorText,
                       '--agor-link-chip-accent-color': disabled
                         ? token.colorTextDisabled
-                        : token.colorPrimary,
+                        : token.colorTextTertiary,
                       '--agor-link-chip-hover-bg': token.colorPrimaryBg,
                       '--agor-link-chip-hover-border': token.colorPrimaryBorder,
                       '--agor-link-chip-hover-color': token.colorPrimary,
+                      '--agor-link-chip-hover-accent-color': token.colorTextTertiary,
                       height: 26,
                       minWidth: 0,
                       maxWidth: 156,

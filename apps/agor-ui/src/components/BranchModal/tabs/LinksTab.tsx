@@ -205,9 +205,7 @@ function BranchTitle({
   const contentAction = getLinkContentAction(item);
   const disabled = Boolean(getUnavailableReason(item));
   const style: React.CSSProperties = {
-    color: disabled
-      ? token.colorTextDisabled
-      : `var(--agor-link-title-color, ${token.colorPrimary})`,
+    color: disabled ? token.colorTextDisabled : `var(--agor-link-title-color, ${token.colorText})`,
     fontWeight: 600,
     lineHeight: 1.25,
   };
@@ -795,7 +793,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
                           {
                             '--agor-link-title-color': disabled
                               ? token.colorTextDisabled
-                              : token.colorPrimary,
+                              : token.colorText,
                             '--agor-link-icon-color': disabled
                               ? token.colorTextDisabled
                               : token.colorTextTertiary,

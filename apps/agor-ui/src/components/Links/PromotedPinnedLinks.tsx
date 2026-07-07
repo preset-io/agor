@@ -234,12 +234,11 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                         : token.colorText,
                     '--agor-link-chip-accent-color': disabled
                       ? token.colorTextDisabled
-                      : isBranchCard
-                        ? token.colorTextTertiary
-                        : token.colorPrimary,
+                      : token.colorTextTertiary,
                     '--agor-link-chip-hover-bg': token.colorPrimaryBgHover,
                     '--agor-link-chip-hover-border': token.colorPrimaryBorderHover,
                     '--agor-link-chip-hover-color': token.colorPrimary,
+                    '--agor-link-chip-hover-accent-color': token.colorTextTertiary,
                     height: chipHeight,
                     minWidth: 0,
                     maxWidth: chipMaxWidth,

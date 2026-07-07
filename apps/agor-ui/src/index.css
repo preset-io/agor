@@ -35,21 +35,31 @@
   transition: color 0.16s ease;
 }
 
-.agor-action-link-row:not([aria-disabled="true"]):hover {
+.agor-action-link-row:not([aria-disabled="true"]):hover,
+.agor-action-link-row:not([aria-disabled="true"]):focus-visible,
+.agor-action-link-row:not([aria-disabled="true"]):focus-within {
   --agor-link-row-bg: var(--agor-link-row-hover-bg, transparent);
   --agor-link-title-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
   --agor-link-icon-color: var(--agor-link-row-hover-icon-color, var(--ant-color-text-tertiary));
 }
 
-.agor-action-link-title:hover {
+.agor-action-link-title:hover,
+.agor-action-link-title:focus-visible {
   --agor-link-title-color: var(--agor-link-row-hover-color, var(--ant-color-primary));
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .agor-action-link-row:not([aria-disabled="true"]):hover .agor-action-link-title,
+.agor-action-link-row:not([aria-disabled="true"]):focus-visible .agor-action-link-title,
+.agor-action-link-row:not([aria-disabled="true"]):focus-within .agor-action-link-title,
 .agor-action-link-row:not([aria-disabled="true"]) .agor-action-link-title:hover,
+.agor-action-link-row:not([aria-disabled="true"]) .agor-action-link-title:focus-visible,
 .agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover .agor-action-link-title,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-visible
+  .agor-action-link-title,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-within
+  .agor-action-link-title,
 .agor-action-link-chip:not(:disabled):not([aria-disabled="true"]) .agor-action-link-title:hover {
   text-decoration: none;
 }
@@ -69,7 +79,9 @@
     opacity 0.16s ease;
 }
 
-.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover {
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-visible,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-within {
   --agor-link-chip-bg: var(--agor-link-chip-hover-bg, var(--ant-color-primary-bg));
   --agor-link-chip-border: var(--agor-link-chip-hover-border, var(--ant-color-primary));
   --agor-link-chip-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
@@ -79,12 +91,24 @@
   );
 }
 
-.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover .agor-action-link-title {
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover .agor-action-link-title,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-visible
+  .agor-action-link-title,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-within
+  .agor-action-link-title {
   --agor-link-title-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
 }
 
 .agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover .agor-action-link-icon,
 .agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):hover
+  .agor-action-link-affordance,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-visible
+  .agor-action-link-icon,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-visible
+  .agor-action-link-affordance,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-within
+  .agor-action-link-icon,
+.agor-action-link-chip:not(:disabled):not([aria-disabled="true"]):focus-within
   .agor-action-link-affordance {
   --agor-link-icon-color: var(--agor-link-chip-hover-color, var(--ant-color-primary));
 }
