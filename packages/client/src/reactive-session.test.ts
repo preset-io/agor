@@ -42,21 +42,40 @@ function createMockClient(opts: MockClientOptions) {
 
   const listener = () => ({ on: vi.fn(), removeListener: vi.fn() });
 
+  const sessionStreams = {
+    create: vi.fn(async () => ({ session_id: SESSION_ID, subscribed: true })),
+    remove: vi.fn(async () => ({ session_id: SESSION_ID, subscribed: false })),
+  };
+
   const services: Record<string, unknown> = {
     sessions: { get: vi.fn(async () => ({ session_id: SESSION_ID }) as Session), ...listener() },
     tasks: { findAll: vi.fn(async () => opts.tasks), ...listener() },
     messages: { findAll: messageFindAll, ...listener() },
+    'session-streams': sessionStreams,
   };
   const queueService = { find: vi.fn(async () => ({ data: [] })) };
 
+  const ioHandlers: Record<string, Array<(...args: unknown[]) => void>> = {};
   const client = {
-    io: { connected: true, on: vi.fn(), off: vi.fn() },
+    io: {
+      connected: true,
+      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        const handlers = ioHandlers[event] ?? [];
+        handlers.push(handler);
+        ioHandlers[event] = handlers;
+      }),
+      off: vi.fn(),
+    },
     service: vi.fn((name: string) =>
       name.includes('/tasks/queue') ? queueService : services[name]
     ),
   } as unknown as AgorClient;
 
-  return { client, messageFindAll };
+  const fireIo = (event: string) => {
+    for (const handler of ioHandlers[event] ?? []) handler();
+  };
+
+  return { client, messageFindAll, sessionStreams, fireIo };
 }
 
 async function bootstrapHandle(opts: MockClientOptions, taskHydration: TaskHydrationMode) {
@@ -186,5 +205,63 @@ describe('ReactiveSessionHandle resync hydration parity', () => {
     expect(messageFindAll).toHaveBeenCalledWith({
       query: { task_id: 'task-4', $sort: { index: 1 } },
     });
+  });
+});
+
+describe('ReactiveSessionHandle stream subscription', () => {
+  const opts = { tasks: [], messagesByTask: {} };
+
+  it('subscribes to the session stream on attach', async () => {
+    const { client, sessionStreams } = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+
+    expect(sessionStreams.create).toHaveBeenCalledWith({ session_id: SESSION_ID });
+    handle.dispose();
+  });
+
+  it('unsubscribes on dispose', async () => {
+    const { client, sessionStreams } = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+
+    handle.dispose();
+    expect(sessionStreams.remove).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('re-subscribes after a socket reconnect (new connection has no room membership)', async () => {
+    const { client, sessionStreams, fireIo } = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+    expect(sessionStreams.create).toHaveBeenCalledTimes(1);
+
+    fireIo('connect');
+    await handle.ready();
+
+    expect(sessionStreams.create).toHaveBeenCalledTimes(2);
+    handle.dispose();
+  });
+
+  it('tolerates a client without the session-streams service (deploy skew)', async () => {
+    const { client } = createMockClient(opts);
+    (
+      client.service as unknown as { mockImplementation: (fn: (n: string) => unknown) => void }
+    ).mockImplementation((name: string) =>
+      name === 'session-streams'
+        ? undefined
+        : {
+            get: vi.fn(async () => ({})),
+            findAll: vi.fn(async () => []),
+            find: vi.fn(async () => ({ data: [] })),
+            on: vi.fn(),
+            removeListener: vi.fn(),
+          }
+    );
+
+    // Construction + dispose must not throw even though subscribe/unsubscribe
+    // hit an undefined service.
+    const handle = new ReactiveSessionHandle(client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+    expect(() => handle.dispose()).not.toThrow();
   });
 });

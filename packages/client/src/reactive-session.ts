@@ -318,19 +318,27 @@ export class ReactiveSessionHandle {
    * keeps this session's own tabs updating until the daemon is upgraded.
    */
   private subscribeToStream(): void {
-    void Promise.resolve(
-      this.client.service('session-streams').create({ session_id: this.sessionId })
-    ).catch(() => {
-      // Ignore — see method doc. Access errors also surface via bootstrap/resync.
-    });
+    try {
+      void Promise.resolve(
+        this.client.service('session-streams').create({ session_id: this.sessionId })
+      ).catch(() => {
+        // Ignore — see method doc. Access errors also surface via bootstrap/resync.
+      });
+    } catch {
+      // Service unavailable on this client build — nothing to subscribe to.
+    }
   }
 
   private unsubscribeFromStream(): void {
-    void Promise.resolve(this.client.service('session-streams').remove(this.sessionId)).catch(
-      () => {
-        // Ignore — the socket teardown removes room membership regardless.
-      }
-    );
+    try {
+      void Promise.resolve(this.client.service('session-streams').remove(this.sessionId)).catch(
+        () => {
+          // Ignore — the socket teardown removes room membership regardless.
+        }
+      );
+    } catch {
+      // Service unavailable on this client build — nothing to unsubscribe from.
+    }
   }
 
   private assertNotDisposed(): void {
