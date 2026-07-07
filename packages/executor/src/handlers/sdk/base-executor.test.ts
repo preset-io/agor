@@ -286,7 +286,11 @@ describe('executeToolTask first-progress watchdog', () => {
         }),
       } as never;
 
-      const stopTask = vi.fn(async () => ({ success: true }));
+      let resolveStopTask: ((value: { success: true }) => void) | undefined;
+      const stopTaskRelease = new Promise<{ success: true }>((resolve) => {
+        resolveStopTask = resolve;
+      });
+      const stopTask = vi.fn(async () => stopTaskRelease);
       const execution = executeToolTask({
         client,
         sessionId: 'session-1' as never,
@@ -309,12 +313,28 @@ describe('executeToolTask first-progress watchdog', () => {
         }),
       });
 
+      let executionSettled = false;
+      void execution.then(
+        () => {
+          executionSettled = true;
+        },
+        () => {
+          executionSettled = true;
+        }
+      );
       const executionExpectation = expect(execution).rejects.toThrow(
         'no first meaningful agent event'
       );
       await vi.advanceTimersByTimeAsync(1000);
-      await executionExpectation;
+      await Promise.resolve();
+      await Promise.resolve();
+
       expect(stopTask).toHaveBeenCalledWith('session-1', 'task-1');
+      expect(executionSettled).toBe(false);
+      expect(taskPatches).not.toContainEqual(expect.objectContaining({ status: 'failed' }));
+
+      resolveStopTask?.({ success: true });
+      await executionExpectation;
       expect(taskPatches).toContainEqual(
         expect.objectContaining({
           status: 'failed',

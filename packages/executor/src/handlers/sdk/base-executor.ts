@@ -566,8 +566,11 @@ export async function executeToolTask(params: {
   const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
 
   // Wire up abort signal to tool's stopTask method.
-  // Triggered by SIGTERM handler calling abortController.abort().
-  const abortHandler = async () => {
+  // AbortSignal listeners are fire-and-forget, so retain the stop promise so
+  // watchdog-triggered terminal handling can wait for graceful SDK/tool cleanup
+  // before marking the task failed and allowing queue/session processing to move on.
+  let abortStopPromise: Promise<void> | undefined;
+  const stopToolForAbort = async () => {
     console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
     if (tool.stopTask) {
       try {
@@ -584,10 +587,14 @@ export async function executeToolTask(params: {
       console.warn(`[${toolName}] Tool does not implement stopTask method`);
     }
   };
+  const abortHandler = () => {
+    abortStopPromise ??= stopToolForAbort();
+  };
 
   // Handle race condition: if signal is already aborted, call handler immediately
   if (params.abortController.signal.aborted) {
-    await abortHandler();
+    abortHandler();
+    await abortStopPromise;
   }
 
   // Listen for abort signal
@@ -720,8 +727,13 @@ export async function executeToolTask(params: {
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
     await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
-    const err = watchdog.getStallReason() ? new Error(watchdog.getStallReason()) : toError(error);
+    const watchdogStallReason = watchdog.getStallReason();
+    const err = watchdogStallReason ? new Error(watchdogStallReason) : toError(error);
     console.error(`[${toolName}] Execution failed:`, err);
+
+    if (watchdogStallReason && abortStopPromise) {
+      await abortStopPromise;
+    }
 
     // Capture git SHA at task end (even for failed tasks)
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
