@@ -36,7 +36,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({ level = 3, style, classNam
     margin: 0,
     fontSize: LEVEL_SIZES[level],
     lineHeight: 1.35,
-    background: 'linear-gradient(90deg, #539D9F 0%, #7fe8df 50%, #a8f5ed 100%)',
+    background: 'linear-gradient(90deg, #339699 0%, #7fe8df 50%, #a8f5ed 100%)',
     WebkitBackgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
     backgroundClip: 'text',

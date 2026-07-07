@@ -103,12 +103,12 @@ function getDefaultCustomTheme(): string {
   return JSON.stringify(
     {
       token: {
-        colorPrimary: '#539D9F',
+        colorPrimary: '#339699',
         colorSuccess: '#52c41a',
         colorWarning: '#faad14',
         colorError: '#ff4d4f',
-        colorInfo: '#539D9F',
-        colorLink: '#539D9F',
+        colorInfo: '#339699',
+        colorLink: '#339699',
         borderRadius: 8,
       },
       // Note: algorithm (dark/light) should be set via the theme switcher dropdown

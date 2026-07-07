@@ -130,7 +130,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
       theme: {
         background: '#141414',
         foreground: '#ffffff',
-        cursor: '#539D9F',
+        cursor: '#339699',
         cursorAccent: '#141414',
       },
     });

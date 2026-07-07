@@ -31,10 +31,10 @@ export const mellowParticleOptions = {
   },
   particles: {
     color: {
-      value: '#539D9F', // Agor teal brand color
+      value: '#339699', // Agor teal brand color
     },
     links: {
-      color: '#539D9F',
+      color: '#339699',
       distance: 150,
       enable: true,
       opacity: 0.2,
