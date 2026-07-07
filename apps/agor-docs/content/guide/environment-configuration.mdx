@@ -81,6 +81,8 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `{{branch.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
 | `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
 | `{{branch.gid}}` | Branch | `1042` | Unix GID of the branch's isolation group. |
+| `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
+| `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag` — whether `base_ref` names a branch or a tag. Defaults to `branch`. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
 | `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
 | `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `branch.custom_context`. |
