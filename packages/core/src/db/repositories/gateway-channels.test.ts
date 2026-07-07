@@ -238,6 +238,27 @@ describe('GatewayChannelRepository', () => {
       expect(channel.config.bot_token).toBe('xoxb-token');
       expect(channel.config.app_token).toBeUndefined();
     });
+
+    dbTest(
+      'rejects an enabled outbound channel that also opts into inbound surfaces',
+      async ({ db }) => {
+        const branch = await seedBranch(db);
+        const repo = new GatewayChannelRepository(db);
+
+        // outbound_enabled alone waives app_token, but an inbound surface flag
+        // (enable_channels) means the channel must LISTEN — which needs app_token.
+        await expect(
+          repo.create({
+            name: 'Outbound+inbound Slack',
+            created_by: generateId() as UUID,
+            target_branch_id: branch.branch_id as UUID,
+            channel_type: 'slack',
+            enabled: true,
+            config: { bot_token: 'xoxb-token', outbound_enabled: true, enable_channels: true },
+          })
+        ).rejects.toThrow('missing required secret(s) app_token');
+      }
+    );
   });
 
   describe('getRequiredSecretFields', () => {
@@ -254,6 +275,11 @@ describe('GatewayChannelRepository', () => {
       ]);
       expect(
         getRequiredSecretFields('slack', { outbound_enabled: true, connection_mode: 'socket' })
+      ).toEqual(['bot_token', 'app_token']);
+      // An inbound surface flag (public/private/group-DM listening) forces
+      // app_token even when outbound is also enabled — the channel still listens.
+      expect(
+        getRequiredSecretFields('slack', { outbound_enabled: true, enable_channels: true })
       ).toEqual(['bot_token', 'app_token']);
     });
   });

@@ -66,7 +66,15 @@ export function getRequiredSecretFields(
 ): string[] {
   switch (channelType) {
     case 'slack': {
-      const outboundOnly = config.outbound_enabled === true && config.connection_mode !== 'socket';
+      // Slack needs an app_token whenever the channel LISTENS (Socket Mode):
+      // an explicit socket connection, or any inbound surface flag. Only a
+      // purely outbound channel (sends, never listens) may omit it.
+      const wantsInbound =
+        config.connection_mode === 'socket' ||
+        config.enable_channels === true ||
+        config.enable_groups === true ||
+        config.enable_mpim === true;
+      const outboundOnly = config.outbound_enabled === true && !wantsInbound;
       return outboundOnly ? ['bot_token'] : ['bot_token', 'app_token'];
     }
     case 'github':
