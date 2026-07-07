@@ -13,8 +13,10 @@ export const THEME_COLOR = '#2e9a92';
 export const FAVICON_PATH = '/favicon.png';
 export const LOGO_PATH = '/logo.png';
 
+export const DEFAULT_TITLE = 'agor – The command center for AI enablement';
+
 export const DEFAULT_DESCRIPTION =
-  'Team command center for all things agentic. A shared canvas for coding agents and long-lived AI teammates — Claude Code, Codex, Gemini — anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.';
+  'The command center for AI enablement. Empower your team with AI teammates — Claude Code, Codex, Gemini — on a shared canvas anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.';
 
 export const DEFAULT_SOCIAL_IMAGE = '/screenshots/board-hero.png';
 

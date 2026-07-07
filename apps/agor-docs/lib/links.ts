@@ -20,3 +20,7 @@ export const AGOR_CLOUD_INVITE_URL = 'https://preset.io/contact-us-about-agor/';
 // Agor Cloud demo / contact link (HubSpot meetings scheduler).
 export const AGOR_CLOUD_DEMO_URL =
   'https://meetings.hubspot.com/zane-aitken/agor-cloud-sign-up-link-';
+
+// Preset blog post defining the AI Enablement Engineer — Agor's target
+// persona. Linked from landing-page copy.
+export const AI_ENABLEMENT_POST_URL = 'https://preset.io/blog/ai-enablement-engineer/';

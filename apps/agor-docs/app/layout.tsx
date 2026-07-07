@@ -1,7 +1,7 @@
 import { Head } from 'nextra/components';
 import 'nextra-theme-docs/style.css';
 import type { ReactNode } from 'react';
-import { DocsBackground } from '../components/DocsBackground';
+import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
 import { GITHUB_REPO_URL } from '../lib/links';
 import {
   BRAND_NAME,
@@ -73,7 +73,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </Head>
       <body>
-        <DocsBackground />
+        <DocsAuroraBackground />
         {children}
       </body>
     </html>

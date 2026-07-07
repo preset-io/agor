@@ -9,6 +9,7 @@
   --landing-mint: #d9fb89;
   --landing-pink: #ffc3df;
   --landing-sky: #9bdcff;
+  position: relative;
   width: 100vw;
   margin-left: calc(50% - 50vw);
   margin-right: calc(50% - 50vw);
@@ -19,6 +20,82 @@
     radial-gradient(circle at 82% 8%, rgba(35, 136, 242, 0.16), transparent 34rem),
     linear-gradient(180deg, #05070b 0%, #09111d 36%, #070b12 72%, #05070b 100%);
   overflow: hidden;
+}
+
+/* Hero banner — looping product-demo video behind the hero copy */
+.heroBanner {
+  position: relative;
+  overflow: hidden;
+}
+
+.heroVideo {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* Poster doubles as the reduced-motion / video-loading backdrop. */
+  background: url("/videos/agor-hero-poster.jpg") center top / cover no-repeat;
+}
+
+.heroVideo video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+
+/* Scrim keeps the copy legible over the busy board UI and fades the banner
+ * into the page background at the bottom. */
+.heroVideo::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(5, 7, 11, 0.92) 0%,
+      rgba(5, 7, 11, 0.7) 44%,
+      rgba(5, 7, 11, 0.34) 100%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(5, 7, 11, 0.5) 0%,
+      rgba(5, 7, 11, 0.08) 32%,
+      rgba(5, 7, 11, 0.95) 100%
+    );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heroVideo video {
+    display: none;
+  }
+}
+
+/* Aurora (ReactBits) backdrop behind the harness + multiplayer band */
+.auroraBand {
+  position: relative;
+}
+
+.bandAurora {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.auroraBand > section {
+  position: relative;
+  z-index: 1;
+}
+
+/* Keep all landing content above backdrop canvases */
+.landingShell > section,
+.landingShell > footer {
+  position: relative;
+  z-index: 1;
 }
 
 .heroSection,
@@ -36,15 +113,8 @@
   padding-top: 128px;
 }
 
-.heroGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 0.98fr) minmax(430px, 1.02fr);
-  gap: 42px;
-  align-items: center;
-}
-
 .heroCopy {
-  max-width: 610px;
+  max-width: 640px;
 }
 
 .brandMark {
@@ -248,8 +318,11 @@
   justify-content: center;
   min-height: 48px;
   padding: 0 20px;
+  border: 0;
   border-radius: 999px;
+  font: inherit;
   font-weight: 750;
+  cursor: pointer;
   text-decoration: none;
   transition:
     transform 160ms ease,
@@ -301,37 +374,6 @@
   width: 1.05em;
   height: 1.05em;
   margin-right: 0.45em;
-}
-
-.screenshotCollage {
-  position: relative;
-  min-height: 560px;
-  perspective: 1400px;
-}
-
-.mainScreenshotFrame {
-  position: absolute;
-  z-index: 2;
-  top: 70px;
-  left: -18px;
-  width: min(760px, 124%);
-  aspect-ratio: 3384 / 1978;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 10px;
-  overflow: hidden;
-  background: rgba(9, 17, 30, 0.86);
-  box-shadow: 0 36px 90px rgba(0, 0, 0, 0.42);
-  backdrop-filter: blur(16px);
-  transform: rotateY(-4deg) rotateX(1deg) rotateZ(-1.4deg);
-  transform-origin: center;
-}
-
-.mainScreenshotFrame img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
 }
 
 .sectionHeader {
@@ -734,8 +776,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .landingShell [data-reveal],
-  .landingShell .isVisible,
-  .screenshotCollage {
+  .landingShell .isVisible {
     opacity: 1;
     transform: none;
     transition: none;
@@ -743,7 +784,6 @@
 }
 
 @media (max-width: 980px) {
-  .heroGrid,
   .liveSection,
   .workspaceSection,
   .controlSection {
@@ -762,19 +802,6 @@
   .landingFooter {
     grid-template-columns: 1fr;
     gap: 36px;
-  }
-
-  .heroGrid {
-    gap: 44px;
-  }
-
-  .screenshotCollage {
-    min-height: 500px;
-  }
-
-  .mainScreenshotFrame {
-    left: 0;
-    width: 100%;
   }
 
   .workspaceCopy {
@@ -820,22 +847,6 @@
   .secondaryButton,
   .textButton {
     width: 100%;
-  }
-
-  .screenshotCollage {
-    min-height: 360px;
-  }
-
-  .mainScreenshotFrame {
-    top: 42px;
-    left: 0;
-    width: 100%;
-    border-radius: 10px;
-    transform: none;
-  }
-
-  .mainScreenshotFrame img {
-    object-position: center;
   }
 
   .socialCollage {
@@ -890,4 +901,29 @@
   .footerLinks h4 {
     letter-spacing: 0.06em;
   }
+}
+
+/* Higher-specificity overrides — kept last so specificity ascends file-wide
+ * (biome noDescendingSpecificity). */
+
+/* Hero copy stacks above the video backdrop. */
+.heroBanner .heroSection {
+  position: relative;
+  z-index: 1;
+}
+
+/* Inline links inside landing body copy (e.g. the AI Enablement Engineer
+ * post) — explicit so they read as links regardless of site theme. */
+.workspaceCopy p a,
+.controlSection p a {
+  color: var(--landing-teal);
+  text-decoration: underline;
+  text-decoration-color: rgba(127, 232, 223, 0.45);
+  text-underline-offset: 3px;
+}
+
+.workspaceCopy p a:hover,
+.controlSection p a:hover {
+  color: #a8f5ed;
+  text-decoration-color: #a8f5ed;
 }

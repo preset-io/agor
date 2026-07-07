@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { importPage } from 'nextra/pages';
 import {
   DEFAULT_DESCRIPTION,
+  DEFAULT_TITLE,
   type FrontMatterLike,
   getCanonicalUrl,
   getSocialImage,
@@ -51,10 +52,7 @@ export async function generateMetadata(props: PageProps) {
   const { metadata } = await importPage(params.mdxPath);
   const pathname = `/${params.mdxPath?.join('/') ?? ''}`;
   const pageTitle = metadata.title ?? 'agor';
-  const title =
-    pageTitle === 'agor'
-      ? 'agor – Team command center for all things agentic'
-      : `${pageTitle} – agor`;
+  const title = pageTitle === 'agor' ? DEFAULT_TITLE : `${pageTitle} – agor`;
   const description = metadata.description || DEFAULT_DESCRIPTION;
   const frontMatter = metadata as FrontMatterLike;
   const image = getSocialImage(frontMatter);

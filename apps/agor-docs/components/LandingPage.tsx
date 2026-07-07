@@ -2,9 +2,16 @@
 
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
-import { useEffect, useRef } from 'react';
-import { AGOR_CLOUD_DEMO_URL, DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
+import { useEffect, useRef, useState } from 'react';
+import {
+  AGOR_CLOUD_DEMO_URL,
+  AI_ENABLEMENT_POST_URL,
+  DISCORD_INVITE_URL,
+  GITHUB_REPO_URL,
+} from '../lib/links';
 import { BRAND_NAME, LOGO_PATH } from '../lib/siteMetadata';
+import Aurora from './Aurora/Aurora';
+import { HubSpotFormModal } from './HubSpotFormModal';
 import styles from './LandingPage.module.css';
 
 const LANDING_PRIVATE_BETA_URL = 'https://agor.live/blog/agor-cloud#lets-get-cooking';
@@ -12,25 +19,25 @@ const LANDING_PRIVATE_BETA_URL = 'https://agor.live/blog/agor-cloud#lets-get-coo
 const featureCards = [
   {
     title: 'Shared memory',
-    body: 'Each AI teammate gets a namespace in the knowledge base: semantically searchable, durable, and shared with the team.',
+    body: 'Each assistant gets a namespace in the knowledge base: semantically searchable, durable, and shared with the team.',
     href: '/guide/knowledge',
     linkLabel: 'Explore Knowledge',
   },
   {
     title: 'Skills + MCP',
-    body: 'Package repeatable workflows as skills and connect teammates to the MCP servers your team already trusts.',
+    body: 'Package repeatable workflows as skills and connect assistants to the MCP servers your team already trusts.',
     href: '/guide/internal-mcp',
     linkLabel: 'See MCP control',
   },
   {
     title: 'Conversational onboarding',
-    body: 'Teach an AI teammate by talking to it. The programming language is conversation, and the useful parts become reusable context.',
-    href: '/guide/teammates',
-    linkLabel: 'Read about Teammates',
+    body: 'Teach an assistant by talking to it. The programming language is conversation, and the useful parts become reusable context.',
+    href: '/guide/assistants',
+    linkLabel: 'Read about Assistants',
   },
   {
     title: 'Where your team works',
-    body: 'Reach teammates from Slack, GitHub, or wherever work already happens through gateway channels.',
+    body: 'Reach assistants from Slack, GitHub, or wherever work already happens through gateway channels.',
     href: '/guide/message-gateway',
     linkLabel: 'Open Message Gateway',
   },
@@ -42,7 +49,7 @@ const featureCards = [
   },
   {
     title: 'Personality + boundaries',
-    body: 'Tune voice, style, and level of agency so every teammate knows how bold to be and when to ask first.',
+    body: 'Tune voice, style, and level of agency so every assistant knows how bold to be and when to ask first.',
     href: '/blog/agent-modeling-101',
     linkLabel: 'Agent modeling 101',
   },
@@ -61,10 +68,10 @@ const productPreviews = [
     href: '/guide/rich-chat-ux',
   },
   {
-    title: 'Persistent AI teammates',
+    title: 'Persistent assistants',
     body: 'Give long-lived helpers memory, skills, schedules, and team-wide reach beyond one-off prompts.',
-    image: '/screenshots/teammates-list.png',
-    href: '/guide/teammates',
+    image: '/screenshots/assistants-list.png',
+    href: '/guide/assistants',
   },
   {
     title: 'Message gateway',
@@ -74,7 +81,7 @@ const productPreviews = [
   },
   {
     title: 'Scheduler',
-    body: 'Run standups, audits, digests, reports, and teammate heartbeats without waiting to be asked.',
+    body: 'Run standups, audits, digests, reports, and assistant heartbeats without waiting to be asked.',
     image: '/screenshots/scheduler-modal.png',
     href: '/guide/scheduler',
   },
@@ -156,20 +163,6 @@ function GitHubIcon() {
   );
 }
 
-function ProductMockup() {
-  return (
-    <div className={styles.screenshotCollage} role="img" aria-label="Agor product screenshots">
-      <div className={styles.mainScreenshotFrame}>
-        {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-        <img
-          src="/screenshots/board-hero.png"
-          alt="Agor board showing live cursors, rich branch cards, zones, and agent dashboards"
-        />
-      </div>
-    </div>
-  );
-}
-
 function MultiplayerCollage() {
   return (
     <div
@@ -201,6 +194,7 @@ function MultiplayerCollage() {
 
 export function LandingPage() {
   const landingRef = useRef<HTMLDivElement>(null);
+  const [isBetaFormOpen, setIsBetaFormOpen] = useState(false);
 
   useEffect(() => {
     const landing = landingRef.current;
@@ -241,25 +235,42 @@ export function LandingPage() {
 
   return (
     <div ref={landingRef} className={styles.landingShell}>
-      <section className={styles.heroSection}>
-        <div className={styles.heroGrid}>
+      <div className={styles.heroBanner}>
+        {/* Looping product demo as the hero backdrop. Sources are a viewport
+            ladder — browsers pick the first matching media query. Falls back
+            to the poster frame under prefers-reduced-motion (CSS hides the
+            video element; the poster is the layer's background image). */}
+        <div className={styles.heroVideo} aria-hidden="true">
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            poster="/videos/agor-hero-poster.jpg"
+          >
+            <source src="/videos/agor-hero-540.mp4" type="video/mp4" media="(max-width: 720px)" />
+            <source src="/videos/agor-hero-720.mp4" type="video/mp4" media="(max-width: 1280px)" />
+            <source src="/videos/agor-hero.mp4" type="video/mp4" />
+          </video>
+        </div>
+        <section className={styles.heroSection}>
           <div className={styles.heroCopy} data-reveal>
-            <p className={styles.kicker}>Team command center for all things agentic.</p>
-            <h1>Meet your AI teammates.</h1>
+            <p className={styles.kicker}>The command center for AI enablement.</p>
+            <h1>Empower your team with AI assistants.</h1>
             <p className={styles.heroProvocation}>
-              Break out of the terminal.
+              Break your team out of the terminal.
               <br />
-              Bring your team and agents together.
+              Build agentic workflows for business end-users and AI power users alike.
             </p>
             <div className={styles.heroActions}>
-              <Link
-                href={LANDING_PRIVATE_BETA_URL}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
                 className={styles.primaryButton}
+                onClick={() => setIsBetaFormOpen(true)}
               >
                 Join the private beta
-              </Link>
+              </button>
               <Link href="/guide/getting-started" className={styles.secondaryButton}>
                 Get started
               </Link>
@@ -277,75 +288,78 @@ export function LandingPage() {
               Open source. Try it today with a 3-minute local install.
             </p>
           </div>
-          <div data-reveal style={revealDelay(1)}>
-            <ProductMockup />
-          </div>
+        </section>
+      </div>
+
+      <div className={styles.auroraBand}>
+        <div className={styles.bandAurora} aria-hidden="true">
+          <Aurora colorStops={['#3B82F6', '#06B6D4', '#0408ef']} amplitude={0.9} blend={1} />
         </div>
-      </section>
-
-      <section className={styles.harnessStrip} data-reveal>
-        <span className={styles.harnessLabel}>Built on the harnesses you already use</span>
-        <ul className={styles.harnessList}>
-          {harnesses.map((harness) => (
-            <li className={styles.harnessItem} key={harness.name}>
-              <span className={styles.harnessLogo}>
-                {harness.logo ? (
-                  // biome-ignore lint/performance/noImgElement: Static brand logo
-                  <img src={harness.logo} alt={`${harness.name} logo`} />
-                ) : (
-                  <span className={styles.harnessGlyph}>{harness.glyph}</span>
-                )}
-              </span>
-              <span className={styles.harnessName}>{harness.name}</span>
-              {harness.beta ? <span className={styles.harnessBeta}>Beta</span> : null}
-            </li>
-          ))}
-        </ul>
-        <p className={styles.harnessNote}>
-          Bring your own provider and subscription. Pick the best harness per session, no lock-in.
-          All in a web workspace that leaves the terminal behind.
-        </p>
-      </section>
-
-      <section className={styles.liveSection} data-reveal>
-        <div className={styles.liveCopy}>
-          <span className={styles.eyebrow}>Multiplayer by default</span>
-          <h2>Your team’s agents on one live, Figma-like canvas.</h2>
-          <p>
-            Most agent tools are solo. Agor isn’t. Cursors, comments, and a facepile show who’s
-            here. Sessions, dev environments, and branches are shared. One link, one running thing,
-            everyone looking at the same live work.
-          </p>
-          <ul className={styles.liveHighlights}>
-            <li>
-              <strong>Live presence</strong>
-              <span>
-                See teammates’ cursors, comments, and reactions as work happens, not after the fact.
-              </span>
-            </li>
-            <li>
-              <strong>Shared dev environments</strong>
-              <span>
-                Engineers, reviewers, PMs, and QA rally around the same running branch instead of
-                “spin up your own to see it.”
-              </span>
-            </li>
-            <li>
-              <strong>Learn from each other</strong>
-              <span>
-                Watch how teammates prompt, lift the patterns that work, and standardize them as
-                zone triggers.
-              </span>
-            </li>
+        <section className={styles.harnessStrip} data-reveal>
+          <span className={styles.harnessLabel}>Built on the harnesses you already use</span>
+          <ul className={styles.harnessList}>
+            {harnesses.map((harness) => (
+              <li className={styles.harnessItem} key={harness.name}>
+                <span className={styles.harnessLogo}>
+                  {harness.logo ? (
+                    // biome-ignore lint/performance/noImgElement: Static brand logo
+                    <img src={harness.logo} alt={`${harness.name} logo`} />
+                  ) : (
+                    <span className={styles.harnessGlyph}>{harness.glyph}</span>
+                  )}
+                </span>
+                <span className={styles.harnessName}>{harness.name}</span>
+                {harness.beta ? <span className={styles.harnessBeta}>Beta</span> : null}
+              </li>
+            ))}
           </ul>
-          <Link href="/guide/multiplayer-social" className={styles.cardLink}>
-            Explore multiplayer →
-          </Link>
-        </div>
-        <div className={styles.liveVisual}>
-          <MultiplayerCollage />
-        </div>
-      </section>
+          <p className={styles.harnessNote}>
+            Bring your own provider and subscription. Pick the best harness per session, no lock-in.
+            All in a web workspace that leaves the terminal behind.
+          </p>
+        </section>
+
+        <section className={styles.liveSection} data-reveal>
+          <div className={styles.liveCopy}>
+            <span className={styles.eyebrow}>Multiplayer by default</span>
+            <h2>Your team’s agents on one live, Figma-like canvas.</h2>
+            <p>
+              Most agent tools are solo. Agor isn’t. Cursors, comments, and a facepile show who’s
+              here. Sessions, dev environments, and branches are shared. One link, one running
+              thing, everyone looking at the same live work.
+            </p>
+            <ul className={styles.liveHighlights}>
+              <li>
+                <strong>Live presence</strong>
+                <span>
+                  See teammates’ cursors, comments, and reactions as work happens, not after the
+                  fact.
+                </span>
+              </li>
+              <li>
+                <strong>Shared dev environments</strong>
+                <span>
+                  Engineers, reviewers, PMs, and QA rally around the same running branch instead of
+                  “spin up your own to see it.”
+                </span>
+              </li>
+              <li>
+                <strong>Learn from each other</strong>
+                <span>
+                  Watch how teammates prompt, lift the patterns that work, and standardize them as
+                  zone triggers.
+                </span>
+              </li>
+            </ul>
+            <Link href="/guide/multiplayer-social" className={styles.cardLink}>
+              Explore multiplayer →
+            </Link>
+          </div>
+          <div className={styles.liveVisual}>
+            <MultiplayerCollage />
+          </div>
+        </section>
+      </div>
 
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
@@ -375,11 +389,16 @@ export function LandingPage() {
       <section className={styles.workspaceSection} data-reveal>
         <div className={styles.workspaceCopy}>
           <span className={styles.eyebrow}>The shared workspace</span>
-          <h2>Raise AI teammates with memory, skills, and a place to work.</h2>
+          <h2>Raise team assistants with memory, skills, and a place to work.</h2>
           <p>
-            One-off prompts don’t compound. In Agor, AI teammates have durable identities your team
+            One-off prompts don’t compound. In Agor, assistants have durable identities your team
             can teach conversationally, then equip with memory, tools, channels, and schedules as
-            they grow, so what works for one person finally reaches the whole team.
+            they grow — so your{' '}
+            <Link href={AI_ENABLEMENT_POST_URL} target="_blank" rel="noopener noreferrer">
+              most AI-enabled teammates
+            </Link>{' '}
+            can uplevel workflows across the entire org, and what works for one person finally
+            reaches everyone.
           </p>
         </div>
         <div className={styles.featureGrid}>
@@ -409,8 +428,13 @@ export function LandingPage() {
             Now make it compound.
           </h2>
           <p>
-            Choose the right agent harness, keep your data yours, and move from solo experiments to
-            team-visible workflows without locking into one frontier.
+            Agor is built for the{' '}
+            <Link href={AI_ENABLEMENT_POST_URL} target="_blank" rel="noopener noreferrer">
+              AI Enablement Engineer
+            </Link>{' '}
+            — the teammate already multiplying everyone around them. Choose the right agent harness,
+            keep your data yours, and give your AI leadership one platform to empower the entire org
+            with full agentic power.
           </p>
         </div>
         <ul className={styles.trustList}>
@@ -429,14 +453,13 @@ export function LandingPage() {
         <h2>Give your team’s AI work a place to live.</h2>
         <p>Agor Cloud is opening to teams now. The open-source build is ready when you are.</p>
         <div className={styles.heroActions}>
-          <Link
-            href={LANDING_PRIVATE_BETA_URL}
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            type="button"
             className={styles.primaryButton}
+            onClick={() => setIsBetaFormOpen(true)}
           >
             Join the private beta
-          </Link>
+          </button>
           <Link
             href={AGOR_CLOUD_DEMO_URL}
             target="_blank"
@@ -457,7 +480,7 @@ export function LandingPage() {
           <img src={LOGO_PATH} alt={`${BRAND_NAME} logo`} />
           <div>
             <strong>agor</strong>
-            <p>Team command center for all things agentic.</p>
+            <p>The command center for AI enablement.</p>
             <p className={styles.footerEtymology}>
               <span>AG</span>ent <span>OR</span>chestration
             </p>
@@ -468,7 +491,7 @@ export function LandingPage() {
             <h4>Product</h4>
             <Link href="/guide/boards">Boards</Link>
             <Link href="/guide/sessions">Sessions</Link>
-            <Link href="/guide/teammates">Teammates</Link>
+            <Link href="/guide/assistants">Assistants</Link>
             <Link href="/guide/internal-mcp">MCP control</Link>
           </div>
           <div>
@@ -491,6 +514,12 @@ export function LandingPage() {
           </div>
         </div>
       </footer>
+
+      <HubSpotFormModal
+        isOpen={isBetaFormOpen}
+        onClose={() => setIsBetaFormOpen(false)}
+        title="Join the Agor Cloud private beta"
+      />
     </div>
   );
 }

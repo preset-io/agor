@@ -4,10 +4,10 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { BRAND_NAME, LOGO_PATH } from '../lib/siteMetadata';
+import Aurora from './Aurora/Aurora';
 import { GifGallery } from './GifGallery';
 import styles from './Hero.module.css';
 import { HubSpotFormModal } from './HubSpotFormModal';
-import { ParticleBackground } from './ParticleBackground';
 
 interface HeroProps {
   title: string;
@@ -31,7 +31,9 @@ export function Hero({
   const [isContactOpen, setIsContactOpen] = useState(false);
   return (
     <div className={styles.heroWrapper}>
-      <ParticleBackground />
+      <div className={styles.auroraBackground}>
+        <Aurora colorStops={['#3B82F6', '#06B6D4', '#0408ef']} amplitude={0.9} blend={1} />
+      </div>
 
       <div className={styles.hero}>
         <div className={styles.heroContent}>
@@ -83,16 +85,6 @@ export function Hero({
           </div>
         )}
       </div>
-
-      {/* Attribution */}
-      <a
-        href="https://particles.js.org"
-        target="_blank"
-        rel="noopener noreferrer"
-        className={styles.particlesAttribution}
-      >
-        🤍 tsparticles
-      </a>
 
       <HubSpotFormModal isOpen={isContactOpen} onClose={() => setIsContactOpen(false)} />
     </div>
