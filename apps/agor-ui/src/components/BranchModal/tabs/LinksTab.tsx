@@ -43,7 +43,6 @@ import {
   compareLinkDisplayItemsBySort,
   getCompactLinkDisplayName,
   getLinkCategoryCounts,
-  getLinkCategorySummary,
   getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
   isBranchOwnedLink,
@@ -699,29 +698,6 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
         data-testid="branch-links-tab"
       >
         <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
-          <div
-            style={{
-              position: 'sticky',
-              top: 0,
-              zIndex: 1,
-              background: token.colorBgElevated,
-              padding: `0 ${token.paddingLG}px ${token.sizeXS}px`,
-            }}
-          >
-            <Typography.Title level={5} style={{ margin: 0 }}>
-              Branch links
-            </Typography.Title>
-            <Typography.Text type="secondary">
-              Durable resources owned by this branch. Session-owned pins stay promoted in session
-              headers, not on the branch card.
-            </Typography.Text>
-            {items.length > 0 && (
-              <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
-                {getLinkCategorySummary(items)}
-              </Typography.Text>
-            )}
-          </div>
-
           {error && (
             <div style={{ padding: `0 ${token.paddingLG}px` }}>
               <Alert title="Error" description={error} type="error" showIcon />
