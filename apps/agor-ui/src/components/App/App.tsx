@@ -1125,11 +1125,9 @@ export const App: React.FC<AppProps> = ({
     useMemo(() => makeBranchesForBoardSelector(currentBoardId), [currentBoardId]),
     shallow
   );
-  // Comment-derived header scalars, shared between AppHeader's comments button
-  // and the collapsed rail's Comments item so both surfaces carry the same
-  // badge. Subscribing to the derived number/boolean (instead of the comment
-  // map) keeps comment edits that don't change them — and all comments on other
-  // boards — from waking the shell.
+  // Comment-derived header scalars. Subscribing to the derived number/boolean
+  // (instead of the comment map) keeps comment edits that don't change them —
+  // and all comments on other boards — from waking the shell.
   const currentUserName = user?.name || user?.email?.split('@')[0] || '';
   const unreadCommentsCount = useAgorStore(
     useMemo(() => makeUnreadCommentCountSelector(currentBoardId), [currentBoardId])
