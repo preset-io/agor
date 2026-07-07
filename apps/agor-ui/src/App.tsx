@@ -30,7 +30,6 @@ import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
-import { OnboardingBanners } from './components/OnboardingBanners';
 import { OnboardingWizard, type WizardStep } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
 import { getDaemonUrl } from './config/daemon';
@@ -427,11 +426,6 @@ function AppContent() {
     user ? (s.userById.get(user.user_id) ?? null) : null
   );
   const currentUser = user ? storedCurrentUser || user : null;
-
-  // Narrow selector for the OnboardingBanners integrations check — subscribes
-  // to the MCP server count only, not the whole map, so unrelated MCP writes
-  // don't re-render the shell.
-  const mcpServerCount = useAgorStore((s) => s.mcpServerById.size);
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
@@ -1687,18 +1681,6 @@ function AppContent() {
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
       onRestartOnboarding={handleRestartOnboarding}
-      topBanner={
-        <OnboardingBanners
-          user={currentUser}
-          mcpServerCount={mcpServerCount}
-          onOpenUserSettings={(tab) => {
-            setUserSettingsInitialTab(tab);
-            setOpenUserSettings(true);
-          }}
-          onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
-          onCheckAuth={handleCheckAuth}
-        />
-      }
     />
   );
 
