@@ -7,7 +7,7 @@
 
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { SessionRow } from '../schema';
 import { dbTest } from '../test-helpers';
