@@ -369,6 +369,9 @@ export const tasks = pgTable(
 
         // Generic metadata (e.g., is_agor_callback, source, child_session_id)
         metadata?: Task['metadata'];
+
+        // Passive runtime-vitals observability
+        runtime_vitals?: Task['runtime_vitals'];
       }>()
       .notNull(),
   },

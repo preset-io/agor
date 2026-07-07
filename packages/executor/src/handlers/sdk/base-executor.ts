@@ -18,9 +18,16 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, TaskRuntimeEventKind, TaskRuntimePhase } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
+import {
+  TaskRuntimeVitalsReporter,
+  wrapMessagesServiceWithRuntimeVitals,
+  wrapStreamingCallbacksWithRuntimeVitals,
+  wrapTasksServiceWithRuntimeVitals,
+  wrapTasksStreamingServiceWithRuntimeVitals,
+} from '../../runtime-vitals.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -216,12 +223,34 @@ export function createStreamingCallbacks(
 export function createExecutionContext(
   client: AgorClient,
   toolName: string,
-  sessionId: SessionID
+  sessionId: SessionID,
+  vitalsReporter?: TaskRuntimeVitalsReporter
 ): ExecutionContext {
+  const repos = createFeathersBackedRepositories(client);
+  const callbacks = createStreamingCallbacks(client, toolName, sessionId);
+
+  if (!vitalsReporter) {
+    return { client, repos, callbacks };
+  }
+
   return {
     client,
-    repos: createFeathersBackedRepositories(client),
-    callbacks: createStreamingCallbacks(client, toolName, sessionId),
+    repos: {
+      ...repos,
+      messagesService: wrapMessagesServiceWithRuntimeVitals(
+        repos.messagesService,
+        vitalsReporter
+      ) as typeof repos.messagesService,
+      tasksService: wrapTasksServiceWithRuntimeVitals(
+        repos.tasksService,
+        vitalsReporter
+      ) as typeof repos.tasksService,
+      tasksStreamingService: wrapTasksStreamingServiceWithRuntimeVitals(
+        repos.tasksStreamingService,
+        vitalsReporter
+      ) as typeof repos.tasksStreamingService,
+    },
+    callbacks: wrapStreamingCallbacksWithRuntimeVitals(callbacks, vitalsReporter),
   };
 }
 
@@ -401,6 +430,17 @@ export async function executeToolTask(params: {
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
 
+  const vitalsReporter = new TaskRuntimeVitalsReporter({
+    client,
+    taskId,
+    toolName,
+  });
+  await vitalsReporter.record(TaskRuntimeEventKind.SDK_TURN_STARTED, {
+    source: 'executor',
+    phase: TaskRuntimePhase.SDK_STARTING,
+    forceFlush: true,
+  });
+
   // Ensure plain git commands launched by the agent SDK inherit safe.directory
   // trust for this managed checkout. Without this, Unix-isolated sessions can
   // create and run successfully through executor-mediated git probes while
@@ -438,7 +478,7 @@ export async function executeToolTask(params: {
   }
 
   // Create execution context
-  const ctx = createExecutionContext(client, toolName, sessionId);
+  const ctx = createExecutionContext(client, toolName, sessionId, vitalsReporter);
 
   // Create tool instance using factory function
   // Pass the resolved key (or empty string) and useNativeAuth flag
@@ -473,6 +513,12 @@ export async function executeToolTask(params: {
   params.abortController.signal.addEventListener('abort', abortHandler);
 
   try {
+    await vitalsReporter.record(TaskRuntimeEventKind.TASK_STATUS, {
+      source: 'executor',
+      phase: TaskRuntimePhase.AWAITING_FIRST_AGENT_EVENT,
+      forceFlush: true,
+    });
+
     // Execute prompt with streaming
     // Pass abortController directly to SDK for proper cancellation support
     const result = await tool.executePromptWithStreaming(
@@ -503,10 +549,25 @@ export async function executeToolTask(params: {
       );
     }
 
+    const terminalVitalsKind = result.wasStopped
+      ? TaskRuntimeEventKind.TURN_STOPPED
+      : result.hadError
+        ? TaskRuntimeEventKind.TURN_FAILED
+        : TaskRuntimeEventKind.TURN_COMPLETED;
+    const terminalPhase = result.wasStopped
+      ? TaskRuntimePhase.STOPPED
+      : result.hadError
+        ? TaskRuntimePhase.FAILED
+        : TaskRuntimePhase.COMPLETED;
+
     // Build patch data
     const patchData: Partial<Task> = {
       status: taskStatus,
       completed_at: new Date().toISOString(),
+      runtime_vitals: await vitalsReporter.terminalSnapshot(terminalVitalsKind, {
+        source: 'sdk',
+        phase: terminalPhase,
+      }),
     };
 
     // Add git_state if we captured a SHA
@@ -604,6 +665,10 @@ export async function executeToolTask(params: {
     const patchData: Partial<Task> = {
       status: 'failed',
       completed_at: new Date().toISOString(),
+      runtime_vitals: await vitalsReporter.terminalSnapshot(TaskRuntimeEventKind.TURN_FAILED, {
+        source: 'sdk',
+        phase: TaskRuntimePhase.FAILED,
+      }),
       // Surface the actual failure reason so the UI / DB show what went wrong,
       // instead of the task silently flipping to FAILED with no context.
       error_message: err.message || String(err),
@@ -650,6 +715,8 @@ export async function executeToolTask(params: {
 
     throw err;
   } finally {
+    vitalsReporter.stop();
+
     // Clean up abort listener
     params.abortController.signal.removeEventListener('abort', abortHandler);
   }

@@ -19,6 +19,92 @@ export const TaskStatus = {
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
 /**
+ * Passive, persisted runtime-vitals snapshot for a task.
+ *
+ * This is observability only: writers must not use it to terminalize, stop,
+ * abort, timeout, or drain queues. Policies can be layered later by daemon-side
+ * supervisors that read these normalized phase/event fields.
+ */
+export const TaskRuntimePhase = {
+  EXECUTOR_CONNECTED: 'executor_connected',
+  SDK_STARTING: 'sdk_starting',
+  AWAITING_FIRST_AGENT_EVENT: 'awaiting_first_agent_event',
+  RUNNING: 'running',
+  AWAITING_PERMISSION: 'awaiting_permission',
+  TOOL_RUNNING: 'tool_running',
+  STOPPING: 'stopping',
+  COMPLETED: 'completed',
+  FAILED: 'failed',
+  STOPPED: 'stopped',
+  TIMED_OUT: 'timed_out',
+} as const;
+
+export type TaskRuntimePhase = (typeof TaskRuntimePhase)[keyof typeof TaskRuntimePhase];
+
+export const TaskRuntimeEventKind = {
+  EXECUTOR_CONNECTED: 'executor_connected',
+  SDK_TURN_STARTED: 'sdk_turn_started',
+  FIRST_AGENT_EVENT: 'first_agent_event',
+  STREAM_START: 'stream_start',
+  THINKING: 'thinking',
+  ASSISTANT_MESSAGE: 'assistant_message',
+  TOOL_START: 'tool_start',
+  TOOL_PROGRESS: 'tool_progress',
+  TOOL_COMPLETE: 'tool_complete',
+  PERMISSION_WAIT_START: 'permission_wait_start',
+  PERMISSION_WAIT_END: 'permission_wait_end',
+  TASK_STATUS: 'task_status',
+  TURN_COMPLETED: 'turn_completed',
+  TURN_FAILED: 'turn_failed',
+  TURN_STOPPED: 'turn_stopped',
+  TURN_TIMED_OUT: 'turn_timed_out',
+} as const;
+
+export type TaskRuntimeEventKind = (typeof TaskRuntimeEventKind)[keyof typeof TaskRuntimeEventKind];
+
+export type TaskRuntimeEventSource = 'daemon' | 'executor' | 'sdk' | 'tool' | 'permission';
+
+export interface TaskRuntimeEvent {
+  kind: TaskRuntimeEventKind;
+  at: string;
+  source: TaskRuntimeEventSource;
+  phase?: TaskRuntimePhase;
+  /** Normalized tool name only; never raw tool input/output. */
+  tool_name?: string;
+  /** Native tool-call id when available; no arguments or payload. */
+  tool_use_id?: string;
+}
+
+export interface TaskRuntimeVitals {
+  schema_version: 1;
+  phase: TaskRuntimePhase;
+  phase_started_at: string;
+  last_activity_at: string;
+  /** Set only for agent/tool output signals, not executor heartbeat. */
+  last_meaningful_progress_at?: string;
+  first_meaningful_progress_at?: string;
+  last_event?: TaskRuntimeEvent;
+  active_tool?: {
+    tool_name?: string;
+    tool_use_id?: string;
+    started_at: string;
+    last_activity_at?: string;
+  } | null;
+  counters?: {
+    events?: number;
+    meaningful_progress_events?: number;
+    tool_starts?: number;
+    tool_completes?: number;
+    thinking_events?: number;
+    stream_starts?: number;
+    assistant_messages?: number;
+    permission_waits?: number;
+  };
+  /** Small recent-event ring buffer; capped by writers. */
+  recent_events?: TaskRuntimeEvent[];
+}
+
+/**
  * Structured metadata attached to a task. All fields are optional, but the
  * ones that are present are load-bearing — typing them here prevents drift
  * between the daemon (which writes them) and the UI/services that read them.
@@ -155,6 +241,9 @@ export interface Task {
    * so the UI styling for callbacks survives the queue → run hop.
    */
   metadata?: TaskMetadata;
+
+  /** Passive executor/agent runtime phase observability. No policy side effects. */
+  runtime_vitals?: TaskRuntimeVitals;
 
   // Message range
   message_range: {

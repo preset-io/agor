@@ -5,7 +5,7 @@
  */
 
 import type { Task, UUID } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { TaskRuntimeEventKind, TaskRuntimePhase, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -780,6 +780,95 @@ describe('TaskRepository.update', () => {
     expect(updated.last_executor_heartbeat_at).toBe(heartbeatAt);
     expect(found?.last_executor_heartbeat_at).toBe(heartbeatAt);
   });
+
+  dbTest(
+    'should round-trip runtime_vitals and clear active_tool across deep-merge updates',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const startedAt = '2026-01-01T00:00:00.000Z';
+      const created = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          runtime_vitals: {
+            schema_version: 1,
+            phase: TaskRuntimePhase.SDK_STARTING,
+            phase_started_at: startedAt,
+            last_activity_at: startedAt,
+            last_event: {
+              kind: TaskRuntimeEventKind.SDK_TURN_STARTED,
+              at: startedAt,
+              source: 'executor',
+              phase: TaskRuntimePhase.SDK_STARTING,
+            },
+            active_tool: {
+              tool_name: 'Bash',
+              tool_use_id: 'tool-1',
+              started_at: startedAt,
+              last_activity_at: startedAt,
+            },
+            counters: { events: 1 },
+            recent_events: [
+              {
+                kind: TaskRuntimeEventKind.SDK_TURN_STARTED,
+                at: startedAt,
+                source: 'executor',
+                phase: TaskRuntimePhase.SDK_STARTING,
+              },
+            ],
+          },
+        })
+      );
+
+      const progressAt = '2026-01-01T00:00:01.000Z';
+      const updated = await taskRepo.update(created.task_id, {
+        runtime_vitals: {
+          schema_version: 1,
+          phase: TaskRuntimePhase.RUNNING,
+          phase_started_at: progressAt,
+          last_activity_at: progressAt,
+          last_meaningful_progress_at: progressAt,
+          first_meaningful_progress_at: progressAt,
+          last_event: {
+            kind: TaskRuntimeEventKind.TOOL_COMPLETE,
+            at: progressAt,
+            source: 'tool',
+            phase: TaskRuntimePhase.RUNNING,
+            tool_name: 'Bash',
+            tool_use_id: 'tool-1',
+          },
+          active_tool: null,
+          counters: { events: 2, meaningful_progress_events: 1 },
+          recent_events: [
+            {
+              kind: TaskRuntimeEventKind.SDK_TURN_STARTED,
+              at: startedAt,
+              source: 'executor',
+              phase: TaskRuntimePhase.SDK_STARTING,
+            },
+            {
+              kind: TaskRuntimeEventKind.TOOL_COMPLETE,
+              at: progressAt,
+              source: 'tool',
+              phase: TaskRuntimePhase.RUNNING,
+              tool_name: 'Bash',
+              tool_use_id: 'tool-1',
+            },
+          ],
+        },
+      });
+      await taskRepo.update(created.task_id, { tool_use_count: 2 });
+      const found = await taskRepo.findById(created.task_id);
+
+      expect(updated.runtime_vitals?.phase).toBe(TaskRuntimePhase.RUNNING);
+      expect(found?.runtime_vitals?.phase).toBe(TaskRuntimePhase.RUNNING);
+      expect(found?.runtime_vitals?.last_event?.kind).toBe(TaskRuntimeEventKind.TOOL_COMPLETE);
+      expect(found?.runtime_vitals?.active_tool).toBeNull();
+      expect(found?.runtime_vitals?.counters?.meaningful_progress_events).toBe(1);
+      expect(found?.tool_use_count).toBe(2);
+    }
+  );
 
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
