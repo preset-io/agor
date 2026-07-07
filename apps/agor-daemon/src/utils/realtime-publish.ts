@@ -396,9 +396,8 @@ async function resolveStreamingDelivery(
   const tenantConnections = new Set<unknown>(
     (tenantScoped as unknown as { connections: unknown[] }).connections
   );
-  const room = app
-    .channel(sessionStreamChannelName(sessionId))
-    .filter((connection: unknown) => tenantConnections.has(connection));
+  const roomChannel = app.channel(sessionStreamChannelName(sessionId));
+  const room = roomChannel.filter((connection: unknown) => tenantConnections.has(connection));
 
   let ownerId: string | null = null;
   try {

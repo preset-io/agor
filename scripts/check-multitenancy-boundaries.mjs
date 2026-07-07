@@ -50,7 +50,10 @@ const checks = [
       'apps/agor-daemon/src/mcp/tools/artifacts.ts': 1,
       'apps/agor-daemon/src/mcp/tools/boards.ts': 2,
       'apps/agor-daemon/src/mcp/tools/cards.ts': 8,
-      'apps/agor-daemon/src/utils/realtime-publish.ts': 7,
+      // The tenant-aware realtime facade: tenant/session channel join/leave,
+      // the publish handler, and session-stream room routing (join, leave,
+      // leave-all, and the publish-time room lookup) all live here on purpose.
+      'apps/agor-daemon/src/utils/realtime-publish.ts': 8,
       'apps/agor-daemon/src/setup/socketio.ts': 18,
     },
   },

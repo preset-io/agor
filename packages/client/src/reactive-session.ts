@@ -184,18 +184,25 @@ export class ReactiveSessionHandle {
     // AWAIT its ack BEFORE hydrating: a chunk arriving after the ack lands on
     // top of hydrated state, and anything earlier is captured by the hydration
     // itself — a viewer opening mid-stream can't fall into the gap where early
-    // chunks arrive with no streaming state and get dropped. Reconnects
-    // re-subscribe once via the registry's connect handler (rooms are
-    // per-connection; a reconnect is a new one).
-    this.readyPromise = this.subscribeThenHydrate(() => this.bootstrap());
+    // chunks arrive with no streaming state and get dropped. Reconnects apply
+    // the same ordering via onSocketConnect (rooms are per-connection; a
+    // reconnect is a new one).
+    this.readyPromise = this.subscribeThenHydrate(
+      retainSessionStream(this.client, this.sessionId),
+      () => this.bootstrap()
+    );
   }
 
   /**
-   * Await the streaming subscription, then run the hydration step, so chunk
-   * delivery and state hydration can't interleave into a lost-update gap.
+   * Await the streaming subscription ack, then run the hydration step, so chunk
+   * delivery and state hydration can't interleave into a lost-update gap. Used
+   * on both attach (retain) and reconnect (re-subscribe) with the same ordering.
    */
-  private async subscribeThenHydrate(hydrate: () => Promise<void>): Promise<void> {
-    await retainSessionStream(this.client, this.sessionId);
+  private async subscribeThenHydrate(
+    subscribed: Promise<void>,
+    hydrate: () => Promise<void>
+  ): Promise<void> {
+    await subscribed;
     if (this.disposed) return;
     await hydrate();
   }
@@ -436,11 +443,14 @@ export class ReactiveSessionHandle {
     const onSocketConnect = () => {
       if (this.disposed) return;
       this.updateState((prev) => ({ ...prev, connected: true }));
-      // Re-subscription on reconnect is owned by the shared registry's connect
-      // handler (once per still-wanted session); the handle just resyncs its
-      // state, and the chunk handler initializes any stream that starts before
-      // this resync completes.
-      this.readyPromise = this.resync();
+      // A reconnect is a new connection with no room membership. Await the
+      // shared re-subscribe (deduped to one join per session across handles)
+      // BEFORE resyncing — the same subscribe-then-hydrate ordering as attach,
+      // so a chunk arriving after the join lands on top of the resynced state.
+      this.readyPromise = this.subscribeThenHydrate(
+        resubscribeSessionStream(this.client, this.sessionId),
+        () => this.resync()
+      );
     };
     const onSocketDisconnect = () => {
       if (this.disposed) return;
@@ -1099,11 +1109,17 @@ interface StreamSubscription {
   /** Canonical room id echoed by create; used so `remove` leaves the right room. */
   roomId: string | null;
   wantSubscribed: boolean;
+  /**
+   * The re-subscribe op for the CURRENT connection, shared by every handle so a
+   * reconnect re-subscribes each session exactly once. Reset to null on socket
+   * disconnect so the next reconnect issues a fresh join.
+   */
+  reconnect: Promise<void> | null;
 }
 
 interface ClientStreamState {
   subs: Map<string, StreamSubscription>;
-  connectHandler: (() => void) | null;
+  disconnectHandler: (() => void) | null;
 }
 
 const CLIENT_STREAM_STATE = new WeakMap<AgorClient, ClientStreamState>();
@@ -1111,7 +1127,7 @@ const CLIENT_STREAM_STATE = new WeakMap<AgorClient, ClientStreamState>();
 function getClientStreamState(client: AgorClient): ClientStreamState {
   let state = CLIENT_STREAM_STATE.get(client);
   if (!state) {
-    state = { subs: new Map(), connectHandler: null };
+    state = { subs: new Map(), disconnectHandler: null };
     CLIENT_STREAM_STATE.set(client, state);
   }
   return state;
@@ -1159,30 +1175,37 @@ async function removeSubscription(
   }
 }
 
-function ensureStreamConnectHandler(client: AgorClient, state: ClientStreamState): void {
-  if (state.connectHandler) return;
+// A reconnect is a new connection with no room membership. Reset each sub's
+// re-subscribe token on disconnect so the next `resubscribeSessionStream` (one
+// per session, driven by the handles' connect listeners) issues a fresh join.
+function ensureStreamDisconnectHandler(client: AgorClient, state: ClientStreamState): void {
+  if (state.disconnectHandler) return;
   const handler = () => {
-    for (const [sessionId, sub] of state.subs) {
-      if (sub.wantSubscribed) {
-        void runSubscriptionOp(sub, () => createSubscription(client, sessionId, sub));
-      }
+    for (const sub of state.subs.values()) {
+      sub.reconnect = null;
     }
   };
-  state.connectHandler = handler;
-  client.io.on('connect', handler);
+  state.disconnectHandler = handler;
+  client.io.on('disconnect', handler);
 }
 
 function retainSessionStream(client: AgorClient, sessionId: string): Promise<void> {
   const state = getClientStreamState(client);
   let sub = state.subs.get(sessionId);
   if (!sub) {
-    sub = { refCount: 0, chain: Promise.resolve(), roomId: null, wantSubscribed: false };
+    sub = {
+      refCount: 0,
+      chain: Promise.resolve(),
+      roomId: null,
+      wantSubscribed: false,
+      reconnect: null,
+    };
     state.subs.set(sessionId, sub);
   }
   const was = sub.refCount;
   sub.refCount += 1;
   sub.wantSubscribed = true;
-  ensureStreamConnectHandler(client, state);
+  ensureStreamDisconnectHandler(client, state);
   // First attach (including re-attach while a prior remove is still draining on
   // the shared chain) enqueues the create; it lands after any pending remove.
   if (was === 0) {
@@ -1190,6 +1213,22 @@ function retainSessionStream(client: AgorClient, sessionId: string): Promise<voi
     return runSubscriptionOp(target, () => createSubscription(client, sessionId, target));
   }
   return sub.chain;
+}
+
+/**
+ * Re-subscribe a still-wanted session on reconnect and return the shared op
+ * promise so the caller can await the join BEFORE resyncing. Deduped per
+ * connection: the first handle to call it enqueues the create; every other
+ * handle for the same session awaits the same promise (exactly one join).
+ */
+function resubscribeSessionStream(client: AgorClient, sessionId: string): Promise<void> {
+  const state = CLIENT_STREAM_STATE.get(client);
+  const sub = state?.subs.get(sessionId);
+  if (!sub?.wantSubscribed) return Promise.resolve();
+  if (!sub.reconnect) {
+    sub.reconnect = runSubscriptionOp(sub, () => createSubscription(client, sessionId, sub));
+  }
+  return sub.reconnect;
 }
 
 function releaseSessionStream(client: AgorClient, sessionId: string): void {
@@ -1205,9 +1244,9 @@ function releaseSessionStream(client: AgorClient, sessionId: string): void {
     // re-attach reuses this same sub and its ordered chain.
     if (sub.refCount === 0 && !sub.wantSubscribed && state.subs.get(sessionId) === sub) {
       state.subs.delete(sessionId);
-      if (state.subs.size === 0 && state.connectHandler) {
-        client.io.off('connect', state.connectHandler);
-        state.connectHandler = null;
+      if (state.subs.size === 0 && state.disconnectHandler) {
+        client.io.off('disconnect', state.disconnectHandler);
+        state.disconnectHandler = null;
         CLIENT_STREAM_STATE.delete(client);
       }
     }

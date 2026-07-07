@@ -342,17 +342,59 @@ describe('ReactiveSessionHandle stream subscription', () => {
     expect(mock.order).toEqual(['subscribe', 'unsubscribe']);
   });
 
-  it('re-subscribes after a socket reconnect (new connection has no room membership)', async () => {
-    const { client, sessionStreams, fireIo } = createMockClient(opts);
-    const handle = new ReactiveSessionHandle(client, SESSION_ID, { taskHydration: 'none' });
-    await handle.ready();
-    expect(sessionStreams.create).toHaveBeenCalledTimes(1);
+  it('re-subscribes on reconnect and awaits the ack before resyncing', async () => {
+    // Deferred create lets us prove the resync ordering: hydration must not run
+    // while the re-subscribe ack is pending, only after it resolves.
+    const mock = createMockClient({
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: {},
+      deferCreate: true,
+    });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
 
-    fireIo('connect');
+    // Complete the initial attach subscription first.
+    await vi.waitFor(() => {
+      expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+    });
+    mock.releaseCreate();
     await handle.ready();
+    mock.order.length = 0; // observe only the reconnect ordering below
 
-    expect(sessionStreams.create).toHaveBeenCalledTimes(2);
+    // Reconnect: disconnect resets the re-subscribe token, connect re-subscribes.
+    mock.fireIo('disconnect');
+    mock.fireIo('connect');
+
+    // The re-subscribe create is in flight; resync/hydration must NOT have run.
+    await vi.waitFor(() => {
+      expect(mock.sessionStreams.create).toHaveBeenCalledTimes(2);
+    });
+    await Promise.resolve();
+    expect(mock.order).toEqual(['subscribe']);
+
+    // Resolving the re-subscribe ack lets the resync proceed — strictly after.
+    mock.releaseCreate();
+    await handle.ready();
+    expect(mock.order).toEqual(['subscribe', 'hydrate']);
     handle.dispose();
+  });
+
+  it('re-subscribes exactly once across multiple handles on reconnect', async () => {
+    const mock = createMockClient({ tasks: [], messagesByTask: {} });
+    const a = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    const b = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await a.ready();
+    await b.ready();
+    expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+
+    mock.fireIo('disconnect');
+    mock.fireIo('connect');
+    await a.ready();
+    await b.ready();
+
+    // Two handles, one shared re-subscribe (not one per handle).
+    expect(mock.sessionStreams.create).toHaveBeenCalledTimes(2);
+    a.dispose();
+    b.dispose();
   });
 
   it('tolerates a client without the session-streams service (deploy skew)', async () => {
