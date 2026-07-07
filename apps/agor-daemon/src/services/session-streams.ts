@@ -26,6 +26,13 @@ interface SubscribeData {
   sessionId?: string;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A full session UUID needs no short-id/alias resolution before leaving. */
+function isCanonicalSessionId(id: string): boolean {
+  return UUID_RE.test(id);
+}
+
 export function createSessionStreamsService(app: Application) {
   // Reuse the canonical session read as the access gate AND to resolve the
   // caller-supplied id (which may be a short id / alias) to the row's full
@@ -69,15 +76,19 @@ export function createSessionStreamsService(app: Application) {
       if (!connection || !sessionId) {
         return { session_id: sessionId, subscribed: false };
       }
-      // Resolve to the canonical room id when possible so we leave the room we
-      // actually joined. Unsubscribing must not require access (a revoked user
-      // still needs to leave), so fall back to the raw id if the read fails.
+      // The client sends the canonical (full UUID) id it stored from subscribe,
+      // so skip the resolving round-trip when the id is already canonical. Only
+      // a short-id / alias caller needs a lookup. Unsubscribing must not require
+      // access (a revoked user still needs to leave), so fall back to the raw id
+      // if the read fails.
       let canonicalId = sessionId;
-      try {
-        canonicalId = (await resolveAccessibleSessionId(sessionId, params)) ?? sessionId;
-      } catch {
-        // Best-effort: leave under the supplied id; socket teardown is the
-        // ultimate cleanup regardless.
+      if (!isCanonicalSessionId(sessionId)) {
+        try {
+          canonicalId = (await resolveAccessibleSessionId(sessionId, params)) ?? sessionId;
+        } catch {
+          // Best-effort: leave under the supplied id; socket teardown is the
+          // ultimate cleanup regardless.
+        }
       }
       leaveSessionStreamChannel(app, canonicalId, connection);
       return { session_id: canonicalId, subscribed: false };

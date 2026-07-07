@@ -722,6 +722,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  // These routes re-emit onto the `messages` / `tasks` services (which carry
+  // the real streaming payloads); their OWN default `created` event is just the
+  // `{ success: true }` ack and must never broadcast — one per chunk otherwise
+  // reaches every service-account socket. Publish it to no one.
+  app.service('/messages/streaming').publish(() => []);
+  app.service('/tasks/streaming').publish(() => []);
+
   // ============================================================================
   // Sessions custom routes (fork, spawn, genealogy, prompt, stop, queue)
   // ============================================================================

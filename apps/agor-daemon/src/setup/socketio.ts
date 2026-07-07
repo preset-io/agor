@@ -28,6 +28,7 @@ import type {
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
+import { leaveAllSessionStreamChannels } from '../utils/realtime-publish.js';
 import type { BuildInfo } from './build-info.js';
 import type { CorsOrigin } from './cors.js';
 
@@ -905,6 +906,10 @@ export function configureChannels(
             .leave(context.connection as never);
         }
       }
+      // Streaming rooms are separate per-session channels; drop the logged-out
+      // connection from all of them so it stops receiving live session text
+      // while it remains socket-connected.
+      leaveAllSessionStreamChannels(app, context.connection);
     }
   });
 }

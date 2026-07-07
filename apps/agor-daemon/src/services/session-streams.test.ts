@@ -100,4 +100,18 @@ describe('session-streams service', () => {
     expect(leave).toHaveBeenCalledWith(connection);
     expect(result).toEqual({ session_id: 's1', subscribed: false });
   });
+
+  it('unsubscribe skips the resolve round-trip when given a full UUID', async () => {
+    const { app, leave, channel, get } = makeApp(async () => ({ session_id: 's1' }));
+    const service = createSessionStreamsService(app);
+    const fullId = 'ffffffff-1111-2222-3333-444444444444';
+
+    const result = await service.remove(fullId, { connection, provider: 'socketio' } as never);
+
+    // The client already sends the canonical id, so no sessions.get lookup.
+    expect(get).not.toHaveBeenCalled();
+    expect(channel).toHaveBeenCalledWith(`session-stream:${fullId}`);
+    expect(leave).toHaveBeenCalledWith(connection);
+    expect(result).toEqual({ session_id: fullId, subscribed: false });
+  });
 });

@@ -6,7 +6,7 @@ import type {
   RealtimeAccessBranchRepository,
   RealtimeAccessSessionRepository,
 } from './realtime-access-cache';
-import { configureRealtimePublish } from './realtime-publish';
+import { configureRealtimePublish, leaveAllSessionStreamChannels } from './realtime-publish';
 
 class FakeChannel {
   constructor(public connections: unknown[]) {}
@@ -941,5 +941,58 @@ describe('configureRealtimePublish streaming scope', () => {
     );
 
     expect(unionConnections(result)).toEqual([owner]);
+  });
+
+  it('excludes a room member no longer in the tenant/auth channel (logout fail-open guard, RBAC off)', async () => {
+    // `loggedOut` still sits in the session-stream room (Feathers only drops
+    // room membership on socket disconnect) but has been removed from the
+    // authenticated channel. Intersecting the room with tenantScoped must keep
+    // streaming from reaching it — this is the RBAC-off path that would
+    // otherwise return the room unfiltered.
+    const active = { user: user('active') };
+    const loggedOut = { user: user('gone') };
+    const app = makeApp(
+      [active],
+      {},
+      {
+        authenticated: [active],
+        'session-stream:s1': [active, loggedOut],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([active]);
+  });
+});
+
+describe('leaveAllSessionStreamChannels', () => {
+  it('leaves only session-stream rooms for the connection', () => {
+    const leaves: Array<[string, unknown]> = [];
+    const app = {
+      channels: ['authenticated', 'tenant:default', 'session-stream:s1', 'session-stream:s2'],
+      channel: (name: string) => ({
+        leave: (connection: unknown) => {
+          leaves.push([name, connection]);
+        },
+      }),
+    } as unknown as Parameters<typeof leaveAllSessionStreamChannels>[0];
+    const connection = { id: 'c1' };
+
+    leaveAllSessionStreamChannels(app, connection);
+
+    expect(leaves).toEqual([
+      ['session-stream:s1', connection],
+      ['session-stream:s2', connection],
+    ]);
   });
 });

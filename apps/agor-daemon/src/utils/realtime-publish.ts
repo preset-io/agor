@@ -29,8 +29,26 @@ function tenantChannelName(tenantId: string): string {
  * additionally impossible because the subscribe path gates on a tenant-scoped
  * `sessions.get`.
  */
+const SESSION_STREAM_CHANNEL_PREFIX = 'session-stream:';
+
 export function sessionStreamChannelName(sessionId: string): string {
-  return `session-stream:${sessionId}`;
+  return `${SESSION_STREAM_CHANNEL_PREFIX}${sessionId}`;
+}
+
+/**
+ * Remove a connection from every session-stream room it has joined. Called on
+ * logout so a still-connected-but-deauthenticated socket stops receiving live
+ * session text — Feathers only auto-drops channel membership on socket
+ * disconnect, and streaming delivery would otherwise keep reaching a logged-out
+ * connection (which is no longer in the authenticated/tenant channels but may
+ * still sit in a session-stream room).
+ */
+export function leaveAllSessionStreamChannels(app: Application, connection: unknown): void {
+  for (const name of app.channels) {
+    if (name.startsWith(SESSION_STREAM_CHANNEL_PREFIX)) {
+      app.channel(name).leave(connection as never);
+    }
+  }
 }
 
 /**
@@ -370,7 +388,17 @@ async function resolveStreamingDelivery(
   const sessionId = extractSessionId(data);
   if (!sessionId) return serviceConnections;
 
-  const room = app.channel(sessionStreamChannelName(sessionId));
+  // Intersect the room with the tenant/auth channel: a connection that logged
+  // out (removed from authenticated + tenant channels) or was tenant-evicted
+  // but is still socket-connected may linger in a session-stream room, so this
+  // structurally guarantees nothing outside the current tenant/auth set can
+  // receive — independent of the per-connection room cleanup on logout.
+  const tenantConnections = new Set<unknown>(
+    (tenantScoped as unknown as { connections: unknown[] }).connections
+  );
+  const room = app
+    .channel(sessionStreamChannelName(sessionId))
+    .filter((connection: unknown) => tenantConnections.has(connection));
 
   let ownerId: string | null = null;
   try {
