@@ -139,10 +139,12 @@ async function advanceToOptions() {
   await flush();
 }
 
-/** Advance from "Options" (fills identity) to the "Create app" step (step 2). */
+/**
+ * Advance from "Options" to the "Create app" step (step 2). Slack defaults to
+ * aligning Slack users, so no run-as user is required and no user-select renders.
+ */
 async function advanceToCreateAppStep() {
   await advanceToOptions();
-  fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
   clickButton(/^Continue$/);
   await flush();
 }
@@ -195,8 +197,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.getByText('Surfaces')).toBeInTheDocument();
     expect(screen.getByText('Align Slack users')).toBeInTheDocument();
 
-    // Final step: primary becomes the submit verb, "Continue" is gone.
-    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
+    // Slack aligns users by default, so no run-as user is required to advance.
     clickButton(/^Continue$/);
     await flush();
     expect(getButton(/Copy manifest/)).toBeInTheDocument();
@@ -273,10 +274,21 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     clickButton(/Create channel/);
 
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
+    // Slack defaults to aligning users, so the channel is valid with no run-as
+    // user: align_slack_users is true and no agor_user_id was collected.
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'slack',
-      config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+      config: {
+        bot_token: 'xoxb-test',
+        app_token: 'xapp-test',
+        align_slack_users: true,
+        // The wizard only creates inbound/Socket-Mode Slack channels, so it
+        // records connection_mode:'socket' — this is what makes
+        // getRequiredSecretFields require app_token for UI-created channels.
+        connection_mode: 'socket',
+      },
     });
+    expect(channelCreate.mock.calls[0][0].agor_user_id).toBeFalsy();
   });
 
   it('invalidates a passing test result when a channel-scope option changes', async () => {
@@ -288,8 +300,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     await advanceToOptions();
     fireEvent.click(screen.getByText('Public channels'));
 
-    // Finish identity + walk to the final Tokens step.
-    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
+    // Slack aligns users by default — no run-as user needed. Walk to Tokens step.
     clickButton(/^Continue$/);
     await flush();
     clickButton(/^Continue$/);

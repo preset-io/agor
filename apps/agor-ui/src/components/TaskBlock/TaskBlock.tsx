@@ -62,7 +62,7 @@ const EMPTY_USER_MAP = new Map<string, User>();
 /**
  * Block types for rendering
  */
-type Block =
+export type Block =
   | { type: 'message'; message: Message }
   | { type: 'agent-chain'; messages: Message[] }
   | { type: 'compaction'; messages: Message[] }; // System messages (start + optional complete)
@@ -173,7 +173,7 @@ function isAgentChainMessage(message: Message): boolean {
  * - Compaction events (system_status + system_complete) → Compaction block
  * - Permission requests are now just messages, rendered inline naturally
  */
-function groupMessagesIntoBlocks(messages: Message[]): Block[] {
+export function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   // Separate top-level messages from nested (parent_tool_use_id)
   const topLevel = messages.filter((m) => !m.parent_tool_use_id);
   const nested = messages.filter((m) => m.parent_tool_use_id);
@@ -344,6 +344,20 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
       }
     }
     blocks.splice(insertPosition, 0, block);
+  }
+
+  // Display-order only: stable-move widget_request blocks to the END of the
+  // task's block list so an inline widget (e.g. the gateway token form) renders
+  // BELOW the agent's closing text for the same turn — making it the last thing
+  // the user sees. Widgets are stamped at tool-call time (mid-turn), so by
+  // message index they'd otherwise sort above the agent's closing explanation.
+  // Non-widget blocks keep their original order; widget blocks keep their
+  // relative order at the end. This touches render order ONLY — message.index /
+  // identity (genealogy markers, streaming, React keys) are untouched.
+  const isWidgetBlock = (b: Block): boolean =>
+    b.type === 'message' && b.message.type === 'widget_request';
+  if (blocks.some(isWidgetBlock)) {
+    return [...blocks.filter((b) => !isWidgetBlock(b)), ...blocks.filter(isWidgetBlock)];
   }
 
   return blocks;

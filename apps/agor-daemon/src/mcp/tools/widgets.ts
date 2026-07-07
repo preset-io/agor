@@ -16,8 +16,10 @@
  */
 
 import type {
+  ChannelType,
   EnvVarMetadata,
   EnvVarScope,
+  GatewayChannel,
   MessageID,
   Session,
   TaskID,
@@ -25,8 +27,9 @@ import type {
   UserID,
   WidgetMessageMetadata,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { getRequiredSecretFields, hasMinimumRole, MessageRole, ROLES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
 import { findHostTaskForSession } from '../../utils/session-tasks.js';
 import {
@@ -34,8 +37,19 @@ import {
   envVarsParamsSchema,
   normalizeEnvVarsParams,
 } from '../../widgets/env-vars/index.js';
+import {
+  type GatewayTokenParams,
+  gatewayTokenParamsSchema,
+  isSupportedGatewayTokenChannelType,
+} from '../../widgets/gateway-token/index.js';
 import type { McpContext } from '../server.js';
 import { sessionContextRequiredResult, textResult } from '../server.js';
+
+function requireAdmin(ctx: McpContext, action: string): void {
+  if (!hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN)) {
+    throw new Error(`Access denied: admin role required to ${action}`);
+  }
+}
 
 /**
  * Build a short, user-visible message body for the widget transcript row.
@@ -212,6 +226,134 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         }
         return textResult({ widget_id: widgetId, status: 'already_present' });
       }
+
+      return textResult({ widget_id: widgetId, status: 'requested' });
+    }
+  );
+
+  server.registerTool(
+    'agor_widgets_request_gateway_token',
+    {
+      description:
+        "Ask an admin to securely provide a gateway channel's platform tokens (Slack bot/app tokens, GitHub private key, Teams app password) via a compact form that appears at the end of your message, so setup finishes without anyone pasting xoxb-/xapp- tokens into chat. " +
+        'FIRE-AND-FORGET: the widget renders inline at the end of your turn; end your turn after calling. You will receive a user-role message when it is resolved. ' +
+        'Token values never enter your context — only the channel identity and field NAMES do. ' +
+        'Admin-only: a non-admin agent cannot mint this widget. Keep `reason` to ONE short sentence (≤200 chars).',
+      annotations: { destructiveHint: false, openWorldHint: false },
+      inputSchema: z.object({
+        gatewayChannelId: z
+          .string()
+          .min(1)
+          .describe('Gateway channel ID (UUIDv7 or short ID) whose tokens are being set.'),
+        reason: z
+          .string()
+          .max(200)
+          .optional()
+          .describe('One short sentence explaining why the tokens are needed.'),
+      }),
+    },
+    async (args) => {
+      if (!ctx.sessionId) return sessionContextRequiredResult();
+      const currentSessionId = ctx.sessionId;
+      requireAdmin(ctx, 'set gateway channel tokens');
+
+      // Redacted read — secrets come back as sentinels, but the non-secret
+      // fields we need (type, name, connection_mode) are intact.
+      const channel = (await ctx.app
+        .service('gateway-channels')
+        .get(args.gatewayChannelId, ctx.baseServiceParams)) as GatewayChannel;
+      const channelType = channel.channel_type as ChannelType;
+      if (!isSupportedGatewayTokenChannelType(channelType)) {
+        throw new Error(
+          `Gateway channel type "${channelType}" does not support token entry via this widget.`
+        );
+      }
+      const fields = getRequiredSecretFields(channelType, channel.config);
+      if (fields.length === 0) {
+        throw new Error(
+          `Gateway channel "${channel.name}" has no required secret fields to collect.`
+        );
+      }
+
+      const params: GatewayTokenParams = gatewayTokenParamsSchema.parse({
+        gatewayChannelId: channel.id,
+        channelType,
+        channelName: channel.name,
+        fields,
+        reason:
+          args.reason ??
+          `Provide the ${channelType} credentials to finish connecting "${channel.name}".`,
+      });
+
+      const requestedAt = new Date().toISOString();
+      const baseWidgetMeta: Omit<WidgetMessageMetadata, 'widget_id'> = {
+        widget_type: 'gateway_token',
+        schema_version: 1,
+        params,
+        status: 'pending',
+        requested_at: requestedAt,
+        auto_resume: true,
+      };
+
+      // Bind the widget message to the host task so the transcript renderer
+      // (which loads messages by task_id) picks it up. See the env_vars tool
+      // above and `utils/session-tasks.ts` for the lookup semantics.
+      const hostTask = await findHostTaskForSession(
+        ctx.app,
+        currentSessionId,
+        ctx.baseServiceParams
+      );
+      const hostTaskId = hostTask?.task_id as TaskID | undefined;
+
+      const created = await appendSystemMessage({
+        app: ctx.app,
+        db: ctx.db,
+        sessionId: currentSessionId,
+        taskId: hostTaskId,
+        content: `Please provide the ${channelType} tokens for "${channel.name}": ${params.reason}`,
+        contentPreview: `Widget: gateway_token (${channel.name})`,
+        type: 'widget_request',
+        role: MessageRole.SYSTEM,
+        metadata: {
+          widget: {
+            ...baseWidgetMeta,
+            widget_id: 'pending' as MessageID,
+          },
+        },
+      });
+
+      const widgetId = created.message_id as MessageID;
+
+      if (hostTask?.message_range) {
+        try {
+          await ctx.app.service('tasks').patch(
+            hostTask.task_id,
+            {
+              message_range: {
+                start_index: hostTask.message_range.start_index,
+                end_index: created.index,
+              },
+            },
+            ctx.baseServiceParams
+          );
+        } catch (err) {
+          console.warn(
+            `[widgets] failed to extend task.message_range for widget ${widgetId}:`,
+            err
+          );
+        }
+      }
+
+      await ctx.app.service('messages').patch(
+        widgetId,
+        {
+          metadata: {
+            ...(created.metadata ?? {}),
+            widget: { ...baseWidgetMeta, widget_id: widgetId },
+          },
+        },
+        ctx.baseServiceParams
+      );
 
       return textResult({ widget_id: widgetId, status: 'requested' });
     }

@@ -9,6 +9,7 @@ import {
   requiredBotEvents,
   requiredBotScopes,
 } from '@agor/core/gateway';
+import { getRequiredSecretFields } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -130,7 +131,7 @@ describe('agor_gateway_channels MCP tools', () => {
       targetBranchId: 'branch-1',
       channelType: 'slack',
       enabled: false,
-      config: {},
+      config: { align_slack_users: true },
     });
     expect(draft.success).toBe(true);
 
@@ -177,7 +178,7 @@ describe('agor_gateway_channels MCP tools', () => {
       targetBranchId: 'branch-1',
       channelType: 'slack',
       enabled: false,
-      config: {},
+      config: { align_slack_users: true },
     });
     expect(slackDraft.success).toBe(true);
 
@@ -189,6 +190,55 @@ describe('agor_gateway_channels MCP tools', () => {
       config: { app_id: '123', installation_id: '456', watch_repos: ['org/repo'] },
     });
     expect(githubDraftComplete.success).toBe(true);
+  });
+
+  it('requires agorUserId for run-as-selected-user Slack channels', async () => {
+    const tools = await captureTools();
+
+    // align_slack_users:false (run as selected user) without agorUserId is invalid
+    // even for disabled drafts — identity is config, not a secret.
+    const runAsMissingUser = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Run-as Slack',
+      targetBranchId: 'branch-1',
+      channelType: 'slack',
+      enabled: false,
+      config: { align_slack_users: false },
+    });
+    expect(runAsMissingUser.success).toBe(false);
+    expect(String(runAsMissingUser.error)).toContain('Run-as-selected-user needs agorUserId');
+
+    // Omitting align_slack_users entirely (falsy) is treated the same way.
+    const omittedAlign = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Run-as Slack',
+      targetBranchId: 'branch-1',
+      channelType: 'slack',
+      enabled: false,
+      config: {},
+    });
+    expect(omittedAlign.success).toBe(false);
+    expect(String(omittedAlign.error)).toContain('Run-as-selected-user needs agorUserId');
+
+    // Providing agorUserId satisfies run-as-selected-user.
+    const runAsWithUser = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Run-as Slack',
+      targetBranchId: 'branch-1',
+      channelType: 'slack',
+      enabled: false,
+      agorUserId: 'user-runner',
+      config: { align_slack_users: false },
+    });
+    expect(runAsWithUser.success).toBe(true);
+
+    // align_slack_users:true needs no agorUserId — each Slack user runs as their
+    // own matched Agor account.
+    const aligned = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Aligned Slack',
+      targetBranchId: 'branch-1',
+      channelType: 'slack',
+      enabled: false,
+      config: { align_slack_users: true },
+    });
+    expect(aligned.success).toBe(true);
   });
 
   it('creates through gateway-channels service and redacts returned secrets', async () => {
@@ -254,6 +304,7 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(JSON.stringify(payload)).not.toContain('xoxb-secret');
     expect(JSON.stringify(payload)).not.toContain('raw-channel-key');
     expect(JSON.stringify(payload)).not.toContain('raw-env-secret');
+    expect(JSON.stringify(payload.next_steps)).toContain('agor_widgets_request_gateway_token');
   });
 
   it('lists with filters and redacts Teams app_password', async () => {
@@ -755,6 +806,29 @@ describe('agor_gateway_channels MCP tools', () => {
   });
 });
 
+describe('getRequiredSecretFields — Slack app_token required unless explicitly outbound-only', () => {
+  it('requires bot_token AND app_token when no config is set (default inbound)', () => {
+    expect(getRequiredSecretFields('slack', {})).toEqual(['bot_token', 'app_token']);
+  });
+
+  it('requires bot_token AND app_token when connection_mode is socket (inbound)', () => {
+    expect(getRequiredSecretFields('slack', { connection_mode: 'socket' })).toEqual([
+      'bot_token',
+      'app_token',
+    ]);
+  });
+
+  it('requires only bot_token when explicitly outbound-only (no Socket Mode)', () => {
+    expect(getRequiredSecretFields('slack', { outbound_enabled: true })).toEqual(['bot_token']);
+  });
+
+  it('still requires app_token when outbound is enabled alongside Socket Mode', () => {
+    expect(
+      getRequiredSecretFields('slack', { outbound_enabled: true, connection_mode: 'socket' })
+    ).toEqual(['bot_token', 'app_token']);
+  });
+});
+
 describe('agor_gateway_slack_manifest_generate MCP tool', () => {
   const dmOnly = {
     appName: 'Agor',
@@ -783,8 +857,9 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     expect(payload.bot_scopes).not.toContain('app_mentions:read');
     expect(payload.bot_events).toEqual(['message.im']);
     expect(payload.create_channel_config_hint).toEqual({
-      channel_type: 'slack',
+      channelType: 'slack',
       config: {
+        connection_mode: 'socket',
         enable_channels: false,
         enable_groups: false,
         enable_mpim: false,
@@ -808,6 +883,47 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     expect(serializedHint).not.toContain('app_token');
     expect(serializedHint).not.toContain('xoxb');
     expect(serializedHint).not.toContain('xapp');
+  });
+
+  it('emits a create-compatible hint (channelType + socket connection_mode) that channels_create accepts', async () => {
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler({
+      ...dmOnly,
+      alignUsers: true,
+    });
+    const payload = JSON.parse(result.content[0].text);
+    const hint = payload.create_channel_config_hint;
+
+    // The hint must speak the camelCase param name agor_gateway_channels_create
+    // expects, and pin Socket Mode so the app_token requirement is unambiguous.
+    expect(hint.channelType).toBe('slack');
+    expect(hint).not.toHaveProperty('channel_type');
+    expect(hint.config.connection_mode).toBe('socket');
+
+    // Feed the hint straight into the create input schema (adding only the
+    // caller-supplied non-secret fields) — it must validate.
+    const parsed = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Eng Slack',
+      targetBranchId: 'branch-1',
+      channelType: hint.channelType,
+      enabled: false,
+      config: hint.config,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('derives BOTH bot_token and app_token as required secrets from the generated hint', async () => {
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler({
+      ...dmOnly,
+      alignUsers: true,
+    });
+    const payload = JSON.parse(result.content[0].text);
+    const hintConfig = payload.create_channel_config_hint.config;
+
+    // Regression: a manifest-generated draft must drive the token widget to ask
+    // for BOTH Slack tokens — the listener requires app_token unconditionally.
+    expect(getRequiredSecretFields('slack', hintConfig)).toEqual(['bot_token', 'app_token']);
   });
 
   it('adds outbound scopes and config when outbound is enabled', async () => {
@@ -864,15 +980,23 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     );
   });
 
-  it('applies schema defaults so omitted toggles yield a DM-only manifest', async () => {
+  it('defaults to aligning Slack users so omitted toggles need no run-as user', async () => {
+    // The manifest tool defaults alignUsers:true so agent-driven setup produces a
+    // valid channel with no empty run-as user. The generated hint therefore aligns
+    // by email and the manifest carries the users:read.email scope.
+    const dmAligned = { ...dmOnly, alignUsers: true };
     const tools = await captureTools('admin');
     const parsed = tools.agor_gateway_slack_manifest_generate.cfg.inputSchema.parse({
       appName: 'Agor',
     });
+    expect(parsed.alignUsers).toBe(true);
+
     const result = await tools.agor_gateway_slack_manifest_generate.handler(parsed);
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.manifest).toEqual(buildSlackManifest(dmOnly));
+    expect(payload.manifest).toEqual(buildSlackManifest(dmAligned));
+    expect(payload.create_channel_config_hint.config.align_slack_users).toBe(true);
+    expect(payload.bot_scopes).toEqual(expect.arrayContaining(['users:read.email']));
     expect(payload.create_channel_config_hint.config).not.toHaveProperty('allowed_channel_ids');
   });
 

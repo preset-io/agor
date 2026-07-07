@@ -137,12 +137,11 @@ const VarRow: React.FC<VarRowProps> = ({
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 6,
               fontFamily: token.fontFamilyCode,
               fontSize: token.fontSizeSM,
             }}
           >
-            <LockOutlined style={{ color: token.colorTextSecondary }} />
+            <LockOutlined style={{ color: token.colorTextSecondary, marginInlineEnd: 8 }} />
             {name}
           </Text>
           {existing?.set ? <Tag color="success">Set (encrypted)</Tag> : null}
