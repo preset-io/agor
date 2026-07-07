@@ -1120,12 +1120,6 @@ export const App: React.FC<AppProps> = ({
     useMemo(() => makeBranchesForBoardSelector(currentBoardId), [currentBoardId]),
     shallow
   );
-  // Shared between AppHeader's comments button and the collapsed rail's
-  // Comments item so both surfaces carry the same badge.
-  const unreadCommentsCount = activeComments.filter(
-    (c: BoardComment) => !c.parent_comment_id
-  ).length;
-
   // Comment-derived header scalars. Subscribing to the derived number/boolean
   // (instead of the comment map) keeps comment edits that don't change them —
   // and all comments on other boards — from waking the shell.
