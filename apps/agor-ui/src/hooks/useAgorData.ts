@@ -776,8 +776,14 @@ export function useAgorData(
         // their fire-and-forget fetches resolved before this gate did. Those
         // slices are owned by their background setters + realtime handlers.
         agorStore.getState().applyMaps((prev) => {
-          const pinnedBranchDomainBranchIds = boardScope && !silent ? new Set<string>() : undefined;
-          if (pinnedBranchDomainBranchIds) {
+          const skippedPinnedBranchLinksFetch = !boardScope && !silent;
+          const pinnedBranchDomainBranchIds =
+            boardScope && !silent
+              ? new Set<string>()
+              : skippedPinnedBranchLinksFetch
+                ? new Set<string>()
+                : undefined;
+          if (boardScope && pinnedBranchDomainBranchIds) {
             for (const branch of prev.branchById.values()) {
               if (branch.board_id === boardScope) {
                 pinnedBranchDomainBranchIds.add(branch.branch_id);

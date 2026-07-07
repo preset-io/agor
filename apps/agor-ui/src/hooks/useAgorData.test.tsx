@@ -759,6 +759,34 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
  * state or repopulate the Maps after teardown. These tests pin BLOCKING-1.
  */
 describe('useAgorData — bulk-write revision bumps', () => {
+  it('preserves realtime pinned branch links when the cold Home load skips the links snapshot', async () => {
+    const realtimePinnedLink = makeLink({ link_id: 'l-realtime', branch_id: 'b-live' });
+    const linksHydrationGate = deferred();
+    const { client, emit, onFetch } = makeMockClient({
+      'sessions:find': [],
+      'sessions:findAll': [],
+      'branches:findAll': [],
+      'links:findAll': [],
+    });
+
+    // Hold the later global links hydration so this test isolates the first-paint
+    // skipped-snapshot path instead of racing the background reconciliation.
+    onFetch('links', 'findAll', () => linksHydrationGate.promise);
+    onFetch('sessions', 'find', (call) => {
+      if (call === 1) emit('links', 'created', realtimePinnedLink);
+    });
+
+    const { result } = renderHook(() => useAgorData(client));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+      expect(result.current.initialLoadComplete).toBe(true);
+    });
+
+    expect(result.current.linkById.get('l-realtime')).toBe(realtimePinnedLink);
+    expect(result.current.linksByBranch.get('b-live')).toEqual([realtimePinnedLink]);
+  });
+
   it('silent reconnect removes stale archived-branch pinned links without dropping other link scopes', async () => {
     const branch = makeBranch({ branch_id: 'b-1' });
     const pinnedLink = makeLink({ link_id: 'l-pinned' });
