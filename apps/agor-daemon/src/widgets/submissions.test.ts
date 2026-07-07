@@ -446,6 +446,28 @@ describe('resolveWidget', () => {
     expect(calls.find((c) => c.service === 'messages' && c.method === 'patch')).toBeUndefined();
   });
 
+  it('rejects a dismissal from an undefined-role caller, leaving it pending', async () => {
+    // Same endpoint path, but the caller carries no role at all (fails closed).
+    registerTestWidget(undefined, (ctx) => {
+      if (ctx.submitterRole !== 'admin') {
+        throw new Error('Only admins can decline this request');
+      }
+    });
+    const fixtures = makeFixtures();
+    const { app, calls } = makeApp(fixtures);
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'dismiss' },
+        { user_id: 'creator-user-id' as UserID },
+        { app: app as never, isBranchOwner: async () => false }
+      )
+    ).rejects.toThrow(/admin/i);
+
+    expect(calls.find((c) => c.service === 'messages' && c.method === 'patch')).toBeUndefined();
+  });
+
   it('allows a dismissal that the widget authorizeDismiss permits', async () => {
     registerTestWidget(undefined, (ctx) => {
       if (ctx.submitterRole !== 'admin') {
