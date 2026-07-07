@@ -1,0 +1,109 @@
+.marketing-video-page {
+  min-height: 100vh;
+  overflow: hidden;
+  background: #07111d;
+}
+
+.marketing-video-page .ant-layout-header {
+  height: 64px;
+  box-shadow: 0 18px 70px rgba(0, 0, 0, 0.28);
+  z-index: 20;
+}
+
+.marketing-video-canvas {
+  position: relative;
+  height: calc(100vh - 64px);
+  overflow: hidden;
+}
+
+.marketing-video-page .react-flow__node-branchNode,
+.marketing-video-page .react-flow__node-cardNode,
+.marketing-video-page .react-flow__node-markdown,
+.marketing-video-page .react-flow__node-comment {
+  filter: drop-shadow(0 22px 45px rgba(0, 0, 0, 0.28));
+}
+
+/* Video capture: no canvas chrome at all — controls, minimap, attribution. */
+.marketing-video-page .react-flow__controls,
+.marketing-video-page .react-flow__minimap,
+.marketing-video-page .react-flow__attribution {
+  display: none;
+}
+
+/* No scrollbars in captured frames. */
+.marketing-video-page ::-webkit-scrollbar {
+  display: none;
+}
+
+/* Determinism: all visible motion must come from the virtual timeline. antd
+ * token.motion=false covers antd; this kills inline/component CSS transitions
+ * (e.g. the comment pin's hover transition) so frame-stepped captures never
+ * catch a wall-clock animation mid-flight. */
+.marketing-video-page *,
+.marketing-video-page *::before,
+.marketing-video-page *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: must beat inline component styles for deterministic capture */
+  transition: none !important;
+  /* biome-ignore lint/complexity/noImportantStyles: must beat inline component styles for deterministic capture */
+  animation-duration: 0s !important;
+}
+
+/* Artifact reveal overlay (scene 2) */
+.marketing-video-artifact-cover {
+  position: absolute;
+  z-index: 1500;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(94, 234, 212, 0.16), transparent 42%),
+    linear-gradient(135deg, #0a1626 0%, #101c30 55%, #1a1206 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.marketing-video-artifact-cover .shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 30%,
+    rgba(94, 234, 212, 0.12) 46%,
+    rgba(94, 234, 212, 0.22) 50%,
+    rgba(94, 234, 212, 0.12) 54%,
+    transparent 70%
+  );
+}
+
+.marketing-video-artifact-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.78);
+  border: 1px solid rgba(94, 234, 212, 0.35);
+  color: #a7f3d0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.45);
+}
+
+.marketing-video-artifact-badge .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #5eead4;
+  box-shadow: 0 0 14px rgba(94, 234, 212, 0.8);
+}
+
+.marketing-video-success-ring {
+  position: absolute;
+  z-index: 1500;
+  pointer-events: none;
+  border-radius: 16px;
+  border: 3px solid #34d399;
+}

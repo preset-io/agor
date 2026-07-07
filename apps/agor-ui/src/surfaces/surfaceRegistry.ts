@@ -80,7 +80,7 @@ export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
 export const DEMO_SURFACE = defineSurface({
   id: 'demo',
   label: 'Demo',
-  routePaths: ['/demo/streamdown', '/demo/marketing-screenshots'],
+  routePaths: ['/demo/streamdown', '/demo/marketing-screenshots', '/demo/marketing-video'],
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: false,

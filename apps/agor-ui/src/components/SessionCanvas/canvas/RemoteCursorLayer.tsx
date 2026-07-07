@@ -13,6 +13,8 @@ export interface StaticRemoteCursor {
   y: number;
   user: User;
   color?: string;
+  /** Demo-only click affordance: 0 = idle, (0,1] = expanding ring progress. */
+  ripple?: number;
 }
 
 interface RemoteCursorLayerProps {
@@ -71,6 +73,7 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
       {cursors.map(([userId, cursor]) => {
         const { x, y, user } = cursor;
         const color = 'color' in cursor ? cursor.color : undefined;
+        const ripple = 'ripple' in cursor ? (cursor.ripple ?? 0) : 0;
         const screenX = x * viewport.zoom + viewport.x;
         const screenY = y * viewport.zoom + viewport.y;
 
@@ -92,6 +95,22 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
                 height: '24px',
               }}
             >
+              {ripple > 0 && ripple <= 1 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '4px',
+                    left: '6px',
+                    width: `${8 + ripple * 36}px`,
+                    height: `${8 + ripple * 36}px`,
+                    marginLeft: `${-(8 + ripple * 36) / 2}px`,
+                    marginTop: `${-(8 + ripple * 36) / 2}px`,
+                    borderRadius: '50%',
+                    border: `2px solid ${color ?? token.colorPrimary}`,
+                    opacity: 1 - ripple,
+                  }}
+                />
+              )}
               <svg
                 width="24"
                 height="24"

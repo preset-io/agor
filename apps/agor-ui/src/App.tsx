@@ -181,6 +181,11 @@ const MarketingScreenshotPage = lazy(() =>
     default: module.MarketingScreenshotPage,
   }))
 );
+const MarketingVideoPage = lazy(() =>
+  import('./pages/marketing/MarketingVideoPage').then((module) => ({
+    default: module.MarketingVideoPage,
+  }))
+);
 
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
@@ -1912,6 +1917,7 @@ function AppContent() {
           {/* Demo routes */}
           <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
           <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />
+          <Route path="/demo/marketing-video" element={<MarketingVideoPage />} />
 
           {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
           {KNOWLEDGE_ROUTE_PATHS.map((path) => (
@@ -1979,6 +1985,7 @@ function AppWrapper() {
   const { getCurrentThemeConfig } = useTheme();
   const location = useLocation();
   const isMarketingScreenshotRoute = location.pathname === '/demo/marketing-screenshots';
+  const isMarketingVideoRoute = location.pathname === '/demo/marketing-video';
 
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
@@ -1992,6 +1999,10 @@ function AppWrapper() {
             {isMarketingScreenshotRoute ? (
               <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
                 <MarketingScreenshotPage />
+              </Suspense>
+            ) : isMarketingVideoRoute ? (
+              <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
+                <MarketingVideoPage />
               </Suspense>
             ) : (
               <AppContent />
