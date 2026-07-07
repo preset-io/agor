@@ -50,7 +50,7 @@ const checks = [
       'apps/agor-daemon/src/mcp/tools/artifacts.ts': 1,
       'apps/agor-daemon/src/mcp/tools/boards.ts': 2,
       'apps/agor-daemon/src/mcp/tools/cards.ts': 8,
-      'apps/agor-daemon/src/utils/realtime-publish.ts': 4,
+      'apps/agor-daemon/src/utils/realtime-publish.ts': 7,
       'apps/agor-daemon/src/setup/socketio.ts': 18,
     },
   },

@@ -180,6 +180,11 @@ export class ReactiveSessionHandle {
     };
 
     this.attachListeners();
+    // Declare interest in this session's streaming channel so the daemon routes
+    // per-chunk streaming events to this connection. The socket is usually
+    // already connected here; reconnects re-subscribe via onSocketConnect
+    // because rooms are per-connection and a reconnect is a new connection.
+    this.subscribeToStream();
     this.readyPromise = this.bootstrap();
   }
 
@@ -294,11 +299,38 @@ export class ReactiveSessionHandle {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    // Best-effort: leave the streaming room. The daemon also drops the
+    // connection from the channel automatically on socket disconnect, so this
+    // only matters while the socket stays open (e.g. navigating between
+    // sessions in one tab).
+    this.unsubscribeFromStream();
     for (const cleanup of this.disposeCallbacks) {
       cleanup();
     }
     this.disposeCallbacks.length = 0;
     this.listeners.clear();
+  }
+
+  /**
+   * Join this session's per-connection streaming channel on the daemon.
+   * Best-effort: a daemon that predates the `session-streams` service (deploy
+   * skew) rejects the call, in which case the daemon's owner-fallback delivery
+   * keeps this session's own tabs updating until the daemon is upgraded.
+   */
+  private subscribeToStream(): void {
+    void Promise.resolve(
+      this.client.service('session-streams').create({ session_id: this.sessionId })
+    ).catch(() => {
+      // Ignore — see method doc. Access errors also surface via bootstrap/resync.
+    });
+  }
+
+  private unsubscribeFromStream(): void {
+    void Promise.resolve(this.client.service('session-streams').remove(this.sessionId)).catch(
+      () => {
+        // Ignore — the socket teardown removes room membership regardless.
+      }
+    );
   }
 
   private assertNotDisposed(): void {
@@ -411,6 +443,9 @@ export class ReactiveSessionHandle {
     const onSocketConnect = () => {
       if (this.disposed) return;
       this.updateState((prev) => ({ ...prev, connected: true }));
+      // A reconnect is a new socket connection with no room membership, so
+      // re-declare interest before resyncing state.
+      this.subscribeToStream();
       this.readyPromise = this.resync();
     };
     const onSocketDisconnect = () => {

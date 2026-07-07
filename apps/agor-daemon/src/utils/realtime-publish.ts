@@ -19,6 +19,42 @@ function tenantChannelName(tenantId: string): string {
   return `tenant:${tenantId}`;
 }
 
+/**
+ * Per-session channel that carries only the high-frequency streaming events
+ * (message text/thinking chunks, tool start/complete). Connections join this
+ * room via the `session-streams` service after passing a session-access check,
+ * so streaming traffic reaches only the tabs actively viewing a session
+ * instead of the whole tenant. Session ids are globally-unique UUIDv7, so the
+ * unprefixed name cannot collide across tenants; cross-tenant membership is
+ * additionally impossible because the subscribe path gates on a tenant-scoped
+ * `sessions.get`.
+ */
+export function sessionStreamChannelName(sessionId: string): string {
+  return `session-stream:${sessionId}`;
+}
+
+/**
+ * Join a connection to a session's streaming room. Centralized here (the
+ * tenant-aware realtime facade) so subscribe/publish share one channel name
+ * and the raw `app.channel` surface stays in a single audited file.
+ */
+export function joinSessionStreamChannel(
+  app: Application,
+  sessionId: string,
+  connection: unknown
+): void {
+  app.channel(sessionStreamChannelName(sessionId)).join(connection as never);
+}
+
+/** Remove a connection from a session's streaming room. */
+export function leaveSessionStreamChannel(
+  app: Application,
+  sessionId: string,
+  connection: unknown
+): void {
+  app.channel(sessionStreamChannelName(sessionId)).leave(connection as never);
+}
+
 const DEBUG_REALTIME_PUBLISH =
   process.env.AGOR_DEBUG_REALTIME_PUBLISH === '1' ||
   process.env.DEBUG?.includes('realtime-publish');
@@ -64,11 +100,33 @@ const SESSION_ID_SCOPED_PATHS = new Set([
 ]);
 const OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS = new Set(['board-objects', 'board-comments']);
 
+// High-frequency per-chunk events emitted on the `messages` service during a
+// streaming turn (text + thinking deltas). These fan out once per token-batch,
+// so they must be scoped to session subscribers rather than the whole tenant.
+const MESSAGE_STREAMING_EVENTS = new Set([
+  'streaming:start',
+  'streaming:chunk',
+  'streaming:end',
+  'streaming:error',
+  'thinking:start',
+  'thinking:chunk',
+  'thinking:end',
+]);
+
+// Per-chunk / per-tool events emitted on the `tasks` service during a turn.
+const TASK_STREAMING_EVENTS = new Set(['thinking:chunk', 'tool:start', 'tool:complete']);
+
 function isStreamingEvent(context: PublishContext): boolean {
-  return (
-    context.path === 'messages/streaming' ||
-    (context.path === 'messages' && context.event?.startsWith('streaming:') === true)
-  );
+  if (context.path === 'messages/streaming') return true;
+  const event = context.event;
+  if (!event) return false;
+  if (context.path === 'messages') {
+    return event.startsWith('streaming:') || MESSAGE_STREAMING_EVENTS.has(event);
+  }
+  if (context.path === 'tasks') {
+    return TASK_STREAMING_EVENTS.has(event);
+  }
+  return false;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -276,6 +334,55 @@ function filterToServiceConnections(authenticated: PublishChannel): PublishChann
   return authenticated.filter((connection: unknown) => isServiceConnection(connection));
 }
 
+/**
+ * Delivery set for a streaming event. Streaming chunks are the dominant
+ * always-on realtime cost, so they bypass the tenant-wide broadcast and go to:
+ *
+ *   1. the per-session stream room — connections that explicitly subscribed
+ *      (session panels / transcripts that passed a session-access check),
+ *   2. service connections — gateway / Slack streaming and other service
+ *      consumers keep working exactly as before,
+ *   3. the session owner's own connections — a cheap fallback so a creator's
+ *      already-open tabs keep updating during deploy skew, before a
+ *      stale-cached client has re-subscribed after refresh.
+ *
+ * Everything else (created/patched/removed, status transitions) keeps its
+ * existing tenant/branch scoping. Malformed events without a resolvable
+ * session id fail closed to service connections only.
+ */
+async function resolveStreamingDelivery(
+  app: Application,
+  data: unknown,
+  tenantScoped: PublishChannel,
+  accessCache: RealtimeAccessCache
+): Promise<PublishChannel | PublishChannel[]> {
+  const serviceConnections = filterToServiceConnections(tenantScoped);
+  const sessionId = extractSessionId(data);
+  if (!sessionId) return serviceConnections;
+
+  const channels: PublishChannel[] = [
+    app.channel(sessionStreamChannelName(sessionId)),
+    serviceConnections,
+  ];
+
+  let ownerId: string | null = null;
+  try {
+    ownerId = await accessCache.getSessionOwnerId(sessionId);
+  } catch {
+    // Best-effort owner fallback; the session room + service connections still
+    // deliver even if the owner lookup fails.
+  }
+  if (ownerId) {
+    channels.push(
+      tenantScoped.filter(
+        (connection: unknown) => userFromConnection(connection)?.user_id === ownerId
+      )
+    );
+  }
+
+  return channels;
+}
+
 function filterToUserIdsOrAdmins(
   authenticated: PublishChannel,
   userIds: Set<string> | Set<UserID>,
@@ -386,6 +493,13 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         throw error;
       }
     }
+    // Streaming events are routed to session subscribers (plus service and
+    // owner connections) regardless of branch RBAC — this is the always-on
+    // firehose the tenant broadcast must not carry.
+    if (isStreamingEvent(context)) {
+      return resolveStreamingDelivery(app, data, tenantScoped, accessCache);
+    }
+
     if (!branchRbacEnabled) return tenantScoped;
 
     const scope = await resolvePublishScope(data, context, accessCache);

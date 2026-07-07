@@ -114,6 +114,7 @@ import { createReposService } from './services/repos.js';
 import { createSchedulesService } from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
+import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
 import { createTemplatesService } from './services/templates.js';
@@ -221,6 +222,19 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   sessionsService.setExecuteHandler(
     createExecuteHandler(ctx, sessionsService, sessionTokenService)
   );
+
+  // Realtime control-plane: browsers subscribe (create) / unsubscribe (remove)
+  // to a session's per-connection streaming channel so per-chunk streaming
+  // events reach only the tabs actively viewing that session. Access is gated
+  // by the session read inside the service. The create/remove events are
+  // control-plane only and must never broadcast, so publish to no connections.
+  app.use('/session-streams', createSessionStreamsService(app), {
+    methods: ['create', 'remove'],
+  });
+  app.service('/session-streams').hooks({
+    before: { all: [ctx.requireAuth] },
+  });
+  app.service('/session-streams').publish(() => []);
 
   app.use('/tasks', createTasksService(db, app), {
     // Custom events not in this list are dropped at the FeathersJS transport

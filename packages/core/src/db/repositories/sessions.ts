@@ -289,6 +289,30 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   }
 
   /**
+   * Resolve the owning user id for a session without hydrating the full row.
+   * Used by realtime delivery to offer streaming events to the session
+   * creator's own connections as a fallback, so their open tabs keep updating
+   * even before they subscribe to the per-session stream channel.
+   */
+  async findCreatedByBySessionId(id: string): Promise<UUID | null> {
+    try {
+      const fullId = await this.resolveId(id);
+      const row = await select(this.db, { created_by: sessions.created_by })
+        .from(sessions)
+        .where(eq(sessions.session_id, fullId))
+        .one();
+      return (row?.created_by as UUID | undefined) ?? null;
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      if (error instanceof AmbiguousIdError) throw error;
+      throw new RepositoryError(
+        `Failed to find session owner: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Find all sessions
    *
    * LEFT JOINs with branches to populate board_id and url in a single query.
