@@ -52,6 +52,9 @@
 import { AGOR_USER_ENV_KEYS_VAR } from '../config/env-resolver';
 import { renderTemplate } from '../templates/handlebars-helpers';
 import type { MCPAuth, MCPServer } from '../types';
+import { containsTemplate, isUserEnvPlaceholder } from './template-patterns';
+
+export { containsTemplate, isUserEnvPlaceholder };
 
 /**
  * Template context available for MCP configuration resolution.
@@ -111,38 +114,6 @@ export function buildMCPTemplateContextFromEnv(
       env: userEnv,
     },
   };
-}
-
-/**
- * Check if a string contains Handlebars template syntax
- */
-export function containsTemplate(value: string): boolean {
-  return value.includes('{{') && value.includes('}}');
-}
-
-/**
- * Matches a value that is EXACTLY one bare `{{ user.env.NAME }}` placeholder:
- * optional surrounding/inner whitespace, a standard env-var name, nothing else.
- *
- * Deliberately rejects everything but a direct user-env reference — arbitrary
- * expressions (`{{secret}}`), helper/fallback forms
- * (`{{default user.env.X "sk-live-…"}}`), partial values (`sk-{{x}}`), and
- * multiple expressions (`{{a}}{{b}}`) — so a raw secret or a literal secret
- * fallback can never be mistaken for a placeholder.
- */
-const USER_ENV_PLACEHOLDER_RE = /^\{\{\s*user\.env\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}$/;
-
-/**
- * Check if a string is a single bare `{{ user.env.NAME }}` placeholder.
- *
- * Redaction uses this to decide whether a secret-bearing auth field holds a
- * user-env placeholder — which references an env key and carries no secret
- * material itself, so it is safe to preserve for downstream resolution — versus
- * a raw secret (which must be redacted). Intentionally far narrower than
- * {@link containsTemplate}: only bare user-env references may bypass redaction.
- */
-export function isUserEnvPlaceholder(value: string): boolean {
-  return USER_ENV_PLACEHOLDER_RE.test(value.trim());
 }
 
 /**

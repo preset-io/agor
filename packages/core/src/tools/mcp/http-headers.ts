@@ -7,7 +7,7 @@
  * OAuth/JWT/bearer credentials.
  */
 
-import { isUserEnvPlaceholder } from '../../mcp/template-resolver';
+import { isUserEnvPlaceholder } from '../../mcp/template-patterns';
 
 export const MCP_HEADER_REDACTED_SENTINEL = '••••••••';
 
