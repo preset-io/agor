@@ -163,6 +163,14 @@ export class ReactiveSessionHandle {
    */
   private streamOpChain: Promise<void> = Promise.resolve();
 
+  /**
+   * Canonical room id echoed back by `session-streams.create` (the resolved
+   * row's full session_id). Used for `remove` so a short-id / alias caller —
+   * including one whose access was later revoked — leaves the room it actually
+   * joined rather than a raw-id room it never entered.
+   */
+  private streamRoomId: string | null = null;
+
   private stateSnapshot: ReactiveSessionState;
 
   constructor(client: AgorClient, sessionId: string, options?: ReactiveSessionOptions) {
@@ -355,7 +363,14 @@ export class ReactiveSessionHandle {
       // avoids a pointless round-trip.
       if (this.disposed) return;
       try {
-        await this.client.service('session-streams').create({ session_id: this.sessionId });
+        const result = (await this.client
+          .service('session-streams')
+          .create({ session_id: this.sessionId })) as { session_id?: string } | undefined;
+        // Remember the canonical room id so unsubscribe leaves the right room
+        // even for short-id callers or after access is revoked.
+        if (typeof result?.session_id === 'string' && result.session_id) {
+          this.streamRoomId = result.session_id;
+        }
       } catch {
         // Ignore — see method doc. Access errors also surface via bootstrap/resync.
       }
@@ -365,7 +380,7 @@ export class ReactiveSessionHandle {
   private unsubscribeFromStream(): Promise<void> {
     return this.runStreamOp(async () => {
       try {
-        await this.client.service('session-streams').remove(this.sessionId);
+        await this.client.service('session-streams').remove(this.streamRoomId ?? this.sessionId);
       } catch {
         // Ignore — the socket teardown removes room membership regardless.
       }
@@ -770,12 +785,30 @@ export class ReactiveSessionHandle {
       if (event.session_id !== this.sessionId) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
-        if (!current) return prev;
         const nextStreaming = new Map(prev.streamingMessages);
-        nextStreaming.set(event.message_id, {
-          ...current,
-          content: current.content + event.chunk,
-        });
+        if (current) {
+          nextStreaming.set(event.message_id, {
+            ...current,
+            content: current.content + event.chunk,
+          });
+        } else {
+          // Attached or reconnected after streaming:start already fired: the
+          // start event won't repeat, so initialize the stream from this chunk
+          // instead of dropping it. Content begins here; earlier text arrives
+          // when the message row lands at the next boundary (onMessageCreated
+          // then clears this entry). task_id is inferred from the active task
+          // so the live text groups under the right TaskBlock.
+          nextStreaming.set(event.message_id, {
+            message_id: event.message_id,
+            session_id: event.session_id,
+            task_id: findLatestHydratableTask(prev.tasks)?.task_id,
+            role: 'assistant',
+            content: event.chunk,
+            thinkingContent: '',
+            timestamp: new Date().toISOString(),
+            isStreaming: true,
+          });
+        }
         return {
           ...prev,
           streamingMessages: nextStreaming,

@@ -46,7 +46,22 @@ function createMockClient(opts: MockClientOptions) {
     return Object.values(opts.messagesByTask).flat();
   });
 
-  const listener = () => ({ on: vi.fn(), removeListener: vi.fn() });
+  // Capture service event handlers so tests can fire realtime events (e.g. a
+  // streaming:chunk that arrives with no preceding streaming:start).
+  const serviceHandlers: Record<string, Record<string, Array<(...a: unknown[]) => void>>> = {};
+  const listener = (svc: string) => ({
+    on: vi.fn((event: string, handler: (...a: unknown[]) => void) => {
+      const byEvent = serviceHandlers[svc] ?? {};
+      const handlers = byEvent[event] ?? [];
+      handlers.push(handler);
+      byEvent[event] = handlers;
+      serviceHandlers[svc] = byEvent;
+    }),
+    removeListener: vi.fn(),
+  });
+  const emitServiceEvent = (svc: string, event: string, payload: unknown) => {
+    for (const handler of serviceHandlers[svc]?.[event] ?? []) handler(payload);
+  };
 
   let releaseCreate: (() => void) | null = null;
   const sessionStreams = {
@@ -71,10 +86,10 @@ function createMockClient(opts: MockClientOptions) {
         order.push('hydrate');
         return { session_id: SESSION_ID } as Session;
       }),
-      ...listener(),
+      ...listener('sessions'),
     },
-    tasks: { findAll: vi.fn(async () => opts.tasks), ...listener() },
-    messages: { findAll: messageFindAll, ...listener() },
+    tasks: { findAll: vi.fn(async () => opts.tasks), ...listener('tasks') },
+    messages: { findAll: messageFindAll, ...listener('messages') },
     'session-streams': sessionStreams,
   };
   const queueService = { find: vi.fn(async () => ({ data: [] })) };
@@ -101,7 +116,15 @@ function createMockClient(opts: MockClientOptions) {
 
   const releaseCreateFn = () => releaseCreate?.();
 
-  return { client, messageFindAll, sessionStreams, fireIo, order, releaseCreate: releaseCreateFn };
+  return {
+    client,
+    messageFindAll,
+    sessionStreams,
+    fireIo,
+    emitServiceEvent,
+    order,
+    releaseCreate: releaseCreateFn,
+  };
 }
 
 async function bootstrapHandle(opts: MockClientOptions, taskHydration: TaskHydrationMode) {
@@ -259,16 +282,23 @@ describe('ReactiveSessionHandle stream subscription', () => {
     });
   });
 
-  it('subscribes before hydrating so mid-stream chunks land after state exists', async () => {
-    const mock = createMockClient(opts);
+  it('does not hydrate until the subscribe ack resolves', async () => {
+    // Hold create() unresolved: hydration must NOT have started yet. This fails
+    // if subscribe were fire-and-forget (hydration would race ahead).
+    const mock = createMockClient({ tasks: [], messagesByTask: {}, deferCreate: true });
     const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
-    await handle.ready();
 
-    // The subscribe ack is awaited before any session-state fetch, so a chunk
-    // arriving right after subscribe cannot precede hydration.
-    expect(mock.order[0]).toBe('subscribe');
-    expect(mock.order).toContain('hydrate');
-    expect(mock.order.indexOf('subscribe')).toBeLessThan(mock.order.indexOf('hydrate'));
+    await vi.waitFor(() => {
+      expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+    });
+    // Give any (incorrectly) un-awaited hydration a chance to run.
+    await Promise.resolve();
+    expect(mock.order).toEqual(['subscribe']);
+
+    // Resolving the subscribe ack lets hydration proceed — strictly after.
+    mock.releaseCreate();
+    await handle.ready();
+    expect(mock.order).toEqual(['subscribe', 'hydrate']);
     handle.dispose();
   });
 
@@ -331,5 +361,70 @@ describe('ReactiveSessionHandle stream subscription', () => {
     const handle = new ReactiveSessionHandle(client, SESSION_ID, { taskHydration: 'none' });
     await handle.ready();
     expect(() => handle.dispose()).not.toThrow();
+  });
+
+  it('renders chunks that arrive after start already fired (attach mid-stream)', async () => {
+    // A viewer opening a running session subscribes after streaming:start; the
+    // chunk handler must initialize the stream from the chunk instead of
+    // dropping it, grouping it under the active task so it renders.
+    const mock = createMockClient({
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: {},
+    });
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'none' });
+    await handle.ready();
+
+    // No streaming:start — the stream is already in progress upstream.
+    mock.emitServiceEvent('messages', 'streaming:chunk', {
+      message_id: 'm1',
+      session_id: SESSION_ID,
+      chunk: 'hello',
+    });
+    mock.emitServiceEvent('messages', 'streaming:chunk', {
+      message_id: 'm1',
+      session_id: SESSION_ID,
+      chunk: ' world',
+    });
+
+    const streamed = handle.getStreamingMessage('m1');
+    expect(streamed?.content).toBe('hello world');
+    expect(streamed?.isStreaming).toBe(true);
+    // Grouped under the active task so useStreamingMessagesByTask renders it.
+    expect(streamed?.task_id).toBe('task-1');
+    handle.dispose();
+  });
+
+  it('unsubscribes using the canonical room id returned by subscribe', async () => {
+    // A short-id caller joins the canonical room (create echoes the full id);
+    // remove must target that canonical room, so a later-revoked user still
+    // leaves the room they actually joined.
+    const shortId = 'ffffffff';
+    const canonical = 'ffffffff-1111-2222-3333-444444444444';
+    const create = vi.fn(async () => ({ session_id: canonical, subscribed: true }));
+    const remove = vi.fn(async () => ({ session_id: canonical, subscribed: false }));
+    const listener = () => ({ on: vi.fn(), removeListener: vi.fn() });
+    const services: Record<string, unknown> = {
+      sessions: { get: vi.fn(async () => ({ session_id: canonical }) as Session), ...listener() },
+      tasks: { findAll: vi.fn(async () => []), ...listener() },
+      messages: { findAll: vi.fn(async () => []), ...listener() },
+      'session-streams': { create, remove },
+    };
+    const queueService = { find: vi.fn(async () => ({ data: [] })) };
+    const client = {
+      io: { connected: true, on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name.includes('/tasks/queue') ? queueService : services[name]
+      ),
+    } as unknown as AgorClient;
+
+    const handle = new ReactiveSessionHandle(client, shortId, { taskHydration: 'none' });
+    await handle.ready();
+    expect(create).toHaveBeenCalledWith({ session_id: shortId });
+
+    handle.dispose();
+    await vi.waitFor(() => {
+      expect(remove).toHaveBeenCalledWith(canonical);
+    });
+    expect(remove).not.toHaveBeenCalledWith(shortId);
   });
 });
