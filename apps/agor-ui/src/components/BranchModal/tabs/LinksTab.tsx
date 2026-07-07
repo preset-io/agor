@@ -724,7 +724,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, assistantBranc
                   items={categoryTabs}
                   onChange={(key) => setActiveCategory(key as LinkCategoryTabKey)}
                 />
-                <Space size={token.sizeXS} style={{ marginTop: token.sizeSM }}>
+                <Space size={token.sizeXS} style={{ marginTop: token.sizeMD }}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                     Sort
                   </Typography.Text>
