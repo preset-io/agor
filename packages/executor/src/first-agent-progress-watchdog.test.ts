@@ -1,14 +1,12 @@
-import type { TaskID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentProgressWatchdog } from './agent-progress-watchdog.js';
+import { FirstAgentProgressWatchdog } from './first-agent-progress-watchdog.js';
 
 function createWatchdog(options?: {
   firstAgentProgressTimeoutMs?: number;
   checkIntervalMs?: number;
 }) {
   const abortController = new AbortController();
-  const watchdog = new AgentProgressWatchdog({
-    taskId: 'task-1' as TaskID,
+  const watchdog = new FirstAgentProgressWatchdog({
     toolName: 'codex',
     abortController,
     firstAgentProgressTimeoutMs: options?.firstAgentProgressTimeoutMs ?? 1000,
@@ -18,7 +16,7 @@ function createWatchdog(options?: {
   return { watchdog, abortController };
 }
 
-describe('AgentProgressWatchdog', () => {
+describe('FirstAgentProgressWatchdog', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
@@ -36,11 +34,11 @@ describe('AgentProgressWatchdog', () => {
 
     expect(watchdog.hasStalled()).toBe(true);
     expect(abortController.signal.aborted).toBe(true);
-    expect(watchdog.getStallReason()).toContain('no agent progress within 1000ms');
+    expect(watchdog.getStallReason()).toContain('no first meaningful agent event within 1000ms');
     expect(watchdog.getDiagnosticMetadata()).toEqual({
-      agent_progress_watchdog: expect.objectContaining({
+      first_agent_progress_watchdog: expect.objectContaining({
         status: 'stalled',
-        first_progress_seen: false,
+        watchdog_started_at: '2026-06-20T00:00:00.000Z',
         timeout_ms: 1000,
       }),
     });
@@ -87,8 +85,7 @@ describe('AgentProgressWatchdog', () => {
 
     expect(abortController.signal.aborted).toBe(true);
     expect(watchdog.getDiagnosticMetadata()).toEqual({
-      agent_progress_watchdog: expect.objectContaining({
-        first_progress_seen: false,
+      first_agent_progress_watchdog: expect.objectContaining({
         last_activity_label: 'message-service:create:user',
       }),
     });

@@ -66,18 +66,15 @@ export interface TaskMetadata {
    */
   widget_id?: MessageID;
   /**
-   * Executor-side watchdog diagnostics for SDK turns that stopped producing
-   * observable agent progress while the wrapper process was still alive.
+   * Executor-side diagnostics for SDK turns that never produced a first
+   * meaningful Agor-visible agent event while the wrapper process was alive.
    */
-  agent_progress_watchdog?: {
+  first_agent_progress_watchdog?: {
     status: 'stalled';
     tool: string;
     reason: string;
-    started_at: string;
+    watchdog_started_at: string;
     stalled_at: string;
-    first_progress_seen: boolean;
-    last_progress_at?: string;
-    last_progress_label?: string;
     last_activity_at?: string;
     last_activity_label?: string;
     timeout_ms: number;

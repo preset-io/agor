@@ -19,8 +19,8 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { MessageRole, TaskStatus } from '@agor/core/types';
-import { startAgentProgressWatchdog } from '../../agent-progress-watchdog.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
+import { startFirstAgentProgressWatchdog } from '../../first-agent-progress-watchdog.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
@@ -35,6 +35,10 @@ function sdkDebug(...args: unknown[]): void {
   if (DEBUG_SDK_EXECUTOR) {
     console.debug(...args);
   }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 /**
@@ -543,8 +547,7 @@ export async function executeToolTask(params: {
 
   // Create execution context
   const ctx = createExecutionContext(client, toolName, sessionId);
-  const watchdog = startAgentProgressWatchdog({
-    taskId,
+  const watchdog = startFirstAgentProgressWatchdog({
     toolName,
     abortController: params.abortController,
     firstAgentProgressTimeoutMs: params.resolvedConfig?.execution?.agent_first_progress_timeout_ms,
@@ -717,7 +720,7 @@ export async function executeToolTask(params: {
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
     await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
-    const err = watchdog.getStallReason() ? new Error(watchdog.getStallReason()) : (error as Error);
+    const err = watchdog.getStallReason() ? new Error(watchdog.getStallReason()) : toError(error);
     console.error(`[${toolName}] Execution failed:`, err);
 
     // Capture git SHA at task end (even for failed tasks)

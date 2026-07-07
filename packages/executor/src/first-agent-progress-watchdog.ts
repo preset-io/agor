@@ -1,12 +1,11 @@
-import type { AgenticToolName, TaskID, TaskMetadata } from '@agor/core/types';
+import type { AgenticToolName, TaskMetadata } from '@agor/core/types';
 
 const DEFAULT_FIRST_AGENT_PROGRESS_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_CHECK_INTERVAL_MS = 30 * 1000;
 
 type TimerHandle = ReturnType<typeof setInterval>;
 
-export interface AgentProgressWatchdogOptions {
-  taskId: TaskID;
+export interface FirstAgentProgressWatchdogOptions {
   toolName: AgenticToolName;
   abortController: AbortController;
   firstAgentProgressTimeoutMs?: number;
@@ -26,24 +25,23 @@ function toIso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
-export class AgentProgressWatchdog {
+export class FirstAgentProgressWatchdog {
   private readonly firstAgentProgressTimeoutMs: number;
   private readonly checkIntervalMs: number;
   private readonly nowMs: () => number;
   private timer?: TimerHandle;
-  private startedAtMs?: number;
+  private watchdogStartedAtMs?: number;
   private pausedAtMs?: number;
   private lastActivityAtMs?: number;
   private lastActivityLabel?: string;
-  private lastAgentProgressAtMs?: number;
-  private lastAgentProgressLabel?: string;
+  private firstProgressSeen = false;
   private checkInFlight = false;
   private stalled = false;
   private stallReason?: string;
   private stalledAtMs?: number;
   private stalledTimeoutMs?: number;
 
-  constructor(private readonly options: AgentProgressWatchdogOptions) {
+  constructor(private readonly options: FirstAgentProgressWatchdogOptions) {
     this.firstAgentProgressTimeoutMs =
       options.firstAgentProgressTimeoutMs ??
       envNumber('AGOR_AGENT_FIRST_PROGRESS_TIMEOUT_MS', DEFAULT_FIRST_AGENT_PROGRESS_TIMEOUT_MS) ??
@@ -58,7 +56,7 @@ export class AgentProgressWatchdog {
   start(): void {
     if (this.timer || this.firstAgentProgressTimeoutMs === 0) return;
 
-    this.startedAtMs = this.nowMs();
+    this.watchdogStartedAtMs = this.nowMs();
     this.timer = setInterval(() => {
       void this.check();
     }, this.checkIntervalMs);
@@ -73,25 +71,24 @@ export class AgentProgressWatchdog {
   }
 
   markActivity(label: string): void {
-    if (this.stalled) return;
+    if (this.stalled || this.firstProgressSeen) return;
 
     this.lastActivityAtMs = this.nowMs();
     this.lastActivityLabel = label;
   }
 
   markAgentProgress(label: string): void {
-    if (this.stalled) return;
+    if (this.stalled || this.firstProgressSeen) return;
 
     const now = this.nowMs();
+    this.firstProgressSeen = true;
     this.lastActivityAtMs = now;
     this.lastActivityLabel = label;
-    this.lastAgentProgressAtMs = now;
-    this.lastAgentProgressLabel = label;
     this.stop();
   }
 
   pause(label: string): void {
-    if (this.stalled || this.lastAgentProgressAtMs !== undefined) return;
+    if (this.stalled || this.firstProgressSeen) return;
 
     const now = this.nowMs();
     this.pausedAtMs = now;
@@ -101,16 +98,12 @@ export class AgentProgressWatchdog {
   }
 
   resume(label: string): void {
-    if (
-      this.stalled ||
-      this.lastAgentProgressAtMs !== undefined ||
-      this.firstAgentProgressTimeoutMs === 0
-    ) {
+    if (this.stalled || this.firstProgressSeen || this.firstAgentProgressTimeoutMs === 0) {
       return;
     }
 
     const now = this.nowMs();
-    this.startedAtMs = now;
+    this.watchdogStartedAtMs = now;
     this.lastActivityAtMs = now;
     this.lastActivityLabel = label;
     this.pausedAtMs = undefined;
@@ -126,26 +119,27 @@ export class AgentProgressWatchdog {
   }
 
   getDiagnosticMetadata(nowMs = this.stalledAtMs ?? this.nowMs()): TaskMetadata | undefined {
-    if (!this.startedAtMs || !this.stallReason || !this.stalledAtMs || !this.stalledTimeoutMs) {
+    if (
+      this.watchdogStartedAtMs === undefined ||
+      !this.stallReason ||
+      this.stalledAtMs === undefined ||
+      this.stalledTimeoutMs === undefined
+    ) {
       return undefined;
     }
 
     return {
-      agent_progress_watchdog: {
+      first_agent_progress_watchdog: {
         status: 'stalled',
         tool: this.options.toolName,
         reason: this.stallReason,
-        started_at: toIso(this.startedAtMs),
+        watchdog_started_at: toIso(this.watchdogStartedAtMs),
         stalled_at: toIso(this.stalledAtMs),
-        first_progress_seen: this.lastAgentProgressAtMs !== undefined,
-        last_progress_at: this.lastAgentProgressAtMs
-          ? toIso(this.lastAgentProgressAtMs)
-          : undefined,
-        last_progress_label: this.lastAgentProgressLabel,
-        last_activity_at: this.lastActivityAtMs ? toIso(this.lastActivityAtMs) : undefined,
+        last_activity_at:
+          this.lastActivityAtMs === undefined ? undefined : toIso(this.lastActivityAtMs),
         last_activity_label: this.lastActivityLabel,
         timeout_ms: this.stalledTimeoutMs,
-        elapsed_ms: nowMs - this.startedAtMs,
+        elapsed_ms: nowMs - this.watchdogStartedAtMs,
       },
     };
   }
@@ -154,16 +148,16 @@ export class AgentProgressWatchdog {
     if (
       this.checkInFlight ||
       this.stalled ||
-      !this.startedAtMs ||
+      this.watchdogStartedAtMs === undefined ||
       this.pausedAtMs !== undefined ||
-      this.lastAgentProgressAtMs !== undefined
+      this.firstProgressSeen
     ) {
       return;
     }
 
     const now = this.nowMs();
     const timeoutMs = this.firstAgentProgressTimeoutMs;
-    const elapsedMs = now - this.startedAtMs;
+    const elapsedMs = now - this.watchdogStartedAtMs;
 
     if (elapsedMs < timeoutMs) return;
 
@@ -176,12 +170,12 @@ export class AgentProgressWatchdog {
   }
 
   private async markStalled(now: number, timeoutMs: number): Promise<void> {
-    if (this.stalled || !this.startedAtMs) return;
+    if (this.stalled || this.watchdogStartedAtMs === undefined) return;
 
     this.stalled = true;
     this.stop();
 
-    const reason = `${this.options.toolName} task stalled: no agent progress within ${timeoutMs}ms after executor start.`;
+    const reason = `${this.options.toolName} task startup stalled: no first meaningful agent event within ${timeoutMs}ms after SDK watchdog start.`;
     this.stallReason = reason;
     this.stalledAtMs = now;
     this.stalledTimeoutMs = timeoutMs;
@@ -192,10 +186,10 @@ export class AgentProgressWatchdog {
   }
 }
 
-export function startAgentProgressWatchdog(
-  options: AgentProgressWatchdogOptions
-): AgentProgressWatchdog {
-  const watchdog = new AgentProgressWatchdog(options);
+export function startFirstAgentProgressWatchdog(
+  options: FirstAgentProgressWatchdogOptions
+): FirstAgentProgressWatchdog {
+  const watchdog = new FirstAgentProgressWatchdog(options);
   watchdog.start();
   return watchdog;
 }

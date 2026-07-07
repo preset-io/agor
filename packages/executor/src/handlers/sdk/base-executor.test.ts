@@ -1,8 +1,9 @@
 import { resolveApiKey } from '@agor/core/config';
-import { MessageRole, TaskStatus } from '@agor/core/types';
+import { MessageRole, type Task, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   attachRepositoryProgressReporting,
+  executeToolTask,
   resolveApiKeyForTask,
   withProgressCallbacks,
 } from './base-executor.js';
@@ -239,5 +240,108 @@ describe('SDK executor progress reporting', () => {
 
     expect(progress.pause).toHaveBeenCalledWith('task:awaiting_permission');
     expect(progress.resume).toHaveBeenCalledWith('task:running');
+  });
+});
+
+describe('executeToolTask first-progress watchdog', () => {
+  it('marks the task failed with watchdog metadata when no first agent event arrives', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
+    const previousInterval = process.env.AGOR_AGENT_PROGRESS_WATCHDOG_INTERVAL_MS;
+    process.env.AGOR_AGENT_PROGRESS_WATCHDOG_INTERVAL_MS = '100';
+
+    try {
+      const taskPatches: Partial<Task>[] = [];
+      const createdMessages: unknown[] = [];
+      const services: Record<string, unknown> = {
+        'config/resolve-api-key': {
+          create: vi.fn(async () => ({ apiKey: '', source: 'env', useNativeAuth: true })),
+        },
+        sessions: {
+          get: vi.fn(async () => ({ session_id: 'session-1' })),
+          patch: vi.fn(async (_id, patch) => patch),
+        },
+        messages: {
+          find: vi.fn(async () => ({ total: 0, data: [] })),
+          create: vi.fn(async (message) => {
+            createdMessages.push(message);
+            return message;
+          }),
+        },
+        tasks: {
+          patch: vi.fn(async (_id, patch) => {
+            taskPatches.push(patch as Partial<Task>);
+            return patch;
+          }),
+        },
+        '/tasks/streaming': {
+          create: vi.fn(async (event) => event),
+        },
+      };
+      const client = {
+        service: vi.fn((name: string) => {
+          const service = services[name];
+          if (!service) throw new Error(`unexpected service ${name}`);
+          return service;
+        }),
+      } as never;
+
+      const stopTask = vi.fn(async () => ({ success: true }));
+      const execution = executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController: new AbortController(),
+        apiKeyEnvVar: 'OPENAI_API_KEY',
+        toolName: 'codex',
+        resolvedConfig: { execution: { agent_first_progress_timeout_ms: 1000 } },
+        createTool: () => ({
+          stopTask,
+          executePromptWithStreaming: vi.fn(
+            (_sessionId, _prompt, _taskId, _permissionMode, _callbacks, abortController) =>
+              new Promise<never>((_resolve, reject) => {
+                abortController?.signal.addEventListener('abort', () => {
+                  reject(new Error('aborted'));
+                });
+              })
+          ),
+        }),
+      });
+
+      const executionExpectation = expect(execution).rejects.toThrow(
+        'no first meaningful agent event'
+      );
+      await vi.advanceTimersByTimeAsync(1000);
+      await executionExpectation;
+      expect(stopTask).toHaveBeenCalledWith('session-1', 'task-1');
+      expect(taskPatches).toContainEqual(
+        expect.objectContaining({
+          status: 'failed',
+          error_message: expect.stringContaining('no first meaningful agent event'),
+          metadata: {
+            first_agent_progress_watchdog: expect.objectContaining({
+              status: 'stalled',
+              tool: 'codex',
+              watchdog_started_at: '2026-06-20T00:00:00.000Z',
+              timeout_ms: 1000,
+            }),
+          },
+        })
+      );
+      expect(createdMessages).toContainEqual(
+        expect.objectContaining({
+          role: MessageRole.SYSTEM,
+          content: expect.stringContaining('no first meaningful agent event'),
+        })
+      );
+    } finally {
+      if (previousInterval === undefined) {
+        delete process.env.AGOR_AGENT_PROGRESS_WATCHDOG_INTERVAL_MS;
+      } else {
+        process.env.AGOR_AGENT_PROGRESS_WATCHDOG_INTERVAL_MS = previousInterval;
+      }
+      vi.useRealTimers();
+    }
   });
 });
