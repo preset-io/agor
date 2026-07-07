@@ -1,11 +1,23 @@
 import type { Branch, Link, Session } from '@agor-live/client';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../hooks/useAgorData';
+import { cancelAllHydrations, resetHydrationRevisions, runHydration } from './agorHydration';
 import { mergeLinksIntoMaps, reconcilePinnedBranchLinksIntoMaps } from './agorMaps';
-import { agorStore } from './agorStore';
+import { agorStore, getPinnedBranchLinkPreserveBranchIds } from './agorStore';
 
 // Reset the singleton before each test so cases don't bleed into each other.
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
+  cancelAllHydrations();
+  resetHydrationRevisions();
   agorStore.getState().reset();
 });
 
@@ -171,6 +183,355 @@ describe('agorStore scaffold', () => {
     expect(state.linksByBranch.get('b1')).toEqual([unpinnedInDomain, currentPinnedInDomain]);
     expect(state.linksByBranch.get('b2')).toEqual([pinnedOutOfDomain]);
     expect(state.linksBySession.get('s1')).toEqual([sessionLink]);
+  });
+
+  it('replaces a full session link bucket without touching other owners', () => {
+    const staleSessionLink = {
+      link_id: 'l-stale-session',
+      branch_id: null,
+      session_id: 's1',
+      is_pinned: false,
+    } as Link;
+    const currentSessionLink = {
+      link_id: 'l-current-session',
+      branch_id: null,
+      session_id: 's1',
+      is_pinned: true,
+    } as Link;
+    const otherSessionLink = {
+      link_id: 'l-other-session',
+      branch_id: null,
+      session_id: 's2',
+      is_pinned: false,
+    } as Link;
+    const branchLink = {
+      link_id: 'l-branch',
+      branch_id: 'b1',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+
+    agorStore
+      .getState()
+      .applyMaps((prev) =>
+        mergeLinksIntoMaps(prev, [staleSessionLink, otherSessionLink, branchLink])
+      );
+
+    agorStore.getState().replaceFullSessionLinks('s1', [currentSessionLink, branchLink]);
+
+    const state = agorStore.getState();
+    expect(state.linkById.has('l-stale-session')).toBe(false);
+    expect(state.linkById.get('l-current-session')).toBe(currentSessionLink);
+    expect(state.linkById.get('l-other-session')).toBe(otherSessionLink);
+    expect(state.linkById.get('l-branch')).toBe(branchLink);
+    expect(state.linksBySession.get('s1')).toEqual([currentSessionLink]);
+    expect(state.linksBySession.get('s2')).toEqual([otherSessionLink]);
+    expect(state.linksByBranch.get('b1')).toEqual([branchLink]);
+    expect(state.fullSessionLinkOwnerIds.has('s1')).toBe(true);
+  });
+
+  it('replaces a full branch link bucket without touching session or other branch owners', () => {
+    const staleBranchLink = {
+      link_id: 'l-stale-branch',
+      branch_id: 'b1',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+    const currentBranchLink = {
+      link_id: 'l-current-branch',
+      branch_id: 'b1',
+      session_id: null,
+      is_pinned: false,
+    } as Link;
+    const otherBranchLink = {
+      link_id: 'l-other-branch',
+      branch_id: 'b2',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+    const sessionLink = {
+      link_id: 'l-session',
+      branch_id: null,
+      session_id: 's1',
+      is_pinned: true,
+    } as Link;
+
+    agorStore
+      .getState()
+      .applyMaps((prev) =>
+        mergeLinksIntoMaps(prev, [staleBranchLink, otherBranchLink, sessionLink])
+      );
+
+    agorStore.getState().replaceFullBranchLinks('b1', [currentBranchLink, sessionLink]);
+
+    const state = agorStore.getState();
+    expect(state.linkById.has('l-stale-branch')).toBe(false);
+    expect(state.linkById.get('l-current-branch')).toBe(currentBranchLink);
+    expect(state.linkById.get('l-other-branch')).toBe(otherBranchLink);
+    expect(state.linkById.get('l-session')).toBe(sessionLink);
+    expect(state.linksByBranch.get('b1')).toEqual([currentBranchLink]);
+    expect(state.linksByBranch.get('b2')).toEqual([otherBranchLink]);
+    expect(state.linksBySession.get('s1')).toEqual([sessionLink]);
+    expect(state.fullBranchLinkOwnerIds.has('b1')).toBe(true);
+  });
+
+  it('lets pinned-only hydration prune active full buckets but preserves direct archived full buckets', () => {
+    const activeBranch = { branch_id: 'b-active' } as Branch;
+    const activePinned = {
+      link_id: 'l-active-pinned',
+      branch_id: 'b-active',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+    const archivedPinned = {
+      link_id: 'l-archived-pinned',
+      branch_id: 'b-archived',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+
+    agorStore.getState().setMap('branchById', new Map([['b-active', activeBranch]]));
+    agorStore.getState().replaceFullBranchLinks('b-active', [activePinned]);
+    agorStore.getState().replaceFullBranchLinks('b-archived', [archivedPinned]);
+
+    agorStore.getState().applyMaps((prev) =>
+      reconcilePinnedBranchLinksIntoMaps(prev, [], {
+        preserveBranchIds: getPinnedBranchLinkPreserveBranchIds(agorStore.getState()),
+      })
+    );
+
+    const state = agorStore.getState();
+    expect(state.linkById.has('l-active-pinned')).toBe(false);
+    expect(state.linksByBranch.has('b-active')).toBe(false);
+    expect(state.linkById.get('l-archived-pinned')).toBe(archivedPinned);
+    expect(state.linksByBranch.get('b-archived')).toEqual([archivedPinned]);
+  });
+
+  it('prunes a formerly-active full branch bucket after branch hydration drops the owner', () => {
+    const activeBranch = { branch_id: 'b-formerly-active' } as Branch;
+    const stalePinned = {
+      link_id: 'l-formerly-active-pinned',
+      branch_id: 'b-formerly-active',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+
+    agorStore.getState().setMap('branchById', new Map([['b-formerly-active', activeBranch]]));
+    agorStore.getState().replaceFullBranchLinks('b-formerly-active', [stalePinned]);
+
+    // Active branch hydration later discovers the branch disappeared (archived
+    // or deleted) before global pinned-link hydration runs.
+    agorStore.getState().setMap('branchById', new Map());
+    agorStore.getState().applyMaps((prev) =>
+      reconcilePinnedBranchLinksIntoMaps(prev, [], {
+        preserveBranchIds: getPinnedBranchLinkPreserveBranchIds(agorStore.getState()),
+      })
+    );
+
+    const state = agorStore.getState();
+    expect(state.linkById.has('l-formerly-active-pinned')).toBe(false);
+    expect(state.linksByBranch.has('b-formerly-active')).toBe(false);
+  });
+
+  it('fetches and replaces a full branch link bucket through the centralized action', async () => {
+    const fetchedBranchLink = {
+      link_id: 'l-fetched-branch',
+      branch_id: 'b1',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+    const findAll = vi.fn().mockResolvedValue([fetchedBranchLink]);
+    const service = vi.fn(() => ({ findAll }));
+    const client = { service } as never;
+
+    const result = await agorStore.getState().fetchAndReplaceFullBranchLinks(client, 'b1');
+
+    expect(result).toEqual([fetchedBranchLink]);
+    expect(service).toHaveBeenCalledWith('links');
+    expect(findAll).toHaveBeenCalledWith({
+      query: {
+        owner_scope: 'branch',
+        branch_id: 'b1',
+        $limit: 10000,
+      },
+    });
+    expect(agorStore.getState().linksByBranch.get('b1')).toEqual([fetchedBranchLink]);
+  });
+
+  it('applies concurrent unrelated full session and branch hydrations independently', async () => {
+    const sessionGate = deferred<Link[]>();
+    const branchGate = deferred<Link[]>();
+    const sessionLink = {
+      link_id: 'l-session-full',
+      branch_id: null,
+      session_id: 's1',
+      is_pinned: false,
+    } as Link;
+    const branchLink = {
+      link_id: 'l-branch-full',
+      branch_id: 'b1',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+    const findAll = vi.fn(({ query }) => {
+      if (query.session_id === 's1') return sessionGate.promise;
+      if (query.branch_id === 'b1') return branchGate.promise;
+      return Promise.resolve([]);
+    });
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    const sessionHydration = agorStore.getState().fetchAndReplaceFullSessionLinks(client, 's1');
+    const branchHydration = agorStore.getState().fetchAndReplaceFullBranchLinks(client, 'b1');
+
+    branchGate.resolve([branchLink]);
+    sessionGate.resolve([sessionLink]);
+    await expect(Promise.all([sessionHydration, branchHydration])).resolves.toEqual([
+      [sessionLink],
+      [branchLink],
+    ]);
+
+    const state = agorStore.getState();
+    expect(state.linksBySession.get('s1')).toEqual([sessionLink]);
+    expect(state.linksByBranch.get('b1')).toEqual([branchLink]);
+  });
+
+  it('does not let direct full owner hydration cancel global pinned hydration', async () => {
+    const activeBranch = { branch_id: 'b-active' } as Branch;
+    const staleActivePinned = {
+      link_id: 'l-stale-active-pinned',
+      branch_id: 'b-active',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+    const directArchivedLink = {
+      link_id: 'l-direct-archived',
+      branch_id: 'b-archived',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+    const globalGate = deferred<Link[]>();
+    let globalCalls = 0;
+
+    agorStore.getState().setMap('branchById', new Map([['b-active', activeBranch]]));
+    agorStore.getState().applyMaps((prev) => mergeLinksIntoMaps(prev, [staleActivePinned]));
+
+    const globalPinnedHydration = runHydration(
+      'links',
+      ['links'],
+      () => {
+        globalCalls += 1;
+        return globalCalls === 1 ? globalGate.promise : Promise.resolve([]);
+      },
+      (pinnedLinks) =>
+        agorStore.getState().applyMaps((prev) =>
+          reconcilePinnedBranchLinksIntoMaps(prev, pinnedLinks, {
+            preserveBranchIds: getPinnedBranchLinkPreserveBranchIds(agorStore.getState()),
+          })
+        )
+    );
+
+    const findAll = vi.fn().mockResolvedValue([directArchivedLink]);
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+    await expect(
+      agorStore.getState().fetchAndReplaceFullBranchLinks(client, 'b-archived')
+    ).resolves.toEqual([directArchivedLink]);
+
+    globalGate.resolve([]);
+    await globalPinnedHydration;
+
+    expect(globalCalls).toBe(2);
+    const state = agorStore.getState();
+    expect(state.linkById.has('l-stale-active-pinned')).toBe(false);
+    expect(state.linksByBranch.has('b-active')).toBe(false);
+    expect(state.linkById.get('l-direct-archived')).toBe(directArchivedLink);
+    expect(state.linksByBranch.get('b-archived')).toEqual([directArchivedLink]);
+  });
+
+  it('does not let global pinned hydration cancel direct full owner hydration', async () => {
+    const directGate = deferred<Link[]>();
+    const directArchivedLink = {
+      link_id: 'l-direct-after-global',
+      branch_id: 'b-archived',
+      session_id: null,
+      is_pinned: true,
+    } as Link;
+    const findAll = vi.fn().mockReturnValue(directGate.promise);
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    const directHydration = agorStore
+      .getState()
+      .fetchAndReplaceFullBranchLinks(client, 'b-archived');
+    await runHydration(
+      'links',
+      ['links'],
+      () => Promise.resolve([]),
+      (pinnedLinks) =>
+        agorStore
+          .getState()
+          .applyMaps((prev) => reconcilePinnedBranchLinksIntoMaps(prev, pinnedLinks))
+    );
+
+    directGate.resolve([directArchivedLink]);
+    await expect(directHydration).resolves.toEqual([directArchivedLink]);
+    expect(agorStore.getState().linksByBranch.get('b-archived')).toEqual([directArchivedLink]);
+  });
+
+  it('suppresses an older same-owner result after a newer empty request applies', async () => {
+    const staleSessionLink = {
+      link_id: 'l-older-empty-race',
+      branch_id: null,
+      session_id: 's1',
+      is_pinned: false,
+    } as Link;
+    const olderGate = deferred<Link[]>();
+    let calls = 0;
+    const findAll = vi.fn(() => {
+      calls += 1;
+      return calls === 1 ? olderGate.promise : Promise.resolve([]);
+    });
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    const olderHydration = agorStore.getState().fetchAndReplaceFullSessionLinks(client, 's1');
+    await expect(
+      agorStore.getState().fetchAndReplaceFullSessionLinks(client, 's1')
+    ).resolves.toEqual([]);
+
+    olderGate.resolve([staleSessionLink]);
+    await expect(olderHydration).resolves.toEqual([]);
+
+    const state = agorStore.getState();
+    expect(state.linkById.has('l-older-empty-race')).toBe(false);
+    expect(state.linksBySession.has('s1')).toBe(false);
+  });
+
+  it('suppresses stale full owner results when that owner changed during the fetch', async () => {
+    const staleSessionLink = {
+      link_id: 'l-stale-session-result',
+      branch_id: null,
+      session_id: 's1',
+      is_pinned: false,
+      title: 'stale',
+    } as Link;
+    const newerSessionLink = {
+      link_id: 'l-newer-session-link',
+      branch_id: null,
+      session_id: 's1',
+      is_pinned: true,
+      title: 'newer',
+    } as Link;
+    const gate = deferred<Link[]>();
+    const findAll = vi.fn().mockReturnValue(gate.promise);
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    const hydration = agorStore.getState().fetchAndReplaceFullSessionLinks(client, 's1');
+    agorStore.getState().replaceFullSessionLinks('s1', [newerSessionLink]);
+    gate.resolve([staleSessionLink]);
+
+    await expect(hydration).resolves.toEqual([]);
+    const state = agorStore.getState();
+    expect(state.linkById.has('l-stale-session-result')).toBe(false);
+    expect(state.linkById.get('l-newer-session-link')).toBe(newerSessionLink);
+    expect(state.linksBySession.get('s1')).toEqual([newerSessionLink]);
   });
 
   it('branch eviction removes branch links and child session links', () => {

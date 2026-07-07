@@ -251,6 +251,12 @@ export type PinnedBranchLinkHydrationDomain = {
    * owner_scope=branch,is_pinned=true domain.
    */
   branchIds?: ReadonlySet<string> | readonly string[];
+  /**
+   * Branch owners with a newer full-owner link bucket that this pinned-only
+   * snapshot must not prune. Pinned snapshots may still upsert fetched links for
+   * these owners; they just are not authoritative for deleting absent ones.
+   */
+  preserveBranchIds?: ReadonlySet<string> | readonly string[];
 };
 
 function normalizeDomainBranchIds(
@@ -268,6 +274,17 @@ function isPinnedBranchLinkInDomain(
   return !domainBranchIds || domainBranchIds.has(link.branch_id);
 }
 
+function isPinnedBranchLinkPrunable(
+  link: Link,
+  domainBranchIds: ReadonlySet<string> | null,
+  preserveBranchIds: ReadonlySet<string> | null
+): boolean {
+  return (
+    isPinnedBranchLinkInDomain(link, domainBranchIds) &&
+    (!link.branch_id || !preserveBranchIds?.has(link.branch_id))
+  );
+}
+
 /**
  * Reconcile a fetched `owner_scope=branch,is_pinned=true` snapshot into the
  * link maps. Unlike `mergeLinksIntoMaps`, this is domain-complete: cached
@@ -281,6 +298,7 @@ export function reconcilePinnedBranchLinksIntoMaps(
   domain: PinnedBranchLinkHydrationDomain = {}
 ): DataMaps {
   const domainBranchIds = normalizeDomainBranchIds(domain.branchIds);
+  const preserveBranchIds = normalizeDomainBranchIds(domain.preserveBranchIds);
   const fetchedIds = new Set<string>();
   for (const link of links) {
     if (isPinnedBranchLinkInDomain(link, domainBranchIds)) {
@@ -290,12 +308,85 @@ export function reconcilePinnedBranchLinksIntoMaps(
 
   let next = prev;
   for (const link of prev.linkById.values()) {
-    if (isPinnedBranchLinkInDomain(link, domainBranchIds) && !fetchedIds.has(link.link_id)) {
+    if (
+      isPinnedBranchLinkPrunable(link, domainBranchIds, preserveBranchIds) &&
+      !fetchedIds.has(link.link_id)
+    ) {
       next = removeLinkFromMaps(next, link.link_id);
     }
   }
 
   return mergeLinksIntoMaps(next, links);
+}
+
+function sameLinkArray(left: readonly Link[] | undefined, right: readonly Link[]): boolean {
+  if (!left) return right.length === 0;
+  if (left.length !== right.length) return false;
+  return left.every((link, index) => shallowEqualEntity(link, right[index]));
+}
+
+function replaceLinkBucket(
+  buckets: Map<string, Link[]>,
+  ownerId: string,
+  links: readonly Link[]
+): Map<string, Link[]> {
+  const existing = buckets.get(ownerId);
+  if (sameLinkArray(existing, links)) return buckets;
+
+  const next = new Map(buckets);
+  if (links.length > 0) next.set(ownerId, [...links]);
+  else next.delete(ownerId);
+  return next;
+}
+
+function isBranchOwnedBy(link: Link, branchId: string): boolean {
+  return link.branch_id === branchId && !link.session_id;
+}
+
+function isSessionOwnedBy(link: Link, sessionId: string): boolean {
+  return link.session_id === sessionId && !link.branch_id;
+}
+
+export function replaceFullBranchLinksInMaps(
+  prev: DataMaps,
+  branchId: string,
+  links: readonly Link[]
+): DataMaps {
+  const ownerLinks = links.filter((link) => isBranchOwnedBy(link, branchId));
+  const fetchedIds = new Set(ownerLinks.map((link) => link.link_id));
+
+  let next = prev;
+  for (const link of prev.linkById.values()) {
+    if (isBranchOwnedBy(link, branchId) && !fetchedIds.has(link.link_id)) {
+      next = removeLinkFromMaps(next, link.link_id);
+    }
+  }
+  next = mergeLinksIntoMaps(next, ownerLinks);
+
+  const linksByBranch = replaceLinkBucket(next.linksByBranch, branchId, ownerLinks);
+  if (linksByBranch === next.linksByBranch) return next;
+  return { ...next, linksByBranch };
+}
+
+export function replaceFullSessionLinksInMaps(
+  prev: DataMaps,
+  sessionId: string,
+  links: readonly Link[]
+): DataMaps {
+  const ownerLinks = links.filter((link) => isSessionOwnedBy(link, sessionId));
+  const fetchedIds = new Set(ownerLinks.map((link) => link.link_id));
+
+  let next = prev;
+  for (const link of prev.linkById.values()) {
+    if (isSessionOwnedBy(link, sessionId) && !fetchedIds.has(link.link_id)) {
+      next = removeLinkFromMaps(next, link.link_id);
+    }
+  }
+  next = mergeLinksIntoMaps(next, ownerLinks);
+
+  const linksBySession = replaceLinkBucket(next.linksBySession, sessionId, ownerLinks);
+  if (linksBySession === next.linksBySession) return next;
+  return { ...next, linksBySession };
 }
 
 export function removeLinkFromMaps(prev: DataMaps, linkOrId: Link | string): DataMaps {

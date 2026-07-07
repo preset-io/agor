@@ -34,6 +34,12 @@ export const selectLinkById = (s: AgorState) => s.linkById;
 export const selectLinksByBranch = (s: AgorState) => s.linksByBranch;
 export const selectLinksBySession = (s: AgorState) => s.linksBySession;
 export const selectSessionMcpServerIds = (s: AgorState) => s.sessionMcpServerIds;
+export const selectReplaceFullSessionLinks = (s: AgorState) => s.replaceFullSessionLinks;
+export const selectReplaceFullBranchLinks = (s: AgorState) => s.replaceFullBranchLinks;
+export const selectFetchAndReplaceFullSessionLinks = (s: AgorState) =>
+  s.fetchAndReplaceFullSessionLinks;
+export const selectFetchAndReplaceFullBranchLinks = (s: AgorState) =>
+  s.fetchAndReplaceFullBranchLinks;
 
 /**
  * Select a single board's board-object array. Curried so callers can memoize

@@ -48,7 +48,7 @@ import {
   replaceIfChanged,
 } from '../store/agorMaps';
 import * as realtime from '../store/agorRealtimeActions';
-import { agorStore } from '../store/agorStore';
+import { agorStore, getPinnedBranchLinkPreserveBranchIds } from '../store/agorStore';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import {
@@ -817,7 +817,10 @@ export function useAgorData(
               userById: usersMap,
             },
             pinnedBranchLinksList,
-            { branchIds: pinnedBranchDomainBranchIds }
+            {
+              branchIds: pinnedBranchDomainBranchIds,
+              preserveBranchIds: getPinnedBranchLinkPreserveBranchIds(agorStore.getState()),
+            }
           );
         });
         // This wholesale replace is NOT a `runHydration` apply, so it must bump
@@ -919,9 +922,11 @@ export function useAgorData(
                 },
               }),
             (pinnedBranchLinks) =>
-              agorStore
-                .getState()
-                .applyMaps((prev) => reconcilePinnedBranchLinksIntoMaps(prev, pinnedBranchLinks))
+              agorStore.getState().applyMaps((prev) =>
+                reconcilePinnedBranchLinksIntoMaps(prev, pinnedBranchLinks, {
+                  preserveBranchIds: getPinnedBranchLinkPreserveBranchIds(agorStore.getState()),
+                })
+              )
           );
         }
 

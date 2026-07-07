@@ -22,12 +22,22 @@
  *   (per-collection revision counters, generation tokens, `runHydration`) lives
  *   in `agorHydration.ts`.
  */
+
+import { type AgorClient, type Link, PAGINATION } from '@agor-live/client';
 import { enableMapSet } from 'immer';
 import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createStore } from 'zustand/vanilla';
 import type { InitialLoadItemKey, InitialLoadingStage } from '../hooks/useAgorData';
-import { type DataMaps, EMPTY_MAPS, MAP_KEYS, pickMaps } from './agorMaps';
+import { bumpRevision, getHydrationRevision } from './agorHydration';
+import {
+  type DataMaps,
+  EMPTY_MAPS,
+  MAP_KEYS,
+  pickMaps,
+  replaceFullBranchLinksInMaps,
+  replaceFullSessionLinksInMaps,
+} from './agorMaps';
 
 // Immer needs this to draft Map/Set state. Called once at module load; the
 // store's state is entirely Maps and one Set.
@@ -42,6 +52,12 @@ interface AgorMeta {
   loadingStage: InitialLoadingStage;
   error: string | null;
   itemCounts: ItemCounts;
+  /** Branch owners whose `linksByBranch` bucket has been hydrated as a full owner snapshot. */
+  fullBranchLinkOwnerIds: Set<string>;
+  /** Full branch owners intentionally hydrated while outside the active branch map. */
+  directFullBranchLinkOwnerIds: Set<string>;
+  /** Session owners whose `linksBySession` bucket has been hydrated as a full owner snapshot. */
+  fullSessionLinkOwnerIds: Set<string>;
 }
 
 /** Store actions: foundational primitives + the one immer cascade. */
@@ -51,7 +67,8 @@ interface AgorActions {
   /**
    * Reset ONLY the data maps to empty, leaving meta untouched. Mirrors the
    * hook's logout effect (`setMaps(EMPTY_MAPS)`), which clears board state
-   * without flipping `loading` / `error` / `itemCounts`.
+   * without flipping `loading` / `error` / `itemCounts`. Full-link owner
+   * hydration markers are data-scope bookkeeping, so they are cleared too.
    */
   resetMaps: () => void;
   setLoading: (loading: boolean) => void;
@@ -85,26 +102,103 @@ interface AgorActions {
    * path and the hard-delete `removed` path.
    */
   evictBranchAndSessions: (branchId: string) => void;
+  /** Replace one session owner's complete link bucket, preserving every other owner bucket. */
+  replaceFullSessionLinks: (sessionId: string, links: readonly Link[]) => void;
+  /** Replace one branch owner's complete link bucket, preserving every other owner bucket. */
+  replaceFullBranchLinks: (branchId: string, links: readonly Link[]) => void;
+  /** Fetch and race-safely replace one session owner's complete link bucket. */
+  fetchAndReplaceFullSessionLinks: (client: AgorClient, sessionId: string) => Promise<Link[]>;
+  /** Fetch and race-safely replace one branch owner's complete link bucket. */
+  fetchAndReplaceFullBranchLinks: (client: AgorClient, branchId: string) => Promise<Link[]>;
 }
 
 export type AgorState = DataMaps & AgorMeta & AgorActions;
 
 /** Initial meta values — identical to `useAgorData`'s `useState` defaults. */
-const INITIAL_META: AgorMeta = {
+const makeInitialMeta = (): AgorMeta => ({
   loading: true,
   loadingStage: 'idle',
   error: null,
   itemCounts: {},
-};
+  fullBranchLinkOwnerIds: new Set(),
+  directFullBranchLinkOwnerIds: new Set(),
+  fullSessionLinkOwnerIds: new Set(),
+});
+
+let fullLinkRequestSequence = 0;
+const branchFullLinkRequestGeneration = new Map<string, number>();
+const sessionFullLinkRequestGeneration = new Map<string, number>();
+
+function resetFullLinkRequestGenerations(): void {
+  fullLinkRequestSequence = 0;
+  branchFullLinkRequestGeneration.clear();
+  sessionFullLinkRequestGeneration.clear();
+}
+
+function invalidateBranchFullLinkRequests(branchId: string): number {
+  const generation = ++fullLinkRequestSequence;
+  branchFullLinkRequestGeneration.set(branchId, generation);
+  return generation;
+}
+
+function invalidateSessionFullLinkRequests(sessionId: string): number {
+  const generation = ++fullLinkRequestSequence;
+  sessionFullLinkRequestGeneration.set(sessionId, generation);
+  return generation;
+}
+
+function isLatestBranchFullLinkRequest(branchId: string, generation: number): boolean {
+  return branchFullLinkRequestGeneration.get(branchId) === generation;
+}
+
+function isLatestSessionFullLinkRequest(sessionId: string, generation: number): boolean {
+  return sessionFullLinkRequestGeneration.get(sessionId) === generation;
+}
+
+function linkOwnerSignature(links: readonly Link[] | undefined): string {
+  return JSON.stringify(links ?? []);
+}
+
+function branchLinkOwnerSignature(state: AgorState, branchId: string): string {
+  return linkOwnerSignature(state.linksByBranch.get(branchId));
+}
+
+function sessionLinkOwnerSignature(state: AgorState, sessionId: string): string {
+  return linkOwnerSignature(state.linksBySession.get(sessionId));
+}
+
+function shouldSuppressFullOwnerLinksResult(
+  beforeRevision: number,
+  beforeSignature: string,
+  currentSignature: string
+): boolean {
+  const revisionChanged = getHydrationRevision('links') !== beforeRevision;
+  if (!revisionChanged && currentSignature === beforeSignature) return false;
+  // Suppress only when this owner changed while the request was in flight.
+  // Unrelated link writes may bump the global links revision, but they should
+  // not cancel this owner-scoped replacement.
+  return currentSignature !== beforeSignature;
+}
 
 export const agorStore = createStore<AgorState>()(
   immer((set, get) => ({
     ...EMPTY_MAPS,
-    ...INITIAL_META,
+    ...makeInitialMeta(),
 
-    reset: () => set({ ...EMPTY_MAPS, ...INITIAL_META }),
+    reset: () => {
+      resetFullLinkRequestGenerations();
+      set({ ...EMPTY_MAPS, ...makeInitialMeta() });
+    },
 
-    resetMaps: () => set({ ...EMPTY_MAPS }),
+    resetMaps: () => {
+      resetFullLinkRequestGenerations();
+      set({
+        ...EMPTY_MAPS,
+        fullBranchLinkOwnerIds: new Set(),
+        directFullBranchLinkOwnerIds: new Set(),
+        fullSessionLinkOwnerIds: new Set(),
+      });
+    },
 
     // Meta setters mirror `useState`'s bail-out: a write equal to the current
     // value is a no-op (no fresh state object, no subscriber notify).
@@ -178,6 +272,8 @@ export const agorStore = createStore<AgorState>()(
           if (session.branch_id === branchId) orphanIds.push(sessionId);
         }
         for (const sessionId of orphanIds) draft.sessionById.delete(sessionId);
+        draft.fullBranchLinkOwnerIds.delete(branchId);
+        draft.directFullBranchLinkOwnerIds.delete(branchId);
         if (draft.linksByBranch.has(branchId)) {
           for (const link of draft.linksByBranch.get(branchId) ?? []) {
             draft.linkById.delete(link.link_id);
@@ -189,10 +285,103 @@ export const agorStore = createStore<AgorState>()(
             draft.linkById.delete(link.link_id);
           }
           draft.linksBySession.delete(sessionId);
+          draft.fullSessionLinkOwnerIds.delete(sessionId);
         }
       }),
+
+    replaceFullSessionLinks: (sessionId, links) => {
+      invalidateSessionFullLinkRequests(sessionId);
+      bumpRevision('links');
+      get().applyMaps((prev) => replaceFullSessionLinksInMaps(prev, sessionId, links));
+      set((draft) => {
+        draft.fullSessionLinkOwnerIds.add(sessionId);
+      });
+    },
+
+    replaceFullBranchLinks: (branchId, links) => {
+      invalidateBranchFullLinkRequests(branchId);
+      const isDirectOutsideActiveBranchMap = !get().branchById.has(branchId);
+      bumpRevision('links');
+      get().applyMaps((prev) => replaceFullBranchLinksInMaps(prev, branchId, links));
+      set((draft) => {
+        draft.fullBranchLinkOwnerIds.add(branchId);
+        if (isDirectOutsideActiveBranchMap) draft.directFullBranchLinkOwnerIds.add(branchId);
+        else draft.directFullBranchLinkOwnerIds.delete(branchId);
+      });
+    },
+
+    fetchAndReplaceFullSessionLinks: async (client, sessionId) => {
+      const requestGeneration = invalidateSessionFullLinkRequests(sessionId);
+      const beforeRevision = getHydrationRevision('links');
+      const beforeSignature = sessionLinkOwnerSignature(get(), sessionId);
+      const links = await client.service('links').findAll({
+        query: {
+          owner_scope: 'session',
+          session_id: sessionId,
+          $limit: PAGINATION.DEFAULT_LIMIT,
+        },
+      });
+
+      if (
+        !isLatestSessionFullLinkRequest(sessionId, requestGeneration) ||
+        shouldSuppressFullOwnerLinksResult(
+          beforeRevision,
+          beforeSignature,
+          sessionLinkOwnerSignature(get(), sessionId)
+        )
+      ) {
+        return [];
+      }
+
+      get().replaceFullSessionLinks(sessionId, links);
+      return links;
+    },
+
+    fetchAndReplaceFullBranchLinks: async (client, branchId) => {
+      const requestGeneration = invalidateBranchFullLinkRequests(branchId);
+      const beforeRevision = getHydrationRevision('links');
+      const beforeSignature = branchLinkOwnerSignature(get(), branchId);
+      const links = await client.service('links').findAll({
+        query: {
+          owner_scope: 'branch',
+          branch_id: branchId,
+          $limit: PAGINATION.DEFAULT_LIMIT,
+        },
+      });
+
+      if (
+        !isLatestBranchFullLinkRequest(branchId, requestGeneration) ||
+        shouldSuppressFullOwnerLinksResult(
+          beforeRevision,
+          beforeSignature,
+          branchLinkOwnerSignature(get(), branchId)
+        )
+      ) {
+        return [];
+      }
+
+      get().replaceFullBranchLinks(branchId, links);
+      return links;
+    },
   }))
 );
+
+/**
+ * Pinned-only branch snapshots are authoritative for active branch owners, but
+ * not for direct full-owner buckets whose branch is outside the active branch
+ * map (for example, an archived branch opened directly). Preserve those buckets
+ * during pinned reconciliation while still allowing global pinned hydration to
+ * clean up stale active-branch pins after missed realtime events.
+ */
+export function getPinnedBranchLinkPreserveBranchIds(
+  state: AgorState
+): ReadonlySet<string> | undefined {
+  const preserve = new Set<string>();
+  for (const branchId of state.directFullBranchLinkOwnerIds) {
+    if (!state.branchById.has(branchId)) preserve.add(branchId);
+  }
+  return preserve.size > 0 ? preserve : undefined;
+}
 
 /**
  * React binding for the vanilla store. The store's lifecycle stays owned by the

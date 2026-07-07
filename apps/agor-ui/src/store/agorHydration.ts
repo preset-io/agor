@@ -123,6 +123,10 @@ export const bumpRevision = (collection: HydratedCollection): void => {
   liveRevisions[collection] += 1;
 };
 
+/** Read the current live-write revision for request-scoped race guards. */
+export const getHydrationRevision = (collection: HydratedCollection): number =>
+  liveRevisions[collection];
+
 /**
  * Bump the revisions of every collection a non-runHydration wholesale merge
  * overwrites (gated first-paint apply + silent reconnect resync). Mirrors the
