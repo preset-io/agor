@@ -7,6 +7,8 @@
  * OAuth/JWT/bearer credentials.
  */
 
+import { isUserEnvPlaceholder } from '../../mcp/template-resolver';
+
 export const MCP_HEADER_REDACTED_SENTINEL = '••••••••';
 
 export const RESERVED_MCP_CUSTOM_HEADER_NAMES = new Set([
@@ -58,7 +60,15 @@ export function redactMCPCustomHeaders(
   const normalized = normalizeMCPCustomHeaders(headers);
   if (!normalized) return undefined;
   return Object.fromEntries(
-    Object.keys(normalized).map((key) => [key, MCP_HEADER_REDACTED_SENTINEL])
+    Object.entries(normalized).map(([key, value]) => [
+      key,
+      // Leave a bare `{{ user.env.NAME }}` placeholder intact so executor-side
+      // session-scoping can resolve it against the user's env; redacting it to
+      // the sentinel would send `••••••••` as the literal header value. Raw
+      // secrets — and partial/multiple/helper expressions that can carry secret
+      // material — are still redacted.
+      isUserEnvPlaceholder(value) ? value : MCP_HEADER_REDACTED_SENTINEL,
+    ])
   );
 }
 
