@@ -44,7 +44,7 @@ export function sessionStreamChannelName(sessionId: string): string {
  * still sit in a session-stream room).
  */
 export function leaveAllSessionStreamChannels(app: Application, connection: unknown): void {
-  for (const name of app.channels) {
+  for (const name of app.channels ?? []) {
     if (name.startsWith(SESSION_STREAM_CHANNEL_PREFIX)) {
       app.channel(name).leave(connection as never);
     }
