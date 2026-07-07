@@ -88,6 +88,27 @@ describe('GatewayTokenWidget — admin gate (fail-open)', () => {
     expect(screen.queryByText(NOTICE)).toBeNull();
   });
 
+  it('shows the Dismiss action for an admin', () => {
+    currentRole = 'admin';
+    renderForm();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy();
+  });
+
+  it('hides Dismiss while the role is still loading (form fail-open, Dismiss is not)', () => {
+    currentRole = undefined;
+    renderForm();
+    // The form renders fail-open, but the admin-only Dismiss action must not.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+  });
+
+  it('shows no Dismiss for a known non-admin (notice only)', () => {
+    currentRole = 'member';
+    renderForm();
+    expect(screen.getByText(NOTICE)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+  });
+
   it('renders the form for an owner role', () => {
     currentRole = 'owner';
     renderForm();

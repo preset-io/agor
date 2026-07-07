@@ -282,17 +282,25 @@ interface SessionsGetService {
  * `refreshGatewayChannelState` all live in that service — this handler does not
  * reimplement them.
  */
+/**
+ * Only admins may set OR decline gateway channel tokens. `submitterRole` may be
+ * undefined → normalizes to member → fails closed. Shared by the submit and
+ * dismiss paths so neither can drift from the other; authoritative gate (the
+ * gateway-channels admin hook self-skips on the internal patch).
+ */
+function assertGatewayTokenAdmin(ctx: WidgetSubmitCtx): void {
+  if (!hasMinimumRole(ctx.submitterRole, ROLES.ADMIN)) {
+    throw new Forbidden('Only admins can set gateway channel tokens');
+  }
+}
+
 async function applyGatewayTokenSubmit(
   ctx: WidgetSubmitCtx,
   submit: GatewayTokenSubmit,
   params: GatewayTokenParams
 ): Promise<void> {
-  // a. Admin guard FIRST. `submitterRole` may be undefined → normalizes to
-  // member → fails closed. This explicit gate is authoritative: the
-  // gateway-channels admin hook self-skips on the internal patch below.
-  if (!hasMinimumRole(ctx.submitterRole, ROLES.ADMIN)) {
-    throw new Forbidden('Only admins can set gateway channel tokens');
-  }
+  // a. Admin guard FIRST.
+  assertGatewayTokenAdmin(ctx);
 
   // b. Channel-binding validation (anti confused-deputy). The channel must
   // exist, be a supported type matching the request, and target the SAME
@@ -409,6 +417,9 @@ export const gatewayTokenWidget: WidgetRegistryEntry<
   buildDismissedPrompt: (params) =>
     `[Agor] User declined to provide tokens for "${params.channelName}"; it stays disabled. ` +
     `Don't immediately re-ask.`,
+  // Dismissal is admin-only too — otherwise a member could terminally decline
+  // an admin-only credential flow via the generic dismiss endpoint.
+  authorizeDismiss: (ctx) => assertGatewayTokenAdmin(ctx),
 };
 
 /** Idempotent registration helper, safe to call at every daemon boot. */

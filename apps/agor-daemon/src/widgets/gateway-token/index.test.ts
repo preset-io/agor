@@ -174,6 +174,23 @@ describe('gateway_token widget — applySubmit admin guard', () => {
   });
 });
 
+describe('gateway_token widget — authorizeDismiss (admin-only dismissal)', () => {
+  it('rejects a non-admin dismissal', () => {
+    const { ctx } = makeCtx({ submitterRole: 'member' });
+    expect(() => gatewayTokenWidget.authorizeDismiss?.(ctx, defaultParams)).toThrow(/admin/i);
+  });
+
+  it('rejects an undefined-role dismissal (fails closed)', () => {
+    const { ctx } = makeCtx({ submitterRole: undefined });
+    expect(() => gatewayTokenWidget.authorizeDismiss?.(ctx, defaultParams)).toThrow(/admin/i);
+  });
+
+  it('allows an admin dismissal', () => {
+    const { ctx } = makeCtx({ submitterRole: 'admin' });
+    expect(() => gatewayTokenWidget.authorizeDismiss?.(ctx, defaultParams)).not.toThrow();
+  });
+});
+
 describe('gateway_token widget — channel-binding validation', () => {
   it('rejects when the channel does not exist', async () => {
     const { ctx, patchSpy } = makeCtx({ channel: null });

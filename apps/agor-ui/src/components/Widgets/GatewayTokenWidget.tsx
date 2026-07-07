@@ -435,9 +435,14 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
         ) : null}
 
         <Space style={{ width: '100%', justifyContent: 'flex-end' }} size="small">
-          <Button size="small" onClick={handleDismiss} loading={dismissing} disabled={submitting}>
-            Dismiss
-          </Button>
+          {/* Dismiss is the admin-only decline action, so only surface it to a
+              known admin — never during the role-loading window (isAdmin is
+              false until the role hydrates). The daemon enforces the same. */}
+          {isAdmin ? (
+            <Button size="small" onClick={handleDismiss} loading={dismissing} disabled={submitting}>
+              Dismiss
+            </Button>
+          ) : null}
           <Button
             size="small"
             type="primary"
