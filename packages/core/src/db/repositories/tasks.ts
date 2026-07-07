@@ -375,8 +375,13 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         const current = this.rowToTask(currentRow);
 
         // STEP 2: Deep merge updates into current task (in memory)
-        // Preserves nested objects like message_range when doing partial updates
+        // Preserves nested objects like message_range when doing partial updates.
+        // Runtime vitals are complete snapshots; replacing them avoids stale nested
+        // fields surviving across SDK progress events that intentionally omit them.
         const merged = deepMerge(current, updates);
+        if (updates.runtime_vitals !== undefined) {
+          merged.runtime_vitals = updates.runtime_vitals;
+        }
         const insertData = this.taskToInsert(merged);
 
         // STEP 3: Write merged task (within same transaction)

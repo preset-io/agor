@@ -435,84 +435,86 @@ export async function executeToolTask(params: {
     taskId,
     toolName,
   });
-  await vitalsReporter.record(TaskRuntimeEventKind.SDK_TURN_STARTED, {
-    source: 'executor',
-    phase: TaskRuntimePhase.SDK_STARTING,
-    forceFlush: true,
-  });
-
-  // Ensure plain git commands launched by the agent SDK inherit safe.directory
-  // trust for this managed checkout. Without this, Unix-isolated sessions can
-  // create and run successfully through executor-mediated git probes while
-  // `git status` inside the agent shell still fails with dubious ownership.
-  await configureSessionGitSafeDirectories(client, sessionId, `[${toolName} git.safe-directory]`);
-
-  // Capture and stamp task-start git state inside the executor as early as
-  // possible. The daemon transitions the task to RUNNING before spawn, but the
-  // authoritative branch git read belongs here with the rest of
-  // executor-mediated git work.
-  await stampGitStateAtTaskStart(client, sessionId, taskId);
-
-  // Resolve API key with proper precedence (user → config → env → native auth).
-  // Pass `toolName` so the daemon scopes the per-user lookup to this tool's
-  // credential bucket — prevents cross-SDK leak (e.g. Codex picking up an
-  // ANTHROPIC_API_KEY stored under claude-code).
-  const resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
-
-  // Fail fast if stored key can't be decrypted (e.g. master secret changed)
-  if (resolution.decryptionFailed) {
-    throw new Error(
-      `API key "${apiKeyEnvVar}" could not be decrypted. ` +
-        `The stored key may have been encrypted with a different master secret. ` +
-        `Please re-enter your API key in Settings > ${toolName} > Authentication.`
-    );
-  }
-
-  // Log resolution result
-  if (resolution.apiKey) {
-    sdkDebug(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);
-  } else {
-    sdkDebug(
-      `[${toolName}] No API key found - SDK will use native authentication (OAuth/CLI login)`
-    );
-  }
-
-  // Create execution context
-  const ctx = createExecutionContext(client, toolName, sessionId, vitalsReporter);
-
-  // Create tool instance using factory function
-  // Pass the resolved key (or empty string) and useNativeAuth flag
-  const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
-
-  // Wire up abort signal to tool's stopTask method.
-  // Triggered by SIGTERM handler calling abortController.abort().
-  const abortHandler = async () => {
-    console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
-    if (tool.stopTask) {
-      try {
-        const stopResult = await tool.stopTask(sessionId, taskId);
-        if (stopResult.success) {
-          console.log(`[${toolName}] Tool stopped successfully`);
-        } else {
-          console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
-        }
-      } catch (error) {
-        console.error(`[${toolName}] Error calling stopTask:`, error);
-      }
-    } else {
-      console.warn(`[${toolName}] Tool does not implement stopTask method`);
-    }
-  };
-
-  // Handle race condition: if signal is already aborted, call handler immediately
-  if (params.abortController.signal.aborted) {
-    await abortHandler();
-  }
-
-  // Listen for abort signal
-  params.abortController.signal.addEventListener('abort', abortHandler);
+  let abortHandler: (() => Promise<void>) | undefined;
 
   try {
+    await vitalsReporter.record(TaskRuntimeEventKind.SDK_TURN_STARTED, {
+      source: 'executor',
+      phase: TaskRuntimePhase.SDK_STARTING,
+      forceFlush: true,
+    });
+
+    // Ensure plain git commands launched by the agent SDK inherit safe.directory
+    // trust for this managed checkout. Without this, Unix-isolated sessions can
+    // create and run successfully through executor-mediated git probes while
+    // `git status` inside the agent shell still fails with dubious ownership.
+    await configureSessionGitSafeDirectories(client, sessionId, `[${toolName} git.safe-directory]`);
+
+    // Capture and stamp task-start git state inside the executor as early as
+    // possible. The daemon transitions the task to RUNNING before spawn, but the
+    // authoritative branch git read belongs here with the rest of
+    // executor-mediated git work.
+    await stampGitStateAtTaskStart(client, sessionId, taskId);
+
+    // Resolve API key with proper precedence (user → config → env → native auth).
+    // Pass `toolName` so the daemon scopes the per-user lookup to this tool's
+    // credential bucket — prevents cross-SDK leak (e.g. Codex picking up an
+    // ANTHROPIC_API_KEY stored under claude-code).
+    const resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
+
+    // Fail fast if stored key can't be decrypted (e.g. master secret changed)
+    if (resolution.decryptionFailed) {
+      throw new Error(
+        `API key "${apiKeyEnvVar}" could not be decrypted. ` +
+          `The stored key may have been encrypted with a different master secret. ` +
+          `Please re-enter your API key in Settings > ${toolName} > Authentication.`
+      );
+    }
+
+    // Log resolution result
+    if (resolution.apiKey) {
+      sdkDebug(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);
+    } else {
+      sdkDebug(
+        `[${toolName}] No API key found - SDK will use native authentication (OAuth/CLI login)`
+      );
+    }
+
+    // Create execution context
+    const ctx = createExecutionContext(client, toolName, sessionId, vitalsReporter);
+
+    // Create tool instance using factory function
+    // Pass the resolved key (or empty string) and useNativeAuth flag
+    const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
+
+    // Wire up abort signal to tool's stopTask method.
+    // Triggered by SIGTERM handler calling abortController.abort().
+    abortHandler = async () => {
+      console.log(`[${toolName}] Abort signal received, calling tool.stopTask()...`);
+      if (tool.stopTask) {
+        try {
+          const stopResult = await tool.stopTask(sessionId, taskId);
+          if (stopResult.success) {
+            console.log(`[${toolName}] Tool stopped successfully`);
+          } else {
+            console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
+          }
+        } catch (error) {
+          console.error(`[${toolName}] Error calling stopTask:`, error);
+        }
+      } else {
+        console.warn(`[${toolName}] Tool does not implement stopTask method`);
+      }
+    };
+
+    // Handle race condition: if signal is already aborted, call handler immediately
+    if (params.abortController.signal.aborted) {
+      await abortHandler();
+    }
+
+    // Listen for abort signal
+    params.abortController.signal.addEventListener('abort', abortHandler);
+
     await vitalsReporter.record(TaskRuntimeEventKind.TASK_STATUS, {
       source: 'executor',
       phase: TaskRuntimePhase.AWAITING_FIRST_AGENT_EVENT,
@@ -718,6 +720,8 @@ export async function executeToolTask(params: {
     vitalsReporter.stop();
 
     // Clean up abort listener
-    params.abortController.signal.removeEventListener('abort', abortHandler);
+    if (abortHandler) {
+      params.abortController.signal.removeEventListener('abort', abortHandler);
+    }
   }
 }

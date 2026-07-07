@@ -870,6 +870,80 @@ describe('TaskRepository.update', () => {
     }
   );
 
+  dbTest(
+    'should replace runtime_vitals snapshots instead of deep-merging stale nested fields',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const startedAt = '2026-01-01T00:00:00.000Z';
+      const progressAt = '2026-01-01T00:00:01.000Z';
+      const created = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          runtime_vitals: {
+            schema_version: 1,
+            phase: TaskRuntimePhase.TOOL_RUNNING,
+            phase_started_at: startedAt,
+            last_activity_at: startedAt,
+            last_event: {
+              kind: TaskRuntimeEventKind.TOOL_START,
+              at: startedAt,
+              source: 'tool',
+              phase: TaskRuntimePhase.TOOL_RUNNING,
+              tool_name: 'Bash',
+              tool_use_id: 'tool-1',
+            },
+            active_tool: {
+              tool_name: 'Bash',
+              tool_use_id: 'tool-1',
+              started_at: startedAt,
+              last_activity_at: startedAt,
+            },
+            counters: { events: 1 },
+            recent_events: [],
+          },
+        })
+      );
+
+      const updated = await taskRepo.update(created.task_id, {
+        runtime_vitals: {
+          schema_version: 1,
+          phase: TaskRuntimePhase.RUNNING,
+          phase_started_at: startedAt,
+          last_activity_at: progressAt,
+          last_event: {
+            kind: TaskRuntimeEventKind.THINKING,
+            at: progressAt,
+            source: 'sdk',
+            phase: TaskRuntimePhase.RUNNING,
+          },
+          counters: { events: 2, thinking_events: 1 },
+          recent_events: [
+            {
+              kind: TaskRuntimeEventKind.THINKING,
+              at: progressAt,
+              source: 'sdk',
+              phase: TaskRuntimePhase.RUNNING,
+            },
+          ],
+        },
+      });
+
+      const found = await taskRepo.findById(created.task_id);
+
+      expect(updated.runtime_vitals?.last_event).toEqual({
+        kind: TaskRuntimeEventKind.THINKING,
+        at: progressAt,
+        source: 'sdk',
+        phase: TaskRuntimePhase.RUNNING,
+      });
+      expect(updated.runtime_vitals?.active_tool).toBeUndefined();
+      expect(found?.runtime_vitals?.last_event).toEqual(updated.runtime_vitals?.last_event);
+      expect(found?.runtime_vitals?.active_tool).toBeUndefined();
+    }
+  );
+
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     await expect(taskRepo.update('99999999', { status: TaskStatus.COMPLETED })).rejects.toThrow(
