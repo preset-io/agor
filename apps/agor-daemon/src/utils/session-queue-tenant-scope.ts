@@ -95,14 +95,14 @@ export function deferWithSessionQueueTenantScope(
   const capturedTenantId = resolveTenantIdForDeferredScope(options.params);
   if (capturedTenantId) {
     const scopedParams = queueTenantParams(options.params, capturedTenantId, 'explicit');
-    deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), onError);
+    deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), handleError);
     return;
   }
 
   const tenantIdHint = trustedTenantIdHint(options);
   if (tenantIdHint) {
     const scopedParams = queueTenantParams(options.params, tenantIdHint, 'explicit');
-    deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), onError);
+    deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), handleError);
     return;
   }
 
@@ -115,5 +115,5 @@ export function deferWithSessionQueueTenantScope(
   }
 
   const scopedParams = queueTenantParams(options.params, configuredStaticTenantId, 'static');
-  deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), onError);
+  deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), handleError);
 }
