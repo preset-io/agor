@@ -1776,7 +1776,9 @@ function AppContent() {
             }
           }}
           assistantPending={
-            onboardingConfig?.teammatePending ?? onboardingConfig?.assistantPending ?? onboardingConfig?.persistedAgentPending
+            onboardingConfig?.teammatePending ??
+            onboardingConfig?.assistantPending ??
+            onboardingConfig?.persistedAgentPending
           }
           frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
         />

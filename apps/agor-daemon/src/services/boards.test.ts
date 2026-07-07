@@ -274,7 +274,10 @@ describe('BoardsService - Custom Methods', () => {
       );
 
       const note = updated.objects?.['welcome-note'];
-      expect(params).toEqual({ assistantWelcomeNoteMutated: true });
+      expect(params).toEqual({
+        teammateWelcomeNoteMutated: true,
+        assistantWelcomeNoteMutated: true,
+      });
       expect(note?.type).toBe('markdown');
       expect(note?.content).not.toContain('{{assistant.name}}');
       expect(note?.content).not.toContain('<img src=x onerror=alert(1)>');

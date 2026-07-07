@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
-import { getTeammateConfig, isTeammate, isSessionExecuting } from '@agor-live/client';
+import { getTeammateConfig, isSessionExecuting, isTeammate } from '@agor-live/client';
 import {
   BranchesOutlined,
   CodeOutlined,

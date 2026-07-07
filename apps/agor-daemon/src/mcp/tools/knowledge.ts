@@ -5,7 +5,6 @@ import path from 'node:path';
 import { BranchRepository, KnowledgeNamespaceRepository } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
 import type {
-  TeammateKnowledgeGrantAccess,
   Branch,
   BranchID,
   KnowledgeDocumentKind,
@@ -16,6 +15,7 @@ import type {
   KnowledgeGraphNodeType,
   KnowledgeNamespace,
   KnowledgeVisibility,
+  TeammateKnowledgeGrantAccess,
   User,
   UserRole,
 } from '@agor/core/types';
@@ -44,13 +44,13 @@ import {
   splitMarkdownLines,
 } from '../../knowledge/markdown-outline.js';
 import {
-  TEAMMATE_MEMORY_PATH_TEMPLATE,
-  TEAMMATE_NAMESPACE_MISSING_MESSAGE,
-} from '../../services/teammate-knowledge.js';
-import {
   hasKnowledgeNamespacePermission,
   resolveKnowledgeNamespacePermission,
 } from '../../services/knowledge-access.js';
+import {
+  TEAMMATE_MEMORY_PATH_TEMPLATE,
+  TEAMMATE_NAMESPACE_MISSING_MESSAGE,
+} from '../../services/teammate-knowledge.js';
 import { resolveBranchWorkspacePath } from '../../utils/branch-workspace-path.js';
 import { resolveBranchId } from '../resolve-ids.js';
 import {
@@ -856,9 +856,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     mode: z.enum(['text', 'semantic', 'hybrid']).optional(),
     ...KnowledgeSearchContentControlSchemaShape,
   });
-  const teammateMemorySearchHandler = async (
-    args: z.infer<typeof teammateMemorySearchSchema>
-  ) => {
+  const teammateMemorySearchHandler = async (args: z.infer<typeof teammateMemorySearchSchema>) => {
     if (!ctx.sessionId) return sessionContextRequiredResult();
     const { namespace } = await resolveTeammateKnowledgeContext(ctx);
     const service = getOptionalService(ctx, 'kb/search');
@@ -978,7 +976,9 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/)
       .optional(),
-    category: z.enum(['note', 'decision', 'preference', 'project', 'learning', 'task', 'other']).optional(),
+    category: z
+      .enum(['note', 'decision', 'preference', 'project', 'learning', 'task', 'other'])
+      .optional(),
     tags: z.array(z.string()).optional(),
     importance: z.enum(['low', 'normal', 'high']).optional(),
     idempotencyKey: z.string().optional(),

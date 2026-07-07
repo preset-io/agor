@@ -216,7 +216,6 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   );
 };
 
-
 /** @deprecated Use TeammateTabResult instead. */
 export type AssistantTabResult = TeammateTabResult;
 /** @deprecated Use TeammateTabProps instead. */

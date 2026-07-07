@@ -508,6 +508,15 @@ export const boards = sqliteTable(
         onDelete: 'set null',
       }
     ),
+    // Deprecated SQLite compatibility column. Kept so upgraded local DBs can
+    // retain the legacy value without a destructive table rebuild; all new
+    // writes use primary_teammate_id.
+    primary_assistant_id: text('primary_assistant_id', { length: 36 }).references(
+      (): AnySQLiteColumn => branches.branch_id,
+      {
+        onDelete: 'set null',
+      }
+    ),
 
     // JSON blob for the rest
     data: t

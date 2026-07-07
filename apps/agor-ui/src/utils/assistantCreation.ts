@@ -1,4 +1,4 @@
-import type { AgorClient, TeammateConfig, Board, BoardID, Branch, Repo } from '@agor-live/client';
+import type { AgorClient, Board, BoardID, Branch, Repo, TeammateConfig } from '@agor-live/client';
 import { ensureTeammateWelcomeNote } from '@/utils/assistantWelcomeNote';
 import { slugify } from '@/utils/repoSlug';
 

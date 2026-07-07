@@ -1,9 +1,9 @@
 import type {
   AgorClient,
-  TeammateConfig,
   Branch,
   KnowledgeNamespace,
   Repo,
+  TeammateConfig,
   User,
 } from '@agor-live/client';
 import { render } from '@testing-library/react';

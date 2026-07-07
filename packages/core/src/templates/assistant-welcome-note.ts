@@ -1,10 +1,10 @@
 import type { MarkdownBoardObject } from '../types/board';
 import {
-  TEAMMATE_WELCOME_NOTE_OBJECT_ID,
-  TEAMMATE_WELCOME_NOTE_TEMPLATE,
   buildTeammateWelcomeNoteContent,
   buildTeammateWelcomeNoteContext,
   buildTeammateWelcomeNoteObject,
+  TEAMMATE_WELCOME_NOTE_OBJECT_ID,
+  TEAMMATE_WELCOME_NOTE_TEMPLATE,
 } from './teammate-welcome-note';
 
 export const ASSISTANT_WELCOME_NOTE_OBJECT_ID = TEAMMATE_WELCOME_NOTE_OBJECT_ID;
@@ -33,6 +33,8 @@ export function buildAssistantWelcomeNoteContent(input: AssistantWelcomeNoteInpu
 }
 
 /** @deprecated Use buildTeammateWelcomeNoteObject instead. */
-export function buildAssistantWelcomeNoteObject(input: AssistantWelcomeNoteInput): MarkdownBoardObject {
+export function buildAssistantWelcomeNoteObject(
+  input: AssistantWelcomeNoteInput
+): MarkdownBoardObject {
   return buildTeammateWelcomeNoteObject(toTeammateInput(input));
 }

@@ -90,6 +90,5 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
   );
 };
 
-
 /** @deprecated Use TeammateTab instead. */
 export const AssistantTab = TeammateTab;

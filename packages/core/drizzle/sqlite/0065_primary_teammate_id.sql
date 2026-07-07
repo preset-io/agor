@@ -1,1 +1,1 @@
-ALTER TABLE `boards` RENAME COLUMN `primary_assistant_id` TO `primary_teammate_id`;--> statement-breakpoint
+ALTER TABLE `boards` ADD `primary_teammate_id` text(36);

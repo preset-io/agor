@@ -74,9 +74,9 @@ import {
   spawnExecutor,
 } from '../utils/spawn-executor.js';
 import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
-import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import type { InternalEnrichmentParams } from './sessions';
+import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
 
 /**
  * Branch service params
@@ -854,9 +854,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const permission = await namespaces.resolveNamespacePermission(namespace.namespace_id, userId);
     if (permission !== 'write' && permission !== 'own') {
-      throw new Forbidden(
-        'You need write access to use this Knowledge namespace as teammate home'
-      );
+      throw new Forbidden('You need write access to use this Knowledge namespace as teammate home');
     }
   }
 

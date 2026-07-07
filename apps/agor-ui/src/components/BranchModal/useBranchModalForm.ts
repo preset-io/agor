@@ -19,12 +19,12 @@
 
 import type {
   AgorClient,
-  TeammateConfig,
   Branch,
   BranchGroupGrantWithGroup,
   BranchPermissionLevel,
   EffectiveBranchAccess,
   Group,
+  TeammateConfig,
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
@@ -713,7 +713,6 @@ export function useBranchModalForm({
     reset,
   };
 }
-
 
 /** @deprecated Use TeammateFormState instead. */
 export type AssistantFormState = TeammateFormState;

@@ -12,7 +12,7 @@ import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { ensureAssistantKnowledgeNamespace } from './assistant-knowledge';
 
 describe('ensureAssistantKnowledgeNamespace', () => {
-  dbTest('creates an open primary namespace and stores assistant kb config', async ({ db }) => {
+  dbTest('creates an open primary namespace and stores teammate kb config', async ({ db }) => {
     const user = await new UsersRepository(db).create({
       user_id: generateId() as UserID,
       email: `assistant-kb-${Date.now()}@test.local`,
@@ -43,7 +43,7 @@ describe('ensureAssistantKnowledgeNamespace', () => {
     const result = await ensureAssistantKnowledgeNamespace(db, branch.branch_id, user.user_id);
 
     expect(result.namespace).toMatchObject({
-      slug: `assistant-${shortId(branch.branch_id)}`,
+      slug: `teammate-${shortId(branch.branch_id)}`,
       display_name: 'Helper Memory',
       kind: 'branch',
       branch_id: branch.branch_id,
@@ -52,8 +52,8 @@ describe('ensureAssistantKnowledgeNamespace', () => {
       others_can: 'write',
       owner_user_id: user.user_id,
     });
-    expect(result.branch.custom_context?.assistant).toMatchObject({
-      kind: 'assistant',
+    expect(result.branch.custom_context?.teammate).toMatchObject({
+      kind: 'teammate',
       displayName: 'Helper',
       kb: {
         primary_namespace_id: result.namespace.namespace_id,

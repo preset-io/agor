@@ -12,8 +12,8 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import {
-  TEAMMATE_WELCOME_NOTE_OBJECT_ID,
   buildTeammateWelcomeNoteObject,
+  TEAMMATE_WELCOME_NOTE_OBJECT_ID,
 } from '@agor/core/templates/teammate-welcome-note';
 import type {
   AuthenticatedParams,

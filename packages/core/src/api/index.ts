@@ -6,7 +6,6 @@
 
 import type {
   Artifact,
-  TeammateWelcomeNoteRequest,
   AuthenticationResult,
   Board,
   BoardExportBlob,
@@ -36,6 +35,7 @@ import type {
   Schedule,
   Session,
   Task,
+  TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
   TemplateRenderResponse,
   User,

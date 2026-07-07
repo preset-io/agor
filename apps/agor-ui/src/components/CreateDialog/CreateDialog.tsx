@@ -66,6 +66,8 @@ const ACTION_LABELS: Record<ActiveTab, string> = {
   repository: 'Add Repository',
 };
 
+const normalizeTab = (tab: CreateDialogTab): ActiveTab => (tab === 'assistant' ? 'teammate' : tab);
+
 export interface CreateDialogProps {
   open: boolean;
   onClose: () => void;
@@ -122,7 +124,6 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const repoById = useAgorStore(selectRepoById);
   const boardById = useAgorStore(selectBoardById);
   const mcpServerById = useAgorStore(selectMcpServerById);
-  const normalizeTab = (tab: CreateDialogTab): ActiveTab => (tab === 'assistant' ? 'teammate' : tab);
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => normalizeTab(defaultTab));
   // Validity is tracked per tab so a sibling tab's empty-form state (or a
   // deferred validity push from its init effect) can't clobber the active
@@ -211,7 +212,9 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           const result = await teammateFormRef.current?.();
           if (result) {
             setSubmitStatus('Creating AI teammate…');
-            await (onCreateTeammate ?? onCreateAssistant)?.(result, { onStatusChange: setSubmitStatus });
+            await (onCreateTeammate ?? onCreateAssistant)?.(result, {
+              onStatusChange: setSubmitStatus,
+            });
             onClose();
           }
           break;

@@ -1071,7 +1071,8 @@ export const App: React.FC<AppProps> = ({
   const sessionSettingsSession =
     useAgorStore(useMemo(() => makeSessionSelector(sessionSettingsId), [sessionSettingsId])) ??
     null;
-  const primaryAssistantId = currentBoard?.primary_teammate_id ?? currentBoard?.primary_assistant_id ?? null;
+  const primaryAssistantId =
+    currentBoard?.primary_teammate_id ?? currentBoard?.primary_assistant_id ?? null;
   const primaryAssistantBranch = useAgorStore(
     useMemo(() => makeBranchSelector(primaryAssistantId), [primaryAssistantId])
   );

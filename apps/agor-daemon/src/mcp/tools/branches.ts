@@ -1412,8 +1412,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
   server.registerTool(
     'agor_assistants_list',
     {
-      description:
-        'Deprecated alias for agor_teammates_list. Assistants are now called teammates.',
+      description: 'Deprecated alias for agor_teammates_list. Assistants are now called teammates.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Filter teammates by repository ID'),

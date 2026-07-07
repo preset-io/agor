@@ -62,7 +62,10 @@ export function buildTeammateKnowledgePatch(
   nextKb: Partial<AssistantKnowledgeConfig>
 ): Partial<Branch> {
   const existingConfig =
-    branch.custom_context?.teammate ?? branch.custom_context?.assistant ?? branch.custom_context?.agent ?? {};
+    branch.custom_context?.teammate ??
+    branch.custom_context?.assistant ??
+    branch.custom_context?.agent ??
+    {};
   return {
     custom_context: {
       teammate: {
@@ -454,7 +457,6 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
     </div>
   );
 };
-
 
 /** @deprecated Use buildTeammateKnowledgePatch instead. */
 export const buildAssistantKnowledgePatch = buildTeammateKnowledgePatch;

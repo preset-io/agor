@@ -6,7 +6,7 @@
  * admin/owner and partial-RBAC-data cases.
  */
 
-import type { AgorClient, TeammateConfig, Branch, User } from '@agor-live/client';
+import type { AgorClient, Branch, TeammateConfig, User } from '@agor-live/client';
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { BranchModal } from './BranchModal';
@@ -88,7 +88,7 @@ describe('BranchModal — permissions tab visibility', () => {
       client: makeStubClient({ owners: [seb], users: [seb] }).client,
     });
 
-    expect(await screen.findByRole('tab', { name: /teammate/i })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: /^teammate$/i })).toBeInTheDocument();
     expect(await screen.findByRole('tab', { name: /permissions/i })).toBeInTheDocument();
   });
 

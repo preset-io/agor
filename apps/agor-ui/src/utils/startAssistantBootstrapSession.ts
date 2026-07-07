@@ -37,8 +37,8 @@ export async function startTeammateBootstrapSession<TSessionConfig>({
   return sessionId;
 }
 
-
 /** @deprecated Use StartTeammateBootstrapSessionInput instead. */
-export type StartAssistantBootstrapSessionInput<TSessionConfig> = StartTeammateBootstrapSessionInput<TSessionConfig>;
+export type StartAssistantBootstrapSessionInput<TSessionConfig> =
+  StartTeammateBootstrapSessionInput<TSessionConfig>;
 /** @deprecated Use startTeammateBootstrapSession instead. */
 export const startAssistantBootstrapSession = startTeammateBootstrapSession;

@@ -114,9 +114,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         name: row.name,
         slug,
         primary_teammate_id:
-          (row.primary_teammate_id as Board['primary_teammate_id']) ?? undefined,
+          ((row.primary_teammate_id ?? row.primary_assistant_id) as Board['primary_teammate_id']) ??
+          undefined,
         primary_assistant_id:
-          (row.primary_teammate_id as Board['primary_assistant_id']) ?? undefined,
+          ((row.primary_teammate_id ??
+            row.primary_assistant_id) as Board['primary_assistant_id']) ?? undefined,
         created_at: new Date(row.created_at).toISOString(),
         last_updated: row.updated_at
           ? new Date(row.updated_at).toISOString()

@@ -5,10 +5,10 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type {
-  TeammateKnowledgeConfig,
   Branch,
   BranchID,
   KnowledgeNamespace,
+  TeammateKnowledgeConfig,
   UserID,
 } from '@agor/core/types';
 import { getTeammateConfig, isTeammate } from '@agor/core/types';

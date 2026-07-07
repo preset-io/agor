@@ -44,10 +44,7 @@ describe('ensureTeammateWelcomeNote', () => {
       })
     ).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledWith(
-      'Failed to create teammate welcome note:',
-      expect.any(Error)
-    );
+    expect(warn).toHaveBeenCalledWith('Failed to create teammate welcome note:', expect.any(Error));
     warn.mockRestore();
   });
 });
