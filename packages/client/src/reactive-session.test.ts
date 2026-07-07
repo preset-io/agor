@@ -679,4 +679,84 @@ describe('ReactiveSessionHandle stream subscription', () => {
     });
     expect(remove).toHaveBeenCalledWith(canonical);
   });
+
+  // Client for a handle constructed with a SHORT id: hydration + create ack echo
+  // the canonical id, and events (which always carry the full UUID) can be fired.
+  function makeShortIdEventClient(canonical: string) {
+    const serviceHandlers: Record<string, Record<string, Array<(...a: unknown[]) => void>>> = {};
+    const listener = (svc: string) => ({
+      on: vi.fn((event: string, handler: (...a: unknown[]) => void) => {
+        const byEvent = serviceHandlers[svc] ?? {};
+        const handlers = byEvent[event] ?? [];
+        handlers.push(handler);
+        byEvent[event] = handlers;
+        serviceHandlers[svc] = byEvent;
+      }),
+      removeListener: vi.fn(),
+    });
+    const emit = (svc: string, event: string, payload: unknown) => {
+      for (const handler of [...(serviceHandlers[svc]?.[event] ?? [])]) handler(payload);
+    };
+    const runningTask = {
+      task_id: 'task-1',
+      session_id: canonical,
+      status: TaskStatus.RUNNING,
+    } as unknown as Task;
+    const services: Record<string, unknown> = {
+      // Hydration returns the canonical row even though we asked by short id.
+      sessions: {
+        get: vi.fn(async () => ({ session_id: canonical }) as Session),
+        ...listener('sessions'),
+      },
+      tasks: { findAll: vi.fn(async () => [runningTask]), ...listener('tasks') },
+      messages: { findAll: vi.fn(async () => []), ...listener('messages') },
+      'session-streams': {
+        create: vi.fn(async () => ({ session_id: canonical, subscribed: true })),
+        remove: vi.fn(async () => ({ session_id: canonical, subscribed: false })),
+      },
+    };
+    const queueService = { find: vi.fn(async () => ({ data: [] })) };
+    const client = {
+      io: { connected: true, on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name.includes('/tasks/queue') ? queueService : services[name]
+      ),
+    } as unknown as AgorClient;
+    return { client, emit };
+  }
+
+  it('a short-id handle matches events that carry the canonical id', async () => {
+    const shortId = 'ffffffff';
+    const canonical = 'ffffffff-1111-2222-3333-444444444444';
+    const { client, emit } = makeShortIdEventClient(canonical);
+    const handle = new ReactiveSessionHandle(client, shortId, { taskHydration: 'none' });
+    await handle.ready();
+
+    // (a) a canonical-id streaming chunk renders into streaming state.
+    emit('messages', 'streaming:chunk', {
+      message_id: 'm1',
+      session_id: canonical,
+      chunk: 'hello',
+    });
+    expect(handle.getStreamingMessage('m1')?.content).toBe('hello');
+
+    // (b) a canonical-id tool event applies.
+    emit('tasks', 'tool:start', {
+      task_id: 'task-1',
+      session_id: canonical,
+      tool_use_id: 'tool-1',
+      tool_name: 'Bash',
+    });
+    expect(handle.getTaskTools('task-1').map((t) => t.toolName)).toContain('Bash');
+
+    // (c) sanity — an event for a DIFFERENT session id is still ignored.
+    emit('messages', 'streaming:chunk', {
+      message_id: 'm2',
+      session_id: 'aaaaaaaa-0000-0000-0000-000000000000',
+      chunk: 'nope',
+    });
+    expect(handle.getStreamingMessage('m2')).toBeUndefined();
+
+    handle.dispose();
+  });
 });

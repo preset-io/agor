@@ -156,6 +156,16 @@ export class ReactiveSessionHandle {
   private readyPromise: Promise<void>;
   private disposed = false;
 
+  /**
+   * The canonical (full-UUID) session id. When this handle was constructed with
+   * a short id / alias, incoming realtime events still carry the full UUID, so
+   * event matching must accept it too. Learned from the subscribe ack and from
+   * hydration (the fetched session row's `session_id` is always canonical); we
+   * deliberately do NOT overwrite `sessionId`, which echoes back what the
+   * caller passed (API calls resolve short ids server-side anyway).
+   */
+  private canonicalSessionId: string | null = null;
+
   private stateSnapshot: ReactiveSessionState;
 
   constructor(client: AgorClient, sessionId: string, options?: ReactiveSessionOptions) {
@@ -203,12 +213,26 @@ export class ReactiveSessionHandle {
     hydrate: () => Promise<void>
   ): Promise<void> {
     await subscribed;
+    // Learn the canonical id from the ack so events (full-UUID) arriving before
+    // hydration completes already match — the mid-stream chunk case.
+    const canonical = getCanonicalSessionId(this.client, this.sessionId);
+    if (canonical) this.canonicalSessionId = canonical;
     if (this.disposed) return;
     await hydrate();
   }
 
   get sessionId(): string {
     return this.stateSnapshot.sessionId;
+  }
+
+  /**
+   * True when a realtime event's session id belongs to this handle — matching
+   * either the id the caller requested or the canonical id learned from the
+   * subscribe ack / hydration. Events always carry the canonical (full-UUID)
+   * id, so a short-id handle relies on the canonical match.
+   */
+  private matchesSession(id: string): boolean {
+    return id === this.sessionId || id === this.canonicalSessionId;
   }
 
   get state(): ReactiveSessionState {
@@ -367,6 +391,10 @@ export class ReactiveSessionHandle {
           .catch(() => ({ data: [] }) as QueueFindResult),
       ]);
 
+      // The fetched row's id is canonical even when we asked by short id — the
+      // authoritative source for event matching.
+      if (session?.session_id) this.canonicalSessionId = session.session_id;
+
       let messagesByTask = new Map<string, Message[]>();
       let loadedTaskIds = new Set<string>();
 
@@ -462,7 +490,7 @@ export class ReactiveSessionHandle {
     this.disposeCallbacks.push(() => this.client.io.off('disconnect', onSocketDisconnect));
 
     const onSessionPatched = (session: Session) => {
-      if (session.session_id !== this.sessionId) return;
+      if (!this.matchesSession(session.session_id)) return;
       this.updateState((prev) => ({
         ...prev,
         session,
@@ -470,7 +498,7 @@ export class ReactiveSessionHandle {
       }));
     };
     const onSessionRemoved = (session: Session) => {
-      if (session.session_id !== this.sessionId) return;
+      if (!this.matchesSession(session.session_id)) return;
       this.updateState((prev) => ({
         ...prev,
         session: null,
@@ -487,7 +515,7 @@ export class ReactiveSessionHandle {
     this.disposeCallbacks.push(() => sessionsService.removeListener('removed', onSessionRemoved));
 
     const onTaskCreated = (task: Task) => {
-      if (task.session_id !== this.sessionId) return;
+      if (!this.matchesSession(task.session_id)) return;
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
           ? prev.tasks
@@ -507,7 +535,7 @@ export class ReactiveSessionHandle {
       });
     };
     const onTaskPatched = (task: Task) => {
-      if (task.session_id !== this.sessionId) return;
+      if (!this.matchesSession(task.session_id)) return;
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
         const nextTasks = index === -1 ? [...prev.tasks, task] : [...prev.tasks];
@@ -538,7 +566,7 @@ export class ReactiveSessionHandle {
       });
     };
     const onTaskRemoved = (task: Task) => {
-      if (task.session_id !== this.sessionId) return;
+      if (!this.matchesSession(task.session_id)) return;
       this.updateState((prev) => {
         const nextByTask = new Map(prev.messagesByTask);
         nextByTask.delete(task.task_id);
@@ -577,7 +605,7 @@ export class ReactiveSessionHandle {
     );
 
     const onToolStart = (event: ToolStartEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.some((t) => t.toolUseId === event.tool_use_id)) return prev;
@@ -597,7 +625,7 @@ export class ReactiveSessionHandle {
       });
     };
     const onToolComplete = (event: ToolCompleteEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.length === 0) return prev;
@@ -624,7 +652,7 @@ export class ReactiveSessionHandle {
     );
 
     const onMessageCreated = (message: Message) => {
-      if (message.session_id !== this.sessionId) return;
+      if (!this.matchesSession(message.session_id)) return;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.delete(message.message_id);
@@ -664,7 +692,7 @@ export class ReactiveSessionHandle {
 
     const onMessagePatched = (message: Message) => {
       const taskId = message.task_id;
-      if (message.session_id !== this.sessionId || !taskId) return;
+      if (!this.matchesSession(message.session_id) || !taskId) return;
       this.updateState((prev) => {
         const current = prev.messagesByTask.get(taskId);
         if (!current) return prev;
@@ -683,7 +711,7 @@ export class ReactiveSessionHandle {
     };
 
     const onMessageRemoved = (message: Message) => {
-      if (message.session_id !== this.sessionId) return;
+      if (!this.matchesSession(message.session_id)) return;
       const taskId = message.task_id;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
@@ -711,7 +739,7 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingStart = (event: StreamingStartEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.set(event.message_id, {
@@ -732,7 +760,7 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingChunk = (event: StreamingChunkEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         const nextStreaming = new Map(prev.streamingMessages);
@@ -767,7 +795,7 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingEnd = (event: StreamingEndEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         if (!current) return prev;
@@ -784,7 +812,7 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingError = (event: StreamingErrorEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         if (!current) return prev;
@@ -802,7 +830,7 @@ export class ReactiveSessionHandle {
     };
 
     const onThinkingStart = (event: ThinkingStartEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         const existing = nextStreaming.get(event.message_id);
@@ -825,7 +853,7 @@ export class ReactiveSessionHandle {
     };
 
     const onThinkingChunk = (event: ThinkingChunkEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         const nextStreaming = new Map(prev.streamingMessages);
@@ -859,7 +887,7 @@ export class ReactiveSessionHandle {
     };
 
     const onThinkingEnd = (event: ThinkingEndEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         if (!current) return prev;
@@ -986,6 +1014,9 @@ export class ReactiveSessionHandle {
           .find()
           .catch(() => ({ data: [] }) as QueueFindResult),
       ]);
+
+      // The fetched row's id is canonical even when we asked by short id.
+      if (session?.session_id) this.canonicalSessionId = session.session_id;
 
       let messagesByTask = this.stateSnapshot.messagesByTask;
       let loadedTaskIds = this.stateSnapshot.loadedTaskIds;
@@ -1158,6 +1189,17 @@ function getClientStreamState(client: AgorClient): ClientStreamState {
 
 function resolveStreamKey(state: ClientStreamState, sessionId: string): string {
   return state.keyToCanonical.get(sessionId) ?? sessionId;
+}
+
+/**
+ * The canonical session id the daemon echoed for a caller-supplied id, learned
+ * from a `create` ack, or null if not yet known. Lets a short-id handle match
+ * incoming events (which carry the full UUID) once its subscription is acked.
+ */
+function getCanonicalSessionId(client: AgorClient, sessionId: string): string | null {
+  const state = CLIENT_STREAM_STATE.get(client);
+  const canonical = state?.keyToCanonical.get(sessionId);
+  return canonical && canonical !== sessionId ? canonical : null;
 }
 
 /** Serialize a create/remove op onto the subscription's shared chain. */
