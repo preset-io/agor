@@ -648,7 +648,7 @@ export const MarketingScreenshotPage = () => {
       theme={{
         algorithm: theme.darkAlgorithm,
         token: {
-          colorPrimary: '#34767A',
+          colorPrimary: '#539D9F',
           borderRadius: 12,
           fontFamily:
             'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',

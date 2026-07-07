@@ -77,12 +77,12 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const baseTheme: ThemeConfig = {
       // CSS variables are enabled by default in antd v6
       token: {
-        colorPrimary: '#34767A', // Agor deep ink-teal
+        colorPrimary: '#539D9F', // Agor teal
         colorSuccess: '#52c41a',
         colorWarning: '#faad14',
         colorError: '#ff4d4f',
-        colorInfo: '#34767A',
-        colorLink: '#34767A',
+        colorInfo: '#539D9F',
+        colorLink: '#539D9F',
         borderRadius: 8,
         // Use Inter font from Bunny Fonts CDN with system font fallbacks
         fontFamily:

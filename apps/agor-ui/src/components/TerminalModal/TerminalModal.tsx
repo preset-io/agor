@@ -168,7 +168,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           // Ant Design dark theme colors
           background: '#141414', // colorBgContainer
           foreground: '#ffffff', // colorText
-          cursor: '#34767A', // Agor deep ink-teal
+          cursor: '#539D9F', // Agor teal
           cursorAccent: '#141414',
 
           // ANSI colors matching Ant Design palette
@@ -178,7 +178,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           yellow: '#faad14', // colorWarning
           blue: '#1890ff', // colorInfo
           magenta: '#eb2f96',
-          cyan: '#34767A', // Agor deep ink-teal (colorPrimary)
+          cyan: '#539D9F', // Agor teal (colorPrimary)
           white: '#f0f0f0',
 
           // Bright colors
