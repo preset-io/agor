@@ -119,7 +119,11 @@ export async function getMcpServersForSession(
     };
 
     if (typeof deps.sessionMCPRepo.listEffectiveServers === 'function') {
-      const effectiveServers = await deps.sessionMCPRepo.listEffectiveServers(sessionId, true);
+      const effectiveServers = await deps.sessionMCPRepo.listEffectiveServers(
+        sessionId,
+        true,
+        deps.forUserId
+      );
       mcpDebug(`   📍 Effective session scope: ${effectiveServers.length} server(s)`);
 
       for (const server of effectiveServers) {

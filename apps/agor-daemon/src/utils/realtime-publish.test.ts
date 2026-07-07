@@ -145,6 +145,49 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([service]);
   });
 
+  it('routes a manual emit to the tenant channel when the hook context carries params.tenant (regression #1750)', async () => {
+    // Background env transitions (health-monitor / executor completion) run
+    // outside any request AND outside an ambient tenant DB scope, so the tenant
+    // must be resolvable from the emitted hook's params. This is exactly the
+    // context shape emitServiceEvent() builds for the branches `patched` emit.
+    const tenantUser = user('tenant-user');
+    const otherTenantUser = user('other-tenant-user');
+    const app = makeApp(
+      [{ user: tenantUser }, { user: otherTenantUser }],
+      {},
+      {
+        authenticated: [{ user: tenantUser }, { user: otherTenantUser }],
+        'tenant:tenant-a': [{ user: tenantUser }],
+        'tenant:tenant-b': [{ user: otherTenantUser }],
+      }
+    );
+    const r = repos({ branch: branch('b1'), permissions: {} });
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    // No ambient tenant DB scope here — tenant resolves purely from the hook.
+    const channel = await app.runPublish(
+      { branch_id: 'b1' },
+      {
+        path: 'branches',
+        method: 'patch',
+        event: 'patched',
+        id: 'b1',
+        params: { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
+      }
+    );
+
+    expect(channel.connections).toEqual([{ user: tenantUser }]);
+  });
+
   it('uses ambient tenant database scope for internal/manual emits without params tenant', async () => {
     const tenantUser = user('tenant-user');
     const otherTenantUser = user('other-tenant-user');

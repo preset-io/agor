@@ -21,7 +21,7 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
 import type { GatewayService } from './services/gateway.js';
@@ -270,26 +270,57 @@ async function cleanupOrphanStatusesInTenantScope(
     }
   }
 
-  // Fix sessions that are IDLE but not promptable — this happens when the
-  // daemon is killed while a session is mid-execution and the stop path set
-  // status=idle without setting ready_for_prompt=true, or when the executor
-  // exit raced with the stop endpoint and left ready_for_prompt=false. IDLE +
-  // ready_for_prompt=false is never a legitimate persistent state.
-  const stuckIdleResult = (await sessionsService.find({
+  // Fix sessions that are IDLE but not promptable *because a kill interrupted
+  // them* — the daemon died during the stop path after writing status=idle but
+  // before writing ready_for_prompt=true, or the executor exit raced the stop
+  // endpoint. IDLE + ready_for_prompt=false is NOT inherently orphaned state:
+  // the UI also uses ready_for_prompt as the unread/attention flag (opening a
+  // conversation patches it false, branch cards highlight while it's true —
+  // see SessionPromptState in @agor/core/types), so it is the normal resting
+  // state of every read session. Discriminate by the session's most recent
+  // task: only sessions whose latest task was non-terminal at boot (just
+  // orphan-stopped / queue-wiped above, or still in an executing state) were
+  // actually interrupted; read sessions have a terminal latest task from a
+  // previous run and must be left untouched.
+  const bootInterruptedTaskIds = new Set<string>([
+    ...orphanedTasks.map((t: Task) => t.task_id as string),
+    ...queuedTasks.map((t: Task) => t.task_id as string),
+  ]);
+
+  const idleNotReadyResult = (await sessionsService.find({
     query: { status: SessionStatus.IDLE, ready_for_prompt: false, $limit: 1000 },
     ...startupParams,
   })) as unknown as Paginated<Session>;
-  const stuckIdleSessions = stuckIdleResult.data;
 
-  if (stuckIdleSessions.length > 0) {
-    for (const session of stuckIdleSessions) {
-      await app
-        .service('sessions')
-        .patch(session.session_id, { ready_for_prompt: true }, startupParams as never);
-      startupDebug(
-        `   ✓ Unblocked stuck-idle session ${shortId(session.session_id)} (ready_for_prompt was false)`
-      );
+  const stuckIdleSessions: Session[] = [];
+  for (const session of idleNotReadyResult.data) {
+    // Sessions maintain an ordered task-ID list; the last entry is the most
+    // recent task (same convention as injectRestartNotices below).
+    const latestTaskId = session.tasks?.at(-1);
+    if (!latestTaskId) {
+      continue; // never ran a task — nothing was interrupted
     }
+
+    let wasInterrupted = bootInterruptedTaskIds.has(latestTaskId as string);
+    if (!wasInterrupted) {
+      try {
+        const latestTask = await tasksService.get(latestTaskId, startupParams as never);
+        wasInterrupted = !isTerminalTaskStatus(latestTask.status);
+      } catch {
+        // Task row missing/unreadable — fail closed: don't re-flag the session.
+      }
+    }
+    if (!wasInterrupted) {
+      continue;
+    }
+
+    stuckIdleSessions.push(session);
+    await app
+      .service('sessions')
+      .patch(session.session_id, { ready_for_prompt: true }, startupParams as never);
+    startupDebug(
+      `   ✓ Unblocked stuck-idle session ${shortId(session.session_id)} (ready_for_prompt was false, latest task interrupted)`
+    );
   }
 
   const cleanupParts: string[] = [

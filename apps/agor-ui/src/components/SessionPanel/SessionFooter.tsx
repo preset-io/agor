@@ -95,7 +95,12 @@ export interface SessionFooterProps {
   promptInputSlot: React.ReactNode;
 }
 
-export const SessionFooter: React.FC<SessionFooterProps> = ({
+// Memoized: the panel re-renders once per animation frame while its session
+// streams (reactive-session notifies), and this footer is a large subtree of
+// dropdowns/popovers that doesn't depend on per-chunk state. SessionPanel
+// keeps every prop identity-stable across those renders (stable handler
+// wrappers, memoized slot/config objects) so the bailout actually holds.
+const SessionFooterInner: React.FC<SessionFooterProps> = ({
   session,
   footerTimerTask,
   tokenBreakdown,
@@ -1570,3 +1575,6 @@ export const SessionFooter: React.FC<SessionFooterProps> = ({
     </div>
   );
 };
+
+export const SessionFooter = React.memo(SessionFooterInner);
+SessionFooter.displayName = 'SessionFooter';

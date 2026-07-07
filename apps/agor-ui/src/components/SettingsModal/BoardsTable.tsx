@@ -76,23 +76,22 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
 
-  // Calculate session count per board (branch-centric model)
+  // Calculate session count per board (branch-centric model). Build the
+  // board buckets once so opening Settings is O(branches + sessions) instead
+  // of O(boards × branches).
   const boardSessionCounts = useMemo(() => {
     const counts = new Map<string, number>();
 
+    for (const branch of branchById.values()) {
+      if (!branch.board_id) continue;
+      counts.set(
+        branch.board_id,
+        (counts.get(branch.board_id) ?? 0) + (sessionsByBranch.get(branch.branch_id)?.length ?? 0)
+      );
+    }
+
     for (const board of boardById.values()) {
-      const boardBranchIds: string[] = [];
-      for (const branch of branchById.values()) {
-        if (branch.board_id === board.board_id) {
-          boardBranchIds.push(branch.branch_id);
-        }
-      }
-
-      const sessionCount = boardBranchIds.flatMap(
-        (branchId) => sessionsByBranch.get(branchId) || []
-      ).length;
-
-      counts.set(board.board_id, sessionCount);
+      if (!counts.has(board.board_id)) counts.set(board.board_id, 0);
     }
 
     return counts;

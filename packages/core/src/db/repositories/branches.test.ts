@@ -1247,6 +1247,202 @@ describe('BranchRepository findExplicitFsAccessUserIds', () => {
   );
 });
 
+describe('BranchRepository findExplicitFsAccessBranchIdsForGroup', () => {
+  dbTest(
+    'scopes membership-driven filesystem syncs to direct and board-aligned group grants',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const boardRepo = new BoardRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const groupRepo = new GroupRepository(db);
+      const usersRepo = new UsersRepository(db);
+      const repo = await repoRepo.create(createRepoData({ slug: 'group-fs-branches-repo' }));
+      const creatorId = generateId() as UUID;
+      await usersRepo.create({
+        user_id: creatorId,
+        email: 'creator-group-fs-branches@example.com',
+      });
+      const group = await groupRepo.create({ name: 'Group FS Branches', created_by: creatorId });
+
+      const direct = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'group-fs-direct',
+          branch_unique_id: 9401,
+          created_by: creatorId,
+        })
+      );
+      await groupRepo.upsertBranchGrant({
+        branch_id: direct.branch_id,
+        group_id: group.group_id,
+        can: 'session',
+        fs_access: 'write',
+        created_by: creatorId,
+      });
+      const defaultFsAccess = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'group-fs-default-read',
+          branch_unique_id: 9405,
+          created_by: creatorId,
+        })
+      );
+      await groupRepo.upsertBranchGrant({
+        branch_id: defaultFsAccess.branch_id,
+        group_id: group.group_id,
+        can: 'view',
+        created_by: creatorId,
+      });
+
+      const board = await boardRepo.create({
+        board_id: generateId(),
+        name: 'Group FS Board',
+        created_by: creatorId,
+        access_mode: 'shared',
+      });
+      await groupRepo.upsertBoardGrant({
+        board_id: board.board_id,
+        group_id: group.group_id,
+        can: 'view',
+        fs_access: 'read',
+        created_by: creatorId,
+      });
+      const aligned = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          name: 'group-fs-board-aligned',
+          branch_unique_id: 9402,
+          created_by: creatorId,
+          permission_source: 'board',
+        })
+      );
+      const override = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          name: 'group-fs-board-override',
+          branch_unique_id: 9403,
+          created_by: creatorId,
+          permission_source: 'override',
+        })
+      );
+
+      const appOnly = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'group-app-only',
+          branch_unique_id: 9404,
+          created_by: creatorId,
+        })
+      );
+      await groupRepo.upsertBranchGrant({
+        branch_id: appOnly.branch_id,
+        group_id: group.group_id,
+        can: 'prompt',
+        fs_access: 'none',
+        created_by: creatorId,
+      });
+      const privateBoard = await boardRepo.create({
+        board_id: generateId(),
+        name: 'Private Group FS Board',
+        created_by: creatorId,
+        access_mode: 'private',
+      });
+      await groupRepo.upsertBoardGrant({
+        board_id: privateBoard.board_id,
+        group_id: group.group_id,
+        can: 'all',
+        fs_access: 'write',
+        created_by: creatorId,
+      });
+      const privateBoardBranch = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: privateBoard.board_id,
+          name: 'group-fs-private-board',
+          branch_unique_id: 9406,
+          created_by: creatorId,
+          permission_source: 'board',
+        })
+      );
+      const archivedBranch = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'group-fs-archived',
+          branch_unique_id: 9407,
+          created_by: creatorId,
+        })
+      );
+      await groupRepo.upsertBranchGrant({
+        branch_id: archivedBranch.branch_id,
+        group_id: group.group_id,
+        can: 'session',
+        fs_access: 'write',
+        created_by: creatorId,
+      });
+      await branchRepo.update(archivedBranch.branch_id, { archived: true });
+
+      const branchIds = await branchRepo.findExplicitFsAccessBranchIdsForGroup(group.group_id);
+      expect(branchIds).toEqual(
+        expect.arrayContaining([direct.branch_id, defaultFsAccess.branch_id, aligned.branch_id])
+      );
+      expect(branchIds).not.toEqual(
+        expect.arrayContaining([
+          override.branch_id,
+          appOnly.branch_id,
+          privateBoardBranch.branch_id,
+          archivedBranch.branch_id,
+        ])
+      );
+    }
+  );
+
+  dbTest('returns no branches for groups without filesystem grants', async ({ db }) => {
+    const branchRepo = new BranchRepository(db);
+    const groupRepo = new GroupRepository(db);
+    const group = await groupRepo.create({ name: 'No FS Grants' });
+
+    await expect(branchRepo.findExplicitFsAccessBranchIdsForGroup(group.group_id)).resolves.toEqual(
+      []
+    );
+  });
+
+  dbTest('returns no branches for archived groups', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const groupRepo = new GroupRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'archived-group-fs-branches-repo' }));
+    const creatorId = generateId() as UUID;
+    await usersRepo.create({
+      user_id: creatorId,
+      email: 'creator-archived-group-fs-branches@example.com',
+    });
+    const group = await groupRepo.create({ name: 'Archived Group FS', created_by: creatorId });
+    const branch = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'archived-group-fs-branch',
+        branch_unique_id: 9408,
+        created_by: creatorId,
+      })
+    );
+    await groupRepo.upsertBranchGrant({
+      branch_id: branch.branch_id,
+      group_id: group.group_id,
+      can: 'session',
+      fs_access: 'write',
+      created_by: creatorId,
+    });
+    await groupRepo.update(group.group_id, { archived: true });
+
+    await expect(branchRepo.findExplicitFsAccessBranchIdsForGroup(group.group_id)).resolves.toEqual(
+      []
+    );
+  });
+});
+
 describe('BranchRepository.findAssistantBranches', () => {
   dbTest(
     'finds marker assistants and enabled-schedule legacy assistants without scanning all branches',

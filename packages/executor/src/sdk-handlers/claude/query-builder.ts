@@ -588,7 +588,8 @@ export async function setupQuery(
             type: transport,
             env: server.env,
           };
-          let canAlwaysLoad = shouldBlockOnMcpStartup;
+          let canAlwaysLoad =
+            shouldBlockOnMcpStartup || (transport !== 'stdio' && server.auth?.type === 'oauth');
 
           // Add transport-specific fields
           if (transport === 'stdio') {

@@ -72,17 +72,15 @@ import {
 import { NotFoundError } from '@agor/core/utils/errors';
 import type { Request } from 'express';
 import { rateLimit } from 'express-rate-limit';
+import { createIssueBrowserTokensHook } from './auth/issue-browser-tokens-hook.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './auth/launch-auth.js';
 import { createRefreshTokenService } from './auth/refresh-token-service.js';
 import {
   issueRuntimeToken,
-  issueRuntimeTokenPair,
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
-  runtimeTenantClaims,
 } from './auth/runtime-tokens.js';
 import { authTokenIssuedAtClaim } from './auth/token-invalidation.js';
-import { redactUserAuthMetadata } from './auth/user-redaction.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
@@ -92,6 +90,7 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
+import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { GatewayService } from './services/gateway.js';
 import {
   ScheduleBusyError,
@@ -436,41 +435,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // Hook: Issue browser access + refresh tokens with millisecond issue time.
+  // Machine-token logins (executor-session / service) keep their original
+  // token — see createIssueBrowserTokensHook for why.
   // Rate limiting is enforced by express-rate-limit middleware mounted on
   // `/authentication` above — by the time we reach this hook the limiter
   // has already 429'd any over-quota request.
   authService.hooks({
     after: {
       create: [
-        // biome-ignore lint/suspicious/noExplicitAny: FeathersJS context type not fully typed
-        async (context: any) => {
-          authEventDebug('✅ Authentication succeeded:', {
-            strategy: context.result?.authentication?.strategy,
-            hasUser: !!context.result?.user,
-            user_id: context.result?.user?.user_id,
-            hasAccessToken: !!context.result?.accessToken,
-          });
-
-          if (context.result?.user) {
-            const tenantId =
-              context.params?.tenant?.tenant_id ??
-              (context.result.user as { tenant_id?: string }).tenant_id;
-            const tokens = issueRuntimeTokenPair(
-              context.result.user,
-              jwtSecret,
-              ACCESS_TOKEN_TTL,
-              REFRESH_TOKEN_TTL,
-              {
-                ...authTokenIssuedAtClaim(Date.now(), context.result.user),
-                ...runtimeTenantClaims(tenantId, tenantTokenClaim),
-              }
-            );
-            context.result.accessToken = tokens.accessToken;
-            context.result.refreshToken = tokens.refreshToken;
-            context.result.user = redactUserAuthMetadata(context.result.user);
-          }
-          return context;
-        },
+        createIssueBrowserTokensHook({
+          jwtSecret,
+          accessTokenTtl: ACCESS_TOKEN_TTL,
+          refreshTokenTtl: REFRESH_TOKEN_TTL,
+          tenantClaim: tenantTokenClaim,
+          debug: authEventDebug,
+        }),
       ],
     },
   });
@@ -3271,7 +3250,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const includeMetadata =
             params.query?.includeMetadata === 'true' || params.query?.includeMetadata === true;
           const mcpService = app.service('mcp-servers');
-          const userId = params.user?.user_id;
+          const queryForUserId =
+            typeof params.query?.forUserId === 'string' ? params.query.forUserId : undefined;
+          const authPayloadType = (
+            params as RouteParams & { authentication?: { payload?: { type?: unknown } } }
+          ).authentication?.payload?.type;
+          const routeUser = params.user as
+            | (NonNullable<RouteParams['user']> & { _isServiceAccount?: boolean })
+            | undefined;
+          const userId = resolveForUserIdWithGate({
+            queryForUserId,
+            isServiceAccount: routeUser?._isServiceAccount,
+            authPayloadType,
+            callerUserId: params.user?.user_id,
+          });
           const rawLookupParams = {
             ...params,
             provider: undefined,

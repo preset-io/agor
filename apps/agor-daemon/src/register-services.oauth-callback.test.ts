@@ -67,8 +67,10 @@ describe('register-services OAuth callback URL regression', () => {
     // originating Feathers auth params or tenant headers, so the pending OAuth
     // state must capture tenant_id at flow start and re-enter that DB scope
     // before persisting user_mcp_oauth_tokens or backfilling mcp_servers auth.
-    expect(codeOnly).toMatch(/tenantId:\s*getCurrentTenantId\s*\(\s*\)/);
-    expect(codeOnly).toMatch(/runWithTenantDatabaseScope\s*\(\s*db,\s*pendingFlow\.tenantId/);
+    expect(codeOnly).toMatch(/tenantId\?\s*:\s*string/);
+    expect(codeOnly).toMatch(/tenantId:\s*opts\.tenantId\s*\?\?\s*getCurrentTenantId\s*\(\s*\)/);
+    expect(codeOnly).toMatch(/runInOAuthTenantScope\s*\(\s*db,\s*pendingFlow\.tenantId/);
     expect(codeOnly).toMatch(/Missing tenant context for MCP OAuth callback/);
+    expect(codeOnly).toMatch(/OAuth flow belongs to a different tenant/);
   });
 });

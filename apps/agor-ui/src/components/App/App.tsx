@@ -2,8 +2,6 @@ import type {
   AgorClient,
   Artifact,
   Board,
-  BoardComment,
-  BoardEntityObject,
   BoardID,
   Branch,
   CreateLocalRepoRequest,
@@ -19,8 +17,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
-import { LeftOutlined, RightOutlined } from '@ant-design/icons';
-import { Layout, Tooltip, Upload } from 'antd';
+import { Layout, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
@@ -30,7 +27,6 @@ import {
 } from 'react-resizable-panels';
 import { useLocation, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
-import { mapToArray } from '@/utils/mapHelpers';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
@@ -40,26 +36,28 @@ import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
+import { useStableCallback } from '../../hooks/useStableCallback';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
 import { type ActiveUrlTarget, useUrlState } from '../../hooks/useUrlState';
 import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
-import { useAgorStore } from '../../store/agorStore';
+import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import {
+  makeBoardSelector,
+  makeBranchesForBoardSelector,
+  makeBranchSelector,
+  makeCommentMentionSelector,
+  makeRepoSelector,
+  makeSessionExistsSelector,
+  makeSessionMcpServerIdsSelector,
+  makeSessionSelector,
+  makeSessionsForBranchSelector,
+  makeUnreadCommentCountSelector,
   selectArtifactById,
   selectBoardById,
-  selectBoardObjectById,
-  selectBoardObjectsByBoardId,
+  selectBoardCount,
   selectBranchById,
-  selectCardById,
-  selectCardTypeById,
-  selectCommentById,
-  selectGatewayChannelById,
-  selectMcpServerById,
-  selectRepoById,
+  selectFirstBoardId,
   selectSessionById,
-  selectSessionMcpServerIds,
-  selectSessionsByBranch,
-  selectUserById,
 } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
 import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
@@ -70,7 +68,7 @@ import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
 import { AppHeader } from '../AppHeader';
 import type { BoardAssistantPanelTab } from '../BoardAssistantPanel';
-import { BoardAssistantPanel } from '../BoardAssistantPanel';
+import { AssistantPanelRail, BoardAssistantPanel } from '../BoardAssistantPanel';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
@@ -87,7 +85,17 @@ import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal, UserSettingsModal } from '../SettingsModal';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
-import { getShowCommentsPanelState, getToggleBoardPanelState } from './boardPanelActions';
+import {
+  getSelectAssistantPanelTabState,
+  getShowCommentsPanelState,
+  getToggleBoardPanelState,
+} from './boardPanelActions';
+import {
+  capSessionSizeForCanvasMin,
+  getContentPanelWidthPercent,
+  toContentRelativePercent,
+  toViewportRelativePercent,
+} from './panelSizing';
 
 const { Content } = Layout;
 
@@ -97,6 +105,39 @@ const BoardSwitcherBridge: React.FC<{ setCurrentBoardId: (id: string) => void }>
   setCurrentBoardId,
 }) => {
   useRegisterBoardSwitcher(setCurrentBoardId);
+  return null;
+};
+
+/** Hosts the URL⇄state sync in a null-rendering child. useUrlState must
+ *  observe the whole entity maps (a deep-linked short ID resolves only once
+ *  the entity streams in), so those subscriptions live here where a patch
+ *  re-renders nothing instead of the whole shell. Effect-order note: as a
+ *  child, these effects fire before App's own — the sync is guarded by
+ *  refs/`syncingRef` and is order-insensitive within a commit. */
+const UrlStateBridge: React.FC<{
+  currentBoardId: string;
+  currentSessionId: string | null;
+  onBoardChange: (boardId: string) => void;
+  onSessionChange: (sessionId: string | null) => void;
+  onActiveUrlTargetChange: (target: ActiveUrlTarget | null) => void;
+}> = ({
+  currentBoardId,
+  currentSessionId,
+  onBoardChange,
+  onSessionChange,
+  onActiveUrlTargetChange,
+}) => {
+  useUrlState({
+    currentBoardId,
+    currentSessionId,
+    boardById: useAgorStore(selectBoardById),
+    sessionById: useAgorStore(selectSessionById),
+    branchById: useAgorStore(selectBranchById),
+    artifactById: useAgorStore(selectArtifactById),
+    onBoardChange,
+    onSessionChange,
+    onActiveUrlTargetChange,
+  });
   return null;
 };
 
@@ -202,41 +243,44 @@ export interface AppProps {
 // common no-MCP case so that downstream React.memo bailouts are not defeated.
 // Frozen at runtime; the consuming components only read it.
 const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
-const EMPTY_BOARD_OBJECTS: BoardEntityObject[] = Object.freeze(
-  [] as BoardEntityObject[]
-) as BoardEntityObject[];
+const EMPTY_BOARDS: Board[] = Object.freeze([] as Board[]) as Board[];
+const EMPTY_SESSIONS: Session[] = Object.freeze([] as Session[]) as Session[];
 
 // 320px keeps the three left-panel tabs (Assistant / All sessions / Comments)
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
 const LEFT_PANEL_MIN_WIDTH_PX = 320;
 const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
-const LEFT_PANEL_TOGGLE_HIT_SIZE_PX = 44;
-const LEFT_PANEL_TOGGLE_KNOB_SIZE_PX = 30;
+const SESSION_PANEL_MIN_WIDTH_PX = 360;
+const SESSION_PANEL_MAX_SIZE_PERCENT = 75;
+const SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT = 15;
+// Matches the canvas panel's own `minSize` below — kept as one constant so
+// the two cannot drift apart.
+const CANVAS_MIN_SIZE_PERCENT = 20;
+// Width of the persistent icon rail (AssistantPanelRail) shown in place of
+// the panel when collapsed. Replaces the old 0px-collapse + floating
+// reopen-knob pattern (see issue agor-cloud#123).
+const LEFT_PANEL_RAIL_WIDTH_PX = 56;
 
 const getLeftPanelMinSizePercent = (viewportWidth: number) =>
   Math.min(LEFT_PANEL_MAX_SIZE_PERCENT, (LEFT_PANEL_MIN_WIDTH_PX / viewportWidth) * 100);
 
+const getLeftPanelRailSizePercent = (viewportWidth: number) =>
+  (LEFT_PANEL_RAIL_WIDTH_PX / viewportWidth) * 100;
+
+// Express the session panel's 360px minimum through the panel sizing system
+// (a percentage of the current viewport) rather than a CSS px `minWidth`, which
+// fights react-resizable-panels' percentage layout on narrow viewports.
+const getSessionPanelMinSizePercent = (viewportWidth: number) =>
+  Math.min(
+    SESSION_PANEL_MAX_SIZE_PERCENT,
+    Math.max(
+      SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT,
+      (SESSION_PANEL_MIN_WIDTH_PX / viewportWidth) * 100
+    )
+  );
+
 const clampPercent = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
-
-// Freeze a callback's identity for the component's lifetime while always
-// invoking the latest implementation. Several action props arrive from the
-// parent (`AppContent`) as plain consts that get a fresh identity on every
-// store-driven re-render. Passing them straight to the memoized SessionCanvas
-// would defeat its `React.memo` (and the inner BranchNode / `initialNodes`
-// memoization) on every live patch. The wrapper's identity is stable; a ref
-// keeps it delegating to the current impl, so behavior is unchanged. Preserves
-// `undefined` so optional handlers stay absent (no spurious enabled UI).
-function useStableCallback<TFn extends (...args: never[]) => unknown>(
-  callback: TFn | undefined
-): TFn | undefined {
-  const callbackRef = useRef(callback);
-  useLayoutEffect(() => {
-    callbackRef.current = callback;
-  });
-  const stable = useCallback(((...args: never[]) => callbackRef.current?.(...args)) as TFn, []);
-  return callback ? stable : undefined;
-}
 
 export const App: React.FC<AppProps> = ({
   client,
@@ -303,27 +347,11 @@ export const App: React.FC<AppProps> = ({
   webTerminalEnabled = false,
   branchStorageConfig,
 }) => {
-  // Entity maps are read straight from the store via narrow slice selectors
-  // (rather than received as props). Each selector subscribes to a single
-  // slice, so App only re-renders when that specific slice's reference changes
-  // — and the derivations below keep their exact prior logic and memoization,
-  // only their data SOURCE moves from props to the store.
-  const sessionById = useAgorStore(selectSessionById);
-  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
-  const boardById = useAgorStore(selectBoardById);
-  const boardObjectById = useAgorStore(selectBoardObjectById);
-  const boardObjectsByBoardId = useAgorStore(selectBoardObjectsByBoardId);
-  const commentById = useAgorStore(selectCommentById);
-  const cardById = useAgorStore(selectCardById);
-  const cardTypeById = useAgorStore(selectCardTypeById);
-  const repoById = useAgorStore(selectRepoById);
-  const branchById = useAgorStore(selectBranchById);
-  const userById = useAgorStore(selectUserById);
-  const mcpServerById = useAgorStore(selectMcpServerById);
-  const sessionMcpServerIds = useAgorStore(selectSessionMcpServerIds);
-  const gatewayChannelById = useAgorStore(selectGatewayChannelById);
-  const artifactById = useAgorStore(selectArtifactById);
-
+  // The always-mounted shell holds NO whole-map subscriptions. Everything it
+  // needs is either a narrow per-id / derived-scalar selector below (which
+  // stays quiet across unrelated entity patches), a call-time
+  // `agorStore.getState()` read inside a handler, or pushed down into the
+  // component that actually consumes the map (SettingsModal, UrlStateBridge).
   const { showWarning } = useThemedMessage();
   const location = useLocation();
   const routeParams = useParams<{
@@ -365,16 +393,13 @@ export const App: React.FC<AppProps> = ({
   // theme token styles. By computing the effective ID synchronously, the
   // Panel conditional evaluates to false in the *same* render, producing a
   // single-phase unmount identical to the explicit-close path.
-  const effectiveSelectedSessionId = useMemo(
-    () =>
-      !isRootHomePath &&
-      !pendingHomeNavigation &&
-      selectedSessionId &&
-      sessionById.has(selectedSessionId)
-        ? selectedSessionId
-        : null,
-    [isRootHomePath, pendingHomeNavigation, selectedSessionId, sessionById]
+  const selectedSessionExists = useAgorStore(
+    useMemo(() => makeSessionExistsSelector(selectedSessionId), [selectedSessionId])
   );
+  const effectiveSelectedSessionId =
+    !isRootHomePath && !pendingHomeNavigation && selectedSessionId && selectedSessionExists
+      ? selectedSessionId
+      : null;
 
   const [leftPanelTab, setLeftPanelTab] = useState<BoardAssistantPanelTab>('assistant');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
@@ -385,13 +410,36 @@ export const App: React.FC<AppProps> = ({
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    const handleResize = () => setViewportWidth(window.innerWidth);
+    // Debounced: viewportWidth only feeds panel min-size percentages, so
+    // re-rendering the shell on every resize tick is wasted work — the
+    // trailing value is all that matters.
+    let timer: number | null = null;
+    const handleResize = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        setViewportWidth(window.innerWidth);
+      }, 150);
+    };
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
   const leftPanelMinSize = useMemo(
     () => getLeftPanelMinSizePercent(viewportWidth),
+    [viewportWidth]
+  );
+
+  const leftPanelRailSize = useMemo(
+    () => getLeftPanelRailSizePercent(viewportWidth),
+    [viewportWidth]
+  );
+
+  const sessionPanelMinSize = useMemo(
+    () => getSessionPanelMinSizePercent(viewportWidth),
     [viewportWidth]
   );
 
@@ -430,10 +478,44 @@ export const App: React.FC<AppProps> = ({
     24
   );
 
-  const currentBoard = boardById.get(currentBoardId);
+  const currentBoard = useAgorStore(
+    useMemo(() => makeBoardSelector(currentBoardId), [currentBoardId])
+  );
   const isHomeSurface = (isRootHomePath || pendingHomeNavigation) && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
   const headerBoard = isHomeSurface ? undefined : currentBoard;
+  const wasHomeSurfaceRef = useRef(isHomeSurface);
+  const isLeavingHomeSurface = wasHomeSurfaceRef.current && !isHomeSurface;
+  const [homeExitSidePanelDeferred, setHomeExitSidePanelDeferred] = useState(false);
+  const [homeExitPanelDetailsDeferred, setHomeExitPanelDetailsDeferred] = useState(false);
+
+  useLayoutEffect(() => {
+    if (isLeavingHomeSurface) {
+      setHomeExitSidePanelDeferred(true);
+      setHomeExitPanelDetailsDeferred(true);
+    }
+    wasHomeSurfaceRef.current = isHomeSurface;
+  }, [isLeavingHomeSurface, isHomeSurface]);
+
+  useEffect(() => {
+    if (!homeExitSidePanelDeferred) return;
+    const timer = window.setTimeout(() => {
+      setHomeExitSidePanelDeferred(false);
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [homeExitSidePanelDeferred]);
+
+  useEffect(() => {
+    if (!homeExitPanelDetailsDeferred) return;
+    const timer = window.setTimeout(() => {
+      setHomeExitPanelDetailsDeferred(false);
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [homeExitPanelDetailsDeferred]);
+
+  const handleDeferredDetailsHydrated = useCallback(() => {
+    setHomeExitPanelDetailsDeferred(false);
+  }, []);
 
   // Home is route-authoritative. Do not clear board/session state while the
   // old `/b/...` URL is still active — that creates a transient no-board
@@ -456,7 +538,17 @@ export const App: React.FC<AppProps> = ({
     selectedSessionId,
   ]);
 
-  const leftPanelCollapsed = commentsPanelCollapsed || suppressLeftPanel || isHomeSurface;
+  const leftPanelCollapsed =
+    commentsPanelCollapsed ||
+    suppressLeftPanel ||
+    isHomeSurface ||
+    isLeavingHomeSurface ||
+    homeExitSidePanelDeferred;
+  // The rail only makes sense when there's a board to open the panel onto,
+  // and stays hidden entirely while a modal-first flow suppresses the panel
+  // (suppressLeftPanel) — same gating the old floating knob used.
+  const leftPanelRailVisible = leftPanelCollapsed && !!currentBoard && !suppressLeftPanel;
+  const leftPanelCollapsedSize = leftPanelRailVisible ? leftPanelRailSize : 0;
 
   // Ref for programmatically controlling the comments panel
   const commentsPanelRef = useRef<ImperativePanelHandle>(null);
@@ -466,14 +558,50 @@ export const App: React.FC<AppProps> = ({
     LEFT_PANEL_MAX_SIZE_PERCENT
   );
 
-  // Session panel size persistence (percentage of available width), scoped per user.
+  // Width of the middle content panel (canvas + session panel), as a
+  // percentage of the full viewport — whatever's left once the left
+  // assistant/comments panel (rail or fully expanded) takes its share. The
+  // session panel's own size is persisted relative to the viewport (below),
+  // so this is the conversion factor used to translate that into the
+  // content-relative percentage react-resizable-panels expects — keeping the
+  // session panel's absolute pixel width stable whenever the left panel
+  // toggles or resizes.
+  const contentPanelWidthPercent = getContentPanelWidthPercent(
+    leftPanelCollapsed,
+    leftPanelCollapsedSize,
+    effectiveCommentsPanelSize
+  );
+
+  // Session panel size persistence: percentage of the FULL VIEWPORT (not of
+  // the content panel), scoped per user, so the chat panel's absolute pixel
+  // width doesn't change when the left panel collapses to a rail or back.
   const [sessionPanelSize, setSessionPanelSize] = useUserLocalStorage<number>(
     user?.user_id,
     'panel:right:size',
     50
   );
 
-  const effectiveSessionPanelSize = clampPercent(sessionPanelSize, 15, 75);
+  const effectiveSessionPanelSize = clampPercent(
+    sessionPanelSize,
+    sessionPanelMinSize,
+    SESSION_PANEL_MAX_SIZE_PERCENT
+  );
+  // react-resizable-panels sizes the nested `canvas-session` PanelGroup's
+  // panels relative to the content panel, not the viewport — convert. Both
+  // the default and max are further capped so the canvas panel can always
+  // keep its own `minSize` (CANVAS_MIN_SIZE_PERCENT).
+  const sessionPanelSizeWithinContent = capSessionSizeForCanvasMin(
+    toContentRelativePercent(effectiveSessionPanelSize, contentPanelWidthPercent),
+    CANVAS_MIN_SIZE_PERCENT
+  );
+  const sessionPanelMaxSizeWithinContent = capSessionSizeForCanvasMin(
+    toContentRelativePercent(SESSION_PANEL_MAX_SIZE_PERCENT, contentPanelWidthPercent),
+    CANVAS_MIN_SIZE_PERCENT
+  );
+  const sessionPanelMinSizeWithinContent = Math.min(
+    toContentRelativePercent(sessionPanelMinSize, contentPanelWidthPercent),
+    sessionPanelMaxSizeWithinContent
+  );
   const sessionPanelRef = useRef<ImperativePanelHandle>(null);
   const leftPanelResizeDraggingRef = useRef(false);
   const rightPanelResizeDraggingRef = useRef(false);
@@ -499,11 +627,10 @@ export const App: React.FC<AppProps> = ({
 
   // Recent-board visit tracking + the id list HomePage consumes. AppHeader owns
   // its own pill derivation from the store (so it isn't fed an unstable array),
-  // and the localStorage-backed recents list keeps both in sync.
-  const { recentBoardIds, trackBoardVisit } = useRecentBoards(
-    mapToArray(boardById),
-    currentBoardId
-  );
+  // and the localStorage-backed recents list keeps both in sync. The boards arg
+  // only shapes `recentBoards`, which the shell does not consume — passing the
+  // stable empty list avoids a whole-map subscription here.
+  const { recentBoardIds, trackBoardVisit } = useRecentBoards(EMPTY_BOARDS, currentBoardId);
 
   // Persist current board to localStorage when it changes
   useEffect(() => {
@@ -534,40 +661,50 @@ export const App: React.FC<AppProps> = ({
     }
   }, [effectiveCommentsPanelSize, leftPanelCollapsed]);
 
+  // Re-resize whenever the content-relative size changes — including when
+  // the left panel toggles or resizes and shifts contentPanelWidthPercent,
+  // which sessionPanelSizeWithinContent is derived from. Without this, the
+  // session panel keeps the same content-relative percentage while its
+  // parent's absolute width changes, so its own absolute pixel width would
+  // drift along with the left panel.
   useEffect(() => {
     if (sessionPanelRef.current && (effectiveSelectedSessionId || !eventStreamPanelCollapsed)) {
-      sessionPanelRef.current.resize(effectiveSessionPanelSize);
+      sessionPanelRef.current.resize(sessionPanelSizeWithinContent);
     }
-  }, [effectiveSelectedSessionId, effectiveSessionPanelSize, eventStreamPanelCollapsed]);
+  }, [effectiveSelectedSessionId, sessionPanelSizeWithinContent, eventStreamPanelCollapsed]);
 
-  // URL state synchronization - bidirectional sync between URL and state
-  useUrlState({
-    currentBoardId,
-    currentSessionId: effectiveSelectedSessionId,
-    boardById,
-    sessionById,
-    branchById,
-    artifactById,
-    onBoardChange: (boardId) => {
-      setCurrentBoardIdInternal(boardId);
-    },
-    onSessionChange: (sessionId) => {
-      setSelectedSessionId(sessionId);
-    },
-    onActiveUrlTargetChange: setActiveUrlTarget,
-  });
+  // URL⇄state sync renders via UrlStateBridge (in the JSX below) so its
+  // whole-map subscriptions never wake the shell. Stable callbacks only.
+  const handleUrlBoardChange = useCallback((boardId: string) => {
+    setCurrentBoardIdInternal(boardId);
+  }, []);
 
   // Central navigation API. Every deliberate "go to X" call site routes
   // through this so the URL stays the single source of truth and the back
   // button restores prior board+session+camera. The hook reads live data
-  // via refs internally so its function identities stay stable across
-  // socket churn — important because they flow into memoized children.
-  const navigation = useAppNavigation({
-    boardById,
-    sessionById,
-    branchById,
-    artifactById,
-  });
+  // from the store at call time so its function identities stay stable
+  // across socket churn — important because they flow into memoized children.
+  const navigation = useAppNavigation();
+
+  const handleHomeBoardClick = useCallback(
+    (boardId: string) => navigation.goToBoard(boardId),
+    [navigation]
+  );
+
+  const handleHomeBranchClick = useCallback(
+    (branchId: string) => navigation.goToBranch(branchId),
+    [navigation]
+  );
+
+  const handleHomeOpenCreateDialog = useCallback(
+    (tab?: 'branch' | 'assistant' | 'board' | 'repository', boardId?: string) => {
+      if (boardId) navigation.goToBoard(boardId);
+      setNewBranchDefaultPosition(null);
+      setCreateDialogDefaultTab(tab || 'assistant');
+      setCreateDialogOpen(true);
+    },
+    [navigation]
+  );
 
   // Wrapper to update board ID (updates both state and URL via hook)
   // Also closes conversation panel when switching to a different board
@@ -582,23 +719,26 @@ export const App: React.FC<AppProps> = ({
   );
 
   // If the stored board no longer exists (deleted/archived), fall back to the
-  // first board. Distinguish the two reasons `boardById` can be empty:
+  // first board. Distinguish the two reasons the board map can be empty:
   //   - Disconnected and data was never loaded, or was momentarily wiped by a
   //     stale upstream effect → treat as transient, keep the id sticky so the
   //     `/b/<id>` URL survives.
   //   - Connected with an authoritative empty set (user deleted last board) →
   //     clear the selection so we stop pointing at a tombstone.
+  // Subscribes to board-list scalars (count / first id) plus the narrow
+  // `currentBoard` read above, not the whole map.
+  const boardCount = useAgorStore(selectBoardCount);
+  const firstBoardId = useAgorStore(selectFirstBoardId);
   useEffect(() => {
-    if (boardById.size === 0) {
+    if (boardCount === 0) {
       if (!connected) return;
       if (currentBoardId) setCurrentBoardId('');
       return;
     }
-    if (currentBoardId && !boardById.has(currentBoardId)) {
-      const fallback = mapToArray(boardById)[0]?.board_id || '';
-      setCurrentBoardId(fallback);
+    if (currentBoardId && !currentBoard) {
+      setCurrentBoardId(firstBoardId || '');
     }
-  }, [boardById, currentBoardId, setCurrentBoardId, connected]);
+  }, [boardCount, firstBoardId, currentBoard, currentBoardId, setCurrentBoardId, connected]);
 
   // Recalculate default position when board changes while modal is open
   // This ensures branches spawn at the center of the new board's viewport
@@ -610,16 +750,8 @@ export const App: React.FC<AppProps> = ({
     }
   }, [currentBoardId, createDialogOpen]);
 
-  const currentBoardObjects = useMemo(
-    () =>
-      currentBoardId
-        ? boardObjectsByBoardId.get(currentBoardId) || EMPTY_BOARD_OBJECTS
-        : EMPTY_BOARD_OBJECTS,
-    [boardObjectsByBoardId, currentBoardId]
-  );
-
   // Update favicon based on session activity on current board
-  useFaviconStatus(currentBoardId, sessionsByBranch, currentBoardObjects);
+  useFaviconStatus(currentBoardId);
 
   // Check if event stream is enabled in user preferences (default: true)
   const eventStreamEnabled = user?.preferences?.eventStream?.enabled ?? true;
@@ -660,6 +792,15 @@ export const App: React.FC<AppProps> = ({
   const handleOpenCommentsPanel = useCallback(() => {
     applyLeftPanelState(getShowCommentsPanelState({ collapsed: true, activeTab: 'assistant' }));
   }, [applyLeftPanelState]);
+
+  // Shared by every AssistantPanelRail button: expand the panel onto
+  // whichever tab was clicked.
+  const handleSelectAssistantPanelTab = useCallback(
+    (tab: BoardAssistantPanelTab) => {
+      applyLeftPanelState(getSelectAssistantPanelTabState(tab));
+    },
+    [applyLeftPanelState]
+  );
 
   const handleCommentSelect = useCallback((commentId: string | null) => {
     // Toggle selection: if clicking same comment, deselect
@@ -760,7 +901,7 @@ export const App: React.FC<AppProps> = ({
         branchName: result.branchName,
         sourceBranch: result.sourceBranch,
       },
-      { client, repoById, onCreateBranch, onUpdateBranch }
+      { client, repoById: agorStore.getState().repoById, onCreateBranch, onUpdateBranch }
     );
 
     if (!branch) {
@@ -820,22 +961,15 @@ export const App: React.FC<AppProps> = ({
     navigation.goToBranch(branch.branch_id);
   };
 
-  // Refs for the data `handleSessionClick` reads. Using refs (vs
-  // useCallback deps) keeps the handler's identity stable across
-  // socket-driven map churn — important because it flows through
-  // SessionCanvas → initialNodes deps and a flipping identity would
-  // cascade re-renders into every BranchCard. Inline `useRef(...)`
-  // rather than going through a helper so biome's
-  // `useExhaustiveDependencies` heuristic recognizes the refs as
-  // stable and doesn't false-positive on `.current.get` reads.
-  const sessionByIdRef = useRef(sessionById);
-  sessionByIdRef.current = sessionById;
-  const branchByIdRef = useRef(branchById);
-  branchByIdRef.current = branchById;
-
   const handleSessionClick = useCallback(
     (sessionId: string) => {
-      const session = sessionByIdRef.current.get(sessionId);
+      // Call-time store read: the shell no longer subscribes to the session /
+      // branch maps, so any render-time snapshot here would be stale. The
+      // handler's identity stays stable across socket churn — important
+      // because it flows through SessionCanvas → initialNodes deps and a
+      // flipping identity would cascade re-renders into every BranchCard.
+      const { sessionById, branchById } = agorStore.getState();
+      const session = sessionById.get(sessionId);
 
       // Best-effort: clear highlight flags when opening the conversation.
       // These updates may fail silently if the user lacks write permission (e.g. read-only
@@ -847,7 +981,7 @@ export const App: React.FC<AppProps> = ({
           .catch(() => {});
       }
 
-      const branch = session?.branch_id ? branchByIdRef.current.get(session.branch_id) : undefined;
+      const branch = session?.branch_id ? branchById.get(session.branch_id) : undefined;
       if (client && branch?.needs_attention) {
         client
           .service('branches')
@@ -891,10 +1025,25 @@ export const App: React.FC<AppProps> = ({
     [client, user?.user_id]
   );
 
-  const selectedSession = effectiveSelectedSessionId
-    ? sessionById.get(effectiveSelectedSessionId) || null
-    : null;
-  const selectedSessionBranch = selectedSession ? branchById.get(selectedSession.branch_id) : null;
+  // Narrow per-id subscriptions: only patches to the SELECTED session (and
+  // its branch) wake the shell — those renders are needed to feed
+  // SessionPanel fresh props anyway.
+  const selectedSession =
+    useAgorStore(
+      useMemo(() => makeSessionSelector(effectiveSelectedSessionId), [effectiveSelectedSessionId])
+    ) ?? null;
+  const selectedSessionBranchId = selectedSession?.branch_id;
+  const selectedSessionBranch =
+    useAgorStore(
+      useMemo(() => makeBranchSelector(selectedSessionBranchId), [selectedSessionBranchId])
+    ) ?? null;
+  const selectedSessionMcpServerIds =
+    useAgorStore(
+      useMemo(
+        () => makeSessionMcpServerIdsSelector(effectiveSelectedSessionId),
+        [effectiveSelectedSessionId]
+      )
+    ) ?? EMPTY_STRING_ARRAY;
 
   // Sync the actual state when a session disappears (for URL, localStorage, etc.).
   // The rendering already uses effectiveSelectedSessionId so this is mostly
@@ -905,22 +1054,31 @@ export const App: React.FC<AppProps> = ({
   // with the current board before clearing selection so archive/delete closes
   // the drawer and does not resurrect the card.
   useEffect(() => {
-    if (selectedSessionId && !sessionById.has(selectedSessionId)) {
+    if (selectedSessionId && !selectedSessionExists) {
       if (routeParams.sessionShortId && currentBoardId) {
         navigation.goToBoard(currentBoardId, { replace: true });
       }
       setSelectedSessionId(null);
     }
-  }, [currentBoardId, navigation, routeParams.sessionShortId, selectedSessionId, sessionById]);
+  }, [
+    currentBoardId,
+    navigation,
+    routeParams.sessionShortId,
+    selectedSessionId,
+    selectedSessionExists,
+  ]);
 
-  const sessionSettingsSession = sessionSettingsId ? sessionById.get(sessionSettingsId) : null;
+  const sessionSettingsSession =
+    useAgorStore(useMemo(() => makeSessionSelector(sessionSettingsId), [sessionSettingsId])) ??
+    null;
   const primaryAssistantId = currentBoard?.primary_assistant_id ?? null;
-  const primaryAssistantBranch = primaryAssistantId
-    ? branchById.get(primaryAssistantId)
-    : undefined;
-  const primaryAssistantRepo = primaryAssistantBranch
-    ? repoById.get(primaryAssistantBranch.repo_id)
-    : undefined;
+  const primaryAssistantBranch = useAgorStore(
+    useMemo(() => makeBranchSelector(primaryAssistantId), [primaryAssistantId])
+  );
+  const primaryAssistantRepoId = primaryAssistantBranch?.repo_id;
+  const primaryAssistantRepo = useAgorStore(
+    useMemo(() => makeRepoSelector(primaryAssistantRepoId), [primaryAssistantRepoId])
+  );
   const primaryAssistantInaccessible = Boolean(primaryAssistantId && !primaryAssistantBranch);
 
   // Preserve the historical board-switch behavior now that the panel itself
@@ -934,45 +1092,54 @@ export const App: React.FC<AppProps> = ({
   useBoardTitle(currentBoard);
 
   // Find branch and repo for BranchModal
-  const selectedBranch = branchModalBranchId ? branchById.get(branchModalBranchId) : null;
-  const selectedBranchRepo = selectedBranch ? repoById.get(selectedBranch.repo_id) : null;
-  const branchSessions = selectedBranch ? sessionsByBranch.get(selectedBranch.branch_id) || [] : [];
+  const selectedBranch =
+    useAgorStore(useMemo(() => makeBranchSelector(branchModalBranchId), [branchModalBranchId])) ??
+    null;
+  const selectedBranchRepoId = selectedBranch?.repo_id;
+  const selectedBranchRepo =
+    useAgorStore(useMemo(() => makeRepoSelector(selectedBranchRepoId), [selectedBranchRepoId])) ??
+    null;
+  const selectedBranchId = selectedBranch?.branch_id;
+  const branchSessions =
+    useAgorStore(
+      useMemo(() => makeSessionsForBranchSelector(selectedBranchId), [selectedBranchId])
+    ) ?? EMPTY_SESSIONS;
 
   // Find branch for NewSessionModal
-  const newSessionBranch = newSessionBranchId ? branchById.get(newSessionBranchId) : null;
+  const newSessionBranch =
+    useAgorStore(useMemo(() => makeBranchSelector(newSessionBranchId), [newSessionBranchId])) ??
+    null;
 
-  // Filter branches by current board (via board_objects). Memoized so that
-  // unrelated socket churn (e.g. another user's session patch) doesn't
-  // produce a fresh array reference on every render — that array flows into
-  // SessionCanvas's `initialNodes` deps and would otherwise cascade into
-  // every BranchCard re-rendering.
-  const boardBranches = useMemo(
-    () =>
-      currentBoardObjects
-        .filter((bo: BoardEntityObject) => bo.branch_id)
-        .map((bo: BoardEntityObject) => branchById.get(bo.branch_id!))
-        .filter((wt): wt is Branch => wt !== undefined),
-    [currentBoardObjects, branchById]
+  // Branch for the environment-logs modal (open only while the id is set).
+  const logsModalBranch = useAgorStore(
+    useMemo(() => makeBranchSelector(logsModalBranchId), [logsModalBranchId])
   );
 
-  // Check if current user is mentioned in active comments
-  const activeComments = mapToArray(commentById).filter(
-    (c: BoardComment) => c.board_id === currentBoardId && !c.resolved
+  // Branches on the current board (via board_objects), derived in the store
+  // layer with shallow equality: only membership changes or a member branch's
+  // patch produce a fresh array — unrelated socket churn keeps the reference,
+  // which matters because this flows into SessionCanvas's `initialNodes` deps
+  // and would otherwise cascade into every BranchCard re-rendering.
+  const boardBranches = useStoreWithEqualityFn(
+    agorStore,
+    useMemo(() => makeBranchesForBoardSelector(currentBoardId), [currentBoardId]),
+    shallow
   );
-
+  // Comment-derived header scalars, shared between AppHeader's comments button
+  // and the collapsed rail's Comments item so both surfaces carry the same
+  // badge. Subscribing to the derived number/boolean (instead of the comment
+  // map) keeps comment edits that don't change them — and all comments on other
+  // boards — from waking the shell.
   const currentUserName = user?.name || user?.email?.split('@')[0] || '';
-  const hasUserMentions =
-    !!currentUserName &&
-    activeComments.some((comment) => {
-      // Check if comment content mentions the user
-      const mentionPatterns = [
-        `@${currentUserName}`,
-        `@"${currentUserName}"`,
-        `@${user?.email}`,
-        `@"${user?.email}"`,
-      ];
-      return mentionPatterns.some((pattern) => comment.content.includes(pattern));
-    });
+  const unreadCommentsCount = useAgorStore(
+    useMemo(() => makeUnreadCommentCountSelector(currentBoardId), [currentBoardId])
+  );
+  const hasUserMentions = useAgorStore(
+    useMemo(
+      () => makeCommentMentionSelector(currentBoardId, currentUserName || undefined, user?.email),
+      [currentBoardId, currentUserName, user?.email]
+    )
+  );
 
   // Web terminal is gated by both the instance-level feature flag and the
   // user's role (`WEB_TERMINAL_MIN_ROLE`, shared with TerminalModal so the
@@ -981,51 +1148,14 @@ export const App: React.FC<AppProps> = ({
   // terminal buttons via `{onOpenTerminal && ...}`.
   const canOpenTerminal = webTerminalEnabled && hasMinimumRole(user?.role, WEB_TERMINAL_MIN_ROLE);
 
-  // Memoize AppActionsContext value with useCallback-wrapped handlers
-  const appActionsValue = useMemo(
-    () => ({
-      onSendPrompt,
-      onFork: onForkSession,
-      onBtwFork: onBtwForkSession,
-      onSubsession: onSpawnSession,
-      onUpdateSession,
-      onDeleteSession,
-      onPermissionDecision: handlePermissionDecision,
-      onStartEnvironment,
-      onStopEnvironment,
-      onNukeEnvironment,
-      onViewLogs: (branchId: string) => setLogsModalBranchId(branchId),
-      onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
-      onSessionClick: handleSessionClick,
-      onOpenBranch: (branchId: string, tab?: BranchModalTab) => {
-        setBranchModalBranchId(branchId);
-        setBranchModalTab(tab);
-      },
-      onOpenTerminal: canOpenTerminal ? handleOpenTerminal : undefined,
-    }),
-    [
-      onSendPrompt,
-      onForkSession,
-      onBtwForkSession,
-      onSpawnSession,
-      onUpdateSession,
-      onDeleteSession,
-      handlePermissionDecision,
-      onStartEnvironment,
-      onStopEnvironment,
-      onNukeEnvironment,
-      handleSessionClick,
-      handleOpenTerminal,
-      canOpenTerminal,
-    ]
-  );
-
   // Stabilize the passthrough action props before they reach the memoized
-  // SessionCanvas. These arrive from AppContent as plain consts (fresh identity
-  // on every store-driven re-render); without freezing them, SessionCanvas's
-  // React.memo would re-render on every live patch even when nothing it draws
-  // changed. Every other SessionCanvas prop is already stable (memoized values,
-  // useState setters, or useCallback handlers).
+  // SessionCanvas and the AppActions context value. These arrive from
+  // AppContent as plain consts (fresh identity on every store-driven
+  // re-render); without freezing them, SessionCanvas's React.memo — and every
+  // AppActions consumer — would re-render whenever the parent re-renders,
+  // even when nothing they draw changed.
+  const stableOnSendPrompt = useStableCallback(onSendPrompt);
+  const stableOnBtwForkSession = useStableCallback(onBtwForkSession);
   const stableOnSessionUpdate = useStableCallback(onUpdateSession);
   const stableOnSessionDelete = useStableCallback(onDeleteSession);
   const stableOnForkSession = useStableCallback(onForkSession);
@@ -1036,6 +1166,58 @@ export const App: React.FC<AppProps> = ({
   const stableOnStopEnvironment = useStableCallback(onStopEnvironment);
   const stableOnNukeEnvironment = useStableCallback(onNukeEnvironment);
 
+  // Modal-opener handlers shared by the context value and panel props.
+  const handleViewLogs = useCallback((branchId: string) => setLogsModalBranchId(branchId), []);
+  const handleOpenSessionSettings = useCallback(
+    (sessionId: string) => setSessionSettingsId(sessionId),
+    []
+  );
+  const handleOpenBranchModal = useCallback((branchId: string, tab?: BranchModalTab) => {
+    setBranchModalBranchId(branchId);
+    setBranchModalTab(tab);
+  }, []);
+
+  // Memoize AppActionsContext value from identity-stable handlers only, so
+  // the provider value survives shell re-renders and context consumers stay
+  // quiet unless terminal availability actually flips.
+  const appActionsValue = useMemo(
+    () => ({
+      onSendPrompt: stableOnSendPrompt,
+      onFork: stableOnForkSession,
+      onBtwFork: stableOnBtwForkSession,
+      onSubsession: stableOnSpawnSession,
+      onUpdateSession: stableOnSessionUpdate,
+      onDeleteSession: stableOnSessionDelete,
+      onPermissionDecision: handlePermissionDecision,
+      onStartEnvironment: stableOnStartEnvironment,
+      onStopEnvironment: stableOnStopEnvironment,
+      onNukeEnvironment: stableOnNukeEnvironment,
+      onViewLogs: handleViewLogs,
+      onOpenSettings: handleOpenSessionSettings,
+      onSessionClick: handleSessionClick,
+      onOpenBranch: handleOpenBranchModal,
+      onOpenTerminal: canOpenTerminal ? handleOpenTerminal : undefined,
+    }),
+    [
+      stableOnSendPrompt,
+      stableOnForkSession,
+      stableOnBtwForkSession,
+      stableOnSpawnSession,
+      stableOnSessionUpdate,
+      stableOnSessionDelete,
+      handlePermissionDecision,
+      stableOnStartEnvironment,
+      stableOnStopEnvironment,
+      stableOnNukeEnvironment,
+      handleViewLogs,
+      handleOpenSessionSettings,
+      handleSessionClick,
+      handleOpenBranchModal,
+      handleOpenTerminal,
+      canOpenTerminal,
+    ]
+  );
+
   // Stabilize the remaining passthrough props (schedule + comment actions) and
   // the panel's inline-arrow handlers so the memoized BoardAssistantPanel's
   // React.memo bailout holds — every prop it receives stays referentially stable
@@ -1045,16 +1227,22 @@ export const App: React.FC<AppProps> = ({
   const stableOnResolveComment = useStableCallback(onResolveComment);
   const stableOnToggleReaction = useStableCallback(onToggleReaction);
   const stableOnDeleteComment = useStableCallback(onDeleteComment);
-  const handleAssistantOpenSettings = useStableCallback(
-    (branchId: string, tab?: BranchModalTab) => {
-      setBranchModalBranchId(branchId);
-      setBranchModalTab(tab);
-    }
-  );
   const handleAssistantSendComment = useStableCallback((content: string) =>
     onSendComment?.(currentBoardId || '', content)
   );
   const handleAssistantCollapse = useStableCallback(() => setCommentsPanelCollapsed(true));
+
+  // Identity-stable branch actions for EventStreamPanel (previously an inline
+  // object literal whose identity flipped on every shell render).
+  const eventStreamBranchActions = useMemo(
+    () => ({
+      onSessionClick: handleSessionClick,
+      onCreateSession: (branchId: string) => setNewSessionBranchId(branchId),
+      onOpenSettings: (branchId: string) => setBranchModalBranchId(branchId),
+      onNukeEnvironment: stableOnNukeEnvironment,
+    }),
+    [handleSessionClick, stableOnNukeEnvironment]
+  );
 
   // Header action handlers, frozen so the memoized AppHeader's React.memo bailout
   // isn't defeated by a fresh inline-arrow identity on every App re-render. Each
@@ -1092,6 +1280,13 @@ export const App: React.FC<AppProps> = ({
   return (
     <AppActionsProvider value={appActionsValue}>
       <BoardSwitcherBridge setCurrentBoardId={setCurrentBoardId} />
+      <UrlStateBridge
+        currentBoardId={currentBoardId}
+        currentSessionId={effectiveSelectedSessionId}
+        onBoardChange={handleUrlBoardChange}
+        onSessionChange={setSelectedSessionId}
+        onActiveUrlTargetChange={setActiveUrlTarget}
+      />
       <Layout style={{ height: '100vh' }}>
         <AppHeader
           user={user}
@@ -1109,9 +1304,7 @@ export const App: React.FC<AppProps> = ({
           onRetryConnection={stableOnRetryConnection}
           currentBoardName={headerBoard?.name}
           currentBoardIcon={headerBoard?.icon}
-          unreadCommentsCount={
-            activeComments.filter((c: BoardComment) => !c.parent_comment_id).length
-          }
+          unreadCommentsCount={unreadCommentsCount}
           eventStreamEnabled={eventStreamEnabled}
           hasUserMentions={hasUserMentions}
           currentBoardId={headerBoardId}
@@ -1143,13 +1336,27 @@ export const App: React.FC<AppProps> = ({
               order={1}
               ref={commentsPanelRef}
               collapsible
-              defaultSize={leftPanelCollapsed ? 0 : effectiveCommentsPanelSize}
-              collapsedSize={0}
-              minSize={leftPanelCollapsed ? 0 : leftPanelMinSize}
+              defaultSize={leftPanelCollapsed ? leftPanelCollapsedSize : effectiveCommentsPanelSize}
+              collapsedSize={leftPanelCollapsedSize}
+              minSize={leftPanelCollapsed ? leftPanelCollapsedSize : leftPanelMinSize}
               maxSize={LEFT_PANEL_MAX_SIZE_PERCENT}
-              style={{ minWidth: leftPanelCollapsed ? 0 : LEFT_PANEL_MIN_WIDTH_PX }}
+              style={{
+                minWidth: leftPanelCollapsed
+                  ? leftPanelRailVisible
+                    ? LEFT_PANEL_RAIL_WIDTH_PX
+                    : 0
+                  : LEFT_PANEL_MIN_WIDTH_PX,
+              }}
             >
-              {!leftPanelCollapsed && (
+              {leftPanelCollapsed ? (
+                leftPanelRailVisible && (
+                  <AssistantPanelRail
+                    onSelectTab={handleSelectAssistantPanelTab}
+                    unreadCommentsCount={unreadCommentsCount}
+                    hasUserMentions={hasUserMentions}
+                  />
+                )
+              ) : (
                 <BoardAssistantPanel
                   client={client}
                   board={currentBoard || null}
@@ -1165,7 +1372,7 @@ export const App: React.FC<AppProps> = ({
                   onForkSession={stableOnForkSession}
                   onSpawnSession={stableOnSpawnSession}
                   onArchiveOrDelete={stableOnArchiveOrDeleteBranch}
-                  onOpenSettings={handleAssistantOpenSettings}
+                  onOpenSettings={handleOpenBranchModal}
                   onOpenSessionSettings={setSessionSettingsId}
                   onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
                   onStartEnvironment={stableOnStartEnvironment}
@@ -1181,6 +1388,8 @@ export const App: React.FC<AppProps> = ({
                   hoveredCommentId={hoveredCommentId}
                   selectedCommentId={selectedCommentId}
                   onCollapse={handleAssistantCollapse}
+                  deferSessionDetails={homeExitPanelDetailsDeferred}
+                  onDeferredDetailsHydrated={handleDeferredDetailsHydrated}
                 />
               )}
             </Panel>
@@ -1211,12 +1420,7 @@ export const App: React.FC<AppProps> = ({
                 }
               }}
             />
-            <Panel
-              id="content-panel"
-              order={2}
-              defaultSize={leftPanelCollapsed ? 100 : 100 - effectiveCommentsPanelSize}
-              minSize={40}
-            >
+            <Panel id="content-panel" order={2} defaultSize={contentPanelWidthPercent} minSize={40}>
               <PanelGroup
                 id="canvas-session"
                 direction="horizontal"
@@ -1224,20 +1428,36 @@ export const App: React.FC<AppProps> = ({
                 onLayout={(sizes) => {
                   // Persist only user drag updates so panel open/close and
                   // programmatic restores do not overwrite the user's preference.
+                  // sizes[1] is content-relative (react-resizable-panels sizes
+                  // panels relative to their own PanelGroup) — convert back to
+                  // viewport-relative before persisting, matching the frame
+                  // sessionPanelSize is stored in.
                   if (
                     effectiveSelectedSessionId &&
                     rightPanelResizeDraggingRef.current &&
                     sizes.length === 2
                   ) {
-                    setSessionPanelSize(clampPercent(sizes[1], 15, 75));
+                    const viewportRelativeSize = toViewportRelativePercent(
+                      sizes[1],
+                      contentPanelWidthPercent
+                    );
+                    setSessionPanelSize(
+                      clampPercent(
+                        viewportRelativeSize,
+                        sessionPanelMinSize,
+                        SESSION_PANEL_MAX_SIZE_PERCENT
+                      )
+                    );
                   }
                 }}
               >
                 <Panel
                   id="canvas-panel"
                   order={1}
-                  defaultSize={effectiveSelectedSessionId ? 100 - effectiveSessionPanelSize : 100}
-                  minSize={20}
+                  defaultSize={
+                    effectiveSelectedSessionId ? 100 - sessionPanelSizeWithinContent : 100
+                  }
+                  minSize={CANVAS_MIN_SIZE_PERCENT}
                 >
                   <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
                     {isHomeSurface ? (
@@ -1246,15 +1466,10 @@ export const App: React.FC<AppProps> = ({
                         connected={connected}
                         recentBoardIds={recentBoardIds}
                         currentUserId={user?.user_id}
-                        onBoardClick={navigation.goToBoard}
-                        onBranchClick={navigation.goToBranch}
+                        onBoardClick={handleHomeBoardClick}
+                        onBranchClick={handleHomeBranchClick}
                         onSessionClick={handleSessionClick}
-                        onOpenCreateDialog={(tab, boardId) => {
-                          if (boardId) navigation.goToBoard(boardId);
-                          setNewBranchDefaultPosition(null);
-                          setCreateDialogDefaultTab(tab);
-                          setCreateDialogOpen(true);
-                        }}
+                        onOpenCreateDialog={handleHomeOpenCreateDialog}
                         onOpenSettings={openSettings}
                       />
                     ) : (
@@ -1289,16 +1504,16 @@ export const App: React.FC<AppProps> = ({
                         onCommentSelect={handleCommentSelect}
                       />
                     )}
-                    <NewSessionButton
-                      onClick={() => {
-                        const center = isHomeSurface
-                          ? null
-                          : sessionCanvasRef.current?.getViewportCenter();
-                        setNewBranchDefaultPosition(center || null);
-                        setCreateDialogDefaultTab('assistant');
-                        setCreateDialogOpen(true);
-                      }}
-                    />
+                    {!isHomeSurface && (
+                      <NewSessionButton
+                        onClick={() => {
+                          const center = sessionCanvasRef.current?.getViewportCenter();
+                          setNewBranchDefaultPosition(center || null);
+                          setCreateDialogDefaultTab('assistant');
+                          setCreateDialogOpen(true);
+                        }}
+                      />
+                    )}
                   </div>
                 </Panel>
                 {(effectiveSelectedSessionId || !eventStreamPanelCollapsed) && (
@@ -1326,9 +1541,9 @@ export const App: React.FC<AppProps> = ({
                       id="session-panel"
                       order={2}
                       ref={sessionPanelRef}
-                      defaultSize={effectiveSessionPanelSize}
-                      minSize={15}
-                      maxSize={75}
+                      defaultSize={sessionPanelSizeWithinContent}
+                      minSize={sessionPanelMinSizeWithinContent}
+                      maxSize={sessionPanelMaxSizeWithinContent}
                     >
                       {effectiveSelectedSessionId ? (
                         <SessionPanel
@@ -1336,10 +1551,7 @@ export const App: React.FC<AppProps> = ({
                           session={selectedSession}
                           branch={selectedSessionBranch}
                           currentUserId={user?.user_id}
-                          sessionMcpServerIds={
-                            sessionMcpServerIds.get(effectiveSelectedSessionId) ??
-                            EMPTY_STRING_ARRAY
-                          }
+                          sessionMcpServerIds={selectedSessionMcpServerIds}
                           open={!!effectiveSelectedSessionId}
                           onClose={handleCloseSessionPanel}
                         />
@@ -1353,12 +1565,7 @@ export const App: React.FC<AppProps> = ({
                           selectedSessionId={effectiveSelectedSessionId}
                           currentBoard={currentBoard}
                           client={client}
-                          branchActions={{
-                            onSessionClick: handleSessionClick,
-                            onCreateSession: (branchId) => setNewSessionBranchId(branchId),
-                            onOpenSettings: (branchId) => setBranchModalBranchId(branchId),
-                            onNukeEnvironment,
-                          }}
+                          branchActions={eventStreamBranchActions}
                         />
                       )}
                     </Panel>
@@ -1367,59 +1574,6 @@ export const App: React.FC<AppProps> = ({
               </PanelGroup>
             </Panel>
           </PanelGroup>
-          {currentBoard && (
-            <Tooltip
-              title={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
-              placement="right"
-              getPopupContainer={() => document.body}
-            >
-              <button
-                type="button"
-                aria-label={leftPanelCollapsed ? 'Open side panel' : 'Close side panel'}
-                onClick={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
-                style={{
-                  position: 'absolute',
-                  top: '50%',
-                  left: leftPanelCollapsed ? 0 : `calc(${effectiveCommentsPanelSize}% + 2px)`,
-                  transform: 'translate(-50%, -50%)',
-                  width: LEFT_PANEL_TOGGLE_HIT_SIZE_PX,
-                  height: LEFT_PANEL_TOGGLE_HIT_SIZE_PX,
-                  padding: 0,
-                  border: 0,
-                  background: 'transparent',
-                  cursor: 'pointer',
-                  pointerEvents: 'auto',
-                  zIndex: 20,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <span
-                  aria-hidden="true"
-                  style={{
-                    width: LEFT_PANEL_TOGGLE_KNOB_SIZE_PX,
-                    height: LEFT_PANEL_TOGGLE_KNOB_SIZE_PX,
-                    borderRadius: '50%',
-                    border: '1px solid var(--ant-color-border)',
-                    background: 'var(--ant-color-bg-container)',
-                    boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
-                    color: 'var(--ant-color-text)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  {leftPanelCollapsed ? (
-                    <RightOutlined style={{ fontSize: 12 }} />
-                  ) : (
-                    <LeftOutlined style={{ fontSize: 12 }} />
-                  )}
-                </span>
-              </button>
-            </Tooltip>
-          )}
         </Content>
         {/* Invisible mount of antd Upload so its CSS-in-JS styles stay
               registered even after the SessionPanel (which contains FileUpload)
@@ -1445,15 +1599,6 @@ export const App: React.FC<AppProps> = ({
           }}
           client={client}
           currentUser={user}
-          boardById={boardById}
-          boardObjects={mapToArray(boardObjectById)}
-          repoById={repoById}
-          branchById={branchById}
-          sessionsByBranch={sessionsByBranch}
-          userById={userById}
-          mcpServerById={mcpServerById}
-          cardById={cardById}
-          cardTypeById={cardTypeById}
           activeTab={effectiveSettingsTab}
           onTabChange={(newTab) => {
             if (!settingsRouteOpen && openSettingsTab) {
@@ -1483,11 +1628,9 @@ export const App: React.FC<AppProps> = ({
           onDeleteUser={onDeleteUser}
           onCreateMCPServer={onCreateMCPServer}
           onDeleteMCPServer={onDeleteMCPServer}
-          gatewayChannelById={gatewayChannelById}
           onCreateGatewayChannel={onCreateGatewayChannel}
           onUpdateGatewayChannel={onUpdateGatewayChannel}
           onDeleteGatewayChannel={onDeleteGatewayChannel}
-          artifactById={artifactById}
           onUpdateArtifact={onUpdateArtifact}
           onDeleteArtifact={onDeleteArtifact}
           onCreateAssistant={() => {
@@ -1565,7 +1708,7 @@ export const App: React.FC<AppProps> = ({
           <EnvironmentLogsModal
             open={!!logsModalBranchId}
             onClose={() => setLogsModalBranchId(null)}
-            branch={branchById.get(logsModalBranchId)!}
+            branch={logsModalBranch!}
             client={client}
           />
         )}

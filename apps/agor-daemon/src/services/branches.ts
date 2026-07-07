@@ -64,6 +64,7 @@ import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveGitImpersonationForBranch } from '../utils/git-impersonation.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import {
@@ -1824,8 +1825,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // this.patch() calls the raw implementation and bypasses Feathers event
     // dispatch, so the patched event is not automatically emitted. Emit it
-    // manually so WebSocket clients receive the environment status update.
-    this.app.service('branches').emit?.('patched', branch);
+    // manually — with a correctly-shaped publish context carrying the tenant
+    // params — so the realtime publish handler can route it to the tenant's
+    // browser clients. Background transitions (health-monitor start→running,
+    // executor stop/nuke→stopped) fire outside any request scope, so the tenant
+    // must come from `resolvedParams` here or the event is suppressed and the
+    // env card spinner hangs until a manual refresh. See #1750 and
+    // emitServiceEvent for why the hook shape matters.
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: branch,
+      params: resolvedParams,
+      id,
+    });
 
     return branch;
   }

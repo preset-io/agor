@@ -1216,6 +1216,7 @@ export class CodexPromptService {
       let latestContextUsage: ContextUsageSnapshot | undefined;
 
       let eventCount = 0;
+      let didStop = false;
 
       for await (const event of events) {
         eventCount++;
@@ -1225,6 +1226,7 @@ export class CodexPromptService {
         if (this.stopRequested.get(sessionId)) {
           console.log(`🛑 Stop requested for session ${sessionId}, breaking event loop`);
           this.stopRequested.delete(sessionId);
+          didStop = true;
           // Yield stopped event so caller knows execution was stopped early
           yield {
             type: 'stopped',
@@ -1234,12 +1236,79 @@ export class CodexPromptService {
         }
 
         if ((event as { type?: string }).type === 'event_msg') {
-          // Codex emits token_count as generic event_msg payloads.
-          // Capture the latest snapshot so turn.completed can return context usage.
-          const contextSnapshot = extractCodexContextSnapshotFromEvent(event);
-          if (contextSnapshot) {
-            latestContextUsage = contextSnapshot;
+          const eventPayload = (event as { payload?: Record<string, unknown> }).payload;
+          const payloadType = eventPayload?.type;
+
+          if (payloadType === 'token_count') {
+            // Codex emits token_count as generic event_msg payloads.
+            // Capture the latest snapshot so turn.completed can return context usage.
+            const contextSnapshot = extractCodexContextSnapshotFromEvent(event);
+            if (contextSnapshot) {
+              latestContextUsage = contextSnapshot;
+            }
+            continue;
           }
+
+          if (payloadType === 'agent_message') {
+            // New Codex rollout format: final assistant text surfaces via event_msg
+            // rather than an item.completed(agent_message) item.
+            const text =
+              typeof eventPayload?.content === 'string'
+                ? eventPayload.content
+                : typeof eventPayload?.text === 'string'
+                  ? eventPayload.text
+                  : typeof eventPayload?.message === 'string'
+                    ? eventPayload.message
+                    : '';
+            if (text) {
+              currentMessage.push({ type: 'text', text });
+            }
+            continue;
+          }
+
+          if (payloadType === 'task_complete' || payloadType === 'turn_complete') {
+            // Terminal completion event from new Codex rollout format.
+            // Treat as equivalent to turn.completed.
+            threadId = thread.id || '';
+            const taskCompleteUsage = extractCodexTokenUsage(
+              (eventPayload?.usage ?? eventPayload?.token_usage) as unknown
+            );
+            const contextUsage =
+              latestContextUsage ?? (await extractLatestContextUsageFromRollout(thread.id || ''));
+
+            // Synthesize final assistant text from last_agent_message unless
+            // a preceding agent_message event already pushed the same text.
+            // This preserves distinct progress/final messages without duplicating.
+            const lastAgentMessage =
+              typeof eventPayload?.last_agent_message === 'string'
+                ? eventPayload.last_agent_message
+                : '';
+            const hasSameTextContent = currentMessage.some(
+              (block) => block.type === 'text' && block.text === lastAgentMessage
+            );
+            if (lastAgentMessage && !hasSameTextContent) {
+              currentMessage.push({ type: 'text', text: lastAgentMessage });
+            }
+
+            codexDebug(
+              `✅ [Codex] terminal event_msg (${payloadType}) received for session ${shortId(sessionId)}`
+            );
+
+            yield {
+              type: 'complete',
+              content: currentMessage,
+              toolUses: allToolUses.length > 0 ? allToolUses : undefined,
+              threadId,
+              resolvedModel,
+              usage: taskCompleteUsage,
+              rawContextUsage: contextUsage,
+            };
+
+            return;
+          }
+
+          // Unknown event_msg payload type — ignore silently.
+          codexDebug(`[Codex] Unknown event_msg payload type: ${String(payloadType)}`);
           continue;
         }
 
@@ -1443,6 +1512,18 @@ export class CodexPromptService {
             // Ignore other event types silently
             break;
         }
+      }
+
+      // If we reach here without returning, the stream ended.
+      // A user-requested stop is a valid early exit; anything else means Codex
+      // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
+      // which is the bug described in issue #1749.
+      if (!didStop) {
+        throw new Error(
+          'Codex stream ended without a terminal completion event (turn.completed, task_complete, or turn_complete). ' +
+            'The Codex process may have exited unexpectedly (check the executor logs for exit code 0 clues). ' +
+            'This is usually resolved by retrying the prompt; if it persists, restart the session.'
+        );
       }
     } catch (error) {
       // Check if this is an AbortError from AbortController.abort()

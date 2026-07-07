@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { getShowCommentsPanelState, getToggleBoardPanelState } from './boardPanelActions';
+import {
+  getSelectAssistantPanelTabState,
+  getShowCommentsPanelState,
+  getToggleBoardPanelState,
+} from './boardPanelActions';
 
 describe('board panel navbar actions', () => {
   it('opens a closed panel on the Comments tab from Show comments tab', () => {
@@ -27,6 +31,17 @@ describe('board panel navbar actions', () => {
     expect(getToggleBoardPanelState({ collapsed: false, activeTab: 'comments' })).toEqual({
       collapsed: true,
       activeTab: 'comments',
+    });
+  });
+
+  it.each([
+    'assistant',
+    'all-sessions',
+    'comments',
+  ] as const)('opens a closed panel on the %s tab when its rail button is clicked', (tab) => {
+    expect(getSelectAssistantPanelTabState(tab)).toEqual({
+      collapsed: false,
+      activeTab: tab,
     });
   });
 });

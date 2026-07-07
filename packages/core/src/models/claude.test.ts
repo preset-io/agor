@@ -10,6 +10,6 @@ describe('AVAILABLE_CLAUDE_MODEL_ALIASES', () => {
     expect(ids).toContain('claude-opus-4-7');
     expect(ids).toContain('claude-sonnet-4-6');
     expect(ids).toContain('claude-haiku-4-5');
-    expect(ids).not.toContain('claude-fable-5');
+    expect(ids).toContain('claude-fable-5');
   });
 });

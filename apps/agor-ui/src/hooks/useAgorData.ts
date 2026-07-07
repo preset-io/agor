@@ -47,6 +47,13 @@ import {
 } from '../store/agorMaps';
 import * as realtime from '../store/agorRealtimeActions';
 import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
+import {
+  discardRealtimeNow,
+  enqueueSessionPatch,
+  flushRealtimeNow,
+  tombstoneSession,
+  untombstoneSession,
+} from '../store/realtimeBatch';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import {
@@ -241,6 +248,9 @@ export function useAgorData(
     agorStore.getState().reset();
     resetHydrationRevisions();
     cancelAllHydrations();
+    // Drop any straggler frame-batched patches from a prior mount of the
+    // singleton so they can't flush into this instance's fresh store.
+    discardRealtimeNow();
     return null;
   });
 
@@ -348,9 +358,10 @@ export function useAgorData(
           () =>
             client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
           (list) =>
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, mcpServerById: buildById(list, 'mcp_server_id') }))
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
+            }))
         );
         void runHydration(
           'session-mcp-servers',
@@ -372,9 +383,10 @@ export function useAgorData(
               .service('gateway-channels')
               .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
           (list) =>
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, gatewayChannelById: buildById(list, 'id') }))
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
+            }))
         );
         void runHydration(
           'artifacts',
@@ -407,9 +419,10 @@ export function useAgorData(
               },
             }),
           (list) =>
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, artifactById: buildById(list, 'artifact_id') }))
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              artifactById: buildById(list, 'artifact_id', prev.artifactById),
+            }))
         );
         void runHydration(
           'oauth-status',
@@ -839,7 +852,14 @@ export function useAgorData(
                 for (const [id, session] of prev.sessionById) {
                   if (session.archived && !sessions.has(id)) sessions.set(id, session);
                 }
-                const { sessionById, sessionsByBranch } = buildSessionMaps([...sessions.values()]);
+                // Reconcile against the current maps so a wholesale apply of
+                // already-loaded sessions reuses prior refs (no board-wide
+                // re-render). This is the hot path on a busy workspace: the
+                // full-session hydration lands right as the user enters a board.
+                const { sessionById, sessionsByBranch } = buildSessionMaps([...sessions.values()], {
+                  sessionById: prev.sessionById,
+                  sessionsByBranch: prev.sessionsByBranch,
+                });
                 return { ...prev, sessionById, sessionsByBranch };
               })
           );
@@ -855,9 +875,10 @@ export function useAgorData(
               // are active-only (the snapshot query is archived:false and the
               // handlers never keep an archived branch), so a wholesale replace
               // is complete.
-              agorStore
-                .getState()
-                .applyMaps((prev) => ({ ...prev, branchById: buildById(allBranches, 'branch_id') }))
+              agorStore.getState().applyMaps((prev) => ({
+                ...prev,
+                branchById: buildById(allBranches, 'branch_id', prev.branchById),
+              }))
           );
         }
 
@@ -894,9 +915,10 @@ export function useAgorData(
             ['cards'],
             () => client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
             (allCards) =>
-              agorStore
-                .getState()
-                .applyMaps((prev) => ({ ...prev, cardById: buildById(allCards, 'card_id') }))
+              agorStore.getState().applyMaps((prev) => ({
+                ...prev,
+                cardById: buildById(allCards, 'card_id', prev.cardById),
+              }))
           );
           void runHydration(
             'board-comments',
@@ -908,7 +930,7 @@ export function useAgorData(
             (allComments) =>
               agorStore.getState().applyMaps((prev) => ({
                 ...prev,
-                commentById: buildById(allComments, 'comment_id'),
+                commentById: buildById(allComments, 'comment_id', prev.commentById),
               }))
           );
         }
@@ -925,9 +947,10 @@ export function useAgorData(
             ['boards'],
             () => client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
             (allBoards) =>
-              agorStore
-                .getState()
-                .applyMaps((prev) => ({ ...prev, boardById: buildById(allBoards, 'board_id') }))
+              agorStore.getState().applyMaps((prev) => ({
+                ...prev,
+                boardById: buildById(allBoards, 'board_id', prev.boardById),
+              }))
           );
         }
 
@@ -985,6 +1008,9 @@ export function useAgorData(
   // and eventually apply into freshly-cleared Maps.
   useEffect(() => {
     if (client) return;
+    // Discard (don't apply) any frame-batched session patches so a queued patch
+    // can't repopulate the maps `resetMaps()` is about to clear.
+    discardRealtimeNow();
     cancelAndFailAllHydrations();
     agorStore.getState().resetMaps();
     setHasInitiallyFetched(false);
@@ -1081,12 +1107,35 @@ export function useAgorData(
       return;
     }
 
-    // Subscribe to session events
+    // Subscribe to session events. `patched`/`updated` are the streaming hot
+    // path (a patch per token batch), so they're coalesced into one keyed store
+    // write per frame — without this, mounting a board into a live store
+    // (home→board) never converges. `created`/`removed` stay synchronous; the
+    // keyed queue's tombstones keep a deferred patch from resurrecting a
+    // session a synchronous `removed` just deleted (see `realtimeBatch`).
     const sessionsService = client.service('sessions');
-    sessionsService.on('created', realtime.sessionCreated);
-    sessionsService.on('patched', realtime.sessionPatched);
-    sessionsService.on('updated', realtime.sessionPatched);
-    sessionsService.on('removed', realtime.sessionRemoved);
+    // Keep the skip-apply-on-race revision bump SYNCHRONOUS — the background
+    // hydration's quiet-window guard, and the queue's own stale-drop stamp, both
+    // depend on the bump landing the instant the event does, not a frame later.
+    const sessionPatchedBatched = (session: Session) => {
+      bumpRevision('sessions');
+      enqueueSessionPatch(session);
+    };
+    // `created` clears any tombstone (remove-then-recreate in one frame) and
+    // `removed` sets one + drops the id's queued patch, before the synchronous
+    // store write.
+    const sessionCreatedSync = (session: Session) => {
+      untombstoneSession(session.session_id);
+      realtime.sessionCreated(session);
+    };
+    const sessionRemovedSync = (session: Session) => {
+      tombstoneSession(session.session_id);
+      realtime.sessionRemoved(session);
+    };
+    sessionsService.on('created', sessionCreatedSync);
+    sessionsService.on('patched', sessionPatchedBatched);
+    sessionsService.on('updated', sessionPatchedBatched);
+    sessionsService.on('removed', sessionRemovedSync);
 
     // Subscribe to board events
     const boardsService = client.service('boards');
@@ -1327,14 +1376,19 @@ export function useAgorData(
 
     // Cleanup listeners on unmount
     return () => {
+      // APPLY (not discard) any frame-batched session patches here: this cleanup
+      // also runs when the effect merely re-subscribes (a dep changes), so
+      // dropping would lose live updates mid-session. The logout path discards
+      // explicitly instead (see the `client`-null effect above).
+      flushRealtimeNow();
       client.io.off('oauth:completed', handleOAuthCompleted);
       client.io.off('oauth:disconnected', handleOAuthDisconnected);
       client.io.off('connect', refetchSilently);
       window.removeEventListener(TOKENS_REFRESHED_EVENT, handleTokensRefreshed);
-      sessionsService.removeListener('created', realtime.sessionCreated);
-      sessionsService.removeListener('patched', realtime.sessionPatched);
-      sessionsService.removeListener('updated', realtime.sessionPatched);
-      sessionsService.removeListener('removed', realtime.sessionRemoved);
+      sessionsService.removeListener('created', sessionCreatedSync);
+      sessionsService.removeListener('patched', sessionPatchedBatched);
+      sessionsService.removeListener('updated', sessionPatchedBatched);
+      sessionsService.removeListener('removed', sessionRemovedSync);
 
       boardsService.removeListener('created', realtime.boardCreated);
       boardsService.removeListener('patched', realtime.boardPatched);

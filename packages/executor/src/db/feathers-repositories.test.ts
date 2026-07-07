@@ -73,6 +73,25 @@ describe('FeathersMCPOAuthAuthHeadersRepository', () => {
 });
 
 describe('FeathersSessionMCPServersRepository', () => {
+  it('carries forUserId through effective session MCP route lookups', async () => {
+    const find = vi.fn().mockResolvedValue([]);
+    const service = vi.fn((path: string) => {
+      if (path !== '/sessions/session-1/mcp-servers') {
+        throw new Error(`unexpected service path: ${path}`);
+      }
+      return { find };
+    });
+    const repo = new FeathersSessionMCPServersRepository({
+      service,
+    } as unknown as AgorClient);
+
+    await repo.listEffectiveServers('session-1' as SessionID, true, 'user-1');
+
+    expect(find).toHaveBeenCalledWith({
+      query: { includeGlobal: true, enabledOnly: true, forUserId: 'user-1' },
+    });
+  });
+
   it('resolves MCP metadata through the session-scoped route', async () => {
     const find = vi.fn().mockResolvedValue([
       {
