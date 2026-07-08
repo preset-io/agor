@@ -631,6 +631,115 @@ describe('SlackConnector.fetchThreadHistory', () => {
   });
 });
 
+describe('SlackConnector.fetchChannelHistory', () => {
+  it('normalizes newest-first channel history into chronological order and filters bots', async () => {
+    const calls: Array<{ method: string; args: unknown }> = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { botUserId: string }).botUserId = 'U_BOT';
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        history: async (args: unknown) => {
+          calls.push({ method: 'history', args });
+          return {
+            ok: true,
+            has_more: false,
+            messages: [
+              { ts: '1700000002.000000', user: 'U2', text: '<@U_BOT> newest' },
+              { ts: '1700000001.000000', bot_id: 'B1', text: 'bot output' },
+              { ts: '1700000000.000000', user: 'U1', text: 'oldest' },
+            ],
+          };
+        },
+      },
+      users: {
+        info: async ({ user }: { user: string }) => ({
+          ok: true,
+          user: { profile: { display_name: user === 'U1' ? 'Alice' : 'Bob' } },
+        }),
+      },
+    };
+
+    const history = await connector.fetchChannelHistory({
+      channelId: 'C123',
+      oldestTs: '1699999999.000000',
+      latestTs: '1700000002.000000',
+      inclusive: true,
+      limit: 50,
+    });
+
+    expect(calls[0]).toEqual({
+      method: 'history',
+      args: {
+        channel: 'C123',
+        limit: 200,
+        oldest: '1699999999.000000',
+        latest: '1700000002.000000',
+        inclusive: true,
+      },
+    });
+    expect(history.channel).toBe('C123');
+    expect(history.has_more).toBe(false);
+    expect(history.messages.map((message) => message.text)).toEqual(['oldest', '<@U_BOT> newest']);
+    expect(history.messages[1]).toMatchObject({
+      user_id: 'U2',
+      user_name: 'Bob',
+      is_bot: false,
+      is_mention: true,
+      is_trigger: false,
+    });
+  });
+
+  it('keeps the most recent matches when the limit truncates', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        history: async () => ({
+          ok: true,
+          has_more: false,
+          messages: [
+            { ts: '1700000002.000000', user: 'U1', text: 'newest' },
+            { ts: '1700000001.000000', user: 'U1', text: 'middle' },
+            { ts: '1700000000.000000', user: 'U1', text: 'oldest' },
+          ],
+        }),
+      },
+      users: {
+        info: async () => ({ ok: true, user: { profile: { display_name: 'Alice' } } }),
+      },
+    };
+
+    const history = await connector.fetchChannelHistory({ channelId: 'C123', limit: 2 });
+
+    expect(history.messages.map((message) => message.text)).toEqual(['middle', 'newest']);
+    expect(history.has_more).toBe(true);
+  });
+
+  it('enforces the allowed_channel_ids whitelist', async () => {
+    const connector = new SlackConnector({
+      bot_token: 'xoxb-test',
+      allowed_channel_ids: ['C_ALLOWED'],
+    });
+    let apiCalled = false;
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        history: async () => {
+          apiCalled = true;
+          return { ok: true, messages: [] };
+        },
+      },
+    };
+
+    await expect(connector.fetchChannelHistory({ channelId: 'C_OTHER' })).rejects.toThrow(
+      /allowed_channel_ids/
+    );
+    expect(apiCalled).toBe(false);
+
+    const allowed = await connector.fetchChannelHistory({ channelId: 'C_ALLOWED' });
+    expect(allowed.messages).toEqual([]);
+    expect(apiCalled).toBe(true);
+  });
+});
+
 // Mirrors SECTION_MAX_CHARS in slack.ts; kept in the test as a lower-bound
 // sanity check (we expect the legacy mrkdwn fallback to carry more than this).
 const SECTION_MAX_CHARS_TEST = 3000;

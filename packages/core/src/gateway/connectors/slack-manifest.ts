@@ -16,6 +16,12 @@
  * are requested.
  */
 
+import {
+  resolveSlackAgentTools,
+  type SlackAgentToolCapability,
+  type SlackAgentToolsConfig,
+} from '../../types/gateway';
+
 export interface SlackWizardOptions {
   appName: string;
   botDisplayName?: string;
@@ -31,7 +37,24 @@ export interface SlackWizardOptions {
   outbound: boolean;
   /** Ingest files attached to inbound messages (screenshots/images). */
   ingestFiles: boolean;
+  /** Agent-callable MCP tool toggles (maps to `config.agent_tools`). */
+  agentTools: SlackAgentToolsConfig;
 }
+
+/**
+ * Slack OAuth bot scopes each agent-tool capability requires. The single
+ * source of truth tying a capability toggle to the scopes its MCP tool needs:
+ * `requiredBotScopes` consumes it, so enabling a capability in the wizard and
+ * gating the tool at call time can never drift apart.
+ *
+ * `thread_history` contributes no scopes of its own — mapped threads only
+ * exist on surfaces the bot listens to, and each listening surface already
+ * carries its history scope (DMs via the `im:history` baseline).
+ */
+export const SLACK_AGENT_TOOL_SCOPES: Record<SlackAgentToolCapability, string[]> = {
+  thread_history: [],
+  channel_history: ['channels:history', 'groups:history', 'mpim:history'],
+};
 
 export interface SlackBotEventSubscriptions {
   bot_events: string[];
@@ -113,6 +136,13 @@ export function requiredBotScopes(opts: SlackWizardOptions): string[] {
       'im:write',
       'users:read.email'
     );
+  }
+
+  const agentTools = resolveSlackAgentTools(opts.agentTools);
+  for (const capability of Object.keys(SLACK_AGENT_TOOL_SCOPES) as SlackAgentToolCapability[]) {
+    if (agentTools[capability]) {
+      scopes.push(...SLACK_AGENT_TOOL_SCOPES[capability]);
+    }
   }
 
   return sortedUnique(scopes);
