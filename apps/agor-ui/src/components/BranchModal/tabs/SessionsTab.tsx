@@ -1,12 +1,24 @@
 import type { AgorClient, Branch, Session, SessionID } from '@agor-live/client';
 import { EyeInvisibleOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
-import { Badge, Input, Space, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
+import {
+  Badge,
+  Button,
+  Input,
+  Popconfirm,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { getSessionStatusTone } from '../../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
-import { ArchiveToggleButton } from '../../ArchiveButton';
+import { ArchiveIcon } from '../../ArchiveButton';
 import { TaskStatusIcon } from '../../TaskStatusIcon';
 import { ToolIcon } from '../../ToolIcon/ToolIcon';
 
@@ -340,16 +352,41 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
       title: '',
       key: 'actions',
       width: 40,
-      render: (_, session) => (
-        <ArchiveToggleButton
-          archived={session.archived}
-          loading={archivingIds.has(session.session_id)}
-          tooltip={session.archived ? 'Archived • Click to unarchive' : 'Archive session'}
-          onToggle={(nextArchived) =>
-            handleArchiveToggle(session.session_id as SessionID, nextArchived)
-          }
-        />
-      ),
+      render: (_, session) => {
+        const nextArchived = !session.archived;
+        const actionLabel = nextArchived ? 'archive' : 'unarchive';
+        const title = nextArchived
+          ? 'Archive session and child sessions?'
+          : 'Unarchive session and child sessions?';
+        const description = nextArchived
+          ? 'This will archive this session and its branch-local child sessions.'
+          : 'This will unarchive this session and its branch-local child sessions.';
+        const tooltip = nextArchived
+          ? 'Archive session and child sessions'
+          : 'Archived • Click to unarchive session and child sessions';
+
+        return (
+          <Popconfirm
+            title={title}
+            description={description}
+            okText={nextArchived ? 'Archive' : 'Unarchive'}
+            cancelText="Cancel"
+            okButtonProps={{ danger: nextArchived }}
+            onConfirm={() => handleArchiveToggle(session.session_id as SessionID, nextArchived)}
+          >
+            <Tooltip title={tooltip}>
+              <Button
+                type="text"
+                size="small"
+                icon={<ArchiveIcon />}
+                loading={archivingIds.has(session.session_id)}
+                aria-label={`${actionLabel} session and child sessions`}
+                onClick={(event) => event.stopPropagation()}
+              />
+            </Tooltip>
+          </Popconfirm>
+        );
+      },
     },
   ];
 

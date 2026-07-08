@@ -859,10 +859,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     for (const session of sessions) {
       let branch = branchCache.get(session.branch_id);
       if (!branch) {
-        branch = await this.branchRepo.findById(session.branch_id);
-        if (!branch) {
+        const loadedBranch = await this.branchRepo.findById(session.branch_id);
+        if (!loadedBranch) {
           throw new Forbidden(`Branch not found for session: ${session.session_id}`);
         }
+        branch = loadedBranch;
         branchCache.set(session.branch_id, branch);
       }
 
