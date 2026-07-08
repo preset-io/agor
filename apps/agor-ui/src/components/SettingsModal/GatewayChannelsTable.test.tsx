@@ -31,7 +31,21 @@ vi.mock('./UserSelect', () => ({
 // edit collapse; they're heavy (agent cards + model/MCP selects) and irrelevant
 // to the gateway-wizard assertions. Stub them so step transitions stay fast.
 vi.mock('../AgentSelectionGrid', () => ({
-  AgentSelectionGrid: () => <div data-testid="agent-grid" />,
+  AgentSelectionGrid: ({
+    agents,
+    onSelect,
+  }: {
+    agents: { id: string }[];
+    onSelect: (agentId: string) => void;
+  }) => (
+    <div data-testid="agent-grid">
+      {agents.map((a) => (
+        <button key={a.id} type="button" onClick={() => onSelect(a.id)}>
+          {a.id}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 vi.mock('../AgenticToolConfigForm', () => ({
   AgenticToolConfigForm: () => <div data-testid="agent-config" />,
@@ -472,6 +486,39 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(onUpdate.mock.calls[0][1]).toMatchObject({
       agentic_config: { mcpServerIds: ['mcp-server-1'] },
+    });
+  });
+
+  it("applies the target agent's defaults when switching agents and back, instead of silently keeping stale fields", async () => {
+    // A value-based guard (selectedAgent === persisted agent) would treat
+    // switching away and back as "no-op" and skip re-applying defaults,
+    // leaving whatever the other agent's switch left behind — the same
+    // silent-corruption class as #1730. Switching agents must always land on
+    // a defined state: that agent's own user defaults.
+    const channel = {
+      ...makeSlackChannel(),
+      agentic_config: { agent: 'claude-code', mcpServerIds: ['mcp-server-1'] },
+    };
+    const currentUser = {
+      ...makeUser(),
+      default_agentic_config: {
+        'claude-code': { mcpServerIds: ['default-claude-server'] },
+        codex: { mcpServerIds: ['default-codex-server'] },
+      },
+    } as unknown as User;
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { currentUser, onUpdate });
+    expandPanel('Agent Configuration');
+
+    // Switch away to codex, then back to the channel's persisted agent.
+    clickButton(/^codex$/);
+    clickButton(/^claude-code$/);
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      agentic_config: { agent: 'claude-code', mcpServerIds: ['default-claude-server'] },
     });
   });
 });
