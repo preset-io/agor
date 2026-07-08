@@ -556,7 +556,7 @@
 
 /* Faint guide circle through the node centers (diameter = 2 × node radius). */
 .ringStage::before {
-  content: '';
+  content: "";
   position: absolute;
   top: 50%;
   left: 50%;
@@ -1085,6 +1085,10 @@
     grid-template-columns: 1fr;
   }
 
+  .rosterGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
   .surfaceExplorer {
     grid-template-columns: 1fr;
   }
@@ -1453,6 +1457,70 @@
 
 .ctaCard > * {
   position: relative;
+}
+
+/* Meet the roster — directory cards for named assistants */
+.rosterSection {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 88px 28px;
+}
+
+.rosterSub {
+  max-width: 56ch;
+  margin: 16px 0 0;
+  color: var(--landing-muted);
+  line-height: 1.6;
+}
+
+.rosterGrid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 14px;
+  margin-top: 44px;
+}
+
+.rosterCard {
+  padding: 20px 18px;
+  border: 1px solid rgba(52, 230, 196, 0.12);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(15, 34, 31, 0.7), rgba(10, 22, 20, 0.5));
+  transition:
+    translate 0.3s ease,
+    border-color 0.3s ease;
+}
+
+.rosterCard:hover {
+  translate: 0 -5px;
+  border-color: rgba(52, 230, 196, 0.32);
+}
+
+.rosterEmoji {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(52, 230, 196, 0.16);
+  border-radius: 50%;
+  background: rgba(52, 230, 196, 0.08);
+  font-size: 1.3rem;
+}
+
+.rosterCard h3 {
+  margin: 14px 0 0;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.02rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.rosterCard p {
+  margin: 6px 0 0;
+  color: var(--landing-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
 }
 
 /* Higher-specificity overrides — kept last so specificity ascends file-wide

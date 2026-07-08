@@ -184,16 +184,35 @@ const showcaseSlides = [
   },
   {
     label: 'Message gateway',
-    caption: 'slack · agents where your team already works',
+    caption: 'slack · @DatAgor picks up the ticket',
     image: '/screenshots/marketing/agor-marketing-slack-thread.png',
   },
+];
+
+// Meet the roster — real assistants from our own Agor instance (mirrors the
+// Persistent-assistants screenshot; names and jobs are the genuine article).
+const rosterMembers = [
+  { emoji: '🦞', name: 'AgorClaw', role: 'Main coding orchestrator' },
+  { emoji: '🏛️', name: 'Preset Architect', role: 'Knows every repo and how they fit together' },
+  {
+    emoji: '🐙',
+    name: 'GitHub Handler',
+    role: 'Tag it on any PR or issue — it takes it from there',
+  },
+  { emoji: '🖇️', name: 'Milchick', role: 'Chief-of-staff orchestrator' },
+  { emoji: '🏈', name: 'Peyton Manning', role: 'Sees the whole field, calls the right plays' },
+  { emoji: '📈', name: 'OpEx', role: 'Observability & operational excellence' },
+  { emoji: '🩹', name: 'patch-bot', role: 'Watches new builds of our base images' },
+  { emoji: '⚖️', name: 'Saul', role: 'Legal, contracts, redlines expert' },
+  { emoji: '🧊', name: 'Blake', role: 'Deal desk expert' },
+  { emoji: '📣', name: 'Peggy', role: 'Proposes, optimizes, and reviews ad campaigns' },
 ];
 
 // Multiplayer numbered cards (mockup design language, our copy)
 const liveCards = [
   {
     title: 'Live presence',
-    body: 'See teammates’ cursors, comments, and reactions as work happens, not after the fact.',
+    body: 'Cursors, comments, and reactions as work happens — from humans and AI teammates on the same board.',
   },
   {
     title: 'Shared dev environments',
@@ -279,7 +298,7 @@ export function LandingPage() {
             </p>
             <h1>
               Empower your <span className={styles.headingStrong}>team</span> with{' '}
-              <span className={styles.headingAccent}>AI assistants</span>
+              <span className={styles.headingAccent}>AI teammates</span>
             </h1>
             <div className={styles.heroActions}>
               <button
@@ -539,6 +558,35 @@ export function LandingPage() {
         </div>
       </section>
 
+      <section className={styles.rosterSection} data-reveal>
+        <div className={styles.sectionHeader}>
+          <span className={styles.eyebrow}>Not mockups — our actual coworkers</span>
+          <h2>
+            Meet the <span className={styles.headingAccent}>roster</span>.
+          </h2>
+          <p className={styles.rosterSub}>
+            The teammates running in our own Agor instance today — each with a name, a job, and a
+            memory.
+          </p>
+        </div>
+        <div className={styles.rosterGrid}>
+          {rosterMembers.map((member, index) => (
+            <article
+              className={styles.rosterCard}
+              key={member.name}
+              data-reveal
+              style={revealDelay(index % 5)}
+            >
+              <span className={styles.rosterEmoji} aria-hidden="true">
+                {member.emoji}
+              </span>
+              <h3>{member.name}</h3>
+              <p>{member.role}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
       <section className={styles.controlSection} data-reveal>
         <div>
           <span className={styles.eyebrow}>Build teams as a team</span>
@@ -582,10 +630,13 @@ export function LandingPage() {
       <section className={styles.finalCta} data-reveal>
         <div className={styles.ctaCard}>
           <h2>
-            Give your team’s <span className={styles.headingStrong}>AI work</span> a place to{' '}
-            <span className={styles.headingAccent}>live</span>
+            Give your <span className={styles.headingStrong}>AI teammates</span> a place to{' '}
+            <span className={styles.headingAccent}>work</span>
           </h2>
-          <p>Agor Cloud is opening to teams now. The open-source build is ready when you are.</p>
+          <p>
+            Agor Cloud is opening to teams now — or onboard your first AI teammate in three minutes
+            with the open-source build.
+          </p>
           <div className={styles.heroActions}>
             <button
               type="button"
