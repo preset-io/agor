@@ -207,9 +207,12 @@ function applyExecutionAttemptPatchState(
   if (!attempt) return;
 
   if (data.runtime_vitals?.last_event?.kind === TaskRuntimeEventKind.EXECUTOR_CONNECTED) {
+    const connectedAt = data.runtime_vitals.last_event.at ?? now;
+    data.last_executor_heartbeat_at ??= connectedAt;
     data.current_execution_attempt = {
       ...attempt,
-      connected_at: attempt.connected_at ?? data.runtime_vitals.last_event.at ?? now,
+      connected_at: attempt.connected_at ?? connectedAt,
+      last_heartbeat_at: attempt.last_heartbeat_at ?? connectedAt,
     };
     return;
   }

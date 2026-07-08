@@ -708,6 +708,10 @@ describe('TasksService executor heartbeat helpers', () => {
       params
     );
     expect(currentTask.current_execution_attempt.connected_at).toBe('2026-01-01T00:00:01.000Z');
+    expect(currentTask.current_execution_attempt.last_heartbeat_at).toBe(
+      '2026-01-01T00:00:01.000Z'
+    );
+    expect(currentTask.last_executor_heartbeat_at).toBe('2026-01-01T00:00:01.000Z');
 
     await service.patch(taskId, { last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z' }, params);
     expect(currentTask.current_execution_attempt.last_heartbeat_at).toBe(
