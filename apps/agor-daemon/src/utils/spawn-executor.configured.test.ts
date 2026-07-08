@@ -52,6 +52,7 @@ describe('configured executor spawning', () => {
     spawnMock.mockReset();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const unix = await import('@agor/core/unix');
     vi.mocked(unix.buildSpawnArgs).mockReturnValue({ cmd: 'node', args: ['executor', '--stdin'] });
@@ -223,6 +224,30 @@ describe('configured executor spawning', () => {
       command: 'prompt',
       resolvedConfig: expect.any(Object),
     });
+  });
+
+  it('writes the executor payload if async onSpawn never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValue(proc);
+      const onSpawn = vi.fn(() => new Promise<void>(() => {}));
+      const { spawnExecutor } = await import('./spawn-executor');
+
+      spawnExecutor({ command: 'prompt' }, { onSpawn, logPrefix: '[test]' });
+
+      expect(onSpawn).toHaveBeenCalledWith(proc);
+      expect(proc.written).toBe('');
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(JSON.parse(proc.written)).toMatchObject({
+        command: 'prompt',
+        resolvedConfig: expect.any(Object),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('derives LOG_LEVEL for executor processes when only NODE_ENV is set', async () => {
