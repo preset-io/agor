@@ -386,6 +386,7 @@ export function wrapMessagesServiceWithRuntimeVitals(
 ): MessagesService {
   return {
     ...service,
+    patch: service.patch.bind(service),
     create: async (data) => {
       const result = await service.create(data);
       if (isAssistantMessage(result)) {

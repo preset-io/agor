@@ -1,6 +1,10 @@
 import { TaskRuntimeEventKind, TaskRuntimePhase, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TaskRuntimeVitalsReporter, wrapTasksServiceWithRuntimeVitals } from './runtime-vitals.js';
+import {
+  TaskRuntimeVitalsReporter,
+  wrapMessagesServiceWithRuntimeVitals,
+  wrapTasksServiceWithRuntimeVitals,
+} from './runtime-vitals.js';
 
 function createClient(patches: Array<{ id: string; data: Record<string, unknown> }>) {
   return {
@@ -234,6 +238,39 @@ describe('TaskRuntimeVitalsReporter', () => {
     expect(patches).toHaveLength(1);
     expect(patches[0]?.data).toEqual({ runtime_vitals: expect.any(Object) });
     expect(patches[0]?.data).not.toHaveProperty('status');
+  });
+});
+
+describe('wrapMessagesServiceWithRuntimeVitals', () => {
+  it('preserves Feathers service context when forwarding patch', async () => {
+    const rawMessagesService = {
+      marker: 'messages-service-context',
+      create: vi.fn(async (data: Record<string, unknown>) => ({
+        message_id: 'message-1',
+        role: 'user',
+        ...data,
+      })),
+      patch: vi.fn(async function (
+        this: { marker: string },
+        id: string,
+        data: Record<string, unknown>
+      ) {
+        return { message_id: id, marker: this.marker, ...data };
+      }),
+    };
+    const reporter = new TaskRuntimeVitalsReporter({
+      client: createClient([]),
+      taskId: 'task-1',
+      toolName: 'claude-code',
+      minPatchIntervalMs: 0,
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const wrapped = wrapMessagesServiceWithRuntimeVitals(rawMessagesService, reporter);
+
+    await expect(wrapped.patch('message-1', { text: 'ok' })).resolves.toMatchObject({
+      marker: 'messages-service-context',
+      text: 'ok',
+    });
   });
 });
 
