@@ -1,6 +1,7 @@
 import { LinkOutlined, PushpinFilled } from '@ant-design/icons';
 import { Space, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
+import { LinkDisplayTargetLink } from './LinkDisplayTargetLink';
 import {
   getCompactLinkDisplayName,
   getLinkDisplayPillLabel,
@@ -47,15 +48,13 @@ export const PinnedLinksStrip: React.FC<PinnedLinksStripProps> = ({
             </Tag>
           );
           return item.href ? (
-            <Typography.Link
+            <LinkDisplayTargetLink
               key={item.key}
-              href={item.href}
-              target={item.navigation === 'external' ? '_blank' : undefined}
-              rel={item.navigation === 'external' ? 'noopener noreferrer' : undefined}
+              item={item}
               onClick={(event) => event.stopPropagation()}
             >
               <Tooltip title={`${getLinkDisplayPillLabel(item.category)}: ${name}`}>{chip}</Tooltip>
-            </Typography.Link>
+            </LinkDisplayTargetLink>
           ) : (
             <Tooltip key={item.key} title={`${getLinkDisplayPillLabel(item.category)}: ${name}`}>
               {chip}

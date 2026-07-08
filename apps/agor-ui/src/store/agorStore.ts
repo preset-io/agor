@@ -192,6 +192,18 @@ function sessionLinkOwnerSignature(state: AgorState, sessionId: string): string 
   return linkOwnerSignature(state.linksBySession.get(sessionId));
 }
 
+function linkUpdatedAtMillis(link: Link): number | null {
+  const timestamp = Date.parse(link.updated_at);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function isStaleLinkMutationResult(existing: Link, incoming: Link): boolean {
+  const existingUpdatedAt = linkUpdatedAtMillis(existing);
+  const incomingUpdatedAt = linkUpdatedAtMillis(incoming);
+  if (existingUpdatedAt === null || incomingUpdatedAt === null) return false;
+  return incomingUpdatedAt < existingUpdatedAt;
+}
+
 function shouldSuppressFullOwnerLinksResult(
   beforeRevision: number,
   beforeSignature: string,
@@ -421,6 +433,9 @@ export const agorStore = createStore<AgorState>()(
     },
 
     applyLinkMutationResult: (link) => {
+      const existing = get().linkById.get(link.link_id);
+      if (!existing || isStaleLinkMutationResult(existing, link)) return;
+
       let mapsChanged = false;
       get().applyMaps((prev) => {
         const next = upsertLinkInMaps(prev, link);

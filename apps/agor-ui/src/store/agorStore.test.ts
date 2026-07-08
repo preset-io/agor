@@ -126,6 +126,58 @@ describe('agorStore scaffold', () => {
     expect(state.linksBySession.get('s1')).toEqual([sessionLink]);
   });
 
+  it('applies link mutation results only when they still match current store state', () => {
+    const newerLink = {
+      link_id: 'l-branch',
+      branch_id: 'b1',
+      session_id: null,
+      is_pinned: true,
+      updated_at: '2026-07-01T12:00:00.000Z',
+    } as Link;
+    const stalePatchResponse = {
+      ...newerLink,
+      is_pinned: false,
+      updated_at: '2026-07-01T11:59:00.000Z',
+    } as Link;
+    const freshPatchResponse = {
+      ...newerLink,
+      is_pinned: false,
+      updated_at: '2026-07-01T12:01:00.000Z',
+    } as Link;
+
+    agorStore.getState().applyMaps((prev) => mergeLinksIntoMaps(prev, [newerLink]));
+
+    agorStore.getState().applyLinkMutationResult(stalePatchResponse);
+    expect(agorStore.getState().linkById.get('l-branch')).toBe(newerLink);
+    expect(agorStore.getState().linksByBranch.get('b1')).toEqual([newerLink]);
+
+    agorStore.getState().applyLinkMutationResult(freshPatchResponse);
+    expect(agorStore.getState().linkById.get('l-branch')).toEqual(freshPatchResponse);
+    expect(agorStore.getState().linksByBranch.get('b1')).toEqual([freshPatchResponse]);
+  });
+
+  it('does not resurrect a removed link from a delayed mutation result', () => {
+    const removedLink = {
+      link_id: 'l-removed',
+      branch_id: 'b1',
+      session_id: null,
+      is_pinned: true,
+      updated_at: '2026-07-01T12:00:00.000Z',
+    } as Link;
+    const delayedPatchResponse = {
+      ...removedLink,
+      is_pinned: false,
+      updated_at: '2026-07-01T12:01:00.000Z',
+    } as Link;
+
+    agorStore.getState().applyMaps((prev) => mergeLinksIntoMaps(prev, [removedLink]));
+    linkRemoved(removedLink);
+
+    agorStore.getState().applyLinkMutationResult(delayedPatchResponse);
+    expect(agorStore.getState().linkById.has('l-removed')).toBe(false);
+    expect(agorStore.getState().linksByBranch.has('b1')).toBe(false);
+  });
+
   it('reconciles only the fetched pinned branch link domain', () => {
     const stalePinnedInDomain = {
       link_id: 'l-stale-pinned-in-domain',

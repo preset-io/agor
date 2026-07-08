@@ -1,6 +1,7 @@
 import { LinkOutlined, PushpinFilled, PushpinOutlined } from '@ant-design/icons';
 import { Button, Empty, List, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
+import { LinkDisplayTargetLink } from './LinkDisplayTargetLink';
 import {
   getCompactLinkDisplayName,
   getLinkDisplayGlyphLabel,
@@ -24,14 +25,9 @@ function LinkTitle({ item }: { item: LinkDisplayItem }) {
   if (!item.href) return <Typography.Text>{label}</Typography.Text>;
 
   return (
-    <Typography.Link
-      href={item.href}
-      target={item.navigation === 'external' ? '_blank' : undefined}
-      rel={item.navigation === 'external' ? 'noopener noreferrer' : undefined}
-      onClick={(event) => event.stopPropagation()}
-    >
+    <LinkDisplayTargetLink item={item} onClick={(event) => event.stopPropagation()}>
       {label}
-    </Typography.Link>
+    </LinkDisplayTargetLink>
   );
 }
 
