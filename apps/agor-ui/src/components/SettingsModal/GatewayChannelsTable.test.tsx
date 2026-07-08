@@ -324,7 +324,14 @@ describe('GatewayChannelsTable Slack create wizard', () => {
  * edit Collapse keeps inactive panels mounted (`destroyOnHidden={false}`), but
  * children render lazily — call {@link expandPanel} to reveal a section's body.
  */
-function renderEditTable(client: AgorClient | null, channel: GatewayChannel) {
+function renderEditTable(
+  client: AgorClient | null,
+  channel: GatewayChannel,
+  opts: {
+    currentUser?: User;
+    onUpdate?: (channelId: string, updates: Partial<GatewayChannel>) => void;
+  } = {}
+) {
   const branch = makeBranch();
   const user = makeUser();
   renderWithProviders(
@@ -334,6 +341,8 @@ function renderEditTable(client: AgorClient | null, channel: GatewayChannel) {
       branchById={new Map([[branch.branch_id, branch]])}
       userById={new Map([[user.user_id, user]])}
       mcpServerById={new Map<string, MCPServer>()}
+      currentUser={opts.currentUser ?? user}
+      onUpdate={opts.onUpdate}
     />
   );
   fireEvent.click(screen.getByTitle('Edit'));
@@ -439,6 +448,31 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(
       screen.getByText('No token stored yet. Enter the app token (xapp-...).')
     ).toBeInTheDocument();
+  });
+
+  it("preserves a channel's stored mcpServerIds on save, even when the current user has their own agent defaults", async () => {
+    // Regression test for #1730: opening the edit form used to re-run the
+    // "apply user's default agentic config" effect (it depends on
+    // editModalOpen), stomping the just-hydrated per-channel mcpServerIds
+    // with the current user's global defaults — silently wiping saved
+    // servers on save even though the user never touched the field.
+    const channel = {
+      ...makeSlackChannel(),
+      agentic_config: { agent: 'claude-code', mcpServerIds: ['mcp-server-1'] },
+    };
+    const currentUser = {
+      ...makeUser(),
+      default_agentic_config: { 'claude-code': { permissionMode: 'default' } },
+    } as unknown as User;
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { currentUser, onUpdate });
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      agentic_config: { mcpServerIds: ['mcp-server-1'] },
+    });
   });
 });
 

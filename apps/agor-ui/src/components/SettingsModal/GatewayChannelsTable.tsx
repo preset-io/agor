@@ -2510,8 +2510,16 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
   }, [client, editingChannel, showError]);
 
-  // Pre-populate agentic config form with user defaults when agent changes
+  // Pre-populate agentic config form with user defaults when agent changes.
+  // Skipped when opening the edit form on the channel's already-persisted
+  // agent — that run is the initial hydration, and applying the user's
+  // *global* defaults there would stomp the channel's own saved config
+  // (e.g. silently wiping mcpServerIds that were just hydrated from
+  // channel.agentic_config).
   useEffect(() => {
+    if (editModalOpen && selectedAgent === editingChannel?.agentic_config?.agent) {
+      return;
+    }
     const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
     if (agentDefaults) {
       const activeForm = editModalOpen ? editForm : createForm;
@@ -2524,7 +2532,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         codexNetworkAccess: agentDefaults.codexNetworkAccess,
       });
     }
-  }, [selectedAgent, currentUser, createForm, editForm, editModalOpen]);
+  }, [selectedAgent, currentUser, createForm, editForm, editModalOpen, editingChannel]);
 
   const extractFormData = (
     values: Record<string, unknown>,
