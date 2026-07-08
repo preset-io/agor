@@ -14,12 +14,16 @@ export function isExecutorSpawnFailureExit(processSpawnObserved: boolean, code: 
 }
 
 export interface ExecutorConnectionEvidenceState {
+  has_current_attempt?: boolean;
   connected_at?: unknown;
   last_heartbeat_at?: unknown;
   task_last_executor_heartbeat_at?: unknown;
 }
 
 export function hasExecutorConnectionEvidence(state: ExecutorConnectionEvidenceState): boolean {
+  if (state.has_current_attempt) {
+    return Boolean(state.connected_at || state.last_heartbeat_at);
+  }
   return Boolean(
     state.connected_at || state.last_heartbeat_at || state.task_last_executor_heartbeat_at
   );

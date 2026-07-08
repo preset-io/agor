@@ -791,6 +791,7 @@ function createExecuteHandler(
     };
     const taskHasExecutorConnectionEvidence = (task: Task): boolean =>
       hasExecutorConnectionEvidence({
+        has_current_attempt: !!task.current_execution_attempt,
         connected_at: task.current_execution_attempt?.connected_at,
         last_heartbeat_at: task.current_execution_attempt?.last_heartbeat_at,
         task_last_executor_heartbeat_at: task.last_executor_heartbeat_at,

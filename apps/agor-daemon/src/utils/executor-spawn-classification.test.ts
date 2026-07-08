@@ -39,6 +39,12 @@ describe('executor spawn classification', () => {
         task_last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
       })
     ).toBe(true);
+    expect(
+      hasExecutorConnectionEvidence({
+        has_current_attempt: true,
+        task_last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
+      })
+    ).toBe(false);
   });
 
   it('does not fail command-template tasks for successful launcher exits', () => {
