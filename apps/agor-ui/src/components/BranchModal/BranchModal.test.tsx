@@ -6,9 +6,11 @@
  * admin/owner and partial-RBAC-data cases.
  */
 
-import type { AgorClient, AssistantConfig, Branch, User } from '@agor-live/client';
-import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import type { AgorClient, AssistantConfig, Branch, Link, User } from '@agor-live/client';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
 import { BranchModal } from './BranchModal';
 import { buildAssistantKnowledgePatch } from './tabs/KnowledgeTab';
 import {
@@ -19,6 +21,29 @@ import {
   makeUser,
   renderWithApp,
 } from './testUtils';
+
+function makeLink(overrides: Partial<Link> = {}): Link {
+  return {
+    link_id: 'link-1',
+    branch_id: 'branch-1',
+    session_id: null,
+    source_message_id: null,
+    kind: 'url',
+    source: 'manual',
+    url: 'https://example.com/runbook',
+    ref_uri: null,
+    file_path: null,
+    target_key: 'url:https://example.com/runbook',
+    is_pinned: false,
+    title: 'Runbook',
+    mime_type: null,
+    metadata: null,
+    created_by: null,
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+    ...overrides,
+  } as Link;
+}
 
 function renderBranchModal({
   branch = makeBranch(),
@@ -43,6 +68,10 @@ function renderBranchModal({
 }
 
 describe('BranchModal — permissions tab visibility', () => {
+  beforeEach(() => {
+    agorStore.setState({ ...EMPTY_MAPS });
+  });
+
   it('shows Permissions for an admin user who is a branch owner', async () => {
     const seb = makeUser({ user_id: 'seb', role: 'admin' });
 
@@ -138,5 +167,28 @@ describe('BranchModal — permissions tab visibility', () => {
         },
       },
     });
+  });
+
+  it('hydrates the Links tab through the centralized full branch action and renders selector data', async () => {
+    const seb = makeUser({ user_id: 'seb', role: 'admin' });
+    const link = makeLink();
+    const { client, calls } = makeStubClient({ owners: [seb], users: [seb], links: [link] });
+
+    renderBranchModal({
+      currentUser: seb,
+      client,
+    });
+
+    fireEvent.click(await screen.findByRole('tab', { name: /links/i }));
+
+    await screen.findByText('Runbook');
+    const linkFind = calls.find((call) => call.service === 'links' && call.method === 'findAll');
+    expect(linkFind?.args[0]).toMatchObject({
+      query: {
+        owner_scope: 'branch',
+        branch_id: 'branch-1',
+      },
+    });
+    expect(agorStore.getState().linksByBranch.get('branch-1')).toEqual([link]);
   });
 });

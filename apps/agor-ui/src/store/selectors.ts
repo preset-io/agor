@@ -40,6 +40,7 @@ export const selectFetchAndReplaceFullSessionLinks = (s: AgorState) =>
   s.fetchAndReplaceFullSessionLinks;
 export const selectFetchAndReplaceFullBranchLinks = (s: AgorState) =>
   s.fetchAndReplaceFullBranchLinks;
+export const selectApplyLinkMutationResult = (s: AgorState) => s.applyLinkMutationResult;
 
 /**
  * Select a single board's board-object array. Curried so callers can memoize

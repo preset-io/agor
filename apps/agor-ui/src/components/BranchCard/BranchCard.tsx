@@ -13,6 +13,8 @@ import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useAgorStore } from '../../store/agorStore';
+import { makeLinksForBranchSelector } from '../../store/selectors';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
@@ -21,6 +23,7 @@ import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { EnvironmentPill } from '../EnvironmentPill';
+import { buildLinkDisplayItems, PinnedLinksStrip } from '../Links';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -105,6 +108,11 @@ const BranchCardComponent = ({
 }: BranchCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
+  const branchLinksSelector = useMemo(
+    () => makeLinksForBranchSelector(branch.branch_id),
+    [branch.branch_id]
+  );
+  const branchLinks = useAgorStore(branchLinksSelector) ?? [];
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
@@ -213,6 +221,14 @@ const BranchCardComponent = ({
   }, [activeSessions, branch.needs_attention, isFocused]);
 
   const isDarkMode = isDarkTheme(token);
+  const pinnedLinkItems = useMemo(
+    () =>
+      buildLinkDisplayItems({
+        links: branchLinks.filter((link) => link.is_pinned),
+        includeBranchLinks: false,
+      }),
+    [branchLinks]
+  );
 
   // Memoize glow shadow string to avoid recomputing color normalization on every render
   const attentionGlowShadow = useMemo(() => {
@@ -548,6 +564,10 @@ const BranchCardComponent = ({
           )}
         </div>
       )}
+
+      <div className={REACT_FLOW_NO_DRAG_CLASS}>
+        <PinnedLinksStrip items={pinnedLinkItems} compact maxItems={3} />
+      </div>
 
       {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
       <div className={REACT_FLOW_NO_DRAG_CLASS}>

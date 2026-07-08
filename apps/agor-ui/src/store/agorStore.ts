@@ -37,6 +37,7 @@ import {
   pickMaps,
   replaceFullBranchLinksInMaps,
   replaceFullSessionLinksInMaps,
+  upsertLinkInMaps,
 } from './agorMaps';
 
 // Immer needs this to draft Map/Set state. Called once at module load; the
@@ -112,6 +113,8 @@ interface AgorActions {
   fetchAndReplaceFullSessionLinks: (client: AgorClient, sessionId: string) => Promise<Link[]>;
   /** Fetch and race-safely replace one branch owner's complete link bucket. */
   fetchAndReplaceFullBranchLinks: (client: AgorClient, branchId: string) => Promise<Link[]>;
+  /** Apply a link returned from a component-initiated service mutation. */
+  applyLinkMutationResult: (link: Link) => void;
 }
 
 export type AgorState = DataMaps & AgorMeta & AgorActions;
@@ -415,6 +418,16 @@ export const agorStore = createStore<AgorState>()(
 
       get().replaceFullBranchLinks(branchId, links);
       return links;
+    },
+
+    applyLinkMutationResult: (link) => {
+      let mapsChanged = false;
+      get().applyMaps((prev) => {
+        const next = upsertLinkInMaps(prev, link);
+        mapsChanged = next !== prev;
+        return next;
+      });
+      if (mapsChanged) bumpRevision('links');
     },
   }))
 );

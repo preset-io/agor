@@ -18,6 +18,7 @@ import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import {
+  makeLinksForBranchSelector,
   selectBranchById,
   selectCommentById,
   selectRepoById,
@@ -30,6 +31,7 @@ import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardSessionList } from '../BranchListDrawer';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
+import { buildLinkDisplayItems, PinnedLinksStrip } from '../Links';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -109,6 +111,11 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
   const repoById = useAgorStore(selectRepoById);
   const userById = useAgorStore(selectUserById);
   const commentById = useAgorStore(selectCommentById);
+  const assistantLinksSelector = useMemo(
+    () => makeLinksForBranchSelector(primaryAssistantBranch?.branch_id ?? ''),
+    [primaryAssistantBranch?.branch_id]
+  );
+  const assistantLinks = useAgorStore(assistantLinksSelector) ?? [];
   // Derive the board-scoped comment list and board objects locally: comments
   // only render when a board is selected, so filtering by `board.board_id`
   // scopes them to that board.
@@ -205,6 +212,14 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
       primaryAssistantBranch ? sessionsByBranch.get(primaryAssistantBranch.branch_id) || [] : [],
     [primaryAssistantBranch, sessionsByBranch]
   );
+  const assistantPinnedLinkItems = useMemo(
+    () =>
+      buildLinkDisplayItems({
+        links: assistantLinks.filter((link) => link.is_pinned),
+        includeBranchLinks: false,
+      }),
+    [assistantLinks]
+  );
 
   const assistantContent = (() => {
     if (primaryAssistantBranch && primaryAssistantRepo) {
@@ -294,6 +309,11 @@ export const BoardAssistantPanel: React.FC<BoardAssistantPanelProps> = ({
                 <MarkdownRenderer content={assistantDescription} compact showControls={false} />
               </div>
             )}
+            <PinnedLinksStrip
+              items={assistantPinnedLinkItems}
+              label="Pinned assistant links"
+              maxItems={5}
+            />
           </div>
 
           <BranchSessionSections

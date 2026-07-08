@@ -4,6 +4,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  Link,
   PermissionMode,
   Session,
   SessionID,
@@ -37,6 +38,9 @@ import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
 import {
+  makeLinksForSessionSelector,
+  selectApplyLinkMutationResult,
+  selectFetchAndReplaceFullSessionLinks,
   selectMcpServerById,
   selectUserAuthenticatedMcpServerIds,
   selectUserById,
@@ -48,12 +52,10 @@ import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessi
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
+import { buildLinkDisplayItems, PinnedLinksStrip, SessionLinksControl } from '../Links';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
-import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
-import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
-import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
 
@@ -249,6 +251,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const userById = useAgorStore(selectUserById);
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
+  const sessionLinksSelector = React.useMemo(
+    () => makeLinksForSessionSelector(session?.session_id ?? ''),
+    [session?.session_id]
+  );
+  const sessionLinks = useAgorStore(sessionLinksSelector) ?? [];
+  const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
+  const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
 
   // Get actions from context
   const { onSendPrompt, onFork, onBtwFork, onOpenSettings, onUpdateSession, onOpenTerminal } =
@@ -345,6 +354,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
+  const [pinningLinkId, setPinningLinkId] = React.useState<string | null>(null);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
@@ -352,6 +362,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   });
 
   const tasks = reactiveSessionState?.tasks || [];
+
+  React.useEffect(() => {
+    if (!open || !client || !session?.session_id) return;
+    fetchAndReplaceFullSessionLinks(client, session.session_id).catch((error: unknown) => {
+      console.error('[SessionPanel] Failed to fetch session links:', error);
+    });
+  }, [client, fetchAndReplaceFullSessionLinks, open, session?.session_id]);
 
   // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
@@ -465,24 +482,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return null;
   }, [tasks, session?.agentic_tool]);
 
-  const attachmentItems = React.useMemo((): SessionAttachmentItem[] => {
-    const acc: SessionAttachmentItem[] = [];
-    if (branch?.issue_url) {
-      acc.push({
-        key: 'issue',
-        name: `Issue: ${getUrlDisplayLabel(branch.issue_url)}`,
-        url: branch.issue_url,
-      });
-    }
-    if (branch?.pull_request_url) {
-      acc.push({
-        key: 'pr',
-        name: `PR: ${getUrlDisplayLabel(branch.pull_request_url)}`,
-        url: branch.pull_request_url,
-      });
-    }
-    return acc;
-  }, [branch?.issue_url, branch?.pull_request_url]);
+  const pinnedSessionLinkItems = React.useMemo(
+    () =>
+      buildLinkDisplayItems({
+        links: sessionLinks.filter((link) => link.is_pinned),
+        includeBranchLinks: false,
+      }),
+    [sessionLinks]
+  );
 
   const footerGradient = React.useMemo(() => {
     if (!latestContextWindow) return undefined;
@@ -640,6 +647,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       showError('Failed to stop execution. You can try again.');
     } finally {
       setStopRequestInFlight(false);
+    }
+  };
+
+  const handleToggleSessionLinkPinned = async (item: { linkId?: string; isPinned: boolean }) => {
+    if (!client || !item.linkId) return;
+    setPinningLinkId(item.linkId);
+    try {
+      const updated = (await client.service('links').patch(item.linkId, {
+        is_pinned: !item.isPinned,
+      })) as Link;
+      applyLinkMutationResult(updated);
+    } catch (error) {
+      showError(`Failed to update link: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setPinningLinkId(null);
     }
   };
 
@@ -944,7 +966,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </Space>
           <Space size={4}>
-            <SessionAttachmentsDropdown items={attachmentItems} />
+            <SessionLinksControl
+              branch={branch}
+              links={sessionLinks}
+              disabled={!client || connectionDisabled}
+              pinningLinkId={pinningLinkId}
+              onTogglePinned={handleToggleSessionLinkPinned}
+            />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
                 <Button type="text" icon={<EllipsisOutlined />} />
@@ -960,6 +988,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
           </Space>
         </div>
+        <PinnedLinksStrip
+          items={pinnedSessionLinkItems}
+          maxItems={5}
+          label="Pinned session links"
+        />
       </div>
 
       {/* Body - Scrollable content */}
