@@ -164,8 +164,21 @@ function isLatestSessionFullLinkRequest(sessionId: string, generation: number): 
   return sessionFullLinkRequestGeneration.get(sessionId) === generation;
 }
 
+function hashLinkSignaturePart(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 function linkOwnerSignature(links: readonly Link[] | undefined): string {
-  return JSON.stringify(links ?? []);
+  if (!links || links.length === 0) return '0:';
+  return `${links.length}:${links
+    .map((link) => `${link.link_id}:${hashLinkSignaturePart(JSON.stringify(link))}`)
+    .sort()
+    .join('|')}`;
 }
 
 function branchLinkOwnerSignature(state: AgorState, branchId: string): string {
@@ -321,8 +334,13 @@ export const agorStore = createStore<AgorState>()(
 
     replaceFullSessionLinks: (sessionId, links) => {
       invalidateSessionFullLinkRequests(sessionId);
-      bumpRevision('links');
-      get().applyMaps((prev) => replaceFullSessionLinksInMaps(prev, sessionId, links));
+      let mapsChanged = false;
+      get().applyMaps((prev) => {
+        const next = replaceFullSessionLinksInMaps(prev, sessionId, links);
+        mapsChanged = next !== prev;
+        return next;
+      });
+      if (mapsChanged) bumpRevision('links');
       set((draft) => {
         draft.fullSessionLinkOwnerIds.add(sessionId);
       });
@@ -331,8 +349,13 @@ export const agorStore = createStore<AgorState>()(
     replaceFullBranchLinks: (branchId, links) => {
       invalidateBranchFullLinkRequests(branchId);
       const isDirectOutsideActiveBranchMap = !get().branchById.has(branchId);
-      bumpRevision('links');
-      get().applyMaps((prev) => replaceFullBranchLinksInMaps(prev, branchId, links));
+      let mapsChanged = false;
+      get().applyMaps((prev) => {
+        const next = replaceFullBranchLinksInMaps(prev, branchId, links);
+        mapsChanged = next !== prev;
+        return next;
+      });
+      if (mapsChanged) bumpRevision('links');
       set((draft) => {
         draft.fullBranchLinkOwnerIds.add(branchId);
         if (isDirectOutsideActiveBranchMap) draft.directFullBranchLinkOwnerIds.add(branchId);

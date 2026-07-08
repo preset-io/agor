@@ -356,8 +356,8 @@ export function replaceFullBranchLinksInMaps(
   const fetchedIds = new Set(ownerLinks.map((link) => link.link_id));
 
   let next = prev;
-  for (const link of prev.linkById.values()) {
-    if (isBranchOwnedBy(link, branchId) && !fetchedIds.has(link.link_id)) {
+  for (const link of prev.linksByBranch.get(branchId) ?? []) {
+    if (!fetchedIds.has(link.link_id)) {
       next = removeLinkFromMaps(next, link.link_id);
     }
   }
@@ -377,8 +377,8 @@ export function replaceFullSessionLinksInMaps(
   const fetchedIds = new Set(ownerLinks.map((link) => link.link_id));
 
   let next = prev;
-  for (const link of prev.linkById.values()) {
-    if (isSessionOwnedBy(link, sessionId) && !fetchedIds.has(link.link_id)) {
+  for (const link of prev.linksBySession.get(sessionId) ?? []) {
+    if (!fetchedIds.has(link.link_id)) {
       next = removeLinkFromMaps(next, link.link_id);
     }
   }
