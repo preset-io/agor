@@ -539,6 +539,214 @@
   color: #a8f5ed;
 }
 
+/* --- Capability ring: nodes orbit a hub that reveals the active card --- */
+.featureRing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ringStage {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  aspect-ratio: 1 / 1;
+}
+
+/* Faint guide circle through the node centers (diameter = 2 × node radius). */
+.ringStage::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 75%;
+  height: 75%;
+  transform: translate(-50%, -50%);
+  border: 1px dashed rgba(52, 230, 196, 0.14);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.ringNode {
+  position: absolute;
+  /* Both dims are % of the square stage → guaranteed equal px (a real circle);
+   * aspect-ratio alone yields to content and drifts oval. */
+  width: 25%;
+  height: 25%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8%;
+  border: 1px solid rgba(52, 230, 196, 0.18);
+  border-radius: 50%;
+  background: linear-gradient(180deg, rgba(15, 34, 31, 0.72), rgba(10, 22, 20, 0.55));
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: clamp(0.7rem, 1.35vw, 0.9rem);
+  font-weight: 600;
+  line-height: 1.18;
+  letter-spacing: -0.01em;
+  text-align: center;
+  text-wrap: balance;
+  cursor: pointer;
+  transition:
+    transform 0.28s ease,
+    border-color 0.28s ease,
+    background 0.28s ease,
+    box-shadow 0.28s ease,
+    color 0.28s ease;
+}
+
+.ringNodeActive {
+  border-color: rgba(52, 230, 196, 0.75);
+  background: linear-gradient(180deg, rgba(30, 74, 68, 0.95), rgba(18, 44, 40, 0.82));
+  color: #eafff9;
+  box-shadow:
+    0 0 0 4px rgba(52, 230, 196, 0.12),
+    0 14px 32px rgba(0, 0, 0, 0.38);
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.ringNode:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(52, 230, 196, 0.55);
+}
+
+.ringHub {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 46%;
+  aspect-ratio: 1 / 1;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7%;
+  border: 1px solid rgba(52, 230, 196, 0.16);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 38%, rgba(16, 38, 35, 0.92), rgba(8, 18, 17, 0.94));
+  text-align: center;
+}
+
+.ringHubInner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 13px;
+  max-width: 82%;
+  animation: hubFade 0.35s ease;
+}
+
+.ringHubInner p {
+  margin: 0;
+  color: var(--landing-muted);
+  font-size: clamp(0.68rem, 1.3vw, 0.82rem);
+  line-height: 1.48;
+}
+
+.ringButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #2e9a92 0%, #4ec4ba 100%);
+  color: #06110f;
+  /* Landing links set -webkit-text-fill-color (teal); override it or the
+   * dark label washes out to that fill color on the bright button. */
+  -webkit-text-fill-color: #06110f;
+  font-family: var(--font-mono-stack);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  text-decoration: none;
+  box-shadow: 0 6px 18px rgba(46, 154, 146, 0.35);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    filter 0.15s ease;
+}
+
+.ringButton:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 8px 22px rgba(46, 154, 146, 0.5);
+}
+
+@keyframes hubFade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ringNode,
+  .ringHubInner,
+  .ringButton {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* A ring can't breathe at phone widths — collapse to a stacked list of title
+ * pills with the active card's panel beneath (tab-list / panel pattern). */
+@media (max-width: 600px) {
+  .ringStage {
+    position: static;
+    width: 100%;
+    max-width: 440px;
+    aspect-ratio: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .ringStage::before {
+    display: none;
+  }
+  .ringNode {
+    position: static;
+    width: 100%;
+    height: auto;
+    aspect-ratio: auto;
+    transform: none;
+    padding: 15px 20px;
+    border-radius: 14px;
+    font-size: 1rem;
+  }
+  .ringNodeActive {
+    transform: none;
+  }
+  .ringHub {
+    order: 1;
+    position: static;
+    width: 100%;
+    aspect-ratio: auto;
+    transform: none;
+    padding: 24px 22px;
+    border-radius: 18px;
+  }
+  .ringHubInner {
+    max-width: 100%;
+    gap: 16px;
+  }
+  .ringHubInner p {
+    font-size: 0.94rem;
+  }
+  .ringButton {
+    white-space: normal;
+    font-size: 0.78rem;
+  }
+}
+
 .workspaceSection {
   display: grid;
   grid-template-columns: 0.82fr 1.18fr;

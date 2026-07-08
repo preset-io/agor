@@ -210,6 +210,7 @@ export function LandingPage() {
   const [isBetaFormOpen, setIsBetaFormOpen] = useState(false);
   const [activeShot, setActiveShot] = useState(0);
   const [activeSurface, setActiveSurface] = useState(0);
+  const [activeFeature, setActiveFeature] = useState(0);
 
   useEffect(() => {
     const landing = landingRef.current;
@@ -278,7 +279,7 @@ export function LandingPage() {
             </p>
             <h1>
               Empower your <span className={styles.headingStrong}>team</span> with{' '}
-              <span className={styles.headingAccent}>AI assistants</span>.
+              <span className={styles.headingAccent}>AI assistants</span>
             </h1>
             <div className={styles.heroActions}>
               <button
@@ -314,7 +315,7 @@ export function LandingPage() {
         <section className={styles.liveSection} data-reveal>
           <h2 className={styles.liveStatement}>
             Set your team <span className={styles.headingStrong}>free</span> from{' '}
-            <span className={styles.headingAccent}>the terminal</span>.
+            <span className={styles.headingAccent}>the terminal</span>
           </h2>
           <p className={styles.liveSub}>
             Don’t let AI tools trap people in their corner.
@@ -369,7 +370,7 @@ export function LandingPage() {
           <div className={styles.sectionHeader}>
             <h2>
               So much <span className={styles.headingStrong}>more</span> than a{' '}
-              <span className={styles.headingAccent}>chat box</span>.
+              <span className={styles.headingAccent}>chat box</span>
             </h2>
           </div>
           <div className={styles.showcaseTabs}>
@@ -441,7 +442,7 @@ export function LandingPage() {
           <span className={styles.eyebrow}>Let power users get down to business</span>
           <h2>
             Every surface <span className={styles.headingStrong}>AI enablers</span> need to{' '}
-            <span className={styles.headingAccent}>orchestrate AI</span>.
+            <span className={styles.headingAccent}>orchestrate AI</span>
           </h2>
         </div>
         <div className={styles.surfaceExplorer} data-reveal>
@@ -488,7 +489,7 @@ export function LandingPage() {
           <span className={styles.eyebrow}>Agents that learn with you</span>
           <h2>
             Raise <span className={styles.headingAccent}>team assistants</span> with memory, skills,
-            and a place to <span className={styles.headingStrong}>work</span>.
+            and a place to <span className={styles.headingStrong}>work</span>
           </h2>
           <p>
             One-off prompts don’t compound. In Agor, assistants have durable identities your team
@@ -501,21 +502,40 @@ export function LandingPage() {
             reaches everyone.
           </p>
         </div>
-        <div className={styles.featureGrid}>
-          {featureCards.map((feature) => (
-            <article
-              className={styles.featureCard}
-              key={feature.title}
-              data-reveal
-              style={revealDelay(featureCards.indexOf(feature))}
-            >
-              <h3>{feature.title}</h3>
-              <p>{feature.body}</p>
-              <Link href={feature.href} className={styles.cardLink}>
-                {feature.linkLabel} →
-              </Link>
-            </article>
-          ))}
+        <div className={styles.featureRing} data-reveal>
+          <div className={styles.ringStage}>
+            {featureCards.map((feature, index) => {
+              const angle = ((-90 + index * (360 / featureCards.length)) * Math.PI) / 180;
+              const radius = 37.5; // percent of stage, from center to node center
+              const left = 50 + radius * Math.cos(angle);
+              const top = 50 + radius * Math.sin(angle);
+              const isActive = index === activeFeature;
+              return (
+                <button
+                  type="button"
+                  key={feature.title}
+                  className={
+                    isActive ? `${styles.ringNode} ${styles.ringNodeActive}` : styles.ringNode
+                  }
+                  style={{ left: `${left}%`, top: `${top}%` }}
+                  onMouseEnter={() => setActiveFeature(index)}
+                  onFocus={() => setActiveFeature(index)}
+                  onClick={() => setActiveFeature(index)}
+                  aria-pressed={isActive}
+                >
+                  <span>{feature.title}</span>
+                </button>
+              );
+            })}
+            <div className={styles.ringHub}>
+              <div className={styles.ringHubInner} key={activeFeature}>
+                <p>{featureCards[activeFeature].body}</p>
+                <Link href={featureCards[activeFeature].href} className={styles.ringButton}>
+                  {featureCards[activeFeature].linkLabel} <span aria-hidden="true">→</span>
+                </Link>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -525,7 +545,7 @@ export function LandingPage() {
           <h2>
             Everyone’s <span className={styles.headingStrong}>using</span> AI.
             <br />
-            Now make it <span className={styles.headingAccent}>compound</span>.
+            Now make it <span className={styles.headingAccent}>compound</span>
           </h2>
           <p>
             Agor is built for the{' '}
@@ -563,7 +583,7 @@ export function LandingPage() {
         <div className={styles.ctaCard}>
           <h2>
             Give your team’s <span className={styles.headingStrong}>AI work</span> a place to{' '}
-            <span className={styles.headingAccent}>live</span>.
+            <span className={styles.headingAccent}>live</span>
           </h2>
           <p>Agor Cloud is opening to teams now. The open-source build is ready when you are.</p>
           <div className={styles.heroActions}>
