@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../hooks/useAgorData';
 import { cancelAllHydrations, resetHydrationRevisions, runHydration } from './agorHydration';
 import { mergeLinksIntoMaps, reconcilePinnedBranchLinksIntoMaps } from './agorMaps';
-import { branchPatched, sessionRemoved } from './agorRealtimeActions';
+import { branchPatched, linkCreated, linkRemoved, sessionRemoved } from './agorRealtimeActions';
 import { agorStore, getPinnedBranchLinkPreserveBranchIds } from './agorStore';
 
 // Reset the singleton before each test so cases don't bleed into each other.
@@ -533,6 +533,54 @@ describe('agorStore scaffold', () => {
     expect(state.linkById.has('l-stale-session-result')).toBe(false);
     expect(state.linkById.get('l-newer-session-link')).toBe(newerSessionLink);
     expect(state.linksBySession.get('s1')).toEqual([newerSessionLink]);
+  });
+
+  it('suppresses a stale empty-to-empty session full-owner result after realtime link churn', async () => {
+    const staleSessionLink = {
+      link_id: 'l-stale-session-churn',
+      branch_id: null,
+      session_id: 's-empty-churn',
+      is_pinned: false,
+    } as Link;
+    const gate = deferred<Link[]>();
+    const findAll = vi.fn().mockReturnValue(gate.promise);
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    const hydration = agorStore
+      .getState()
+      .fetchAndReplaceFullSessionLinks(client, staleSessionLink.session_id!);
+    linkCreated(staleSessionLink);
+    linkRemoved(staleSessionLink);
+    gate.resolve([staleSessionLink]);
+
+    await expect(hydration).resolves.toEqual([]);
+    const state = agorStore.getState();
+    expect(state.linkById.has(staleSessionLink.link_id)).toBe(false);
+    expect(state.linksBySession.has(staleSessionLink.session_id!)).toBe(false);
+  });
+
+  it('suppresses a stale empty-to-empty branch full-owner result after realtime link churn', async () => {
+    const staleBranchLink = {
+      link_id: 'l-stale-branch-churn',
+      branch_id: 'b-empty-churn',
+      session_id: null,
+      is_pinned: false,
+    } as Link;
+    const gate = deferred<Link[]>();
+    const findAll = vi.fn().mockReturnValue(gate.promise);
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    const hydration = agorStore
+      .getState()
+      .fetchAndReplaceFullBranchLinks(client, staleBranchLink.branch_id!);
+    linkCreated(staleBranchLink);
+    linkRemoved(staleBranchLink);
+    gate.resolve([staleBranchLink]);
+
+    await expect(hydration).resolves.toEqual([]);
+    const state = agorStore.getState();
+    expect(state.linkById.has(staleBranchLink.link_id)).toBe(false);
+    expect(state.linksByBranch.has(staleBranchLink.branch_id!)).toBe(false);
   });
 
   it('suppresses a stale empty-to-empty branch full-owner result after branch archive eviction', async () => {

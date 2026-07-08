@@ -50,7 +50,7 @@ import {
   upsertBoardObjectInMaps,
   upsertLinkInMaps,
 } from './agorMaps';
-import { type AgorState, agorStore } from './agorStore';
+import { type AgorState, agorStore, invalidateFullLinkRequestsForLink } from './agorStore';
 
 // Thin bindings to the store primitives. The vanilla store and its actions are
 // stable module singletons, so these resolve the live action each call. The
@@ -387,14 +387,19 @@ export function branchRemoved(branch: Branch) {
 
 // ── Links ──────────────────────────────────────────────────────────────────
 export function linkCreated(link: Link) {
+  invalidateFullLinkRequestsForLink(link);
   bumpRevision('links');
   applyMaps((prev) => upsertLinkInMaps(prev, link));
 }
 export function linkPatched(link: Link) {
+  invalidateFullLinkRequestsForLink(agorStore.getState().linkById.get(link.link_id));
+  invalidateFullLinkRequestsForLink(link);
   bumpRevision('links');
   applyMaps((prev) => upsertLinkInMaps(prev, link));
 }
 export function linkRemoved(link: Link) {
+  invalidateFullLinkRequestsForLink(agorStore.getState().linkById.get(link.link_id));
+  invalidateFullLinkRequestsForLink(link);
   bumpRevision('links');
   applyMaps((prev) => removeLinkFromMaps(prev, link));
 }

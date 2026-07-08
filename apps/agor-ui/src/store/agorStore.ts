@@ -149,6 +149,13 @@ function invalidateSessionFullLinkRequests(sessionId: string): number {
   return generation;
 }
 
+/** Cancel in-flight owner-scoped full-link requests touched by realtime link churn. */
+export function invalidateFullLinkRequestsForLink(link: Link | null | undefined): void {
+  if (!link) return;
+  if (link.branch_id && !link.session_id) invalidateBranchFullLinkRequests(link.branch_id);
+  if (link.session_id && !link.branch_id) invalidateSessionFullLinkRequests(link.session_id);
+}
+
 function isLatestBranchFullLinkRequest(branchId: string, generation: number): boolean {
   return branchFullLinkRequestGeneration.get(branchId) === generation;
 }
