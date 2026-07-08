@@ -803,6 +803,26 @@ describe('GatewayService outbound emit session branch binding', () => {
     expect(branchRepo.resolveUserPermission).toHaveBeenCalled();
     expect(sendSlackMessage).not.toHaveBeenCalled();
   });
+
+  it('plumbs threadTs through to the connector as thread_ts', async () => {
+    const { service, sendSlackMessage } = makeEmitHarness({});
+
+    await service.emitMessage(emitData({ threadTs: '171234.000100' }));
+
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ thread_ts: '171234.000100' })
+    );
+  });
+
+  it('omits thread_ts from the connector call when threadTs is not provided', async () => {
+    const { service, sendSlackMessage } = makeEmitHarness({});
+
+    await service.emitMessage(emitData());
+
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      expect.not.objectContaining({ thread_ts: expect.anything() })
+    );
+  });
 });
 
 describe('GatewayService Slack attachment ingestion', () => {

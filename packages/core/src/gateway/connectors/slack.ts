@@ -1354,6 +1354,73 @@ export class SlackConnector implements GatewayConnector {
     };
   }
 
+  /** Add an emoji reaction to a Slack message. */
+  async addReaction(req: { channel: string; timestamp: string; name: string }): Promise<void> {
+    const result = await this.web.reactions.add({
+      channel: req.channel,
+      timestamp: req.timestamp,
+      name: req.name,
+    });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+  }
+
+  /** Remove an emoji reaction from a Slack message. */
+  async removeReaction(req: { channel: string; timestamp: string; name: string }): Promise<void> {
+    const result = await this.web.reactions.remove({
+      channel: req.channel,
+      timestamp: req.timestamp,
+      name: req.name,
+    });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+  }
+
+  /**
+   * Upload a file to a Slack channel or thread via `files.uploadV2`.
+   *
+   * Cast to a minimal local shape because `@slack/web-api`'s `uploadV2`
+   * argument type is a discriminated union that doesn't narrow cleanly over
+   * a conditionally-spread object; the runtime response carries `files[0]`
+   * with the uploaded file's id/permalink/name.
+   */
+  async uploadFile(req: {
+    channel: string;
+    threadTs?: string;
+    file: Buffer;
+    filename: string;
+    comment?: string;
+  }): Promise<{ id: string; permalink: string | null; name: string }> {
+    const files = this.web.files as unknown as {
+      uploadV2: (args: Record<string, unknown>) => Promise<{
+        ok?: boolean;
+        error?: string;
+        files?: Array<{ id?: string; permalink?: string; name?: string }>;
+      }>;
+    };
+    const result = await files.uploadV2({
+      channel_id: req.channel,
+      file: req.file,
+      filename: req.filename,
+      ...(req.threadTs ? { thread_ts: req.threadTs } : {}),
+      ...(req.comment ? { initial_comment: req.comment } : {}),
+    });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+    const uploaded = result.files?.[0];
+    if (!uploaded?.id) {
+      throw new Error('Slack API error: upload response missing file id');
+    }
+    return {
+      id: uploaded.id,
+      permalink: uploaded.permalink ?? null,
+      name: uploaded.name ?? req.filename,
+    };
+  }
+
   /** Resolve a Slack channel by its human name (with or without #). */
   async resolveChannelByName(name: string): Promise<{ channel: string; name: string }> {
     const normalized = name.replace(/^#/, '').trim().toLowerCase();

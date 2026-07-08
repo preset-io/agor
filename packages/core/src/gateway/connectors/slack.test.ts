@@ -948,6 +948,147 @@ describe('SlackConnector.sendMessage', () => {
   });
 });
 
+describe('SlackConnector.addReaction / removeReaction', () => {
+  it('adds a reaction via reactions.add', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      reactions: {
+        add: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      },
+    };
+
+    await connector.addReaction({ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' });
+
+    expect(calls).toEqual([{ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' }]);
+  });
+
+  it('removes a reaction via reactions.remove', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      reactions: {
+        remove: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      },
+    };
+
+    await connector.removeReaction({
+      channel: 'C123',
+      timestamp: '1700000000.000001',
+      name: 'eyes',
+    });
+
+    expect(calls).toEqual([{ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' }]);
+  });
+
+  it('throws a Slack API error when reactions.add fails', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      reactions: {
+        add: async () => ({ ok: false, error: 'already_reacted' }),
+      },
+    };
+
+    await expect(
+      connector.addReaction({ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' })
+    ).rejects.toThrow('already_reacted');
+  });
+
+  it('throws a Slack API error when reactions.remove fails', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      reactions: {
+        remove: async () => ({ ok: false, error: 'no_reaction' }),
+      },
+    };
+
+    await expect(
+      connector.removeReaction({ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' })
+    ).rejects.toThrow('no_reaction');
+  });
+});
+
+describe('SlackConnector.uploadFile', () => {
+  it('uploads a file via files.uploadV2', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        uploadV2: async (args: unknown) => {
+          calls.push(args);
+          return {
+            ok: true,
+            files: [{ id: 'F123', permalink: 'https://slack.example/files/F123', name: 'a.png' }],
+          };
+        },
+      },
+    };
+
+    const result = await connector.uploadFile({
+      channel: 'C123',
+      file: Buffer.from('bytes'),
+      filename: 'a.png',
+    });
+
+    expect(calls).toEqual([{ channel_id: 'C123', file: Buffer.from('bytes'), filename: 'a.png' }]);
+    expect(result).toEqual({
+      id: 'F123',
+      permalink: 'https://slack.example/files/F123',
+      name: 'a.png',
+    });
+  });
+
+  it('passes thread_ts and initial_comment when provided', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        uploadV2: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true, files: [{ id: 'F456', name: 'b.png' }] };
+        },
+      },
+    };
+
+    await connector.uploadFile({
+      channel: 'C123',
+      threadTs: '1700000000.000001',
+      file: Buffer.from('bytes'),
+      filename: 'b.png',
+      comment: 'here you go',
+    });
+
+    expect(calls).toEqual([
+      {
+        channel_id: 'C123',
+        thread_ts: '1700000000.000001',
+        file: Buffer.from('bytes'),
+        filename: 'b.png',
+        initial_comment: 'here you go',
+      },
+    ]);
+  });
+
+  it('throws a Slack API error when the upload fails', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        uploadV2: async () => ({ ok: false, error: 'invalid_channel' }),
+      },
+    };
+
+    await expect(
+      connector.uploadFile({ channel: 'C123', file: Buffer.from('x'), filename: 'a.png' })
+    ).rejects.toThrow('invalid_channel');
+  });
+});
+
 describe('SlackConnector.lookupUserAvatarByEmail', () => {
   it('treats Slack users_not_found platform errors as a skipped lookup', async () => {
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });
