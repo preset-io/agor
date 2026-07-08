@@ -850,8 +850,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
 
     modal.confirm({
-      title: 'Archive session?',
-      content: 'Are you sure you want to archive this session?',
+      title: 'Archive session and child sessions?',
+      content: 'Are you sure you want to archive this session and its child sessions?',
       okText: 'Archive',
       cancelText: 'Cancel',
       onOk: async () => {

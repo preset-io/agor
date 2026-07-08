@@ -697,6 +697,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // object spread, so it intentionally does not carry non-enumerable
         // properties from rowToSession(currentRow).
         merged.last_updated = insertData.updated_at.toISOString();
+        if (insertData.archived_reason === null) {
+          merged.archived_reason = undefined;
+        }
         return attachHiddenTenant(merged, currentRow);
       });
 

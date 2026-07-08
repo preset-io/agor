@@ -164,32 +164,47 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
 
       setArchivingIds((prev) => new Set(prev).add(sessionId));
       try {
-        await currentClient.service('sessions').patch(sessionId, {
-          archived: archive,
-          archived_reason: archive ? 'manual' : undefined,
-        } as Partial<Session>);
+        const result = (await currentClient
+          .service(`sessions/${sessionId}/${archive ? 'archive' : 'unarchive'}`)
+          .create({})) as {
+          session?: Session;
+          affectedSessions?: Session[];
+        };
+        const affectedSessions =
+          result.affectedSessions && result.affectedSessions.length > 0
+            ? result.affectedSessions
+            : result.session
+              ? [result.session]
+              : [];
 
-        // Keep local archived cache in sync for this modal view
-        if (archive) {
-          const source = activeSessions.find((s) => s.session_id === sessionId);
-          if (source) {
-            setActiveSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
-            setArchivedSessions((prev) => {
-              if (prev.some((s) => s.session_id === sessionId)) return prev;
-              return [{ ...source, archived: true }, ...prev];
-            });
-          } else if (showArchived) {
-            void loadArchivedSessions();
+        // Keep local archived cache in sync for this modal view. Realtime
+        // events will converge other views; this prevents stale descendants in
+        // the currently open modal immediately after route completion.
+        if (affectedSessions.length > 0) {
+          const affectedIds = new Set(affectedSessions.map((session) => session.session_id));
+          setActiveSessions((prev) =>
+            prev.filter((session) => !affectedIds.has(session.session_id))
+          );
+          setArchivedSessions((prev) =>
+            prev.filter((session) => !affectedIds.has(session.session_id))
+          );
+
+          if (archive) {
+            setArchivedSessions((prev) => [...affectedSessions, ...prev]);
+          } else {
+            setActiveSessions((prev) =>
+              affectedSessions.reduce((next, session) => upsertSession(next, session), prev)
+            );
           }
+        } else if (showArchived) {
+          void loadArchivedSessions();
         } else {
-          const source = archivedSessions.find((s) => s.session_id === sessionId);
-          if (source) {
-            setActiveSessions((prev) => upsertSession(prev, { ...source, archived: false }));
-          }
-          setArchivedSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
+          void loadActiveSessions();
         }
 
-        showSuccess(archive ? 'Session archived' : 'Session unarchived');
+        showSuccess(
+          archive ? 'Session and child sessions archived' : 'Session and child sessions unarchived'
+        );
       } catch (err) {
         showError(err instanceof Error ? err.message : 'Failed to update session');
       } finally {
@@ -200,15 +215,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
         });
       }
     },
-    [
-      activeSessions,
-      archivedSessions,
-      loadArchivedSessions,
-      showArchived,
-      showSuccess,
-      showError,
-      upsertSession,
-    ]
+    [loadActiveSessions, loadArchivedSessions, showArchived, showSuccess, showError, upsertSession]
   );
 
   const combinedSessions = useMemo(() => {
