@@ -521,6 +521,53 @@ describe('TasksService executor heartbeat helpers', () => {
     expect(service.emit).not.toHaveBeenCalled();
   });
 
+  it('uses preserved socket executor scope fields when JWT payload is absent', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000161';
+    const currentTask = {
+      task_id: taskId,
+      session_id: '018f0000-0000-7000-8000-000000000162',
+      status: TaskStatus.RUNNING,
+      created_at: '2026-01-01T00:00:00.000Z',
+      current_execution_attempt: {
+        schema_version: 1 as const,
+        attempt_id: '018f0000-0000-7000-8000-000000000163',
+        executor_instance_id: '018f0000-0000-7000-8000-000000000164',
+        runtime_backend: TaskExecutionRuntimeBackend.COMMAND_TEMPLATE,
+        started_at: '2026-01-01T00:00:00.000Z',
+      },
+    };
+    const service = Object.create(TasksService.prototype) as TasksService & {
+      get: ReturnType<typeof vi.fn>;
+      repository: { update: ReturnType<typeof vi.fn> };
+      id: string;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    service.get = vi.fn().mockResolvedValue(currentTask);
+    service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
+    service.id = 'task_id';
+    service.emit = vi.fn();
+
+    const result = await service.patch(
+      taskId,
+      { last_executor_heartbeat_at: '2026-01-01T00:00:10.000Z' },
+      {
+        provider: 'socketio',
+        authentication: { strategy: 'jwt' },
+        task_id: taskId,
+        attempt_id: '018f0000-0000-7000-8000-000000000999',
+        executor_instance_id: currentTask.current_execution_attempt.executor_instance_id,
+      } as any
+    );
+
+    expect(result).toMatchObject({
+      ...currentTask,
+      runtime_patch_ignored: true,
+    });
+    expect(service.repository.update).not.toHaveBeenCalled();
+    expect(service.emit).not.toHaveBeenCalled();
+  });
+
   it('checks runtime attempt ownership against the locked task row', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000151';
     const staleAttempt = {

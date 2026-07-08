@@ -171,13 +171,30 @@ function executorAttemptClaims(params?: TaskParams): ExecutorAttemptClaims {
       }
     | undefined;
   const payload = auth?.payload;
+  const socketScope = params as
+    | (TaskParams & {
+        task_id?: unknown;
+        attempt_id?: unknown;
+        executor_instance_id?: unknown;
+      })
+    | undefined;
   const isExecutorRuntime =
-    payload?.type === 'executor-session' || (auth?.strategy === 'jwt' && !!payload?.task_id);
+    payload?.type === 'executor-session' ||
+    (auth?.strategy === 'jwt' && (!!payload?.task_id || !!socketScope?.task_id));
   return {
     isExecutorRuntime,
-    attemptId: typeof payload?.attempt_id === 'string' ? payload.attempt_id : undefined,
+    attemptId:
+      typeof payload?.attempt_id === 'string'
+        ? payload.attempt_id
+        : typeof socketScope?.attempt_id === 'string'
+          ? socketScope.attempt_id
+          : undefined,
     executorInstanceId:
-      typeof payload?.executor_instance_id === 'string' ? payload.executor_instance_id : undefined,
+      typeof payload?.executor_instance_id === 'string'
+        ? payload.executor_instance_id
+        : typeof socketScope?.executor_instance_id === 'string'
+          ? socketScope.executor_instance_id
+          : undefined,
   };
 }
 
