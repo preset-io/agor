@@ -108,7 +108,7 @@ describe('ingestInboundImageAttachments', () => {
 
     expect(fetchImpl).toHaveBeenCalledWith(
       'https://files.slack.com/files-pri/T1-F123/download/screenshot.png',
-      { headers: { Authorization: 'Bearer xoxb-test' } }
+      { headers: { Authorization: 'Bearer xoxb-test' }, redirect: 'manual' }
     );
     expect(result.failed).toBe(0);
     expect(result.paths).toHaveLength(1);
@@ -160,6 +160,93 @@ describe('ingestInboundImageAttachments', () => {
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(result).toEqual({ paths: [], failed: 1 });
+  });
+
+  it('rejects redirects to non-allowlisted hosts and never sends the token there', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://attacker.example/exfil.png' },
+        })
+    );
+
+    const result = await ingestInboundImageAttachments({
+      files: [makeFile()],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      uploadDir,
+    });
+
+    expect(result).toEqual({ paths: [], failed: 1 });
+    // The Authorization header must only ever reach allowlisted slack.com
+    // hosts: the redirect target is validated BEFORE any fetch to it.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    for (const [calledUrl] of fetchImpl.mock.calls) {
+      expect(isAllowedSlackFileUrl(calledUrl as string)).toBe(true);
+    }
+  });
+
+  it('follows redirects between allowlisted Slack hosts with the token', async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71]);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://files.slack.com/files-pri/T1-F123/other/screenshot.png' },
+        })
+      )
+      .mockResolvedValueOnce(makeImageResponse(bytes));
+
+    const result = await ingestInboundImageAttachments({
+      files: [makeFile()],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      uploadDir,
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.paths).toHaveLength(1);
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      'https://files.slack.com/files-pri/T1-F123/other/screenshot.png',
+      { headers: { Authorization: 'Bearer xoxb-test' }, redirect: 'manual' }
+    );
+  });
+
+  it('aborts oversized streaming bodies without a trustworthy Content-Length', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const chunkSize = 1024 * 1024;
+    let chunksPulled = 0;
+    // Endless image stream with no Content-Length: if the implementation
+    // buffered before checking, this test would never terminate.
+    const endlessBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        chunksPulled++;
+        controller.enqueue(new Uint8Array(chunkSize));
+      },
+    });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(endlessBody, {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        })
+    );
+
+    const result = await ingestInboundImageAttachments({
+      files: [makeFile()],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      uploadDir,
+    });
+
+    expect(result).toEqual({ paths: [], failed: 1 });
+    // Reading stopped as soon as the running total crossed the 50MB ceiling.
+    expect(chunksPulled).toBeLessThanOrEqual(MAX_UPLOAD_FILE_SIZE / chunkSize + 2);
+    expect(await fs.readdir(uploadDir)).toEqual([]);
   });
 
   it('rejects non-image response bodies (Slack HTML error pages)', async () => {
