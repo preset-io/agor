@@ -1043,27 +1043,8 @@ export function OnboardingWizard({
 
   // ─── Step renderers ───────────────────────────────────────────────────────
 
-  const renderStepBadge = (emoji: string, title: string) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-      <div
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 36,
-          height: 36,
-          borderRadius: 11,
-          flexShrink: 0,
-          background: 'rgba(255,255,255,0.07)',
-          border: '1px solid rgba(255,255,255,0.14)',
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-          fontSize: 18,
-        }}
-      >
-        {emoji}
-      </div>
+  const renderStepBadge = (title: string) => (
+    <div style={{ marginBottom: 12 }}>
       <Title level={3} style={{ color: TEXT_PRIMARY, margin: 0 }}>
         {title}
       </Title>
@@ -1077,7 +1058,7 @@ export function OnboardingWizard({
       : "Let's make this yours.";
     return (
       <div>
-        {renderStepBadge('👋', personaTitle)}
+        {renderStepBadge(personaTitle)}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
           How do you work? We'll tailor your setup to what you actually need.
         </Paragraph>
@@ -1129,7 +1110,7 @@ export function OnboardingWizard({
   const renderLlm = () => {
     return (
       <div>
-        {renderStepBadge('✦', 'Connect your AI')}
+        {renderStepBadge('Connect your AI')}
         <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 24 }}>
           Choose a model and connect it. This powers everything - you can change it anytime in
           Settings.
@@ -1473,7 +1454,7 @@ export function OnboardingWizard({
 
   const renderWorkspace = () => (
     <div>
-      {renderStepBadge('🗂️', 'Set up your workspace')}
+      {renderStepBadge('Set up your workspace')}
       <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
         Name your board. You can link repos and change everything anytime.
       </Paragraph>
@@ -1597,7 +1578,7 @@ export function OnboardingWizard({
     const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
     return (
       <div>
-        {renderStepBadge('🔌', 'Connect your tools via MCP')}
+        {renderStepBadge('Connect your tools via MCP')}
 
         {/* General MCP intro */}
         <div
