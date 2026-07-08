@@ -23,13 +23,13 @@ const siteUrl = getSiteUrl();
 // default stack until a rule opts in.
 const displayFont = Space_Grotesk({
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+  weight: ['300', '400', '500', '600', '700'],
   variable: '--font-display',
   display: 'swap',
 });
 const bodyFont = Hanken_Grotesk({
   subsets: ['latin'],
-  weight: ['400', '500', '600'],
+  weight: ['100', '400', '500', '600', '700'],
   variable: '--font-body',
   display: 'swap',
 });

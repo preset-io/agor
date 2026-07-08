@@ -30,6 +30,10 @@
 /* Hero banner — looping product-demo video behind the hero copy */
 .heroBanner {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: calc(100vh - 64px);
   overflow: hidden;
 }
 
@@ -123,14 +127,15 @@
 }
 
 .heroCopy {
+  position: relative;
   max-width: 1040px;
   margin: 0 auto;
-  padding: clamp(36px, 4.5vw, 64px) clamp(24px, 4vw, 56px);
+  padding: clamp(30px, 3.4vw, 48px) clamp(24px, 4vw, 56px) clamp(32px, 3.8vw, 54px);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 28px;
   background: rgba(7, 16, 15, 0.42);
-  backdrop-filter: blur(18px) saturate(1.15);
-  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(9px) saturate(1.15);
+  -webkit-backdrop-filter: blur(9px) saturate(1.15);
   text-align: center;
 }
 
@@ -141,16 +146,21 @@
   }
 }
 
-/* Mono badge pill above the H1 (mockup treatment) */
+/* Mono badge pill straddling the glass pane's top edge (50% in / 50% out) */
 .heroBadge {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  margin: 0 0 26px;
+  margin: 0;
   padding: 7px 15px 7px 11px;
-  border: 1px solid rgba(52, 230, 196, 0.18);
+  border: 1px solid rgba(52, 230, 196, 0.22);
   border-radius: 100px;
-  background: rgba(52, 230, 196, 0.05);
+  background: rgba(7, 16, 15, 0.9);
+  white-space: nowrap;
   color: var(--landing-teal);
   font-family: var(--font-mono-stack);
   font-size: 0.72rem;
@@ -213,7 +223,8 @@
 
 .kicker,
 .eyebrow {
-  margin: 0 0 16px;
+  display: block;
+  margin: 0 0 22px;
   color: var(--landing-teal);
   font-family: var(--font-mono-stack);
   font-size: 0.75rem;
@@ -230,8 +241,9 @@
 .finalCta h2 {
   margin: 0;
   color: var(--landing-ink);
-  font-family: var(--font-display-stack);
-  font-weight: 500;
+  /* Hairline (100) headers use the body grotesque — Space Grotesk floors at 300. */
+  font-family: var(--font-body-stack);
+  font-weight: 100;
   letter-spacing: -0.03em;
   line-height: 1.02;
 }
@@ -248,20 +260,18 @@
 /* Gradient accent phrase inside headings (mockup treatment, mint → sky).
  * One keyword phrase per heading, site-wide on the landing page. */
 .headingAccent {
+  font-weight: 600;
   background: linear-gradient(110deg, #34e6c4, #7ad9ff);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
-.heroProvocation {
-  max-width: 860px;
-  margin: 24px auto 0;
+/* Single ink-weighted emphasis word per heading, paired with the colored
+ * .headingAccent phrase against the thin (300) base. */
+.headingStrong {
+  font-weight: 700;
   color: var(--landing-ink);
-  font-size: clamp(1.05rem, 1.5vw, 1.3rem);
-  font-weight: 500;
-  line-height: 1.7;
-  letter-spacing: -0.02em;
 }
 
 .heroActions {
@@ -299,7 +309,8 @@
 .harnessStrip {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 64px 28px 40px;
+  padding: 44px 28px 56px;
+  border-top: 1px solid rgba(52, 230, 196, 0.14);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -545,8 +556,9 @@
   margin-top: 0;
 }
 
+/* Generous gap separates the surface explorer from the carousel above */
 .productShowcase {
-  padding-top: 42px;
+  padding-top: 116px;
 }
 
 /* Product-surfaces explorer: side rail + large screenshot stage */
@@ -960,10 +972,6 @@
     font-size: clamp(3.05rem, 14vw, 4.75rem);
   }
 
-  .heroProvocation {
-    font-size: 1.16rem;
-  }
-
   .heroActions {
     align-items: stretch;
     flex-direction: column;
@@ -1150,7 +1158,21 @@
 /* Two-tone statement headline + numbered card grid (multiplayer section) */
 .liveStatement {
   max-width: 32ch;
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
   font-size: clamp(2.2rem, 4.2vw, 3.7rem);
+  font-weight: 100;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+}
+
+.liveSub {
+  max-width: 64ch;
+  margin: 18px 0 0;
+  color: var(--landing-ink);
+  font-size: clamp(1.05rem, 1.5vw, 1.28rem);
+  line-height: 1.6;
 }
 
 .headingDim {

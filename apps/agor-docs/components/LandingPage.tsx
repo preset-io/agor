@@ -272,26 +272,21 @@ export function LandingPage() {
         <section className={styles.heroSection}>
           <div className={styles.heroCopy} data-reveal>
             <p className={styles.heroBadge}>
+              Agor
               <span className={styles.badgeDot} aria-hidden="true" />
               The command center for AI enablement
             </p>
             <h1>
-              Empower your team with <span className={styles.headingAccent}>AI assistants</span>.
+              Empower your <span className={styles.headingStrong}>team</span> with{' '}
+              <span className={styles.headingAccent}>AI assistants</span>.
             </h1>
-            <p className={styles.heroProvocation}>
-              Build powerful agents for business users.
-              <br />
-              Let power users get down to business.
-              <br />
-              Break your team free from their terminals.
-            </p>
             <div className={styles.heroActions}>
               <button
                 type="button"
                 className={styles.primaryButton}
                 onClick={() => setIsBetaFormOpen(true)}
               >
-                Join the private beta
+                Join the Agor Cloud private beta
               </button>
               <Link href="/guide/getting-started" className={styles.secondaryButton}>
                 Install locally
@@ -316,6 +311,34 @@ export function LandingPage() {
               edge-light echo of the hero video, TV-backlight style. */}
           <Aurora colorStops={['#f12711', '#f5af19', '#ffd166']} amplitude={0.9} blend={1} />
         </div>
+        <section className={styles.liveSection} data-reveal>
+          <h2 className={styles.liveStatement}>
+            Set your team <span className={styles.headingStrong}>free</span> from{' '}
+            <span className={styles.headingAccent}>the terminal</span>.
+          </h2>
+          <p className={styles.liveSub}>
+            Don’t let AI tools trap people in their corner.
+            <br />
+            <span className={styles.headingDim}>
+              Agor puts your whole team on one live,{' '}
+              <span className={styles.headingAccent}>multiplayer canvas</span>.
+            </span>
+          </p>
+          <div className={styles.liveGrid}>
+            {liveCards.map((card, index) => (
+              <article
+                className={styles.numberedCard}
+                key={card.title}
+                data-reveal
+                style={revealDelay(index)}
+              >
+                <h3>{card.title}</h3>
+                <p>{card.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
         <section className={styles.harnessStrip} data-reveal>
           <span className={styles.harnessLabel}>Built on the harnesses you already use</span>
           <ul className={styles.harnessList}>
@@ -339,37 +362,14 @@ export function LandingPage() {
             All in a web workspace that leaves the terminal behind.
           </p>
         </section>
-
-        <section className={styles.liveSection} data-reveal>
-          <h2 className={styles.liveStatement}>
-            Don’t let AI tools trap people in their corner.{' '}
-            <span className={styles.headingDim}>
-              Agor puts your whole team on one{' '}
-              <span className={styles.headingAccent}>live, multiplayer canvas</span>.
-            </span>
-          </h2>
-          <div className={styles.liveGrid}>
-            {liveCards.map((card, index) => (
-              <article
-                className={styles.numberedCard}
-                key={card.title}
-                data-reveal
-                style={revealDelay(index)}
-              >
-                <h3>{card.title}</h3>
-                <p>{card.body}</p>
-              </article>
-            ))}
-          </div>
-        </section>
       </div>
 
       <section className={styles.showcaseSection} data-reveal>
         <div className={styles.showcaseHeader}>
           <div className={styles.sectionHeader}>
-            <span className={styles.eyebrow}>What is Agor?</span>
             <h2>
-              So much more than a <span className={styles.headingAccent}>chat box</span>.
+              So much <span className={styles.headingStrong}>more</span> than a{' '}
+              <span className={styles.headingAccent}>chat box</span>.
             </h2>
           </div>
           <div className={styles.showcaseTabs}>
@@ -438,9 +438,10 @@ export function LandingPage() {
 
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
+          <span className={styles.eyebrow}>Let power users get down to business</span>
           <h2>
-            Every surface an <span className={styles.headingAccent}>enablement leader</span> needs
-            to orchestrate AI.
+            Every surface <span className={styles.headingStrong}>AI enablers</span> need to{' '}
+            <span className={styles.headingAccent}>orchestrate AI</span>.
           </h2>
         </div>
         <div className={styles.surfaceExplorer} data-reveal>
@@ -484,9 +485,10 @@ export function LandingPage() {
 
       <section className={styles.workspaceSection} data-reveal>
         <div className={styles.workspaceCopy}>
+          <span className={styles.eyebrow}>Agents that learn with you</span>
           <h2>
             Raise <span className={styles.headingAccent}>team assistants</span> with memory, skills,
-            and a place to work.
+            and a place to <span className={styles.headingStrong}>work</span>.
           </h2>
           <p>
             One-off prompts don’t compound. In Agor, assistants have durable identities your team
@@ -519,9 +521,9 @@ export function LandingPage() {
 
       <section className={styles.controlSection} data-reveal>
         <div>
-          <span className={styles.eyebrow}>Built for teams</span>
+          <span className={styles.eyebrow}>Build teams as a team</span>
           <h2>
-            Everyone’s cranking with AI.
+            Everyone’s <span className={styles.headingStrong}>using</span> AI.
             <br />
             Now make it <span className={styles.headingAccent}>compound</span>.
           </h2>
@@ -560,7 +562,8 @@ export function LandingPage() {
       <section className={styles.finalCta} data-reveal>
         <div className={styles.ctaCard}>
           <h2>
-            Give your team’s AI work <span className={styles.headingAccent}>a place to live</span>.
+            Give your team’s <span className={styles.headingStrong}>AI work</span> a place to{' '}
+            <span className={styles.headingAccent}>live</span>.
           </h2>
           <p>Agor Cloud is opening to teams now. The open-source build is ready when you are.</p>
           <div className={styles.heroActions}>
@@ -569,7 +572,7 @@ export function LandingPage() {
               className={styles.primaryButton}
               onClick={() => setIsBetaFormOpen(true)}
             >
-              Join the private beta
+              Join the Agor Cloud private beta
             </button>
             <Link
               href={AGOR_CLOUD_DEMO_URL}
@@ -621,7 +624,7 @@ export function LandingPage() {
               Discord
             </Link>
             <Link href={LANDING_PRIVATE_BETA_URL} target="_blank" rel="noopener noreferrer">
-              Join the private beta
+              Join the Agor Cloud private beta
             </Link>
           </div>
         </div>

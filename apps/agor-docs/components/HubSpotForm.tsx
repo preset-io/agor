@@ -15,6 +15,7 @@ declare global {
           region: string;
           target: string;
           css?: string;
+          onFormReady?: () => void;
         }) => void;
       };
     };
@@ -49,7 +50,11 @@ const HUBSPOT_FORM_CSS = `
   .hs-form-private .hs-input {
     width: 100%;
     box-sizing: border-box;
-    padding: 0.85rem 1.25rem;
+    /* height:auto so HubSpot's default fixed input height doesn't clip the
+     * padding and push text to the top — lets the vertical padding center. */
+    height: auto;
+    padding: 1.15rem 1.6rem;
+    line-height: 1.4;
     font-size: 1rem;
     font-family: inherit;
     border-radius: 999px;
@@ -129,6 +134,7 @@ export function HubSpotForm({
   const reactId = useId().replace(/:/g, '');
   const targetId = `hubspot-form-${reactId}`;
   const [scriptReady, setScriptReady] = useState(false);
+  const [formReady, setFormReady] = useState(false);
 
   // The HubSpot loader is cached across client-side navigations, so on
   // remount window.hbspt is already populated — flip the flag immediately
@@ -151,6 +157,7 @@ export function HubSpotForm({
       region,
       target: `#${targetId}`,
       css: HUBSPOT_FORM_CSS,
+      onFormReady: () => setFormReady(true),
     });
   }, [scriptReady, portalId, formId, region, targetId]);
 
@@ -162,6 +169,11 @@ export function HubSpotForm({
         onLoad={() => setScriptReady(true)}
         onReady={() => setScriptReady(true)}
       />
+      {!formReady && (
+        <div className={styles.loading} role="status" aria-label="Loading form">
+          <span className={styles.spinner} aria-hidden="true" />
+        </div>
+      )}
       <div id={targetId} className={styles.form} />
       {showDemoLink && (
         <p className={styles.demoLine}>

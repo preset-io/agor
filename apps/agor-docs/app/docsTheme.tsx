@@ -1,5 +1,4 @@
 import { Footer, Navbar } from 'nextra-theme-docs';
-import { NavbarCloudCTA } from '../components/NavbarCloudCTA';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { BRAND_NAME, getBasePath, LOGO_PATH } from '../lib/siteMetadata';
 
@@ -30,9 +29,7 @@ export const logo = (
 );
 
 export const navbar = (
-  <Navbar logo={logo} projectLink={GITHUB_REPO_URL} chatLink={DISCORD_INVITE_URL}>
-    <NavbarCloudCTA />
-  </Navbar>
+  <Navbar logo={logo} projectLink={GITHUB_REPO_URL} chatLink={DISCORD_INVITE_URL} />
 );
 
 export const footer = <Footer>BSL 1.1 © {new Date().getFullYear()} Preset Inc.</Footer>;

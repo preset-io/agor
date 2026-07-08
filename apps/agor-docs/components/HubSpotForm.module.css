@@ -35,3 +35,32 @@
   color: #a8f5ed;
   text-decoration: underline;
 }
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 220px;
+}
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(52, 230, 196, 0.18);
+  border-top-color: #34e6c4;
+  animation: hsSpin 0.8s linear infinite;
+}
+
+@keyframes hsSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2s;
+  }
+}
