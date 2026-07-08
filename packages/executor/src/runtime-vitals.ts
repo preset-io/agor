@@ -1,5 +1,6 @@
 import type {
   Message,
+  Task,
   TaskRuntimeEvent,
   TaskRuntimeEventKind,
   TaskRuntimeEventSource,
@@ -44,6 +45,8 @@ export interface RuntimeVitalsRecordOptions {
   forceFlush?: boolean;
 }
 
+export type RuntimeVitalsPatchResult = Task & { runtime_patch_ignored?: boolean };
+
 export class TaskRuntimeVitalsReporter {
   private readonly now: () => Date;
   private readonly maxEvents: number;
@@ -51,7 +54,7 @@ export class TaskRuntimeVitalsReporter {
   private readonly warn: (...args: unknown[]) => void;
   private current: TaskRuntimeVitals | undefined;
   private lastFlushAtMs = 0;
-  private pendingFlush: Promise<void> = Promise.resolve();
+  private pendingFlush: Promise<RuntimeVitalsPatchResult | undefined> = Promise.resolve(undefined);
   private trailingFlushTimer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
 
@@ -77,8 +80,8 @@ export class TaskRuntimeVitalsReporter {
   async record(
     kind: TaskRuntimeEventKind,
     options: RuntimeVitalsRecordOptions = {}
-  ): Promise<void> {
-    if (this.stopped) return;
+  ): Promise<RuntimeVitalsPatchResult | undefined> {
+    if (this.stopped) return undefined;
     const previous = this.current;
     const vitals = this.applyEvent(kind, options);
     const phaseChanged = !previous || previous.phase !== vitals.phase;
@@ -93,11 +96,11 @@ export class TaskRuntimeVitalsReporter {
 
     if (!shouldFlush) {
       this.scheduleTrailingFlush();
-      return;
+      return undefined;
     }
 
     this.cancelTrailingFlush();
-    await this.enqueueFlush(vitals);
+    return this.enqueueFlush(vitals);
   }
 
   /**
@@ -225,24 +228,27 @@ export class TaskRuntimeVitalsReporter {
     this.trailingFlushTimer = undefined;
   }
 
-  private async enqueueFlush(vitals: TaskRuntimeVitals): Promise<void> {
+  private async enqueueFlush(
+    vitals: TaskRuntimeVitals
+  ): Promise<RuntimeVitalsPatchResult | undefined> {
     this.lastFlushAtMs = this.now().getTime();
     const patch = async () => {
-      if (this.stopped) return;
+      if (this.stopped) return undefined;
       try {
-        await this.options.client.service('tasks').patch(this.options.taskId, {
+        return (await this.options.client.service('tasks').patch(this.options.taskId, {
           runtime_vitals: vitals,
-        });
+        })) as RuntimeVitalsPatchResult;
       } catch (error) {
         this.warn(
           '[runtime-vitals] Failed to write task runtime vitals:',
           error instanceof Error ? error.message : String(error)
         );
+        return undefined;
       }
     };
 
     this.pendingFlush = this.pendingFlush.then(patch, patch);
-    await this.pendingFlush;
+    return this.pendingFlush;
   }
 }
 

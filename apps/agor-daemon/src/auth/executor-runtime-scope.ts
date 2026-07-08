@@ -11,6 +11,7 @@ import {
 type Scope = {
   sessionId?: string;
   taskId?: string;
+  attemptId?: string;
   branchId?: string;
 };
 
@@ -56,6 +57,42 @@ function expectMatch(claim: string, value: unknown, label: string): void {
   if (value === undefined || value === null) return;
   if (String(value) !== claim) {
     throw new Forbidden(`Executor token ${label} scope does not match this request`);
+  }
+}
+
+async function requireCurrentAttemptScope(
+  context: HookContext,
+  payload: ExecutorSessionTokenPayload
+): Promise<void> {
+  if (!payload.task_id) return;
+  const app = (
+    context as HookContext & {
+      app?: { service(name: string): { get(id: string, params?: Params): Promise<unknown> } };
+    }
+  ).app;
+  if (!app) return;
+
+  const task = asRecord(await app.service('tasks').get(payload.task_id, { provider: undefined }));
+  const attempt = asRecord(task?.current_execution_attempt);
+  if (!attempt) return;
+
+  if (!payload.attempt_id) {
+    throw new Forbidden('Executor token is missing attempt scope');
+  }
+  if (attempt.attempt_id !== payload.attempt_id) {
+    throw new Forbidden('Executor token attempt scope does not match current task attempt');
+  }
+  if (
+    payload.executor_instance_id &&
+    attempt.executor_instance_id &&
+    attempt.executor_instance_id !== payload.executor_instance_id
+  ) {
+    throw new Forbidden(
+      'Executor token executor-instance scope does not match current task attempt'
+    );
+  }
+  if (attempt.terminal_at) {
+    throw new Forbidden('Executor token attempt is no longer active');
   }
 }
 
@@ -196,9 +233,12 @@ export function executorRuntimeScopeGuard() {
     const payload = scopedPayload(context);
     if (!payload) return context;
 
+    await requireCurrentAttemptScope(context, payload);
+
     const scope = {
       sessionId: getExecutorSessionTokenSessionId(payload),
       taskId: payload.task_id,
+      attemptId: payload.attempt_id,
       branchId: payload.branch_id,
     };
     const data = (context.data ?? {}) as Record<string, unknown>;

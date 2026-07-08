@@ -44,15 +44,21 @@ export class ExecutorHeartbeatSupervisor {
       const tasks = await tasksService.getActiveWithExecutorHeartbeat();
       const nowMs = this.now().getTime();
       for (const task of tasks) {
-        if (!task.last_executor_heartbeat_at) continue;
-        const heartbeatMs = new Date(task.last_executor_heartbeat_at).getTime();
+        const observedHeartbeatAt = task.current_execution_attempt
+          ? task.current_execution_attempt.last_heartbeat_at
+          : task.last_executor_heartbeat_at;
+        if (!observedHeartbeatAt) continue;
+        const heartbeatMs = new Date(observedHeartbeatAt).getTime();
         if (!Number.isFinite(heartbeatMs)) continue;
         if (nowMs - heartbeatMs <= this.options.config.stale_after_ms) continue;
 
         try {
           const current = await this.options.app.service('tasks').get(task.task_id);
-          if (current.status !== task.status || !current.last_executor_heartbeat_at) continue;
-          const currentHeartbeatMs = new Date(current.last_executor_heartbeat_at).getTime();
+          const currentHeartbeatAt = current.current_execution_attempt
+            ? current.current_execution_attempt.last_heartbeat_at
+            : current.last_executor_heartbeat_at;
+          if (current.status !== task.status || !currentHeartbeatAt) continue;
+          const currentHeartbeatMs = new Date(currentHeartbeatAt).getTime();
           if (!Number.isFinite(currentHeartbeatMs)) continue;
           if (nowMs - currentHeartbeatMs <= this.options.config.stale_after_ms) continue;
 

@@ -172,6 +172,51 @@ describe('ConfigService.resolveApiKey', () => {
     });
   });
 
+  it('rejects executor runtime tokens for stale attempts', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'creator-1' as UserID,
+              session_id: 'session-1',
+              current_execution_attempt: {
+                attempt_id: 'attempt-current',
+                executor_instance_id: 'executor-current',
+                terminal_at: undefined,
+              },
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+        {
+          provider: 'socketio',
+          authentication: {
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              attempt_id: 'attempt-stale',
+              executor_instance_id: 'executor-current',
+            },
+          },
+        } as never
+      )
+    ).rejects.toBeInstanceOf(Forbidden);
+
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
   it('recovers executor runtime scope from the verified access token when payload is absent', async () => {
     const service = new ConfigService({} as never);
     service.app = {

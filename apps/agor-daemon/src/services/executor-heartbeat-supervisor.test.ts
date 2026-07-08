@@ -78,4 +78,48 @@ describe('ExecutorHeartbeatSupervisor', () => {
     await supervisor.checkOnce();
     expect(tasksPatch).not.toHaveBeenCalled();
   });
+
+  it('does not treat a previous task-level heartbeat as current-attempt heartbeat evidence', async () => {
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000003',
+      session_id: '018f0000-0000-7000-8000-000000000004',
+      status: 'running',
+      last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
+      current_execution_attempt: {
+        schema_version: 1,
+        attempt_id: '018f0000-0000-7000-8000-000000000005',
+        executor_instance_id: '018f0000-0000-7000-8000-000000000006',
+        runtime_backend: 'command_template',
+        started_at: '2026-01-01T00:00:04.000Z',
+      },
+    };
+    const failForLostHeartbeat = vi.fn();
+    const app = {
+      service: (name: string) => {
+        if (name === 'tasks') {
+          return {
+            getActiveWithExecutorHeartbeat: vi.fn().mockResolvedValue([task]),
+            get: vi.fn().mockResolvedValue(task),
+            failForLostHeartbeat,
+          };
+        }
+        throw new Error(`unknown service ${name}`);
+      },
+    } as any;
+
+    const supervisor = new ExecutorHeartbeatSupervisor({
+      app,
+      config: {
+        enabled: true,
+        interval_ms: 1000,
+        stale_after_ms: 3000,
+        callback: { command_template: null, timeout_ms: 3000 },
+      },
+      now: () => new Date('2026-01-01T00:00:05.000Z'),
+    });
+
+    await supervisor.checkOnce();
+
+    expect(failForLostHeartbeat).not.toHaveBeenCalled();
+  });
 });

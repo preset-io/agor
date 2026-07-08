@@ -43,6 +43,14 @@ function sdkDebug(...args: unknown[]): void {
   }
 }
 
+function runtimePatchIgnored(result: unknown): boolean {
+  return (
+    result !== null &&
+    typeof result === 'object' &&
+    (result as { runtime_patch_ignored?: unknown }).runtime_patch_ignored === true
+  );
+}
+
 /**
  * Tool interface that all SDK wrappers must implement
  */
@@ -683,7 +691,10 @@ export async function executeToolTask(params: {
     // Update task status to completed/stopped with git SHA and SDK responses
     // Note: The stop endpoint may have already patched task to STOPPED via process kill.
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
-    await client.service('tasks').patch(taskId, patchData);
+    const patchedTask = await client.service('tasks').patch(taskId, patchData);
+    if (runtimePatchIgnored(patchedTask)) {
+      throw new Error('Executor attempt is no longer current');
+    }
   } catch (error) {
     const err = error as Error;
     console.error(`[${toolName}] Execution failed:`, err);

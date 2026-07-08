@@ -36,6 +36,14 @@ function executorDebug(...args: unknown[]): void {
   }
 }
 
+function isRuntimePatchIgnored(result: unknown): result is { runtime_patch_ignored: true } {
+  return (
+    result !== null &&
+    typeof result === 'object' &&
+    (result as { runtime_patch_ignored?: unknown }).runtime_patch_ignored === true
+  );
+}
+
 export interface ExecutorConfig {
   sessionToken: string;
   sessionId: string;
@@ -169,16 +177,18 @@ export class AgorExecutor {
         initialSnapshot: task.runtime_vitals,
         minPatchIntervalMs: 0,
       });
-      await reporter.record(TaskRuntimeEventKind.EXECUTOR_CONNECTED, {
+      const result = await reporter.record(TaskRuntimeEventKind.EXECUTOR_CONNECTED, {
         source: 'executor',
         phase: TaskRuntimePhase.EXECUTOR_CONNECTED,
         forceFlush: true,
       });
       reporter.stop();
+      if (isRuntimePatchIgnored(result)) {
+        throw new Error('Executor attempt is no longer current');
+      }
     } catch (error) {
-      console.warn(
-        '[executor] Failed to emit executor_connected:',
-        error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `Failed to claim executor attempt: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }

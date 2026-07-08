@@ -46,11 +46,18 @@ type ExecutorTokenPayload = {
   sessionId?: string;
   task_id?: string;
   branch_id?: string;
+  attempt_id?: string;
+  executor_instance_id?: string;
 };
 
 function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefined {
   const authParams = params as
-    | (AuthenticatedParams & { task_id?: string; authentication?: { strategy?: string } })
+    | (AuthenticatedParams & {
+        task_id?: string;
+        attempt_id?: string;
+        executor_instance_id?: string;
+        authentication?: { strategy?: string };
+      })
     | undefined;
   const payload = authParams?.authentication?.payload as ExecutorTokenPayload | undefined;
   if (payload?.type === 'executor-session' && payload.purpose === 'executor-task') {
@@ -76,12 +83,21 @@ function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefi
   // connections that have a task claim minted by ServiceJWTStrategy.
   if (authParams?.authentication?.strategy === 'jwt' && authParams.task_id) {
     const scopedParams = params as
-      | (Params & { session_id?: string; sessionId?: string; task_id?: string; branch_id?: string })
+      | (Params & {
+          session_id?: string;
+          sessionId?: string;
+          task_id?: string;
+          attempt_id?: string;
+          executor_instance_id?: string;
+          branch_id?: string;
+        })
       | undefined;
     return {
       type: 'executor-session',
       purpose: 'executor-task',
       task_id: authParams.task_id,
+      attempt_id: scopedParams?.attempt_id,
+      executor_instance_id: scopedParams?.executor_instance_id,
       session_id: scopedParams?.session_id,
       sessionId: scopedParams?.sessionId,
       branch_id: scopedParams?.branch_id,
@@ -91,9 +107,34 @@ function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefi
   return undefined;
 }
 
-/**
- * Mask API keys for secure display
- */
+function validateExecutorAttemptScope(executorPayload: ExecutorTokenPayload, task: unknown): void {
+  const record =
+    task && typeof task === 'object' && !Array.isArray(task)
+      ? (task as { current_execution_attempt?: Record<string, unknown> })
+      : undefined;
+  const attempt = record?.current_execution_attempt;
+  if (!attempt) return;
+
+  if (!executorPayload.attempt_id) {
+    throw new Forbidden('Executor token is missing attempt scope');
+  }
+  if (attempt.attempt_id !== executorPayload.attempt_id) {
+    throw new Forbidden('Executor token attempt scope does not match current task attempt');
+  }
+  if (
+    executorPayload.executor_instance_id &&
+    attempt.executor_instance_id &&
+    attempt.executor_instance_id !== executorPayload.executor_instance_id
+  ) {
+    throw new Forbidden(
+      'Executor token executor-instance scope does not match current task attempt'
+    );
+  }
+  if (attempt.terminal_at) {
+    throw new Forbidden('Executor token attempt is no longer active');
+  }
+}
+
 function maskApiKey(key: string | undefined): string | undefined {
   if (!key || typeof key !== 'string') return undefined;
   if (key.length <= 10) return '***';
@@ -219,6 +260,8 @@ export class ConfigService {
           type: 'executor-session',
           purpose: 'executor-task',
           task_id: sessionInfo.task_id,
+          attempt_id: sessionInfo.attempt_id,
+          executor_instance_id: sessionInfo.executor_instance_id,
         };
       }
     }
@@ -240,10 +283,12 @@ export class ConfigService {
     // executor-token calls and best-effort for internal/service-account calls.
     let userId: UserID | undefined;
     let sessionId: string | undefined;
+    let taskForScopeCheck: unknown;
     try {
       const tasksService = this.app?.service('tasks');
       if (tasksService) {
         const task = await tasksService.get(taskId, { provider: undefined });
+        taskForScopeCheck = task;
         userId = task?.created_by;
         sessionId = task?.session_id;
       }
@@ -256,6 +301,9 @@ export class ConfigService {
 
     if (executorPayload && (!userId || !sessionId)) {
       throw new Forbidden('Executor token task scope could not be verified');
+    }
+    if (executorPayload) {
+      validateExecutorAttemptScope(executorPayload, taskForScopeCheck);
     }
 
     // Executor runtime calls are narrowly scoped to the SDK for this session.

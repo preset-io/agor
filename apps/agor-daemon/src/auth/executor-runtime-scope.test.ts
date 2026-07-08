@@ -7,6 +7,8 @@ const payload = {
   purpose: 'executor-task',
   session_id: 'session-1',
   task_id: 'task-1',
+  attempt_id: 'attempt-1',
+  executor_instance_id: 'executor-1',
   branch_id: 'branch-1',
 };
 
@@ -205,6 +207,59 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(
       /not valid for this endpoint/
     );
+  });
+
+  it('rejects executor tokens for stale task attempts before side effects', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'create',
+      data: { content: 'late message' },
+      app: {
+        service(name: string) {
+          if (name === 'tasks') {
+            return {
+              get: async () => ({
+                task_id: 'task-1',
+                current_execution_attempt: {
+                  attempt_id: 'attempt-2',
+                  executor_instance_id: 'executor-1',
+                },
+              }),
+            };
+          }
+          throw new Error(`unexpected service ${name}`);
+        },
+      },
+    } as never);
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/attempt scope/);
+  });
+
+  it('rejects executor tokens after their current attempt is terminal', async () => {
+    const context = ctx({
+      path: 'messages',
+      method: 'create',
+      data: { content: 'late message' },
+      app: {
+        service(name: string) {
+          if (name === 'tasks') {
+            return {
+              get: async () => ({
+                task_id: 'task-1',
+                current_execution_attempt: {
+                  attempt_id: 'attempt-1',
+                  executor_instance_id: 'executor-1',
+                  terminal_at: '2026-01-01T00:00:00.000Z',
+                },
+              }),
+            };
+          }
+          throw new Error(`unexpected service ${name}`);
+        },
+      },
+    } as never);
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/no longer active/);
   });
 
   it('bypasses internal (provider-less) service composition', async () => {
