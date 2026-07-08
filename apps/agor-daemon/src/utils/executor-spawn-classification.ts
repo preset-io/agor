@@ -1,0 +1,14 @@
+import type { ChildProcess } from 'node:child_process';
+
+/**
+ * `child_process.spawn()` returns a ChildProcess before the launch outcome is
+ * fully known. Spawn failures can still emit `error` after callers receive the
+ * object, and those failures commonly have no child PID.
+ */
+export function hasObservedLaunchedExecutorProcess(child: Pick<ChildProcess, 'pid'>): boolean {
+  return typeof child.pid === 'number' && Number.isSafeInteger(child.pid) && child.pid > 0;
+}
+
+export function isExecutorSpawnFailureExit(processSpawnObserved: boolean, code: number | null) {
+  return !processSpawnObserved && code !== 0;
+}

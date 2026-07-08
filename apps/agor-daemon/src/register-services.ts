@@ -125,6 +125,10 @@ import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
+import {
+  hasObservedLaunchedExecutorProcess,
+  isExecutorSpawnFailureExit,
+} from './utils/executor-spawn-classification.js';
 import { escapeHtml } from './utils/html.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -951,7 +955,11 @@ function createExecuteHandler(
         unix_user: executorUnixUser || undefined,
       },
       onSpawn: async (child) => {
-        processSpawnObserved = true;
+        processSpawnObserved = hasObservedLaunchedExecutorProcess(child);
+        if (!processSpawnObserved) {
+          return;
+        }
+
         await patchDaemonTaskRuntimeEvent(
           tasksRuntimeVitalsService,
           taskId,
@@ -987,16 +995,17 @@ function createExecuteHandler(
             try {
               const currentTask = await app.service('tasks').get(taskId, params);
               if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
-                const eventKind = processSpawnObserved
-                  ? TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED
-                  : TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED;
+                const spawnFailureExit = isExecutorSpawnFailureExit(processSpawnObserved, code);
+                const eventKind = spawnFailureExit
+                  ? TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED
+                  : TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED;
                 const runtime_vitals = buildDaemonTaskRuntimeVitals(
                   currentTask.runtime_vitals,
                   eventKind,
                   {
                     phase: TaskRuntimePhase.FAILED,
                     exitCode: code,
-                    errorCode: processSpawnObserved ? 'unexpected_exit' : 'spawn_error',
+                    errorCode: spawnFailureExit ? 'spawn_error' : 'unexpected_exit',
                   }
                 );
                 await app.service('tasks').patch(
@@ -1044,12 +1053,14 @@ function createExecuteHandler(
           await patchDaemonTaskRuntimeEvent(
             tasksRuntimeVitalsService,
             taskId,
-            processSpawnObserved || code === 0
-              ? TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED
-              : TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED,
+            isExecutorSpawnFailureExit(processSpawnObserved, code)
+              ? TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED
+              : TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED,
             {
               exitCode: code,
-              ...(processSpawnObserved || code === 0 ? {} : { errorCode: 'spawn_error' }),
+              ...(isExecutorSpawnFailureExit(processSpawnObserved, code)
+                ? { errorCode: 'spawn_error' }
+                : {}),
             },
             params
           );
