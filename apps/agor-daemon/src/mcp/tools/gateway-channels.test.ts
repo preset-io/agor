@@ -1407,6 +1407,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
   it('denies reaction add/remove when the reactions capability is disabled, with an actionable error', async () => {
     spyCallerGatewaySession('branch-1', gatewaySource);
     vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
 
     const tools = await captureTools('member');
     await expect(
@@ -1433,6 +1434,26 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         emoji: 'thumbsup',
       })
     ).rejects.toThrow('targets a different branch');
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed slackChannelId/ts/emoji before any Slack call', async () => {
+    const tools = await captureTools('member');
+    const schema = tools.agor_gateway_slack_reaction_add.cfg.inputSchema;
+
+    expect(
+      schema.safeParse({ slackChannelId: 'not-a-channel', ts: '171234.000100', emoji: 'eyes' })
+        .success
+    ).toBe(false);
+    expect(
+      schema.safeParse({ slackChannelId: 'C123', ts: 'not-a-timestamp', emoji: 'eyes' }).success
+    ).toBe(false);
+    expect(
+      schema.safeParse({ slackChannelId: 'C123', ts: '171234.000100', emoji: ':eyes:' }).success
+    ).toBe(false);
+    expect(
+      schema.safeParse({ slackChannelId: 'C123', ts: '171234.000100', emoji: 'eyes' }).success
+    ).toBe(true);
     expect(getConnector).not.toHaveBeenCalled();
   });
 
@@ -1549,6 +1570,80 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       }
     });
 
+    // The three tests below deliberately do NOT mock resolveBranchWorkspacePath
+    // (or leave canonicalizeExistingPrefix/isPathInsideRoot real, which they
+    // already are) so the escape rejections are proven end-to-end through the
+    // tool, not just asserted against a mock's return value.
+
+    it('rejects relative path traversal via the real branch workspace resolver', async () => {
+      const actualWorkspacePath = await vi.importActual<
+        typeof import('../../utils/branch-workspace-path.js')
+      >('../../utils/branch-workspace-path.js');
+      vi.mocked(resolveBranchWorkspacePath).mockImplementation(
+        actualWorkspacePath.resolveBranchWorkspacePath
+      );
+
+      const workspaceDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-real-workspace-'));
+      try {
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          fileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue({
+          ...branch,
+          path: workspaceDir,
+        } as any);
+        vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(true);
+
+        const tools = await captureTools('member');
+        await expect(
+          tools.agor_gateway_slack_file_upload.handler({ path: '../secret.txt' })
+        ).rejects.toThrow('".." segments');
+        expect(getConnector).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects an absolute path that is a symlink escaping the upload directory', async () => {
+      const dir = withUploadDir();
+      const outsideDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-symlink-outside-'));
+      const outsideFile = path.join(outsideDir, 'secret.txt');
+      fs.writeFileSync(outsideFile, 'nope');
+      const symlinkPath = path.join(dir, 'innocuous.png');
+      fs.symlinkSync(outsideFile, symlinkPath);
+      try {
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          fileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+        const tools = await captureTools('member');
+        await expect(
+          tools.agor_gateway_slack_file_upload.handler({ path: symlinkPath })
+        ).rejects.toThrow('escapes the daemon upload directory');
+        expect(getConnector).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(outsideDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects an absolute path containing a null byte', async () => {
+      const dir = withUploadDir();
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileUploadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_file_upload.handler({ path: path.join(dir, 'evil\0.png') })
+      ).rejects.toThrow();
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
     it('rejects a file exceeding the upload size limit', async () => {
       const dir = withUploadDir();
       const filePath = path.join(dir, 'huge.bin');
@@ -1577,6 +1672,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
         slackChannel as any
       );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
 
       const tools = await captureTools('member');
       await expect(
