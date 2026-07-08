@@ -24,8 +24,19 @@ function makeApp(
   channels: Record<string, unknown[]> = {}
 ) {
   let publishFn: ((data: unknown, context: any) => unknown) | undefined;
+  // Names accessed via the channel factory — mirrors Feathers materializing a
+  // channel on lookup, so tests can assert the publish path did NOT create a
+  // room.
+  const created = new Set<string>();
   const app = {
-    channel: vi.fn((name: string) => new FakeChannel(channels[name] ?? connections)),
+    // Provided channels plus any materialized by a channel lookup.
+    get channels() {
+      return [...new Set([...Object.keys(channels), ...created])];
+    },
+    channel: vi.fn((name: string) => {
+      created.add(name);
+      return new FakeChannel(channels[name] ?? connections);
+    }),
     publish: vi.fn((fn) => {
       publishFn = fn;
     }),
@@ -941,6 +952,66 @@ describe('configureRealtimePublish streaming scope', () => {
     );
 
     expect(unionConnections(result)).toEqual([owner]);
+  });
+
+  it('does not materialize a room for a session with no subscribers', async () => {
+    // No `session-stream:s1` channel provided → the session has no subscribers.
+    const viewer = { user: user('viewer') };
+    const app = makeApp([viewer], {}, { authenticated: [viewer] });
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    await app.runPublish({ session_id: 's1', message_id: 'm1', chunk: 'hello' }, streamingContext);
+
+    // The publish path must not have created the empty room.
+    expect(app.channels).not.toContain('session-stream:s1');
+  });
+
+  it('delivers to a subscribed session whose room already exists', async () => {
+    const subscribed = { user: user('subscribed') };
+    const app = makeApp(
+      [subscribed],
+      {},
+      {
+        authenticated: [subscribed],
+        'session-stream:s1': [subscribed],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(app.channels).toContain('session-stream:s1');
+    expect(unionConnections(result)).toEqual([subscribed]);
+  });
+
+  it('does not resurrect the room after the last subscriber has left', async () => {
+    // The room was pruned when its last subscriber left, so it is absent again.
+    const viewer = { user: user('viewer') };
+    const app = makeApp([viewer], {}, { authenticated: [viewer] });
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    await app.runPublish({ session_id: 's1', message_id: 'm1', chunk: 'a' }, streamingContext);
+    await app.runPublish({ session_id: 's1', message_id: 'm1', chunk: 'b' }, streamingContext);
+
+    expect(app.channels).not.toContain('session-stream:s1');
   });
 
   it('excludes a room member no longer in the tenant/auth channel (logout fail-open guard, RBAC off)', async () => {

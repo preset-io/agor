@@ -52,6 +52,18 @@ export function leaveAllSessionStreamChannels(app: Application, connection: unkn
 }
 
 /**
+ * Return an existing channel by name, or null if it has never been created.
+ * Feathers' channel lookup MATERIALIZES the channel when absent — and a channel
+ * with no joined connection is never auto-cleaned (Feathers only prunes on the
+ * last leave) — so the publish path must not touch a room that has no
+ * subscribers. Only `session-streams.create` (a real join) should create the
+ * room; joined channels get Feathers' empty-cleanup on leave/disconnect.
+ */
+function existingChannel(app: Application, name: string): PublishChannel | null {
+  return (app.channels ?? []).includes(name) ? app.channel(name) : null;
+}
+
+/**
  * Join a connection to a session's streaming room. Centralized here (the
  * tenant-aware realtime facade) so subscribe/publish share one channel name
  * and the raw `app.channel` surface stays in a single audited file.
@@ -396,8 +408,13 @@ async function resolveStreamingDelivery(
   const tenantConnections = new Set<unknown>(
     (tenantScoped as unknown as { connections: unknown[] }).connections
   );
-  const roomChannel = app.channel(sessionStreamChannelName(sessionId));
-  const room = roomChannel.filter((connection: unknown) => tenantConnections.has(connection));
+  // Never materialize the room on the publish path — a session streaming with
+  // zero subscribers would otherwise accumulate an empty, never-cleaned channel
+  // per session. Only an actual subscribe (join) creates it.
+  const existingRoom = existingChannel(app, sessionStreamChannelName(sessionId));
+  const room = existingRoom
+    ? existingRoom.filter((connection: unknown) => tenantConnections.has(connection))
+    : null;
 
   let ownerId: string | null = null;
   try {
@@ -413,7 +430,8 @@ async function resolveStreamingDelivery(
 
   // RBAC off: no visibility model — deliver to subscribers + owner + service.
   if (!branchRbacEnabled) {
-    const channels: PublishChannel[] = [room, serviceConnections];
+    const channels: PublishChannel[] = [serviceConnections];
+    if (room) channels.push(room);
     if (ownerId) channels.push(ownerChannel());
     return channels;
   }
@@ -425,17 +443,18 @@ async function resolveStreamingDelivery(
   if (!visibility) return serviceConnections;
 
   if (visibility.mode === 'allAuthenticated') {
-    const channels: PublishChannel[] = [room, serviceConnections];
+    const channels: PublishChannel[] = [serviceConnections];
+    if (room) channels.push(room);
     if (ownerId) channels.push(ownerChannel());
     return channels;
   }
 
   // Explicit-users branch: room members and the owner fallback must currently
   // hold view access (service accounts and superadmins always pass).
-  const channels: PublishChannel[] = [
-    filterToUserIdsOrSuperadmins(room, visibility.userIds, allowSuperadmin),
-    serviceConnections,
-  ];
+  const channels: PublishChannel[] = [serviceConnections];
+  if (room) {
+    channels.push(filterToUserIdsOrSuperadmins(room, visibility.userIds, allowSuperadmin));
+  }
   if (ownerId && visibility.userIds.has(ownerId as UserID)) {
     channels.push(ownerChannel());
   }
