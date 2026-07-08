@@ -1,5 +1,6 @@
+import { EventEmitter } from 'node:events';
 import type { HookContext } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { executorRuntimeScopeGuard, scopeExecutorRuntimeAuth } from './executor-runtime-scope';
 
 const payload = {
@@ -260,6 +261,88 @@ describe('executorRuntimeScopeGuard', () => {
     } as never);
 
     await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/no longer active/);
+  });
+
+  it('memoizes current attempt checks for hot executor request paths', async () => {
+    const tasks = Object.assign(new EventEmitter(), {
+      get: vi.fn(async () => ({
+        task_id: 'task-cache-1',
+        current_execution_attempt: {
+          attempt_id: 'attempt-cache-1',
+          executor_instance_id: 'executor-cache-1',
+        },
+      })),
+    });
+    const app = { service: (name: string) => (name === 'tasks' ? tasks : undefined) };
+    const scopedPayload = {
+      ...payload,
+      task_id: 'task-cache-1',
+      attempt_id: 'attempt-cache-1',
+      executor_instance_id: 'executor-cache-1',
+    };
+
+    await executorRuntimeScopeGuard()(
+      ctx({
+        path: 'messages/streaming',
+        method: 'create',
+        data: { data: { task_id: 'task-cache-1' } },
+        params: { authentication: { payload: scopedPayload }, query: {}, provider: 'socketio' },
+        app,
+      } as never)
+    );
+    await executorRuntimeScopeGuard()(
+      ctx({
+        path: 'messages/streaming',
+        method: 'create',
+        data: { data: { task_id: 'task-cache-1' } },
+        params: { authentication: { payload: scopedPayload }, query: {}, provider: 'socketio' },
+        app,
+      } as never)
+    );
+
+    expect(tasks.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates cached current attempt checks when the task is patched', async () => {
+    const tasks = Object.assign(new EventEmitter(), {
+      get: vi
+        .fn()
+        .mockResolvedValueOnce({
+          task_id: 'task-cache-2',
+          current_execution_attempt: {
+            attempt_id: 'attempt-cache-2',
+            executor_instance_id: 'executor-cache-2',
+          },
+        })
+        .mockResolvedValueOnce({
+          task_id: 'task-cache-2',
+          current_execution_attempt: {
+            attempt_id: 'attempt-cache-3',
+            executor_instance_id: 'executor-cache-2',
+          },
+        }),
+    });
+    const app = { service: (name: string) => (name === 'tasks' ? tasks : undefined) };
+    const scopedPayload = {
+      ...payload,
+      task_id: 'task-cache-2',
+      attempt_id: 'attempt-cache-2',
+      executor_instance_id: 'executor-cache-2',
+    };
+    const streamingContext = () =>
+      ctx({
+        path: 'messages/streaming',
+        method: 'create',
+        data: { data: { task_id: 'task-cache-2' } },
+        params: { authentication: { payload: scopedPayload }, query: {}, provider: 'socketio' },
+        app,
+      } as never);
+
+    await executorRuntimeScopeGuard()(streamingContext());
+    tasks.emit('patched', { task_id: 'task-cache-2' });
+
+    await expect(executorRuntimeScopeGuard()(streamingContext())).rejects.toThrow(/attempt scope/);
+    expect(tasks.get).toHaveBeenCalledTimes(2);
   });
 
   it('bypasses internal (provider-less) service composition', async () => {

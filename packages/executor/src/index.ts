@@ -183,6 +183,9 @@ export class AgorExecutor {
         forceFlush: true,
       });
       reporter.stop();
+      if (!result) {
+        throw new Error('Failed to write executor_connected runtime event');
+      }
       if (isRuntimePatchIgnored(result)) {
         throw new Error('Executor attempt is no longer current');
       }

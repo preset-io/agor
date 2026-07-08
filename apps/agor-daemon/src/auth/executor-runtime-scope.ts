@@ -15,6 +15,19 @@ type Scope = {
   branchId?: string;
 };
 
+type CurrentAttemptScope = {
+  attemptId?: unknown;
+  executorInstanceId?: unknown;
+  terminalAt?: unknown;
+};
+
+const CURRENT_ATTEMPT_SCOPE_CACHE_TTL_MS = 1_000;
+const currentAttemptScopeCache = new Map<
+  string,
+  { expiresAtMs: number; attempt: CurrentAttemptScope | null }
+>();
+const currentAttemptInvalidators = new WeakSet<object>();
+
 function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null {
   const params = context.params as AuthenticatedParams & ExecutorSessionTokenPayload;
   const payload = params.authentication?.payload as ExecutorSessionTokenPayload | undefined;
@@ -46,6 +59,36 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
   return null;
 }
 
+function currentAttemptCacheKey(payload: ExecutorSessionTokenPayload): string {
+  return `${payload.task_id ?? ''}\0${payload.attempt_id ?? ''}\0${payload.executor_instance_id ?? ''}`;
+}
+
+function invalidateCurrentAttemptScopeCache(taskId: unknown): void {
+  if (typeof taskId !== 'string') return;
+  const prefix = `${taskId}\0`;
+  for (const key of currentAttemptScopeCache.keys()) {
+    if (key.startsWith(prefix)) currentAttemptScopeCache.delete(key);
+  }
+}
+
+function ensureCurrentAttemptInvalidator(app: { service(name: string): unknown }): void {
+  const tasksService = app.service('tasks') as
+    | {
+        on?: (event: string, listener: (task: unknown) => void) => void;
+      }
+    | undefined;
+  if (!tasksService || currentAttemptInvalidators.has(tasksService)) return;
+  currentAttemptInvalidators.add(tasksService);
+
+  const invalidateFromTask = (task: unknown) => {
+    const record = asRecord(task);
+    invalidateCurrentAttemptScopeCache(record?.task_id);
+  };
+  tasksService.on?.('patched', invalidateFromTask);
+  tasksService.on?.('updated', invalidateFromTask);
+  tasksService.on?.('removed', invalidateFromTask);
+}
+
 function expectClaim(claim: string | undefined, label: string): string {
   if (!claim) {
     throw new Forbidden(`Executor token is missing ${label} scope`);
@@ -57,6 +100,30 @@ function expectMatch(claim: string, value: unknown, label: string): void {
   if (value === undefined || value === null) return;
   if (String(value) !== claim) {
     throw new Forbidden(`Executor token ${label} scope does not match this request`);
+  }
+}
+
+function validateCurrentAttemptScope(
+  payload: ExecutorSessionTokenPayload,
+  attempt: CurrentAttemptScope
+): void {
+  if (!payload.attempt_id) {
+    throw new Forbidden('Executor token is missing attempt scope');
+  }
+  if (attempt.attemptId !== payload.attempt_id) {
+    throw new Forbidden('Executor token attempt scope does not match current task attempt');
+  }
+  if (
+    payload.executor_instance_id &&
+    attempt.executorInstanceId &&
+    attempt.executorInstanceId !== payload.executor_instance_id
+  ) {
+    throw new Forbidden(
+      'Executor token executor-instance scope does not match current task attempt'
+    );
+  }
+  if (attempt.terminalAt) {
+    throw new Forbidden('Executor token attempt is no longer active');
   }
 }
 
@@ -72,28 +139,33 @@ async function requireCurrentAttemptScope(
   ).app;
   if (!app) return;
 
-  const task = asRecord(await app.service('tasks').get(payload.task_id, { provider: undefined }));
-  const attempt = asRecord(task?.current_execution_attempt);
-  if (!attempt) return;
+  ensureCurrentAttemptInvalidator(app);
+  const cacheKey = currentAttemptCacheKey(payload);
+  const nowMs = Date.now();
+  let cachedAttempt = currentAttemptScopeCache.get(cacheKey);
+  if (!cachedAttempt || cachedAttempt.expiresAtMs <= nowMs) {
+    const task = asRecord(await app.service('tasks').get(payload.task_id, { provider: undefined }));
+    const attempt = asRecord(task?.current_execution_attempt);
+    const attemptScope = attempt
+      ? {
+          attemptId: attempt.attempt_id,
+          executorInstanceId: attempt.executor_instance_id,
+          terminalAt: attempt.terminal_at,
+        }
+      : null;
+    if (attemptScope) {
+      validateCurrentAttemptScope(payload, attemptScope);
+    }
+    cachedAttempt = {
+      expiresAtMs: nowMs + CURRENT_ATTEMPT_SCOPE_CACHE_TTL_MS,
+      attempt: attemptScope,
+    };
+    currentAttemptScopeCache.set(cacheKey, cachedAttempt);
+  }
 
-  if (!payload.attempt_id) {
-    throw new Forbidden('Executor token is missing attempt scope');
-  }
-  if (attempt.attempt_id !== payload.attempt_id) {
-    throw new Forbidden('Executor token attempt scope does not match current task attempt');
-  }
-  if (
-    payload.executor_instance_id &&
-    attempt.executor_instance_id &&
-    attempt.executor_instance_id !== payload.executor_instance_id
-  ) {
-    throw new Forbidden(
-      'Executor token executor-instance scope does not match current task attempt'
-    );
-  }
-  if (attempt.terminal_at) {
-    throw new Forbidden('Executor token attempt is no longer active');
-  }
+  const attempt = cachedAttempt.attempt;
+  if (!attempt) return;
+  validateCurrentAttemptScope(payload, attempt);
 }
 
 function setIfAbsent(target: Record<string, unknown>, key: string, value: string): void {
