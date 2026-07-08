@@ -29,6 +29,8 @@ export interface SlackWizardOptions {
   alignUsers: boolean;
   /** Proactive outbound: post to channels by name and DM users by email. */
   outbound: boolean;
+  /** Ingest files attached to inbound messages (screenshots/images). */
+  ingestFiles: boolean;
 }
 
 export interface SlackBotEventSubscriptions {
@@ -97,6 +99,9 @@ export function requiredBotScopes(opts: SlackWizardOptions): string[] {
   }
   if (opts.alignUsers) {
     scopes.push('users:read.email');
+  }
+  if (opts.ingestFiles) {
+    scopes.push('files:read');
   }
   if (opts.outbound) {
     // Outbound name resolution lists public+private channels and opens DMs by

@@ -394,6 +394,7 @@ const SLACK_PROBE_FIELDS = new Set<string>([
   'enable_mpim',
   'align_slack_users',
   'outbound_enabled',
+  'ingest_files',
   'slack_public_scope',
   'allowed_channel_ids',
 ]);
@@ -704,6 +705,7 @@ const SlackSetupWizard: React.FC<{
   const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
   const alignUsers = Form.useWatch('align_slack_users', form) ?? true;
   const outbound = Form.useWatch('outbound_enabled', form) ?? false;
+  const ingestFiles = Form.useWatch('ingest_files', form) ?? false;
   const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
 
   const wizardOptions: SlackWizardOptions = useMemo(
@@ -714,8 +716,9 @@ const SlackSetupWizard: React.FC<{
       groupDms: enableMpim,
       alignUsers,
       outbound,
+      ingestFiles,
     }),
-    [appName, enableChannels, enableGroups, enableMpim, alignUsers, outbound]
+    [appName, enableChannels, enableGroups, enableMpim, alignUsers, outbound, ingestFiles]
   );
 
   const manifestJson = useMemo(
@@ -905,6 +908,16 @@ const SlackSetupWizard: React.FC<{
             <UserSelect userById={userById} />
           </Form.Item>
         )}
+
+        <Form.Item
+          label="Ingest attached images"
+          name="ingest_files"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Download images attached to inbound messages (screenshots) so session agents can view them. Adds the files:read scope."
+        >
+          <Switch />
+        </Form.Item>
 
         <Form.Item
           label="Enable outbound sends"
@@ -1153,6 +1166,7 @@ const ChannelFormFields: React.FC<{
   const outboundEnabled = Boolean(
     Form.useWatch('outbound_enabled', form) ?? slackConfig?.outbound_enabled
   );
+  const ingestFiles = Boolean(Form.useWatch('ingest_files', form) ?? slackConfig?.ingest_files);
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
   // Track the live Name field so the manifest preview reflects in-progress edits,
   // falling back to the stored channel name.
@@ -1171,8 +1185,17 @@ const ChannelFormFields: React.FC<{
       groupDms: enableMpim,
       alignUsers: alignSlackUsers,
       outbound: outboundEnabled,
+      ingestFiles,
     }),
-    [channelName, enableChannels, enableGroups, enableMpim, alignSlackUsers, outboundEnabled]
+    [
+      channelName,
+      enableChannels,
+      enableGroups,
+      enableMpim,
+      alignSlackUsers,
+      outboundEnabled,
+      ingestFiles,
+    ]
   );
   const slackScopes = useMemo(() => requiredBotScopes(slackOptions), [slackOptions]);
   const slackEvents = useMemo(() => requiredBotEvents(slackOptions), [slackOptions]);
@@ -2071,6 +2094,16 @@ const ChannelFormFields: React.FC<{
                       <Switch />
                     </Form.Item>
 
+                    <Form.Item
+                      label="Ingest attached images"
+                      name="ingest_files"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Download images attached to inbound messages (screenshots) so session agents can view them. Requires the files:read scope."
+                    >
+                      <Switch />
+                    </Form.Item>
+
                     {sourcesEnabled && (
                       <CompactAlert
                         type="info"
@@ -2454,6 +2487,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       align_slack_users: values.align_slack_users ?? false,
       allowed_channel_ids: values.allowed_channel_ids ?? [],
       outbound_enabled: values.outbound_enabled ?? false,
+      ingest_files: values.ingest_files ?? false,
     };
     setSlackTestLoading(true);
     setSlackTestResult(null);
@@ -2597,6 +2631,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.allowed_channel_ids = values.allowed_channel_ids ?? [];
       config.outbound_enabled = values.outbound_enabled ?? false;
       config.default_outbound_target = values.default_outbound_target || null;
+      config.ingest_files = values.ingest_files ?? false;
     }
 
     // Build agentic config from form values
@@ -2754,6 +2789,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.allowed_channel_ids = (config?.allowed_channel_ids as string[]) ?? [];
       formValues.outbound_enabled = config?.outbound_enabled ?? false;
       formValues.default_outbound_target = config?.default_outbound_target;
+      formValues.ingest_files = config?.ingest_files ?? false;
     } else if (channel.channel_type === 'github') {
       formValues.github_app_id = config?.app_id;
       formValues.github_installation_id = config?.installation_id;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  extractSlackInboundFiles,
   isChannelAllowedByWhitelist,
   markdownToMrkdwn,
   markdownToSlackPayload,
@@ -1019,5 +1020,38 @@ describe('SlackConnector.testConnection', () => {
     const failure = result.failures.find((f) => f.capability === 'channel_access');
     expect(failure?.slackError).toBe('not_in_channel');
     expect(failure?.reason).toMatch(/not a member/i);
+  });
+});
+
+describe('extractSlackInboundFiles', () => {
+  const slackFile = {
+    id: 'F123',
+    name: 'screenshot.png',
+    mimetype: 'image/png',
+    size: 2048,
+    url_private_download: 'https://files.slack.com/files-pri/T1-F123/download/screenshot.png',
+  };
+
+  it('maps well-formed Slack file objects and drops extra fields', () => {
+    const raw = [{ ...slackFile, permalink: 'https://x.slack.com/p', user: 'U1' }];
+    expect(extractSlackInboundFiles(raw)).toEqual([slackFile]);
+  });
+
+  it('drops malformed entries but keeps valid ones', () => {
+    const raw = [
+      null,
+      'not-an-object',
+      { ...slackFile, id: undefined },
+      { ...slackFile, size: '2048' },
+      { ...slackFile, url_private_download: undefined },
+      slackFile,
+    ];
+    expect(extractSlackInboundFiles(raw)).toEqual([slackFile]);
+  });
+
+  it('returns an empty array for non-array input', () => {
+    expect(extractSlackInboundFiles(undefined)).toEqual([]);
+    expect(extractSlackInboundFiles({})).toEqual([]);
+    expect(extractSlackInboundFiles('files')).toEqual([]);
   });
 });

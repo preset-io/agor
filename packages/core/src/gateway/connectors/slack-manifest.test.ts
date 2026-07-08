@@ -19,6 +19,7 @@ const baseOptions: SlackWizardOptions = {
   groupDms: false,
   alignUsers: false,
   outbound: false,
+  ingestFiles: false,
 };
 
 function withOptions(overrides: Partial<SlackWizardOptions>): SlackWizardOptions {
@@ -71,6 +72,17 @@ describe('requiredBotScopes', () => {
     ]);
   });
 
+  it('adds files:read for file ingestion and omits it otherwise', () => {
+    expect(requiredBotScopes(withOptions({ ingestFiles: true }))).toEqual([
+      'chat:write',
+      'files:read',
+      'im:history',
+      'im:read',
+      'users:read',
+    ]);
+    expect(requiredBotScopes(baseOptions)).not.toContain('files:read');
+  });
+
   it('all capabilities on — de-duplicated and sorted', () => {
     const allOn = withOptions({
       publicChannels: true,
@@ -78,6 +90,7 @@ describe('requiredBotScopes', () => {
       groupDms: true,
       alignUsers: true,
       outbound: true,
+      ingestFiles: true,
     });
     expect(requiredBotScopes(allOn)).toEqual([
       'app_mentions:read',
@@ -85,6 +98,7 @@ describe('requiredBotScopes', () => {
       'channels:read',
       'chat:write',
       'chat:write.public',
+      'files:read',
       'groups:history',
       'groups:read',
       'im:history',

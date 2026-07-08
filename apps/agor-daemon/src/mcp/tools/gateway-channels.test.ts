@@ -1063,6 +1063,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     groupDms: false,
     alignUsers: false,
     outbound: false,
+    ingestFiles: false,
   };
 
   it('marks the manifest generator read-only', async () => {
@@ -1091,6 +1092,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
         enable_mpim: false,
         align_slack_users: false,
         outbound_enabled: false,
+        ingest_files: false,
       },
     });
     expect(Array.isArray(payload.setup_steps)).toBe(true);
@@ -1173,6 +1175,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       groupDms: true,
       alignUsers: true,
       outbound: true,
+      ingestFiles: true,
     };
     const tools = await captureTools('admin');
     const result = await tools.agor_gateway_slack_manifest_generate.handler({
@@ -1192,8 +1195,10 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       enable_mpim: true,
       align_slack_users: true,
       outbound_enabled: true,
+      ingest_files: true,
       allowed_channel_ids: ['C123', 'C456'],
     });
+    expect(payload.bot_scopes).toEqual(expect.arrayContaining(['files:read']));
     expect(payload.caveats).toEqual(
       expect.arrayContaining([
         expect.stringContaining('restrictToChannelIds maps to config.allowed_channel_ids'),

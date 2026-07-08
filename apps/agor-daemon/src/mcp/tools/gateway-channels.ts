@@ -625,6 +625,12 @@ const slackManifestGenerateSchema = z.strictObject({
     .boolean()
     .default(false)
     .describe('Proactive outbound: post to channels by name and DM users by email.'),
+  ingestFiles: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Ingest images attached to inbound messages (adds the files:read scope). The gateway downloads them server-side and hands the stored paths to the session agent.'
+    ),
   restrictToChannelIds: z
     .array(z.string().min(1))
     .optional()
@@ -644,6 +650,7 @@ function toSlackWizardOptions(
     groupDms: args.groupDms,
     alignUsers: args.alignUsers,
     outbound: args.outbound,
+    ingestFiles: args.ingestFiles,
   };
 }
 
@@ -661,6 +668,7 @@ function toCreateChannelConfigHint(args: z.infer<typeof slackManifestGenerateSch
     enable_mpim: args.groupDms,
     align_slack_users: args.alignUsers,
     outbound_enabled: args.outbound,
+    ingest_files: args.ingestFiles,
   };
   if (args.restrictToChannelIds && args.restrictToChannelIds.length > 0) {
     config.allowed_channel_ids = args.restrictToChannelIds;
