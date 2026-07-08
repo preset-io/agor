@@ -76,13 +76,19 @@ export function joinSessionStreamChannel(
   app.channel(sessionStreamChannelName(sessionId)).join(connection as never);
 }
 
-/** Remove a connection from a session's streaming room. */
+/**
+ * Remove a connection from a session's streaming room, but only if the room
+ * already exists. A `remove` for a never-joined room (any authenticated caller
+ * can send one) or a dispose after logout/disconnect already pruned the room
+ * would otherwise re-materialize an empty, never-cleaned channel — the same
+ * leak class as the publish path. `.leave` on an absent room is a no-op anyway.
+ */
 export function leaveSessionStreamChannel(
   app: Application,
   sessionId: string,
   connection: unknown
 ): void {
-  app.channel(sessionStreamChannelName(sessionId)).leave(connection as never);
+  existingChannel(app, sessionStreamChannelName(sessionId))?.leave(connection as never);
 }
 
 const DEBUG_REALTIME_PUBLISH =

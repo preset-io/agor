@@ -2,12 +2,24 @@ import type { Application } from '@agor/core/feathers';
 import { describe, expect, it, vi } from 'vitest';
 import { createSessionStreamsService } from './session-streams.js';
 
-function makeApp(sessionsGet: (id: string, params: unknown) => Promise<unknown>) {
+function makeApp(
+  sessionsGet: (id: string, params: unknown) => Promise<unknown>,
+  existingChannels: string[] = []
+) {
   const join = vi.fn();
   const leave = vi.fn();
-  const channel = vi.fn(() => ({ join, leave }));
+  // Names that already exist plus any materialized by a channel lookup; the
+  // leave path is existence-gated, so an absent room must not be created.
+  const created = new Set<string>(existingChannels);
+  const channel = vi.fn((name: string) => {
+    created.add(name);
+    return { join, leave };
+  });
   const get = vi.fn(sessionsGet);
   const app = {
+    get channels() {
+      return [...created];
+    },
     channel,
     service: vi.fn((path: string) => {
       if (path === 'sessions') return { get };
@@ -91,7 +103,10 @@ describe('session-streams service', () => {
   });
 
   it('leaves the per-session channel on unsubscribe', async () => {
-    const { app, leave, channel } = makeApp(async () => ({ session_id: 's1' }));
+    const { app, leave, channel } = makeApp(
+      async () => ({ session_id: 's1' }),
+      ['session-stream:s1']
+    );
     const service = createSessionStreamsService(app);
 
     const result = await service.remove('s1', { connection, provider: 'socketio' } as never);
@@ -102,9 +117,12 @@ describe('session-streams service', () => {
   });
 
   it('unsubscribe skips the resolve round-trip when given a full UUID', async () => {
-    const { app, leave, channel, get } = makeApp(async () => ({ session_id: 's1' }));
-    const service = createSessionStreamsService(app);
     const fullId = 'ffffffff-1111-2222-3333-444444444444';
+    const { app, leave, channel, get } = makeApp(
+      async () => ({ session_id: 's1' }),
+      [`session-stream:${fullId}`]
+    );
+    const service = createSessionStreamsService(app);
 
     const result = await service.remove(fullId, { connection, provider: 'socketio' } as never);
 
@@ -112,6 +130,20 @@ describe('session-streams service', () => {
     expect(get).not.toHaveBeenCalled();
     expect(channel).toHaveBeenCalledWith(`session-stream:${fullId}`);
     expect(leave).toHaveBeenCalledWith(connection);
+    expect(result).toEqual({ session_id: fullId, subscribed: false });
+  });
+
+  it('unsubscribe from an absent room does not materialize it', async () => {
+    // No existing channels — the room was never joined (or already pruned).
+    const fullId = 'ffffffff-1111-2222-3333-444444444444';
+    const { app, leave } = makeApp(async () => ({ session_id: fullId }));
+    const service = createSessionStreamsService(app);
+
+    const result = await service.remove(fullId, { connection, provider: 'socketio' } as never);
+
+    // The leave path is existence-gated: no channel created, no leave issued.
+    expect(leave).not.toHaveBeenCalled();
+    expect(app.channels).not.toContain(`session-stream:${fullId}`);
     expect(result).toEqual({ session_id: fullId, subscribed: false });
   });
 });

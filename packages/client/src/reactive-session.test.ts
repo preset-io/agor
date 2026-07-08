@@ -1,7 +1,11 @@
 import type { AgorClient, Message, Session, Task } from '@agor/core/client';
 import { TaskStatus } from '@agor/core/client';
 import { describe, expect, it, vi } from 'vitest';
-import { ReactiveSessionHandle, type TaskHydrationMode } from './reactive-session';
+import {
+  __streamSubscriptionCountForTest,
+  ReactiveSessionHandle,
+  type TaskHydrationMode,
+} from './reactive-session';
 
 const SESSION_ID = 'session-1';
 
@@ -758,5 +762,52 @@ describe('ReactiveSessionHandle stream subscription', () => {
     expect(handle.getStreamingMessage('m2')).toBeUndefined();
 
     handle.dispose();
+  });
+
+  it('a short-id handle disposed before its ack leaves the registry empty', async () => {
+    const shortId = 'ffffffff';
+    const canonical = 'ffffffff-1111-2222-3333-444444444444';
+    const createResolvers: Array<() => void> = [];
+    const create = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        createResolvers.push(resolve);
+      });
+      return { session_id: canonical, subscribed: true };
+    });
+    const remove = vi.fn(async () => ({ session_id: canonical, subscribed: false }));
+    const listener = () => ({ on: vi.fn(), removeListener: vi.fn() });
+    const services: Record<string, unknown> = {
+      sessions: { get: vi.fn(async () => ({ session_id: canonical }) as Session), ...listener() },
+      tasks: { findAll: vi.fn(async () => []), ...listener() },
+      messages: { findAll: vi.fn(async () => []), ...listener() },
+      'session-streams': { create, remove },
+    };
+    const queueService = { find: vi.fn(async () => ({ data: [] })) };
+    const client = {
+      io: { connected: true, on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name.includes('/tasks/queue') ? queueService : services[name]
+      ),
+    } as unknown as AgorClient;
+
+    const handle = new ReactiveSessionHandle(client, shortId, { taskHydration: 'none' });
+    // The create ack is held; dispose BEFORE it lands (release captured the
+    // short-id key, but the ack re-keys the entry to the canonical id).
+    await vi.waitFor(() => {
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+    handle.dispose();
+    for (const resolve of createResolvers.splice(0)) resolve();
+
+    await vi.waitFor(() => {
+      expect(remove).toHaveBeenCalledTimes(1);
+    });
+    // The compensating remove targeted the canonical room...
+    expect(remove).toHaveBeenCalledWith(canonical);
+    // ...and the registry ends empty (entry dropped under its re-keyed id,
+    // connect handler detached) rather than leaking a stale entry.
+    await vi.waitFor(() => {
+      expect(__streamSubscriptionCountForTest(client)).toBe(0);
+    });
   });
 });

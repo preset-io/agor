@@ -50,10 +50,11 @@ const checks = [
       'apps/agor-daemon/src/mcp/tools/artifacts.ts': 1,
       'apps/agor-daemon/src/mcp/tools/boards.ts': 2,
       'apps/agor-daemon/src/mcp/tools/cards.ts': 8,
-      // The tenant-aware realtime facade: tenant/session channel join/leave,
-      // the publish handler, and session-stream room routing (join, leave,
-      // leave-all, and the publish-time room lookup) all live here on purpose.
-      'apps/agor-daemon/src/utils/realtime-publish.ts': 8,
+      // The tenant-aware realtime facade: tenant/session channel join, the
+      // publish handler, session-stream join, the existence-gated room lookup
+      // (existingChannel — used by publish + leave paths so they never
+      // materialize a room), and leave-all all live here on purpose.
+      'apps/agor-daemon/src/utils/realtime-publish.ts': 7,
       'apps/agor-daemon/src/setup/socketio.ts': 18,
     },
   },

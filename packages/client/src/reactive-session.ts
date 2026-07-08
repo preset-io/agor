@@ -1362,10 +1362,14 @@ function releaseSessionStream(client: AgorClient, sessionId: string): void {
   if (sub.refCount > 0) return;
   sub.wantSubscribed = false;
   void runSubscriptionOp(sub, () => removeSubscription(client, sub)).then(() => {
-    // Drop the entry only if nothing re-attached while the remove drained; a
-    // re-attach reuses this same sub and its ordered chain.
-    if (sub.refCount === 0 && !sub.wantSubscribed && state.subs.get(key) === sub) {
-      state.subs.delete(key);
+    // Re-resolve the key: the create ack (which ran before this remove on the
+    // shared chain) may have re-keyed the entry from the id we captured to its
+    // canonical id — e.g. a short-id handle disposed before its ack. Consulting
+    // the stale key would leave the entry (and the connect-handler lifecycle)
+    // orphaned. Drop it only if nothing re-attached while the remove drained.
+    const currentKey = resolveStreamKey(state, sessionId);
+    if (sub.refCount === 0 && !sub.wantSubscribed && state.subs.get(currentKey) === sub) {
+      state.subs.delete(currentKey);
       if (state.subs.size === 0 && state.disconnectHandler) {
         client.io.off('disconnect', state.disconnectHandler);
         state.disconnectHandler = null;
@@ -1373,6 +1377,15 @@ function releaseSessionStream(client: AgorClient, sessionId: string): void {
       }
     }
   });
+}
+
+/**
+ * @internal Test-only: number of live stream-subscription registry entries for
+ * a client (0 once the last release has torn the client's state down). Lets
+ * tests assert the registry doesn't leak entries across re-key / dispose races.
+ */
+export function __streamSubscriptionCountForTest(client: AgorClient): number {
+  return CLIENT_STREAM_STATE.get(client)?.subs.size ?? 0;
 }
 
 interface SharedReactiveSessionEntry {
