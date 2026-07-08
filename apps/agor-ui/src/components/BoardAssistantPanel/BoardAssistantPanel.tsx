@@ -348,7 +348,7 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
               onForkSession={onForkSession}
               onSpawnSession={onSpawnSession}
               onOpenSessionSettings={onOpenSessionSettings}
-              defaultExpanded={false}
+              defaultExpanded={true}
               mode="panel"
               client={client}
             />
