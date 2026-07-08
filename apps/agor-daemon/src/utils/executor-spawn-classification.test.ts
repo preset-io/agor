@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  hasExecutorConnectionEvidence,
   hasObservedLaunchedExecutorProcess,
   isExecutorSpawnFailureExit,
   shouldFailCommandTemplateLauncherExit,
+  shouldScheduleCommandTemplateConnectTimeout,
 } from './executor-spawn-classification.js';
 
 describe('executor spawn classification', () => {
@@ -24,6 +26,19 @@ describe('executor spawn classification', () => {
 
   it('does not classify successful exits as spawn failures', () => {
     expect(isExecutorSpawnFailureExit(false, 0)).toBe(false);
+  });
+
+  it('treats attempt connection and heartbeat timestamps as executor connection evidence', () => {
+    expect(hasExecutorConnectionEvidence({})).toBe(false);
+    expect(hasExecutorConnectionEvidence({ connected_at: '2026-01-01T00:00:00.000Z' })).toBe(true);
+    expect(hasExecutorConnectionEvidence({ last_heartbeat_at: '2026-01-01T00:00:01.000Z' })).toBe(
+      true
+    );
+    expect(
+      hasExecutorConnectionEvidence({
+        task_last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
+      })
+    ).toBe(true);
   });
 
   it('does not fail command-template tasks for successful launcher exits', () => {
@@ -58,6 +73,42 @@ describe('executor spawn classification', () => {
         activeTask: true,
         isLatestTask: true,
         sessionExecuting: true,
+      })
+    ).toBe(false);
+  });
+
+  it('schedules a connect-timeout check for successful command-template launcher exits before connect', () => {
+    expect(
+      shouldScheduleCommandTemplateConnectTimeout({
+        code: 0,
+        connected: false,
+        activeTask: true,
+        isLatestTask: true,
+        sessionExecuting: true,
+        attemptMatches: true,
+      })
+    ).toBe(true);
+  });
+
+  it('does not schedule command-template connect timeout for stale attempts or connected executors', () => {
+    expect(
+      shouldScheduleCommandTemplateConnectTimeout({
+        code: 0,
+        connected: false,
+        activeTask: true,
+        isLatestTask: true,
+        sessionExecuting: true,
+        attemptMatches: false,
+      })
+    ).toBe(false);
+    expect(
+      shouldScheduleCommandTemplateConnectTimeout({
+        code: 0,
+        connected: true,
+        activeTask: true,
+        isLatestTask: true,
+        sessionExecuting: true,
+        attemptMatches: true,
       })
     ).toBe(false);
   });

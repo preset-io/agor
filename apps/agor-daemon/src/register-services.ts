@@ -10,6 +10,7 @@ import {
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
   resolveExecutionSecurityMode,
+  resolveExecutorHeartbeatConfig,
 } from '@agor/core/config';
 import {
   and,
@@ -127,9 +128,11 @@ import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import {
+  hasExecutorConnectionEvidence,
   hasObservedLaunchedExecutorProcess,
   isExecutorSpawnFailureExit,
   shouldFailCommandTemplateLauncherExit,
+  shouldScheduleCommandTemplateConnectTimeout,
 } from './utils/executor-spawn-classification.js';
 import { escapeHtml } from './utils/html.js';
 import {
@@ -786,6 +789,74 @@ function createExecuteHandler(
       if (!data.attemptId) return true;
       return task.current_execution_attempt?.attempt_id === data.attemptId;
     };
+    const taskHasExecutorConnectionEvidence = (task: Task): boolean =>
+      hasExecutorConnectionEvidence({
+        connected_at: task.current_execution_attempt?.connected_at,
+        last_heartbeat_at: task.current_execution_attempt?.last_heartbeat_at,
+        task_last_executor_heartbeat_at: task.last_executor_heartbeat_at,
+      });
+    const commandTemplateConnectTimeoutMs = resolveExecutorHeartbeatConfig(
+      config.execution
+    ).stale_after_ms;
+
+    const scheduleCommandTemplateConnectTimeoutCheck = (): void => {
+      const timer = setTimeout(() => {
+        void (async () => {
+          try {
+            const latestSession = await app.service('sessions').get(sessionId, params);
+            const latestTask = (await app.service('tasks').get(taskId, params)) as Task;
+            const latestConnected = taskHasExecutorConnectionEvidence(latestTask);
+            const latestTaskId = latestSession.tasks?.[latestSession.tasks.length - 1];
+            const stillLatestTask = !latestTaskId || latestTaskId === taskId;
+            const stillActiveTask =
+              isTaskExecuting(latestTask) || latestTask.status === TaskStatus.TIMED_OUT;
+            const stillSessionExecuting =
+              isSessionExecuting(latestSession) || latestSession.status === SessionStatus.TIMED_OUT;
+            const stillAttemptMatches = capturedAttemptMatches(latestTask);
+
+            if (
+              !stillAttemptMatches ||
+              latestConnected ||
+              !stillActiveTask ||
+              !stillLatestTask ||
+              !stillSessionExecuting
+            ) {
+              return;
+            }
+
+            await app.service('tasks').patch(
+              taskId,
+              {
+                status: TaskStatus.FAILED,
+                error_message:
+                  `Executor launcher exited successfully but executor did not connect ` +
+                  `within ${commandTemplateConnectTimeoutMs}ms.`,
+                runtime_vitals: buildDaemonTaskRuntimeVitals(
+                  latestTask.runtime_vitals,
+                  TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED,
+                  {
+                    phase: TaskRuntimePhase.FAILED,
+                    errorCode: 'connect_timeout',
+                  }
+                ),
+              },
+              runtimeAttemptParams
+            );
+            appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+            console.log(
+              `✅ [Executor] Command-template executor connect timeout marked task ${shortId(taskId)} FAILED`
+            );
+          } catch (error) {
+            console.error(
+              `❌ [Executor] Failed command-template executor connect-timeout check:`,
+              error
+            );
+          }
+        })();
+      }, commandTemplateConnectTimeoutMs);
+
+      timer.unref?.();
+    };
 
     // Get branch path
     let cwd = process.cwd();
@@ -1008,7 +1079,7 @@ function createExecuteHandler(
           try {
             const currentSession = await app.service('sessions').get(sessionId, params);
             const currentTask = (await app.service('tasks').get(taskId, params)) as Task;
-            const connected = Boolean(currentTask.current_execution_attempt?.connected_at);
+            const connected = taskHasExecutorConnectionEvidence(currentTask);
             const activeTask =
               isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT;
             const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
@@ -1051,6 +1122,18 @@ function createExecuteHandler(
                 `✅ [Executor] Command-template launcher failure marked task ${shortId(taskId)} FAILED (code: ${code})`
               );
             } else {
+              if (
+                shouldScheduleCommandTemplateConnectTimeout({
+                  code,
+                  connected,
+                  activeTask,
+                  isLatestTask,
+                  sessionExecuting,
+                  attemptMatches,
+                })
+              ) {
+                scheduleCommandTemplateConnectTimeoutCheck();
+              }
               console.log(
                 `ℹ️  [Executor] Command-template launcher exit is not authoritative (code: ${code}, connected: ${connected})`
               );
@@ -1214,7 +1297,13 @@ function createExecuteHandler(
           }
         }
 
-        appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+        if (!isCommandTemplateRuntime || wroteExitVitals) {
+          appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
+        } else {
+          console.log(
+            `ℹ️  [Executor] Keeping command-template runtime token for task ${shortId(taskId)} after launcher exit; remote executor owns terminal revocation/expiry`
+          );
+        }
       },
     });
 

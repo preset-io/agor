@@ -8,6 +8,24 @@ import { describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
 
 describe('TasksService executor heartbeat helpers', () => {
+  const installLockedTaskRepo = (service: {
+    get: ReturnType<typeof vi.fn>;
+    repository: { update: ReturnType<typeof vi.fn> };
+    taskRepo?: { updateWithLockedCurrent: ReturnType<typeof vi.fn> };
+  }) => {
+    service.taskRepo = {
+      updateWithLockedCurrent: vi.fn(async (id: string, decide: (current: any) => any) => {
+        const before = await service.get(id);
+        const decision = decide(before);
+        if (decision.action === 'return') {
+          return { before, after: decision.task, updated: false };
+        }
+        const after = await service.repository.update(id, decision.updates);
+        return { before, after, updated: true };
+      }),
+    };
+  };
+
   it('fails lost heartbeat tasks and marks the session failed without draining its queue', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000001';
     const sessionId = '018f0000-0000-7000-8000-000000000002';
@@ -34,6 +52,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(currentTask);
     service.repository = { update: vi.fn().mockResolvedValue(failedTask) };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
     service.app = {
@@ -104,6 +123,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(completedTask);
     service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
     service.app = {
@@ -145,6 +165,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(failedTask);
     service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
     service.app = {
@@ -184,6 +205,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(failedTask);
     service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
 
@@ -226,6 +248,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(currentTask);
     service.repository = { update: vi.fn().mockResolvedValue(stoppedTask) };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
     service.dispatchCompletionCallbacks = dispatchCompletionCallbacks;
@@ -301,6 +324,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(currentTask);
     service.repository = { update: vi.fn().mockResolvedValue(stoppedTask) };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
     service.dispatchCompletionCallbacks = vi.fn();
@@ -358,6 +382,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(stoppedTask);
     service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
     service.app = {
@@ -396,6 +421,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(stoppedTask);
     service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
     service.app = {
@@ -437,6 +463,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(currentTask);
     service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
 
@@ -494,6 +521,70 @@ describe('TasksService executor heartbeat helpers', () => {
     expect(service.emit).not.toHaveBeenCalled();
   });
 
+  it('checks runtime attempt ownership against the locked task row', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000151';
+    const staleAttempt = {
+      schema_version: 1 as const,
+      attempt_id: '018f0000-0000-7000-8000-000000000153',
+      executor_instance_id: '018f0000-0000-7000-8000-000000000154',
+      runtime_backend: TaskExecutionRuntimeBackend.COMMAND_TEMPLATE,
+      started_at: '2026-01-01T00:00:00.000Z',
+    };
+    const preReadTask = {
+      task_id: taskId,
+      session_id: '018f0000-0000-7000-8000-000000000152',
+      status: TaskStatus.RUNNING,
+      created_at: '2026-01-01T00:00:00.000Z',
+      current_execution_attempt: staleAttempt,
+    };
+    const lockedTask = {
+      ...preReadTask,
+      current_execution_attempt: {
+        ...staleAttempt,
+        attempt_id: '018f0000-0000-7000-8000-000000000155',
+      },
+    };
+    const service = Object.create(TasksService.prototype) as TasksService & {
+      get: ReturnType<typeof vi.fn>;
+      repository: { update: ReturnType<typeof vi.fn> };
+      taskRepo: { updateWithLockedCurrent: ReturnType<typeof vi.fn> };
+      id: string;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    service.get = vi.fn().mockResolvedValue(preReadTask);
+    service.repository = { update: vi.fn() };
+    service.taskRepo = {
+      updateWithLockedCurrent: vi.fn(async (_id: string, decide: (current: any) => any) => {
+        const decision = decide(lockedTask);
+        if (decision.action === 'return') {
+          return { before: lockedTask, after: decision.task, updated: false };
+        }
+        const after = await service.repository.update(_id, decision.updates);
+        return { before: lockedTask, after, updated: true };
+      }),
+    };
+    service.id = 'task_id';
+    service.emit = vi.fn();
+
+    const result = await service.patch(
+      taskId,
+      { last_executor_heartbeat_at: '2026-01-01T00:00:10.000Z' },
+      {
+        runtimeAttempt: {
+          attemptId: staleAttempt.attempt_id,
+          executorInstanceId: staleAttempt.executor_instance_id,
+        },
+      } as any
+    );
+
+    expect(result).toMatchObject({
+      ...lockedTask,
+      runtime_patch_ignored: true,
+    });
+    expect(service.repository.update).not.toHaveBeenCalled();
+    expect(service.emit).not.toHaveBeenCalled();
+  });
+
   it('stamps connected, heartbeat, and terminal attempt fields for current executor patches', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000111';
     const attempt = {
@@ -527,6 +618,7 @@ describe('TasksService executor heartbeat helpers', () => {
         return currentTask;
       }),
     };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
     service.heartbeatCallbackRunner = { run: vi.fn() };
@@ -619,6 +711,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(currentTask);
     service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
 
@@ -668,6 +761,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(currentTask);
     service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
 
@@ -711,6 +805,7 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     service.get = vi.fn().mockResolvedValue(currentTask);
     service.repository = { update: vi.fn() };
+    installLockedTaskRepo(service);
     service.id = 'task_id';
     service.emit = vi.fn();
 

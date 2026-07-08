@@ -22,6 +22,16 @@ import {
 import { visibleSessionReferenceAccessExists } from './branch-access';
 import { deepMerge } from './merge-utils';
 
+export type TaskLockedUpdateDecision =
+  | { action: 'update'; updates: Partial<Task> }
+  | { action: 'return'; task: Task };
+
+export interface TaskLockedUpdateResult {
+  before: Task;
+  after: Task;
+  updated: boolean;
+}
+
 /**
  * Task repository implementation
  */
@@ -407,6 +417,81 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to update task: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Update a task while letting the caller decide against the row version that
+   * is locked inside the repository transaction.
+   *
+   * Use this for compare-and-swap style task updates where a pre-transaction
+   * read would be stale by the time the merge/write happens.
+   */
+  async updateWithLockedCurrent(
+    id: string,
+    decide: (current: Task) => TaskLockedUpdateDecision
+  ): Promise<TaskLockedUpdateResult> {
+    try {
+      const fullId = await this.resolveId(id);
+
+      const result = await this.db.transaction(async (tx) => {
+        await lockRowForUpdate(txAsDb(tx), this.db, tasks, eq(tasks.task_id, fullId));
+
+        const currentRow = await select(txAsDb(tx))
+          .from(tasks)
+          .where(eq(tasks.task_id, fullId))
+          .one();
+
+        if (!currentRow) {
+          throw new EntityNotFoundError('Task', id);
+        }
+
+        const current = this.rowToTask(currentRow);
+        const decision = decide(current);
+
+        if (decision.action === 'return') {
+          return {
+            before: current,
+            after: decision.task,
+            updated: false,
+          };
+        }
+
+        const merged = deepMerge(current, decision.updates);
+        if (decision.updates.runtime_vitals !== undefined) {
+          merged.runtime_vitals = decision.updates.runtime_vitals;
+        }
+        const insertData = this.taskToInsert(merged);
+
+        await update(txAsDb(tx), tasks)
+          .set({
+            status: insertData.status,
+            queue_position: insertData.queue_position,
+            completed_at: insertData.completed_at,
+            last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
+            session_md5: insertData.session_md5,
+            data: insertData.data,
+          })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+
+        return {
+          before: current,
+          after: merged,
+          updated: true,
+        };
+      });
+
+      return result;
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to update task with locked current row: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
         error
       );
     }

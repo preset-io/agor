@@ -13,6 +13,18 @@ export function isExecutorSpawnFailureExit(processSpawnObserved: boolean, code: 
   return !processSpawnObserved && code !== 0;
 }
 
+export interface ExecutorConnectionEvidenceState {
+  connected_at?: unknown;
+  last_heartbeat_at?: unknown;
+  task_last_executor_heartbeat_at?: unknown;
+}
+
+export function hasExecutorConnectionEvidence(state: ExecutorConnectionEvidenceState): boolean {
+  return Boolean(
+    state.connected_at || state.last_heartbeat_at || state.task_last_executor_heartbeat_at
+  );
+}
+
 export interface CommandTemplateLauncherExitState {
   code: number | null;
   connected: boolean;
@@ -26,6 +38,23 @@ export function shouldFailCommandTemplateLauncherExit(
 ): boolean {
   return (
     state.code !== 0 &&
+    !state.connected &&
+    state.activeTask &&
+    state.isLatestTask &&
+    state.sessionExecuting
+  );
+}
+
+export interface CommandTemplateConnectTimeoutState extends CommandTemplateLauncherExitState {
+  attemptMatches: boolean;
+}
+
+export function shouldScheduleCommandTemplateConnectTimeout(
+  state: CommandTemplateConnectTimeoutState
+): boolean {
+  return (
+    state.attemptMatches &&
+    state.code === 0 &&
     !state.connected &&
     state.activeTask &&
     state.isLatestTask &&

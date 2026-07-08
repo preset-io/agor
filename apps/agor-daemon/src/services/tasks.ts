@@ -607,22 +607,15 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const nextStatus = data.status;
     const isRuntimeOwnedPatch = runtimeOwnedTaskPatch(data);
-    const currentTask =
+    let currentTask =
       nextStatus !== undefined || isRuntimeOwnedPatch ? await this.get(id, params) : undefined;
 
-    if (currentTask && isRuntimeOwnedPatch) {
-      const claims = executorAttemptClaims(params);
-      const noopReason = shouldNoopRuntimeOwnedPatch(data, currentTask, claims);
-      if (noopReason) {
-        console.warn(
-          `⏭️ [TasksService] Ignoring runtime-owned patch for task ${shortId(currentTask.task_id)}: ${noopReason}`
-        );
-        return runtimeOwnedPatchNoopTask(currentTask, noopReason);
-      }
-      applyExecutionAttemptPatchState(data, currentTask);
-    }
-
-    if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
+    if (
+      !isRuntimeOwnedPatch &&
+      currentTask &&
+      isTerminalTaskStatus(currentTask.status) &&
+      nextStatus !== undefined
+    ) {
       console.warn(
         `⏭️ [TasksService] Ignoring status rewrite for terminal task ${shortId(currentTask.task_id)} ` +
           `(${currentTask.status} → ${nextStatus})`
@@ -676,7 +669,49 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     }
 
-    const result = await super.patch(id, data, params);
+    let result: Task | Task[];
+    if (isRuntimeOwnedPatch) {
+      const claims = executorAttemptClaims(params);
+      const guarded = await this.taskRepo.updateWithLockedCurrent(id, (lockedTask) => {
+        const noopReason = shouldNoopRuntimeOwnedPatch(data, lockedTask, claims);
+        if (noopReason) {
+          console.warn(
+            `⏭️ [TasksService] Ignoring runtime-owned patch for task ${shortId(lockedTask.task_id)}: ${noopReason}`
+          );
+          return {
+            action: 'return',
+            task: runtimeOwnedPatchNoopTask(lockedTask, noopReason),
+          };
+        }
+
+        if (isTerminalTaskStatus(lockedTask.status) && nextStatus !== undefined) {
+          console.warn(
+            `⏭️ [TasksService] Ignoring status rewrite for terminal task ${shortId(lockedTask.task_id)} ` +
+              `(${lockedTask.status} → ${nextStatus})`
+          );
+          return {
+            action: 'return',
+            task: lockedTask,
+          };
+        }
+
+        applyExecutionAttemptPatchState(data, lockedTask);
+        return {
+          action: 'update',
+          updates: data,
+        };
+      });
+
+      currentTask = guarded.before;
+      if (!guarded.updated) {
+        return guarded.after;
+      }
+
+      result = guarded.after;
+      this.emit?.('patched', result, params);
+    } else {
+      result = await super.patch(id, data, params);
+    }
 
     if (isRunningTransition && !Array.isArray(result)) {
       this.trackTaskStarted(result as Task);
