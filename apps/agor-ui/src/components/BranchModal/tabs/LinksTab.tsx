@@ -2,15 +2,25 @@ import type { AgorClient, Branch, Link } from '@agor-live/client';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Space, Typography } from 'antd';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAgorStore } from '../../../store/agorStore';
 import {
   makeLinksForBranchSelector,
+  selectApplyKnownLinkCreatedResult,
+  selectApplyKnownLinkRemovedResult,
   selectApplyLinkMutationResult,
+  selectBoardById,
   selectFetchAndReplaceFullBranchLinks,
 } from '../../../store/selectors';
 import { useThemedMessage } from '../../../utils/message';
-import { buildLinkDisplayItems, getLinkCategorySummary, LinkDisplayList } from '../../Links';
+import {
+  buildLinkDisplayItems,
+  getAssistantPromotionState,
+  getLinkCategorySummary,
+  type LinkDisplayItem,
+  LinkDisplayList,
+  promoteLinkToAssistant,
+} from '../../Links';
 
 interface LinksTabProps {
   branch: Branch;
@@ -22,12 +32,25 @@ interface LinksTabProps {
 export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open }) => {
   const selector = useMemo(() => makeLinksForBranchSelector(branch.branch_id), [branch.branch_id]);
   const links = useAgorStore(selector) ?? [];
+  const boardById = useAgorStore(selectBoardById);
   const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
   const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
+  const applyKnownLinkCreatedResult = useAgorStore(selectApplyKnownLinkCreatedResult);
+  const applyKnownLinkRemovedResult = useAgorStore(selectApplyKnownLinkRemovedResult);
   const { showError } = useThemedMessage();
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
+  const [assistantActionKey, setAssistantActionKey] = useState<string | null>(null);
+
+  const assistantBranchId = branch.board_id
+    ? (boardById.get(branch.board_id)?.primary_assistant_id ?? null)
+    : null;
+  const assistantLinksSelector = useMemo(
+    () => makeLinksForBranchSelector(assistantBranchId ?? ''),
+    [assistantBranchId]
+  );
+  const assistantLinks = useAgorStore(assistantLinksSelector) ?? [];
 
   const displayItems = useMemo(() => buildLinkDisplayItems({ branch, links }), [branch, links]);
 
@@ -37,7 +60,11 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    fetchAndReplaceFullBranchLinks(client, branch.branch_id)
+    const requests = [fetchAndReplaceFullBranchLinks(client, branch.branch_id)];
+    if (assistantBranchId && assistantBranchId !== branch.branch_id) {
+      requests.push(fetchAndReplaceFullBranchLinks(client, assistantBranchId));
+    }
+    Promise.all(requests)
       .catch((error: unknown) => {
         if (cancelled) return;
         const message = error instanceof Error ? error.message : String(error);
@@ -50,7 +77,7 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
     return () => {
       cancelled = true;
     };
-  }, [active, branch.branch_id, client, fetchAndReplaceFullBranchLinks, open]);
+  }, [active, assistantBranchId, branch.branch_id, client, fetchAndReplaceFullBranchLinks, open]);
 
   const refresh = async () => {
     if (!client) return;
@@ -58,6 +85,9 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
     setLoadError(null);
     try {
       await fetchAndReplaceFullBranchLinks(client, branch.branch_id);
+      if (assistantBranchId && assistantBranchId !== branch.branch_id) {
+        await fetchAndReplaceFullBranchLinks(client, assistantBranchId);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLoadError(message);
@@ -78,6 +108,60 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
       showError(`Failed to update link: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setPinningLinkId(null);
+    }
+  };
+
+  const assistantStateForItem = useCallback(
+    (item: LinkDisplayItem) => {
+      const state = getAssistantPromotionState({
+        item,
+        assistantBranchId,
+        sourceBranchId: branch.branch_id,
+        assistantLinks,
+      });
+      if (!state.canPromote) return null;
+      const actionKey = state.isPromoted ? state.assistantLink.link_id : item.linkId;
+      return {
+        isPromoted: state.isPromoted,
+        assistantLinkId: state.assistantLink?.link_id,
+        disabled: !client,
+        loading: actionKey ? assistantActionKey === actionKey : false,
+      };
+    },
+    [assistantActionKey, assistantBranchId, assistantLinks, branch.branch_id, client]
+  );
+
+  const handlePromoteToAssistant = async (item: LinkDisplayItem) => {
+    if (!client || !assistantBranchId || !item.linkId) return;
+    setAssistantActionKey(item.linkId);
+    try {
+      const promoted = await promoteLinkToAssistant({
+        client,
+        sourceLinkId: item.linkId,
+        assistantBranchId,
+      });
+      applyKnownLinkCreatedResult(promoted);
+    } catch (error) {
+      showError(
+        `Failed to add link to assistant: ${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setAssistantActionKey(null);
+    }
+  };
+
+  const handleRemoveFromAssistant = async (_item: LinkDisplayItem, assistantLinkId: string) => {
+    if (!client) return;
+    setAssistantActionKey(assistantLinkId);
+    try {
+      const removed = (await client.service('links').remove(assistantLinkId)) as Link;
+      applyKnownLinkRemovedResult(removed);
+    } catch (error) {
+      showError(
+        `Failed to remove link from assistant: ${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setAssistantActionKey(null);
     }
   };
 
@@ -113,6 +197,9 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
             pinActionDisabled={!client}
             pinningLinkId={pinningLinkId}
             onTogglePinned={handleTogglePinned}
+            getAssistantActionState={assistantStateForItem}
+            onPromoteToAssistant={handlePromoteToAssistant}
+            onRemoveFromAssistant={handleRemoveFromAssistant}
           />
         </Space>
       </Card>

@@ -178,6 +178,30 @@ describe('agorStore scaffold', () => {
     expect(agorStore.getState().linksByBranch.has('b1')).toBe(false);
   });
 
+  it('applies known link create and remove results without stale mutation guards', () => {
+    const existing = {
+      link_id: 'l-known',
+      branch_id: 'b1',
+      session_id: null,
+      is_pinned: false,
+      updated_at: '2026-07-01T12:01:00.000Z',
+    } as Link;
+    const olderKnownCreate = {
+      ...existing,
+      is_pinned: true,
+      updated_at: '2026-07-01T12:00:00.000Z',
+    } as Link;
+
+    agorStore.getState().applyMaps((prev) => mergeLinksIntoMaps(prev, [existing]));
+    agorStore.getState().applyKnownLinkCreatedResult(olderKnownCreate);
+    expect(agorStore.getState().linkById.get('l-known')).toEqual(olderKnownCreate);
+    expect(agorStore.getState().linksByBranch.get('b1')).toEqual([olderKnownCreate]);
+
+    agorStore.getState().applyKnownLinkRemovedResult(olderKnownCreate);
+    expect(agorStore.getState().linkById.has('l-known')).toBe(false);
+    expect(agorStore.getState().linksByBranch.has('b1')).toBe(false);
+  });
+
   it('reconciles only the fetched pinned branch link domain', () => {
     const stalePinnedInDomain = {
       link_id: 'l-stale-pinned-in-domain',

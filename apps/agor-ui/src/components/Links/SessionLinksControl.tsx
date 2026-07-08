@@ -3,7 +3,7 @@ import { LinkOutlined } from '@ant-design/icons';
 import { Badge, Button, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useMemo } from 'react';
-import { LinkDisplayList } from './LinkDisplayList';
+import { type AssistantLinkDisplayActionState, LinkDisplayList } from './LinkDisplayList';
 import { buildLinkDisplayItems, type LinkDisplayItem } from './linkDisplay';
 
 interface SessionLinksControlProps {
@@ -12,6 +12,9 @@ interface SessionLinksControlProps {
   disabled?: boolean;
   pinningLinkId?: string | null;
   onTogglePinned?: (item: LinkDisplayItem) => void;
+  getAssistantActionState?: (item: LinkDisplayItem) => AssistantLinkDisplayActionState | null;
+  onPromoteToAssistant?: (item: LinkDisplayItem) => void;
+  onRemoveFromAssistant?: (item: LinkDisplayItem, assistantLinkId: string) => void;
 }
 
 export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
@@ -20,6 +23,9 @@ export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
   disabled = false,
   pinningLinkId = null,
   onTogglePinned,
+  getAssistantActionState,
+  onPromoteToAssistant,
+  onRemoveFromAssistant,
 }) => {
   const { token } = theme.useToken();
   const items = useMemo(() => buildLinkDisplayItems({ branch, links }), [branch, links]);
@@ -35,6 +41,9 @@ export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
         pinActionDisabled={disabled}
         pinningLinkId={pinningLinkId}
         onTogglePinned={onTogglePinned}
+        getAssistantActionState={getAssistantActionState}
+        onPromoteToAssistant={onPromoteToAssistant}
+        onRemoveFromAssistant={onRemoveFromAssistant}
       />
     </div>
   );
@@ -43,7 +52,11 @@ export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
     <Popover content={content} title="Session links" trigger="click" placement="bottomRight">
       <Tooltip title="Session links">
         <Badge count={items.length} color={token.colorPrimary} size="small" offset={[-4, 4]}>
-          <Button type="text" icon={<LinkOutlined style={{ color: token.colorPrimary }} />} />
+          <Button
+            type="text"
+            aria-label="Session links"
+            icon={<LinkOutlined style={{ color: token.colorPrimary }} />}
+          />
         </Badge>
       </Tooltip>
     </Popover>

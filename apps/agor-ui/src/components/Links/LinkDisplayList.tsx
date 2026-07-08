@@ -1,5 +1,5 @@
-import { LinkOutlined, PushpinFilled, PushpinOutlined } from '@ant-design/icons';
-import { Button, Empty, List, Space, Tag, Tooltip, Typography, theme } from 'antd';
+import { EllipsisOutlined, LinkOutlined, PushpinFilled, PushpinOutlined } from '@ant-design/icons';
+import { Button, Dropdown, Empty, List, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { LinkDisplayTargetLink } from './LinkDisplayTargetLink';
 import {
@@ -10,6 +10,13 @@ import {
   type LinkDisplayItem,
 } from './linkDisplay';
 
+export interface AssistantLinkDisplayActionState {
+  isPromoted: boolean;
+  assistantLinkId?: string;
+  disabled?: boolean;
+  loading?: boolean;
+}
+
 interface LinkDisplayListProps {
   items: LinkDisplayItem[];
   emptyDescription?: string;
@@ -18,6 +25,9 @@ interface LinkDisplayListProps {
   pinActionDisabled?: boolean;
   pinningLinkId?: string | null;
   onTogglePinned?: (item: LinkDisplayItem) => void;
+  getAssistantActionState?: (item: LinkDisplayItem) => AssistantLinkDisplayActionState | null;
+  onPromoteToAssistant?: (item: LinkDisplayItem) => void;
+  onRemoveFromAssistant?: (item: LinkDisplayItem, assistantLinkId: string) => void;
 }
 
 function LinkTitle({ item }: { item: LinkDisplayItem }) {
@@ -39,6 +49,9 @@ export const LinkDisplayList: React.FC<LinkDisplayListProps> = ({
   pinActionDisabled = false,
   pinningLinkId = null,
   onTogglePinned,
+  getAssistantActionState,
+  onPromoteToAssistant,
+  onRemoveFromAssistant,
 }) => {
   const { token } = theme.useToken();
 
@@ -54,33 +67,74 @@ export const LinkDisplayList: React.FC<LinkDisplayListProps> = ({
       renderItem={(item) => {
         const secondary = getLinkDisplaySecondaryLabel(item);
         const canTogglePin = showPinActions && Boolean(item.linkId) && onTogglePinned;
+        const assistantAction = getAssistantActionState?.(item) ?? null;
+        const actions: React.ReactNode[] = [];
+        if (canTogglePin) {
+          actions.push(
+            <Tooltip
+              key="pin"
+              title={item.isPinned ? 'Unpin from quick links' : 'Pin to quick links'}
+            >
+              <Button
+                type="text"
+                size="small"
+                aria-label={item.isPinned ? `Unpin ${item.name}` : `Pin ${item.name}`}
+                icon={item.isPinned ? <PushpinFilled /> : <PushpinOutlined />}
+                disabled={pinActionDisabled}
+                loading={pinningLinkId === item.linkId}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onTogglePinned?.(item);
+                }}
+              />
+            </Tooltip>
+          );
+        }
+        if (assistantAction) {
+          const itemKey = assistantAction.isPromoted ? 'remove-assistant' : 'promote-assistant';
+          actions.push(
+            <Dropdown
+              key="assistant"
+              trigger={['click']}
+              menu={{
+                items: [
+                  {
+                    key: itemKey,
+                    label: assistantAction.isPromoted
+                      ? 'Remove from assistant'
+                      : 'Add to assistant',
+                    danger: assistantAction.isPromoted,
+                    disabled: assistantAction.disabled || assistantAction.loading,
+                  },
+                ],
+                onClick: ({ domEvent }) => {
+                  domEvent.stopPropagation();
+                  if (assistantAction.disabled || assistantAction.loading) return;
+                  if (assistantAction.isPromoted && assistantAction.assistantLinkId) {
+                    onRemoveFromAssistant?.(item, assistantAction.assistantLinkId);
+                  } else {
+                    onPromoteToAssistant?.(item);
+                  }
+                },
+              }}
+            >
+              <Button
+                type="text"
+                size="small"
+                aria-label={`Assistant actions for ${item.name}`}
+                icon={<EllipsisOutlined />}
+                loading={assistantAction.loading}
+                disabled={assistantAction.disabled}
+                onClick={(event) => event.stopPropagation()}
+              />
+            </Dropdown>
+          );
+        }
         return (
           <List.Item
             key={item.key}
             style={{ padding: compact ? '6px 0' : undefined }}
-            actions={
-              canTogglePin
-                ? [
-                    <Tooltip
-                      key="pin"
-                      title={item.isPinned ? 'Unpin from quick links' : 'Pin to quick links'}
-                    >
-                      <Button
-                        type="text"
-                        size="small"
-                        aria-label={item.isPinned ? `Unpin ${item.name}` : `Pin ${item.name}`}
-                        icon={item.isPinned ? <PushpinFilled /> : <PushpinOutlined />}
-                        disabled={pinActionDisabled}
-                        loading={pinningLinkId === item.linkId}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onTogglePinned?.(item);
-                        }}
-                      />
-                    </Tooltip>,
-                  ]
-                : undefined
-            }
+            actions={actions.length > 0 ? actions : undefined}
           >
             <List.Item.Meta
               avatar={

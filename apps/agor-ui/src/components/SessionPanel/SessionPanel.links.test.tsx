@@ -1,5 +1,5 @@
-import type { AgorClient, Branch, Link, Session } from '@agor-live/client';
-import { render, screen, waitFor } from '@testing-library/react';
+import type { AgorClient, Board, Branch, Link, Session } from '@agor-live/client';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
@@ -137,6 +137,61 @@ function makeClient(links: Link[]) {
   return { client, calls };
 }
 
+function makePromotionClient(args: {
+  sessionLinks: Link[];
+  assistantLinks: Link[];
+  promoted: Link;
+}) {
+  const calls: Array<{ service: string; method: string; args: unknown[] }> = [];
+  const client = {
+    service(path: string) {
+      return {
+        async find(args?: unknown) {
+          calls.push({ service: path, method: 'find', args: [args] });
+          if (path.endsWith('/tasks/queue')) return { data: [] };
+          return [];
+        },
+        async findAll(params?: { query?: { owner_scope?: string; branch_id?: string } }) {
+          calls.push({ service: path, method: 'findAll', args: [params] });
+          if (params?.query?.owner_scope === 'branch') return args.assistantLinks;
+          return args.sessionLinks;
+        },
+        async patch(id: string, body: unknown) {
+          calls.push({ service: path, method: 'patch', args: [id, body] });
+          return {
+            ...args.sessionLinks.find((link) => link.link_id === id),
+            ...(body as object),
+            link_id: id,
+          };
+        },
+        async create(body: unknown) {
+          calls.push({ service: path, method: 'create', args: [body] });
+          return args.promoted;
+        },
+        async remove(id: string) {
+          calls.push({ service: path, method: 'remove', args: [id] });
+          return args.promoted;
+        },
+        on: vi.fn(),
+        off: vi.fn(),
+      };
+    },
+  } as unknown as AgorClient;
+  return { client, calls };
+}
+
+function renderPanel(client: AgorClient) {
+  return render(
+    <ConnectionProvider value={connected}>
+      <AppActionsProvider value={{}}>
+        <AntApp>
+          <SessionPanel client={client} session={session} branch={branch} open onClose={vi.fn()} />
+        </AntApp>
+      </AppActionsProvider>
+    </ConnectionProvider>
+  );
+}
+
 describe('SessionPanel session links', () => {
   beforeEach(() => {
     agorStore.setState({ ...EMPTY_MAPS });
@@ -176,5 +231,82 @@ describe('SessionPanel session links', () => {
       },
     });
     expect(agorStore.getState().linksBySession.get('session-1')).toEqual([link]);
+  });
+
+  it('promotes a session link to the board primary assistant', async () => {
+    const source = makeLink();
+    const promoted = makeLink({
+      link_id: 'assistant-link' as Link['link_id'],
+      branch_id: 'assistant-1' as Link['branch_id'],
+      session_id: null,
+      is_pinned: true,
+    });
+    agorStore.setState({
+      ...EMPTY_MAPS,
+      boardById: new Map([
+        ['board-1', { board_id: 'board-1', primary_assistant_id: 'assistant-1' } as Board],
+      ]),
+    });
+    const { client, calls } = makePromotionClient({
+      sessionLinks: [source],
+      assistantLinks: [],
+      promoted,
+    });
+
+    renderPanel(client);
+
+    await screen.findByText('Session Runbook');
+    fireEvent.click(screen.getByLabelText('Session links'));
+    fireEvent.click(await screen.findByLabelText('Assistant actions for Session Runbook'));
+    fireEvent.click(await screen.findByText('Add to assistant'));
+
+    await waitFor(() => {
+      expect(calls).toContainEqual({
+        service: 'links/link-1/promote',
+        method: 'create',
+        args: [{ target: 'assistant', assistant_branch_id: 'assistant-1' }],
+      });
+    });
+    expect(agorStore.getState().linksByBranch.get('assistant-1')).toEqual([promoted]);
+  });
+
+  it('removes an assistant copy from the session links popover', async () => {
+    const source = makeLink();
+    const promoted = makeLink({
+      link_id: 'assistant-link' as Link['link_id'],
+      branch_id: 'assistant-1' as Link['branch_id'],
+      session_id: null,
+      is_pinned: true,
+    });
+    agorStore.setState({
+      ...EMPTY_MAPS,
+      boardById: new Map([
+        ['board-1', { board_id: 'board-1', primary_assistant_id: 'assistant-1' } as Board],
+      ]),
+      linksByBranch: new Map([['assistant-1', [promoted]]]),
+      linkById: new Map([[promoted.link_id, promoted]]),
+    });
+    const { client, calls } = makePromotionClient({
+      sessionLinks: [source],
+      assistantLinks: [promoted],
+      promoted,
+    });
+
+    renderPanel(client);
+
+    await screen.findByText('Session Runbook');
+    fireEvent.click(screen.getByLabelText('Session links'));
+    fireEvent.click(await screen.findByLabelText('Assistant actions for Session Runbook'));
+    fireEvent.click(await screen.findByText('Remove from assistant'));
+
+    await waitFor(() => {
+      expect(calls).toContainEqual({
+        service: 'links',
+        method: 'remove',
+        args: ['assistant-link'],
+      });
+    });
+    expect(agorStore.getState().linkById.has('assistant-link')).toBe(false);
+    expect(agorStore.getState().linksBySession.get('session-1')).toEqual([source]);
   });
 });

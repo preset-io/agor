@@ -35,6 +35,7 @@ import {
   EMPTY_MAPS,
   MAP_KEYS,
   pickMaps,
+  removeLinkFromMaps,
   replaceFullBranchLinksInMaps,
   replaceFullSessionLinksInMaps,
   upsertLinkInMaps,
@@ -113,6 +114,10 @@ interface AgorActions {
   fetchAndReplaceFullSessionLinks: (client: AgorClient, sessionId: string) => Promise<Link[]>;
   /** Fetch and race-safely replace one branch owner's complete link bucket. */
   fetchAndReplaceFullBranchLinks: (client: AgorClient, branchId: string) => Promise<Link[]>;
+  /** Apply a link returned from a component-initiated create/upsert where this caller knows it is current. */
+  applyKnownLinkCreatedResult: (link: Link) => void;
+  /** Apply a link returned from a component-initiated remove where this caller knows it is current. */
+  applyKnownLinkRemovedResult: (link: Link) => void;
   /** Apply a link returned from a component-initiated service mutation. */
   applyLinkMutationResult: (link: Link) => void;
 }
@@ -430,6 +435,26 @@ export const agorStore = createStore<AgorState>()(
 
       get().replaceFullBranchLinks(branchId, links);
       return links;
+    },
+
+    applyKnownLinkCreatedResult: (link) => {
+      let mapsChanged = false;
+      get().applyMaps((prev) => {
+        const next = upsertLinkInMaps(prev, link);
+        mapsChanged = next !== prev;
+        return next;
+      });
+      if (mapsChanged) bumpRevision('links');
+    },
+
+    applyKnownLinkRemovedResult: (link) => {
+      let mapsChanged = false;
+      get().applyMaps((prev) => {
+        const next = removeLinkFromMaps(prev, link);
+        mapsChanged = next !== prev;
+        return next;
+      });
+      if (mapsChanged) bumpRevision('links');
     },
 
     applyLinkMutationResult: (link) => {

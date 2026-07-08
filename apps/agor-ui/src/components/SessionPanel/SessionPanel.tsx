@@ -38,8 +38,13 @@ import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
 import {
+  makeLinksForBranchSelector,
   makeLinksForSessionSelector,
+  selectApplyKnownLinkCreatedResult,
+  selectApplyKnownLinkRemovedResult,
   selectApplyLinkMutationResult,
+  selectBoardById,
+  selectFetchAndReplaceFullBranchLinks,
   selectFetchAndReplaceFullSessionLinks,
   selectMcpServerById,
   selectUserAuthenticatedMcpServerIds,
@@ -52,7 +57,14 @@ import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessi
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
-import { buildLinkDisplayItems, PinnedLinksStrip, SessionLinksControl } from '../Links';
+import {
+  buildLinkDisplayItems,
+  getAssistantPromotionState,
+  type LinkDisplayItem,
+  PinnedLinksStrip,
+  promoteLinkToAssistant,
+  SessionLinksControl,
+} from '../Links';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
 import { ToolIcon } from '../ToolIcon';
@@ -256,8 +268,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     [session?.session_id]
   );
   const sessionLinks = useAgorStore(sessionLinksSelector) ?? [];
+  const boardById = useAgorStore(selectBoardById);
+  const assistantBranchId = branch?.board_id
+    ? (boardById.get(branch.board_id)?.primary_assistant_id ?? null)
+    : null;
+  const assistantLinksSelector = React.useMemo(
+    () => makeLinksForBranchSelector(assistantBranchId ?? ''),
+    [assistantBranchId]
+  );
+  const assistantLinks = useAgorStore(assistantLinksSelector) ?? [];
   const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
+  const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
   const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
+  const applyKnownLinkCreatedResult = useAgorStore(selectApplyKnownLinkCreatedResult);
+  const applyKnownLinkRemovedResult = useAgorStore(selectApplyKnownLinkRemovedResult);
 
   // Get actions from context
   const { onSendPrompt, onFork, onBtwFork, onOpenSettings, onUpdateSession, onOpenTerminal } =
@@ -355,6 +379,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [droppedFiles, setDroppedFiles] = React.useState<File[]>([]);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
   const [pinningLinkId, setPinningLinkId] = React.useState<string | null>(null);
+  const [assistantActionKey, setAssistantActionKey] = React.useState<string | null>(null);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
@@ -365,10 +390,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   React.useEffect(() => {
     if (!open || !client || !session?.session_id) return;
-    fetchAndReplaceFullSessionLinks(client, session.session_id).catch((error: unknown) => {
-      console.error('[SessionPanel] Failed to fetch session links:', error);
+    const requests = [fetchAndReplaceFullSessionLinks(client, session.session_id)];
+    if (assistantBranchId && assistantBranchId !== branch?.branch_id) {
+      requests.push(fetchAndReplaceFullBranchLinks(client, assistantBranchId));
+    }
+    Promise.all(requests).catch((error: unknown) => {
+      console.error('[SessionPanel] Failed to fetch session/assistant links:', error);
     });
-  }, [client, fetchAndReplaceFullSessionLinks, open, session?.session_id]);
+  }, [
+    assistantBranchId,
+    branch?.branch_id,
+    client,
+    fetchAndReplaceFullBranchLinks,
+    fetchAndReplaceFullSessionLinks,
+    open,
+    session?.session_id,
+  ]);
 
   // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
@@ -662,6 +699,60 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       showError(`Failed to update link: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setPinningLinkId(null);
+    }
+  };
+
+  const assistantStateForSessionLink = (item: LinkDisplayItem) => {
+    const state = getAssistantPromotionState({
+      item,
+      assistantBranchId,
+      sourceBranchId: branch?.branch_id ?? null,
+      assistantLinks,
+    });
+    if (!state.canPromote) return null;
+    const actionKey = state.isPromoted ? state.assistantLink.link_id : item.linkId;
+    return {
+      isPromoted: state.isPromoted,
+      assistantLinkId: state.assistantLink?.link_id,
+      disabled: !client || connectionDisabled,
+      loading: actionKey ? assistantActionKey === actionKey : false,
+    };
+  };
+
+  const handlePromoteSessionLinkToAssistant = async (item: LinkDisplayItem) => {
+    if (!client || !assistantBranchId || !item.linkId) return;
+    setAssistantActionKey(item.linkId);
+    try {
+      const promoted = await promoteLinkToAssistant({
+        client,
+        sourceLinkId: item.linkId,
+        assistantBranchId,
+      });
+      applyKnownLinkCreatedResult(promoted);
+    } catch (error) {
+      showError(
+        `Failed to add link to assistant: ${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setAssistantActionKey(null);
+    }
+  };
+
+  const handleRemoveSessionLinkFromAssistant = async (
+    _item: LinkDisplayItem,
+    assistantLinkId: string
+  ) => {
+    if (!client) return;
+    setAssistantActionKey(assistantLinkId);
+    try {
+      const removed = (await client.service('links').remove(assistantLinkId)) as Link;
+      applyKnownLinkRemovedResult(removed);
+    } catch (error) {
+      showError(
+        `Failed to remove link from assistant: ${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setAssistantActionKey(null);
     }
   };
 
@@ -972,6 +1063,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               disabled={!client || connectionDisabled}
               pinningLinkId={pinningLinkId}
               onTogglePinned={handleToggleSessionLinkPinned}
+              getAssistantActionState={assistantStateForSessionLink}
+              onPromoteToAssistant={handlePromoteSessionLinkToAssistant}
+              onRemoveFromAssistant={handleRemoveSessionLinkFromAssistant}
             />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">

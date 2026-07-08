@@ -94,6 +94,7 @@ import type {
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
 import type { GatewayService } from './services/gateway.js';
+import { createLinkPromotionService } from './services/link-promotion.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -703,6 +704,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     {
       create: { role: ROLES.MEMBER, action: 'broadcast streaming events' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/links/:sourceLinkId/promote',
+    createLinkPromotionService({
+      app,
+      db,
+      branchRepository,
+      branchRbacEnabled,
+      superadminOpts,
+    }),
+    {
+      create: { role: ROLES.MEMBER, action: 'promote links to assistant' },
     },
     requireAuth
   );

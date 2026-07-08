@@ -175,6 +175,11 @@ export interface TemplatesService {
 type LinkCreatePayload = ClientInput<LinkCreate>;
 type LinkPatchPayload = Partial<ClientInput<LinkPatch>>;
 
+export interface LinkPromoteRequest {
+  target: 'assistant';
+  assistant_branch_id: string;
+}
+
 /**
  * Service interfaces for type safety
  */
@@ -252,6 +257,10 @@ export interface LinksService extends Omit<AgorService<Link>, 'create' | 'update
   create(data: LinkCreatePayload, params?: Params): Promise<Link>;
   create(data: LinkCreatePayload[], params?: Params): Promise<Link[]>;
   patch(id: string, data: LinkPatchPayload, params?: Params): Promise<Link>;
+}
+
+export interface LinkPromotionService {
+  create(data: LinkPromoteRequest, params?: Params): Promise<Link>;
 }
 
 /**
@@ -580,6 +589,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
   service(path: 'links'): LinksService;
+  service(path: `links/${string}/promote`): LinkPromotionService;
 
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;
