@@ -18,7 +18,7 @@ import { generateId, shortId } from '@agor/core';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, TaskRuntimeEventKind, TaskRuntimePhase } from '@agor/core/types';
 import type { Part as OpenCodePart } from '@opencode-ai/sdk';
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import { getDaemonUrl } from '../../config.js';
@@ -27,6 +27,7 @@ import type {
   MCPServerRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
+import type { TaskRuntimeVitalsReporter } from '../../runtime-vitals.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
@@ -103,7 +104,8 @@ export class OpenCodeTool implements ITool {
     messagesService?: MessagesService,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpServerRepo?: MCPServerRepository,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private vitalsReporter?: TaskRuntimeVitalsReporter
   ) {
     this.config = config;
     this.messagesService = messagesService;
@@ -534,6 +536,68 @@ export class OpenCodeTool implements ITool {
       const allParts: Array<{ id: string; type: string; data: unknown }> = []; // Store all parts for later processing
       let currentTextMessageId: string | null = null;
       let currentReasoningMessageId: string | null = null;
+      let firstAgentEventRecorded = false;
+      const toolRuntimeStatuses = new Map<string, string | undefined>();
+      const toolRuntimeStartedIds = new Set<string>();
+      const recordFirstAgentEvent = async () => {
+        if (firstAgentEventRecorded) return;
+        firstAgentEventRecorded = true;
+        await this.vitalsReporter?.record(TaskRuntimeEventKind.FIRST_AGENT_EVENT, {
+          source: 'sdk',
+          phase: TaskRuntimePhase.RUNNING,
+          meaningful: true,
+          forceFlush: true,
+        });
+      };
+      const recordToolRuntimeFact = async (part: {
+        id?: string;
+        callID?: string;
+        tool?: string;
+        state?: { status?: string };
+      }) => {
+        const rawToolUseId = part.callID || part.id;
+        const toolUseId =
+          typeof rawToolUseId === 'string' && rawToolUseId.length > 0 ? rawToolUseId : undefined;
+        const toolName =
+          typeof part.tool === 'string' && part.tool.length > 0 ? part.tool : undefined;
+        const hasPreviousStatus = toolUseId ? toolRuntimeStatuses.has(toolUseId) : false;
+        const previousStatus = toolUseId ? toolRuntimeStatuses.get(toolUseId) : undefined;
+        const status =
+          typeof part.state?.status === 'string' && part.state.status.length > 0
+            ? part.state.status
+            : undefined;
+        if (toolUseId) {
+          toolRuntimeStatuses.set(toolUseId, status);
+        }
+        if (hasPreviousStatus && status === previousStatus) return;
+
+        const terminalStatus = status === 'completed' || status === 'error';
+        if (!terminalStatus) {
+          if (toolUseId && toolRuntimeStartedIds.has(toolUseId)) return;
+          if (toolUseId) {
+            toolRuntimeStartedIds.add(toolUseId);
+          }
+
+          await recordFirstAgentEvent();
+          await this.vitalsReporter?.record(TaskRuntimeEventKind.TOOL_START, {
+            source: 'tool',
+            phase: TaskRuntimePhase.TOOL_RUNNING,
+            meaningful: true,
+            toolName,
+            toolUseId,
+          });
+          return;
+        }
+
+        await recordFirstAgentEvent();
+        await this.vitalsReporter?.record(TaskRuntimeEventKind.TOOL_COMPLETE, {
+          source: 'tool',
+          phase: TaskRuntimePhase.RUNNING,
+          meaningful: true,
+          toolName,
+          toolUseId,
+        });
+      };
 
       // IMPORTANT: Subscribe to event stream BEFORE sending prompt
       // Events are emitted in real-time as prompt executes
@@ -679,6 +743,12 @@ export class OpenCodeTool implements ITool {
                 // Stream delta to UI based on part type
                 if (delta.length > 0) {
                   if (part.type === 'reasoning') {
+                    await recordFirstAgentEvent();
+                    await this.vitalsReporter?.record(TaskRuntimeEventKind.THINKING, {
+                      source: 'sdk',
+                      phase: TaskRuntimePhase.RUNNING,
+                      meaningful: true,
+                    });
                     // Stream reasoning chunks
                     if (!currentReasoningMessageId) {
                       currentReasoningMessageId = generateId();
@@ -692,8 +762,14 @@ export class OpenCodeTool implements ITool {
                       delta
                     );
                   } else if (part.type === 'text') {
+                    await recordFirstAgentEvent();
                     // Stream text chunks
                     if (!currentTextMessageId) {
+                      await this.vitalsReporter?.record(TaskRuntimeEventKind.STREAM_START, {
+                        source: 'sdk',
+                        phase: TaskRuntimePhase.RUNNING,
+                        meaningful: true,
+                      });
                       currentTextMessageId = generateId();
                       streamingCallbacks.onStreamStart(currentTextMessageId as MessageID, {
                         session_id: sessionId as SessionID,
@@ -704,6 +780,14 @@ export class OpenCodeTool implements ITool {
                     }
                     streamingCallbacks.onStreamChunk(currentTextMessageId as MessageID, delta);
                   } else if (part.type === 'tool') {
+                    await recordToolRuntimeFact(
+                      part as {
+                        id?: string;
+                        callID?: string;
+                        tool?: string;
+                        state?: { status?: string };
+                      }
+                    );
                     // Tool execution - log full details
                     console.log('[OpenCodeTool] ========== TOOL PART ==========');
                     console.log('[OpenCodeTool] Tool part ID:', part.id);
@@ -712,6 +796,14 @@ export class OpenCodeTool implements ITool {
                   }
                 }
               } else if (part.type === 'tool') {
+                await recordToolRuntimeFact(
+                  part as {
+                    id?: string;
+                    callID?: string;
+                    tool?: string;
+                    state?: { status?: string };
+                  }
+                );
                 // Tool parts without text field - log full structure
                 console.log('[OpenCodeTool] ========== TOOL PART (no text) ==========');
                 console.log('[OpenCodeTool] Tool part ID:', part.id);

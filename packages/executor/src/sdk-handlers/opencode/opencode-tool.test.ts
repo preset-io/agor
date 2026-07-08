@@ -8,7 +8,9 @@
  * - Capabilities reflecting MCP support
  */
 
+import { TaskRuntimeEventKind, TaskRuntimePhase } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TaskRuntimeVitalsReporter } from '../../runtime-vitals.js';
 import { OpenCodeTool } from './opencode-tool.js';
 
 // Track client creation calls
@@ -17,6 +19,10 @@ const createdClients: Array<{ baseUrl: string; directory?: string }> = [];
 
 // Mock MCP add calls per client
 const mockMcpAddCalls: Array<{ name: string; config: unknown }> = [];
+let mockEventStream: unknown[] = [];
+let mockPromptResponse: { data: { parts: unknown[]; info: Record<string, unknown> } } = {
+  data: { parts: [], info: {} },
+};
 
 // Create a mock client factory
 function createMockClient(opts: { baseUrl: string; directory?: string }) {
@@ -28,11 +34,11 @@ function createMockClient(opts: { baseUrl: string; directory?: string }) {
       list: vi.fn().mockResolvedValue({ data: [] }),
       create: vi.fn().mockResolvedValue({ data: { id: 'mock-session-id' } }),
       get: vi.fn().mockResolvedValue({ data: {} }),
-      prompt: vi.fn().mockResolvedValue({ data: { parts: [], info: {} } }),
+      prompt: vi.fn().mockResolvedValue(mockPromptResponse),
       messages: vi.fn().mockResolvedValue({ data: [] }),
     },
     event: {
-      subscribe: vi.fn().mockResolvedValue({ stream: [] }),
+      subscribe: vi.fn().mockResolvedValue({ stream: mockEventStream }),
     },
     mcp: {
       add: vi
@@ -79,6 +85,8 @@ describe('OpenCodeTool', () => {
     clientCreateCount = 0;
     createdClients.length = 0;
     mockMcpAddCalls.length = 0;
+    mockEventStream = [];
+    mockPromptResponse = { data: { parts: [], info: {} } };
     vi.clearAllMocks();
   });
 
@@ -524,6 +532,164 @@ describe('OpenCodeTool', () => {
   });
 
   describe('executeTask Integration', () => {
+    it('reports sanitized stream and tool runtime vitals from OpenCode events', async () => {
+      mockEventStream = [
+        {
+          type: 'message.updated',
+          properties: {
+            info: {
+              sessionID: 'oc-session-vitals',
+              role: 'assistant',
+              id: 'assistant-vitals',
+            },
+          },
+        },
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'text-part',
+              messageID: 'assistant-vitals',
+              type: 'text',
+              text: 'hello',
+            },
+          },
+        },
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'tool-part',
+              callID: 'tool-call-1',
+              messageID: 'assistant-vitals',
+              type: 'tool',
+              tool: 'bash',
+              state: {
+                status: 'pending',
+                input: { command: 'echo secret-token' },
+              },
+            },
+          },
+        },
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'tool-part',
+              callID: 'tool-call-1',
+              messageID: 'assistant-vitals',
+              type: 'tool',
+              tool: 'bash',
+              state: {
+                status: 'running',
+                input: { command: 'echo secret-token' },
+              },
+            },
+          },
+        },
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'tool-part',
+              callID: 'tool-call-1',
+              messageID: 'assistant-vitals',
+              type: 'tool',
+              tool: 'bash',
+              state: {
+                status: 'completed',
+                output: 'secret-output',
+              },
+            },
+          },
+        },
+        { type: 'session.status', properties: { status: { type: 'idle' } } },
+      ];
+      mockPromptResponse = {
+        data: {
+          info: { id: 'assistant-vitals' },
+          parts: [
+            { type: 'text', text: 'hello' },
+            {
+              type: 'tool',
+              id: 'tool-part',
+              callID: 'tool-call-1',
+              tool: 'bash',
+              state: {
+                input: { command: 'echo secret-token' },
+                status: 'completed',
+                output: 'secret-output',
+              },
+            },
+          ],
+        },
+      };
+      const patches: Array<{ id: string; data: Record<string, unknown> }> = [];
+      const reporter = new TaskRuntimeVitalsReporter({
+        client: {
+          service(name: string) {
+            if (name !== 'tasks') throw new Error(`unexpected service ${name}`);
+            return {
+              patch: vi.fn(async (id: string, data: Record<string, unknown>) => {
+                patches.push({ id, data });
+                return { task_id: id, ...data };
+              }),
+            };
+          },
+        } as never,
+        taskId: 'task-vitals',
+        toolName: 'opencode',
+        minPatchIntervalMs: 0,
+      });
+      const tool = new OpenCodeTool(
+        { enabled: true, serverUrl: 'http://localhost:4096' },
+        mockMessagesService,
+        mockSessionMCPRepo,
+        mockMCPServerRepo,
+        undefined,
+        reporter
+      );
+      tool.setSessionContext('session-vitals', 'oc-session-vitals');
+
+      const result = await tool.executeTask?.(
+        'session-vitals',
+        'prompt secret should not enter vitals',
+        'task-vitals',
+        {
+          onStreamStart: vi.fn(async () => undefined),
+          onStreamChunk: vi.fn(async () => undefined),
+          onStreamEnd: vi.fn(async () => undefined),
+          onStreamError: vi.fn(async () => undefined),
+          onThinkingStart: vi.fn(async () => undefined),
+          onThinkingChunk: vi.fn(async () => undefined),
+          onThinkingEnd: vi.fn(async () => undefined),
+        },
+        1
+      );
+      const terminalVitals = await reporter.terminalSnapshot(TaskRuntimeEventKind.TURN_COMPLETED, {
+        source: 'sdk',
+        phase: TaskRuntimePhase.COMPLETED,
+      });
+
+      expect(result?.status).toBe('completed');
+      expect(terminalVitals.recent_events?.map((event) => event.kind)).toEqual([
+        TaskRuntimeEventKind.FIRST_AGENT_EVENT,
+        TaskRuntimeEventKind.STREAM_START,
+        TaskRuntimeEventKind.TOOL_START,
+        TaskRuntimeEventKind.TOOL_COMPLETE,
+        TaskRuntimeEventKind.TURN_COMPLETED,
+      ]);
+      expect(terminalVitals.active_tool).toBeNull();
+      expect(terminalVitals.counters?.tool_starts).toBe(1);
+      expect(terminalVitals.counters?.tool_completes).toBe(1);
+      expect(terminalVitals.recent_events?.[2]).toMatchObject({
+        tool_name: 'bash',
+        tool_use_id: 'tool-call-1',
+      });
+      expect(JSON.stringify(terminalVitals)).not.toContain('secret');
+      expect(patches.length).toBeGreaterThan(0);
+    });
+
     it('should use directory-scoped client based on session branch path', async () => {
       const tool = new OpenCodeTool(
         { enabled: true, serverUrl: 'http://localhost:4096' },

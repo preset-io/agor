@@ -21,12 +21,17 @@ import type {
   SessionID,
   Task,
   TaskID,
+  TaskRuntimeVitals,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, TaskRuntimeEventKind, TaskRuntimePhase } from '@agor/core/types';
 import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
+import {
+  TaskRuntimeVitalsReporter,
+  wrapStreamingCallbacksWithRuntimeVitals,
+} from '../../runtime-vitals.js';
 import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -444,6 +449,23 @@ export async function executeCursorTask(params: {
     );
   }
 
+  let initialRuntimeVitals: TaskRuntimeVitals | undefined;
+  try {
+    initialRuntimeVitals = (await client.service('tasks').get(taskId)).runtime_vitals;
+  } catch (error) {
+    console.warn(
+      '[runtime-vitals] Failed to read initial task runtime vitals:',
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  const vitalsReporter = new TaskRuntimeVitalsReporter({
+    client,
+    taskId,
+    toolName: 'cursor',
+    initialSnapshot: initialRuntimeVitals,
+  });
+
   let currentRun: Run | undefined;
   const abortHandler = () => {
     if (!currentRun) return;
@@ -455,13 +477,22 @@ export async function executeCursorTask(params: {
   params.abortController.signal.addEventListener('abort', abortHandler);
 
   try {
+    await vitalsReporter.record(TaskRuntimeEventKind.SDK_TURN_STARTED, {
+      source: 'executor',
+      phase: TaskRuntimePhase.SDK_STARTING,
+      forceFlush: true,
+    });
+
     await configureSessionGitSafeDirectories(client, sessionId, '[cursor git.safe-directory]');
     await stampGitStateAtTaskStart(client, sessionId, taskId);
 
     const apiKey = await resolveCursorApiKey(client, taskId);
     const session = await client.service('sessions').get(sessionId);
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId);
+    const callbacks = wrapStreamingCallbacksWithRuntimeVitals(
+      createStreamingCallbacks(client, 'cursor', sessionId),
+      vitalsReporter
+    );
 
     if (!session.branch_id) {
       throw new Error('Cursor sessions require a branch_id so the local runtime has a cwd.');
@@ -525,8 +556,25 @@ export async function executeCursorTask(params: {
       let thinkingText = '';
       const toolCallMessageIds: MessageID[] = [];
       const toolCallMessageIdsByCallId = new Map<string, MessageID>();
+      const completedToolCallIds = new Set<string>();
       const rawMessages: SDKMessage[] = [];
+      let firstAgentEventRecorded = false;
+      const recordFirstAgentEvent = async () => {
+        if (firstAgentEventRecorded) return;
+        firstAgentEventRecorded = true;
+        await vitalsReporter.record(TaskRuntimeEventKind.FIRST_AGENT_EVENT, {
+          source: 'sdk',
+          phase: TaskRuntimePhase.RUNNING,
+          meaningful: true,
+          forceFlush: true,
+        });
+      };
 
+      await vitalsReporter.record(TaskRuntimeEventKind.TASK_STATUS, {
+        source: 'executor',
+        phase: TaskRuntimePhase.AWAITING_FIRST_AGENT_EVENT,
+        forceFlush: true,
+      });
       currentRun = await agent.send(prompt, {
         model,
         mcpServers,
@@ -554,6 +602,7 @@ export async function executeCursorTask(params: {
           getNextIndex: () => nextIndex++,
           toolCallMessageIds,
           toolCallMessageIdsByCallId,
+          completedToolCallIds,
           getAssistantText: () => assistantText,
           setAssistantText: (value) => {
             assistantText = value;
@@ -571,6 +620,8 @@ export async function executeCursorTask(params: {
           setThinkingStarted: (value) => {
             thinkingStarted = value;
           },
+          vitalsReporter,
+          recordFirstAgentEvent,
         });
       }
 
@@ -598,6 +649,11 @@ export async function executeCursorTask(params: {
           preview: finalText,
           model: recordedModel,
         });
+        await vitalsReporter.record(TaskRuntimeEventKind.ASSISTANT_MESSAGE, {
+          source: 'sdk',
+          phase: TaskRuntimePhase.RUNNING,
+          meaningful: true,
+        });
       }
 
       const failed = runResult.status === 'error';
@@ -606,6 +662,21 @@ export async function executeCursorTask(params: {
       const taskPatch: Partial<Task> = {
         status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
+        runtime_vitals: await vitalsReporter.terminalSnapshot(
+          stopped
+            ? TaskRuntimeEventKind.TURN_STOPPED
+            : failed
+              ? TaskRuntimeEventKind.TURN_FAILED
+              : TaskRuntimeEventKind.TURN_COMPLETED,
+          {
+            source: 'sdk',
+            phase: stopped
+              ? TaskRuntimePhase.STOPPED
+              : failed
+                ? TaskRuntimePhase.FAILED
+                : TaskRuntimePhase.COMPLETED,
+          }
+        ),
         ...(recordedModel ? { model: recordedModel } : {}),
         raw_sdk_response: {
           run: runResult,
@@ -629,6 +700,10 @@ export async function executeCursorTask(params: {
     const taskPatch: Partial<Task> = {
       status: 'failed',
       completed_at: new Date().toISOString(),
+      runtime_vitals: await vitalsReporter.terminalSnapshot(TaskRuntimeEventKind.TURN_FAILED, {
+        source: 'sdk',
+        phase: TaskRuntimePhase.FAILED,
+      }),
       error_message: err.message,
     };
     if (shaAtEnd) {
@@ -639,11 +714,12 @@ export async function executeCursorTask(params: {
     await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
     throw err;
   } finally {
+    vitalsReporter.stop();
     params.abortController.signal.removeEventListener('abort', abortHandler);
   }
 }
 
-async function handleCursorEvent(args: {
+export async function handleCursorEvent(args: {
   event: SDKMessage;
   client: AgorClient;
   callbacks: StreamingCallbacks;
@@ -658,6 +734,7 @@ async function handleCursorEvent(args: {
   getNextIndex: () => number;
   toolCallMessageIds: MessageID[];
   toolCallMessageIdsByCallId: Map<string, MessageID>;
+  completedToolCallIds: Set<string>;
   getAssistantText: () => string;
   setAssistantText: (value: string) => void;
   getThinkingText: () => string;
@@ -667,6 +744,8 @@ async function handleCursorEvent(args: {
   ensureAssistantMessageIndex: () => number;
   isThinkingStarted: () => boolean;
   setThinkingStarted: (value: boolean) => void;
+  vitalsReporter?: TaskRuntimeVitalsReporter;
+  recordFirstAgentEvent?: () => Promise<void>;
 }): Promise<void> {
   switch (args.event.type) {
     case 'assistant': {
@@ -680,6 +759,7 @@ async function handleCursorEvent(args: {
       if (!delta) return;
       const updatedText = isCumulative ? nextText : previousText + nextText;
 
+      await args.recordFirstAgentEvent?.();
       if (!args.isAssistantStreamStarted()) {
         args.ensureAssistantMessageIndex();
         await args.callbacks.onStreamStart(args.assistantMessageId, {
@@ -703,6 +783,7 @@ async function handleCursorEvent(args: {
       if (!delta) return;
       const updatedText = isCumulative ? args.event.text : previousText + args.event.text;
 
+      await args.recordFirstAgentEvent?.();
       if (!args.isThinkingStarted() && args.callbacks.onThinkingStart) {
         args.ensureAssistantMessageIndex();
         await args.callbacks.onThinkingStart(args.assistantMessageId, {});
@@ -714,6 +795,7 @@ async function handleCursorEvent(args: {
     }
 
     case 'tool_call': {
+      const toolName = normalizeCursorToolName(args.event.name);
       const existingMessageId = args.toolCallMessageIdsByCallId.get(args.event.call_id);
       if (existingMessageId) {
         await updateToolMessage({
@@ -721,6 +803,17 @@ async function handleCursorEvent(args: {
           messageId: existingMessageId,
           event: args.event,
         });
+        if (args.event.status !== 'running' && !args.completedToolCallIds.has(args.event.call_id)) {
+          args.completedToolCallIds.add(args.event.call_id);
+          await args.recordFirstAgentEvent?.();
+          await args.vitalsReporter?.record(TaskRuntimeEventKind.TOOL_COMPLETE, {
+            source: 'tool',
+            phase: TaskRuntimePhase.RUNNING,
+            meaningful: true,
+            toolName,
+            toolUseId: args.event.call_id,
+          });
+        }
         return;
       }
 
@@ -734,6 +827,25 @@ async function handleCursorEvent(args: {
       });
       args.toolCallMessageIdsByCallId.set(args.event.call_id, messageId);
       args.toolCallMessageIds.push(messageId);
+      await args.recordFirstAgentEvent?.();
+      if (args.event.status === 'running') {
+        await args.vitalsReporter?.record(TaskRuntimeEventKind.TOOL_START, {
+          source: 'tool',
+          phase: TaskRuntimePhase.TOOL_RUNNING,
+          meaningful: true,
+          toolName,
+          toolUseId: args.event.call_id,
+        });
+      } else {
+        args.completedToolCallIds.add(args.event.call_id);
+        await args.vitalsReporter?.record(TaskRuntimeEventKind.TOOL_COMPLETE, {
+          source: 'tool',
+          phase: TaskRuntimePhase.RUNNING,
+          meaningful: true,
+          toolName,
+          toolUseId: args.event.call_id,
+        });
+      }
       return;
     }
 

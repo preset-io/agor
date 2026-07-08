@@ -10,10 +10,20 @@
  */
 
 import { generateId, shortId } from '@agor/core';
-import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import type {
+  MessageID,
+  PermissionMode,
+  SessionID,
+  TaskID,
+  TaskRuntimeVitals,
+} from '@agor/core/types';
+import { MessageRole, TaskRuntimeEventKind, TaskRuntimePhase } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
+import {
+  TaskRuntimeVitalsReporter,
+  wrapMessagesServiceWithRuntimeVitals,
+} from '../../runtime-vitals.js';
 import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks } from './base-executor.js';
@@ -36,7 +46,30 @@ export async function executeOpenCodeTask(params: {
 
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);
 
+  let initialRuntimeVitals: TaskRuntimeVitals | undefined;
   try {
+    initialRuntimeVitals = (await client.service('tasks').get(taskId)).runtime_vitals;
+  } catch (error) {
+    console.warn(
+      '[runtime-vitals] Failed to read initial task runtime vitals:',
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+
+  const vitalsReporter = new TaskRuntimeVitalsReporter({
+    client,
+    taskId,
+    toolName: 'opencode',
+    initialSnapshot: initialRuntimeVitals,
+  });
+
+  try {
+    await vitalsReporter.record(TaskRuntimeEventKind.SDK_TURN_STARTED, {
+      source: 'executor',
+      phase: TaskRuntimePhase.SDK_STARTING,
+      forceFlush: true,
+    });
+
     // Get session to extract model config
     const session = await client.service('sessions').get(sessionId);
     console.log('[opencode] Session loaded:', {
@@ -77,10 +110,11 @@ export async function executeOpenCodeTask(params: {
         enabled: true,
         serverUrl,
       },
-      repos.messagesService,
+      wrapMessagesServiceWithRuntimeVitals(repos.messagesService, vitalsReporter),
       repos.sessionMCP,
       repos.mcpServers,
-      repos.mcpOAuthAuthHeaders
+      repos.mcpOAuthAuthHeaders,
+      vitalsReporter
     );
 
     let opencodeSessionId: string;
@@ -153,6 +187,11 @@ export async function executeOpenCodeTask(params: {
     // Execute task using OpenCode's executeTask interface
     // This will create the assistant message with streaming
     // Pass nextIndex + 1 for assistant message index
+    await vitalsReporter.record(TaskRuntimeEventKind.TASK_STATUS, {
+      source: 'executor',
+      phase: TaskRuntimePhase.AWAITING_FIRST_AGENT_EVENT,
+      forceFlush: true,
+    });
     const result = await tool.executeTask?.(sessionId, prompt, taskId, callbacks, nextIndex + 1);
 
     console.log(`[opencode] Execution completed: status=${result?.status}`);
@@ -165,11 +204,20 @@ export async function executeOpenCodeTask(params: {
 
     console.log('[opencode] Setting task model:', modelIdentifier);
 
+    const failed = result?.status !== 'completed';
+
     // Update task status to completed and set model
     await client.service('tasks').patch(taskId, {
-      status: result?.status === 'completed' ? 'completed' : 'failed',
+      status: failed ? 'failed' : 'completed',
       completed_at: new Date().toISOString(),
       model: modelIdentifier, // Set the model identifier used for this task (provider/model format)
+      runtime_vitals: await vitalsReporter.terminalSnapshot(
+        failed ? TaskRuntimeEventKind.TURN_FAILED : TaskRuntimeEventKind.TURN_COMPLETED,
+        {
+          source: 'sdk',
+          phase: failed ? TaskRuntimePhase.FAILED : TaskRuntimePhase.COMPLETED,
+        }
+      ),
     });
   } catch (error) {
     const err = error as Error;
@@ -179,8 +227,14 @@ export async function executeOpenCodeTask(params: {
     await client.service('tasks').patch(taskId, {
       status: 'failed',
       completed_at: new Date().toISOString(),
+      runtime_vitals: await vitalsReporter.terminalSnapshot(TaskRuntimeEventKind.TURN_FAILED, {
+        source: 'sdk',
+        phase: TaskRuntimePhase.FAILED,
+      }),
     });
 
     throw err;
+  } finally {
+    vitalsReporter.stop();
   }
 }
