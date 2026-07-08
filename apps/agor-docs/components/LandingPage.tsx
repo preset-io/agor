@@ -209,6 +209,7 @@ export function LandingPage() {
   const landingRef = useRef<HTMLDivElement>(null);
   const [isBetaFormOpen, setIsBetaFormOpen] = useState(false);
   const [activeShot, setActiveShot] = useState(0);
+  const [activeSurface, setActiveSurface] = useState(0);
 
   useEffect(() => {
     const landing = landingRef.current;
@@ -278,9 +279,11 @@ export function LandingPage() {
               Empower your team with <span className={styles.headingAccent}>AI assistants</span>.
             </h1>
             <p className={styles.heroProvocation}>
-              Break your team free from their terminals.
+              Build powerful agents for business users.
               <br />
-              Build powerful agents for business users. Let power users get down to business.
+              Let power users get down to business.
+              <br />
+              Break your team free from their terminals.
             </p>
             <div className={styles.heroActions}>
               <button
@@ -291,21 +294,18 @@ export function LandingPage() {
                 Join the private beta
               </button>
               <Link href="/guide/getting-started" className={styles.secondaryButton}>
-                Get started
+                Install locally
               </Link>
               <Link
                 href={GITHUB_REPO_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className={styles.textButton}
+                className={styles.secondaryButton}
               >
                 <GitHubIcon />
-                View GitHub
+                Star us on GitHub
               </Link>
             </div>
-            <p className={styles.heroMeta}>
-              Open source. Try it today with a 3-minute local install.
-            </p>
           </div>
         </section>
       </div>
@@ -341,7 +341,6 @@ export function LandingPage() {
         </section>
 
         <section className={styles.liveSection} data-reveal>
-          <span className={styles.eyebrow}>Welcome to multiplayer AI</span>
           <h2 className={styles.liveStatement}>
             Don’t let AI tools trap people in their corner.{' '}
             <span className={styles.headingDim}>
@@ -357,22 +356,18 @@ export function LandingPage() {
                 data-reveal
                 style={revealDelay(index)}
               >
-                <div className={styles.cardNum}>{`0${index + 1}`}</div>
                 <h3>{card.title}</h3>
                 <p>{card.body}</p>
               </article>
             ))}
           </div>
-          <Link href="/guide/multiplayer-social" className={styles.cardLink}>
-            Explore multiplayer →
-          </Link>
         </section>
       </div>
 
       <section className={styles.showcaseSection} data-reveal>
         <div className={styles.showcaseHeader}>
           <div className={styles.sectionHeader}>
-            <span className={styles.eyebrow}>Inside Agor</span>
+            <span className={styles.eyebrow}>What is Agor?</span>
             <h2>
               So much more than a <span className={styles.headingAccent}>chat box</span>.
             </h2>
@@ -443,35 +438,52 @@ export function LandingPage() {
 
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
-          <span className={styles.eyebrow}>Product surfaces</span>
           <h2>
             Every surface an <span className={styles.headingAccent}>enablement leader</span> needs
             to orchestrate AI.
           </h2>
         </div>
-        <div className={styles.productGrid}>
-          {productPreviews.map((preview, index) => (
-            <Link
-              className={styles.productCard}
-              href={preview.href}
-              key={preview.title}
-              data-reveal
-              style={revealDelay(index)}
-            >
-              {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-              <img className={styles.productShot} src={preview.image} alt="" />
-              <div className={styles.productCardBody}>
-                <h3>{preview.title}</h3>
-                <p>{preview.body}</p>
+        <div className={styles.surfaceExplorer} data-reveal>
+          <div className={styles.surfaceRail}>
+            <span className={styles.surfaceRailLabel}>Product surfaces</span>
+            {productPreviews.map((preview, index) => (
+              <button
+                type="button"
+                key={preview.title}
+                className={
+                  index === activeSurface
+                    ? `${styles.surfaceRailItem} ${styles.surfaceRailItemActive}`
+                    : styles.surfaceRailItem
+                }
+                onClick={() => setActiveSurface(index)}
+              >
+                {preview.title}
+              </button>
+            ))}
+          </div>
+          <div className={styles.surfaceStage}>
+            <div className={styles.surfaceInfo}>
+              <div>
+                <h3>{productPreviews[activeSurface].title}</h3>
+                <p>{productPreviews[activeSurface].body}</p>
               </div>
-            </Link>
-          ))}
+              <Link href={productPreviews[activeSurface].href} className={styles.secondaryButton}>
+                Learn more →
+              </Link>
+            </div>
+            {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+            <img
+              key={productPreviews[activeSurface].image}
+              className={styles.surfaceShot}
+              src={productPreviews[activeSurface].image}
+              alt={productPreviews[activeSurface].title}
+            />
+          </div>
         </div>
       </section>
 
       <section className={styles.workspaceSection} data-reveal>
         <div className={styles.workspaceCopy}>
-          <span className={styles.eyebrow}>The shared workspace</span>
           <h2>
             Raise <span className={styles.headingAccent}>team assistants</span> with memory, skills,
             and a place to work.

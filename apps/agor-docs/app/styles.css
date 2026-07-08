@@ -61,17 +61,32 @@
   background: var(--agor-teal);
 }
 
-/* Main content area - solid background over particles */
-main {
-  background-color: #ffffff;
+/* Docs content panel — rounded, padded, slightly translucent so the aurora
+ * backdrop reads through. The landing page opts out (its shell is full-bleed
+ * and brings its own background). */
+body:not(:has([class*="landingShell"])) main {
   position: relative;
   z-index: 1;
+  padding: 20px 36px 40px;
+  margin: 16px 0 40px;
+  border: 1px solid rgba(46, 154, 146, 0.14);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.9);
 }
 
-.dark main {
-  background-color: #111111;
+.dark body:not(:has([class*="landingShell"])) main {
+  border-color: rgba(52, 230, 196, 0.08);
+  background: rgba(7, 16, 15, 0.74);
+}
+
+/* Nextra's floating "Copy page" control renders BEFORE <main> in the DOM and
+ * floats into it — lift it above the panel background and nudge it down/in so
+ * it sits inside the rounded content panel rather than straddling its edge. */
+[class~="x:float-end"] {
   position: relative;
-  z-index: 1;
+  z-index: 2;
+  margin-top: 48px;
+  margin-inline-end: 24px;
 }
 
 /* ─── Navbar CTA position ────────────────────────────────────────────────

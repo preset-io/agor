@@ -59,14 +59,14 @@
   background:
     radial-gradient(
       ellipse 82% 72% at 50% 40%,
-      rgba(7, 16, 15, 0.84) 0%,
-      rgba(7, 16, 15, 0.5) 52%,
-      rgba(7, 16, 15, 0.12) 78%
+      rgba(7, 16, 15, 0.38) 0%,
+      rgba(7, 16, 15, 0.22) 52%,
+      rgba(7, 16, 15, 0.08) 78%
     ),
     linear-gradient(
       180deg,
-      rgba(7, 16, 15, 0.55) 0%,
-      rgba(7, 16, 15, 0.1) 32%,
+      rgba(7, 16, 15, 0.45) 0%,
+      rgba(7, 16, 15, 0.06) 32%,
       rgba(7, 16, 15, 0.95) 100%
     );
 }
@@ -123,9 +123,22 @@
 }
 
 .heroCopy {
-  max-width: 780px;
+  max-width: 1040px;
   margin: 0 auto;
+  padding: clamp(36px, 4.5vw, 64px) clamp(24px, 4vw, 56px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  background: rgba(7, 16, 15, 0.42);
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
   text-align: center;
+}
+
+/* Without backdrop-filter support the tint must carry legibility alone */
+@supports not (backdrop-filter: blur(1px)) {
+  .heroCopy {
+    background: rgba(7, 16, 15, 0.78);
+  }
 }
 
 /* Mono badge pill above the H1 (mockup treatment) */
@@ -224,7 +237,7 @@
 }
 
 .heroCopy h1 {
-  max-width: 15ch;
+  max-width: 18ch;
   margin: 0 auto;
   font-size: clamp(3.45rem, 6.5vw, 5.75rem);
   overflow-wrap: normal;
@@ -242,13 +255,13 @@
 }
 
 .heroProvocation {
-  max-width: 620px;
+  max-width: 860px;
   margin: 24px auto 0;
   color: var(--landing-ink);
-  font-size: clamp(1.18rem, 1.8vw, 1.55rem);
+  font-size: clamp(1.05rem, 1.5vw, 1.3rem);
   font-weight: 500;
-  line-height: 1.62;
-  letter-spacing: -0.025em;
+  line-height: 1.7;
+  letter-spacing: -0.02em;
 }
 
 .heroActions {
@@ -536,92 +549,113 @@
   padding-top: 42px;
 }
 
-.productGrid {
+/* Product-surfaces explorer: side rail + large screenshot stage */
+.surfaceExplorer {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-columns: minmax(240px, 0.28fr) 1fr;
   margin-top: 42px;
-}
-
-.productCard {
-  display: block;
   overflow: hidden;
-  padding: 0;
-  border: 1px solid rgba(52, 230, 196, 0.12);
-  border-radius: 18px;
-  color: var(--landing-ink);
-  background: linear-gradient(180deg, rgba(14, 28, 26, 0.65), rgba(9, 18, 16, 0.5));
-  text-decoration: none;
-  transition:
-    translate 0.3s ease,
-    border-color 0.3s ease,
-    box-shadow 0.3s ease;
+  border: 1px solid rgba(52, 230, 196, 0.14);
+  border-radius: 20px;
+  background: #081210;
+  box-shadow: 0 50px 120px -50px rgba(0, 0, 0, 0.8);
 }
 
-/* Full-bleed screenshot: card's overflow clips the top corners; flat bottom.
- * Rests slightly desaturated; hover brings it to full color with a gentle
- * zoom (the card's overflow:hidden crops the scale). */
-.productShot {
+.surfaceRail {
+  display: flex;
+  flex-direction: column;
+  padding: 22px 0;
+  border-right: 1px solid rgba(52, 230, 196, 0.1);
+  background: rgba(7, 16, 15, 0.6);
+}
+
+.surfaceRailLabel {
+  padding: 8px 26px 14px;
+  color: var(--landing-teal);
+  font-family: var(--font-mono-stack);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.surfaceRailItem {
+  padding: 14px 26px;
+  border: 0;
+  background: none;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.02rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color 0.25s ease,
+    background 0.25s ease;
+}
+
+.surfaceRailItem:hover {
+  background: rgba(52, 230, 196, 0.05);
+}
+
+.surfaceRailItemActive,
+.surfaceRailItemActive:hover {
+  color: var(--landing-teal);
+  background: rgba(52, 230, 196, 0.07);
+}
+
+.surfaceStage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.surfaceShot {
   display: block;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  height: clamp(380px, 42vw, 600px);
   object-fit: cover;
-  object-position: 34% 44%;
+  object-position: center top;
+  animation: surfaceShotIn 0.35s ease;
+}
+
+@keyframes surfaceShotIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.surfaceInfo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 20px 34px;
   border-bottom: 1px solid rgba(52, 230, 196, 0.1);
-  filter: saturate(0.45) brightness(0.94);
-  transform: scale(1);
-  transition:
-    filter 0.45s ease,
-    transform 0.45s ease;
 }
 
-.productCard:hover .productShot {
-  filter: saturate(1.06) brightness(1.03);
-  transform: scale(1.045);
+.surfaceInfo .secondaryButton {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
-/* Per-screenshot crop focus (carried over from the old image cards) */
-.productCard:nth-child(2) .productShot {
-  object-position: 72% 45%;
-}
-
-.productCard:nth-child(3) .productShot {
-  object-position: 50% 20%;
-}
-
-.productCard:nth-child(5) .productShot {
-  object-position: 50% 22%;
-}
-
-.productCard:nth-child(7) .productShot,
-.productCard:nth-child(8) .productShot,
-.productCard:nth-child(9) .productShot {
-  object-position: 50% 24%;
-}
-
-.productCardBody {
-  padding: 20px 26px 26px;
-}
-
-.productCard h3 {
+.surfaceInfo h3 {
   margin: 0;
+  color: var(--landing-teal);
   font-family: var(--font-display-stack);
-  font-size: 1.18rem;
+  font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 
-.productCard p {
-  margin: 9px 0 0;
+.surfaceInfo p {
+  max-width: 62ch;
+  margin: 10px 0 0;
   color: var(--landing-muted);
-  font-size: 0.93rem;
-  line-height: 1.58;
-}
-
-.productCard:hover {
-  translate: 0 -5px;
-  border-color: rgba(52, 230, 196, 0.34);
-  box-shadow: 0 18px 44px -18px rgba(52, 230, 196, 0.22);
+  line-height: 1.6;
 }
 
 .controlSection {
@@ -831,6 +865,39 @@
     grid-template-columns: 1fr;
   }
 
+  .surfaceExplorer {
+    grid-template-columns: 1fr;
+  }
+
+  .surfaceRail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 16px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(52, 230, 196, 0.1);
+  }
+
+  .surfaceRailLabel {
+    width: 100%;
+    padding: 0 10px 10px;
+  }
+
+  .surfaceRailItem {
+    padding: 8px 14px;
+    border: 1px solid rgba(52, 230, 196, 0.16);
+    border-radius: 999px;
+    font-size: 0.88rem;
+  }
+
+  .surfaceShot {
+    height: clamp(240px, 52vw, 420px);
+  }
+
+  .surfaceInfo {
+    padding: 20px 22px 24px;
+  }
+
   .showcaseSlide {
     min-height: 340px;
   }
@@ -869,10 +936,6 @@
 
   .workspaceCopy {
     position: static;
-  }
-
-  .productGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -913,10 +976,6 @@
   }
 
   .featureGrid,
-  .productGrid {
-    grid-template-columns: 1fr;
-  }
-
   .sectionHeader h2,
   .liveCopy h2,
   .workspaceCopy h2,
@@ -1120,22 +1179,8 @@
   border-color: rgba(52, 230, 196, 0.32);
 }
 
-.cardNum {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid rgba(52, 230, 196, 0.16);
-  border-radius: 11px;
-  background: rgba(52, 230, 196, 0.08);
-  color: var(--landing-teal);
-  font-family: var(--font-mono-stack);
-  font-size: 0.82rem;
-}
-
 .numberedCard h3 {
-  margin: 18px 0 0;
+  margin: 0;
   color: var(--landing-ink);
   font-family: var(--font-display-stack);
   font-size: 1.19rem;
