@@ -451,7 +451,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           try {
             const result = await archiveSession(sessionId as SessionID);
             if (result) {
-              showSuccess('Session archived');
+              showSuccess('Session and child sessions archived');
             } else {
               showError('Failed to archive session');
             }

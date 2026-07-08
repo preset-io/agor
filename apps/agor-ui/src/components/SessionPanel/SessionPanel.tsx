@@ -857,7 +857,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onOk: async () => {
         const archived = await archiveSession(session.session_id);
         if (archived) {
-          showSuccess('Session archived');
+          showSuccess('Session and child sessions archived');
           onClose();
         } else {
           showError('Failed to archive session');
