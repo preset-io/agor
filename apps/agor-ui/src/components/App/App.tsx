@@ -90,6 +90,7 @@ import {
   getShowCommentsPanelState,
   getToggleBoardPanelState,
 } from './boardPanelActions';
+import { LeftPanelCollapseTrigger } from './LeftPanelCollapseTrigger';
 import {
   capSessionSizeForCanvasMin,
   getContentPanelWidthPercent,
@@ -1572,6 +1573,14 @@ export const App: React.FC<AppProps> = ({
               </PanelGroup>
             </Panel>
           </PanelGroup>
+          {currentBoard && !suppressLeftPanel && (
+            <LeftPanelCollapseTrigger
+              collapsed={leftPanelCollapsed}
+              panelSizePercent={effectiveCommentsPanelSize}
+              collapsedPanelSizePercent={leftPanelCollapsedSize}
+              onToggle={() => setCommentsPanelCollapsed(!commentsPanelCollapsed)}
+            />
+          )}
         </Content>
         {/* Invisible mount of antd Upload so its CSS-in-JS styles stay
               registered even after the SessionPanel (which contains FileUpload)
