@@ -41,17 +41,23 @@ interface ToolStatusInput {
  * Rules:
  * - Has result + error → 'error'
  * - Has result + no error → 'success'
- * - No result + potentially running + task running → 'pending' (spinner)
- * - No result + (not potentially running OR task done) → 'stale' (agent moved on)
+ * - No result + task running → 'pending' (spinner)
+ * - No result + task done → 'stale' (result not captured)
+ *
+ * Note: `isPotentiallyRunning` is kept as an input for call-site context, but
+ * is no longer used to mark a missing result stale while the task is still
+ * running. Some agents can emit user-visible assistant text before a long MCP
+ * tool result arrives; "subsequent message" is not a reliable abandonment
+ * signal until the parent task has actually stopped.
  */
 export function deriveToolStatus({
   hasResult,
   isError,
-  isPotentiallyRunning,
+  isPotentiallyRunning: _isPotentiallyRunning,
   isTaskRunning,
 }: ToolStatusInput): ToolStatus {
   if (hasResult) return isError ? 'error' : 'success';
-  return isPotentiallyRunning && isTaskRunning ? 'pending' : 'stale';
+  return isTaskRunning ? 'pending' : 'stale';
 }
 
 /** Render the icon for a given tool status. */

@@ -11,7 +11,7 @@
 import type { Message } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 
-import { type Block, groupMessagesIntoBlocks } from './TaskBlock';
+import { type Block, blocksHaveSameMessages, groupMessagesIntoBlocks } from './TaskBlock';
 
 function userMessage(index: number, id: string): Message {
   return {
@@ -111,5 +111,53 @@ describe('groupMessagesIntoBlocks — widget_request ordering', () => {
 
     expect(messages.map((m) => m.message_id)).toEqual(originalOrder);
     expect(messages.map((m) => m.index)).toEqual(originalIndices);
+  });
+});
+
+describe('TaskBlock block reconciliation', () => {
+  it('detects in-place tool result patches on a previously grouped agent-chain block', () => {
+    const toolMessage = {
+      message_id: 'tool-msg-1',
+      session_id: 'sess-1',
+      type: 'message',
+      role: 'assistant',
+      index: 0,
+      timestamp: '2026-07-01T12:00:00.000Z',
+      content_preview: '',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tool-1',
+          name: 'Bash',
+          input: { command: 'echo hi' },
+        },
+      ],
+      tool_uses: [{ id: 'tool-1', name: 'Bash', input: { command: 'echo hi' } }],
+    } as unknown as Message;
+
+    const previousBlock = groupMessagesIntoBlocks([toolMessage])[0];
+
+    // Feathers can patch the same message object in place when a running tool
+    // completes. Reconciliation must notice the content change even though the
+    // Message object identity is unchanged.
+    toolMessage.content = [
+      ...(toolMessage.content as Array<Record<string, unknown>>),
+      {
+        type: 'tool_result',
+        tool_use_id: 'tool-1',
+        content: 'hi\n',
+        is_error: false,
+      },
+    ] as unknown as Message['content'];
+    toolMessage.content_preview = 'hi\n';
+
+    const nextBlock = groupMessagesIntoBlocks([toolMessage])[0];
+
+    expect(previousBlock.type).toBe('agent-chain');
+    expect(nextBlock.type).toBe('agent-chain');
+    expect((previousBlock as Extract<Block, { type: 'agent-chain' }>).messages[0]).toBe(
+      (nextBlock as Extract<Block, { type: 'agent-chain' }>).messages[0]
+    );
+    expect(blocksHaveSameMessages(previousBlock, nextBlock)).toBe(false);
   });
 });

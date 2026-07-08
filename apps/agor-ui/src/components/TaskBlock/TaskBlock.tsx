@@ -63,9 +63,9 @@ const EMPTY_USER_MAP = new Map<string, User>();
  * Block types for rendering
  */
 export type Block =
-  | { type: 'message'; message: Message }
-  | { type: 'agent-chain'; messages: Message[] }
-  | { type: 'compaction'; messages: Message[] }; // System messages (start + optional complete)
+  | { type: 'message'; message: Message; renderSignature?: string }
+  | { type: 'agent-chain'; messages: Message[]; renderSignature?: string }
+  | { type: 'compaction'; messages: Message[]; renderSignature?: string }; // System messages (start + optional complete)
 
 interface TaskBlockProps {
   task: Task;
@@ -357,10 +357,13 @@ export function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   const isWidgetBlock = (b: Block): boolean =>
     b.type === 'message' && b.message.type === 'widget_request';
   if (blocks.some(isWidgetBlock)) {
-    return [...blocks.filter((b) => !isWidgetBlock(b)), ...blocks.filter(isWidgetBlock)];
+    return withBlockRenderSignatures([
+      ...blocks.filter((b) => !isWidgetBlock(b)),
+      ...blocks.filter(isWidgetBlock),
+    ]);
   }
 
-  return blocks;
+  return withBlockRenderSignatures(blocks);
 }
 
 /**
@@ -371,6 +374,43 @@ function getBlockKey(block: Block): string {
   return block.type === 'message'
     ? `m:${block.message.message_id}`
     : `${block.type}:${block.messages[0]?.message_id || 'unknown'}`;
+}
+
+/**
+ * Snapshot the render-relevant message shape for reconciliation.
+ *
+ * Feathers/live-query updates may patch a message object in place (e.g. Codex
+ * creates a tool_use-only message at tool:start, then patches the same message
+ * with the tool_result at tool:complete). React.memo only sees prop identity, so
+ * reconciling solely by message object reference can freeze an AgentChain on the
+ * old "no result" render and show the stale-tool tooltip. Store this signature
+ * on each freshly grouped block so the next render can detect in-place content
+ * changes by comparing against the previous snapshot.
+ */
+function getMessageRenderSignature(message: Message): string {
+  return JSON.stringify({
+    message_id: message.message_id,
+    role: message.role,
+    type: message.type,
+    index: message.index,
+    parent_tool_use_id: message.parent_tool_use_id ?? null,
+    content_preview: message.content_preview,
+    content: message.content,
+    tool_uses: message.tool_uses ?? null,
+    isStreaming: (message as { isStreaming?: boolean }).isStreaming === true,
+  });
+}
+
+function getBlockRenderSignature(block: Block): string {
+  const messages = block.type === 'message' ? [block.message] : block.messages;
+  return messages.map(getMessageRenderSignature).join('\n---message---\n');
+}
+
+function withBlockRenderSignatures(blocks: Block[]): Block[] {
+  return blocks.map((block) => ({
+    ...block,
+    renderSignature: getBlockRenderSignature(block),
+  }));
 }
 
 /**
@@ -388,8 +428,11 @@ function getBlockMarker(block: Block): 'streaming' | 'settled' {
 }
 
 /** Same composition: identical message references in identical order. */
-function blocksHaveSameMessages(a: Block, b: Block): boolean {
+export function blocksHaveSameMessages(a: Block, b: Block): boolean {
   if (a.type !== b.type) return false;
+  if (a.renderSignature && b.renderSignature) {
+    return a.renderSignature === b.renderSignature;
+  }
   if (a.type === 'message' && b.type === 'message') return a.message === b.message;
   const aMessages = (a as { messages: Message[] }).messages;
   const bMessages = (b as { messages: Message[] }).messages;
