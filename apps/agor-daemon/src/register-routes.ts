@@ -805,7 +805,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       async create(data: { includeChildren?: boolean } | undefined, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Session ID required');
+        if (!id) throw new BadRequest('Session ID required');
         return sessionsService.archive(id, data, params);
       },
     },
@@ -821,7 +821,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     {
       async create(data: { includeChildren?: boolean } | undefined, params: RouteParams) {
         const id = params.route?.id;
-        if (!id) throw new Error('Session ID required');
+        if (!id) throw new BadRequest('Session ID required');
         return sessionsService.unarchive(id, data, params);
       },
     },

@@ -773,27 +773,9 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   private async collectBranchLocalDescendants(root: Session): Promise<Session[]> {
-    const descendants: Session[] = [];
-    const visited = new Set<string>([root.session_id]);
-
-    const visit = async (parentId: string): Promise<void> => {
-      const children = await this.sessionRepo.findChildren(parentId);
-
-      for (const child of children) {
-        if (visited.has(child.session_id)) continue;
-        visited.add(child.session_id);
-
-        // Session archive cascades follow the branch-local genealogy tree only.
-        // Remote relationships are modeled separately and must not be affected.
-        if (child.branch_id !== root.branch_id) continue;
-
-        descendants.push(child);
-        await visit(child.session_id);
-      }
-    };
-
-    await visit(root.session_id);
-    return descendants;
+    // Session archive cascades follow the branch-local genealogy tree only.
+    // Remote relationships are modeled separately and must not be affected.
+    return this.sessionRepo.findBranchLocalDescendants(root.session_id, root.branch_id);
   }
 
   private getRuntimeExecutionConfig():
@@ -897,17 +879,16 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const sessionsToPatch = includeChildren
       ? [root, ...(await this.collectBranchLocalDescendants(root))]
       : [root];
-    const affectedSessions: Session[] = [];
-
     await this.assertCanArchiveSessions(sessionsToPatch, archived, params);
 
-    for (const session of sessionsToPatch) {
-      const patch = {
-        archived,
-        archived_reason: archived ? 'manual' : null,
-      } as Partial<Session>;
-      const patched = (await this.patch(session.session_id, patch, params)) as Session;
-      affectedSessions.push(patched);
+    const affectedSessions = await this.sessionRepo.updateArchiveStateForIds(
+      sessionsToPatch.map((session) => session.session_id),
+      archived,
+      archived ? 'manual' : null
+    );
+
+    for (const affectedSession of affectedSessions) {
+      this.emit?.('patched', affectedSession, params);
     }
 
     const [session] = affectedSessions;

@@ -538,18 +538,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const fullId = await this.resolveId(sessionId);
       const baseUrl = await getBaseUrl();
 
-      // Query sessions where parent_session_id or forked_from_session_id matches
-      // Use database-agnostic JSON extraction helper
-      const { jsonExtract } = await import('../database-wrapper');
-
       const results = await select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
         .where(
-          or(
-            sql`${jsonExtract(this.db, sessions.data, 'genealogy.parent_session_id')} = ${fullId}`,
-            sql`${jsonExtract(this.db, sessions.data, 'genealogy.forked_from_session_id')} = ${fullId}`
-          )
+          or(eq(sessions.parent_session_id, fullId), eq(sessions.forked_from_session_id, fullId))
         )
         .all();
 
@@ -567,6 +560,64 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     } catch (error) {
       throw new RepositoryError(
         `Failed to find child sessions: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Find all branch-local descendants for a session with one branch-scoped read.
+   *
+   * Archive cascades can touch large trees; building the descendant set in
+   * memory avoids one child lookup per visited node and relies on the
+   * materialized genealogy columns rather than JSON extraction.
+   */
+  async findBranchLocalDescendants(sessionId: string, branchId: BranchID): Promise<Session[]> {
+    try {
+      const fullId = await this.resolveId(sessionId);
+      const baseUrl = await getBaseUrl();
+      const results = await select(this.db)
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+        .where(eq(sessions.branch_id, branchId))
+        .all();
+
+      const sessionById = new Map<string, Session>();
+      const childrenByParent = new Map<string, Session[]>();
+      for (const result of results as Array<{
+        sessions: SessionRow;
+        branches?: { board_id?: string } | null;
+      }>) {
+        const boardId = (result.branches?.board_id ?? null) as UUID | null;
+        const session = this.rowToSession(result.sessions, boardId, baseUrl);
+        sessionById.set(session.session_id, session);
+
+        const parentIds = [
+          session.genealogy?.parent_session_id,
+          session.genealogy?.forked_from_session_id,
+        ].filter((id): id is SessionID => typeof id === 'string' && id.length > 0);
+        for (const parentId of parentIds) {
+          const siblings = childrenByParent.get(parentId) ?? [];
+          siblings.push(session);
+          childrenByParent.set(parentId, siblings);
+        }
+      }
+
+      const descendants: Session[] = [];
+      const visited = new Set<string>([fullId]);
+      const queue = [...(childrenByParent.get(fullId) ?? [])];
+      while (queue.length > 0) {
+        const child = queue.shift();
+        if (!child || visited.has(child.session_id)) continue;
+        visited.add(child.session_id);
+        descendants.push(child);
+        queue.push(...(childrenByParent.get(child.session_id) ?? []));
+      }
+
+      return descendants.filter((session) => sessionById.has(session.session_id));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find branch-local descendants: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -709,6 +760,70 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to update session: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Atomically update archive state for a known set of sessions.
+   *
+   * This is used by manual archive/unarchive cascades so either the whole
+   * branch-local tree flips state or none of it does.
+   */
+  async updateArchiveStateForIds(
+    ids: string[],
+    archived: boolean,
+    archivedReason: Session['archived_reason'] | null
+  ): Promise<Session[]> {
+    if (ids.length === 0) return [];
+
+    try {
+      const fullIds = await Promise.all(ids.map((id) => this.resolveId(id)));
+      const baseUrl = await getBaseUrl();
+      const now = new Date();
+      const result = await this.db.transaction(async (tx) => {
+        await update(txAsDb(tx), sessions)
+          .set({
+            archived,
+            archived_reason: archivedReason,
+            updated_at: now,
+          })
+          .where(inArray(sessions.session_id, fullIds))
+          .run();
+
+        const rows = await select(txAsDb(tx))
+          .from(sessions)
+          .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+          .where(inArray(sessions.session_id, fullIds))
+          .all();
+
+        if (rows.length !== fullIds.length) {
+          throw new EntityNotFoundError('Session', ids[0]);
+        }
+
+        const byId = new Map<string, Session>();
+        for (const row of rows as Array<{
+          sessions: SessionRow;
+          branches?: { board_id?: string } | null;
+        }>) {
+          const boardId = (row.branches?.board_id ?? null) as UUID | null;
+          byId.set(row.sessions.session_id, this.rowToSession(row.sessions, boardId, baseUrl));
+        }
+
+        return fullIds.map((id) => {
+          const session = byId.get(id);
+          if (!session) throw new EntityNotFoundError('Session', id);
+          return session;
+        });
+      });
+
+      return result;
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to update session archive state: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
