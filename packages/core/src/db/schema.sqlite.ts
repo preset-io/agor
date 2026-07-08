@@ -108,7 +108,7 @@ export const sessions = sqliteTable(
     // Archive state (cascaded from branch archive)
     archived: t.bool('archived').notNull().default(false),
     archived_reason: text('archived_reason', {
-      enum: ['branch_archived', 'manual', 'btw_completed'],
+      enum: ['branch_archived', 'manual', 'parent_archived', 'btw_completed'],
     }),
 
     // JSON blob for everything else (cross-DB via json() type)

@@ -39,6 +39,14 @@ export interface SessionWithLastMessage extends Session {
   last_message?: string;
 }
 
+type SessionArchiveReason = NonNullable<Session['archived_reason']>;
+
+export type SessionArchiveStateUpdate = {
+  id: string;
+  archived: boolean;
+  archivedReason: SessionArchiveReason | null;
+};
+
 /**
  * Patches that only acknowledge UI attention state should not make a session
  * look recently active. Keep this intentionally value-aware: setting
@@ -774,23 +782,59 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   async updateArchiveStateForIds(
     ids: string[],
     archived: boolean,
-    archivedReason: Session['archived_reason'] | null
+    archivedReason: SessionArchiveReason | null
   ): Promise<Session[]> {
-    if (ids.length === 0) return [];
+    return this.updateArchiveStateForTargets(
+      ids.map((id) => ({
+        id,
+        archived,
+        archivedReason,
+      }))
+    );
+  }
+
+  /**
+   * Atomically update archive state for known sessions that may need distinct
+   * archive reasons.
+   */
+  async updateArchiveStateForTargets(targets: SessionArchiveStateUpdate[]): Promise<Session[]> {
+    if (targets.length === 0) return [];
 
     try {
+      const ids = targets.map((target) => target.id);
       const fullIds = await Promise.all(ids.map((id) => this.resolveId(id)));
+      const updates = targets.map((target, index) => ({
+        ...target,
+        id: fullIds[index],
+      }));
       const baseUrl = await getBaseUrl();
       const now = new Date();
       const result = await this.db.transaction(async (tx) => {
-        await update(txAsDb(tx), sessions)
-          .set({
-            archived,
-            archived_reason: archivedReason,
-            updated_at: now,
-          })
-          .where(inArray(sessions.session_id, fullIds))
-          .run();
+        const groups = new Map<string, SessionArchiveStateUpdate[]>();
+        for (const updateTarget of updates) {
+          const key = `${updateTarget.archived}:${updateTarget.archivedReason ?? ''}`;
+          const group = groups.get(key) ?? [];
+          group.push(updateTarget);
+          groups.set(key, group);
+        }
+
+        for (const group of groups.values()) {
+          const [first] = group;
+          if (!first) continue;
+          await update(txAsDb(tx), sessions)
+            .set({
+              archived: first.archived,
+              archived_reason: first.archivedReason,
+              updated_at: now,
+            })
+            .where(
+              inArray(
+                sessions.session_id,
+                group.map((target) => target.id)
+              )
+            )
+            .run();
+        }
 
         const rows = await select(txAsDb(tx))
           .from(sessions)

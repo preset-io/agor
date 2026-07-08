@@ -45,6 +45,7 @@ import {
   PERMISSION_RANK,
   resolveChildUnixUsername,
 } from '../utils/branch-authorization.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 
 /**
@@ -58,6 +59,16 @@ interface InheritableSessionConfig {
   permission_config?: Session['permission_config'];
   model_config?: Session['model_config'];
 }
+
+type SessionArchiveReason = NonNullable<Session['archived_reason']>;
+type SessionArchiveTarget = {
+  session: Session;
+  archived: boolean;
+  archivedReason: SessionArchiveReason | null;
+};
+
+const MANUAL_ARCHIVED_REASON = 'manual' satisfies SessionArchiveReason;
+const PARENT_ARCHIVED_REASON = 'parent_archived' satisfies SessionArchiveReason;
 
 /**
  * Extract the inheritable runtime configuration from a parent session.
@@ -876,19 +887,58 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   ): Promise<SessionArchiveResult> {
     const root = await this.get(id, params);
     const includeChildren = options?.includeChildren !== false;
-    const sessionsToPatch = includeChildren
-      ? [root, ...(await this.collectBranchLocalDescendants(root))]
-      : [root];
-    await this.assertCanArchiveSessions(sessionsToPatch, archived, params);
+    const descendants = includeChildren ? await this.collectBranchLocalDescendants(root) : [];
+    const targets: SessionArchiveTarget[] = [
+      {
+        session: root,
+        archived,
+        archivedReason: archived ? MANUAL_ARCHIVED_REASON : null,
+      },
+    ];
 
-    const affectedSessions = await this.sessionRepo.updateArchiveStateForIds(
-      sessionsToPatch.map((session) => session.session_id),
+    for (const session of descendants) {
+      if (archived) {
+        if (!session.archived) {
+          targets.push({
+            session,
+            archived: true,
+            archivedReason: PARENT_ARCHIVED_REASON,
+          });
+        }
+        continue;
+      }
+
+      if (session.archived_reason === PARENT_ARCHIVED_REASON) {
+        targets.push({
+          session,
+          archived: false,
+          archivedReason: null,
+        });
+      }
+    }
+
+    await this.assertCanArchiveSessions(
+      targets.map((target) => target.session),
       archived,
-      archived ? 'manual' : null
+      params
+    );
+
+    const affectedSessions = await this.sessionRepo.updateArchiveStateForTargets(
+      targets.map((target) => ({
+        id: target.session.session_id,
+        archived: target.archived,
+        archivedReason: target.archivedReason,
+      }))
     );
 
     for (const affectedSession of affectedSessions) {
-      this.emit?.('patched', affectedSession, params);
+      emitServiceEvent(this.app, {
+        path: 'sessions',
+        event: 'patched',
+        data: affectedSession,
+        params,
+        id: affectedSession.session_id,
+      });
     }
 
     const [session] = affectedSessions;
