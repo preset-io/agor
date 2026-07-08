@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../hooks/useAgorData';
 import { cancelAllHydrations, resetHydrationRevisions, runHydration } from './agorHydration';
 import { mergeLinksIntoMaps, reconcilePinnedBranchLinksIntoMaps } from './agorMaps';
+import { branchPatched, sessionRemoved } from './agorRealtimeActions';
 import { agorStore, getPinnedBranchLinkPreserveBranchIds } from './agorStore';
 
 // Reset the singleton before each test so cases don't bleed into each other.
@@ -532,6 +533,60 @@ describe('agorStore scaffold', () => {
     expect(state.linkById.has('l-stale-session-result')).toBe(false);
     expect(state.linkById.get('l-newer-session-link')).toBe(newerSessionLink);
     expect(state.linksBySession.get('s1')).toEqual([newerSessionLink]);
+  });
+
+  it('suppresses a stale empty-to-empty branch full-owner result after branch archive eviction', async () => {
+    const branch = { branch_id: 'b-empty-evicted', archived: false } as Branch;
+    const staleBranchLink = {
+      link_id: 'l-stale-branch-after-evict',
+      branch_id: 'b-empty-evicted',
+      session_id: null,
+      is_pinned: false,
+    } as Link;
+    const gate = deferred<Link[]>();
+    const findAll = vi.fn().mockReturnValue(gate.promise);
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    agorStore.getState().setMap('branchById', new Map([[branch.branch_id, branch]]));
+
+    const hydration = agorStore.getState().fetchAndReplaceFullBranchLinks(client, branch.branch_id);
+    branchPatched({ ...branch, archived: true });
+    gate.resolve([staleBranchLink]);
+
+    await expect(hydration).resolves.toEqual([]);
+    const state = agorStore.getState();
+    expect(state.linkById.has('l-stale-branch-after-evict')).toBe(false);
+    expect(state.linksByBranch.has(branch.branch_id)).toBe(false);
+    expect(state.fullBranchLinkOwnerIds.has(branch.branch_id)).toBe(false);
+    expect(state.directFullBranchLinkOwnerIds.has(branch.branch_id)).toBe(false);
+  });
+
+  it('suppresses a stale empty-to-empty session full-owner result after session removal eviction', async () => {
+    const session = { session_id: 's-empty-removed', branch_id: 'b1', archived: false } as Session;
+    const staleSessionLink = {
+      link_id: 'l-stale-session-after-remove',
+      branch_id: null,
+      session_id: 's-empty-removed',
+      is_pinned: false,
+    } as Link;
+    const gate = deferred<Link[]>();
+    const findAll = vi.fn().mockReturnValue(gate.promise);
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    agorStore.getState().setMap('sessionById', new Map([[session.session_id, session]]));
+    agorStore.getState().setMap('sessionsByBranch', new Map([['b1', [session]]]));
+
+    const hydration = agorStore
+      .getState()
+      .fetchAndReplaceFullSessionLinks(client, session.session_id);
+    sessionRemoved(session);
+    gate.resolve([staleSessionLink]);
+
+    await expect(hydration).resolves.toEqual([]);
+    const state = agorStore.getState();
+    expect(state.linkById.has('l-stale-session-after-remove')).toBe(false);
+    expect(state.linksBySession.has(session.session_id)).toBe(false);
+    expect(state.fullSessionLinkOwnerIds.has(session.session_id)).toBe(false);
   });
 
   it('branch eviction removes branch links and child session links', () => {

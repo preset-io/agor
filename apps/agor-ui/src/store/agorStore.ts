@@ -102,6 +102,8 @@ interface AgorActions {
    * path and the hard-delete `removed` path.
    */
   evictBranchAndSessions: (branchId: string) => void;
+  /** Evict a removed/archived session owner's link bucket and owner metadata. */
+  evictSessionLinks: (sessionId: string) => void;
   /** Replace one session owner's complete link bucket, preserving every other owner bucket. */
   replaceFullSessionLinks: (sessionId: string, links: readonly Link[]) => void;
   /** Replace one branch owner's complete link bucket, preserving every other owner bucket. */
@@ -263,14 +265,18 @@ export const agorStore = createStore<AgorState>()(
       set(changed as Partial<AgorState>);
     },
 
-    evictBranchAndSessions: (branchId) =>
+    evictBranchAndSessions: (branchId) => {
+      const orphanIds: string[] = [];
+      for (const [sessionId, session] of get().sessionById) {
+        if (session.branch_id === branchId) orphanIds.push(sessionId);
+      }
+
+      invalidateBranchFullLinkRequests(branchId);
+      for (const sessionId of orphanIds) invalidateSessionFullLinkRequests(sessionId);
+
       set((draft) => {
         if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
         if (draft.sessionsByBranch.has(branchId)) draft.sessionsByBranch.delete(branchId);
-        const orphanIds: string[] = [];
-        for (const [sessionId, session] of draft.sessionById) {
-          if (session.branch_id === branchId) orphanIds.push(sessionId);
-        }
         for (const sessionId of orphanIds) draft.sessionById.delete(sessionId);
         draft.fullBranchLinkOwnerIds.delete(branchId);
         draft.directFullBranchLinkOwnerIds.delete(branchId);
@@ -287,7 +293,24 @@ export const agorStore = createStore<AgorState>()(
           draft.linksBySession.delete(sessionId);
           draft.fullSessionLinkOwnerIds.delete(sessionId);
         }
-      }),
+      });
+    },
+
+    evictSessionLinks: (sessionId) => {
+      invalidateSessionFullLinkRequests(sessionId);
+      const state = get();
+      if (!state.linksBySession.has(sessionId) && !state.fullSessionLinkOwnerIds.has(sessionId)) {
+        return;
+      }
+
+      set((draft) => {
+        for (const link of draft.linksBySession.get(sessionId) ?? []) {
+          draft.linkById.delete(link.link_id);
+        }
+        draft.linksBySession.delete(sessionId);
+        draft.fullSessionLinkOwnerIds.delete(sessionId);
+      });
+    },
 
     replaceFullSessionLinks: (sessionId, links) => {
       invalidateSessionFullLinkRequests(sessionId);

@@ -61,22 +61,8 @@ const setMap: AgorState['setMap'] = (key, value) => agorStore.getState().setMap(
 const applyMaps: AgorState['applyMaps'] = (updater) => agorStore.getState().applyMaps(updater);
 const evictBranchAndSessions: AgorState['evictBranchAndSessions'] = (branchId) =>
   agorStore.getState().evictBranchAndSessions(branchId);
-
-function evictSessionLinks(sessionId: string) {
-  const bucket = agorStore.getState().linksBySession.get(sessionId);
-  setMap('linksBySession', (prev) => {
-    if (!prev.has(sessionId)) return prev;
-    const next = new Map(prev);
-    next.delete(sessionId);
-    return next;
-  });
-  setMap('linkById', (prev) => {
-    if (!bucket?.length) return prev;
-    const next = new Map(prev);
-    for (const link of bucket) next.delete(link.link_id);
-    return next;
-  });
-}
+const evictSessionLinks: AgorState['evictSessionLinks'] = (sessionId) =>
+  agorStore.getState().evictSessionLinks(sessionId);
 
 // ── Sessions ────────────────────────────────────────────────────────────────
 export function sessionCreated(session: Session) {
