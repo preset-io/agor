@@ -156,11 +156,17 @@ describe('OnboardingWizard', () => {
     });
   });
 
-  it('persona selection is optional — Continue advances without saving anything', async () => {
+  it('disables Continue until a persona is picked; Skip is the only way through unselected', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
-    clickButton(/^continue/i);
+    const continueButton = screen.getByText(/^continue/i).closest('button');
+    expect(continueButton).toBeDisabled();
+
+    fireEvent.click(continueButton as HTMLButtonElement);
+    expect(screen.getByText(/let's make this yours/i)).toBeInTheDocument();
+
+    clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     expect(onUpdateUser).not.toHaveBeenCalled();
@@ -321,8 +327,8 @@ describe('OnboardingWizard', () => {
     const onComplete = vi.fn();
     const { onCreateRepo, onCreateBranch, onCreateSession } = renderWizard({ onComplete });
 
-    // persona (optional, skip selection)
-    clickButton(/^continue/i);
+    // persona (optional — Continue is disabled without a selection, so skip)
+    clickButton(/skip for now/i);
 
     // llm
     await findAndClickButton('Claude');
@@ -391,7 +397,8 @@ describe('OnboardingWizard', () => {
   it('Back navigates to the previous step and preserves prior selections', async () => {
     renderWizard();
 
-    clickButton(/^continue/i);
+    clickButton('I write code');
+    clickButton(/this is me/i);
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
 
     clickButton('Back');

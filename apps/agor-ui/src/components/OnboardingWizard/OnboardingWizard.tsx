@@ -718,7 +718,7 @@ export function OnboardingWizard({
   const primaryEnabled = useMemo(() => {
     switch (currentStep) {
       case 'persona':
-        return true; // persona is optional — never block navigation
+        return !!selectedPersona;
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
@@ -739,6 +739,7 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
+    selectedPersona,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
@@ -751,6 +752,8 @@ export function OnboardingWizard({
   const disabledReason = useMemo((): string | null => {
     if (llmSaving || boardCreating) return null;
     switch (currentStep) {
+      case 'persona':
+        return selectedPersona ? null : 'Pick one, or skip for now';
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
@@ -766,6 +769,7 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
+    selectedPersona,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasKey,
