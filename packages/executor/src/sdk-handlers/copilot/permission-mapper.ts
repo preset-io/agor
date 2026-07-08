@@ -34,6 +34,23 @@ import type { PermissionService } from '../../permissions/permission-service.js'
 import type { PermissionMode } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 
+function runtimeTaskPatchIgnored(task: unknown): boolean {
+  return (
+    typeof task === 'object' &&
+    task !== null &&
+    (task as { runtime_patch_ignored?: unknown }).runtime_patch_ignored === true
+  );
+}
+
+function taskStatusApplied(task: unknown, status: TaskStatus): boolean {
+  return (
+    !runtimeTaskPatchIgnored(task) &&
+    typeof task === 'object' &&
+    task !== null &&
+    (task as { status?: unknown }).status === status
+  );
+}
+
 /**
  * Re-export SDK types for convenience
  */
@@ -231,6 +248,23 @@ export function createPermissionHandler(
       const requestId = generateId();
       const timestamp = new Date().toISOString();
 
+      // Update task status to 'awaiting_permission' before creating sidecar
+      // permission state. A stale executor attempt gets a typed no-op response
+      // from the daemon; in that case it must not append permission messages,
+      // emit UI requests, or move the session.
+      const awaitingTask = await deps.tasksService.patch(taskId, {
+        status: TaskStatus.AWAITING_PERMISSION,
+      });
+      if (!taskStatusApplied(awaitingTask, TaskStatus.AWAITING_PERMISSION)) {
+        console.warn(
+          `⏭️ [Copilot Permission] Permission request ignored because task ${taskId} is no longer owned by this executor attempt`
+        );
+        return {
+          kind: 'denied-interactively-by-user',
+          feedback: `Permission request ignored for stale task attempt: ${getToolDisplayName(request)}`,
+        };
+      }
+
       // Get current message index
       const existingMessages = await deps.messagesRepo.findBySessionId(sessionId);
       const nextIndex = existingMessages.length;
@@ -260,11 +294,6 @@ export function createPermissionHandler(
         await deps.messagesService.create(permissionMessage);
         console.log(`✅ [Copilot Permission] Permission request message created`);
       }
-
-      // Update task status to 'awaiting_permission'
-      await deps.tasksService.patch(taskId, {
-        status: TaskStatus.AWAITING_PERMISSION,
-      });
 
       // Update session status to 'awaiting_permission'
       if (deps.sessionsService) {
@@ -324,10 +353,19 @@ export function createPermissionHandler(
           `⏰ [Copilot Permission] Permission timed out for ${toolName}, setting timed_out state...`
         );
 
-        await deps.tasksService.patch(taskId, {
+        const timedOutTask = await deps.tasksService.patch(taskId, {
           status: TaskStatus.TIMED_OUT,
           completed_at: new Date().toISOString(),
         });
+        if (!taskStatusApplied(timedOutTask, TaskStatus.TIMED_OUT)) {
+          console.warn(
+            `⏭️ [Copilot Permission] Permission timeout ignored because task ${taskId} is no longer owned by this executor attempt`
+          );
+          return {
+            kind: 'denied-interactively-by-user',
+            feedback: `Permission request timed out for stale task attempt: ${toolName}`,
+          };
+        }
 
         if (deps.sessionsService) {
           await deps.sessionsService.patch(sessionId, {
@@ -351,9 +389,18 @@ export function createPermissionHandler(
         // Cancel all pending permission requests for this session
         deps.permissionService.cancelPendingRequests(sessionId);
 
-        await deps.tasksService.patch(taskId, {
+        const failedTask = await deps.tasksService.patch(taskId, {
           status: TaskStatus.FAILED,
         });
+        if (!taskStatusApplied(failedTask, TaskStatus.FAILED)) {
+          console.warn(
+            `⏭️ [Copilot Permission] Permission denial ignored because task ${taskId} is no longer owned by this executor attempt`
+          );
+          return {
+            kind: 'denied-interactively-by-user',
+            feedback: `Permission denied for stale task attempt: ${toolName}`,
+          };
+        }
 
         if (deps.sessionsService) {
           await deps.sessionsService.patch(sessionId, {
@@ -368,9 +415,18 @@ export function createPermissionHandler(
       }
 
       // Approved — restore running status
-      await deps.tasksService.patch(taskId, {
+      const runningTask = await deps.tasksService.patch(taskId, {
         status: TaskStatus.RUNNING,
       });
+      if (!taskStatusApplied(runningTask, TaskStatus.RUNNING)) {
+        console.warn(
+          `⏭️ [Copilot Permission] Permission approval ignored because task ${taskId} is no longer owned by this executor attempt`
+        );
+        return {
+          kind: 'denied-interactively-by-user',
+          feedback: `Permission approval ignored for stale task attempt: ${toolName}`,
+        };
+      }
 
       if (deps.sessionsService) {
         await deps.sessionsService.patch(sessionId, {

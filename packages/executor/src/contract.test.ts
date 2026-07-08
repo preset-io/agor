@@ -90,4 +90,19 @@ describe('executor source contract', () => {
     // No loadConfig escape hatch.
     expect(configSrc).not.toMatch(/\bloadConfig\b/);
   });
+
+  it('emits executor_connected before heartbeat startup and SDK execution', () => {
+    const source = readFileSync(join(here, 'index.ts'), 'utf-8');
+    const authIndex = source.indexOf(
+      'createFeathersClient(this.config.daemonUrl, this.config.sessionToken)'
+    );
+    const connectedIndex = source.indexOf('await this.emitExecutorConnected();');
+    const executeIndex = source.indexOf('await this.executeTask();');
+    const heartbeatIndex = source.indexOf('this.heartbeat = startExecutorHeartbeat');
+
+    expect(authIndex).toBeGreaterThanOrEqual(0);
+    expect(connectedIndex).toBeGreaterThan(authIndex);
+    expect(executeIndex).toBeGreaterThan(connectedIndex);
+    expect(heartbeatIndex).toBeGreaterThan(executeIndex);
+  });
 });

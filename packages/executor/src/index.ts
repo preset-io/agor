@@ -16,11 +16,12 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { TaskRuntimeEventKind, TaskRuntimePhase, TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import { TaskRuntimeVitalsReporter } from './runtime-vitals.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
 
@@ -39,6 +40,8 @@ export interface ExecutorConfig {
   sessionToken: string;
   sessionId: string;
   taskId: string;
+  attemptId?: string;
+  executorInstanceId?: string;
   prompt: string;
   tool: 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
   permissionMode?: PermissionMode;
@@ -86,6 +89,7 @@ export class AgorExecutor {
       executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken);
       executorDebug('[executor] Connected to daemon');
+      await this.emitExecutorConnected();
 
       // Setup event listeners
       this.setupEventListeners();
@@ -147,6 +151,36 @@ export class AgorExecutor {
     });
 
     executorDebug('[executor] Event listeners registered');
+  }
+
+  /**
+   * Persist the executor_connected runtime event immediately after Feathers
+   * authentication succeeds. This deliberately runs before heartbeat startup
+   * and before any SDK_TURN_STARTED/runtime-vitals SDK events.
+   */
+  private async emitExecutorConnected(): Promise<void> {
+    if (!this.client) return;
+    try {
+      const task = await this.client.service('tasks').get(this.config.taskId);
+      const reporter = new TaskRuntimeVitalsReporter({
+        client: this.client,
+        taskId: this.config.taskId,
+        toolName: this.config.tool,
+        initialSnapshot: task.runtime_vitals,
+        minPatchIntervalMs: 0,
+      });
+      await reporter.record(TaskRuntimeEventKind.EXECUTOR_CONNECTED, {
+        source: 'executor',
+        phase: TaskRuntimePhase.EXECUTOR_CONNECTED,
+        forceFlush: true,
+      });
+      reporter.stop();
+    } catch (error) {
+      console.warn(
+        '[executor] Failed to emit executor_connected:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   }
 
   /**

@@ -139,6 +139,9 @@ export async function patchDaemonTaskRuntimeEvent(
 ): Promise<TaskRuntimeVitals | undefined> {
   try {
     const task = await tasksService.get(taskId, params);
+    if (task.current_execution_attempt?.terminal_at) {
+      return undefined;
+    }
     const phase =
       options.phase ?? task.runtime_vitals?.phase ?? taskStatusToDaemonRuntimePhase(task.status);
     const runtime_vitals = buildDaemonTaskRuntimeVitals(task.runtime_vitals, kind, {

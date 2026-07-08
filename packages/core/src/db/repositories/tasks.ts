@@ -101,6 +101,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         permission_request: task.permission_request, // Permission state for UI approval flow
         metadata: task.metadata, // Generic metadata bag (e.g., is_agor_callback, source)
         runtime_vitals: task.runtime_vitals, // Passive runtime-vitals observability
+        current_execution_attempt: task.current_execution_attempt, // Executor attempt ownership
       },
     };
   }

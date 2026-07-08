@@ -33,6 +33,8 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
       type: EXECUTOR_SESSION_TOKEN_TYPE,
       purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
       task_id: params.task_id,
+      attempt_id: params.attempt_id,
+      executor_instance_id: params.executor_instance_id,
       session_id: params.session_id,
       sessionId: params.sessionId,
       branch_id: params.branch_id,

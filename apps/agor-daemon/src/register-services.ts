@@ -39,6 +39,7 @@ import type {
   MessageSource,
   Params,
   SessionID,
+  Task,
   UserID,
   UUID,
 } from '@agor/core/types';
@@ -128,6 +129,7 @@ import { requireMinimumRole } from './utils/authorization.js';
 import {
   hasObservedLaunchedExecutorProcess,
   isExecutorSpawnFailureExit,
+  shouldFailCommandTemplateLauncherExit,
 } from './utils/executor-spawn-classification.js';
 import { escapeHtml } from './utils/html.js';
 import {
@@ -716,6 +718,8 @@ function createExecuteHandler(
     sessionId: string,
     data: {
       taskId: string;
+      attemptId?: string;
+      executorInstanceId?: string;
       prompt: string;
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
@@ -758,6 +762,8 @@ function createExecuteHandler(
       (params as AuthenticatedParams).user!.user_id,
       {
         taskId: data.taskId,
+        attemptId: data.attemptId,
+        executorInstanceId: data.executorInstanceId,
         branchId: session.branch_id,
         // Executor JWTs authenticate on every daemon API call over the runtime
         // connection, so low per-call max-use limits make normal execution
@@ -769,6 +775,17 @@ function createExecuteHandler(
     );
 
     const taskId = data.taskId;
+    const runtimeAttemptParams = {
+      ...params,
+      runtimeAttempt: {
+        attemptId: data.attemptId,
+        executorInstanceId: data.executorInstanceId,
+      },
+    };
+    const capturedAttemptMatches = (task: Task): boolean => {
+      if (!data.attemptId) return true;
+      return task.current_execution_attempt?.attempt_id === data.attemptId;
+    };
 
     // Get branch path
     let cwd = process.cwd();
@@ -900,6 +917,8 @@ function createExecuteHandler(
       params: {
         sessionId,
         taskId,
+        attemptId: data.attemptId,
+        executorInstanceId: data.executorInstanceId,
         prompt: data.prompt,
         tool: session.agentic_tool as
           | 'claude-code'
@@ -938,7 +957,8 @@ function createExecuteHandler(
     }
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
-    const canRecordLocalPid = !config.execution?.executor_command_template;
+    const isCommandTemplateRuntime = !!config.execution?.executor_command_template;
+    const canRecordLocalPid = !isCommandTemplateRuntime;
     const tasksRuntimeVitalsService = app.service('tasks') as Parameters<
       typeof patchDaemonTaskRuntimeEvent
     >[0];
@@ -967,7 +987,7 @@ function createExecuteHandler(
           {
             processPid: canRecordLocalPid ? child.pid : undefined,
           },
-          params
+          runtimeAttemptParams
         );
         if (child.pid) {
           trackExecutorProcess(sessionId, child.pid);
@@ -979,77 +999,150 @@ function createExecuteHandler(
         untrackExecutorProcess(sessionId);
         let wroteExitVitals = false;
 
-        // Safety net: check if task is still running
-        try {
-          const currentSession = await app.service('sessions').get(sessionId, params);
-          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
+        if (isCommandTemplateRuntime) {
+          // In command-template mode this child is only a launcher (for example,
+          // kubectl/docker submit), not the authoritative executor lifecycle.
+          // A non-zero launcher exit before the executor connects is a spawn
+          // failure; successful exits, and any exit after executor_connected,
+          // are informational only.
+          try {
+            const currentSession = await app.service('sessions').get(sessionId, params);
+            const currentTask = (await app.service('tasks').get(taskId, params)) as Task;
+            const connected = Boolean(currentTask.current_execution_attempt?.connected_at);
+            const activeTask =
+              isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT;
+            const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
+            const isLatestTask = !latestTaskId || latestTaskId === taskId;
+            const sessionExecuting =
+              isSessionExecuting(currentSession) ||
+              currentSession.status === SessionStatus.TIMED_OUT;
+            const attemptMatches = capturedAttemptMatches(currentTask);
 
-          if (latestTaskId && latestTaskId !== taskId) {
-            console.log(
-              `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
-            );
-          } else if (
-            isSessionExecuting(currentSession) ||
-            currentSession.status === SessionStatus.TIMED_OUT
-          ) {
-            try {
-              const currentTask = await app.service('tasks').get(taskId, params);
-              if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
-                const spawnFailureExit = isExecutorSpawnFailureExit(processSpawnObserved, code);
-                const eventKind = spawnFailureExit
-                  ? TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED
-                  : TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED;
-                const runtime_vitals = buildDaemonTaskRuntimeVitals(
-                  currentTask.runtime_vitals,
-                  eventKind,
-                  {
-                    phase: TaskRuntimePhase.FAILED,
-                    exitCode: code,
-                    errorCode: spawnFailureExit ? 'spawn_error' : 'unexpected_exit',
-                  }
-                );
-                await app.service('tasks').patch(
-                  taskId,
-                  {
-                    status: TaskStatus.FAILED,
-                    error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
-                    runtime_vitals,
-                  },
-                  params
-                );
-                wroteExitVitals = true;
-                console.log(
-                  `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
-                );
-              } else {
-                console.log(
-                  `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
+            if (
+              attemptMatches &&
+              shouldFailCommandTemplateLauncherExit({
+                code,
+                connected,
+                activeTask,
+                isLatestTask,
+                sessionExecuting,
+              })
+            ) {
+              const runtime_vitals = buildDaemonTaskRuntimeVitals(
+                currentTask.runtime_vitals,
+                TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED,
+                {
+                  phase: TaskRuntimePhase.FAILED,
+                  exitCode: code,
+                  errorCode: 'spawn_error',
+                }
+              );
+              await app.service('tasks').patch(
+                taskId,
+                {
+                  status: TaskStatus.FAILED,
+                  error_message: `Executor launcher exited before connect with code ${code ?? 'unknown'}.`,
+                  runtime_vitals,
+                },
+                runtimeAttemptParams
+              );
+              wroteExitVitals = true;
+              console.log(
+                `✅ [Executor] Command-template launcher failure marked task ${shortId(taskId)} FAILED (code: ${code})`
+              );
+            } else {
+              console.log(
+                `ℹ️  [Executor] Command-template launcher exit is not authoritative (code: ${code}, connected: ${connected})`
+              );
+            }
+          } catch (error) {
+            console.error(`❌ [Executor] Failed to handle command-template launcher exit:`, error);
+          }
+        } else {
+          // Safety net: check if task is still running
+          try {
+            const currentSession = await app.service('sessions').get(sessionId, params);
+            const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
+
+            if (latestTaskId && latestTaskId !== taskId) {
+              console.log(
+                `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
+              );
+            } else if (
+              isSessionExecuting(currentSession) ||
+              currentSession.status === SessionStatus.TIMED_OUT
+            ) {
+              try {
+                const currentTask = await app.service('tasks').get(taskId, params);
+                const attemptMatches = capturedAttemptMatches(currentTask);
+                if (!attemptMatches) {
+                  console.log(
+                    `⏭️ [Executor] Skipping stale executor exit for task ${shortId(taskId)}; captured attempt is no longer current`
+                  );
+                } else if (
+                  isTaskExecuting(currentTask) ||
+                  currentTask.status === TaskStatus.TIMED_OUT
+                ) {
+                  const spawnFailureExit = isExecutorSpawnFailureExit(processSpawnObserved, code);
+                  const eventKind = spawnFailureExit
+                    ? TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED
+                    : TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED;
+                  const runtime_vitals = buildDaemonTaskRuntimeVitals(
+                    currentTask.runtime_vitals,
+                    eventKind,
+                    {
+                      phase: TaskRuntimePhase.FAILED,
+                      exitCode: code,
+                      errorCode: spawnFailureExit ? 'spawn_error' : 'unexpected_exit',
+                    }
+                  );
+                  await app.service('tasks').patch(
+                    taskId,
+                    {
+                      status: TaskStatus.FAILED,
+                      error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+                      runtime_vitals,
+                    },
+                    runtimeAttemptParams
+                  );
+                  wroteExitVitals = true;
+                  console.log(
+                    `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
+                  );
+                } else {
+                  console.log(
+                    `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
+                  );
+                  await app
+                    .service('sessions')
+                    .patch(
+                      sessionId,
+                      { status: SessionStatus.IDLE, ready_for_prompt: true },
+                      params
+                    );
+                }
+              } catch (taskError) {
+                console.error(
+                  `⚠️  [Executor] Failed to mark task ${shortId(taskId)} as FAILED, falling back to session IDLE update:`,
+                  taskError
                 );
                 await app
                   .service('sessions')
                   .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
+                console.log(
+                  `✅ [Executor] Session ${shortId(sessionId)} status updated to IDLE after executor exit (was: ${currentSession.status})`
+                );
               }
-            } catch (taskError) {
-              console.error(
-                `⚠️  [Executor] Failed to mark task ${shortId(taskId)} as FAILED, falling back to session IDLE update:`,
-                taskError
-              );
-              await app
-                .service('sessions')
-                .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
+            } else {
               console.log(
-                `✅ [Executor] Session ${shortId(sessionId)} status updated to IDLE after executor exit (was: ${currentSession.status})`
+                `ℹ️  [Executor] Session ${shortId(sessionId)} already in ${currentSession.status} state, skipping IDLE update`
               );
             }
-          } else {
-            console.log(
-              `ℹ️  [Executor] Session ${shortId(sessionId)} already in ${currentSession.status} state, skipping IDLE update`
-            );
+          } catch (error) {
+            console.error(`❌ [Executor] Failed to handle executor exit:`, error);
           }
-        } catch (error) {
-          console.error(`❌ [Executor] Failed to handle executor exit:`, error);
         }
-        if (!wroteExitVitals) {
+        if (!wroteExitVitals && !isCommandTemplateRuntime) {
           await patchDaemonTaskRuntimeEvent(
             tasksRuntimeVitalsService,
             taskId,
@@ -1062,7 +1155,7 @@ function createExecuteHandler(
                 ? { errorCode: 'spawn_error' }
                 : {}),
             },
-            params
+            runtimeAttemptParams
           );
         }
 
@@ -1101,7 +1194,9 @@ function createExecuteHandler(
                 if (filePath) {
                   const md5 = await computeFileHash(filePath);
                   if (md5) {
-                    await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
+                    await app
+                      .service('tasks')
+                      .patch(taskId, { session_md5: md5 }, runtimeAttemptParams);
                   }
                 }
               } catch (md5Err) {

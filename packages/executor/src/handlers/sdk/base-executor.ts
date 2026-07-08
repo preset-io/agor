@@ -19,7 +19,7 @@ import type {
   TaskID,
   TaskRuntimeVitals,
 } from '@agor/core/types';
-import { MessageRole, TaskRuntimeEventKind, TaskRuntimePhase } from '@agor/core/types';
+import { MessageRole, TaskRuntimeEventKind, TaskRuntimePhase, TaskStatus } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import {
@@ -373,6 +373,22 @@ function shouldFallbackToLocalApiKeyResolution(err: unknown): boolean {
   return true;
 }
 
+function runtimeTaskPatchIgnored(task: unknown): boolean {
+  return (
+    typeof task === 'object' &&
+    task !== null &&
+    (task as { runtime_patch_ignored?: unknown }).runtime_patch_ignored === true
+  );
+}
+
+function terminalFailurePatchApplied(patchedTask: unknown, errorMessage: string): boolean {
+  if (runtimeTaskPatchIgnored(patchedTask)) return false;
+  if (typeof patchedTask !== 'object' || patchedTask === null) return false;
+
+  const task = patchedTask as Partial<Task>;
+  return task.status === TaskStatus.FAILED && task.error_message === errorMessage;
+}
+
 export async function resolveApiKeyForTask(
   keyName: ApiKeyName,
   client: AgorClient,
@@ -697,8 +713,17 @@ export async function executeToolTask(params: {
       };
     }
 
-    // Update task status to failed with git SHA
-    await client.service('tasks').patch(taskId, patchData);
+    // Update task status to failed with git SHA. If the daemon no-ops this as
+    // a stale attempt, do not append fallback transcript side effects for an
+    // executor that no longer owns the task.
+    const patchedTask = await client.service('tasks').patch(taskId, patchData);
+    const failureApplied = terminalFailurePatchApplied(patchedTask, patchData.error_message ?? '');
+    if (!failureApplied) {
+      console.warn(
+        `[${toolName}] Failure patch for task ${shortId(taskId)} did not apply to the current attempt; skipping fallback error message`
+      );
+      throw err;
+    }
 
     // Emit a system error message so the user sees what went wrong in the conversation
     try {

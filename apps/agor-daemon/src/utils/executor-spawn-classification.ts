@@ -12,3 +12,23 @@ export function hasObservedLaunchedExecutorProcess(child: Pick<ChildProcess, 'pi
 export function isExecutorSpawnFailureExit(processSpawnObserved: boolean, code: number | null) {
   return !processSpawnObserved && code !== 0;
 }
+
+export interface CommandTemplateLauncherExitState {
+  code: number | null;
+  connected: boolean;
+  activeTask: boolean;
+  isLatestTask: boolean;
+  sessionExecuting: boolean;
+}
+
+export function shouldFailCommandTemplateLauncherExit(
+  state: CommandTemplateLauncherExitState
+): boolean {
+  return (
+    state.code !== 0 &&
+    !state.connected &&
+    state.activeTask &&
+    state.isLatestTask &&
+    state.sessionExecuting
+  );
+}

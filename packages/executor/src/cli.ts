@@ -190,6 +190,8 @@ async function handlePromptPayload(
     sessionToken: payload.sessionToken,
     sessionId: payload.params.sessionId,
     taskId: payload.params.taskId,
+    attemptId: payload.params.attemptId,
+    executorInstanceId: payload.params.executorInstanceId,
     prompt: payload.params.prompt,
     tool: payload.params.tool,
     permissionMode: payload.params.permissionMode,

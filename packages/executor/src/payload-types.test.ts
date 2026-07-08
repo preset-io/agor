@@ -29,6 +29,8 @@ describe('PromptPayloadSchema', () => {
       params: {
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
         taskId: '550e8400-e29b-41d4-a716-446655440001',
+        attemptId: '550e8400-e29b-41d4-a716-446655440002',
+        executorInstanceId: '550e8400-e29b-41d4-a716-446655440003',
         prompt: 'Hello, world!',
         tool: 'claude-code',
         cwd: '/home/user/project',
@@ -39,6 +41,8 @@ describe('PromptPayloadSchema', () => {
     expect(result.command).toBe('prompt');
     expect(result.sessionToken).toBe('jwt-token-here');
     expect(result.params.tool).toBe('claude-code');
+    expect(result.params.attemptId).toBe('550e8400-e29b-41d4-a716-446655440002');
+    expect(result.params.executorInstanceId).toBe('550e8400-e29b-41d4-a716-446655440003');
   });
 
   it('should parse prompt payload with optional fields', () => {

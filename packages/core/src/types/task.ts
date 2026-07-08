@@ -115,6 +115,27 @@ export interface TaskRuntimeVitals {
   recent_events?: TaskRuntimeEvent[];
 }
 
+export const TaskExecutionRuntimeBackend = {
+  LOCAL_SUBPROCESS: 'local_subprocess',
+  COMMAND_TEMPLATE: 'command_template',
+} as const;
+
+export type TaskExecutionRuntimeBackend =
+  (typeof TaskExecutionRuntimeBackend)[keyof typeof TaskExecutionRuntimeBackend];
+
+export interface TaskExecutionAttempt {
+  schema_version: 1;
+  attempt_id: string;
+  executor_instance_id: string;
+  runtime_backend: TaskExecutionRuntimeBackend;
+  runtime_ref?: string;
+  started_at: string;
+  connected_at?: string;
+  last_heartbeat_at?: string;
+  terminal_at?: string;
+  terminal_status?: TaskStatus;
+}
+
 /**
  * Structured metadata attached to a task. All fields are optional, but the
  * ones that are present are load-bearing — typing them here prevents drift
@@ -255,6 +276,9 @@ export interface Task {
 
   /** Passive executor/agent runtime phase observability. No policy side effects. */
   runtime_vitals?: TaskRuntimeVitals;
+
+  /** Current executor attempt allowed to report runtime-owned task state. */
+  current_execution_attempt?: TaskExecutionAttempt;
 
   // Message range
   message_range: {

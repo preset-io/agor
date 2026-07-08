@@ -372,6 +372,9 @@ export const tasks = pgTable(
 
         // Passive runtime-vitals observability
         runtime_vitals?: Task['runtime_vitals'];
+
+        // Current executor attempt ownership metadata
+        current_execution_attempt?: Task['current_execution_attempt'];
       }>()
       .notNull(),
   },

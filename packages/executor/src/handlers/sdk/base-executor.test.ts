@@ -209,4 +209,88 @@ describe('executeToolTask runtime vitals failure handling', () => {
       content: 'tool factory failed',
     });
   });
+
+  it('does not create fallback system-error messages when a stale failure patch is ignored', async () => {
+    const taskPatches: Array<{ id: string; data: Record<string, unknown> }> = [];
+    const messages: Array<Record<string, unknown>> = [];
+    const client = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async (id: string) => ({ task_id: id })),
+            emit: vi.fn(),
+            patch: vi.fn(async (id: string, data: Record<string, unknown>) => {
+              taskPatches.push({ id, data });
+              if (data.status === TaskStatus.FAILED) {
+                return {
+                  task_id: id,
+                  status: TaskStatus.RUNNING,
+                  runtime_patch_ignored: true,
+                  runtime_patch_ignored_reason: 'stale attempt old (current new)',
+                };
+              }
+              return { task_id: id, ...data };
+            }),
+          };
+        }
+        if (name === 'sessions') {
+          return {
+            get: vi.fn(async () => ({ branch_id: 'branch-1', git_state: {} })),
+            patch: vi.fn(async () => ({})),
+          };
+        }
+        if (name === 'branches') {
+          return { get: vi.fn(async () => ({ path: '/tmp/agor-test-branch' })) };
+        }
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn(async () => ({
+              apiKey: undefined,
+              source: 'native',
+              useNativeAuth: true,
+            })),
+          };
+        }
+        if (name === 'messages') {
+          return {
+            find: vi.fn(async () => ({ total: 0 })),
+            create: vi.fn(async (data: Record<string, unknown>) => {
+              messages.push(data);
+              return data;
+            }),
+          };
+        }
+        if (name === '/tasks/streaming') {
+          return { create: vi.fn(async (data: Record<string, unknown>) => data) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController: new AbortController(),
+        apiKeyEnvVar: 'OPENAI_API_KEY',
+        toolName: 'codex' as never,
+        createTool: () => {
+          throw new Error('tool factory failed');
+        },
+      })
+    ).rejects.toThrow('tool factory failed');
+
+    expect(taskPatches).toContainEqual(
+      expect.objectContaining({
+        id: 'task-1',
+        data: expect.objectContaining({
+          status: TaskStatus.FAILED,
+          error_message: 'tool factory failed',
+        }),
+      })
+    );
+    expect(messages).toHaveLength(0);
+  });
 });

@@ -10,6 +10,8 @@ export type ExecutorSessionTokenPayload = JwtPayload & {
   /** @deprecated Legacy alias kept only for tokens minted before session_id became canonical. */
   sessionId?: string;
   task_id?: string;
+  attempt_id?: string;
+  executor_instance_id?: string;
   branch_id?: string;
 };
 

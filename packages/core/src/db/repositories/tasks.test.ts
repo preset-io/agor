@@ -5,7 +5,12 @@
  */
 
 import type { Task, UUID } from '@agor/core/types';
-import { TaskRuntimeEventKind, TaskRuntimePhase, TaskStatus } from '@agor/core/types';
+import {
+  TaskExecutionRuntimeBackend,
+  TaskRuntimeEventKind,
+  TaskRuntimePhase,
+  TaskStatus,
+} from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -779,6 +784,38 @@ describe('TaskRepository.update', () => {
 
     expect(updated.last_executor_heartbeat_at).toBe(heartbeatAt);
     expect(found?.last_executor_heartbeat_at).toBe(heartbeatAt);
+  });
+
+  dbTest('should round-trip current_execution_attempt JSON on update', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    const startedAt = '2026-01-01T00:00:00.000Z';
+    const connectedAt = '2026-01-01T00:00:01.000Z';
+
+    const updated = await taskRepo.update(created.task_id, {
+      current_execution_attempt: {
+        schema_version: 1,
+        attempt_id: generateId(),
+        executor_instance_id: generateId(),
+        runtime_backend: TaskExecutionRuntimeBackend.COMMAND_TEMPLATE,
+        runtime_ref: 'pod/agor-task-1',
+        started_at: startedAt,
+        connected_at: connectedAt,
+      },
+    });
+    const found = await taskRepo.findById(created.task_id);
+
+    expect(updated.current_execution_attempt).toMatchObject({
+      schema_version: 1,
+      runtime_backend: TaskExecutionRuntimeBackend.COMMAND_TEMPLATE,
+      runtime_ref: 'pod/agor-task-1',
+      started_at: startedAt,
+      connected_at: connectedAt,
+    });
+    expect(found?.current_execution_attempt).toEqual(updated.current_execution_attempt);
   });
 
   dbTest(

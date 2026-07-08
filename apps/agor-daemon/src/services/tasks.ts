@@ -32,6 +32,8 @@ import {
   isTerminalTaskStatus,
   SessionStatus,
   type TaskMetadata,
+  TaskRuntimeEventKind,
+  TaskRuntimePhase,
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
@@ -86,12 +88,162 @@ export type TaskParams = QueryParams<{
    * terminal transition. Most callers should leave this unset.
    */
   suppressBtwCleanup?: boolean;
+  /** Internal runtime ownership scope for daemon-authored executor lifecycle patches. */
+  runtimeAttempt?: {
+    attemptId?: string;
+    executorInstanceId?: string;
+  };
   /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
   _agorSqlSessionAccessUserId?: UUID;
 };
 
 interface CompletionCallbackDispatchResult {
   callbackTask?: Task;
+}
+
+type ExecutorAttemptClaims = {
+  isExecutorRuntime: boolean;
+  attemptId?: string;
+  executorInstanceId?: string;
+};
+
+type RuntimeOwnedPatchNoopTask = Task & {
+  runtime_patch_ignored: true;
+  runtime_patch_ignored_reason: string;
+};
+
+const RUNTIME_OWNED_TASK_PATCH_KEYS = new Set<keyof Task>([
+  'last_executor_heartbeat_at',
+  'runtime_vitals',
+  'status',
+  'completed_at',
+  'duration_ms',
+  'agent_session_id',
+  'error_message',
+  'model',
+  'raw_sdk_response',
+  'normalized_sdk_response',
+  'computed_context_window',
+  'git_state',
+  'session_md5',
+]);
+
+function runtimeOwnedTaskPatch(data: Partial<Task>): boolean {
+  return Object.keys(data).some((key) => RUNTIME_OWNED_TASK_PATCH_KEYS.has(key as keyof Task));
+}
+
+function isTerminalRuntimeVitals(data: Partial<Task>): boolean {
+  const phase = data.runtime_vitals?.phase;
+  return (
+    phase === TaskRuntimePhase.COMPLETED ||
+    phase === TaskRuntimePhase.FAILED ||
+    phase === TaskRuntimePhase.STOPPED ||
+    phase === TaskRuntimePhase.TIMED_OUT ||
+    data.runtime_vitals?.last_event?.kind === TaskRuntimeEventKind.TURN_COMPLETED ||
+    data.runtime_vitals?.last_event?.kind === TaskRuntimeEventKind.TURN_FAILED ||
+    data.runtime_vitals?.last_event?.kind === TaskRuntimeEventKind.TURN_STOPPED ||
+    data.runtime_vitals?.last_event?.kind === TaskRuntimeEventKind.TURN_TIMED_OUT
+  );
+}
+
+function isTerminalRuntimePatch(data: Partial<Task>): boolean {
+  return isTerminalTaskStatus(data.status) || isTerminalRuntimeVitals(data);
+}
+
+function executorAttemptClaims(params?: TaskParams): ExecutorAttemptClaims {
+  if (params?.runtimeAttempt) {
+    return {
+      isExecutorRuntime: true,
+      attemptId: params.runtimeAttempt.attemptId,
+      executorInstanceId: params.runtimeAttempt.executorInstanceId,
+    };
+  }
+
+  const auth = params?.authentication as
+    | {
+        strategy?: string;
+        payload?: {
+          type?: unknown;
+          task_id?: unknown;
+          attempt_id?: unknown;
+          executor_instance_id?: unknown;
+        };
+      }
+    | undefined;
+  const payload = auth?.payload;
+  const isExecutorRuntime =
+    payload?.type === 'executor-session' || (auth?.strategy === 'jwt' && !!payload?.task_id);
+  return {
+    isExecutorRuntime,
+    attemptId: typeof payload?.attempt_id === 'string' ? payload.attempt_id : undefined,
+    executorInstanceId:
+      typeof payload?.executor_instance_id === 'string' ? payload.executor_instance_id : undefined,
+  };
+}
+
+function applyExecutionAttemptPatchState(
+  data: Partial<Task>,
+  currentTask: Task | undefined,
+  now = new Date().toISOString()
+): void {
+  const attempt = currentTask?.current_execution_attempt;
+  if (!attempt) return;
+
+  if (data.runtime_vitals?.last_event?.kind === TaskRuntimeEventKind.EXECUTOR_CONNECTED) {
+    data.current_execution_attempt = {
+      ...attempt,
+      connected_at: attempt.connected_at ?? data.runtime_vitals.last_event.at ?? now,
+    };
+    return;
+  }
+
+  if (data.last_executor_heartbeat_at) {
+    data.current_execution_attempt = {
+      ...attempt,
+      last_heartbeat_at: data.last_executor_heartbeat_at,
+    };
+  }
+
+  if (isTerminalRuntimePatch(data)) {
+    data.current_execution_attempt = {
+      ...(data.current_execution_attempt ?? attempt),
+      terminal_at:
+        data.completed_at ?? data.runtime_vitals?.last_event?.at ?? attempt.terminal_at ?? now,
+      terminal_status: data.status ?? attempt.terminal_status,
+    };
+  }
+}
+
+function shouldNoopRuntimeOwnedPatch(
+  data: Partial<Task>,
+  currentTask: Task,
+  claims: ExecutorAttemptClaims
+): string | null {
+  const attempt = currentTask.current_execution_attempt;
+  if (!attempt) return null;
+
+  if (claims.isExecutorRuntime) {
+    if (!claims.attemptId || claims.attemptId !== attempt.attempt_id) {
+      return `stale attempt ${claims.attemptId ?? 'missing'} (current ${attempt.attempt_id})`;
+    }
+    if (claims.executorInstanceId && claims.executorInstanceId !== attempt.executor_instance_id) {
+      return `stale executor instance ${claims.executorInstanceId} (current ${attempt.executor_instance_id})`;
+    }
+  }
+
+  if (attempt.terminal_at && !isTerminalRuntimePatch(data)) {
+    return `attempt already terminal (${attempt.terminal_status ?? 'unknown'})`;
+  }
+
+  return null;
+}
+
+function runtimeOwnedPatchNoopTask(task: Task, reason: string): RuntimeOwnedPatchNoopTask {
+  return {
+    ...task,
+    runtime_patch_ignored: true,
+    runtime_patch_ignored_reason: reason,
+  };
 }
 
 /**
@@ -454,7 +606,22 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const nextStatus = data.status;
-    const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
+    const isRuntimeOwnedPatch = runtimeOwnedTaskPatch(data);
+    const currentTask =
+      nextStatus !== undefined || isRuntimeOwnedPatch ? await this.get(id, params) : undefined;
+
+    if (currentTask && isRuntimeOwnedPatch) {
+      const claims = executorAttemptClaims(params);
+      const noopReason = shouldNoopRuntimeOwnedPatch(data, currentTask, claims);
+      if (noopReason) {
+        console.warn(
+          `⏭️ [TasksService] Ignoring runtime-owned patch for task ${shortId(currentTask.task_id)}: ${noopReason}`
+        );
+        return runtimeOwnedPatchNoopTask(currentTask, noopReason);
+      }
+      applyExecutionAttemptPatchState(data, currentTask);
+    }
+
     if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
       console.warn(
         `⏭️ [TasksService] Ignoring status rewrite for terminal task ${shortId(currentTask.task_id)} ` +

@@ -13,6 +13,8 @@ describe('SessionTokenService runtime scoping', () => {
     const token = await service.generateToken('session-1', 'user-1', {
       taskId: 'task-1',
       branchId: 'branch-1',
+      attemptId: 'attempt-1',
+      executorInstanceId: 'executor-1',
     });
     const decoded = jwt.verify(token, 'session-token-test-secret', {
       issuer: 'agor',
@@ -24,13 +26,24 @@ describe('SessionTokenService runtime scoping', () => {
     expect(decoded.session_id).toBe('session-1');
     expect(decoded.task_id).toBe('task-1');
     expect(decoded.branch_id).toBe('branch-1');
+    expect(decoded.attempt_id).toBe('attempt-1');
+    expect(decoded.executor_instance_id).toBe('executor-1');
 
     await expect(
       service.validateToken(token, { sessionId: 'session-1', taskId: 'task-other' })
     ).resolves.toBeNull();
     await expect(
-      service.validateToken(token, { sessionId: 'session-1', taskId: 'task-1' })
-    ).resolves.toMatchObject({ session_id: 'session-1', task_id: 'task-1' });
+      service.validateToken(token, {
+        sessionId: 'session-1',
+        taskId: 'task-1',
+        attemptId: 'attempt-1',
+      })
+    ).resolves.toMatchObject({
+      session_id: 'session-1',
+      task_id: 'task-1',
+      attempt_id: 'attempt-1',
+      executor_instance_id: 'executor-1',
+    });
     await expect(
       service.validateToken(token, { sessionId: 'session-1', taskId: 'task-1' })
     ).resolves.toBeNull();

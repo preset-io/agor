@@ -33,7 +33,10 @@ describe('createCanUseToolCallback', () => {
         cancelPendingRequests: vi.fn(),
       } as any,
       tasksService: {
-        patch: vi.fn().mockResolvedValue(undefined),
+        patch: vi.fn().mockImplementation(async (_id: string, data: Record<string, unknown>) => ({
+          task_id: taskId,
+          ...data,
+        })),
       } as any,
       messagesRepo: {
         findBySessionId: vi.fn().mockResolvedValue([]),
@@ -132,6 +135,26 @@ describe('createCanUseToolCallback', () => {
       expect(result.updatedPermissions).toBeUndefined();
       // Lock was acquired AND released.
       expect(deps.permissionLocks.size).toBe(0);
+    });
+
+    it('does not create permission side effects when awaiting-permission patch is stale', async () => {
+      const deps = createBaseDeps();
+      deps.tasksService.patch.mockResolvedValueOnce({
+        task_id: taskId,
+        status: 'running',
+        runtime_patch_ignored: true,
+        runtime_patch_ignored_reason: 'stale attempt old (current new)',
+      });
+
+      const callback = createCanUseToolCallback(sessionId, taskId, deps);
+      const result = await callback('Bash', { command: 'ls' }, noopOptions);
+
+      expect(result.behavior).toBe('deny');
+      expect(result.message).toMatch(/stale task attempt/i);
+      expect(deps.messagesService.create).not.toHaveBeenCalled();
+      expect(deps.sessionsService.patch).not.toHaveBeenCalled();
+      expect(deps.permissionService.emitRequest).not.toHaveBeenCalled();
+      expect(deps.permissionService.waitForDecision).not.toHaveBeenCalled();
     });
 
     it('emits an SDK persistence rule when the user picks "remember"', async () => {

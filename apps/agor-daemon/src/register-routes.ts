@@ -67,6 +67,7 @@ import {
   ROLES,
   SERVICE_GROUP_NAMES,
   SessionStatus,
+  TaskExecutionRuntimeBackend,
   TaskRuntimeEventKind,
   TaskRuntimePhase,
   TaskStatus,
@@ -1040,12 +1041,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const gitStateAtStart = 'unknown';
     const refAtStart = 'unknown';
 
+    const runtimeBackend = config.execution?.executor_command_template
+      ? TaskExecutionRuntimeBackend.COMMAND_TEMPLATE
+      : TaskExecutionRuntimeBackend.LOCAL_SUBPROCESS;
+    const currentExecutionAttempt: NonNullable<Task['current_execution_attempt']> = {
+      schema_version: 1,
+      attempt_id: generateId(),
+      executor_instance_id: generateId(),
+      runtime_backend: runtimeBackend,
+      ...(runtimeBackend === TaskExecutionRuntimeBackend.COMMAND_TEMPLATE
+        ? { runtime_ref: task.task_id }
+        : {}),
+      started_at: startTimestamp,
+    };
+
     // Patch task: queued/created → running, with real ranges. queue_position
     // is cleared here so a draining task is no longer considered queued.
     const runningPatch: Partial<Task> = {
       status: TaskStatus.RUNNING,
       started_at: startTimestamp,
       queue_position: undefined,
+      current_execution_attempt: currentExecutionAttempt,
       message_range: {
         start_index: messageStartIndex,
         end_index: messageStartIndex + 1,
@@ -1059,7 +1075,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     };
     if (session.agentic_tool !== 'claude-code-cli') {
       runningPatch.runtime_vitals = buildDaemonTaskRuntimeVitals(
-        task.runtime_vitals,
+        undefined,
         TaskRuntimeEventKind.EXECUTOR_SPAWN_REQUESTED,
         {
           at: startTimestamp,
@@ -1257,6 +1273,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionId,
           {
             taskId,
+            attemptId: currentExecutionAttempt.attempt_id,
+            executorInstanceId: currentExecutionAttempt.executor_instance_id,
             prompt: promptForExecutor,
             permissionMode: options.permissionMode,
             stream: useStreaming,
@@ -1274,30 +1292,61 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           `❌ [Daemon] Executor spawn failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
           error
         );
-        await safePatch(
-          'tasks',
-          taskId,
-          {
-            status: TaskStatus.FAILED,
-            completed_at: new Date().toISOString(),
-            error_message: errorMessage,
-            runtime_vitals: buildDaemonTaskRuntimeVitals(
-              (
-                await app
-                  .service('tasks')
-                  .get(taskId, params)
-                  .catch(() => updatedTask)
-              ).runtime_vitals,
-              TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED,
-              {
-                phase: TaskRuntimePhase.FAILED,
-                errorCode: 'spawn_exception',
-              }
-            ),
+        const runtimeAttemptParams = {
+          ...params,
+          runtimeAttempt: {
+            attemptId: currentExecutionAttempt.attempt_id,
+            executorInstanceId: currentExecutionAttempt.executor_instance_id,
           },
-          'Task',
-          params
-        );
+        } as RouteParams;
+        let spawnFailureApplied = false;
+        try {
+          const failedTask = (await app.service('tasks').patch(
+            taskId,
+            {
+              status: TaskStatus.FAILED,
+              completed_at: new Date().toISOString(),
+              error_message: errorMessage,
+              runtime_vitals: buildDaemonTaskRuntimeVitals(
+                (
+                  await app
+                    .service('tasks')
+                    .get(taskId, params)
+                    .catch(() => updatedTask)
+                ).runtime_vitals,
+                TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED,
+                {
+                  phase: TaskRuntimePhase.FAILED,
+                  errorCode: 'spawn_exception',
+                }
+              ),
+            },
+            runtimeAttemptParams
+          )) as Task & { runtime_patch_ignored?: boolean };
+          spawnFailureApplied =
+            failedTask.runtime_patch_ignored !== true &&
+            failedTask.status === TaskStatus.FAILED &&
+            failedTask.error_message === errorMessage &&
+            failedTask.current_execution_attempt?.attempt_id === currentExecutionAttempt.attempt_id;
+        } catch (patchError) {
+          if (
+            patchError instanceof NotFoundError ||
+            (patchError instanceof Error && patchError.message.includes('No record found'))
+          ) {
+            console.log(
+              `⚠️  Task ${shortId(taskId)} was deleted mid-execution - skipping spawn failure update`
+            );
+          } else {
+            throw patchError;
+          }
+        }
+
+        if (!spawnFailureApplied) {
+          console.log(
+            `⏭️ [Daemon] Spawn failure for task ${shortId(taskId)} did not apply to the current attempt; skipping fallback transcript side effects`
+          );
+          return;
+        }
 
         // Synthesize a system message so the chat surfaces *why* the agent
         // didn't respond. Without this the transcript shows only the user
