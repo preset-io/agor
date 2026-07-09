@@ -217,22 +217,33 @@ export class HealthMonitor {
         return;
       }
 
-      // Get current branch state
-      const branch = await branchesService.get(branchId, params as never);
+      const runCheck = async () => {
+        // Get current branch state
+        const branch = await branchesService.get(branchId, params as never);
 
-      // Only check if still running or starting
-      const status = branch.environment_instance?.status;
-      if (status !== 'running' && status !== 'starting') {
-        // Silently stop monitoring (not an error - expected when env stops)
-        // Start/stop logs are already handled in handleBranchUpdate()
-        this.stopMonitoring(branchId);
-        return;
+        // Only check if still running or starting
+        const status = branch.environment_instance?.status;
+        if (status !== 'running' && status !== 'starting') {
+          // Silently stop monitoring (not an error - expected when env stops)
+          // Start/stop logs are already handled in handleBranchUpdate()
+          this.stopMonitoring(branchId);
+          return;
+        }
+
+        // Perform health check via the service method. This direct custom
+        // service call bypasses Feathers around hooks, so when the monitor has
+        // a db handle and tenant params, enter the same tenant DB/ALS scope the
+        // scheduler uses before mutating branch environment state and emitting
+        // realtime patches.
+        await branchesService.checkHealth(branchId, params as never);
+      };
+
+      const tenantId = params?.tenant?.tenant_id;
+      if (this.db && tenantId) {
+        await runWithTenantDatabaseScope(this.db, tenantId, runCheck);
+      } else {
+        await runCheck();
       }
-
-      // Perform health check via the service method
-      // This will update environment_instance and broadcast via WebSocket
-      // Logging is handled in checkHealth() method - only logs on state changes
-      await branchesService.checkHealth(branchId, params as never);
     } catch (error) {
       // If branch was deleted or not found, stop monitoring silently
       // This is expected when branches are deleted while health checks are in progress

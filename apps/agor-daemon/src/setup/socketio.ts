@@ -786,7 +786,7 @@ export function createSocketIOConfig(
     // The io.on('connection') handler above only catches pre-authenticated sockets
     // (those with a handshake token). Most browser sockets authenticate AFTER connecting,
     // so we need to join the user room here when the login event fires.
-    app.on('login', (authResult: unknown, context: { connection?: unknown }) => {
+    app.on('login', (authResult: unknown, context: { connection?: unknown; params?: unknown }) => {
       if (!context.connection) return;
       const result = authResult as { user?: { user_id?: string } };
       const userId = result.user?.user_id;
@@ -852,7 +852,7 @@ export function configureChannels(
 
   // Join authenticated connections to the 'authenticated' channel
   // This is the only way to receive broadcast events
-  app.on('login', (authResult: unknown, context: { connection?: unknown }) => {
+  app.on('login', (authResult: unknown, context: { connection?: unknown; params?: unknown }) => {
     if (context.connection) {
       const result = authResult as {
         user?: { user_id?: string; email?: string; tenant_id?: string };
@@ -861,9 +861,20 @@ export function configureChannels(
       console.debug('✅ Login event fired:', result.user?.user_id, result.user?.email);
 
       const connection = context.connection as FeathersSocket & { tenant?: TenantContext };
+      const loginParams =
+        context.params && typeof context.params === 'object'
+          ? (context.params as {
+              tenant?: TenantContext;
+              tenant_id?: string;
+              headers?: Record<string, unknown>;
+            })
+          : undefined;
       const tenant = options.multiTenancy
         ? resolveTenantContext(options.multiTenancy, {
             params: {
+              tenant: loginParams?.tenant,
+              tenant_id: loginParams?.tenant_id,
+              headers: loginParams?.headers,
               user: result.user,
               authentication: { payload: result.authentication?.payload },
             },
