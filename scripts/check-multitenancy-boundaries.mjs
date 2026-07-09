@@ -121,6 +121,8 @@ const checks = [
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
       'packages/core/src/db/repositories/repos.ts': 3,
+      // Session updates and archive cascades use raw repository transactions until
+      // the Agor store/tenant transaction wrapper covers both patterns.
       'packages/core/src/db/repositories/sessions.ts': 2,
       'packages/core/src/db/repositories/schedules.ts': 1,
       'packages/core/src/seed/demo-fixtures.ts': 1,
