@@ -51,14 +51,11 @@ import {
   isFileLinkDisplayItem,
   isKnowledgeLinkDisplayItem,
   LINK_CATEGORY_TAB_LABELS,
-  LINK_OWNER_FILTER_LABELS,
   LINK_SORT_LABELS,
   type LinkCategoryTabKey,
   type LinkDisplayItem,
-  type LinkOwnerFilterKey,
   type LinkSortKey,
   matchesLinkCategoryTab,
-  matchesLinkOwnerFilter,
 } from './linkDisplay';
 
 const QUICK_LINK_LIMIT = 7;
@@ -505,7 +502,6 @@ export function LinkPreviewModal({
 }
 
 type LinkManagementCategory = LinkCategoryTabKey;
-type LinkManagementSourceFilter = LinkOwnerFilterKey;
 type LinkManagementSort = LinkSortKey;
 
 function isFileDisplayItem(item: LinkDisplayItem): boolean {
@@ -1364,7 +1360,6 @@ export const LinksManagementDrawer: React.FC<LinksManagementDrawerProps> = ({
   const [markdownTarget, setMarkdownTarget] = useState<LinkMarkdownPreviewTarget | null>(null);
   const [busyLinkId, setBusyLinkId] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<LinkManagementCategory>('all');
-  const [sourceFilter, setSourceFilter] = useState<LinkManagementSourceFilter>('all');
   const [sortOrder, setSortOrder] = useState<LinkManagementSort>('az');
 
   const sortedItems = useMemo(
@@ -1372,12 +1367,8 @@ export const LinksManagementDrawer: React.FC<LinksManagementDrawerProps> = ({
     [items, sortOrder]
   );
   const visibleItems = useMemo(
-    () =>
-      sortedItems.filter(
-        (item) =>
-          matchesLinkCategoryTab(item, activeCategory) && matchesLinkOwnerFilter(item, sourceFilter)
-      ),
-    [activeCategory, sourceFilter, sortedItems]
+    () => sortedItems.filter((item) => matchesLinkCategoryTab(item, activeCategory)),
+    [activeCategory, sortedItems]
   );
   const categoryCounts = useMemo(() => getLinkCategoryCounts(items), [items]);
   const categoryTabs = useMemo(
@@ -1448,23 +1439,6 @@ export const LinksManagementDrawer: React.FC<LinksManagementDrawerProps> = ({
                   }))}
                   onChange={setSortOrder}
                   style={{ width: 128 }}
-                />
-              </Space>
-              <Space size={token.sizeXS}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Location
-                </Typography.Text>
-                <Select<LinkManagementSourceFilter>
-                  size="small"
-                  value={sourceFilter}
-                  options={(
-                    Object.keys(LINK_OWNER_FILTER_LABELS) as LinkManagementSourceFilter[]
-                  ).map((key) => ({
-                    value: key,
-                    label: LINK_OWNER_FILTER_LABELS[key],
-                  }))}
-                  onChange={setSourceFilter}
-                  style={{ width: 142 }}
                 />
               </Space>
             </Space>
