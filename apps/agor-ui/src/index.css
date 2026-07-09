@@ -88,12 +88,27 @@
 .anticon.anticon-spin {
   animation: spinRotate 1s linear infinite;
 }
+/* 45deg start preserves antd's original spinner phase (its keyframes ran
+   45deg -> 405deg), so the first painted frame matches the stock Spin. */
 @keyframes spinRotate {
   from {
-    transform: rotate(0deg);
+    transform: rotate(45deg);
   }
   to {
-    transform: rotate(360deg);
+    transform: rotate(405deg);
+  }
+}
+
+/* At reduced-motion the pulse halo is purely decorative and a static spinner
+   still reads as "loading", so drop both loops. */
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-run::after,
+  .status-dot-wait::after {
+    animation: none;
+  }
+  .ant-spin .ant-spin-dot-spin,
+  .anticon.anticon-spin {
+    animation: none;
   }
 }
 
