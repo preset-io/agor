@@ -2,118 +2,95 @@
  * OnboardingBanners — persistent banners shown after onboarding if steps were skipped.
  *
  * Priority order (only one shows at a time):
- * 1. AI banner (amber)  — no LLM key configured.
- * 2. Connection invalid banner (amber) — key present but auth check failed.
- * 3. Integrations banner (teal) — AI ok, no MCP servers connected.
+ * 1. AI banner (amber)  — the check-auth probe found no working LLM credential.
+ * 2. Connection invalid banner (amber) — a DB key exists but the probe rejected it.
+ * 3. Integrations banner (teal) — AI ok, no MCP servers and no gateway channels.
+ *
+ * Both amber banners require POSITIVE proof (`probeState === 'unauthenticated'`);
+ * the decision logic lives in `bannerLogic.ts`.
  */
 
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { Button } from 'antd';
 import { useEffect, useState } from 'react';
+import { decideBanner, hasAnyLlmKey, type ProbeState, resolveProbeAgent } from './bannerLogic';
 
 export interface OnboardingBannersProps {
   user: User | null | undefined;
   /** Total number of MCP servers configured for this user/instance. */
   mcpServerCount: number;
+  /** Number of gateway channels (Slack/GitHub/etc.) the user has connected. */
+  gatewayChannelCount: number;
   /** Whether the user can reach the MCP settings tab (service enabled + sufficient role). Gates the integrations banner so its CTA is never a dead-end. */
   canManageMcp: boolean;
   /** Opens the user's personal AI credential settings at the given tool tab. */
   onOpenUserSettings: (tab: string) => void;
   /** Opens workspace settings at the given tab key (used for MCP). */
   onOpenWorkspaceSettings: (tab: string) => void;
-  /** Optional auth check — used to detect stored-but-broken keys. */
-  onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
-  /** Bumped by the parent whenever credentials are saved — forces a re-check even if key presence is unchanged (e.g. key rotation). */
-  credentialVersion?: number;
-}
-
-function hasAnyLlmKey(user: User | null | undefined): boolean {
-  if (!user) return false;
-  const claude = user.agentic_tools?.['claude-code'];
-  const codex = user.agentic_tools?.codex;
-  const gemini = user.agentic_tools?.gemini;
-  return !!(
-    claude?.ANTHROPIC_API_KEY ||
-    claude?.CLAUDE_CODE_OAUTH_TOKEN ||
-    codex?.OPENAI_API_KEY ||
-    gemini?.GEMINI_API_KEY ||
-    user.env_vars?.ANTHROPIC_API_KEY ||
-    user.env_vars?.OPENAI_API_KEY ||
-    user.env_vars?.GEMINI_API_KEY
-  );
-}
-
-function primaryAgentForUser(user: User | null | undefined): AgenticToolName | null {
-  if (!user) return null;
-  const claude = user.agentic_tools?.['claude-code'];
-  const codex = user.agentic_tools?.codex;
-  const gemini = user.agentic_tools?.gemini;
-  if (
-    claude?.ANTHROPIC_API_KEY ||
-    claude?.CLAUDE_CODE_OAUTH_TOKEN ||
-    user.env_vars?.ANTHROPIC_API_KEY
-  )
-    return 'claude-code';
-  if (codex?.OPENAI_API_KEY || user.env_vars?.OPENAI_API_KEY) return 'codex';
-  if (gemini?.GEMINI_API_KEY || user.env_vars?.GEMINI_API_KEY) return 'gemini';
-  return null;
+  /** Server-side credential probe — resolves creds exactly as the executor, including executor-filesystem auth (`claude /login`). */
+  onCheckAuth: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
+  /** Bumped by the parent whenever credentials are saved — forces a re-probe even if key presence is unchanged (e.g. key rotation). */
+  credentialVersion: number;
 }
 
 export function OnboardingBanners({
   user,
   mcpServerCount,
+  gatewayChannelCount,
   canManageMcp,
   onOpenUserSettings,
   onOpenWorkspaceSettings,
   onCheckAuth,
   credentialVersion,
 }: OnboardingBannersProps) {
-  const [storedKeyInvalid, setStoredKeyInvalid] = useState(false);
+  const [probeState, setProbeState] = useState<ProbeState>('unknown');
   const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
 
   // Pre-compute user-derived values so the effect captures primitives, not the full user object.
   const onboardingCompleted = !!user?.onboarding_completed;
   const hasLlm = hasAnyLlmKey(user);
-  const primaryAgent = primaryAgentForUser(user);
+  const probeAgent = resolveProbeAgent(user);
 
-  // Check if the stored LLM key is actually working.
-  // Re-runs when the user's key changes or identity changes.
-  // Fails open (storedKeyInvalid=false) on network errors — deliberate: avoid false positives.
-  // credentialVersion is a trigger-only dep: it re-runs the check when the parent bumps it after a credential save,
-  // catching key rotations where presence (hasLlm) and primaryAgent are unchanged.
+  // Probe the tool's real credential state (DB key OR executor-filesystem auth
+  // such as `claude /login`). ONE probe per identity/credential change — the
+  // claude-code probe spawns a ~5–10s subprocess, so deps are primitives/stable
+  // (never re-fires on board navigation or unrelated re-renders).
+  // credentialVersion is a trigger-only dep: it re-probes when the parent bumps
+  // it after a credential save, catching key rotations where presence and
+  // probeAgent are unchanged.
   // biome-ignore lint/correctness/useExhaustiveDependencies: credentialVersion is an intentional trigger dep
   useEffect(() => {
-    if (!onboardingCompleted || !onCheckAuth || !hasLlm || !primaryAgent) {
-      setStoredKeyInvalid(false);
+    if (!onboardingCompleted) {
+      setProbeState('unknown');
       return;
     }
+    setProbeState('unknown');
     let cancelled = false;
-    onCheckAuth(primaryAgent)
+    onCheckAuth(probeAgent)
       .then((result) => {
-        if (!cancelled) setStoredKeyInvalid(!result.authenticated);
+        if (!cancelled) setProbeState(result.authenticated ? 'authenticated' : 'unauthenticated');
       })
       .catch(() => {
-        if (!cancelled) setStoredKeyInvalid(false);
+        if (!cancelled) setProbeState('unknown');
       });
     return () => {
       cancelled = true;
     };
-  }, [onboardingCompleted, hasLlm, primaryAgent, onCheckAuth, credentialVersion]);
+  }, [onboardingCompleted, probeAgent, onCheckAuth, credentialVersion]);
 
-  if (!onboardingCompleted) return null;
+  const decision = decideBanner({
+    onboardingCompleted,
+    hasLlm,
+    probeState,
+    canManageMcp,
+    mcpServerCount,
+    gatewayChannelCount,
+    integrationsBannerDismissed,
+  });
 
-  const showAiBanner = !hasLlm;
-  const showKeyInvalidBanner = hasLlm && storedKeyInvalid;
-  const showIntegrationsBanner =
-    hasLlm &&
-    !storedKeyInvalid &&
-    canManageMcp &&
-    mcpServerCount === 0 &&
-    !integrationsBannerDismissed;
+  if (decision === 'none') return null;
 
-  if (!showAiBanner && !showKeyInvalidBanner && !showIntegrationsBanner) return null;
-
-  if (showAiBanner) {
+  if (decision === 'no-ai') {
     return (
       <div
         style={{
@@ -145,7 +122,7 @@ export function OnboardingBanners({
           </Button>
           <Button
             size="small"
-            onClick={() => onOpenUserSettings(primaryAgent ?? 'claude-code')}
+            onClick={() => onOpenUserSettings(probeAgent)}
             style={{
               background: '#d97706',
               borderColor: '#d97706',
@@ -161,7 +138,7 @@ export function OnboardingBanners({
     );
   }
 
-  if (showKeyInvalidBanner) {
+  if (decision === 'key-invalid') {
     return (
       <div
         style={{
@@ -182,7 +159,7 @@ export function OnboardingBanners({
         </span>
         <Button
           size="small"
-          onClick={() => onOpenUserSettings(primaryAgent ?? 'claude-code')}
+          onClick={() => onOpenUserSettings(probeAgent)}
           style={{
             background: '#d97706',
             borderColor: '#d97706',

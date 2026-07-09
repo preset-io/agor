@@ -436,6 +436,9 @@ function AppContent() {
   );
   const currentUser = user ? storedCurrentUser || user : null;
   const mcpServerById = useAgorStore((s) => s.mcpServerById);
+  // Slack/GitHub connections are gateway channels, a separate store map from MCP
+  // servers. Narrow size selector so unrelated channel writes don't re-render the shell.
+  const gatewayChannelCount = useAgorStore((s) => s.gatewayChannelById.size);
   // Whether this user can actually reach the MCP settings tab. Mirrors the tab's
   // own gate in SettingsModal (`mcpEnabled && isAdmin`), so the "Connect tools"
   // banner is never a dead-end for users who can't open it.
@@ -1648,6 +1651,7 @@ function AppContent() {
         <OnboardingBanners
           user={currentUser}
           mcpServerCount={mcpServerById.size}
+          gatewayChannelCount={gatewayChannelCount}
           canManageMcp={canManageMcp}
           onOpenUserSettings={(tab) => {
             setUserSettingsInitialTab(tab);
