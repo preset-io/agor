@@ -45,6 +45,14 @@ describe('check-auth Claude subscription tokens', () => {
 
     expect(result).toMatchObject({ authenticated: true, method: 'oauth' });
     expect(claudeQueryMock).toHaveBeenCalledTimes(1);
+    expect(claudeQueryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          env: expect.objectContaining({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-test' }),
+        }),
+      })
+    );
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(resolveApiKeyMock).not.toHaveBeenCalled();
   });
 
@@ -64,6 +72,14 @@ describe('check-auth Claude subscription tokens', () => {
     } as never);
 
     expect(result).toMatchObject({ authenticated: true, method: 'oauth' });
+    expect(claudeQueryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          env: expect.objectContaining({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-stored' }),
+        }),
+      })
+    );
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(resolveApiKeyMock).toHaveBeenNthCalledWith(1, 'ANTHROPIC_API_KEY', {
       userId: 'user-1',
       db: {},
@@ -112,6 +128,14 @@ describe('check-auth Claude subscription tokens', () => {
     } as never);
 
     expect(result).toMatchObject({ authenticated: true, method: 'oauth' });
+    expect(claudeQueryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          env: expect.objectContaining({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-env' }),
+        }),
+      })
+    );
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(resolveUserEnvironmentMock).toHaveBeenCalledWith('user-1', {}, { tool: 'claude-code' });
   });
 });

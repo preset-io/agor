@@ -1,4 +1,4 @@
-import type { AgenticToolName, UpdateUserInput } from '@agor-live/client';
+import type { AgenticToolConfigField, AgenticToolName, UpdateUserInput } from '@agor-live/client';
 
 export type CredentialPatchValue = string | null;
 
@@ -9,7 +9,7 @@ export type CredentialPatchValue = string | null;
  */
 export function buildAgenticToolCredentialPatch(
   tool: AgenticToolName,
-  field: string,
+  field: AgenticToolConfigField,
   value: CredentialPatchValue
 ): Pick<UpdateUserInput, 'agentic_tools'> {
   return {

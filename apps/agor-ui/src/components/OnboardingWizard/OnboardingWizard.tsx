@@ -8,6 +8,7 @@
  */
 
 import type {
+  AgenticToolConfigField,
   AgenticToolName,
   AssistantConfig,
   AuthCheckResult,
@@ -140,7 +141,10 @@ function entriesByRepoId(repos: Repo[]): Map<string, Repo> {
   return new Map(repos.map((repo) => [repo.repo_id, repo]));
 }
 
-function apiKeyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-key'): string {
+function apiKeyNameForAgent(
+  agent: AgenticToolName,
+  authMethod: AuthMethod = 'api-key'
+): AgenticToolConfigField {
   if (agent === 'claude-code' && authMethod === 'claude-subscription-token') {
     return 'CLAUDE_CODE_OAUTH_TOKEN';
   }

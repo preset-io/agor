@@ -16,7 +16,12 @@
  * - Cursor SDK: API-key presence check; the SDK validates the key at session start
  *
  * Resolution precedence (when no raw key is provided by the caller):
- *   user encrypted key → config.yaml → env var → native auth
+ *   primary per-tool credential / config / daemon env → user env vars for the
+ *   selected tool → secondary Claude subscription token → native auth.
+ *
+ * User Settings → Env Vars is not the recommended credential home, but
+ * executor environments receive those vars, so this service validates them via
+ * the same user/tool env resolver used for session spawn.
  */
 
 import { promises as fs } from 'node:fs';
@@ -69,7 +74,9 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, message: string):
  *
  * Returns null on any failure (CLI missing, no auth, timeout, etc.).
  */
-async function probeClaudeCodeAuth(): Promise<Claude.AccountInfo | null> {
+async function probeClaudeCodeAuth(
+  env?: Record<string, string>
+): Promise<Claude.AccountInfo | null> {
   let releaseHeldInput!: () => void;
   const heldInputPromise = new Promise<void>((resolve) => {
     releaseHeldInput = resolve;
@@ -82,7 +89,7 @@ async function probeClaudeCodeAuth(): Promise<Claude.AccountInfo | null> {
 
   const q = Claude.query({
     prompt: neverYields(),
-    options: {},
+    options: env ? { env } : {},
   });
 
   try {
@@ -183,43 +190,33 @@ function isClaudeSubscriptionToken(token: string): boolean {
   return token.trim().startsWith('sk-ant-oat');
 }
 
-async function withTemporaryEnv<T>(
-  env: Record<string, string | undefined>,
-  fn: () => Promise<T>
-): Promise<T> {
-  const previous = new Map<string, string | undefined>();
-  for (const key of Object.keys(env)) {
-    previous.set(key, process.env[key]);
-    const value = env[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
+function buildClaudeProbeEnv(token: string): Record<string, string> {
+  const env: Record<string, string> = {
+    CLAUDE_CODE_OAUTH_TOKEN: token.trim(),
+  };
+
+  // The SDK uses an explicit bundled Claude binary path, but preserving PATH
+  // keeps child-process basics working without exposing all daemon env vars.
+  if (process.env.PATH) env.PATH = process.env.PATH;
+
+  // Preserve common proxy settings so validation works in proxied installs.
+  for (const key of [
+    'HTTPS_PROXY',
+    'HTTP_PROXY',
+    'NO_PROXY',
+    'https_proxy',
+    'http_proxy',
+    'no_proxy',
+  ]) {
+    const value = process.env[key];
+    if (value) env[key] = value;
   }
 
-  try {
-    return await fn();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  return env;
 }
 
 async function validateClaudeSubscriptionToken(token: string): Promise<boolean> {
-  const account = await withTemporaryEnv(
-    {
-      CLAUDE_CODE_OAUTH_TOKEN: token.trim(),
-      // Avoid an unrelated daemon-level API key making this probe green.
-      ANTHROPIC_API_KEY: undefined,
-    },
-    () => probeClaudeCodeAuth()
-  );
+  const account = await probeClaudeCodeAuth(buildClaudeProbeEnv(token));
   return !!account?.tokenSource;
 }
 
