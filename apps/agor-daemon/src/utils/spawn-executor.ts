@@ -39,7 +39,6 @@ import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
 
 let configuredDaemonUrl: string | null = null;
-const ON_SPAWN_PAYLOAD_TIMEOUT_MS = 5_000;
 
 function resolveExecutorLogLevel(env: Record<string, string>): string {
   return env.LOG_LEVEL || getCurrentLogLevel();
@@ -465,12 +464,10 @@ function writePayloadAfterSpawnHook(
   logPrefix: string
 ): void {
   let wrotePayload = false;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
 
   const writePayload = () => {
     if (wrotePayload) return;
     wrotePayload = true;
-    if (timeout) clearTimeout(timeout);
     child.stdin?.write(JSON.stringify(payload));
     child.stdin?.end();
   };
@@ -484,19 +481,9 @@ function writePayloadAfterSpawnHook(
   try {
     const result = options.onSpawn?.(child);
     if (result && typeof result.then === 'function') {
-      timeout = setTimeout(() => {
-        console.warn(
-          `${logPrefix} onSpawn hook timed out after ${ON_SPAWN_PAYLOAD_TIMEOUT_MS}ms; writing executor payload anyway`
-        );
-        writePayload();
-      }, ON_SPAWN_PAYLOAD_TIMEOUT_MS);
-
-      void result
-        .catch((error) => {
-          warn(error);
-        })
-        .finally(writePayload);
-      return;
+      void result.catch((error) => {
+        warn(error);
+      });
     }
   } catch (error) {
     warn(error);

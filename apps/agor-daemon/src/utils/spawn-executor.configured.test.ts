@@ -198,7 +198,7 @@ describe('configured executor spawning', () => {
     );
   });
 
-  it('waits for async onSpawn work before writing the executor payload', async () => {
+  it('does not wait for async onSpawn work before writing the executor payload', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
     let resolveOnSpawn!: () => void;
@@ -213,41 +213,28 @@ describe('configured executor spawning', () => {
     spawnExecutor({ command: 'prompt' }, { onSpawn });
 
     expect(onSpawn).toHaveBeenCalledWith(proc);
-    expect(proc.written).toBe('');
+    expect(proc.written).not.toBe('');
 
     resolveOnSpawn();
-
-    await vi.waitFor(() => {
-      expect(proc.written).not.toBe('');
-    });
     expect(JSON.parse(proc.written)).toMatchObject({
       command: 'prompt',
       resolvedConfig: expect.any(Object),
     });
   });
 
-  it('writes the executor payload if async onSpawn never settles', async () => {
-    vi.useFakeTimers();
-    try {
-      const proc = createMockProcess();
-      spawnMock.mockReturnValue(proc);
-      const onSpawn = vi.fn(() => new Promise<void>(() => {}));
-      const { spawnExecutor } = await import('./spawn-executor');
+  it('still writes the executor payload if async onSpawn never settles', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const onSpawn = vi.fn(() => new Promise<void>(() => {}));
+    const { spawnExecutor } = await import('./spawn-executor');
 
-      spawnExecutor({ command: 'prompt' }, { onSpawn, logPrefix: '[test]' });
+    spawnExecutor({ command: 'prompt' }, { onSpawn, logPrefix: '[test]' });
 
-      expect(onSpawn).toHaveBeenCalledWith(proc);
-      expect(proc.written).toBe('');
-
-      await vi.advanceTimersByTimeAsync(5_000);
-
-      expect(JSON.parse(proc.written)).toMatchObject({
-        command: 'prompt',
-        resolvedConfig: expect.any(Object),
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(onSpawn).toHaveBeenCalledWith(proc);
+    expect(JSON.parse(proc.written)).toMatchObject({
+      command: 'prompt',
+      resolvedConfig: expect.any(Object),
+    });
   });
 
   it('derives LOG_LEVEL for executor processes when only NODE_ENV is set', async () => {

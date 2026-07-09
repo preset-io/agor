@@ -126,8 +126,10 @@ import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import {
+  hasExecutorRuntimeEvidence,
   hasObservedLaunchedExecutorProcess,
   isExecutorSpawnFailureExit,
+  shouldFailTaskForChildExit,
 } from './utils/executor-spawn-classification.js';
 import { escapeHtml } from './utils/html.js';
 import {
@@ -938,11 +940,12 @@ function createExecuteHandler(
     }
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
-    const canRecordLocalPid = !config.execution?.executor_command_template;
+    const usesCommandTemplate = !!config.execution?.executor_command_template;
+    const canRecordLocalPid = !usesCommandTemplate;
     const tasksRuntimeVitalsService = app.service('tasks') as Parameters<
       typeof patchDaemonTaskRuntimeEvent
     >[0];
-    let processSpawnObserved = false;
+    let localExecutorProcessObserved = false;
 
     spawnExecutor(executorPayload, {
       cwd,
@@ -954,31 +957,32 @@ function createExecuteHandler(
         task_id: taskId,
         unix_user: executorUnixUser || undefined,
       },
-      onSpawn: async (child) => {
-        processSpawnObserved = hasObservedLaunchedExecutorProcess(child);
-        if (!processSpawnObserved) {
+      onSpawn: (child) => {
+        const childProcessObserved = hasObservedLaunchedExecutorProcess(child);
+        localExecutorProcessObserved = canRecordLocalPid && childProcessObserved;
+        if (!childProcessObserved) {
           return;
         }
 
-        await patchDaemonTaskRuntimeEvent(
-          tasksRuntimeVitalsService,
-          taskId,
-          TaskRuntimeEventKind.EXECUTOR_PROCESS_SPAWNED,
-          {
-            processPid: canRecordLocalPid ? child.pid : undefined,
-          },
-          params
-        );
-        if (child.pid) {
+        if (canRecordLocalPid && child.pid) {
           trackExecutorProcess(sessionId, child.pid);
           console.log(`${logPrefix} PID: ${child.pid}`);
+          void patchDaemonTaskRuntimeEvent(
+            tasksRuntimeVitalsService,
+            taskId,
+            TaskRuntimeEventKind.EXECUTOR_PROCESS_SPAWNED,
+            { processPid: child.pid },
+            params
+          );
+        } else {
+          console.log(
+            `${logPrefix} Launcher PID: ${child.pid} (command-template submission process)`
+          );
         }
       },
       onExit: async (code) => {
         console.log(`${logPrefix} Exited with code ${code}`);
         untrackExecutorProcess(sessionId);
-        let wroteExitVitals = false;
-
         // Safety net: check if task is still running
         try {
           const currentSession = await app.service('sessions').get(sessionId, params);
@@ -995,32 +999,50 @@ function createExecuteHandler(
             try {
               const currentTask = await app.service('tasks').get(taskId, params);
               if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
-                const spawnFailureExit = isExecutorSpawnFailureExit(processSpawnObserved, code);
-                const eventKind = spawnFailureExit
-                  ? TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED
-                  : TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED;
-                const runtime_vitals = buildDaemonTaskRuntimeVitals(
-                  currentTask.runtime_vitals,
-                  eventKind,
-                  {
-                    phase: TaskRuntimePhase.FAILED,
-                    exitCode: code,
-                    errorCode: spawnFailureExit ? 'spawn_error' : 'unexpected_exit',
-                  }
+                const executorRuntimeObserved = hasExecutorRuntimeEvidence(
+                  currentTask.runtime_vitals
                 );
-                await app.service('tasks').patch(
-                  taskId,
-                  {
-                    status: TaskStatus.FAILED,
-                    error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
-                    runtime_vitals,
-                  },
-                  params
-                );
-                wroteExitVitals = true;
-                console.log(
-                  `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
-                );
+                const shouldFailTask = shouldFailTaskForChildExit({
+                  usesCommandTemplate,
+                  code,
+                  localExecutorProcessObserved,
+                  executorRuntimeObserved,
+                });
+
+                if (shouldFailTask) {
+                  const spawnFailureExit = usesCommandTemplate
+                    ? !executorRuntimeObserved && code !== 0
+                    : isExecutorSpawnFailureExit(localExecutorProcessObserved, code);
+                  const eventKind = spawnFailureExit
+                    ? TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED
+                    : TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED;
+                  const runtime_vitals = buildDaemonTaskRuntimeVitals(
+                    currentTask.runtime_vitals,
+                    eventKind,
+                    {
+                      phase: TaskRuntimePhase.FAILED,
+                      exitCode: code,
+                      errorCode: spawnFailureExit ? 'spawn_error' : 'unexpected_exit',
+                    }
+                  );
+                  await app.service('tasks').patch(
+                    taskId,
+                    {
+                      status: TaskStatus.FAILED,
+                      error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+                      runtime_vitals,
+                    },
+                    params
+                  );
+                  console.log(
+                    `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
+                  );
+                } else {
+                  console.log(
+                    `ℹ️  [Executor] Child exit was non-authoritative for task ${shortId(taskId)} ` +
+                      `(code: ${code ?? 'unknown'}, commandTemplate: ${usesCommandTemplate}, executorRuntimeObserved: ${executorRuntimeObserved})`
+                  );
+                }
               } else {
                 console.log(
                   `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
@@ -1049,23 +1071,6 @@ function createExecuteHandler(
         } catch (error) {
           console.error(`❌ [Executor] Failed to handle executor exit:`, error);
         }
-        if (!wroteExitVitals) {
-          await patchDaemonTaskRuntimeEvent(
-            tasksRuntimeVitalsService,
-            taskId,
-            isExecutorSpawnFailureExit(processSpawnObserved, code)
-              ? TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED
-              : TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED,
-            {
-              exitCode: code,
-              ...(isExecutorSpawnFailureExit(processSpawnObserved, code)
-                ? { errorCode: 'spawn_error' }
-                : {}),
-            },
-            params
-          );
-        }
-
         // Stateless FS mode: serialize session file to DB after executor exits
         if (config.execution?.stateless_fs_mode) {
           try {
