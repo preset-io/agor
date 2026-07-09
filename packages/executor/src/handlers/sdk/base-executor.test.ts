@@ -1,6 +1,10 @@
 import { resolveApiKey } from '@agor/core/config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolveApiKeyForTask } from './base-executor.js';
+import {
+  createRuntimeAwareTasksService,
+  createRuntimeAwareTasksStreamingService,
+  resolveApiKeyForTask,
+} from './base-executor.js';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
@@ -101,5 +105,60 @@ describe('resolveApiKeyForTask', () => {
     ).resolves.toMatchObject({ apiKey: 'local-key', source: 'env' });
 
     expect(resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {});
+  });
+});
+
+describe('runtime-aware service wrappers', () => {
+  it('preserves tool labels between start and complete streaming events', async () => {
+    const pulse = vi.fn();
+    const create = vi.fn(async () => ({}));
+    const service = createRuntimeAwareTasksStreamingService({ create }, { pulse });
+
+    await service.create({
+      event: 'tool:start',
+      data: {
+        tool_use_id: 'tool-1',
+        tool_name: 'Bash',
+      },
+    });
+    await service.create({
+      event: 'tool:complete',
+      data: {
+        tool_use_id: 'tool-1',
+      },
+    });
+
+    expect(pulse).toHaveBeenNthCalledWith(1, {
+      kind: 'tool.started',
+      id: 'tool-1',
+      label: 'Bash',
+    });
+    expect(pulse).toHaveBeenNthCalledWith(2, {
+      kind: 'tool.completed',
+      id: 'tool-1',
+      label: 'Bash',
+    });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('emits permission wait pulses without dropping the original task service surface', async () => {
+    const pulse = vi.fn();
+    const patch = vi.fn(async () => ({}));
+    const emit = vi.fn();
+    const service = createRuntimeAwareTasksService(
+      {
+        get: vi.fn(async () => ({})),
+        patch,
+        emit,
+      },
+      { pulse }
+    );
+
+    await service.patch('task-1', { status: 'awaiting_permission' });
+    service.emit('task.cancelled', { task_id: 'task-1' });
+
+    expect(pulse).toHaveBeenCalledWith({ kind: 'permission.wait_started', id: 'task-1' });
+    expect(patch).toHaveBeenCalledWith('task-1', { status: 'awaiting_permission' });
+    expect(emit).toHaveBeenCalledWith('task.cancelled', { task_id: 'task-1' });
   });
 });

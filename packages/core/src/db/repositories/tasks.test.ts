@@ -781,6 +781,81 @@ describe('TaskRepository.update', () => {
     expect(found?.last_executor_heartbeat_at).toBe(heartbeatAt);
   });
 
+  dbTest('should round-trip executor_runtime on update', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    const updated = await taskRepo.update(created.task_id, {
+      executor_runtime: {
+        heartbeat_at: '2026-01-01T00:00:10.000Z',
+        latest_pulse: {
+          kind: 'tool.started',
+          id: 'tool-123',
+          label: 'Bash',
+          at: '2026-01-01T00:00:07.000Z',
+        },
+      },
+    });
+    const found = await taskRepo.findById(created.task_id);
+
+    expect(updated.executor_runtime).toEqual({
+      heartbeat_at: '2026-01-01T00:00:10.000Z',
+      latest_pulse: {
+        kind: 'tool.started',
+        id: 'tool-123',
+        label: 'Bash',
+        at: '2026-01-01T00:00:07.000Z',
+      },
+    });
+    expect(found?.executor_runtime).toEqual(updated.executor_runtime);
+  });
+
+  dbTest(
+    'should replace executor_runtime snapshots instead of deep-merging stale pulse fields',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const created = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_runtime: {
+            heartbeat_at: '2026-01-01T00:00:10.000Z',
+            latest_pulse: {
+              kind: 'tool.started',
+              id: 'tool-123',
+              label: 'Bash',
+              metadata: { event: 'started' },
+              at: '2026-01-01T00:00:07.000Z',
+            },
+          },
+        })
+      );
+
+      const updated = await taskRepo.update(created.task_id, {
+        executor_runtime: {
+          heartbeat_at: '2026-01-01T00:00:20.000Z',
+          latest_pulse: {
+            kind: 'assistant.stream',
+            at: '2026-01-01T00:00:19.000Z',
+          },
+        },
+      });
+      await taskRepo.update(created.task_id, { tool_use_count: 2 });
+      const found = await taskRepo.findById(created.task_id);
+
+      expect(updated.executor_runtime?.latest_pulse).toEqual({
+        kind: 'assistant.stream',
+        at: '2026-01-01T00:00:19.000Z',
+      });
+      expect(found?.executor_runtime?.latest_pulse).toEqual(updated.executor_runtime?.latest_pulse);
+      expect(found?.tool_use_count).toBe(2);
+    }
+  );
+
   dbTest('should throw EntityNotFoundError for non-existent ID', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     await expect(taskRepo.update('99999999', { status: TaskStatus.COMPLETED })).rejects.toThrow(

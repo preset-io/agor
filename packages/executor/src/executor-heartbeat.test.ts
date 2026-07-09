@@ -17,6 +17,13 @@ describe('startExecutorHeartbeat', () => {
       await Promise.resolve();
       expect(patch).toHaveBeenCalledWith('task-1', {
         last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
+        executor_runtime: {
+          heartbeat_at: '2026-01-01T00:00:00.000Z',
+          latest_pulse: {
+            kind: 'executor.connected',
+            at: '2026-01-01T00:00:00.000Z',
+          },
+        },
       });
 
       await vi.advanceTimersByTimeAsync(1000);

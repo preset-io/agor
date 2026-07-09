@@ -27,11 +27,13 @@ import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import {
   captureGitStateAtTaskEnd,
+  createRuntimeAwareStreamingCallbacks,
   createStreamingCallbacks,
   stampGitStateAtTaskStart,
 } from './base-executor.js';
@@ -246,6 +248,21 @@ async function buildCursorMcpServers(args: {
   return count > 0 ? mcpServers : undefined;
 }
 
+function pulseCursorEvent(event: SDKMessage, runtime?: AgenticToolRuntime): void {
+  runtime?.pulse({ kind: 'sdk.cursor_event', metadata: { type: event.type } });
+
+  if (!runtime || event.type !== 'tool_call') return;
+
+  const label = normalizeCursorToolName(event.name);
+  if (event.status === 'completed' || event.status === 'error') {
+    runtime.pulse({ kind: 'tool.completed', id: event.call_id, label });
+  } else if (event.status === 'running') {
+    runtime.pulse({ kind: 'tool.started', id: event.call_id, label });
+  } else {
+    runtime.pulse({ kind: 'tool.progress', id: event.call_id, label });
+  }
+}
+
 async function getSessionMessages(client: AgorClient, sessionId: SessionID): Promise<Message[]> {
   const existingMessages = await client.service('messages').find({
     query: {
@@ -434,10 +451,12 @@ export async function executeCursorTask(params: {
   abortController: AbortController;
   messageSource?: MessageSource;
   resolvedConfig?: ResolvedConfigSlice;
+  runtime?: AgenticToolRuntime;
 }): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
 
   console.log(`[cursor] Executing task ${shortId(taskId)}...`);
+  params.runtime?.pulse({ kind: 'sdk.started', label: 'cursor' });
   if (params.permissionMode && params.permissionMode !== 'bypassPermissions') {
     console.warn(
       `[cursor] Ignoring permission mode "${params.permissionMode}"; @cursor/sdk currently runs autonomously in Agor.`
@@ -461,7 +480,10 @@ export async function executeCursorTask(params: {
     const apiKey = await resolveCursorApiKey(client, taskId);
     const session = await client.service('sessions').get(sessionId);
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId);
+    const callbacks = createRuntimeAwareStreamingCallbacks(
+      createStreamingCallbacks(client, 'cursor', sessionId),
+      params.runtime
+    );
 
     if (!session.branch_id) {
       throw new Error('Cursor sessions require a branch_id so the local runtime has a cwd.');
@@ -539,6 +561,7 @@ export async function executeCursorTask(params: {
 
       for await (const event of currentRun.stream()) {
         rawMessages.push(event);
+        pulseCursorEvent(event, params.runtime);
         if (params.abortController.signal.aborted) {
           await currentRun.cancel();
           break;
@@ -614,6 +637,10 @@ export async function executeCursorTask(params: {
           toolCallMessageIds,
         },
       };
+      params.runtime?.pulse({
+        kind: stopped ? 'terminal.stopped' : failed ? 'terminal.failed' : 'terminal.completed',
+        label: 'cursor',
+      });
       if (shaAtEnd) {
         // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
         taskPatch.git_state = { sha_at_end: shaAtEnd };
@@ -631,6 +658,7 @@ export async function executeCursorTask(params: {
       completed_at: new Date().toISOString(),
       error_message: err.message,
     };
+    params.runtime?.pulse({ kind: 'terminal.failed', label: 'cursor' });
     if (shaAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       taskPatch.git_state = { sha_at_end: shaAtEnd };

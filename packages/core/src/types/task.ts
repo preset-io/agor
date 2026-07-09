@@ -126,6 +126,47 @@ export interface ContextUsageSnapshot {
   percentage: number;
 }
 
+export type PulseKind =
+  | 'executor.connected'
+  | 'sdk.started'
+  | 'sdk.first_event'
+  | 'sdk.progress'
+  | 'assistant.message'
+  | 'assistant.stream'
+  | 'thinking.progress'
+  | 'tool.started'
+  | 'tool.progress'
+  | 'tool.completed'
+  | 'permission.wait_started'
+  | 'permission.wait_ended'
+  | 'terminal.completed'
+  | 'terminal.failed'
+  | 'terminal.stopped'
+  | 'terminal.timed_out'
+  | `sdk.${string}`;
+
+export interface Pulse {
+  kind: PulseKind;
+  /** Stable id when available: tool_use_id, call_id, native message id. */
+  id?: string;
+  /** Privacy-safe label: Bash, Read, Cursor tool_call, etc. */
+  label?: string;
+  /** Small sanitized metadata only; no raw prompts, inputs, outputs, secrets. */
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export interface PulseSnapshot extends Pulse {
+  /** Added by the executor RuntimeOverseer. */
+  at: string;
+}
+
+export interface TaskExecutorRuntime {
+  /** Latest heartbeat emitted by the executor runtime overseer. */
+  heartbeat_at: string;
+  /** Latest sanitized SDK/tool pulse observed before this heartbeat. */
+  latest_pulse?: PulseSnapshot;
+}
+
 export interface Task {
   /** Unique task identifier (UUIDv7) */
   task_id: TaskID;
@@ -239,6 +280,9 @@ export interface Task {
     template: ReportTemplate;
     generated_at: string;
   };
+
+  /** Latest executor runtime heartbeat and SDK/tool pulse snapshot. */
+  executor_runtime?: TaskExecutorRuntime;
 
   // Permission request (when task is awaiting user approval)
   permission_request?: {

@@ -14,9 +14,10 @@ import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/ty
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { createStreamingCallbacks } from './base-executor.js';
+import { createRuntimeAwareStreamingCallbacks, createStreamingCallbacks } from './base-executor.js';
 
 /**
  * Execute OpenCode task (Feathers/WebSocket architecture)
@@ -31,10 +32,12 @@ export async function executeOpenCodeTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   resolvedConfig?: ResolvedConfigSlice;
+  runtime?: AgenticToolRuntime;
 }): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
 
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);
+  params.runtime?.pulse({ kind: 'sdk.started', label: 'opencode' });
 
   try {
     // Get session to extract model config
@@ -48,7 +51,10 @@ export async function executeOpenCodeTask(params: {
 
     // Create execution context (similar to other handlers)
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'opencode', sessionId);
+    const callbacks = createRuntimeAwareStreamingCallbacks(
+      createStreamingCallbacks(client, 'opencode', sessionId),
+      params.runtime
+    );
 
     // OpenCode server URL: env var > daemon-resolved config slice > default.
     const serverUrl =
@@ -165,6 +171,11 @@ export async function executeOpenCodeTask(params: {
 
     console.log('[opencode] Setting task model:', modelIdentifier);
 
+    params.runtime?.pulse({
+      kind: result?.status === 'completed' ? 'terminal.completed' : 'terminal.failed',
+      label: 'opencode',
+    });
+
     // Update task status to completed and set model
     await client.service('tasks').patch(taskId, {
       status: result?.status === 'completed' ? 'completed' : 'failed',
@@ -174,6 +185,8 @@ export async function executeOpenCodeTask(params: {
   } catch (error) {
     const err = error as Error;
     console.error('[opencode] Execution failed:', err);
+
+    params.runtime?.pulse({ kind: 'terminal.failed', label: 'opencode' });
 
     // Update task status to failed
     await client.service('tasks').patch(taskId, {

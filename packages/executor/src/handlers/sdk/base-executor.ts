@@ -21,6 +21,11 @@ import type {
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
+import type {
+  TasksService,
+  TasksStreamingService,
+} from '../../sdk-handlers/base/service-clients.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -210,6 +215,111 @@ export function createStreamingCallbacks(
   };
 }
 
+export function createRuntimeAwareStreamingCallbacks(
+  callbacks: StreamingCallbacks,
+  runtime?: AgenticToolRuntime
+): StreamingCallbacks {
+  if (!runtime) return callbacks;
+
+  return {
+    ...callbacks,
+    onStreamStart: async (messageId, metadata) => {
+      runtime.pulse({ kind: 'assistant.message', id: messageId });
+      await callbacks.onStreamStart(messageId, metadata);
+    },
+    onStreamChunk: async (messageId, chunk, sequence) => {
+      runtime.pulse({ kind: 'assistant.stream', id: messageId });
+      await callbacks.onStreamChunk(messageId, chunk, sequence);
+    },
+    onThinkingChunk: callbacks.onThinkingChunk
+      ? async (messageId, chunk) => {
+          runtime.pulse({ kind: 'thinking.progress', id: messageId });
+          await callbacks.onThinkingChunk?.(messageId, chunk);
+        }
+      : undefined,
+  };
+}
+
+export function createRuntimeAwareTasksService<T extends TasksService>(
+  service: T,
+  runtime?: AgenticToolRuntime
+): T {
+  if (!runtime) return service;
+
+  return new Proxy(service, {
+    get(target, property, receiver) {
+      if (property !== 'patch') {
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+
+      return async (id: string, data: Partial<unknown>) => {
+        if (isRecord(data) && data.status === 'awaiting_permission') {
+          runtime.pulse({ kind: 'permission.wait_started', id });
+        } else if (isRecord(data) && data.status === 'running') {
+          runtime.pulse({ kind: 'permission.wait_ended', id });
+        }
+        return target.patch(id, data);
+      };
+    },
+  });
+}
+
+export function createRuntimeAwareTasksStreamingService<T extends TasksStreamingService>(
+  service: T,
+  runtime?: AgenticToolRuntime
+): T {
+  if (!runtime) return service;
+
+  const toolLabelsById = new Map<string, string>();
+
+  return new Proxy(service, {
+    get(target, property, receiver) {
+      if (property !== 'create') {
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+
+      return async (event: Parameters<T['create']>[0]) => {
+        const toolUseId = asString(event.data.tool_use_id);
+        if (event.event === 'tool:start') {
+          const label = asString(event.data.tool_name);
+          if (toolUseId && label) {
+            toolLabelsById.set(toolUseId, label);
+          }
+          runtime.pulse({
+            kind: 'tool.started',
+            id: toolUseId,
+            label,
+          });
+        } else if (event.event === 'tool:complete') {
+          const label =
+            asString(event.data.tool_name) ?? (toolUseId && toolLabelsById.get(toolUseId));
+          runtime.pulse({
+            kind: 'tool.completed',
+            id: toolUseId,
+            label,
+          });
+          if (toolUseId) {
+            toolLabelsById.delete(toolUseId);
+          }
+        } else if (event.event === 'thinking:chunk') {
+          runtime.pulse({ kind: 'thinking.progress' });
+        }
+        return target.create(event);
+      };
+    },
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
 /**
  * Create execution context with all necessary resources
  */
@@ -390,6 +500,7 @@ export async function executeToolTask(params: {
   apiKeyEnvVar: ApiKeyName;
   toolName: AgenticToolName;
   messageSource?: MessageSource;
+  runtime?: AgenticToolRuntime;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,
@@ -439,10 +550,21 @@ export async function executeToolTask(params: {
 
   // Create execution context
   const ctx = createExecutionContext(client, toolName, sessionId);
+  const runtime = params.runtime;
+  runtime?.pulse({ kind: 'sdk.started', label: toolName });
+  const callbacks = createRuntimeAwareStreamingCallbacks(ctx.callbacks, runtime);
+  const repos = {
+    ...ctx.repos,
+    tasksService: createRuntimeAwareTasksService(ctx.repos.tasksService, runtime),
+    tasksStreamingService: createRuntimeAwareTasksStreamingService(
+      ctx.repos.tasksStreamingService,
+      runtime
+    ),
+  };
 
   // Create tool instance using factory function
   // Pass the resolved key (or empty string) and useNativeAuth flag
-  const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
+  const tool = createTool(repos, resolution.apiKey || '', resolution.useNativeAuth);
 
   // Wire up abort signal to tool's stopTask method.
   // Triggered by SIGTERM handler calling abortController.abort().
@@ -480,7 +602,7 @@ export async function executeToolTask(params: {
       prompt,
       taskId,
       permissionMode,
-      ctx.callbacks,
+      callbacks,
       params.abortController,
       params.messageSource
     );
@@ -589,6 +711,15 @@ export async function executeToolTask(params: {
       }
     }
 
+    runtime?.pulse({
+      kind: result.wasStopped
+        ? 'terminal.stopped'
+        : result.hadError
+          ? 'terminal.failed'
+          : 'terminal.completed',
+      label: toolName,
+    });
+
     // Update task status to completed/stopped with git SHA and SDK responses
     // Note: The stop endpoint may have already patched task to STOPPED via process kill.
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
@@ -617,6 +748,8 @@ export async function executeToolTask(params: {
         sha_at_end: gitStateAtEnd.sha,
       };
     }
+
+    params.runtime?.pulse({ kind: 'terminal.failed', label: toolName });
 
     // Update task status to failed with git SHA
     await client.service('tasks').patch(taskId, patchData);

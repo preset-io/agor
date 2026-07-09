@@ -18,9 +18,9 @@ import type {
 } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
-import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import { RuntimeOverseer } from './runtime-overseer.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
 
@@ -52,7 +52,7 @@ export class AgorExecutor {
   private client: AgorClient | null = null;
   private abortController: AbortController;
   private isRunning = false;
-  private heartbeat: ExecutorHeartbeatHandle | null = null;
+  private runtime: RuntimeOverseer | null = null;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -160,12 +160,14 @@ export class AgorExecutor {
     this.isRunning = true;
 
     const heartbeatConfig = this.config.resolvedConfig?.execution?.executor_heartbeat;
-    this.heartbeat = startExecutorHeartbeat({
+    this.runtime = new RuntimeOverseer({
       client: this.client,
       taskId: this.config.taskId,
       enabled: heartbeatConfig?.enabled ?? true,
-      intervalMs: heartbeatConfig?.interval_ms,
+      heartbeatIntervalMs: heartbeatConfig?.interval_ms,
+      abortController: this.abortController,
     });
+    this.runtime.start();
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);
 
@@ -186,10 +188,18 @@ export class AgorExecutor {
         abortController: this.abortController,
         messageSource: this.config.messageSource,
         resolvedConfig: this.config.resolvedConfig,
+        runtime: this.runtime ?? undefined,
       });
+    } catch (error) {
+      this.runtime?.pulse({
+        kind: this.abortController.signal.aborted ? 'terminal.stopped' : 'terminal.failed',
+        label: this.config.tool,
+      });
+      throw error;
     } finally {
-      this.heartbeat?.stop();
-      this.heartbeat = null;
+      await this.runtime?.flush({ stopTimer: true });
+      this.runtime?.stop();
+      this.runtime = null;
       this.isRunning = false;
     }
   }
@@ -205,8 +215,10 @@ export class AgorExecutor {
       if (this.isRunning) {
         this.abortController.abort();
       }
-      this.heartbeat?.stop();
-      this.heartbeat = null;
+      this.runtime?.pulse({ kind: 'terminal.stopped', label: this.config.tool });
+      await this.runtime?.flush({ stopTimer: true });
+      this.runtime?.stop();
+      this.runtime = null;
 
       // The daemon's stop route already patches the task to STOPPED before
       // sending the signal — this fallback only fires if we received an
