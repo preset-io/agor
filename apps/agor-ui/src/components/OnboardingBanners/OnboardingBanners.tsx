@@ -47,17 +47,17 @@ export function OnboardingBanners({
   const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
 
   // Pre-compute user-derived values so the effect captures primitives, not the full user object.
+  const userId = user?.user_id;
   const onboardingCompleted = !!user?.onboarding_completed;
   const hasLlm = hasAnyLlmKey(user);
   const probeAgent = resolveProbeAgent(user);
 
-  // Probe the tool's real credential state (DB key OR executor-filesystem auth
-  // such as `claude /login`). ONE probe per identity/credential change — the
-  // claude-code probe spawns a ~5–10s subprocess, so deps are primitives/stable
-  // (never re-fires on board navigation or unrelated re-renders).
-  // credentialVersion is a trigger-only dep: it re-probes when the parent bumps
-  // it after a credential save, catching key rotations where presence and
-  // probeAgent are unchanged.
+  // One probe per identity/credential change. Deps are primitives/stable so the
+  // effect never re-fires on board navigation or unrelated re-renders of the
+  // persistent App shell — the claude-code probe spawns a ~5–10s subprocess.
+  // userId resets stale state on a user switch; credentialVersion is a
+  // trigger-only dep re-probing after a credential save (key rotations where
+  // presence and probeAgent are unchanged).
   // biome-ignore lint/correctness/useExhaustiveDependencies: credentialVersion is an intentional trigger dep
   useEffect(() => {
     if (!onboardingCompleted) {
@@ -76,7 +76,7 @@ export function OnboardingBanners({
     return () => {
       cancelled = true;
     };
-  }, [onboardingCompleted, probeAgent, onCheckAuth, credentialVersion]);
+  }, [userId, onboardingCompleted, probeAgent, onCheckAuth, credentialVersion]);
 
   const decision = decideBanner({
     onboardingCompleted,
