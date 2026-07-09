@@ -818,12 +818,12 @@ describe('BranchesService.patch primary assistant invariants', () => {
   });
 });
 
-describe('BranchesService one-shot assistant creation wiring', () => {
-  // A branch created with assistant metadata on the initial row (the MCP create
-  // path and the UI path) must designate the board's primary assistant. This is
+describe('BranchesService one-shot teammate creation wiring', () => {
+  // A branch created with teammate metadata on the initial row (the MCP create
+  // path and the UI path) must designate the board's primary teammate. This is
   // the promotion that IS supported — as opposed to flipping an existing branch
-  // via patch, which the assertAssistantKindIsStable guard (deliberately) blocks.
-  function createAssistantWiringHarness() {
+  // via patch, which the assertTeammateKindIsStable guard (deliberately) blocks.
+  function createTeammateWiringHarness() {
     const boardsEmit = vi.fn();
     const app = {
       service(path: string) {
@@ -832,9 +832,9 @@ describe('BranchesService one-shot assistant creation wiring', () => {
       },
     } as unknown as Application;
     const boardRepo = {
-      setPrimaryAssistantIfUnset: vi.fn(async (boardId: string) => ({
+      setPrimaryTeammateIfUnset: vi.fn(async (boardId: string) => ({
         board_id: boardId,
-        primary_assistant_id: 'assistant-new',
+        primary_teammate_id: 'teammate-new',
       })),
     };
     const service = new BranchesService(createTenantScopeTestDb() as never, app);
@@ -842,22 +842,22 @@ describe('BranchesService one-shot assistant creation wiring', () => {
     const invoke = (branch: Record<string, unknown>) =>
       (
         service as unknown as {
-          maybeSetBoardPrimaryAssistant: (b: unknown) => Promise<void>;
+          maybeSetBoardPrimaryTeammate: (b: unknown) => Promise<void>;
         }
-      ).maybeSetBoardPrimaryAssistant(branch);
+      ).maybeSetBoardPrimaryTeammate(branch);
     return { boardRepo, boardsEmit, invoke };
   }
 
-  it('sets the board primary assistant pointer for a newly created assistant branch', async () => {
-    const { boardRepo, boardsEmit, invoke } = createAssistantWiringHarness();
+  it('sets the board primary teammate pointer for a newly created teammate branch', async () => {
+    const { boardRepo, boardsEmit, invoke } = createTeammateWiringHarness();
 
     await invoke({
-      branch_id: 'assistant-new' as BranchID,
+      branch_id: 'teammate-new' as BranchID,
       board_id: 'board-a' as BoardID,
       custom_context: assistantContext,
     });
 
-    expect(boardRepo.setPrimaryAssistantIfUnset).toHaveBeenCalledWith('board-a', 'assistant-new');
+    expect(boardRepo.setPrimaryTeammateIfUnset).toHaveBeenCalledWith('board-a', 'teammate-new');
     expect(boardsEmit).toHaveBeenCalledWith(
       'patched',
       expect.objectContaining({ board_id: 'board-a' })
@@ -865,7 +865,7 @@ describe('BranchesService one-shot assistant creation wiring', () => {
   });
 
   it('leaves the board primary pointer untouched for a non-assistant branch', async () => {
-    const { boardRepo, boardsEmit, invoke } = createAssistantWiringHarness();
+    const { boardRepo, boardsEmit, invoke } = createTeammateWiringHarness();
 
     await invoke({
       branch_id: 'plain-new' as BranchID,
@@ -873,7 +873,7 @@ describe('BranchesService one-shot assistant creation wiring', () => {
       custom_context: {},
     });
 
-    expect(boardRepo.setPrimaryAssistantIfUnset).not.toHaveBeenCalled();
+    expect(boardRepo.setPrimaryTeammateIfUnset).not.toHaveBeenCalled();
     expect(boardsEmit).not.toHaveBeenCalled();
   });
 });
