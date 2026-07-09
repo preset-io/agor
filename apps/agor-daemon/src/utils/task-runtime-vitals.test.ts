@@ -133,6 +133,26 @@ describe('daemon task runtime vitals', () => {
     expect(patches[0]?.data).not.toHaveProperty('status');
   });
 
+  it('does not rewrite runtime vitals after the task is terminal', async () => {
+    const service = {
+      get: vi.fn(async () => ({ task_id: 'task-1', status: TaskStatus.COMPLETED }) as Task),
+      patch: vi.fn(),
+    };
+
+    const vitals = await patchDaemonTaskRuntimeEvent(
+      service,
+      'task-1',
+      TaskRuntimeEventKind.EXECUTOR_PROCESS_SPAWNED,
+      {
+        at: '2026-01-01T00:00:03.000Z',
+        processPid: 12345,
+      }
+    );
+
+    expect(vitals).toBeUndefined();
+    expect(service.patch).not.toHaveBeenCalled();
+  });
+
   it('preserves a newer runtime phase when appending a daemon event to a running task', async () => {
     const task: Partial<Task> = {
       task_id: 'task-1' as never,
