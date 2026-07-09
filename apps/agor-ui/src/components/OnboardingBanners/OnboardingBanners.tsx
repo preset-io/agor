@@ -6,14 +6,20 @@
  * 2. Connection invalid banner (amber) — a DB key exists but the probe rejected it.
  * 3. Integrations banner (teal) — AI ok, no MCP servers and no gateway channels.
  *
- * Both amber banners require POSITIVE proof (`probeState === 'unauthenticated'`);
- * the decision logic lives in `bannerLogic.ts`.
+ * Both amber banners require POSITIVE proof (probe Unauthenticated); the
+ * decision logic lives in `bannerLogic.ts`.
  */
 
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { Button } from 'antd';
 import { useEffect, useState } from 'react';
-import { decideBanner, hasAnyLlmKey, type ProbeState, resolveProbeAgent } from './bannerLogic';
+import {
+  BannerDecision,
+  decideBanner,
+  hasAnyLlmKey,
+  ProbeState,
+  resolveProbeAgent,
+} from './bannerLogic';
 
 export interface OnboardingBannersProps {
   user: User | null | undefined;
@@ -43,7 +49,7 @@ export function OnboardingBanners({
   onCheckAuth,
   credentialVersion,
 }: OnboardingBannersProps) {
-  const [probeState, setProbeState] = useState<ProbeState>('unknown');
+  const [probeState, setProbeState] = useState<ProbeState>(ProbeState.Unknown);
   const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
 
   // Pre-compute user-derived values so the effect captures primitives, not the full user object.
@@ -61,17 +67,20 @@ export function OnboardingBanners({
   // biome-ignore lint/correctness/useExhaustiveDependencies: credentialVersion is an intentional trigger dep
   useEffect(() => {
     if (!onboardingCompleted) {
-      setProbeState('unknown');
+      setProbeState(ProbeState.Unknown);
       return;
     }
-    setProbeState('unknown');
+    setProbeState(ProbeState.Unknown);
     let cancelled = false;
     onCheckAuth(probeAgent)
       .then((result) => {
-        if (!cancelled) setProbeState(result.authenticated ? 'authenticated' : 'unauthenticated');
+        if (!cancelled)
+          setProbeState(
+            result.authenticated ? ProbeState.Authenticated : ProbeState.Unauthenticated
+          );
       })
       .catch(() => {
-        if (!cancelled) setProbeState('unknown');
+        if (!cancelled) setProbeState(ProbeState.Unknown);
       });
     return () => {
       cancelled = true;
@@ -88,9 +97,7 @@ export function OnboardingBanners({
     integrationsBannerDismissed,
   });
 
-  if (decision === 'none') return null;
-
-  if (decision === 'no-ai') {
+  if (decision === BannerDecision.NoAi) {
     return (
       <div
         style={{
@@ -138,7 +145,7 @@ export function OnboardingBanners({
     );
   }
 
-  if (decision === 'key-invalid') {
+  if (decision === BannerDecision.KeyInvalid) {
     return (
       <div
         style={{
@@ -174,53 +181,58 @@ export function OnboardingBanners({
     );
   }
 
-  return (
-    <div
-      style={{
-        background: 'rgba(46,154,146,0.1)',
-        borderBottom: '1px solid rgba(46,154,146,0.35)',
-        height: 44,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingLeft: 20,
-        paddingRight: 20,
-        flexShrink: 0,
-        zIndex: 10,
-      }}
-    >
-      <span
+  if (decision === BannerDecision.Integrations) {
+    return (
+      <div
         style={{
-          color: '#7dd3ce',
-          fontSize: 13,
-          fontWeight: 500,
+          background: 'rgba(46,154,146,0.1)',
+          borderBottom: '1px solid rgba(46,154,146,0.35)',
+          height: 44,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          paddingLeft: 20,
+          paddingRight: 20,
+          flexShrink: 0,
+          zIndex: 10,
         }}
       >
-        Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues.
-      </span>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <Button
-          type="text"
-          size="small"
-          onClick={() => setIntegrationsBannerDismissed(true)}
-          style={{ color: '#94a3b8', fontSize: 12 }}
-        >
-          Maybe later
-        </Button>
-        <Button
-          size="small"
-          onClick={() => onOpenWorkspaceSettings('mcp')}
+        <span
           style={{
-            background: '#2e9a92',
-            borderColor: '#2e9a92',
-            color: '#fff',
-            fontWeight: 600,
-            fontSize: 12,
+            color: '#7dd3ce',
+            fontSize: 13,
+            fontWeight: 500,
           }}
         >
-          Connect tools
-        </Button>
+          Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track
+          issues.
+        </span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Button
+            type="text"
+            size="small"
+            onClick={() => setIntegrationsBannerDismissed(true)}
+            style={{ color: '#94a3b8', fontSize: 12 }}
+          >
+            Maybe later
+          </Button>
+          <Button
+            size="small"
+            onClick={() => onOpenWorkspaceSettings('mcp')}
+            style={{
+              background: '#2e9a92',
+              borderColor: '#2e9a92',
+              color: '#fff',
+              fontWeight: 600,
+              fontSize: 12,
+            }}
+          >
+            Connect tools
+          </Button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  return null;
 }

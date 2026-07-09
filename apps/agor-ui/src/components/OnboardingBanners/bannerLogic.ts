@@ -88,13 +88,26 @@ export function resolveProbeAgent(user: User | null | undefined): AgenticToolNam
 
 /**
  * Result of the check-auth probe.
- * - `unknown`: initial, in-flight, or the probe threw. Treated as "no proof".
- * - `authenticated`: a working credential was found (DB or executor filesystem).
- * - `unauthenticated`: the probe ran and found no usable credential.
+ * - `Unknown`: initial, in-flight, or the probe threw. Treated as "no proof".
+ * - `Authenticated`: a working credential was found (DB or executor filesystem).
+ * - `Unauthenticated`: the probe ran and found no usable credential.
  */
-export type ProbeState = 'unknown' | 'authenticated' | 'unauthenticated';
+// Object-const enums (not TS `enum`): the UI package compiles with
+// `erasableSyntaxOnly`, which forbids the runtime-emitting `enum` form.
+export const ProbeState = {
+  Unknown: 'unknown',
+  Authenticated: 'authenticated',
+  Unauthenticated: 'unauthenticated',
+} as const;
+export type ProbeState = (typeof ProbeState)[keyof typeof ProbeState];
 
-export type BannerDecision = 'none' | 'no-ai' | 'key-invalid' | 'integrations';
+export const BannerDecision = {
+  None: 'none',
+  NoAi: 'no-ai',
+  KeyInvalid: 'key-invalid',
+  Integrations: 'integrations',
+} as const;
+export type BannerDecision = (typeof BannerDecision)[keyof typeof BannerDecision];
 
 export interface BannerDecisionInput {
   onboardingCompleted: boolean;
@@ -120,13 +133,13 @@ export interface BannerDecisionInput {
  * connections live in the latter, a separate store map).
  */
 export function decideBanner(input: BannerDecisionInput): BannerDecision {
-  if (!input.onboardingCompleted) return 'none';
+  if (!input.onboardingCompleted) return BannerDecision.None;
 
-  if (input.probeState === 'unauthenticated') {
-    return input.hasLlm ? 'key-invalid' : 'no-ai';
+  if (input.probeState === ProbeState.Unauthenticated) {
+    return input.hasLlm ? BannerDecision.KeyInvalid : BannerDecision.NoAi;
   }
 
-  const aiOk = input.probeState === 'authenticated' || input.hasLlm;
+  const aiOk = input.probeState === ProbeState.Authenticated || input.hasLlm;
   const showIntegrations =
     aiOk &&
     input.canManageMcp &&
@@ -134,5 +147,5 @@ export function decideBanner(input: BannerDecisionInput): BannerDecision {
     input.gatewayChannelCount === 0 &&
     !input.integrationsBannerDismissed;
 
-  return showIntegrations ? 'integrations' : 'none';
+  return showIntegrations ? BannerDecision.Integrations : BannerDecision.None;
 }

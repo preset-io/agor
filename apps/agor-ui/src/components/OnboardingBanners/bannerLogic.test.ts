@@ -1,16 +1,18 @@
 import type { User } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import {
+  BannerDecision,
   type BannerDecisionInput,
   decideBanner,
   hasAnyLlmKey,
+  ProbeState,
   resolveProbeAgent,
 } from './bannerLogic';
 
 const baseInput: BannerDecisionInput = {
   onboardingCompleted: true,
   hasLlm: false,
-  probeState: 'unknown',
+  probeState: ProbeState.Unknown,
   canManageMcp: true,
   mcpServerCount: 0,
   gatewayChannelCount: 0,
@@ -22,28 +24,30 @@ const asUser = (partial: Partial<User>): User => partial as User;
 describe('decideBanner — fail-safe amber banners', () => {
   it('no DB key but probe authenticated → does NOT show the "No AI" banner (bug 1 fix)', () => {
     // The claude /login / executor-filesystem case: hasLlm is false but the tool is reachable.
-    expect(decideBanner({ ...baseInput, hasLlm: false, probeState: 'authenticated' })).not.toBe(
-      'no-ai'
-    );
+    expect(
+      decideBanner({ ...baseInput, hasLlm: false, probeState: ProbeState.Authenticated })
+    ).not.toBe(BannerDecision.NoAi);
   });
 
   it('probe unknown (loading) → shows neither amber banner', () => {
-    expect(decideBanner({ ...baseInput, hasLlm: false, probeState: 'unknown' })).toBe('none');
-    expect(decideBanner({ ...baseInput, hasLlm: true, probeState: 'unknown' })).not.toBe(
-      'key-invalid'
+    expect(decideBanner({ ...baseInput, hasLlm: false, probeState: ProbeState.Unknown })).toBe(
+      BannerDecision.None
+    );
+    expect(decideBanner({ ...baseInput, hasLlm: true, probeState: ProbeState.Unknown })).not.toBe(
+      BannerDecision.KeyInvalid
     );
   });
 
   it('probe unauthenticated + no DB key → "No AI" banner', () => {
-    expect(decideBanner({ ...baseInput, hasLlm: false, probeState: 'unauthenticated' })).toBe(
-      'no-ai'
-    );
+    expect(
+      decideBanner({ ...baseInput, hasLlm: false, probeState: ProbeState.Unauthenticated })
+    ).toBe(BannerDecision.NoAi);
   });
 
   it('probe unauthenticated + DB key present → "key invalid" banner', () => {
-    expect(decideBanner({ ...baseInput, hasLlm: true, probeState: 'unauthenticated' })).toBe(
-      'key-invalid'
-    );
+    expect(
+      decideBanner({ ...baseInput, hasLlm: true, probeState: ProbeState.Unauthenticated })
+    ).toBe(BannerDecision.KeyInvalid);
   });
 });
 
@@ -52,44 +56,50 @@ describe('decideBanner — integrations banner', () => {
     expect(
       decideBanner({
         ...baseInput,
-        probeState: 'authenticated',
+        probeState: ProbeState.Authenticated,
         mcpServerCount: 0,
         gatewayChannelCount: 1,
       })
-    ).toBe('none');
+    ).toBe(BannerDecision.None);
   });
 
   it('AI ok + zero MCP + zero gateway channels → shows integrations banner', () => {
     expect(
       decideBanner({
         ...baseInput,
-        probeState: 'authenticated',
+        probeState: ProbeState.Authenticated,
         mcpServerCount: 0,
         gatewayChannelCount: 0,
       })
-    ).toBe('integrations');
+    ).toBe(BannerDecision.Integrations);
   });
 
   it('has an MCP server, zero gateway channels → does NOT show integrations banner', () => {
-    expect(decideBanner({ ...baseInput, probeState: 'authenticated', mcpServerCount: 1 })).toBe(
-      'none'
-    );
+    expect(
+      decideBanner({ ...baseInput, probeState: ProbeState.Authenticated, mcpServerCount: 1 })
+    ).toBe(BannerDecision.None);
   });
 
   it('is suppressed while dismissed, when AI cannot be confirmed, or when MCP is unmanageable', () => {
     expect(
-      decideBanner({ ...baseInput, probeState: 'authenticated', integrationsBannerDismissed: true })
-    ).toBe('none');
+      decideBanner({
+        ...baseInput,
+        probeState: ProbeState.Authenticated,
+        integrationsBannerDismissed: true,
+      })
+    ).toBe(BannerDecision.None);
     // Probe still loading and no DB key → AI not confirmed ok → no teal banner yet.
-    expect(decideBanner({ ...baseInput, probeState: 'unknown' })).toBe('none');
-    expect(decideBanner({ ...baseInput, probeState: 'authenticated', canManageMcp: false })).toBe(
-      'none'
+    expect(decideBanner({ ...baseInput, probeState: ProbeState.Unknown })).toBe(
+      BannerDecision.None
     );
+    expect(
+      decideBanner({ ...baseInput, probeState: ProbeState.Authenticated, canManageMcp: false })
+    ).toBe(BannerDecision.None);
   });
 
   it('shows the teal banner for a DB-key user even while the probe is still loading', () => {
-    expect(decideBanner({ ...baseInput, hasLlm: true, probeState: 'unknown' })).toBe(
-      'integrations'
+    expect(decideBanner({ ...baseInput, hasLlm: true, probeState: ProbeState.Unknown })).toBe(
+      BannerDecision.Integrations
     );
   });
 });
@@ -97,8 +107,12 @@ describe('decideBanner — integrations banner', () => {
 describe('decideBanner — onboarding gate', () => {
   it('never shows any banner before onboarding completes', () => {
     expect(
-      decideBanner({ ...baseInput, onboardingCompleted: false, probeState: 'unauthenticated' })
-    ).toBe('none');
+      decideBanner({
+        ...baseInput,
+        onboardingCompleted: false,
+        probeState: ProbeState.Unauthenticated,
+      })
+    ).toBe(BannerDecision.None);
   });
 });
 
@@ -139,18 +153,18 @@ describe('other-tool false positives (Cursor / Copilot / OpenCode)', () => {
     expect(resolveProbeAgent(user)).toBe('cursor');
     // hasLlm is true (stored key) → an unauthenticated probe would word as key-invalid,
     // but an authenticated probe shows no amber banner at all.
-    expect(decideBanner({ ...baseInput, hasLlm: true, probeState: 'authenticated' })).not.toBe(
-      'key-invalid'
-    );
+    expect(
+      decideBanner({ ...baseInput, hasLlm: true, probeState: ProbeState.Authenticated })
+    ).not.toBe(BannerDecision.KeyInvalid);
   });
 
   it('an OpenCode user (no DB key) probes opencode; authenticated → no "No AI" banner', () => {
     const user = asUser({ default_agentic_config: { opencode: {} } });
     expect(resolveProbeAgent(user)).toBe('opencode');
     expect(hasAnyLlmKey(user)).toBe(false);
-    expect(decideBanner({ ...baseInput, hasLlm: false, probeState: 'authenticated' })).not.toBe(
-      'no-ai'
-    );
+    expect(
+      decideBanner({ ...baseInput, hasLlm: false, probeState: ProbeState.Authenticated })
+    ).not.toBe(BannerDecision.NoAi);
   });
 });
 
