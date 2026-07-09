@@ -1,5 +1,6 @@
 import type { Branch, Link, Repo } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
@@ -69,17 +70,25 @@ describe('BranchCard pinned links', () => {
 
   it('renders pinned branch links from the centralized branch selector only', () => {
     render(
-      <ConnectionProvider
-        value={{
-          connected: true,
-          connecting: false,
-          outOfSync: false,
-          capturedSha: null,
-          currentSha: null,
-        }}
-      >
-        <BranchCard branch={branch} repo={repo} sessions={[]} userById={new Map()} client={null} />
-      </ConnectionProvider>
+      <MemoryRouter>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <BranchCard
+            branch={branch}
+            repo={repo}
+            sessions={[]}
+            userById={new Map()}
+            client={null}
+          />
+        </ConnectionProvider>
+      </MemoryRouter>
     );
 
     expect(screen.getByText('Runbook')).toBeInTheDocument();

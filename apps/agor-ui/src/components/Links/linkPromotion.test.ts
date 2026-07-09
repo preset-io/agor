@@ -44,12 +44,28 @@ function item(overrides: Partial<LinkDisplayItem> = {}): LinkDisplayItem {
 }
 
 describe('linkPromotion', () => {
-  it('finds assistant links by exact target key', () => {
+  it('finds assistant URL/ref links with donor-compatible target normalization', () => {
     const assistantLink = link({ target_key: 'url:https://example.com/' });
     expect(findAssistantLinkForTarget(item(), [assistantLink])).toBe(assistantLink);
+    const differentlyCasedUrlLink = link({ target_key: 'URL:https://EXAMPLE.com/' });
+    expect(findAssistantLinkForTarget(item(), [differentlyCasedUrlLink])).toBe(
+      differentlyCasedUrlLink
+    );
+    const refLink = link({
+      url: null,
+      ref_uri: 'agor://kb/Team/Doc',
+      target_key: 'ref:agor://kb/team/doc',
+    });
     expect(
-      findAssistantLinkForTarget(item(), [link({ target_key: 'URL:https://example.com/' })])
-    ).toBeNull();
+      findAssistantLinkForTarget(
+        item({
+          targetKey: 'ref:AGOR://KB/TEAM/DOC',
+          refUri: 'AGOR://KB/TEAM/DOC',
+          url: undefined,
+        }),
+        [refLink]
+      )
+    ).toBe(refLink);
   });
 
   it('does not collide file-backed target keys that differ only by path case', () => {

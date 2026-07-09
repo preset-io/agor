@@ -28,6 +28,7 @@ export type LinkDisplayCategory =
 export type LinkDisplayNavigation = 'external' | 'spa';
 export type LinkDisplaySource = LinkSource | 'branch';
 export type LinkCategoryTabKey = 'all' | 'files' | 'links' | 'knowledge' | 'issues';
+export type LinkOwnerFilterKey = 'all' | 'branch' | 'session';
 export type LinkSortKey = 'az' | 'za' | 'recent' | 'oldest';
 
 export interface LinkDisplayTarget {
@@ -44,11 +45,14 @@ export interface LinkDisplayItem {
   source?: LinkDisplaySource;
   ownerScope: 'branch' | 'session';
   isPinned: boolean;
+  isPromoted?: boolean;
   url?: string;
   refUri?: string;
   filePath?: string;
   mimeType?: string;
   linkId?: string;
+  sessionId?: string;
+  sourceSessionId?: string;
   href?: string;
   navigation?: LinkDisplayNavigation;
   createdAt?: string;
@@ -296,7 +300,7 @@ export function getCompactLinkDisplayName(
   const prefixesByCategory: Partial<Record<LinkDisplayCategory, string[]>> = {
     issue: ['Issue: '],
     pr: ['PR: '],
-    url: ['URL: '],
+    url: ['Link: ', 'URL: ', 'Saved URL: '],
     image: ['Image: ', 'File: '],
     pdf: ['File: '],
     spreadsheet: ['File: '],
@@ -312,6 +316,14 @@ export function getCompactLinkDisplayName(
     if (item.name.startsWith(prefix)) return item.name.slice(prefix.length);
   }
   return item.name;
+}
+
+function getPromotedFromSessionId(metadata?: Link['metadata'] | null): string | undefined {
+  if (!metadata || typeof metadata !== 'object') return undefined;
+  const promotedFromOwner = metadata.promoted_from_owner;
+  if (!promotedFromOwner || typeof promotedFromOwner !== 'object') return undefined;
+  const sessionId = (promotedFromOwner as { session_id?: unknown }).session_id;
+  return typeof sessionId === 'string' && sessionId.trim() ? sessionId : undefined;
 }
 
 export function getLinkDisplaySecondaryLabel(
@@ -346,7 +358,10 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
     source: link.source,
     ownerScope: link.session_id ? 'session' : 'branch',
     isPinned: Boolean(link.is_pinned),
+    isPromoted: Boolean(getPromotedFromSessionId(link.metadata)),
     linkId: String(link.link_id),
+    sessionId: link.session_id ?? undefined,
+    sourceSessionId: link.session_id ?? getPromotedFromSessionId(link.metadata),
     mimeType: link.mime_type ?? undefined,
     href: target?.href,
     navigation: target?.navigation,
@@ -355,7 +370,7 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
   } satisfies Partial<LinkDisplayItem>;
 
   if (link.url) {
-    const prefix = githubKindLabel(link.kind) ?? 'URL';
+    const prefix = githubKindLabel(link.kind) ?? 'Link';
     return {
       ...base,
       name: titleOrNull(link.title) ?? `${prefix}: ${getUrlDisplayLabel(link.url)}`,
@@ -420,7 +435,7 @@ function branchUrlToDisplayItem(args: {
 export function mergeLinkDisplayItems(items: LinkDisplayItem[]): LinkDisplayItem[] {
   const byTarget = new Map<string, LinkDisplayItem>();
   for (const item of items) {
-    const key = item.targetKey.toLowerCase();
+    const key = item.targetKey.startsWith('file:') ? item.targetKey : item.targetKey.toLowerCase();
     const existing = byTarget.get(key);
     if (
       !existing ||
@@ -463,6 +478,12 @@ export const LINK_CATEGORY_TAB_LABELS: Record<LinkCategoryTabKey, string> = {
   links: 'Links',
   knowledge: 'Knowledge',
   issues: 'Issues/PRs',
+};
+
+export const LINK_OWNER_FILTER_LABELS: Record<LinkOwnerFilterKey, string> = {
+  all: 'All locations',
+  branch: 'Branch',
+  session: 'This session',
 };
 
 export const LINK_SORT_LABELS: Record<LinkSortKey, string> = {
@@ -508,6 +529,13 @@ export function matchesLinkCategoryTab(
     default:
       return true;
   }
+}
+
+export function matchesLinkOwnerFilter(
+  item: LinkDisplayItem,
+  ownerFilter: LinkOwnerFilterKey
+): boolean {
+  return ownerFilter === 'all' || item.ownerScope === ownerFilter;
 }
 
 function compareLinkNames(a: LinkDisplayItem, b: LinkDisplayItem): number {

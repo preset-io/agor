@@ -1,4 +1,4 @@
-import type { AgorClient, Branch, Session, SpawnConfig, Task } from '@agor-live/client';
+import type { AgorClient, Branch, Link, Session, SpawnConfig, Task } from '@agor-live/client';
 import { getAssistantConfig, isAssistant, sessionPath, shortId } from '@agor-live/client';
 import {
   CodeOutlined,
@@ -20,6 +20,7 @@ import { BranchHeaderPill } from '../BranchHeaderPill';
 import { ConversationView } from '../ConversationView';
 import { EmbeddedTerminal } from '../EmbeddedTerminal/EmbeddedTerminalLazy';
 import { ForkSpawnModal } from '../ForkSpawnModal';
+import { type PromotedPinnedLinkItem, PromotedPinnedLinks } from '../Links/PromotedPinnedLinks';
 import { IssuePill, PullRequestPill } from '../Pill';
 
 export interface SessionPanelContentProps {
@@ -45,6 +46,9 @@ export interface SessionPanelContentProps {
    *  Tabs bar inline above the panel; when omitted, the parent is
    *  expected to render the bar itself (legacy header-level placement). */
   setCliViewMode?: (mode: 'terminal' | 'conversation') => void;
+  attachmentLinksByMessageId?: Map<string, Link[]>;
+  pinnedSessionLinks?: PromotedPinnedLinkItem[];
+  onPinnedOverflow?: () => void;
 }
 
 export const SessionPanelContent = React.memo<SessionPanelContentProps>(
@@ -66,6 +70,9 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     isOpen,
     cliViewMode = 'terminal',
     setCliViewMode,
+    attachmentLinksByMessageId,
+    pinnedSessionLinks = [],
+    onPinnedOverflow,
   }) => {
     const { token } = theme.useToken();
     const { showSuccess, showError } = useThemedMessage();
@@ -180,6 +187,40 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           </Space>
         </div>
 
+        {pinnedSessionLinks.length > 0 && (
+          <div
+            data-testid="session-pinned-preconversation"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: token.sizeSM,
+              minWidth: 0,
+              marginBottom: 0,
+              padding: `${token.paddingXXS + 2}px ${token.paddingXS}px`,
+            }}
+          >
+            <Typography.Text
+              type="secondary"
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: 0.2,
+                flex: '0 0 auto',
+              }}
+            >
+              Pinned
+            </Typography.Text>
+            <PromotedPinnedLinks
+              items={pinnedSessionLinks}
+              max={3}
+              variant="session-header"
+              overflowLabel="Manage pinned session links"
+              onOverflow={onPinnedOverflow}
+              data-testid="session-pinned-preconversation-links"
+            />
+          </div>
+        )}
+
         {/* CLI session: proper Tabs bar (CLI terminal / Agor conversation)
             sits directly above the panel it switches, with a Restart
             affordance pinned to the right when the terminal view is
@@ -245,7 +286,14 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             )}
           </div>
         ) : (
-          <Divider style={{ margin: `${token.sizeUnit * 2}px 0` }} />
+          <Divider
+            style={{
+              margin:
+                pinnedSessionLinks.length > 0
+                  ? `${token.sizeUnit}px 0`
+                  : `${token.sizeUnit * 2}px 0`,
+            }}
+          />
         )}
 
         {/* Claude Code CLI: embedded live `claude` REPL.
@@ -325,6 +373,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             assistantEmoji={
               branch && isAssistant(branch) ? getAssistantConfig(branch)?.emoji : undefined
             }
+            attachmentLinksByMessageId={attachmentLinksByMessageId}
           />
         </div>
 

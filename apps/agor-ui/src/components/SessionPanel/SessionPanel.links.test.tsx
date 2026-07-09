@@ -1,6 +1,7 @@
 import type { AgorClient, Board, Branch, Link, Session } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
@@ -50,7 +51,18 @@ vi.mock('./SessionMcpFooterControl', () => ({
 }));
 
 vi.mock('./SessionPanelContent', () => ({
-  SessionPanelContent: () => <div>Session content</div>,
+  SessionPanelContent: ({
+    pinnedSessionLinks = [],
+  }: {
+    pinnedSessionLinks?: Array<{ key: string; name: string }>;
+  }) => (
+    <div>
+      <div>Session content</div>
+      {pinnedSessionLinks.map((link) => (
+        <span key={link.key}>{link.name}</span>
+      ))}
+    </div>
+  ),
 }));
 
 vi.mock('./SessionRunSettingsPopover', () => ({
@@ -182,26 +194,7 @@ function makePromotionClient(args: {
 
 function renderPanel(client: AgorClient) {
   return render(
-    <ConnectionProvider value={connected}>
-      <AppActionsProvider value={{}}>
-        <AntApp>
-          <SessionPanel client={client} session={session} branch={branch} open onClose={vi.fn()} />
-        </AntApp>
-      </AppActionsProvider>
-    </ConnectionProvider>
-  );
-}
-
-describe('SessionPanel session links', () => {
-  beforeEach(() => {
-    agorStore.setState({ ...EMPTY_MAPS });
-  });
-
-  it('hydrates full session links on open and renders from the centralized session selector', async () => {
-    const link = makeLink();
-    const { client, calls } = makeClient([link]);
-
-    render(
+    <MemoryRouter>
       <ConnectionProvider value={connected}>
         <AppActionsProvider value={{}}>
           <AntApp>
@@ -215,6 +208,35 @@ describe('SessionPanel session links', () => {
           </AntApp>
         </AppActionsProvider>
       </ConnectionProvider>
+    </MemoryRouter>
+  );
+}
+
+describe('SessionPanel session links', () => {
+  beforeEach(() => {
+    agorStore.setState({ ...EMPTY_MAPS });
+  });
+
+  it('hydrates full session links on open and renders from the centralized session selector', async () => {
+    const link = makeLink();
+    const { client, calls } = makeClient([link]);
+
+    render(
+      <MemoryRouter>
+        <ConnectionProvider value={connected}>
+          <AppActionsProvider value={{}}>
+            <AntApp>
+              <SessionPanel
+                client={client}
+                session={session}
+                branch={branch}
+                open
+                onClose={vi.fn()}
+              />
+            </AntApp>
+          </AppActionsProvider>
+        </ConnectionProvider>
+      </MemoryRouter>
     );
 
     await screen.findByText('Session Runbook');
@@ -256,9 +278,10 @@ describe('SessionPanel session links', () => {
     renderPanel(client);
 
     await screen.findByText('Session Runbook');
-    fireEvent.click(screen.getByLabelText('Session links'));
+    fireEvent.click(screen.getByLabelText('Open links organizer'));
+    fireEvent.click(await screen.findByLabelText('Manage links'));
     fireEvent.click(await screen.findByLabelText('Assistant actions for Session Runbook'));
-    fireEvent.click(await screen.findByText('Add to assistant'));
+    fireEvent.click(await screen.findByText('Promote to assistant'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
@@ -295,7 +318,8 @@ describe('SessionPanel session links', () => {
     renderPanel(client);
 
     await screen.findByText('Session Runbook');
-    fireEvent.click(screen.getByLabelText('Session links'));
+    fireEvent.click(screen.getByLabelText('Open links organizer'));
+    fireEvent.click(await screen.findByLabelText('Manage links'));
     fireEvent.click(await screen.findByLabelText('Assistant actions for Session Runbook'));
     fireEvent.click(await screen.findByText('Remove from assistant'));
 
@@ -308,5 +332,33 @@ describe('SessionPanel session links', () => {
     });
     expect(agorStore.getState().linkById.has('assistant-link')).toBe(false);
     expect(agorStore.getState().linksBySession.get('session-1')).toEqual([source]);
+  });
+
+  it('opens the manage drawer from the header gear and searches drawer links', async () => {
+    const runbook = makeLink();
+    const apiGuide = makeLink({
+      link_id: 'link-api' as Link['link_id'],
+      is_pinned: false,
+      title: 'API guide',
+      url: 'https://example.com/api-guide',
+      target_key: 'url:https://example.com/api-guide',
+    });
+    const { client } = makeClient([runbook, apiGuide]);
+
+    renderPanel(client);
+
+    await screen.findByText('Session Runbook');
+    fireEvent.click(screen.getByLabelText('Open links organizer'));
+    fireEvent.click(await screen.findByLabelText('Manage links'));
+
+    const drawer = await screen.findByTestId('links-organizer-manage');
+    expect(screen.getByLabelText('Search links')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Search links'), {
+      target: { value: 'api' },
+    });
+
+    await waitFor(() => expect(within(drawer).queryByText('Session Runbook')).toBeNull());
+    expect(within(drawer).getByText('API guide')).toBeTruthy();
   });
 });

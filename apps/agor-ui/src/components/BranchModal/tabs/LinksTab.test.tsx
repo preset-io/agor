@@ -1,6 +1,7 @@
-import type { AgorClient, Board, Branch, Link } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Link, Session } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { EMPTY_MAPS } from '../../../store/agorMaps';
 import { agorStore } from '../../../store/agorStore';
@@ -93,9 +94,11 @@ describe('LinksTab assistant promotion actions', () => {
     const { client, calls } = makeClient({ branchLinks: [source], assistantLinks: [], promoted });
 
     render(
-      <AntApp>
-        <LinksTab branch={branch} client={client} active open />
-      </AntApp>
+      <MemoryRouter>
+        <AntApp>
+          <LinksTab branch={branch} client={client} active open />
+        </AntApp>
+      </MemoryRouter>
     );
 
     await screen.findByText('Runbook');
@@ -112,7 +115,7 @@ describe('LinksTab assistant promotion actions', () => {
     );
 
     fireEvent.click(screen.getByLabelText('Assistant actions for Runbook'));
-    fireEvent.click(await screen.findByText('Add to assistant'));
+    fireEvent.click(await screen.findByText('Promote to assistant'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
@@ -139,9 +142,11 @@ describe('LinksTab assistant promotion actions', () => {
     });
 
     render(
-      <AntApp>
-        <LinksTab branch={branch} client={client} active open />
-      </AntApp>
+      <MemoryRouter>
+        <AntApp>
+          <LinksTab branch={branch} client={client} active open />
+        </AntApp>
+      </MemoryRouter>
     );
 
     await screen.findByText('Runbook');
@@ -157,5 +162,69 @@ describe('LinksTab assistant promotion actions', () => {
     });
     expect(agorStore.getState().linkById.has('assistant-link')).toBe(false);
     expect(agorStore.getState().linkById.has('link-1')).toBe(true);
+  });
+
+  it('searches links and shows source session attribution from the centralized store', async () => {
+    const sourceSession = {
+      session_id: 'session-source-1',
+      title: 'Design review',
+    } as unknown as Session;
+    const runbook = makeLink();
+    const apiLink = makeLink({
+      link_id: 'link-api' as Link['link_id'],
+      title: 'API notes',
+      url: 'https://example.com/api',
+      target_key: 'url:https://example.com/api',
+      metadata: { promoted_from_owner: { session_id: sourceSession.session_id } },
+    });
+    seedStore([runbook, apiLink]);
+    agorStore.setState((state) => ({
+      ...state,
+      sessionById: new Map([[sourceSession.session_id, sourceSession]]),
+    }));
+    const { client } = makeClient({
+      branchLinks: [runbook, apiLink],
+      assistantLinks: [],
+      promoted: apiLink,
+    });
+
+    render(
+      <MemoryRouter>
+        <AntApp>
+          <LinksTab branch={branch} client={client} active open />
+        </AntApp>
+      </MemoryRouter>
+    );
+
+    await screen.findByText('Runbook');
+    expect(await screen.findByText('From Design review')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Search links'), { target: { value: 'api' } });
+
+    await waitFor(() => expect(screen.queryByText('Runbook')).toBeNull());
+    expect(screen.getByText('API notes')).toBeTruthy();
+  });
+
+  it('does not expose manual add-link controls in the branch links tab', async () => {
+    seedStore([]);
+    const { client } = makeClient({
+      branchLinks: [],
+      assistantLinks: [],
+      promoted: makeLink(),
+    });
+
+    render(
+      <MemoryRouter>
+        <AntApp>
+          <LinksTab branch={branch} client={client} active open />
+        </AntApp>
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('button', { name: /add link/i })).toBeNull();
+    expect(
+      screen.queryByPlaceholderText('https://example.com or agor://kb/team/doc.md')
+    ).toBeNull();
+    expect(screen.queryByLabelText(/file path/i)).toBeNull();
   });
 });

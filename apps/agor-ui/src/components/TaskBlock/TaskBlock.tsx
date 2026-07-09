@@ -11,6 +11,7 @@
 
 import type { AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
+  type Link,
   type Message,
   MessageRole,
   type PermissionRequestContent,
@@ -95,6 +96,7 @@ interface TaskBlockProps {
   assistantEmoji?: string;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
   client?: AgorClient | null;
+  attachmentLinksByMessageId?: Map<string, Link[]>;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
 }
@@ -367,6 +369,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     assistantEmoji,
     isLatestTask = false,
     client = null,
+    attachmentLinksByMessageId,
   }) => {
     const { token } = theme.useToken();
 
@@ -651,6 +654,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                           taskId={task.task_id}
                           assistantEmoji={assistantEmoji}
                           client={client}
+                          attachmentLinks={attachmentLinksByMessageId?.get(
+                            block.message.message_id
+                          )}
                         />
                       );
                     }

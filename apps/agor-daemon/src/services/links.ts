@@ -23,6 +23,7 @@ import type {
   Params,
   QueryParams,
   SessionID,
+  Task,
   UUID,
 } from '@agor/core/types';
 import { extractLinksFromMessage } from '@agor/core/types';
@@ -166,6 +167,58 @@ export function ingestParsedLinksAfterMessageCreate(app: Application) {
         ...context.params,
         provider: undefined,
       } as Params);
+    }
+
+    for (const message of messages) {
+      if (message.role !== 'user') continue;
+      if (
+        Array.isArray(message.content) &&
+        message.content.some((block) => block.type === 'tool_result')
+      ) {
+        continue;
+      }
+      if (!message.task_id) continue;
+      const taskService = app.service('tasks') as unknown as {
+        get(id: string, params?: Params): Promise<Task>;
+      };
+      const task = await taskService
+        .get(message.task_id, { ...context.params, provider: undefined } as Params)
+        .catch(() => null);
+      const uploadLinkIds = task?.metadata?.upload_link_ids;
+      const taskCreatedBy = task?.created_by ?? null;
+      if (!Array.isArray(uploadLinkIds) || uploadLinkIds.length === 0) continue;
+
+      const patchableLinksService = app.service('links') as unknown as {
+        get(id: string, params?: Params): Promise<Link>;
+        patch(id: string, data: Partial<Link>, params?: Params): Promise<Link>;
+      };
+      await Promise.all(
+        uploadLinkIds
+          .filter((linkId): linkId is NonNullable<typeof linkId> => typeof linkId === 'string')
+          .map(async (linkId) => {
+            try {
+              const existing = await patchableLinksService.get(linkId, {
+                ...context.params,
+                provider: undefined,
+              } as Params);
+              if (existing.source !== 'upload') return;
+              if (existing.session_id !== message.session_id) return;
+              if (existing.branch_id) return;
+              if (existing.source_message_id) return;
+              if (existing.created_by && taskCreatedBy && existing.created_by !== taskCreatedBy)
+                return;
+              await patchableLinksService.patch(linkId, { source_message_id: message.message_id }, {
+                ...context.params,
+                provider: undefined,
+              } as Params);
+            } catch (error) {
+              console.warn(
+                `[Links] Failed to attach upload link ${linkId} to message ${message.message_id}:`,
+                error
+              );
+            }
+          })
+      );
     }
     return context;
   };

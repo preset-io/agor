@@ -102,10 +102,38 @@ describe('link display helpers', () => {
     expect(items.map((entry) => entry.name)).toEqual([
       'Pinned PR discussion',
       'Issue: preset-io/agor#92',
-      'URL: docs',
+      'Link: docs',
     ]);
     expect(items).toHaveLength(3);
     expect(items[0]).toMatchObject({ isPinned: true, kind: 'pr' });
+  });
+
+  it('keeps case-distinct file target keys visible', () => {
+    const upper = '/uploads/Report.pdf';
+    const lower = '/uploads/report.pdf';
+    const items = buildLinkDisplayItems({
+      links: [
+        makeLink({
+          link_id: 'link-report-upper' as Link['link_id'],
+          kind: 'document',
+          source: 'upload',
+          file_path: upper,
+          target_key: `file:${upper}`,
+          title: 'Report.pdf',
+        }),
+        makeLink({
+          link_id: 'link-report-lower' as Link['link_id'],
+          kind: 'document',
+          source: 'upload',
+          file_path: lower,
+          target_key: `file:${lower}`,
+          title: 'report.pdf',
+        }),
+      ],
+    });
+
+    expect(items.map((entry) => entry.name).sort()).toEqual(['Report.pdf', 'report.pdf']);
+    expect(items).toHaveLength(2);
   });
 
   it('infers categories, compact names, secondary labels, and category counts', () => {
@@ -129,6 +157,9 @@ describe('link display helpers', () => {
     expect(getLinkDisplayCategory({ filePath })).toBe('pdf');
     expect(getLinkDisplayGlyphLabel('knowledge')).toBe('KB');
     expect(getCompactLinkDisplayName(items[0])).toBe('Docs');
+    expect(getCompactLinkDisplayName({ name: 'Saved URL: Legacy docs', category: 'url' })).toBe(
+      'Legacy docs'
+    );
     expect(getLinkDisplaySecondaryLabel(file)).toBe('spec.pdf');
     expect(getLinkCategoryCounts(items)).toEqual({
       all: 4,

@@ -1,4 +1,5 @@
 import type { AgorClient, Link } from '@agor-live/client';
+import { normalizeRefTargetKey, normalizeUrlTargetKey } from '@agor-live/client';
 import type { LinkDisplayItem } from './linkDisplay';
 
 export type AssistantPromotionState =
@@ -25,7 +26,23 @@ export function findAssistantLinkForTarget(
   source: Pick<LinkDisplayItem, 'targetKey'>,
   assistantLinks: readonly Link[]
 ): Link | null {
-  return assistantLinks.find((link) => link.target_key === source.targetKey) ?? null;
+  const sourceTargetKey = normalizePromotionTargetKey(source.targetKey);
+  return (
+    assistantLinks.find(
+      (link) => normalizePromotionTargetKey(link.target_key) === sourceTargetKey
+    ) ?? null
+  );
+}
+
+function normalizePromotionTargetKey(targetKey: string): string {
+  if (targetKey.startsWith('file:')) return targetKey;
+  if (targetKey.toLowerCase().startsWith('url:')) {
+    return normalizeUrlTargetKey(targetKey.slice(4));
+  }
+  if (targetKey.toLowerCase().startsWith('ref:')) {
+    return normalizeRefTargetKey(targetKey.slice(4));
+  }
+  return targetKey.toLowerCase();
 }
 
 export function getAssistantPromotionState(args: {

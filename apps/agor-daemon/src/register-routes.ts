@@ -43,7 +43,9 @@ import type {
   AuthenticatedParams,
   DaemonServicesConfig,
   HookContext,
+  Link,
   LinkCreate,
+  LinkID,
   Message,
   MessageSource,
   Paginated,
@@ -94,6 +96,7 @@ import type {
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
 import type { GatewayService } from './services/gateway.js';
+import { registerLinkContentRoute } from './services/link-content.js';
 import { createLinkPromotionService } from './services/link-promotion.js';
 import {
   ScheduleBusyError,
@@ -190,6 +193,24 @@ interface RouteParams extends Params {
     name?: string;
   };
   user?: User;
+  _trustedUploadLinkIds?: LinkID[];
+}
+
+export function sanitizePromptTaskMetadata(
+  metadata?: Partial<import('@agor/core/types').TaskMetadata>
+): import('@agor/core/types').TaskMetadata {
+  if (!metadata) return {};
+  const { upload_link_ids: _ignoredUploadLinkIds, ...safeMetadata } = metadata;
+  return safeMetadata;
+}
+
+function trustedUploadTaskMetadata(
+  params: RouteParams
+): Pick<import('@agor/core/types').TaskMetadata, 'upload_link_ids'> | Record<string, never> {
+  const uploadLinkIds = params._trustedUploadLinkIds?.filter(
+    (linkId): linkId is LinkID => typeof linkId === 'string' && linkId.length > 0
+  );
+  return uploadLinkIds && uploadLinkIds.length > 0 ? { upload_link_ids: uploadLinkIds } : {};
 }
 
 function isServiceAccountRoute(params: RouteParams): boolean {
@@ -723,6 +744,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     requireAuth
   );
+
+  registerLinkContentRoute(app);
 
   registerAuthenticatedRoute(
     app,
@@ -1472,6 +1495,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               queuedTasks.length > 0;
 
             if (shouldQueue) {
+              const safeTaskMetadata = sanitizePromptTaskMetadata(data.metadata);
               const queuedTask = await taskRepo.createPending({
                 session_id: id as SessionID,
                 full_prompt: data.prompt,
@@ -1480,7 +1504,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 metadata: {
                   ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
                   ...(messageSource ? { source: messageSource } : {}),
-                  ...(data.metadata ?? {}),
+                  ...safeTaskMetadata,
+                  ...trustedUploadTaskMetadata(params),
                 },
               });
 
@@ -1520,9 +1545,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             // writes the user-message row, and spawns the executor. Both this
             // path and processNextQueuedTask go through that helper so behavior
             // stays in lockstep.
+            const safeTaskMetadata = sanitizePromptTaskMetadata(data.metadata);
             const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
               ...(messageSource ? { source: messageSource } : {}),
-              ...(data.metadata ?? {}),
+              ...safeTaskMetadata,
+              ...trustedUploadTaskMetadata(params),
             };
             const task = await taskRepo.createPending({
               session_id: id as SessionID,
@@ -1989,10 +2016,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         created_by: (params.user?.user_id as UUID | undefined) ?? null,
       }));
 
+      const createdUploadLinks: Link[] = [];
       if (uploadLinks.length > 0) {
-        await app
+        const created = (await app
           .service('links')
-          .create(uploadLinks, { ...params, provider: undefined } as Params);
+          .create(uploadLinks, { ...params, provider: undefined } as Params)) as Link | Link[];
+        createdUploadLinks.push(...(Array.isArray(created) ? created : [created]));
       }
 
       let notificationError: string | null = null;
@@ -2010,8 +2039,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const promptParams: any = {
             route: { id: sessionId },
             user: params.user,
+            _trustedUploadLinkIds: createdUploadLinks.map((link) => link.link_id),
           };
-          await promptService.create({ prompt: promptText }, promptParams);
+          await promptService.create(
+            {
+              prompt: promptText,
+            },
+            promptParams
+          );
         } catch (error) {
           console.error('❌ [Upload Handler] Failed to notify agent:', error);
           notificationError =

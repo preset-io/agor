@@ -60,14 +60,19 @@ import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import {
   buildLinkDisplayItems,
   getAssistantPromotionState,
+  getCompactLinkDisplayName,
   type LinkDisplayItem,
-  PinnedLinksStrip,
+  type PromotedPinnedLinkItem,
   promoteLinkToAssistant,
-  SessionLinksControl,
 } from '../Links';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
 import { ToolIcon } from '../ToolIcon';
+import {
+  displayItemToSessionAttachmentItem,
+  type SessionAttachmentItem,
+  SessionAttachmentsDropdown,
+} from './SessionAttachmentsDropdown';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
 
@@ -380,6 +385,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
   const [pinningLinkId, setPinningLinkId] = React.useState<string | null>(null);
   const [assistantActionKey, setAssistantActionKey] = React.useState<string | null>(null);
+  const openPinnedLinksManagerRef = React.useRef<(() => void) | null>(null);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
@@ -519,14 +525,58 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return null;
   }, [tasks, session?.agentic_tool]);
 
-  const pinnedSessionLinkItems = React.useMemo(
-    () =>
-      buildLinkDisplayItems({
-        links: sessionLinks.filter((link) => link.is_pinned),
-        includeBranchLinks: false,
-      }),
-    [sessionLinks]
+  const linkDisplayItems = React.useMemo(
+    () => buildLinkDisplayItems({ branch, links: sessionLinks }),
+    [branch, sessionLinks]
   );
+  const attachmentItems = React.useMemo(
+    () => linkDisplayItems.map(displayItemToSessionAttachmentItem),
+    [linkDisplayItems]
+  );
+
+  const pinnedSessionLinkItems = React.useMemo(
+    () => linkDisplayItems.filter((item) => item.ownerScope === 'session' && item.isPinned),
+    [linkDisplayItems]
+  );
+  const promotedPinnedSessionItems = React.useMemo<PromotedPinnedLinkItem[]>(
+    () =>
+      pinnedSessionLinkItems.map((item) => ({
+        key: item.key,
+        name: getCompactLinkDisplayName(item),
+        url: item.url,
+        refUri: item.refUri,
+        filePath: item.filePath,
+        mimeType: item.mimeType,
+        linkId: item.linkId,
+        kind: item.kind,
+        source: item.source,
+      })),
+    [pinnedSessionLinkItems]
+  );
+  const attachmentLinksByMessageId = React.useMemo(() => {
+    const byMessageId = new Map<string, Link[]>();
+    for (const link of sessionLinks) {
+      if (link.source !== 'upload' || !link.source_message_id) continue;
+      const isUploadAttachment =
+        Boolean(link.file_path) && (link.kind === 'image' || link.kind === 'document');
+      if (!isUploadAttachment) continue;
+      const existing = byMessageId.get(link.source_message_id) ?? [];
+      existing.push(link);
+      byMessageId.set(link.source_message_id, existing);
+    }
+    return byMessageId;
+  }, [sessionLinks]);
+
+  const handleRegisterOpenPinnedManager = React.useCallback(
+    (openPinnedManager: (() => void) | null) => {
+      openPinnedLinksManagerRef.current = openPinnedManager;
+    },
+    []
+  );
+
+  const handleOpenPinnedManager = React.useCallback(() => {
+    openPinnedLinksManagerRef.current?.();
+  }, []);
 
   const footerGradient = React.useMemo(() => {
     if (!latestContextWindow) return undefined;
@@ -709,14 +759,32 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       sourceBranchId: branch?.branch_id ?? null,
       assistantLinks,
     });
-    if (!state.canPromote) return null;
+    const unavailableReason =
+      state.reason === 'no-assistant'
+        ? 'No assistant configured'
+        : state.reason === 'same-owner'
+          ? 'Already on assistant branch'
+          : state.reason === 'missing-source-link'
+            ? 'Cannot promote generated branch metadata'
+            : state.reason === 'missing-target'
+              ? 'Cannot promote a link without a target'
+              : null;
     const actionKey = state.isPromoted ? state.assistantLink.link_id : item.linkId;
     return {
       isPromoted: state.isPromoted,
       assistantLinkId: state.assistantLink?.link_id,
-      disabled: !client || connectionDisabled,
+      disabled: !state.canPromote || !client || connectionDisabled,
       loading: actionKey ? assistantActionKey === actionKey : false,
+      unavailableReason:
+        unavailableReason ??
+        (!client || connectionDisabled
+          ? 'Assistant link actions unavailable while disconnected'
+          : null),
     };
+  };
+
+  const assistantStateForAttachment = (item: SessionAttachmentItem) => {
+    return item.displayItem ? assistantStateForSessionLink(item.displayItem) : null;
   };
 
   const handlePromoteSessionLinkToAssistant = async (item: LinkDisplayItem) => {
@@ -729,6 +797,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         assistantBranchId,
       });
       applyKnownLinkCreatedResult(promoted);
+      showSuccess('Promoted to assistant');
     } catch (error) {
       showError(
         `Failed to add link to assistant: ${error instanceof Error ? error.message : String(error)}`
@@ -736,6 +805,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     } finally {
       setAssistantActionKey(null);
     }
+  };
+
+  const handlePromoteAttachmentToAssistant = async (item: SessionAttachmentItem) => {
+    if (item.displayItem) await handlePromoteSessionLinkToAssistant(item.displayItem);
   };
 
   const handleRemoveSessionLinkFromAssistant = async (
@@ -747,12 +820,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     try {
       const removed = (await client.service('links').remove(assistantLinkId)) as Link;
       applyKnownLinkRemovedResult(removed);
+      showSuccess('Removed from assistant');
     } catch (error) {
       showError(
         `Failed to remove link from assistant: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
       setAssistantActionKey(null);
+    }
+  };
+
+  const handleRemoveAttachmentFromAssistant = async (
+    item: SessionAttachmentItem,
+    assistantLinkId: string
+  ) => {
+    if (item.displayItem) {
+      await handleRemoveSessionLinkFromAssistant(item.displayItem, assistantLinkId);
     }
   };
 
@@ -1057,15 +1140,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </Space>
           <Space size={4}>
-            <SessionLinksControl
-              branch={branch}
-              links={sessionLinks}
-              disabled={!client || connectionDisabled}
+            <SessionAttachmentsDropdown
+              items={attachmentItems}
               pinningLinkId={pinningLinkId}
-              onTogglePinned={handleToggleSessionLinkPinned}
-              getAssistantActionState={assistantStateForSessionLink}
-              onPromoteToAssistant={handlePromoteSessionLinkToAssistant}
-              onRemoveFromAssistant={handleRemoveSessionLinkFromAssistant}
+              onTogglePinned={(item) =>
+                handleToggleSessionLinkPinned({
+                  linkId: item.linkId ?? undefined,
+                  isPinned: item.isPinned === true,
+                })
+              }
+              onRegisterOpenPinnedManager={handleRegisterOpenPinnedManager}
+              getAssistantActionState={assistantStateForAttachment}
+              onPromoteToAssistant={handlePromoteAttachmentToAssistant}
+              onRemoveFromAssistant={handleRemoveAttachmentFromAssistant}
             />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
@@ -1082,11 +1169,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
           </Space>
         </div>
-        <PinnedLinksStrip
-          items={pinnedSessionLinkItems}
-          maxItems={5}
-          label="Pinned session links"
-        />
       </div>
 
       {/* Body - Scrollable content */}
@@ -1118,6 +1200,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           isOpen={open}
           cliViewMode={cliViewMode}
           setCliViewMode={setCliViewMode}
+          attachmentLinksByMessageId={attachmentLinksByMessageId}
+          pinnedSessionLinks={promotedPinnedSessionItems}
+          onPinnedOverflow={handleOpenPinnedManager}
         />
 
         {/* Footer — rendered outside SessionPanelContent so that

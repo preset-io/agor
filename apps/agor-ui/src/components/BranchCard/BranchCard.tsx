@@ -1,4 +1,4 @@
-import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
+import type { AgorClient, Branch, Link, Repo, Session, SpawnConfig, User } from '@agor-live/client';
 import { getAssistantConfig, isAssistant, isSessionExecuting } from '@agor-live/client';
 import {
   BranchesOutlined,
@@ -14,7 +14,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
-import { makeLinksForBranchSelector } from '../../store/selectors';
+import { makeLinksForBranchSelector, selectApplyLinkMutationResult } from '../../store/selectors';
+import { useThemedMessage } from '../../utils/message';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
@@ -23,7 +24,8 @@ import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { EnvironmentPill } from '../EnvironmentPill';
-import { buildLinkDisplayItems, PinnedLinksStrip } from '../Links';
+import { buildLinkDisplayItems, type LinkDisplayItem } from '../Links';
+import { LinkPreviewModal, LinkRow, useLinkFileActions } from '../Links/SessionLinksControl';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -33,6 +35,72 @@ import { BranchSessionSections } from './BranchSessionSections';
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
+const BRANCH_CARD_PINNED_LINK_INLINE_LIMIT = 6;
+
+function BranchCardPinnedLinksBlock({
+  items,
+  onTogglePinned,
+  pinningLinkId,
+}: {
+  items: LinkDisplayItem[];
+  onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
+  pinningLinkId?: string | null;
+}) {
+  const { token } = theme.useToken();
+  const { busyLinkId, preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
+  const inlineItems = useMemo(() => items.slice(0, BRANCH_CARD_PINNED_LINK_INLINE_LIMIT), [items]);
+
+  if (items.length === 0) return null;
+
+  return (
+    <>
+      <div
+        data-testid="branch-card-pinned-links"
+        className={REACT_FLOW_NO_DRAG_CLASS}
+        style={{
+          margin: `${token.sizeUnit}px 0 ${token.sizeUnit * 3}px`,
+          padding: `${token.sizeUnit * 0.5}px 0 ${token.sizeUnit * 2}px`,
+          borderBottom: `1px dashed ${token.colorBorderSecondary}`,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: token.sizeUnit,
+            marginBottom: token.sizeXS,
+          }}
+        >
+          <PushpinFilled style={{ color: token.colorTextTertiary, fontSize: 11 }} />
+          <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 600 }}>
+            Pinned links
+          </Typography.Text>
+          {items.length > inlineItems.length && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              +{items.length - inlineItems.length} more
+            </Typography.Text>
+          )}
+        </div>
+
+        <Space direction="vertical" size={token.sizeXS} style={{ width: '100%' }}>
+          {inlineItems.map((item) => (
+            <LinkRow
+              key={item.key}
+              item={item}
+              compact
+              onPreview={openPreview}
+              onDownload={downloadItem}
+              onTogglePinned={onTogglePinned}
+              busy={item.linkId === busyLinkId}
+              pinning={item.linkId === pinningLinkId}
+            />
+          ))}
+        </Space>
+      </div>
+      <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
+    </>
+  );
+}
 
 interface BranchCardProps {
   branch: Branch;
@@ -107,15 +175,18 @@ const BranchCardComponent = ({
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
+  const { showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const branchLinksSelector = useMemo(
     () => makeLinksForBranchSelector(branch.branch_id),
     [branch.branch_id]
   );
   const branchLinks = useAgorStore(branchLinksSelector) ?? [];
+  const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
 
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
@@ -226,8 +297,28 @@ const BranchCardComponent = ({
       buildLinkDisplayItems({
         links: branchLinks.filter((link) => link.is_pinned),
         includeBranchLinks: false,
-      }),
+      }).filter((item) => item.ownerScope === 'branch' && item.isPinned),
     [branchLinks]
+  );
+
+  const handleToggleLinkPinned = useCallback(
+    async (item: LinkDisplayItem) => {
+      if (!client || !item.linkId || pinningLinkId) return;
+      setPinningLinkId(item.linkId);
+      try {
+        const updated = (await client.service('links').patch(item.linkId, {
+          is_pinned: !item.isPinned,
+        })) as Link;
+        applyLinkMutationResult(updated);
+      } catch (error) {
+        showError(
+          `Failed to update pin: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        setPinningLinkId(null);
+      }
+    },
+    [applyLinkMutationResult, client, pinningLinkId, showError]
   );
 
   // Memoize glow shadow string to avoid recomputing color normalization on every render
@@ -565,9 +656,13 @@ const BranchCardComponent = ({
         </div>
       )}
 
-      <div className={REACT_FLOW_NO_DRAG_CLASS}>
-        <PinnedLinksStrip items={pinnedLinkItems} compact maxItems={3} />
-      </div>
+      {pinnedLinkItems.length > 0 && (
+        <BranchCardPinnedLinksBlock
+          items={pinnedLinkItems}
+          onTogglePinned={client ? handleToggleLinkPinned : undefined}
+          pinningLinkId={pinningLinkId}
+        />
+      )}
 
       {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
       <div className={REACT_FLOW_NO_DRAG_CLASS}>

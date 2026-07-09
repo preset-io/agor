@@ -7,7 +7,9 @@ import type {
   BranchID,
   Link,
   LinkCreate,
+  LinkMetadata,
   Params,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import { isAssistant } from '@agor/core/types';
@@ -53,7 +55,30 @@ function promotedFromOwner(source: Link): {
   };
 }
 
-function trustedTargetCreateFields(source: Link): Partial<LinkCreate> {
+type TrustedTargetCreateFields =
+  | {
+      url: string;
+      ref_uri: null;
+      file_path: null;
+      target_object_type: null;
+      target_object_id: null;
+    }
+  | {
+      url: null;
+      ref_uri: string;
+      file_path: null;
+      target_object_type: Link['target_object_type'];
+      target_object_id: Link['target_object_id'];
+    }
+  | {
+      url: null;
+      ref_uri: null;
+      file_path: string;
+      target_object_type: null;
+      target_object_id: null;
+    };
+
+function trustedTargetCreateFields(source: Link): TrustedTargetCreateFields {
   if (source.url) {
     return {
       url: source.url,
@@ -146,7 +171,7 @@ export class LinkPromotionService {
 
     const now = new Date().toISOString();
     const callerId = (params?.user?.user_id as UUID | undefined) ?? null;
-    const promotedMetadata = {
+    const promotedMetadata: LinkMetadata = {
       ...(source.metadata ?? {}),
       promoted_from_link_id: source.link_id,
       promoted_from_owner: promotedFromOwner(source),
@@ -154,7 +179,7 @@ export class LinkPromotionService {
       promoted_by: callerId,
     };
 
-    const createData: Partial<LinkCreate> = {
+    const createData = {
       branch_id: assistantBranch.branch_id,
       session_id: null,
       kind: source.kind,
@@ -164,8 +189,8 @@ export class LinkPromotionService {
       title: source.title ?? null,
       mime_type: source.mime_type ?? null,
       metadata: promotedMetadata,
-      created_by: callerId,
-    };
+      created_by: callerId as UserID | null,
+    } satisfies LinkCreate;
 
     // Use an internal create so trusted file-backed source links can be copied
     // without exposing client-controlled file_path/source/kind fields.

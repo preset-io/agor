@@ -47,6 +47,7 @@ vi.mock('../ToolIcon', () => ({
 }));
 
 vi.mock('./SessionAttachmentsDropdown', () => ({
+  displayItemToSessionAttachmentItem: (item: unknown) => item,
   SessionAttachmentsDropdown: () => null,
 }));
 

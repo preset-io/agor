@@ -1,4 +1,11 @@
-import type { AgorClient, Message, Session, StreamingMessageState, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Link,
+  Message,
+  Session,
+  StreamingMessageState,
+  User,
+} from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
 import { Alert, Button, Empty, Input, Spin, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -6,6 +13,11 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  makeLinksForSessionSelector,
+  selectFetchAndReplaceFullSessionLinks,
+} from '../../store/selectors';
 import { TaskBlock } from '../TaskBlock';
 import { chooseLatestSessionTask } from './latestSessionTask';
 
@@ -38,6 +50,9 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
     const [prompt, setPrompt] = useState('');
 
     const sessionId = session.session_id;
+    const sessionLinksSelector = useMemo(() => makeLinksForSessionSelector(sessionId), [sessionId]);
+    const sessionLinks = useAgorStore(sessionLinksSelector) ?? [];
+    const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
     const { handle: reactiveSession, state: reactiveState } = useSharedReactiveSession(
       client,
       sessionId,
@@ -62,6 +77,27 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
     const streamingMessagesByTask = useStreamingMessagesByTask(allStreamingMessages);
     const taskId = task?.task_id ?? null;
     const taskMessagesLoaded = !!taskId && !!currentReactiveState?.loadedTaskIds.has(taskId);
+
+    useEffect(() => {
+      if (!enabled || !client || !sessionId) return;
+      fetchAndReplaceFullSessionLinks(client, sessionId).catch((error: unknown) => {
+        console.error('[SessionLatestTaskPeek] Failed to fetch session links:', error);
+      });
+    }, [client, enabled, fetchAndReplaceFullSessionLinks, sessionId]);
+
+    const attachmentLinksByMessageId = useMemo(() => {
+      const byMessageId = new Map<string, Link[]>();
+      for (const link of sessionLinks) {
+        if (link.source !== 'upload' || !link.source_message_id) continue;
+        const isUploadAttachment =
+          Boolean(link.file_path) && (link.kind === 'image' || link.kind === 'document');
+        if (!isUploadAttachment) continue;
+        const existing = byMessageId.get(link.source_message_id) ?? [];
+        existing.push(link);
+        byMessageId.set(link.source_message_id, existing);
+      }
+      return byMessageId;
+    }, [sessionLinks]);
 
     const isNearBottom = useCallback(() => {
       if (!containerRef.current) return true;
@@ -270,6 +306,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               assistantEmoji={undefined}
               isLatestTask={true}
               client={client}
+              attachmentLinksByMessageId={attachmentLinksByMessageId}
             />
           )}
         </div>

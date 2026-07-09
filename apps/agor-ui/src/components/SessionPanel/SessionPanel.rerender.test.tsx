@@ -37,6 +37,7 @@ vi.mock('./SessionPanelContent', () => ({
 // under test here; stub them to keep the harness focused on SessionPanel.
 vi.mock('./SessionAttachmentsDropdown', () => ({
   __esModule: true,
+  displayItemToSessionAttachmentItem: (item: unknown) => item,
   SessionAttachmentsDropdown: () => null,
 }));
 vi.mock('./SessionMcpFooterControl', () => ({

@@ -335,4 +335,122 @@ describe('LinksService', () => {
       })
     );
   });
+
+  it('only stamps trusted upload links that belong to the created message session', async () => {
+    const userId = generateId() as UUID;
+    const sessionId = generateId() as SessionID;
+    const messageId = generateId() as MessageID;
+    const validLink = {
+      link_id: 'valid-upload-link',
+      session_id: sessionId,
+      branch_id: null,
+      source_message_id: null,
+      source: 'upload',
+      kind: 'document',
+      file_path: '/tmp/upload.pdf',
+      target_key: 'file:/tmp/upload.pdf',
+      is_pinned: false,
+      created_by: userId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as Link;
+    const linkById = new Map<string, Link>([
+      [validLink.link_id, validLink],
+      [
+        'manual-link',
+        {
+          ...validLink,
+          link_id: 'manual-link',
+          source: 'manual',
+        } as Link,
+      ],
+      [
+        'other-session-link',
+        {
+          ...validLink,
+          link_id: 'other-session-link',
+          session_id: generateId() as SessionID,
+        } as Link,
+      ],
+      [
+        'branch-owned-link',
+        {
+          ...validLink,
+          link_id: 'branch-owned-link',
+          branch_id: generateId() as BranchID,
+        } as Link,
+      ],
+      [
+        'already-associated-link',
+        {
+          ...validLink,
+          link_id: 'already-associated-link',
+          source_message_id: generateId() as MessageID,
+        } as Link,
+      ],
+      [
+        'other-owner-link',
+        {
+          ...validLink,
+          link_id: 'other-owner-link',
+          created_by: generateId() as UUID,
+        } as Link,
+      ],
+    ]);
+    const patch = vi.fn(async (id: string, data: Partial<Link>) => ({
+      ...linkById.get(id),
+      ...data,
+    }));
+    const app = {
+      service: vi.fn((path: string) => {
+        if (path === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              task_id: 'task-1',
+              session_id: sessionId,
+              created_by: userId,
+              metadata: {
+                upload_link_ids: Array.from(linkById.keys()),
+              },
+            })),
+          };
+        }
+        if (path === 'links') {
+          return {
+            create: vi.fn(async () => []),
+            get: vi.fn(async (id: string) => {
+              const link = linkById.get(id);
+              if (!link) throw new Error(`missing link ${id}`);
+              return link;
+            }),
+            patch,
+          };
+        }
+        throw new Error(`Unexpected service: ${path}`);
+      }),
+    };
+    const hook = ingestParsedLinksAfterMessageCreate(app as never);
+
+    await hook({
+      result: {
+        message_id: messageId,
+        session_id: sessionId,
+        task_id: 'task-1',
+        type: 'user',
+        role: 'user',
+        index: 0,
+        timestamp: new Date().toISOString(),
+        content_preview: 'Uploaded a file',
+        content: 'Uploaded a file',
+      } as Message,
+      params: { user: { user_id: userId } },
+    } as never);
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(patch).toHaveBeenCalledWith(
+      validLink.link_id,
+      { source_message_id: messageId },
+      expect.objectContaining({ provider: undefined })
+    );
+  });
 });
