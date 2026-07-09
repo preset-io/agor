@@ -113,12 +113,12 @@ function renderWizard(
 }
 
 describe('OnboardingWizard', () => {
-  it('starts on assistant name and emoji only, then advances to LLM setup', async () => {
+  it('starts on teammate name and emoji only, then advances to LLM setup', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
     expect(screen.getByText(/Welcome to Agor/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Agor teammate/i })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Agor AI teammate/i })).toHaveAttribute(
       'href',
       'https://agor.live/guide/teammates'
     );
@@ -247,7 +247,7 @@ describe('OnboardingWizard', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
     expect(await screen.findByText(/Setting up Agor/i)).toBeInTheDocument();
-    expect(screen.getByText(/Cloning teammate framework/i)).toBeInTheDocument();
+    expect(screen.getByText(/Cloning AI teammate framework/i)).toBeInTheDocument();
     expect(document.querySelector('.ant-modal-body')).toBe(body);
     expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
   });
@@ -270,7 +270,7 @@ describe('OnboardingWizard', () => {
     fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
 
     await waitFor(() => expect(onCreateRepo).toHaveBeenCalled());
-    expect(screen.getByText(/Cloning teammate framework/i)).toBeInTheDocument();
+    expect(screen.getByText(/Cloning AI teammate framework/i)).toBeInTheDocument();
     expect(screen.queryByText(/Setup failed/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/old failure/i)).not.toBeInTheDocument();
 
@@ -373,7 +373,7 @@ describe('OnboardingWizard', () => {
         expect.objectContaining({ sourceBranch: 'develop' })
       )
     );
-    expect(screen.queryByText(/Cloning teammate framework/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cloning AI teammate framework/i)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith({
         branchId: 'branch-1',
@@ -469,7 +469,7 @@ describe('OnboardingWizard', () => {
     fireEvent.click(codexOption as HTMLInputElement);
     fireEvent.click(await screen.findByRole('button', { name: /continue with codex cli auth/i }));
 
-    expect(await screen.findByText(/Cloning teammate framework/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Cloning AI teammate framework/i)).toBeInTheDocument();
     const readyRepoById = new Map(repoById).set('repo-1', makeRepo());
     act(() => {
       agorStore.setState({ repoById: readyRepoById });
