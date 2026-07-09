@@ -1,4 +1,4 @@
-import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
+import type { ActiveUser, AgorClient, Board, BoardID, SessionID, User } from '@agor-live/client';
 import { Divider } from 'antd';
 import { useMemo } from 'react';
 import { PRESENCE_CONFIG } from '../../config/presence';
@@ -14,12 +14,15 @@ interface GlobalPresenceFacepileProps {
   onUserClick?: (
     userId: string,
     boardId?: BoardID,
-    cursorPosition?: { x: number; y: number }
+    cursorPosition?: { x: number; y: number },
+    sessionId?: SessionID
   ) => void;
   /** Demo/screenshot-only override: render a fixed facepile without live socket presence. */
   staticActiveUsers?: ActiveUser[];
   /** Optional screenshot/demo composition override. Omit to preserve the product default cap. */
   maxVisible?: number;
+  /** User currently being observed in watch mode. */
+  watchedUserId?: string;
 }
 
 export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
@@ -31,6 +34,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
   onUserClick,
   staticActiveUsers,
   maxVisible = 5,
+  watchedUserId,
 }) => {
   const { activeUsers } = usePresence({
     client,
@@ -63,6 +67,7 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
       <Facepile
         activeUsers={allActiveUsers}
         currentUserId={currentUser?.user_id}
+        watchedUserId={watchedUserId}
         maxVisible={maxVisible}
         boardById={boardById}
         onUserClick={onUserClick}

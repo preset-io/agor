@@ -1,6 +1,6 @@
 // src/types/presence.ts
 
-import type { BoardID } from './id';
+import type { BoardID, SessionID } from './id';
 import type { User } from './user';
 
 /**
@@ -11,6 +11,8 @@ export interface CursorMoveEvent {
   x: number; // React Flow viewport coordinates
   y: number; // React Flow viewport coordinates
   timestamp: number;
+  /** Short or full session ID the client is currently viewing, if any. */
+  sessionId?: string;
 }
 
 /**
@@ -22,6 +24,8 @@ export interface CursorMovedEvent {
   x: number;
   y: number;
   timestamp: number;
+  /** Session the emitting user is currently viewing, if any. */
+  sessionId?: string;
 }
 
 /**
@@ -35,6 +39,8 @@ export interface PresenceUpdatedEvent {
   userId: string;
   boardId: BoardID;
   timestamp: number;
+  /** Session the emitting user is currently viewing, if any. */
+  sessionId?: string;
 }
 
 /**
@@ -62,6 +68,7 @@ export interface ActiveUser {
   user: User;
   lastSeen: number;
   boardId?: BoardID; // Which board the user is currently viewing
+  sessionId?: SessionID; // Session the user is currently viewing, if any
   cursor?: {
     x: number;
     y: number;

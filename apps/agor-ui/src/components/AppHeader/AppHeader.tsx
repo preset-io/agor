@@ -1,4 +1,4 @@
-import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
+import type { ActiveUser, AgorClient, Board, BoardID, SessionID, User } from '@agor-live/client';
 import {
   ApiOutlined,
   BulbOutlined,
@@ -55,8 +55,11 @@ export interface AppHeaderProps {
   onUserClick?: (
     userId: string,
     boardId?: BoardID,
-    cursorPosition?: { x: number; y: number }
-  ) => void; // Navigate to user's board
+    cursorPosition?: { x: number; y: number },
+    sessionId?: SessionID
+  ) => void; // Navigate to user's board/session
+  /** User currently being observed in watch mode — wired to facepile for visual treatment. */
+  watchedUserId?: string;
   /** Instance label for deployment identification (displayed as a Tag) */
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
@@ -127,6 +130,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   onUserClick,
   instanceLabel,
   instanceDescription,
+  watchedUserId,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -279,6 +283,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           onUserClick={onUserClick}
           staticActiveUsers={staticActiveUsers}
           maxVisible={presenceMaxVisible}
+          watchedUserId={watchedUserId}
         />
         <AppHeaderGlobalSearch
           currentUserId={currentUserId}

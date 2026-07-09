@@ -62,6 +62,7 @@ interface FeathersSocket extends Socket {
   data: {
     isService?: boolean;
     currentBoardId?: string;
+    currentSessionId?: string;
     lastPresenceEmitAt?: number;
     tenant?: TenantContext;
   };
@@ -484,12 +485,22 @@ export function createSocketIOConfig(
           });
         }
 
+        // Accept a short or full session ID from the client; store it so
+        // presence-updated heartbeats can carry the same value.
+        if (typeof data.sessionId === 'string' && data.sessionId) {
+          fs.data.currentSessionId = data.sessionId;
+        } else if (data.sessionId === undefined && previousBoardId !== data.boardId) {
+          // Board changed and no session ID sent — clear stale session.
+          delete fs.data.currentSessionId;
+        }
+
         const broadcastData: CursorMovedEvent = {
           userId,
           boardId: data.boardId,
           x: data.x,
           y: data.y,
           timestamp: data.timestamp,
+          ...(fs.data.currentSessionId ? { sessionId: fs.data.currentSessionId } : {}),
         };
 
         // Broadcast cursor position only to tabs actively watching this board.
@@ -509,6 +520,7 @@ export function createSocketIOConfig(
             userId,
             boardId: data.boardId,
             timestamp: data.timestamp,
+            ...(fs.data.currentSessionId ? { sessionId: fs.data.currentSessionId } : {}),
           };
           socket.broadcast.emit('presence-updated', presenceData);
           fs.data.lastPresenceEmitAt = data.timestamp;
