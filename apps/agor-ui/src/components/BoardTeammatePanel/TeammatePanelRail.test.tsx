@@ -1,28 +1,28 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { AssistantPanelRail } from './AssistantPanelRail';
+import { TeammatePanelRail } from './TeammatePanelRail';
 
-describe('AssistantPanelRail', () => {
+describe('TeammatePanelRail', () => {
   it('renders one button per tab, fully visible (no clipped floating knob)', () => {
-    render(<AssistantPanelRail onSelectTab={vi.fn()} />);
+    render(<TeammatePanelRail onSelectTab={vi.fn()} />);
 
-    expect(screen.getByRole('button', { name: 'Assistant' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Teammate' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sessions' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Comments' })).toBeInTheDocument();
   });
 
-  it('opens the Assistant tab when its button is clicked', () => {
+  it('opens the Teammate tab when its button is clicked', () => {
     const onSelectTab = vi.fn();
-    render(<AssistantPanelRail onSelectTab={onSelectTab} />);
+    render(<TeammatePanelRail onSelectTab={onSelectTab} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Assistant' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Teammate' }));
 
-    expect(onSelectTab).toHaveBeenCalledExactlyOnceWith('assistant');
+    expect(onSelectTab).toHaveBeenCalledExactlyOnceWith('teammate');
   });
 
   it('opens the All sessions tab when its button is clicked', () => {
     const onSelectTab = vi.fn();
-    render(<AssistantPanelRail onSelectTab={onSelectTab} />);
+    render(<TeammatePanelRail onSelectTab={onSelectTab} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
 
@@ -31,7 +31,7 @@ describe('AssistantPanelRail', () => {
 
   it('opens the Comments tab when its button is clicked', () => {
     const onSelectTab = vi.fn();
-    render(<AssistantPanelRail onSelectTab={onSelectTab} />);
+    render(<TeammatePanelRail onSelectTab={onSelectTab} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Comments' }));
 
@@ -39,13 +39,13 @@ describe('AssistantPanelRail', () => {
   });
 
   it('shows no unread badge on Comments when the count is zero', () => {
-    render(<AssistantPanelRail onSelectTab={vi.fn()} unreadCommentsCount={0} />);
+    render(<TeammatePanelRail onSelectTab={vi.fn()} unreadCommentsCount={0} />);
 
     expect(screen.queryByText('0')).not.toBeInTheDocument();
   });
 
   it('shows the unread badge on Comments when there are unread comments', () => {
-    render(<AssistantPanelRail onSelectTab={vi.fn()} unreadCommentsCount={3} />);
+    render(<TeammatePanelRail onSelectTab={vi.fn()} unreadCommentsCount={3} />);
 
     expect(screen.getByText('3')).toBeInTheDocument();
   });

@@ -6,7 +6,6 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
-import { TeammateTab } from './tabs/AssistantTab';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
@@ -14,6 +13,7 @@ import { KnowledgeTab } from './tabs/KnowledgeTab';
 import { PermissionsTab } from './tabs/PermissionsTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
+import { TeammateTab } from './tabs/TeammateTab';
 import { type BranchUpdate, useBranchModalForm } from './useBranchModalForm';
 
 export type BranchModalTab =

@@ -17,13 +17,13 @@ import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectRepoById } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
-import type { TeammateTabResult } from './tabs/AssistantTab';
-import { TeammateTab } from './tabs/AssistantTab';
 import { BoardTab } from './tabs/BoardTab';
 import type { BranchTabConfig } from './tabs/BranchTab';
 import { BranchTab } from './tabs/BranchTab';
 import type { RepoTabResult } from './tabs/RepoTab';
 import { RepoTab } from './tabs/RepoTab';
+import type { TeammateTabResult } from './tabs/TeammateTab';
+import { TeammateTab } from './tabs/TeammateTab';
 
 type ActiveTab = 'branch' | 'teammate' | 'board' | 'repository';
 type CreateDialogTab = ActiveTab | 'assistant';

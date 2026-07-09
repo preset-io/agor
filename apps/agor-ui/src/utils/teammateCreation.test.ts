@@ -1,6 +1,6 @@
 import type { Branch, Repo } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
-import { createTeammateBranch } from './assistantCreation';
+import { createTeammateBranch } from './teammateCreation';
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
   return {

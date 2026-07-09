@@ -4,7 +4,7 @@ import { App as AntApp } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
-import { BoardAssistantPanel } from './BoardAssistantPanel';
+import { BoardTeammatePanel } from './BoardTeammatePanel';
 
 vi.mock('../BranchCard', () => ({
   BranchSessionSections: ({ defaultExpanded }: { defaultExpanded?: boolean }) => (
@@ -17,15 +17,15 @@ vi.mock('../BranchHeaderPill', () => ({
 }));
 
 const board = { board_id: 'board-1', name: 'Board', slug: 'board' } as Board;
-const primaryAssistantBranch = {
+const primaryTeammateBranch = {
   branch_id: 'branch-1',
   repo_id: 'repo-1',
-  name: 'assistant',
+  name: 'teammate',
   filesystem_status: 'ready',
 } as Branch;
-const primaryAssistantRepo = { repo_id: 'repo-1', slug: 'preset-io/agor' } as Repo;
+const primaryTeammateRepo = { repo_id: 'repo-1', slug: 'preset-io/agor' } as Repo;
 
-describe('BoardAssistantPanel assistant tab', () => {
+describe('BoardTeammatePanel assistant tab', () => {
   beforeEach(() => {
     agorStore.setState({ ...EMPTY_MAPS });
   });
@@ -33,13 +33,13 @@ describe('BoardAssistantPanel assistant tab', () => {
   it('expands the assistant Sessions section by default', () => {
     render(
       <AntApp>
-        <BoardAssistantPanel
+        <BoardTeammatePanel
           board={board}
-          activeTab="assistant"
+          activeTab="teammate"
           onTabChange={vi.fn()}
-          primaryAssistantBranch={primaryAssistantBranch}
-          primaryAssistantRepo={primaryAssistantRepo}
-          primaryAssistantInaccessible={false}
+          primaryTeammateBranch={primaryTeammateBranch}
+          primaryTeammateRepo={primaryTeammateRepo}
+          primaryTeammateInaccessible={false}
           onSessionClick={vi.fn()}
           client={null}
         />

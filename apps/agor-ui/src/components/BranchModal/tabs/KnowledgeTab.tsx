@@ -1,10 +1,10 @@
 import type {
   AgorClient,
-  AssistantKnowledgeConfig,
-  AssistantKnowledgeGrant,
-  AssistantKnowledgeGrantAccess,
   Branch,
   KnowledgeNamespace,
+  TeammateKnowledgeConfig,
+  TeammateKnowledgeGrant,
+  TeammateKnowledgeGrantAccess,
 } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
 import {
@@ -29,9 +29,9 @@ interface KnowledgeTabProps {
   canEdit: boolean;
 }
 
-type EditableGrant = AssistantKnowledgeGrant & { key: string };
+type EditableGrant = TeammateKnowledgeGrant & { key: string };
 
-const ACCESS_OPTIONS: Array<{ label: string; value: AssistantKnowledgeGrantAccess }> = [
+const ACCESS_OPTIONS: Array<{ label: string; value: TeammateKnowledgeGrantAccess }> = [
   { label: 'No access', value: 'none' },
   { label: 'Read', value: 'read' },
   { label: 'Write', value: 'write' },
@@ -39,7 +39,7 @@ const ACCESS_OPTIONS: Array<{ label: string; value: AssistantKnowledgeGrantAcces
 
 const HOME_NAMESPACE_PERMISSIONS = new Set(['write', 'own']);
 
-function emptyKbConfig(): Partial<AssistantKnowledgeConfig> {
+function emptyKbConfig(): Partial<TeammateKnowledgeConfig> {
   return {
     memory_path_template: 'memory/{{YYYY-MM-DD}}.md',
     default_visibility: 'public',
@@ -48,7 +48,7 @@ function emptyKbConfig(): Partial<AssistantKnowledgeConfig> {
   };
 }
 
-function grantKey(grant: Pick<AssistantKnowledgeGrant, 'namespace_id' | 'namespace_slug'>) {
+function grantKey(grant: Pick<TeammateKnowledgeGrant, 'namespace_id' | 'namespace_slug'>) {
   return grant.namespace_id || grant.namespace_slug;
 }
 
@@ -59,7 +59,7 @@ function namespaceSelectLabel(namespace: KnowledgeNamespace) {
 
 export function buildTeammateKnowledgePatch(
   branch: Pick<Branch, 'custom_context'>,
-  nextKb: Partial<AssistantKnowledgeConfig>
+  nextKb: Partial<TeammateKnowledgeConfig>
 ): Partial<Branch> {
   const existingConfig =
     branch.custom_context?.teammate ??
@@ -81,7 +81,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
   const { showSuccess, showError } = useThemedMessage();
   const teammate = useMemo(() => getTeammateConfig(branch), [branch]);
   const initialKb = teammate?.kb;
-  const [kb, setKb] = useState<Partial<AssistantKnowledgeConfig>>(initialKb ?? emptyKbConfig());
+  const [kb, setKb] = useState<Partial<TeammateKnowledgeConfig>>(initialKb ?? emptyKbConfig());
   const [namespace, setNamespace] = useState<KnowledgeNamespace | null>(null);
   const [namespaces, setNamespaces] = useState<KnowledgeNamespace[]>([]);
   const [loading, setLoading] = useState(false);
@@ -159,7 +159,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
     }
   };
 
-  const patchKb = async (nextKb: Partial<AssistantKnowledgeConfig>) => {
+  const patchKb = async (nextKb: Partial<TeammateKnowledgeConfig>) => {
     if (!client) return;
     setSavingPolicy(true);
     try {
@@ -189,7 +189,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
     setNamespace(selected);
   };
 
-  const updateGrant = (key: string, patch: Partial<AssistantKnowledgeGrant>) => {
+  const updateGrant = (key: string, patch: Partial<TeammateKnowledgeGrant>) => {
     setKb((current) => ({
       ...current,
       grants: (current.grants ?? []).map((grant) =>

@@ -254,21 +254,21 @@ describe('BoardsService - Custom Methods', () => {
   );
 
   dbTest(
-    'ensureAssistantWelcomeNote creates rendered static markdown server-side',
+    'ensureTeammateWelcomeNote creates rendered static markdown server-side',
     async ({ db }) => {
       const service = new BoardsService(db);
       const board = (await service.create({
-        name: 'Assistant Board',
-        slug: `assistant-board-${generateId()}`,
+        name: 'Teammate Board',
+        slug: `teammate-board-${generateId()}`,
         created_by: TEST_USER,
       })) as Board;
 
       const params = {};
-      const updated = await service.ensureAssistantWelcomeNote(
+      const updated = await service.ensureTeammateWelcomeNote(
         {
           boardId: board.board_id,
-          assistantName: '<img src=x onerror=alert(1)>',
-          assistantEmoji: '🤖',
+          teammateName: '<img src=x onerror=alert(1)>',
+          teammateEmoji: '🤖',
         },
         params
       );
@@ -276,7 +276,6 @@ describe('BoardsService - Custom Methods', () => {
       const note = updated.objects?.['welcome-note'];
       expect(params).toEqual({
         teammateWelcomeNoteMutated: true,
-        assistantWelcomeNoteMutated: true,
       });
       expect(note?.type).toBe('markdown');
       expect(note?.content).not.toContain('{{assistant.name}}');
@@ -287,12 +286,12 @@ describe('BoardsService - Custom Methods', () => {
   );
 
   dbTest(
-    'ensureAssistantWelcomeNote is a no-op when welcome note already exists',
+    'ensureTeammateWelcomeNote is a no-op when welcome note already exists',
     async ({ db }) => {
       const service = new BoardsService(db);
       const board = (await service.create({
-        name: 'Assistant Board Existing Note',
-        slug: `assistant-board-existing-${generateId()}`,
+        name: 'Teammate Board Existing Note',
+        slug: `teammate-board-existing-${generateId()}`,
         created_by: TEST_USER,
         objects: {
           'welcome-note': {
@@ -306,11 +305,11 @@ describe('BoardsService - Custom Methods', () => {
       })) as Board;
 
       const params = {};
-      const updated = await service.ensureAssistantWelcomeNote(
+      const updated = await service.ensureTeammateWelcomeNote(
         {
           boardId: board.board_id,
-          assistantName: 'Ignored Bot',
-          assistantEmoji: '🛠️',
+          teammateName: 'Ignored Bot',
+          teammateEmoji: '🛠️',
         },
         params
       );
@@ -320,11 +319,11 @@ describe('BoardsService - Custom Methods', () => {
     }
   );
 
-  dbTest('ensureAssistantWelcomeNote preserves custom existing welcome notes', async ({ db }) => {
+  dbTest('ensureTeammateWelcomeNote preserves custom existing welcome notes', async ({ db }) => {
     const service = new BoardsService(db);
     const board = (await service.create({
-      name: 'Assistant Board Custom',
-      slug: `assistant-board-custom-${generateId()}`,
+      name: 'Teammate Board Custom',
+      slug: `teammate-board-custom-${generateId()}`,
       created_by: TEST_USER,
       objects: {
         'welcome-note': {
@@ -338,10 +337,10 @@ describe('BoardsService - Custom Methods', () => {
     })) as Board;
 
     const params = {};
-    const updated = await service.ensureAssistantWelcomeNote(
+    const updated = await service.ensureTeammateWelcomeNote(
       {
         boardId: board.board_id,
-        assistantName: 'Ignored Bot',
+        teammateName: 'Ignored Bot',
       },
       params
     );
@@ -429,6 +428,7 @@ describe('BoardsService - Custom Methods', () => {
     expect(typeof service.toYaml).toBe('function');
     expect(typeof service.fromYaml).toBe('function');
     expect(typeof service.clone).toBe('function');
+    expect(typeof service.ensureTeammateWelcomeNote).toBe('function');
     expect(typeof service.ensureAssistantWelcomeNote).toBe('function');
   });
 });

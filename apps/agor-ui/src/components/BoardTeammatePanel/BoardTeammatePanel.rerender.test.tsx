@@ -5,12 +5,12 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
-import { BoardAssistantPanel } from './BoardAssistantPanel';
+import { BoardTeammatePanel } from './BoardTeammatePanel';
 
-// BoardAssistantPanel renders the active tab's content. With activeTab="comments"
+// BoardTeammatePanel renders the active tab's content. With activeTab="comments"
 // the comments pane mounts CommentsPanel, mocked here to a bare render counter so
 // its invocation count is a faithful proxy for how many times the (memoized)
-// BoardAssistantPanel itself rendered.
+// BoardTeammatePanel itself rendered.
 let panelRenders = 0;
 
 vi.mock('../CommentsPanel', () => ({
@@ -50,7 +50,7 @@ const STABLE_PANEL_PROPS = {
   board,
   activeTab: 'comments' as const,
   onTabChange: noop,
-  primaryAssistantInaccessible: false,
+  primaryTeammateInaccessible: false,
   currentUserId: 'u1',
   selectedSessionId: null,
   onCreateSession: noop,
@@ -75,7 +75,7 @@ const STABLE_PANEL_PROPS = {
   onCollapse: noop,
 } as const;
 
-// Parent harness rendering the REAL memo'd BoardAssistantPanel the way App does.
+// Parent harness rendering the REAL memo'd BoardTeammatePanel the way App does.
 // The flipped `onSessionClick` flows through `useStableCallback` when `stabilize`
 // is true and is a fresh arrow otherwise, so the same harness proves both halves
 // of the guard while every other prop stays referentially stable. A `useState`
@@ -90,19 +90,19 @@ function ParentHarness({ stabilize }: { stabilize: boolean }) {
 
   return (
     <AntApp>
-      <BoardAssistantPanel {...STABLE_PANEL_PROPS} onSessionClick={onSessionClick} />
+      <BoardTeammatePanel {...STABLE_PANEL_PROPS} onSessionClick={onSessionClick} />
     </AntApp>
   );
 }
 
-describe('BoardAssistantPanel memo + prop-stabilization re-render bailout', () => {
+describe('BoardTeammatePanel memo + prop-stabilization re-render bailout', () => {
   beforeEach(() => {
     panelRenders = 0;
     triggerParentRerender = () => {};
     agorStore.setState({ ...EMPTY_MAPS });
   });
 
-  it('a parent re-render does not re-render the memo’d BoardAssistantPanel when props are stable', async () => {
+  it('a parent re-render does not re-render the memo’d BoardTeammatePanel when props are stable', async () => {
     render(<ParentHarness stabilize={true} />);
 
     await waitFor(() => {
@@ -120,7 +120,7 @@ describe('BoardAssistantPanel memo + prop-stabilization re-render bailout', () =
     expect(panelRenders).toBe(baseline);
   });
 
-  it('a parent re-render DOES re-render BoardAssistantPanel when a prop identity churns', async () => {
+  it('a parent re-render DOES re-render BoardTeammatePanel when a prop identity churns', async () => {
     render(<ParentHarness stabilize={false} />);
 
     await waitFor(() => {

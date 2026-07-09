@@ -1,6 +1,6 @@
 export interface PrimaryAssistantRestoreInput {
   currentBoardId: string | null | undefined;
-  primaryAssistantBranchId: string | null | undefined;
+  primaryTeammateBranchId: string | null | undefined;
   effectiveSelectedSessionId: string | null | undefined;
   autoOpenedAssistantBoardId: string | null | undefined;
   restoreAllowed: boolean;
@@ -8,7 +8,7 @@ export interface PrimaryAssistantRestoreInput {
 }
 
 /**
- * Pick the primary assistant session that should be auto-opened for generic
+ * Pick the primary teammate session that should be auto-opened for generic
  * board/app entry points.
  *
  * Callers decide when generic restore is allowed. Explicit entity URLs
@@ -16,16 +16,16 @@ export interface PrimaryAssistantRestoreInput {
  * those routes already carry the user's target and can spend an initialization
  * render before URL→state resolution catches up.
  */
-export function getPrimaryAssistantSessionToRestore({
+export function getPrimaryTeammateSessionToRestore({
   currentBoardId,
-  primaryAssistantBranchId,
+  primaryTeammateBranchId,
   effectiveSelectedSessionId,
   autoOpenedAssistantBoardId,
   restoreAllowed,
   sessions,
 }: PrimaryAssistantRestoreInput): string | null {
   if (!restoreAllowed) return null;
-  if (!currentBoardId || !primaryAssistantBranchId || effectiveSelectedSessionId) return null;
+  if (!currentBoardId || !primaryTeammateBranchId || effectiveSelectedSessionId) return null;
   if (autoOpenedAssistantBoardId === currentBoardId) return null;
 
   return (

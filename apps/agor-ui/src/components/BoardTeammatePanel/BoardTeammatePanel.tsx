@@ -35,15 +35,15 @@ import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 
-export type BoardAssistantPanelTab = 'assistant' | 'all-sessions' | 'comments';
+export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'comments';
 
-interface BoardAssistantPanelProps {
+interface BoardTeammatePanelProps {
   board: Board | null;
-  activeTab?: BoardAssistantPanelTab;
-  onTabChange?: (tab: BoardAssistantPanelTab) => void;
-  primaryAssistantBranch?: Branch;
-  primaryAssistantRepo?: Repo;
-  primaryAssistantInaccessible: boolean;
+  activeTab?: BoardTeammatePanelTab;
+  onTabChange?: (tab: BoardTeammatePanelTab) => void;
+  primaryTeammateBranch?: Branch;
+  primaryTeammateRepo?: Repo;
+  primaryTeammateInaccessible: boolean;
   currentUserId?: string;
   selectedSessionId?: string | null;
   onSessionClick: (sessionId: string) => void;
@@ -78,13 +78,13 @@ interface BoardAssistantPanelProps {
   client: AgorClient | null;
 }
 
-const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
+const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   board,
   activeTab: controlledActiveTab,
   onTabChange,
-  primaryAssistantBranch,
-  primaryAssistantRepo,
-  primaryAssistantInaccessible,
+  primaryTeammateBranch,
+  primaryTeammateRepo,
+  primaryTeammateInaccessible,
   currentUserId,
   selectedSessionId,
   onSessionClick,
@@ -115,11 +115,11 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
   const userById = useAgorStore(selectUserById);
   const commentById = useAgorStore(selectCommentById);
   const boardObjects = board?.objects;
-  const defaultTab: BoardAssistantPanelTab = primaryAssistantInaccessible
+  const defaultTab: BoardTeammatePanelTab = primaryTeammateInaccessible
     ? 'all-sessions'
-    : 'assistant';
+    : 'teammate';
   const [uncontrolledActiveTab, setUncontrolledActiveTab] =
-    useState<BoardAssistantPanelTab>(defaultTab);
+    useState<BoardTeammatePanelTab>(defaultTab);
   const isControlled = controlledActiveTab !== undefined;
   const activeTab = controlledActiveTab ?? uncontrolledActiveTab;
   const [sessionDetailsHydrated, setSessionDetailsHydrated] = useState(() => !deferSessionDetails);
@@ -152,7 +152,7 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
     };
   }, [deferSessionDetails, hydrateDeferredDetails, sessionDetailsHydrated]);
 
-  const setActiveTab = (tab: BoardAssistantPanelTab) => {
+  const setActiveTab = (tab: BoardTeammatePanelTab) => {
     hydrateDeferredDetails();
     setUncontrolledActiveTab(tab);
     onTabChange?.(tab);
@@ -177,8 +177,8 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
     }
   }, [defaultTab, board?.board_id, isControlled, onTabChange]);
 
-  const assistantOptions = useMemo(() => {
-    if (primaryAssistantBranch || primaryAssistantInaccessible) return [];
+  const teammateOptions = useMemo(() => {
+    if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
 
     return Array.from(branchById.values())
       .filter((branch) => isTeammate(branch) && !branch.archived)
@@ -199,36 +199,36 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
           repo,
         };
       });
-  }, [branchById, primaryAssistantBranch, primaryAssistantInaccessible, repoById]);
-  const [selectedAssistantId, setSelectedAssistantId] = useState<string | undefined>();
-  const [assigningAssistant, setAssigningAssistant] = useState(false);
+  }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById]);
+  const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
+  const [assigningTeammate, setAssigningTeammate] = useState(false);
 
   useEffect(() => {
     if (
-      selectedAssistantId &&
-      assistantOptions.some((option) => option.value === selectedAssistantId)
+      selectedTeammateId &&
+      teammateOptions.some((option) => option.value === selectedTeammateId)
     ) {
       return;
     }
-    setSelectedAssistantId(assistantOptions[0]?.value);
-  }, [assistantOptions, selectedAssistantId]);
+    setSelectedTeammateId(teammateOptions[0]?.value);
+  }, [teammateOptions, selectedTeammateId]);
 
   const handleAssignAssistant = async () => {
-    if (!board || !client || !selectedAssistantId) return;
+    if (!board || !client || !selectedTeammateId) return;
 
-    const assistant = branchById.get(selectedAssistantId);
-    if (!assistant) return;
+    const teammate = branchById.get(selectedTeammateId);
+    if (!teammate) return;
 
-    setAssigningAssistant(true);
+    setAssigningTeammate(true);
     try {
-      if (assistant.board_id !== board.board_id) {
-        await client.service('branches').patch(selectedAssistantId, {
+      if (teammate.board_id !== board.board_id) {
+        await client.service('branches').patch(selectedTeammateId, {
           board_id: board.board_id,
         });
       }
       await client.service('boards').setPrimaryTeammate({
         boardId: board.board_id,
-        branchId: selectedAssistantId,
+        branchId: selectedTeammateId,
       });
       message.success('Teammate assigned');
     } catch (error) {
@@ -236,21 +236,21 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
         `Failed to assign teammate: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
-      setAssigningAssistant(false);
+      setAssigningTeammate(false);
     }
   };
 
-  const assistantSessions = useMemo(
+  const teammateSessions = useMemo(
     () =>
-      primaryAssistantBranch ? sessionsByBranch.get(primaryAssistantBranch.branch_id) || [] : [],
-    [primaryAssistantBranch, sessionsByBranch]
+      primaryTeammateBranch ? sessionsByBranch.get(primaryTeammateBranch.branch_id) || [] : [],
+    [primaryTeammateBranch, sessionsByBranch]
   );
 
-  const assistantContent = (() => {
-    if (primaryAssistantBranch && primaryAssistantRepo) {
-      const assistantConfig = getTeammateConfig(primaryAssistantBranch);
-      const assistantDescription = primaryAssistantBranch.notes?.trim();
-      const isCreating = primaryAssistantBranch.filesystem_status === 'creating';
+  const teammateContent = (() => {
+    if (primaryTeammateBranch && primaryTeammateRepo) {
+      const teammateConfig = getTeammateConfig(primaryTeammateBranch);
+      const teammateDescription = primaryTeammateBranch.notes?.trim();
+      const isCreating = primaryTeammateBranch.filesystem_status === 'creating';
 
       return (
         <div style={{ padding: 16 }}>
@@ -277,8 +277,8 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
               >
                 {isCreating ? (
                   <Spin />
-                ) : assistantConfig?.emoji ? (
-                  <span style={{ fontSize: 30 }}>{assistantConfig.emoji}</span>
+                ) : teammateConfig?.emoji ? (
+                  <span style={{ fontSize: 30 }}>{teammateConfig.emoji}</span>
                 ) : (
                   <RobotOutlined style={{ fontSize: 30, color: token.colorInfo }} />
                 )}
@@ -288,10 +288,10 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
                   level={4}
                   style={{ margin: 0, fontWeight: 600 }}
                   ellipsis={{
-                    tooltip: assistantConfig?.displayName ?? primaryAssistantBranch.name,
+                    tooltip: teammateConfig?.displayName ?? primaryTeammateBranch.name,
                   }}
                 >
-                  {assistantConfig?.displayName ?? primaryAssistantBranch.name}
+                  {teammateConfig?.displayName ?? primaryTeammateBranch.name}
                 </Typography.Title>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   Primary teammate
@@ -301,45 +301,45 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
 
             <Space size={4} wrap>
               <BranchHeaderPill
-                repo={primaryAssistantRepo}
-                branch={primaryAssistantBranch}
-                sessionCount={assistantSessions.length}
+                repo={primaryTeammateRepo}
+                branch={primaryTeammateBranch}
+                sessionCount={teammateSessions.length}
                 onOpenBranch={onOpenSettings}
                 showEnvButtons={false}
                 compact
               />
-              {primaryAssistantBranch.created_by && (
+              {primaryTeammateBranch.created_by && (
                 <CreatedByTag
-                  createdBy={primaryAssistantBranch.created_by}
+                  createdBy={primaryTeammateBranch.created_by}
                   currentUserId={currentUserId}
                   userById={userById}
                   prefix="Created by"
                 />
               )}
-              {primaryAssistantBranch.issue_url && (
+              {primaryTeammateBranch.issue_url && (
                 <IssuePill
-                  issueUrl={primaryAssistantBranch.issue_url}
-                  currentRepo={primaryAssistantRepo}
+                  issueUrl={primaryTeammateBranch.issue_url}
+                  currentRepo={primaryTeammateRepo}
                 />
               )}
-              {primaryAssistantBranch.pull_request_url && (
+              {primaryTeammateBranch.pull_request_url && (
                 <PullRequestPill
-                  prUrl={primaryAssistantBranch.pull_request_url}
-                  currentRepo={primaryAssistantRepo}
+                  prUrl={primaryTeammateBranch.pull_request_url}
+                  currentRepo={primaryTeammateRepo}
                 />
               )}
             </Space>
-            {assistantDescription && (
+            {teammateDescription && (
               <div className="markdown-compact" style={{ color: token.colorTextSecondary }}>
-                <MarkdownRenderer content={assistantDescription} compact showControls={false} />
+                <MarkdownRenderer content={teammateDescription} compact showControls={false} />
               </div>
             )}
           </div>
 
           {sessionDetailsHydrated ? (
             <BranchSessionSections
-              branch={primaryAssistantBranch}
-              sessions={assistantSessions}
+              branch={primaryTeammateBranch}
+              sessions={teammateSessions}
               userById={userById}
               currentUserId={currentUserId}
               selectedSessionId={selectedSessionId}
@@ -374,7 +374,7 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
       );
     }
 
-    if (primaryAssistantInaccessible) {
+    if (primaryTeammateInaccessible) {
       return (
         <div style={{ padding: 16 }}>
           <Alert
@@ -403,14 +403,14 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
           <Select
             showSearch
             placeholder="Select a teammate"
-            value={selectedAssistantId}
-            onChange={setSelectedAssistantId}
-            options={assistantOptions}
+            value={selectedTeammateId}
+            onChange={setSelectedTeammateId}
+            options={teammateOptions}
             optionFilterProp="searchText"
-            disabled={assigningAssistant || assistantOptions.length === 0}
+            disabled={assigningTeammate || teammateOptions.length === 0}
             style={{ width: '100%' }}
           />
-          {assistantOptions.length === 0 && (
+          {teammateOptions.length === 0 && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               No existing teammates are available to assign.
             </Typography.Text>
@@ -418,8 +418,8 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
           <Button
             type="primary"
             onClick={handleAssignAssistant}
-            loading={assigningAssistant}
-            disabled={!selectedAssistantId || !board || !client}
+            loading={assigningTeammate}
+            disabled={!selectedTeammateId || !board || !client}
           >
             Assign
           </Button>
@@ -439,14 +439,14 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
     >
       <Tabs
         activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as BoardAssistantPanelTab)}
+        onChange={(key) => setActiveTab(key as BoardTeammatePanelTab)}
         items={[
           {
-            key: 'assistant',
+            key: 'teammate',
             label: 'Teammate',
             children: (
               <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
-                {assistantContent}
+                {teammateContent}
               </div>
             ),
           },
@@ -524,6 +524,6 @@ const BoardAssistantPanelComponent: React.FC<BoardAssistantPanelProps> = ({
 // Memoized: the inner App stabilizes every handler prop it passes (via
 // useStableCallback), so React.memo bails out of re-renders driven by unrelated
 // store patches and only re-renders when a value prop it draws actually changes.
-export const BoardAssistantPanel = memo(BoardAssistantPanelComponent);
+export const BoardTeammatePanel = memo(BoardTeammatePanelComponent);
 
-export default BoardAssistantPanel;
+export default BoardTeammatePanel;

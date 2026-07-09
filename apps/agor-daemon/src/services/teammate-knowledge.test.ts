@@ -9,20 +9,20 @@ import {
 import type { BranchID, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
-import { ensureAssistantKnowledgeNamespace } from './assistant-knowledge';
+import { ensureTeammateKnowledgeNamespace } from './teammate-knowledge';
 
-describe('ensureAssistantKnowledgeNamespace', () => {
+describe('ensureTeammateKnowledgeNamespace', () => {
   dbTest('creates an open primary namespace and stores teammate kb config', async ({ db }) => {
     const user = await new UsersRepository(db).create({
       user_id: generateId() as UserID,
-      email: `assistant-kb-${Date.now()}@test.local`,
-      name: 'Assistant Owner',
+      email: `teammate-kb-${Date.now()}@test.local`,
+      name: 'Teammate Owner',
       role: 'member',
     });
     const repo = await new RepoRepository(db).create({
       repo_id: generateId(),
-      slug: `assistant-kb-repo-${Date.now()}`,
-      name: 'Assistant KB Repo',
+      slug: `teammate-kb-repo-${Date.now()}`,
+      name: 'Teammate KB Repo',
       repo_type: 'remote',
       remote_url: 'https://github.com/test/repo.git',
       local_path: '/tmp/repo',
@@ -31,16 +31,16 @@ describe('ensureAssistantKnowledgeNamespace', () => {
     const branch = await new BranchRepository(db).create({
       branch_id: generateId() as BranchID,
       repo_id: repo.repo_id,
-      name: 'assistant-branch',
-      ref: 'assistant-branch',
+      name: 'teammate-branch',
+      ref: 'teammate-branch',
       branch_unique_id: 1,
       created_by: user.user_id,
       custom_context: {
-        assistant: { kind: 'assistant', displayName: 'Helper' },
+        teammate: { kind: 'teammate', displayName: 'Helper' },
       },
     });
 
-    const result = await ensureAssistantKnowledgeNamespace(db, branch.branch_id, user.user_id);
+    const result = await ensureTeammateKnowledgeNamespace(db, branch.branch_id, user.user_id);
 
     expect(result.namespace).toMatchObject({
       slug: `teammate-${shortId(branch.branch_id)}`,
@@ -75,7 +75,7 @@ describe('ensureAssistantKnowledgeNamespace', () => {
       }),
     ]);
 
-    const again = await ensureAssistantKnowledgeNamespace(db, branch.branch_id, user.user_id);
+    const again = await ensureTeammateKnowledgeNamespace(db, branch.branch_id, user.user_id);
     expect(again.namespace.namespace_id).toBe(result.namespace.namespace_id);
   });
 });

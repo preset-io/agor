@@ -5,7 +5,7 @@
  * - Text content (string or TextBlock)
  * - Tool use blocks
  * - Tool result blocks
- * - User vs Assistant styling
+ * - User vs assistant-message styling
  * - User emoji avatars
  */
 

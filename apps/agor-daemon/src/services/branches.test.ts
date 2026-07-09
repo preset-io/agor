@@ -684,7 +684,7 @@ describe('BranchesService environment start async behavior', () => {
   });
 });
 
-describe('BranchesService.patch primary assistant invariants', () => {
+describe('BranchesService.patch primary teammate invariants', () => {
   it('clears the old primary and sets the new board primary when an assistant moves boards', async () => {
     const boardA = 'board-a' as BoardID;
     const boardB = 'board-b' as BoardID;
@@ -864,7 +864,7 @@ describe('BranchesService one-shot teammate creation wiring', () => {
     );
   });
 
-  it('leaves the board primary pointer untouched for a non-assistant branch', async () => {
+  it('leaves the board primary pointer untouched for a non-teammate branch', async () => {
     const { boardRepo, boardsEmit, invoke } = createTeammateWiringHarness();
 
     await invoke({

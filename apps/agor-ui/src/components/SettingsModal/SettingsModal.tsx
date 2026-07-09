@@ -54,7 +54,6 @@ import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
 import { ArtifactsTable } from './ArtifactsTable';
-import { TeammatesTable } from './AssistantsTable';
 import { BoardsTable } from './BoardsTable';
 import { BranchesTable } from './BranchesTable';
 import { CardsTable } from './CardsTable';
@@ -62,6 +61,7 @@ import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
+import { TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
 
 const { Sider, Content } = Layout;

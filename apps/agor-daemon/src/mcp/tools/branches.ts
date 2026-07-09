@@ -2,12 +2,12 @@ import { existsSync } from 'node:fs';
 import { isBranchRbacEnabled, loadConfig } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
 import type {
-  AssistantConfig,
   BoardID,
   Branch,
   BranchID,
   Repo,
   Session,
+  TeammateConfig,
   UUID,
   ZoneBoardObject,
 } from '@agor/core/types';
@@ -422,9 +422,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'and branchName to your desired unique name (e.g., sourceBranch="issue-282", branchName="issue-282-review-1"). ' +
         'Use zoneId to place the branch in a specific zone (pin only, no trigger). ' +
         'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation. ' +
-        'To create a long-lived Agor assistant (a persistent AI companion that manages other branches ' +
-        'and maintains memory), pass the assistant object — this is the ONLY supported way to make an ' +
-        'assistant via MCP. Assistant status cannot be toggled later with agor_branches_update.',
+        'To create a long-lived Agor teammate (a persistent AI teammate that manages other branches ' +
+        'and maintains memory), pass the teammate object — this is the ONLY supported way to make a ' +
+        'teammate via MCP. Teammate status cannot be toggled later with agor_branches_update.',
       inputSchema: z.object({
         repoId: mcpRequiredId(
           'repoId',
@@ -516,19 +516,19 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             'Common shallow value: 100. Trade-off: smaller disk footprint, but ' +
             '`git log` past N commits is broken and some rebase operations fail.'
         ),
-        assistant: z
+        teammate: z
           .object({
             displayName: z
-              .string({ error: 'assistant.displayName must be a string.' })
+              .string({ error: 'teammate.displayName must be a string.' })
               .trim()
-              .min(1, 'assistant.displayName cannot be empty')
-              .describe('Human-friendly display name for the assistant (e.g., "Siebel CRM").'),
-            emoji: z.string().optional().describe('Emoji icon for this assistant (e.g., "🧑‍💻").'),
+              .min(1, 'teammate.displayName cannot be empty')
+              .describe('Human-friendly display name for the teammate (e.g., "Siebel CRM").'),
+            emoji: z.string().optional().describe('Emoji icon for this teammate (e.g., "🧑‍💻").'),
             frameworkRepo: z
               .string()
               .optional()
               .describe(
-                'Template/framework repo slug this assistant is based on. ' +
+                'Template/framework repo slug this teammate is based on. ' +
                   "Defaults to the created branch's repo slug when omitted."
               ),
             frameworkVersion: z
@@ -539,17 +539,27 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               .boolean()
               .optional()
               .describe(
-                'Whether this assistant was created via the onboarding wizard (defaults to false).'
+                'Whether this teammate was created via the onboarding wizard (defaults to false).'
               ),
           })
           .optional()
           .describe(
-            'When provided, create this branch as a long-lived Agor assistant. ' +
-              'The assistant metadata is written to custom_context.assistant on the initial branch row, ' +
-              'the board primary assistant pointer is wired automatically, and the assistant Knowledge ' +
+            'When provided, create this branch as a long-lived Agor teammate. ' +
+              'The teammate metadata is written to custom_context.teammate on the initial branch row, ' +
+              'the board primary teammate pointer is wired automatically, and the teammate Knowledge ' +
               'namespace is provisioned. Knowledge namespace/grant config (the "kb" field) is managed ' +
               'separately and cannot be set here.'
           ),
+        assistant: z
+          .object({
+            displayName: z.string().trim().min(1).optional(),
+            emoji: z.string().optional(),
+            frameworkRepo: z.string().optional(),
+            frameworkVersion: z.string().optional(),
+            createdViaOnboarding: z.boolean().optional(),
+          })
+          .optional()
+          .describe('Deprecated alias for teammate. Use teammate for new MCP calls.'),
       }),
     },
     async (args) => {
@@ -577,13 +587,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const variant = coerceString(args.variant);
       if (variant) assertValidVariant(repo, variant);
 
-      // Optional: mark the new branch as a long-lived assistant in one shot.
-      // Writing the assistant config onto the initial branch row (rather than a
+      // Optional: mark the new branch as a long-lived teammate in one shot.
+      // Writing the teammate config onto the initial branch row (rather than a
       // follow-up patch) is what the UI does too — it lets BranchesService.create
-      // wire the board primary_assistant_id pointer and provision the assistant
-      // Knowledge namespace atomically, and sidesteps the assertAssistantKindIsStable
-      // guard that (deliberately) blocks flipping assistant status via patch.
-      const assistantInput = args.assistant as
+      // wire the board primary_teammate_id pointer and provision the teammate
+      // Knowledge namespace atomically, and sidesteps the assertTeammateKindIsStable
+      // guard that (deliberately) blocks flipping teammate status via patch.
+      const teammateInput = (args.teammate ?? args.assistant) as
         | {
             displayName?: unknown;
             emoji?: unknown;
@@ -592,20 +602,20 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             createdViaOnboarding?: unknown;
           }
         | undefined;
-      let assistantConfig: AssistantConfig | undefined;
-      if (assistantInput) {
-        const displayName = coerceString(assistantInput.displayName)?.trim();
-        if (!displayName) throw new Error('assistant.displayName is required');
-        const emoji = coerceString(assistantInput.emoji);
-        const frameworkRepo = coerceString(assistantInput.frameworkRepo) ?? repo.slug;
-        const frameworkVersion = coerceString(assistantInput.frameworkVersion);
-        assistantConfig = {
-          kind: 'assistant',
+      let teammateConfig: TeammateConfig | undefined;
+      if (teammateInput) {
+        const displayName = coerceString(teammateInput.displayName)?.trim();
+        if (!displayName) throw new Error('teammate.displayName is required');
+        const emoji = coerceString(teammateInput.emoji);
+        const frameworkRepo = coerceString(teammateInput.frameworkRepo) ?? repo.slug;
+        const frameworkVersion = coerceString(teammateInput.frameworkVersion);
+        teammateConfig = {
+          kind: 'teammate',
           displayName,
           ...(emoji ? { emoji } : {}),
           ...(frameworkRepo ? { frameworkRepo } : {}),
           ...(frameworkVersion ? { frameworkVersion } : {}),
-          createdViaOnboarding: assistantInput.createdViaOnboarding === true,
+          createdViaOnboarding: teammateInput.createdViaOnboarding === true,
         };
       }
 
@@ -678,7 +688,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ...(variant ? { environment_variant: variant } : {}),
           ...(storageMode ? { storage_mode: storageMode } : {}),
           ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
-          ...(assistantConfig ? { custom_context: { assistant: assistantConfig } } : {}),
+          ...(teammateConfig ? { custom_context: { teammate: teammateConfig } } : {}),
         },
         ctx.baseServiceParams
       );
@@ -690,11 +700,16 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         response._note = `Name '${originalName}' was already taken. Created as '${branchName}' instead (autoSuffix applied).`;
       }
 
-      if (assistantConfig) {
-        response._assistant = {
+      if (teammateConfig) {
+        const teammateResult = {
           created: true,
-          display_name: assistantConfig.displayName,
-          note: 'Created as a long-lived Agor assistant. The board primary assistant pointer and the assistant Knowledge namespace were provisioned automatically.',
+          display_name: teammateConfig.displayName,
+          note: 'Created as a long-lived Agor teammate. The board primary teammate pointer and the teammate Knowledge namespace were provisioned automatically.',
+        };
+        response._teammate = teammateResult;
+        response._assistant = {
+          deprecated: true,
+          ...teammateResult,
         };
       }
 

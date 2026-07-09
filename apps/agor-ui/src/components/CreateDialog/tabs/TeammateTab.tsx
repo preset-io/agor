@@ -15,12 +15,12 @@ import { DownOutlined } from '@ant-design/icons';
 import { Collapse, Form, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { slugify } from '@/utils/repoSlug';
-import { useTeammateForm } from '../../../hooks/useAssistantForm';
 import { useEnsureFrameworkRepo } from '../../../hooks/useEnsureFrameworkRepo';
+import { useTeammateForm } from '../../../hooks/useTeammateForm';
 import type { AgenticToolOption } from '../../../types';
 import { AgenticToolConfigForm, getFormValuesFromConfig } from '../../AgenticToolConfigForm';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
-import { TeammateFormFields } from '../../forms/AssistantFormFields';
+import { TeammateFormFields } from '../../forms/TeammateFormFields';
 import type { ModelConfig } from '../../ModelSelector';
 
 export interface TeammateTabResult {

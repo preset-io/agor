@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { getPrimaryAssistantSessionToRestore } from './primaryAssistantRestore';
+import { getPrimaryTeammateSessionToRestore } from './primaryTeammateRestore';
 
 const base = {
   currentBoardId: 'board-1',
-  primaryAssistantBranchId: 'branch-1',
+  primaryTeammateBranchId: 'branch-1',
   effectiveSelectedSessionId: null,
   autoOpenedAssistantBoardId: null,
   restoreAllowed: true,
@@ -13,14 +13,14 @@ const base = {
   ],
 };
 
-describe('getPrimaryAssistantSessionToRestore', () => {
+describe('getPrimaryTeammateSessionToRestore', () => {
   it('restores the latest active primary-assistant session for generic board/app URLs', () => {
-    expect(getPrimaryAssistantSessionToRestore(base)).toBe('newer');
+    expect(getPrimaryTeammateSessionToRestore(base)).toBe('newer');
   });
 
   it('does not restore when route policy disallows generic restore', () => {
     expect(
-      getPrimaryAssistantSessionToRestore({
+      getPrimaryTeammateSessionToRestore({
         ...base,
         restoreAllowed: false,
       })
@@ -29,7 +29,7 @@ describe('getPrimaryAssistantSessionToRestore', () => {
 
   it('does not restore when a session is already selected', () => {
     expect(
-      getPrimaryAssistantSessionToRestore({
+      getPrimaryTeammateSessionToRestore({
         ...base,
         effectiveSelectedSessionId: 'requested-session',
       })
@@ -38,7 +38,7 @@ describe('getPrimaryAssistantSessionToRestore', () => {
 
   it('does not restore the same board more than once', () => {
     expect(
-      getPrimaryAssistantSessionToRestore({
+      getPrimaryTeammateSessionToRestore({
         ...base,
         autoOpenedAssistantBoardId: 'board-1',
       })
@@ -47,7 +47,7 @@ describe('getPrimaryAssistantSessionToRestore', () => {
 
   it('ignores archived sessions', () => {
     expect(
-      getPrimaryAssistantSessionToRestore({
+      getPrimaryTeammateSessionToRestore({
         ...base,
         sessions: [
           {

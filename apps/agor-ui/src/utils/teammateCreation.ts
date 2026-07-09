@@ -1,6 +1,6 @@
 import type { AgorClient, Board, BoardID, Branch, Repo, TeammateConfig } from '@agor-live/client';
-import { ensureTeammateWelcomeNote } from '@/utils/assistantWelcomeNote';
 import { slugify } from '@/utils/repoSlug';
+import { ensureTeammateWelcomeNote } from '@/utils/teammateWelcomeNote';
 
 export interface TeammateCreationInput {
   displayName: string;

@@ -255,14 +255,14 @@ describe('agor_branches_create', () => {
     );
   });
 
-  it('creates a one-shot assistant branch by writing assistant metadata into custom_context', async () => {
+  it('creates a one-shot teammate branch by writing teammate metadata into custom_context', async () => {
     const baseServiceParams = {
       authenticated: true,
       provider: 'mcp',
       user: { user_id: 'user-a', role: 'member' },
     };
     const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
-      branch_id: 'assistant-branch',
+      branch_id: 'teammate-branch',
       created_by: 'user-a',
       ...(data as Record<string, unknown>),
     }));
@@ -290,11 +290,11 @@ describe('agor_branches_create', () => {
       branchName: 'siebel-crm',
       boardId: 'board-1',
       autoSuffix: false,
-      assistant: { displayName: 'Siebel CRM', emoji: '🤖' },
+      teammate: { displayName: 'Siebel CRM', emoji: '🤖' },
     });
 
-    // The assistant metadata must land on the initial branch row so
-    // BranchesService.create can wire the board primary assistant pointer and
+    // The teammate metadata must land on the initial branch row so
+    // BranchesService.create can wire the board primary teammate pointer and
     // provision the Knowledge namespace atomically (mirrors the UI create flow).
     expect(createBranch).toHaveBeenCalledWith(
       'repo-1',
@@ -302,8 +302,8 @@ describe('agor_branches_create', () => {
         name: 'siebel-crm',
         boardId: 'board-1',
         custom_context: {
-          assistant: {
-            kind: 'assistant',
+          teammate: {
+            kind: 'teammate',
             displayName: 'Siebel CRM',
             emoji: '🤖',
             frameworkRepo: 'siebel-crm',
@@ -314,11 +314,19 @@ describe('agor_branches_create', () => {
       baseServiceParams
     );
 
-    const payload = JSON.parse(result.content[0].text) as { _assistant?: Record<string, unknown> };
-    expect(payload._assistant).toMatchObject({ created: true, display_name: 'Siebel CRM' });
+    const payload = JSON.parse(result.content[0].text) as {
+      _teammate?: Record<string, unknown>;
+      _assistant?: Record<string, unknown>;
+    };
+    expect(payload._teammate).toMatchObject({ created: true, display_name: 'Siebel CRM' });
+    expect(payload._assistant).toMatchObject({
+      deprecated: true,
+      created: true,
+      display_name: 'Siebel CRM',
+    });
   });
 
-  it('does not set custom_context when no assistant metadata is provided', async () => {
+  it('does not set custom_context when no teammate metadata is provided', async () => {
     const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
       branch_id: 'plain-branch',
       created_by: 'user-a',
@@ -397,7 +405,7 @@ describe('branch MCP input schemas', () => {
     }
   });
 
-  it('accepts a valid assistant object and rejects an empty assistant displayName', () => {
+  it('accepts a valid teammate object and rejects an empty teammate displayName', () => {
     const config = registerAndCaptureConfig('agor_branches_create', {
       app: {},
       userId: 'user-1',
@@ -408,7 +416,7 @@ describe('branch MCP input schemas', () => {
         repoId: 'repo-1',
         branchName: 'siebel-crm',
         boardId: 'board-1',
-        assistant: { displayName: 'Siebel CRM', emoji: '🤖' },
+        teammate: { displayName: 'Siebel CRM', emoji: '🤖' },
       }).success
     ).toBe(true);
 

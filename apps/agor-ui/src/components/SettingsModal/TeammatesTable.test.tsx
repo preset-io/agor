@@ -2,7 +2,7 @@ import type { Board, Branch, Repo, Session, User } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { TeammatesTable } from './AssistantsTable';
+import { TeammatesTable } from './TeammatesTable';
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);

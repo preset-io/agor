@@ -2,22 +2,22 @@ import { CommentOutlined, RobotOutlined, UnorderedListOutlined } from '@ant-desi
 import { Badge, theme } from 'antd';
 import type React from 'react';
 import { memo } from 'react';
-import type { BoardAssistantPanelTab } from './BoardAssistantPanel';
+import type { BoardTeammatePanelTab } from './BoardTeammatePanel';
 
 interface RailItem {
-  key: BoardAssistantPanelTab;
+  key: BoardTeammatePanelTab;
   label: string;
   icon: React.ReactNode;
 }
 
 const RAIL_ITEMS: RailItem[] = [
-  { key: 'assistant', label: 'Assistant', icon: <RobotOutlined /> },
+  { key: 'teammate', label: 'Teammate', icon: <RobotOutlined /> },
   { key: 'all-sessions', label: 'Sessions', icon: <UnorderedListOutlined /> },
   { key: 'comments', label: 'Comments', icon: <CommentOutlined /> },
 ];
 
-export interface AssistantPanelRailProps {
-  onSelectTab: (tab: BoardAssistantPanelTab) => void;
+export interface TeammatePanelRailProps {
+  onSelectTab: (tab: BoardTeammatePanelTab) => void;
   unreadCommentsCount?: number;
   hasUserMentions?: boolean;
 }
@@ -25,7 +25,7 @@ export interface AssistantPanelRailProps {
 // Collapsed-state replacement for the old floating reopen knob (issue #123):
 // a persistent, always-fully-visible icon rail rather than a half-clipped,
 // low-contrast circle floating at the panel edge.
-const AssistantPanelRailComponent: React.FC<AssistantPanelRailProps> = ({
+const TeammatePanelRailComponent: React.FC<TeammatePanelRailProps> = ({
   onSelectTab,
   unreadCommentsCount = 0,
   hasUserMentions = false,
@@ -98,6 +98,6 @@ const AssistantPanelRailComponent: React.FC<AssistantPanelRailProps> = ({
   );
 };
 
-export const AssistantPanelRail = memo(AssistantPanelRailComponent);
+export const TeammatePanelRail = memo(TeammatePanelRailComponent);
 
-export default AssistantPanelRail;
+export default TeammatePanelRail;

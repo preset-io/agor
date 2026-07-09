@@ -14,14 +14,14 @@ vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
   ),
 }));
 
-vi.mock('../../utils/startAssistantBootstrapSession', () => {
+vi.mock('../../utils/startTeammateBootstrapSession', () => {
   const start = vi.fn(async ({ onCreateSession, sessionConfig, boardId }) => {
     return (await onCreateSession(sessionConfig, boardId)) || 'session-1';
   });
   return { startTeammateBootstrapSession: start, startAssistantBootstrapSession: start };
 });
 
-vi.mock('../../utils/assistantWelcomeNote', () => {
+vi.mock('../../utils/teammateWelcomeNote', () => {
   const ensure = vi.fn(async () => undefined);
   return { ensureTeammateWelcomeNote: ensure, ensureAssistantWelcomeNote: ensure };
 });

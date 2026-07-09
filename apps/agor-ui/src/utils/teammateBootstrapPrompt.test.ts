@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateBootstrapPromptContext,
-} from './assistantBootstrapPrompt';
+} from './teammateBootstrapPrompt';
 
 describe('buildTeammateBootstrapPrompt', () => {
   it('formats teammate identity params without browser-side Handlebars rendering', () => {
@@ -40,7 +40,7 @@ describe('buildTeammateBootstrapPrompt', () => {
     const prompt = buildTeammateBootstrapPrompt({ displayName: 'Board Bot', emoji: '🧭' });
 
     expect(prompt).toContain('- AI teammate: Board Bot 🧭');
-    expect(prompt).not.toContain('Assistant description:');
+    expect(prompt).not.toContain('AI teammate description:');
     expect(prompt).not.toContain('- User:');
     expect(prompt).not.toContain('- User email:');
     expect(prompt).not.toMatch(/\{\{\s*#?\/?\s*(assistant|user)\b/);

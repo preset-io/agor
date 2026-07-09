@@ -113,7 +113,7 @@ interface SessionCanvasProps {
   // subscriptions rather than props — the canvas re-renders only for the slices
   // it actually consumes.
   branches: Branch[];
-  primaryAssistantId?: string | null;
+  primaryTeammateId?: string | null;
   currentUserId?: string;
   selectedSessionId?: string | null;
   /** Branch currently targeted by a `/w/<…>/` deep link — folds into
@@ -435,7 +435,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       board,
       client,
       branches,
-      primaryAssistantId,
+      primaryTeammateId,
       currentUserId,
       selectedSessionId,
       activeUrlTargetBranchId,
@@ -767,7 +767,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       const nodes: Node[] = [];
 
       branches.forEach((branch, index) => {
-        if (primaryAssistantId && branch.branch_id === primaryAssistantId) {
+        if (primaryTeammateId && branch.branch_id === primaryTeammateId) {
           return;
         }
 
@@ -853,7 +853,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       board?.objects,
       board?.board_id,
       branches,
-      primaryAssistantId,
+      primaryTeammateId,
       boardObjectByBranch,
       repoById,
       currentUserId,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ensureTeammateWelcomeNote } from './assistantWelcomeNote';
+import { ensureTeammateWelcomeNote } from './teammateWelcomeNote';
 
 describe('ensureTeammateWelcomeNote', () => {
   it('delegates welcome-note rendering to the boards service', async () => {

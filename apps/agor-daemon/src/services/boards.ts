@@ -43,8 +43,6 @@ export interface BoardParams
   user?: AuthenticatedParams['user'];
   /** Internal hook signal; set only when ensureTeammateWelcomeNote writes. */
   teammateWelcomeNoteMutated?: boolean;
-  /** @deprecated Use teammateWelcomeNoteMutated instead. */
-  assistantWelcomeNoteMutated?: boolean;
   /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
   _agorSqlBoardAccessUserId?: UUID;
 }
@@ -258,7 +256,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 
     if (params) {
       params.teammateWelcomeNoteMutated = true;
-      params.assistantWelcomeNoteMutated = true;
     }
     return this.boardRepo.upsertBoardObject(
       board.board_id,

@@ -3235,13 +3235,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         async (context: HookContext<Board>) => {
           const teammateWelcomeNoteMutated = context.params as typeof context.params & {
             teammateWelcomeNoteMutated?: boolean;
-            assistantWelcomeNoteMutated?: boolean;
           };
-          if (
-            context.result &&
-            (teammateWelcomeNoteMutated.teammateWelcomeNoteMutated ||
-              teammateWelcomeNoteMutated.assistantWelcomeNoteMutated)
-          ) {
+          if (context.result && teammateWelcomeNoteMutated.teammateWelcomeNoteMutated) {
             emitBoardPatched(context.result);
           }
           return context;
@@ -3266,13 +3261,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         async (context: HookContext<Board>) => {
           const welcomeNoteMutated = context.params as typeof context.params & {
             teammateWelcomeNoteMutated?: boolean;
-            assistantWelcomeNoteMutated?: boolean;
           };
-          if (
-            context.result &&
-            (welcomeNoteMutated.teammateWelcomeNoteMutated ||
-              welcomeNoteMutated.assistantWelcomeNoteMutated)
-          ) {
+          if (context.result && welcomeNoteMutated.teammateWelcomeNoteMutated) {
             emitBoardPatched(context.result);
           }
           return context;
