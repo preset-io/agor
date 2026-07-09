@@ -274,8 +274,11 @@ function uniqueByTarget(items: SessionAttachmentItem[]): SessionAttachmentItem[]
   const seen = new Set<string>();
   const result: SessionAttachmentItem[] = [];
   for (const item of items) {
-    const target = item.url ?? item.refUri ?? item.filePath ?? item.key;
-    const key = `${item.kind ?? 'link'}:${target}`.toLowerCase();
+    const target = item.targetKey ?? item.url ?? item.refUri ?? item.filePath ?? item.key;
+    const key =
+      item.targetKey?.startsWith('file:') || (item.filePath && !item.url && !item.refUri)
+        ? `${item.kind ?? 'link'}:${target}`
+        : `${item.kind ?? 'link'}:${target}`.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(item);

@@ -361,4 +361,45 @@ describe('SessionPanel session links', () => {
     await waitFor(() => expect(within(drawer).queryByText('Session Runbook')).toBeNull());
     expect(within(drawer).getByText('API guide')).toBeTruthy();
   });
+
+  it('keeps file-backed links distinct when paths differ only by case', async () => {
+    const upper = makeLink({
+      link_id: 'upper-report' as Link['link_id'],
+      kind: 'document',
+      source: 'upload',
+      title: 'Report.pdf',
+      file_path: '/tmp/uploads/Report.pdf',
+      mime_type: 'application/pdf',
+      target_key: 'file:/tmp/uploads/Report.pdf',
+      is_pinned: false,
+    });
+    const lower = makeLink({
+      link_id: 'lower-report' as Link['link_id'],
+      kind: 'document',
+      source: 'upload',
+      title: 'report.pdf',
+      file_path: '/tmp/uploads/report.pdf',
+      mime_type: 'application/pdf',
+      target_key: 'file:/tmp/uploads/report.pdf',
+      is_pinned: false,
+    });
+    const { client } = makeClient([upper, lower]);
+    agorStore.setState({
+      ...EMPTY_MAPS,
+      linksBySession: new Map([['session-1', [upper, lower]]]),
+      linkById: new Map([
+        [upper.link_id, upper],
+        [lower.link_id, lower],
+      ]),
+    });
+
+    renderPanel(client);
+
+    fireEvent.click(await screen.findByLabelText('Open links organizer'));
+    fireEvent.click(await screen.findByLabelText('Manage links'));
+
+    const drawer = await screen.findByTestId('links-organizer-manage');
+    expect(within(drawer).getByText('Report.pdf')).toBeTruthy();
+    expect(within(drawer).getByText('report.pdf')).toBeTruthy();
+  });
 });
