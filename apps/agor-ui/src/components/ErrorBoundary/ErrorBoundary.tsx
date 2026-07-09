@@ -1,5 +1,6 @@
 import { Alert } from 'antd';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { CanvasCrashScreen } from './CanvasCrashScreen';
 import { GlobalCrashScreen } from './GlobalCrashScreen';
 
 interface ErrorBoundaryProps {
@@ -7,10 +8,13 @@ interface ErrorBoundaryProps {
   // Visual mode for the fallback.
   //   'scoped' (default): small inline antd <Alert> — good for section-level
   //     boundaries that wrap one piece of UI (e.g. the logs modal).
+  //   'canvas': subtree-scoped crash card that fills its container so the rest
+  //     of the app shell stays alive; offers an in-place "Reload canvas" reset
+  //     instead of a full page reload. For the board canvas subtree.
   //   'global': full-screen friendly crash screen with a copy-paste markdown
   //     report and GitHub issue link — for the top-level boundary around the
   //     entire app.
-  variant?: 'scoped' | 'global';
+  variant?: 'scoped' | 'canvas' | 'global';
   fallbackTitle?: ReactNode;
   // When this value changes, the boundary clears its error state and re-renders
   // children. Useful when fresh data may unblock the failed render (e.g. a
@@ -51,6 +55,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     this.setState({ errorInfo: info });
   }
 
+  // Clears the caught error so children re-mount in place. Used by the canvas
+  // fallback's "Reload canvas" action to recover without a full page reload.
+  handleReset = () => {
+    this.setState({ error: null, errorInfo: null });
+  };
+
   render() {
     const { error, errorInfo } = this.state;
     const { variant = 'scoped', fallbackTitle, children } = this.props;
@@ -58,6 +68,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     if (error) {
       if (variant === 'global') {
         return <GlobalCrashScreen error={error} errorInfo={errorInfo} />;
+      }
+      if (variant === 'canvas') {
+        return <CanvasCrashScreen error={error} errorInfo={errorInfo} onReset={this.handleReset} />;
       }
       return (
         <Alert
