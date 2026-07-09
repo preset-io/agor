@@ -435,7 +435,7 @@ function AppContent() {
     user ? (s.userById.get(user.user_id) ?? null) : null
   );
   const currentUser = user ? storedCurrentUser || user : null;
-  const mcpServerById = useAgorStore((s) => s.mcpServerById);
+  const mcpServerCount = useAgorStore((s) => s.mcpServerById.size);
   // Slack/GitHub connections are gateway channels, a separate store map from MCP
   // servers. Narrow size selector so unrelated channel writes don't re-render the shell.
   const gatewayChannelCount = useAgorStore((s) => s.gatewayChannelById.size);
@@ -1662,7 +1662,7 @@ function AppContent() {
       topBanner={
         <OnboardingBanners
           user={currentUser}
-          mcpServerCount={mcpServerById.size}
+          mcpServerCount={mcpServerCount}
           gatewayChannelCount={gatewayChannelCount}
           integrationsHydrated={integrationsHydrated}
           canManageMcp={canManageMcp}
