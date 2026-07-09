@@ -95,34 +95,92 @@ describe('DrizzleService event emission', () => {
     const { service, events } = makeService(repo);
 
     await service.create({ id: 'w2', name: 'created' });
-    await service.patch('w1', { name: 'patched' });
-    await service.update('w1', { id: 'w1', name: 'replaced' });
-    await service.remove('w1');
+    expect(events).toEqual([]);
 
+    await service.patch('w1', { name: 'patched' });
+    expect(events).toEqual([]);
+
+    await service.update('w1', { id: 'w1', name: 'replaced' });
+    expect(events).toEqual([]);
+
+    await service.remove('w1');
     expect(events).toEqual([]);
   });
 
-  it('registered in a real Feathers app, one write yields one path-scoped event (no bare/null twin)', async () => {
-    // End-to-end guard for the bare `created`/`patched` null-payload regression.
-    // Feathers' eventHook emits with a full HookContext (path + result); the
-    // removed adapter emit passed raw `params`, adding a second emission whose
-    // hook had no `path` (→ bare event name) and no `result` (→ null payload).
+  it('registered in a real Feathers app, each write yields one path-scoped event (no bare/null twin)', async () => {
+    // End-to-end guard for the bare null-payload regression. Feathers'
+    // eventHook emits with a full HookContext (path + result); adapter emits
+    // with raw params add a second emission whose hook has neither.
     const app = feathers();
-    app.use('widgets', new DrizzleService<Widget>(makeRepo(), { id: 'id' }) as never);
+    app.use(
+      'widgets',
+      new DrizzleService<Widget>(makeRepo([{ id: 'w1', name: 'hello' }]), { id: 'id' }) as never
+    );
 
-    const emissions: Array<{ path: unknown; hasResult: boolean }> = [];
-    (
-      app.service('widgets') as unknown as {
-        on: (e: string, cb: (d: unknown, h: unknown) => void) => void;
-      }
-    ).on('created', (_data, hook) => {
-      const h = hook as { path?: unknown; result?: unknown } | undefined;
-      emissions.push({ path: h?.path, hasResult: h?.result !== undefined });
-    });
+    const emissions: Array<{
+      event: string;
+      payload: unknown;
+      path: unknown;
+      hasResult: boolean;
+      resultMatchesPayload: boolean;
+    }> = [];
+    const widgets = app.service('widgets') as unknown as {
+      on: (e: string, cb: (d: unknown, h: unknown) => void) => void;
+      create: (data: Partial<Widget>) => Promise<Widget>;
+      update: (id: string, data: Partial<Widget>) => Promise<Widget>;
+      patch: (id: string, data: Partial<Widget>) => Promise<Widget>;
+      remove: (id: string) => Promise<Widget>;
+    };
 
-    await app.service('widgets').create({ id: 'w1', name: 'hello' } as never);
+    for (const event of ['created', 'updated', 'patched', 'removed']) {
+      widgets.on(event, (payload, hook) => {
+        const h = hook as { path?: unknown; result?: unknown } | undefined;
+        emissions.push({
+          event,
+          payload,
+          path: h?.path,
+          hasResult: h?.result !== undefined,
+          resultMatchesPayload: h?.result === payload,
+        });
+      });
+    }
 
-    expect(emissions).toEqual([{ path: 'widgets', hasResult: true }]);
+    const created = await widgets.create({ id: 'w2', name: 'created' });
+    const updated = await widgets.update('w2', { id: 'w2', name: 'updated' });
+    const patched = await widgets.patch('w2', { name: 'patched' });
+    const removed = await widgets.remove('w2');
+
+    expect(emissions).toEqual([
+      {
+        event: 'created',
+        payload: created,
+        path: 'widgets',
+        hasResult: true,
+        resultMatchesPayload: true,
+      },
+      {
+        event: 'updated',
+        payload: updated,
+        path: 'widgets',
+        hasResult: true,
+        resultMatchesPayload: true,
+      },
+      {
+        event: 'patched',
+        payload: patched,
+        path: 'widgets',
+        hasResult: true,
+        resultMatchesPayload: true,
+      },
+      {
+        event: 'removed',
+        payload: removed,
+        path: 'widgets',
+        hasResult: true,
+        resultMatchesPayload: true,
+      },
+    ]);
+    expect(emissions).toHaveLength(4);
   });
 });
 
