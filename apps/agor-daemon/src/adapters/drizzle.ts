@@ -69,7 +69,20 @@ export interface Repository<T> {
  * Drizzle Service Adapter
  *
  * Implements FeathersJS service methods using a Drizzle repository.
- * Emits events for real-time WebSocket broadcasting.
+ *
+ * Realtime events are NOT emitted here. Feathers' own `eventHook`
+ * (`@feathersjs/feathers`) already emits the standard `created`/`updated`/
+ * `patched`/`removed` events with a full HookContext (correct `path` + `result`)
+ * for every method invoked through the `app.service(path)` proxy — that is the
+ * event browsers consume. An adapter-level `this.emit(event, result, params)`
+ * used to fire IN ADDITION to that, but `params` is not a HookContext: Feathers'
+ * transport-commons passes the third `emit` arg through UNCHANGED as the publish
+ * hook, so a `params` object (no `path`, no `result`) produced a duplicate wire
+ * event with an EMPTY name (``\`${path ?? ''} ${event}\`.trim()`` → bare
+ * `'created'`/`'patched'`) and a NULL payload — noise no client could consume.
+ * Internal call sites that mutate through the RAW method (`this.patch(...)`,
+ * bypassing the proxy + eventHook) and need a realtime event emit it explicitly
+ * via `emitServiceEvent(...)`, which builds a correctly-shaped hook.
  */
 // biome-ignore lint/suspicious/noExplicitAny: Generic service adapter needs default any type
 export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> {
@@ -344,29 +357,21 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
           this.repository.create(this.withTenant(item as Partial<T>, params) as Partial<T>)
         )
       );
-      // Emit created event for each item
-      for (const result of results) {
-        this.emit?.('created', result, params);
-      }
+      // Feathers' eventHook emits `created` for external callers; see class doc.
       return results;
     }
 
     const result = await this.repository.create(
       this.withTenant(data as Partial<T>, params) as Partial<T>
     );
-    this.emit?.('created', result, params);
     return result;
   }
 
   /**
    * Update a record (complete replacement).
    *
-   * Emits ONLY `'updated'` — per Feathers convention `patch()` emits
-   * `'patched'`. The previous implementation emitted both for "consistency",
-   * but that doubles up live-event delivery for any subscriber listening
-   * to both (e.g. UI hooks that want to catch any mutation). Subscribers
-   * that need to react to a complete-replacement should listen to
-   * `'updated'` directly.
+   * Realtime `updated` events are emitted by Feathers' eventHook for external
+   * callers (see class doc); the adapter does not emit them itself.
    */
   async update(id: Id, data: D, params?: P): Promise<T> {
     // Verify record exists (throws NotFoundError if not found)
@@ -376,7 +381,6 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       String(id),
       this.stripTenantMutation(data as Partial<T>) as Partial<T>
     );
-    this.emit?.('updated', result, params);
     return result;
   }
 
@@ -406,11 +410,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
         )
       );
 
-      // Emit events for each patched record
-      for (const result of results) {
-        this.emit?.('patched', result, params);
-      }
-
+      // Feathers' eventHook emits `patched` for external callers; see class doc.
       return results;
     }
 
@@ -422,7 +422,6 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       String(id),
       this.stripTenantMutation(data as Partial<T>) as Partial<T>
     );
-    this.emit?.('patched', result, params);
     return result;
   }
 
@@ -446,11 +445,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
       // biome-ignore lint/suspicious/noExplicitAny: Need to access ID field dynamically
       await Promise.all(records.map((record) => this.repository.delete((record as any)[this.id])));
 
-      // Emit removed event for each record
-      for (const record of records) {
-        this.emit?.('removed', record, params);
-      }
-
+      // Feathers' eventHook emits `removed` for external callers; see class doc.
       return records;
     }
 
@@ -459,7 +454,6 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     const existing = await this.get(id, params);
 
     await this.repository.delete(String(id));
-    this.emit?.('removed', existing, params);
     return existing;
   }
 }

@@ -1,18 +1,20 @@
 /**
  * Event emission contract for the Drizzle → Feathers adapter.
  *
- * Each FeathersJS service method has a canonical event:
- *   create → 'created'
- *   update → 'updated'
- *   patch  → 'patched'
- *   remove → 'removed'
+ * The adapter itself emits NO realtime events. Feathers' own `eventHook`
+ * (`@feathersjs/feathers`) emits the canonical `created`/`updated`/`patched`/
+ * `removed` events with a full HookContext for every method called through the
+ * `app.service(path)` proxy — that is the event browsers receive.
  *
- * The adapter used to emit BOTH `'updated'` and `'patched'` from `update()`
- * "for consistency", which doubled live-event delivery for any subscriber
- * listening to both. These tests pin the corrected behavior so the
- * convention doesn't drift again — the chime hook (and any future event
- * subscriber) can rely on one event per write.
+ * The adapter used to ALSO emit `this.emit(event, result, params)`. Because
+ * Feathers' transport-commons passes the third `emit` arg through UNCHANGED as
+ * the publish hook, a bare `params` object (no `path`, no `result`) produced a
+ * duplicate wire event with an EMPTY name (bare `'created'`/`'patched'`) and a
+ * NULL payload — noise no client could consume. These tests pin that the
+ * adapter no longer emits, and that a real Feathers registration yields exactly
+ * one correctly-shaped event per write (no bare/null twin).
  */
+import { feathers } from '@agor/core/feathers';
 import { describe, expect, it, vi } from 'vitest';
 import { DrizzleService, type Repository } from './drizzle.js';
 
@@ -85,45 +87,42 @@ describe('DrizzleService event emission', () => {
     expect(repo.findById).toHaveBeenCalledTimes(1);
   });
 
-  it('emits only `created` on create()', async () => {
-    const repo = makeRepo();
-    const { service, events } = makeService(repo);
-
-    await service.create({ id: 'w1', name: 'hello' });
-
-    expect(events.map((e) => e.event)).toEqual(['created']);
-  });
-
-  it('emits only `patched` on patch()', async () => {
+  it('does not emit any event itself on create/patch/update/remove', async () => {
+    // The adapter must not emit — Feathers' eventHook owns delivery. A direct
+    // adapter emit (with `params` as the third arg) becomes a bare, null-payload
+    // wire event. Feed every mutation through the raw adapter and assert silence.
     const repo = makeRepo([{ id: 'w1', name: 'hello' }]);
     const { service, events } = makeService(repo);
 
-    await service.patch('w1', { name: 'updated' });
-
-    expect(events.map((e) => e.event)).toEqual(['patched']);
-  });
-
-  it('emits only `updated` on update() — NOT `patched`', async () => {
-    // Regression: the adapter used to emit both for "consistency". That
-    // doubled delivery for any subscriber listening to both events, which
-    // is the entire UI chime hook + anyone else doing "react to any
-    // mutation". Per Feathers convention, update() owns 'updated' and
-    // patch() owns 'patched'. Don't conflate.
-    const repo = makeRepo([{ id: 'w1', name: 'hello' }]);
-    const { service, events } = makeService(repo);
-
+    await service.create({ id: 'w2', name: 'created' });
+    await service.patch('w1', { name: 'patched' });
     await service.update('w1', { id: 'w1', name: 'replaced' });
-
-    expect(events.map((e) => e.event)).toEqual(['updated']);
-  });
-
-  it('emits only `removed` on remove()', async () => {
-    const repo = makeRepo([{ id: 'w1', name: 'hello' }]);
-    const { service, events } = makeService(repo);
-
     await service.remove('w1');
 
-    expect(events.map((e) => e.event)).toEqual(['removed']);
+    expect(events).toEqual([]);
+  });
+
+  it('registered in a real Feathers app, one write yields one path-scoped event (no bare/null twin)', async () => {
+    // End-to-end guard for the bare `created`/`patched` null-payload regression.
+    // Feathers' eventHook emits with a full HookContext (path + result); the
+    // removed adapter emit passed raw `params`, adding a second emission whose
+    // hook had no `path` (→ bare event name) and no `result` (→ null payload).
+    const app = feathers();
+    app.use('widgets', new DrizzleService<Widget>(makeRepo(), { id: 'id' }) as never);
+
+    const emissions: Array<{ path: unknown; hasResult: boolean }> = [];
+    (
+      app.service('widgets') as unknown as {
+        on: (e: string, cb: (d: unknown, h: unknown) => void) => void;
+      }
+    ).on('created', (_data, hook) => {
+      const h = hook as { path?: unknown; result?: unknown } | undefined;
+      emissions.push({ path: h?.path, hasResult: h?.result !== undefined });
+    });
+
+    await app.service('widgets').create({ id: 'w1', name: 'hello' } as never);
+
+    expect(emissions).toEqual([{ path: 'widgets', hasResult: true }]);
   });
 });
 
