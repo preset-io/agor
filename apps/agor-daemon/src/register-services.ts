@@ -126,7 +126,6 @@ import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import {
-  hasExecutorRuntimeEvidence,
   hasObservedLaunchedExecutorProcess,
   isExecutorSpawnFailureExit,
   shouldFailTaskForChildExit,
@@ -999,20 +998,17 @@ function createExecuteHandler(
             try {
               const currentTask = await app.service('tasks').get(taskId, params);
               if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
-                const executorRuntimeObserved = hasExecutorRuntimeEvidence(
-                  currentTask.runtime_vitals
-                );
                 const shouldFailTask = shouldFailTaskForChildExit({
                   usesCommandTemplate,
                   code,
                   localExecutorProcessObserved,
-                  executorRuntimeObserved,
                 });
 
                 if (shouldFailTask) {
-                  const spawnFailureExit = usesCommandTemplate
-                    ? !executorRuntimeObserved && code !== 0
-                    : isExecutorSpawnFailureExit(localExecutorProcessObserved, code);
+                  const spawnFailureExit = isExecutorSpawnFailureExit(
+                    localExecutorProcessObserved,
+                    code
+                  );
                   const eventKind = spawnFailureExit
                     ? TaskRuntimeEventKind.EXECUTOR_SPAWN_FAILED
                     : TaskRuntimeEventKind.EXECUTOR_PROCESS_EXITED;
@@ -1040,7 +1036,7 @@ function createExecuteHandler(
                 } else {
                   console.log(
                     `ℹ️  [Executor] Child exit was non-authoritative for task ${shortId(taskId)} ` +
-                      `(code: ${code ?? 'unknown'}, commandTemplate: ${usesCommandTemplate}, executorRuntimeObserved: ${executorRuntimeObserved})`
+                      `(code: ${code ?? 'unknown'}, commandTemplate: ${usesCommandTemplate})`
                   );
                 }
               } else {

@@ -1,7 +1,5 @@
-import { TaskRuntimeEventKind, TaskRuntimePhase } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
-  hasExecutorRuntimeEvidence,
   hasObservedLaunchedExecutorProcess,
   isExecutorSpawnFailureExit,
   shouldFailTaskForChildExit,
@@ -28,43 +26,12 @@ describe('executor spawn classification', () => {
     expect(isExecutorSpawnFailureExit(false, 0)).toBe(false);
   });
 
-  it('detects executor runtime evidence from non-daemon vitals events', () => {
-    expect(hasExecutorRuntimeEvidence(undefined)).toBe(false);
-    expect(
-      hasExecutorRuntimeEvidence({
-        schema_version: 1,
-        phase: TaskRuntimePhase.EXECUTOR_STARTING,
-        phase_started_at: '2026-01-01T00:00:00.000Z',
-        last_activity_at: '2026-01-01T00:00:00.000Z',
-        last_event: {
-          kind: TaskRuntimeEventKind.EXECUTOR_SPAWN_REQUESTED,
-          at: '2026-01-01T00:00:00.000Z',
-          source: 'daemon',
-        },
-      })
-    ).toBe(false);
-    expect(
-      hasExecutorRuntimeEvidence({
-        schema_version: 1,
-        phase: TaskRuntimePhase.SDK_STARTING,
-        phase_started_at: '2026-01-01T00:00:01.000Z',
-        last_activity_at: '2026-01-01T00:00:01.000Z',
-        last_event: {
-          kind: TaskRuntimeEventKind.SDK_TURN_STARTED,
-          at: '2026-01-01T00:00:01.000Z',
-          source: 'executor',
-        },
-      })
-    ).toBe(true);
-  });
-
-  it('keeps command-template launcher exits non-authoritative after successful submission or executor evidence', () => {
+  it('keeps command-template launcher exits non-authoritative in this passive vitals path', () => {
     expect(
       shouldFailTaskForChildExit({
         usesCommandTemplate: true,
         code: 0,
         localExecutorProcessObserved: false,
-        executorRuntimeObserved: false,
       })
     ).toBe(false);
     expect(
@@ -72,15 +39,6 @@ describe('executor spawn classification', () => {
         usesCommandTemplate: true,
         code: 1,
         localExecutorProcessObserved: false,
-        executorRuntimeObserved: false,
-      })
-    ).toBe(true);
-    expect(
-      shouldFailTaskForChildExit({
-        usesCommandTemplate: true,
-        code: 1,
-        localExecutorProcessObserved: false,
-        executorRuntimeObserved: true,
       })
     ).toBe(false);
   });
@@ -91,7 +49,6 @@ describe('executor spawn classification', () => {
         usesCommandTemplate: false,
         code: 0,
         localExecutorProcessObserved: true,
-        executorRuntimeObserved: false,
       })
     ).toBe(true);
     expect(
@@ -99,7 +56,6 @@ describe('executor spawn classification', () => {
         usesCommandTemplate: false,
         code: 127,
         localExecutorProcessObserved: false,
-        executorRuntimeObserved: false,
       })
     ).toBe(true);
   });
