@@ -119,7 +119,7 @@
       "require": "./dist/templates/spawn-subsession-template.cjs"
     },
     "./templates/assistant-welcome-note": {
-      "source": "./src/templates/assistant-welcome-note.ts",
+      "source": "./src/templates/teammate-welcome-note-compat.ts",
       "types": "./dist/templates/assistant-welcome-note.d.ts",
       "import": "./dist/templates/assistant-welcome-note.js",
       "require": "./dist/templates/assistant-welcome-note.cjs"

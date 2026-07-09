@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   ASSISTANT_WELCOME_NOTE_TEMPLATE,
   buildAssistantWelcomeNoteContent,
-} from './assistant-welcome-note';
+} from './teammate-welcome-note-compat';
 
-describe('assistant-welcome-note compatibility alias', () => {
+describe('teammate welcome note legacy export compatibility', () => {
   it('renders the teammate template with legacy assistant identity params', () => {
     const content = buildAssistantWelcomeNoteContent({
       assistantName: 'Product/Design Agor Board',

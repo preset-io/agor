@@ -14,7 +14,7 @@ export const blogPosts: BlogPost[] = [
     description:
       'Claude Tag brings @Claude into Slack. Here is why teams will still need modeled, governed, observable, multi-specialist teammates — and why Agor is built for that next step.',
     date: '2026-06-26',
-    image: '/images/blog/claude-tag-vs-agor-assistants.png',
+    image: '/images/blog/claude-tag-vs-agor-teammates.png',
   },
   {
     slug: 'raise-team-helper-agent',
@@ -38,7 +38,7 @@ export const blogPosts: BlogPost[] = [
     description:
       'What started as an OpenClaw experiment is now a first-class Agor feature. Meet Teammates — persistent AI entities with memory, skills, and team-wide reach through Slack.',
     date: '2026-03-03',
-    image: '/images/blog/agor-assistants.png',
+    image: '/images/blog/agor-teammates.png',
   },
   {
     slug: 'agor-openclaw',

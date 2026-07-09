@@ -1,3 +1,7 @@
+/**
+ * Deprecated compatibility exports for the pre-rename assistant knowledge helper.
+ * Canonical code should import from ./teammate-knowledge.js.
+ */
 export {
   ensureTeammateKnowledgeNamespace as ensureAssistantKnowledgeNamespace,
   TEAMMATE_MEMORY_PATH_TEMPLATE as ASSISTANT_MEMORY_PATH_TEMPLATE,

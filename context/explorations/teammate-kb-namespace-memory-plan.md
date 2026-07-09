@@ -265,10 +265,10 @@ Type changes still needed:
 
 ### Services/helpers likely needed
 
-- New helper module near branches/knowledge services: `assistant-knowledge.ts`.
-- API-only custom methods for configuration, e.g. `/branches/:id/assistant-knowledge` or `/assistant/knowledge/config`, used by UI/CLI and protected by branch-owner/admin checks. Do not expose these as MCP tools.
+- New helper module near branches/knowledge services: `teammate-knowledge.ts`.
+- API-only custom methods for configuration, e.g. `/branches/:id/teammate-knowledge` or `/teammate/knowledge/config`, used by UI/CLI and protected by branch-owner/admin checks. Do not expose these as MCP tools.
 - Optional read-only Feathers/service method for context: `/assistant/knowledge/context` or `/kb/assistant-context`.
-- MCP registrations in a new `apps/agor-daemon/src/mcp/tools/assistant-knowledge.ts` or in `knowledge.ts` if kept small; MCP registrations should be read/append/search only, not configuration mutation.
+- MCP registrations in a new `apps/agor-daemon/src/mcp/tools/teammate-knowledge.ts` or in `knowledge.ts` if kept small; MCP registrations should be read/append/search only, not configuration mutation.
 - BranchModal Knowledge tab UI slice and client calls to `kb/namespaces`/`kb/documents` plus the API-only assistant Knowledge config method.
 
 ### Follow-up normalized table
