@@ -612,6 +612,7 @@ describe('createClient', () => {
       expect(branchesService.methods).toHaveBeenCalledWith(
         'updateEnvironment',
         'initializeUnixGroup',
+        'ensureTeammateKnowledgeNamespace',
         'ensureAssistantKnowledgeNamespace'
       );
     });
