@@ -439,6 +439,11 @@ function AppContent() {
   // Slack/GitHub connections are gateway channels, a separate store map from MCP
   // servers. Narrow size selector so unrelated channel writes don't re-render the shell.
   const gatewayChannelCount = useAgorStore((s) => s.gatewayChannelById.size);
+  // Both integration collections are background-hydrated; gate the teal banner on
+  // their first apply so a zero count can't flash before the data is known.
+  const integrationsHydrated = useAgorStore(
+    (s) => s.mcpServersHydrated && s.gatewayChannelsHydrated
+  );
   // Whether this user can actually reach the MCP settings tab. Mirrors the tab's
   // own gate in SettingsModal (`mcpEnabled && isAdmin`), so the "Connect tools"
   // banner is never a dead-end for users who can't open it.
@@ -540,11 +545,18 @@ function AppContent() {
 
   const handleCheckAuth = useCallback(
     async (tool: AgenticToolName, apiKey?: string): Promise<AuthCheckResult> => {
-      if (!client) return { authenticated: false, method: 'none' as const };
+      // A transport failure is NOT proof of missing auth — surface `unknown` so
+      // callers fail safe rather than flashing a "not connected" state.
+      if (!client) return { status: 'unknown', authenticated: false, method: 'none' };
       try {
         return (await client.service('check-auth').create({ tool, apiKey })) as AuthCheckResult;
       } catch {
-        return { authenticated: false, method: 'none' as const, hint: 'Connection check failed.' };
+        return {
+          status: 'unknown',
+          authenticated: false,
+          method: 'none',
+          hint: 'Connection check failed.',
+        };
       }
     },
     [client]
@@ -1652,6 +1664,7 @@ function AppContent() {
           user={currentUser}
           mcpServerCount={mcpServerById.size}
           gatewayChannelCount={gatewayChannelCount}
+          integrationsHydrated={integrationsHydrated}
           canManageMcp={canManageMcp}
           onOpenUserSettings={(tab) => {
             setUserSettingsInitialTab(tab);
@@ -1765,20 +1778,7 @@ function AppContent() {
           onUpdateBranch={(branchId, updates) =>
             handleUpdateBranch(branchId, updates, { silent: true })
           }
-          onCheckAuth={async (tool, apiKey) => {
-            if (!client) return { authenticated: false, method: 'none' as const };
-            try {
-              return (await client
-                .service('check-auth')
-                .create({ tool, apiKey })) as AuthCheckResult;
-            } catch {
-              return {
-                authenticated: false,
-                method: 'none' as const,
-                hint: 'Connection check failed.',
-              };
-            }
-          }}
+          onCheckAuth={handleCheckAuth}
           assistantPending={
             onboardingConfig?.assistantPending ?? onboardingConfig?.persistedAgentPending
           }

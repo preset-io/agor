@@ -19,6 +19,7 @@ import {
   hasAnyLlmKey,
   ProbeState,
   resolveProbeAgent,
+  resolveProbeState,
 } from './bannerLogic';
 
 export interface OnboardingBannersProps {
@@ -27,6 +28,8 @@ export interface OnboardingBannersProps {
   mcpServerCount: number;
   /** Number of gateway channels (Slack/GitHub/etc.) the user has connected. */
   gatewayChannelCount: number;
+  /** Whether both integration collections have finished their first hydration (gates the teal banner against a pre-hydration flash). */
+  integrationsHydrated: boolean;
   /** Whether the user can reach the MCP settings tab (service enabled + sufficient role). Gates the integrations banner so its CTA is never a dead-end. */
   canManageMcp: boolean;
   /** Opens the user's personal AI credential settings at the given tool tab. */
@@ -39,10 +42,67 @@ export interface OnboardingBannersProps {
   credentialVersion: number;
 }
 
+const AMBER_BANNER_STYLE = {
+  background: '#78350f',
+  borderBottom: '1px solid #92400e',
+  height: 48,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  paddingLeft: 20,
+  paddingRight: 20,
+  flexShrink: 0,
+  zIndex: 10,
+} as const;
+
+const AMBER_BUTTON_STYLE = {
+  background: '#d97706',
+  borderColor: '#d97706',
+  color: '#fff',
+  fontWeight: 600,
+  fontSize: 12,
+} as const;
+
+function AmberBanner({
+  message,
+  buttonLabel,
+  onClick,
+  docsHref,
+}: {
+  message: string;
+  buttonLabel: string;
+  onClick: () => void;
+  docsHref?: string;
+}) {
+  return (
+    <div style={AMBER_BANNER_STYLE}>
+      <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>{message}</span>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {docsHref && (
+          <Button
+            type="text"
+            size="small"
+            href={docsHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: '#fde68a', borderColor: 'rgba(253,230,138,0.4)', fontSize: 12 }}
+          >
+            Documentation
+          </Button>
+        )}
+        <Button size="small" onClick={onClick} style={AMBER_BUTTON_STYLE}>
+          {buttonLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function OnboardingBanners({
   user,
   mcpServerCount,
   gatewayChannelCount,
+  integrationsHydrated,
   canManageMcp,
   onOpenUserSettings,
   onOpenWorkspaceSettings,
@@ -58,12 +118,11 @@ export function OnboardingBanners({
   const hasLlm = hasAnyLlmKey(user);
   const probeAgent = resolveProbeAgent(user);
 
-  // One probe per identity/credential change. Deps are primitives/stable so the
-  // effect never re-fires on board navigation or unrelated re-renders of the
-  // persistent App shell — the claude-code probe spawns a ~5–10s subprocess.
-  // userId resets stale state on a user switch; credentialVersion is a
-  // trigger-only dep re-probing after a credential save (key rotations where
-  // presence and probeAgent are unchanged).
+  // One probe (plus a bounded fallback) per identity/credential change. Deps are
+  // primitives/stable so the effect never re-fires on board navigation or
+  // unrelated re-renders of the persistent App shell — each claude-code probe
+  // spawns a ~5–10s subprocess. userId resets stale state on a user switch;
+  // credentialVersion is a trigger-only dep re-probing after a credential save.
   // biome-ignore lint/correctness/useExhaustiveDependencies: credentialVersion is an intentional trigger dep
   useEffect(() => {
     if (!onboardingCompleted) {
@@ -72,12 +131,13 @@ export function OnboardingBanners({
     }
     setProbeState(ProbeState.Unknown);
     let cancelled = false;
-    onCheckAuth(probeAgent)
-      .then((result) => {
-        if (!cancelled)
-          setProbeState(
-            result.authenticated ? ProbeState.Authenticated : ProbeState.Unauthenticated
-          );
+    resolveProbeState(
+      (tool) => onCheckAuth(tool).then((result) => result.status),
+      probeAgent,
+      hasLlm
+    )
+      .then((state) => {
+        if (!cancelled) setProbeState(state);
       })
       .catch(() => {
         if (!cancelled) setProbeState(ProbeState.Unknown);
@@ -85,7 +145,7 @@ export function OnboardingBanners({
     return () => {
       cancelled = true;
     };
-  }, [userId, onboardingCompleted, probeAgent, onCheckAuth, credentialVersion]);
+  }, [userId, onboardingCompleted, probeAgent, hasLlm, onCheckAuth, credentialVersion]);
 
   const decision = decideBanner({
     onboardingCompleted,
@@ -94,145 +154,78 @@ export function OnboardingBanners({
     canManageMcp,
     mcpServerCount,
     gatewayChannelCount,
+    integrationsHydrated,
     integrationsBannerDismissed,
   });
 
-  if (decision === BannerDecision.NoAi) {
-    return (
-      <div
-        style={{
-          background: '#78350f',
-          borderBottom: '1px solid #92400e',
-          height: 48,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingLeft: 20,
-          paddingRight: 20,
-          flexShrink: 0,
-          zIndex: 10,
-        }}
-      >
-        <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>
-          ⚡ No AI connected - sessions will open but nothing will run.
-        </span>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <Button
-            type="text"
-            size="small"
-            href="https://agor.live/guide"
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: '#fde68a', borderColor: 'rgba(253,230,138,0.4)', fontSize: 12 }}
-          >
-            Documentation
-          </Button>
-          <Button
-            size="small"
-            onClick={() => onOpenUserSettings(probeAgent)}
-            style={{
-              background: '#d97706',
-              borderColor: '#d97706',
-              color: '#fff',
-              fontWeight: 600,
-              fontSize: 12,
-            }}
-          >
-            Connect AI
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (decision === BannerDecision.KeyInvalid) {
-    return (
-      <div
-        style={{
-          background: '#78350f',
-          borderBottom: '1px solid #92400e',
-          height: 48,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingLeft: 20,
-          paddingRight: 20,
-          flexShrink: 0,
-          zIndex: 10,
-        }}
-      >
-        <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>
-          Your AI credentials aren&apos;t working. Sessions will fail until you reconnect.
-        </span>
-        <Button
-          size="small"
+  switch (decision) {
+    case BannerDecision.None:
+      return null;
+    case BannerDecision.NoAi:
+      return (
+        <AmberBanner
+          message="⚡ No AI connected - sessions will open but nothing will run."
+          buttonLabel="Connect AI"
           onClick={() => onOpenUserSettings(probeAgent)}
+          docsHref="https://agor.live/guide"
+        />
+      );
+    case BannerDecision.KeyInvalid:
+      return (
+        <AmberBanner
+          message="Your AI credentials aren't working. Sessions will fail until you reconnect."
+          buttonLabel="Reconnect AI"
+          onClick={() => onOpenUserSettings(probeAgent)}
+        />
+      );
+    case BannerDecision.Integrations:
+      return (
+        <div
           style={{
-            background: '#d97706',
-            borderColor: '#d97706',
-            color: '#fff',
-            fontWeight: 600,
-            fontSize: 12,
+            background: 'rgba(46,154,146,0.1)',
+            borderBottom: '1px solid rgba(46,154,146,0.35)',
+            height: 44,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingLeft: 20,
+            paddingRight: 20,
+            flexShrink: 0,
+            zIndex: 10,
           }}
         >
-          Reconnect AI
-        </Button>
-      </div>
-    );
-  }
-
-  if (decision === BannerDecision.Integrations) {
-    return (
-      <div
-        style={{
-          background: 'rgba(46,154,146,0.1)',
-          borderBottom: '1px solid rgba(46,154,146,0.35)',
-          height: 44,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingLeft: 20,
-          paddingRight: 20,
-          flexShrink: 0,
-          zIndex: 10,
-        }}
-      >
-        <span
-          style={{
-            color: '#7dd3ce',
-            fontSize: 13,
-            fontWeight: 500,
-          }}
-        >
-          Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track
-          issues.
-        </span>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <Button
-            type="text"
-            size="small"
-            onClick={() => setIntegrationsBannerDismissed(true)}
-            style={{ color: '#94a3b8', fontSize: 12 }}
-          >
-            Maybe later
-          </Button>
-          <Button
-            size="small"
-            onClick={() => onOpenWorkspaceSettings('mcp')}
-            style={{
-              background: '#2e9a92',
-              borderColor: '#2e9a92',
-              color: '#fff',
-              fontWeight: 600,
-              fontSize: 12,
-            }}
-          >
-            Connect tools
-          </Button>
+          <span style={{ color: '#7dd3ce', fontSize: 13, fontWeight: 500 }}>
+            Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track
+            issues.
+          </span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Button
+              type="text"
+              size="small"
+              onClick={() => setIntegrationsBannerDismissed(true)}
+              style={{ color: '#94a3b8', fontSize: 12 }}
+            >
+              Maybe later
+            </Button>
+            <Button
+              size="small"
+              onClick={() => onOpenWorkspaceSettings('mcp')}
+              style={{
+                background: '#2e9a92',
+                borderColor: '#2e9a92',
+                color: '#fff',
+                fontWeight: 600,
+                fontSize: 12,
+              }}
+            >
+              Connect tools
+            </Button>
+          </div>
         </div>
-      </div>
-    );
+      );
+    default: {
+      const exhaustive: never = decision;
+      return exhaustive;
+    }
   }
-
-  return null;
 }

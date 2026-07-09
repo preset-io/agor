@@ -1,4 +1,4 @@
-import type { User } from '@agor-live/client';
+import type { AgenticToolName, AuthCheckStatus, User } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import {
   BannerDecision,
@@ -7,6 +7,7 @@ import {
   hasAnyLlmKey,
   ProbeState,
   resolveProbeAgent,
+  resolveProbeState,
 } from './bannerLogic';
 
 const baseInput: BannerDecisionInput = {
@@ -16,6 +17,7 @@ const baseInput: BannerDecisionInput = {
   canManageMcp: true,
   mcpServerCount: 0,
   gatewayChannelCount: 0,
+  integrationsHydrated: true,
   integrationsBannerDismissed: false,
 };
 
@@ -102,6 +104,16 @@ describe('decideBanner — integrations banner', () => {
       BannerDecision.Integrations
     );
   });
+
+  it('is suppressed until both integration collections have hydrated (no pre-hydration flash)', () => {
+    expect(
+      decideBanner({
+        ...baseInput,
+        probeState: ProbeState.Authenticated,
+        integrationsHydrated: false,
+      })
+    ).toBe(BannerDecision.None);
+  });
 });
 
 describe('decideBanner — onboarding gate', () => {
@@ -141,9 +153,74 @@ describe('resolveProbeAgent', () => {
     );
   });
 
+  it('maps a claude-code-cli stored key to the claude-code probe target', () => {
+    expect(
+      resolveProbeAgent(
+        asUser({ agentic_tools: { 'claude-code-cli': { CLAUDE_CODE_OAUTH_TOKEN: 't' } } })
+      )
+    ).toBe('claude-code');
+  });
+
   it('falls back to claude-code when nothing is known', () => {
     expect(resolveProbeAgent(null)).toBe('claude-code');
     expect(resolveProbeAgent(asUser({}))).toBe('claude-code');
+  });
+});
+
+describe('resolveProbeState — multi-tool fallback', () => {
+  const collect = (map: Partial<Record<AgenticToolName, AuthCheckStatus>>) => {
+    const calls: AgenticToolName[] = [];
+    const checkStatus = (tool: AgenticToolName): Promise<AuthCheckStatus> => {
+      calls.push(tool);
+      return Promise.resolve(map[tool] ?? 'unauthenticated');
+    };
+    return { calls, checkStatus };
+  };
+
+  it('returns Authenticated on a working primary without any fallback probes', async () => {
+    const { calls, checkStatus } = collect({ codex: 'authenticated' });
+    expect(await resolveProbeState(checkStatus, 'codex', false)).toBe(ProbeState.Authenticated);
+    expect(calls).toEqual(['codex']);
+  });
+
+  it('returns Unknown (fail safe) when the primary probe is unknown', async () => {
+    const { checkStatus } = collect({ 'claude-code': 'unknown' });
+    expect(await resolveProbeState(checkStatus, 'claude-code', false)).toBe(ProbeState.Unknown);
+  });
+
+  it('does NOT fall back when a stored key is present — unauthenticated is key-invalid', async () => {
+    const { calls, checkStatus } = collect({ gemini: 'unauthenticated' });
+    expect(await resolveProbeState(checkStatus, 'gemini', true)).toBe(ProbeState.Unauthenticated);
+    expect(calls).toEqual(['gemini']);
+  });
+
+  it('probes other native tools when primary is unauthenticated and no key; a hit clears the banner', async () => {
+    // gemini (wrong resolved tool) unauthenticated, but claude /login works.
+    const { calls, checkStatus } = collect({
+      gemini: 'unauthenticated',
+      'claude-code': 'authenticated',
+    });
+    expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Authenticated);
+    expect(calls).toContain('claude-code');
+  });
+
+  it('concludes Unauthenticated only when EVERY probe positively says so', async () => {
+    const { checkStatus } = collect({}); // everything defaults to unauthenticated
+    expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Unauthenticated);
+  });
+
+  it('fails safe to Unknown if any fallback probe is unknown', async () => {
+    const { checkStatus } = collect({ gemini: 'unauthenticated', 'claude-code': 'unknown' });
+    expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Unknown);
+  });
+
+  it('does not re-probe the primary tool during fallback', async () => {
+    const { calls, checkStatus } = collect({
+      'claude-code': 'unauthenticated',
+      codex: 'unauthenticated',
+    });
+    await resolveProbeState(checkStatus, 'claude-code', false);
+    expect(calls.filter((t) => t === 'claude-code')).toHaveLength(1);
   });
 });
 
@@ -186,5 +263,13 @@ describe('hasAnyLlmKey', () => {
 
   it('reads keys stored as plain env vars too', () => {
     expect(hasAnyLlmKey(asUser({ env_vars: { GEMINI_API_KEY: { value: 'g' } } }))).toBe(true);
+  });
+
+  it('ignores non-credential fields — a base-URL-only user has no key', () => {
+    expect(
+      hasAnyLlmKey(
+        asUser({ agentic_tools: { 'claude-code': { ANTHROPIC_BASE_URL: 'https://x' } } })
+      )
+    ).toBe(false);
   });
 });

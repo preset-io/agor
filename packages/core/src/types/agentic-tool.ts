@@ -194,9 +194,25 @@ export interface AgenticToolCapabilities {
  * Source of truth for what each tool supports — avoids scattered `if (tool === 'codex')` checks.
  */
 /**
+ * Tri-state outcome of a credential check.
+ * - `authenticated`: a working credential was positively confirmed.
+ * - `unauthenticated`: positively proven to have NO working credential
+ *   (empty native auth, absent auth file, provider 401/403 on a present key).
+ * - `unknown`: could not determine — transport error, provider timeout/5xx, or
+ *   a credential class the check cannot resolve. Callers must FAIL SAFE and treat
+ *   this as "possibly connected" (never surface a "not connected" state).
+ */
+export type AuthCheckStatus = 'authenticated' | 'unauthenticated' | 'unknown';
+
+/**
  * Auth check result — shared type for ITool.isAuthenticated and the daemon /check-auth service.
+ *
+ * `authenticated` is a DERIVED convenience equal to `status === 'authenticated'`,
+ * kept so presence-only consumers keep compiling; consumers that must distinguish
+ * "couldn't verify" from "no auth" read `status`.
  */
 export interface AuthCheckResult {
+  status: AuthCheckStatus;
   authenticated: boolean;
   method: 'api-key' | 'oauth' | 'native' | 'none';
   hint?: string;
