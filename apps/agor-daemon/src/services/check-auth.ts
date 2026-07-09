@@ -22,7 +22,7 @@
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { resolveApiKey } from '@agor/core/config';
+import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
 import { Claude } from '@agor/core/sdk';
@@ -179,6 +179,50 @@ async function probeCodexAuth(): Promise<CodexAuthProbeResult | null> {
   return null;
 }
 
+function isClaudeSubscriptionToken(token: string): boolean {
+  return token.trim().startsWith('sk-ant-oat');
+}
+
+async function withTemporaryEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => Promise<T>
+): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(env)) {
+    previous.set(key, process.env[key]);
+    const value = env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function validateClaudeSubscriptionToken(token: string): Promise<boolean> {
+  const account = await withTemporaryEnv(
+    {
+      CLAUDE_CODE_OAUTH_TOKEN: token.trim(),
+      // Avoid an unrelated daemon-level API key making this probe green.
+      ANTHROPIC_API_KEY: undefined,
+    },
+    () => probeClaudeCodeAuth()
+  );
+  return !!account?.tokenSource;
+}
+
 async function validateApiKey(tool: string, key: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -253,7 +297,20 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       }
 
       // If caller provided a raw key (user typed it in the wizard), validate directly.
+      // Claude subscription tokens from `claude setup-token` are not Anthropic
+      // Console API keys; the Claude SDK/CLI reads them from CLAUDE_CODE_OAUTH_TOKEN.
       if (rawKey?.trim()) {
+        if (tool === 'claude-code' && isClaudeSubscriptionToken(rawKey)) {
+          const ok = await validateClaudeSubscriptionToken(rawKey);
+          return {
+            authenticated: ok,
+            method: ok ? 'oauth' : 'none',
+            hint: ok
+              ? undefined
+              : 'Claude subscription token rejected — run `claude setup-token` again and paste the fresh token.',
+          };
+        }
+
         const ok = await validateApiKey(tool, rawKey.trim());
         return {
           authenticated: ok,
@@ -281,6 +338,15 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
         };
       }
 
+      let effectiveUserEnv: Record<string, string> | undefined;
+      const getEffectiveUserEnv = async () => {
+        if (!userId) return {};
+        effectiveUserEnv ??= await resolveUserEnvironment(userId, db, {
+          tool: tool as AgenticToolName,
+        });
+        return effectiveUserEnv;
+      };
+
       if (apiKey) {
         const ok = await validateApiKey(tool, apiKey);
         return {
@@ -290,6 +356,52 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
             ? undefined
             : 'Stored key was rejected by provider — update it in Settings → Agent Setup.',
         };
+      }
+
+      // User Settings → Env Vars is not the recommended credential home, but
+      // executors do receive those values. Validate that wild setup through the
+      // same user/tool env resolver used to spawn sessions.
+      const userEnv = await getEffectiveUserEnv();
+      const userEnvApiKey = userEnv[keyName];
+      if (userEnvApiKey) {
+        const ok = await validateApiKey(tool, userEnvApiKey);
+        return {
+          authenticated: ok,
+          method: 'api-key',
+          hint: ok
+            ? undefined
+            : 'Stored env var key was rejected by provider — update it in Settings → Env Vars.',
+        };
+      }
+
+      if (tool === 'claude-code') {
+        const subscriptionResolution = await resolveApiKey('CLAUDE_CODE_OAUTH_TOKEN', {
+          userId,
+          db,
+          tool: 'claude-code',
+        });
+
+        if (subscriptionResolution.decryptionFailed) {
+          return {
+            authenticated: false,
+            method: 'none',
+            hint: 'Stored Claude subscription token could not be decrypted (master-secret mismatch). Re-enter it in Settings → Agent Setup.',
+          };
+        }
+
+        const subscriptionToken = subscriptionResolution.apiKey || userEnv.CLAUDE_CODE_OAUTH_TOKEN;
+        if (subscriptionToken) {
+          const ok = await validateClaudeSubscriptionToken(subscriptionToken);
+          return {
+            authenticated: ok,
+            method: ok ? 'oauth' : 'none',
+            hint: ok
+              ? undefined
+              : subscriptionResolution.apiKey
+                ? 'Stored Claude subscription token was rejected — update it in Settings → Agent Setup.'
+                : 'Claude subscription token env var was rejected — update CLAUDE_CODE_OAUTH_TOKEN in Settings → Env Vars.',
+          };
+        }
       }
 
       if (useNativeAuth && NATIVE_AUTH_TOOLS.has(tool)) {

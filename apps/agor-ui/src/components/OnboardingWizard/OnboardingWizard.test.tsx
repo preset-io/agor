@@ -190,10 +190,17 @@ describe('OnboardingWizard', () => {
     const claudeOption = providerOptions.find((option) => option.value === 'claude-code');
     const codexOption = providerOptions.find((option) => option.value === 'codex');
     expect(claudeOption).toBeChecked();
-    expect(screen.getAllByText(/ANTHROPIC_API_KEY/).length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByText('Subscription'));
+    expect(baseElement.querySelector('input[value="claude-subscription-token"]')).toBeChecked();
     expect(screen.getByText(/claude setup-token/)).toBeInTheDocument();
+    expect(screen.getByText(/terminal with Claude Code installed/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /install docs/i })).toHaveAttribute(
+      'href',
+      'https://docs.claude.com/en/docs/claude-code/setup'
+    );
+
+    fireEvent.click(screen.getByText('API key'));
+    expect(baseElement.querySelector('input[value="api-key"]')).toBeChecked();
+    expect(screen.getAllByText(/ANTHROPIC_API_KEY/).length).toBeGreaterThan(0);
 
     fireEvent.click(codexOption as HTMLInputElement);
     expect(codexOption).toBeChecked();

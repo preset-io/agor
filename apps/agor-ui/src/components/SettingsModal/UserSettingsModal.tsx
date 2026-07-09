@@ -41,6 +41,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById } from '../../store/selectors';
+import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import {
@@ -441,11 +442,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, {
-        agentic_tools: {
-          [tool]: { [field]: value },
-        } as UpdateUserInput['agentic_tools'],
-      });
+      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, value));
       setAgenticToolStatus((prev) => ({
         ...prev,
         [tool]: { ...(prev[tool] ?? {}), [field]: true },
@@ -465,11 +462,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, {
-        agentic_tools: {
-          [tool]: { [field]: null },
-        } as UpdateUserInput['agentic_tools'],
-      });
+      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, null));
       setAgenticToolStatus((prev) => {
         const nextToolFields = { ...(prev[tool] ?? {}) };
         delete nextToolFields[field];

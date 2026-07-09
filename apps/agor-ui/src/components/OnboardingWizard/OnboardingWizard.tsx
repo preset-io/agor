@@ -58,6 +58,7 @@ import {
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectRepoById } from '../../store/selectors';
 import type { CreateRepoOptions } from '../../types';
+import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
 import { ensureAssistantWelcomeNote } from '../../utils/assistantWelcomeNote';
 import { slugify } from '../../utils/repoSlug';
@@ -200,6 +201,7 @@ const AGENT_KEY_CONSOLES: Record<AgenticToolName, { label: string; url: string }
 };
 
 function defaultAuthMethodForAgent(agent: AgenticToolName): AuthMethod {
+  if (agent === 'claude-code') return 'claude-subscription-token';
   return agent === 'codex' ? 'codex-cli-auth' : 'api-key';
 }
 
@@ -255,7 +257,9 @@ export function OnboardingWizard({
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
   const [lastRecommendedAgent, setLastRecommendedAgent] = useState<AgenticToolName>('claude-code');
   const [useDifferentProvider, setUseDifferentProvider] = useState(false);
-  const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
+  const [authMethod, setAuthMethod] = useState<AuthMethod>(() =>
+    defaultAuthMethodForAgent('claude-code')
+  );
   const [apiKey, setApiKey] = useState('');
   const [overrideDetectedAuth, setOverrideDetectedAuth] = useState(false);
   const [manualTestResult, setManualTestResult] = useState<AuthCheckResult | null>(null);
@@ -324,7 +328,8 @@ export function OnboardingWizard({
       const hasAnthropicKey = !!(
         claudeFields?.ANTHROPIC_API_KEY ||
         claudeFields?.CLAUDE_CODE_OAUTH_TOKEN ||
-        user?.env_vars?.ANTHROPIC_API_KEY
+        user?.env_vars?.ANTHROPIC_API_KEY ||
+        user?.env_vars?.CLAUDE_CODE_OAUTH_TOKEN
       );
       const hasOpenAIKey = !!(codexFields?.OPENAI_API_KEY || user?.env_vars?.OPENAI_API_KEY);
       const hasGeminiKey = !!(geminiFields?.GEMINI_API_KEY || user?.env_vars?.GEMINI_API_KEY);
@@ -800,11 +805,10 @@ export function OnboardingWizard({
     const targetTool: AgenticToolName =
       selectedAgent === 'opencode' ? 'claude-code' : selectedAgent;
     try {
-      await onUpdateUser(user.user_id, {
-        agentic_tools: {
-          [targetTool]: { [keyName]: apiKey.trim() },
-        } as UpdateUserInput['agentic_tools'],
-      });
+      await onUpdateUser(
+        user.user_id,
+        buildAgenticToolCredentialPatch(targetTool, keyName, apiKey.trim())
+      );
       await startSetup();
     } catch (err) {
       setError(`Failed to save API key: ${err instanceof Error ? err.message : String(err)}`);
@@ -903,7 +907,15 @@ export function OnboardingWizard({
             style={{ marginBottom: 16, textAlign: 'left' }}
             description={
               <span>
-                Run <Text code>claude setup-token</Text>, then paste the token below.
+                In any terminal with Claude Code installed, run <Text code>claude setup-token</Text>
+                , then paste the printed token below. Need Claude Code?{' '}
+                <Typography.Link
+                  href="https://docs.claude.com/en/docs/claude-code/setup"
+                  target="_blank"
+                >
+                  Install docs
+                </Typography.Link>
+                .
               </span>
             }
           />

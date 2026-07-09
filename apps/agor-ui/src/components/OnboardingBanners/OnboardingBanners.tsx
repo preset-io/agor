@@ -38,6 +38,7 @@ function hasAnyLlmKey(user: User | null | undefined): boolean {
     codex?.OPENAI_API_KEY ||
     gemini?.GEMINI_API_KEY ||
     user.env_vars?.ANTHROPIC_API_KEY ||
+    user.env_vars?.CLAUDE_CODE_OAUTH_TOKEN ||
     user.env_vars?.OPENAI_API_KEY ||
     user.env_vars?.GEMINI_API_KEY
   );
@@ -51,7 +52,8 @@ function primaryAgentForUser(user: User | null | undefined): AgenticToolName | n
   if (
     claude?.ANTHROPIC_API_KEY ||
     claude?.CLAUDE_CODE_OAUTH_TOKEN ||
-    user.env_vars?.ANTHROPIC_API_KEY
+    user.env_vars?.ANTHROPIC_API_KEY ||
+    user.env_vars?.CLAUDE_CODE_OAUTH_TOKEN
   )
     return 'claude-code';
   if (codex?.OPENAI_API_KEY || user.env_vars?.OPENAI_API_KEY) return 'codex';
