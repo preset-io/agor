@@ -1,5 +1,5 @@
 import type { AgorClient, Board, Branch, Repo, Session } from '@agor-live/client';
-import { isAssistant } from '@agor-live/client';
+import { isTeammate } from '@agor-live/client';
 import {
   AimOutlined,
   BranchesOutlined,
@@ -109,7 +109,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [isFormValid, setIsFormValid] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [archiveFilter, setArchiveFilter] = useState<'all' | 'active' | 'archived' | 'assistants'>(
+  const [archiveFilter, setArchiveFilter] = useState<'all' | 'active' | 'archived' | 'teammates'>(
     'active'
   );
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
@@ -325,7 +325,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         const nameMatchesRef = name === record.ref;
         return (
           <Space style={{ minWidth: 0, width: '100%' }}>
-            {isAssistant(record) ? (
+            {isTeammate(record) ? (
               <RobotOutlined style={{ color: token.colorInfo }} />
             ) : (
               <BranchesOutlined />
@@ -505,8 +505,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       filtered = sorted.filter((w) => !w.archived);
     } else if (archiveFilter === 'archived') {
       filtered = sorted.filter((w) => w.archived);
-    } else if (archiveFilter === 'assistants') {
-      filtered = sorted.filter((w) => !w.archived && isAssistant(w));
+    } else if (archiveFilter === 'teammates') {
+      filtered = sorted.filter((w) => !w.archived && isTeammate(w));
     }
 
     // Filter by search term
@@ -561,7 +561,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
               style={{ width: 120 }}
               options={[
                 { value: 'active', label: 'Active' },
-                { value: 'assistants', label: 'Assistants' },
+                { value: 'teammates', label: 'Teammates' },
                 { value: 'all', label: 'All' },
                 { value: 'archived', label: 'Archived' },
               ]}

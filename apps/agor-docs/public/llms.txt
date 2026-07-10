@@ -24,7 +24,7 @@ Agor is open-source software licensed under BSL 1.1, created by Preset Inc.
 ## Features
 
 - [Features Overview](https://agor.live/guide/features-overview): Map of all major features
-- [Assistants](https://agor.live/guide/assistants): Persistent AI companions with memory, skills, orchestration, and scheduled heartbeats
+- [Teammates](https://agor.live/guide/teammates): Persistent AI teammates with memory, skills, orchestration, and scheduled heartbeats
 - [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in MCP server — anything a user can do, an agent can do too
 - [Rich Chat UX](https://agor.live/guide/rich-chat-ux): Per-prompt token/$ accounting, context viz, tool blocks, queueing, autocomplete, Streamdown
 - [Multiplayer & Social](https://agor.live/guide/multiplayer-social): Live cursors, facepile, spatial comments, attention pulse, shared terminals

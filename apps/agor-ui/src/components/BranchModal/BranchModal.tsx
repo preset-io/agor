@@ -1,12 +1,11 @@
 import type { AgorClient, BoardEntityObject, Branch, Repo, Session, User } from '@agor-live/client';
-import { getAssistantConfig, isAssistant } from '@agor-live/client';
+import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { Badge, Button, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
-import { AssistantTab } from './tabs/AssistantTab';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
@@ -14,11 +13,12 @@ import { KnowledgeTab } from './tabs/KnowledgeTab';
 import { PermissionsTab } from './tabs/PermissionsTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
+import { TeammateTab } from './tabs/TeammateTab';
 import { type BranchUpdate, useBranchModalForm } from './useBranchModalForm';
 
 export type BranchModalTab =
   | 'general'
-  | 'assistant'
+  | 'teammate'
   | 'knowledge'
   | 'sessions'
   | 'environment'
@@ -36,7 +36,7 @@ export interface BranchModalProps {
   client: AgorClient | null;
   currentUser?: User | null; // Current user for RBAC
   // Used by EnvironmentTab for its independent start/stop/snapshot actions.
-  // The General / Assistant / Permissions form does NOT route through this —
+  // The General / Teammate / Permissions form does NOT route through this —
   // it calls `client.service('branches').patch()` directly so errors bubble.
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
@@ -106,21 +106,21 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     }
   }, [form.ownersLoadError, showError]);
 
-  const isAnAssistant = branch ? isAssistant(branch) : false;
-  const assistantConfig = useMemo(() => (branch ? getAssistantConfig(branch) : null), [branch]);
+  const isATeammate = branch ? isTeammate(branch) : false;
+  const teammateConfig = useMemo(() => (branch ? getTeammateConfig(branch) : null), [branch]);
 
   if (!branch || !repo) {
     return null;
   }
 
-  const title = isAnAssistant
-    ? `Assistant: ${assistantConfig?.displayName ?? branch.name}`
+  const title = isATeammate
+    ? `Teammate: ${teammateConfig?.displayName ?? branch.name}`
     : `Branch: ${branch.name}`;
 
   const handleSave = async () => {
     const result = await form.save();
     if (result.ok) {
-      showSuccess(isAnAssistant ? 'Assistant updated' : 'Branch updated');
+      showSuccess(isATeammate ? 'Teammate updated' : 'Branch updated');
       onClose();
     } else {
       showError(result.error.message || 'Failed to save changes');
@@ -128,18 +128,18 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   };
 
   const tabItems = [
-    // Assistant tab — only for assistants, shown first
-    ...(isAnAssistant
+    // Teammate tab — only for teammates, shown first
+    ...(isATeammate
       ? [
           {
-            key: 'assistant',
-            label: 'Assistant',
+            key: 'teammate',
+            label: 'Teammate',
             children: (
-              <AssistantTab
+              <TeammateTab
                 branch={branch}
                 canEdit={form.canEditGeneral}
-                state={form.assistant}
-                setField={form.setAssistant}
+                state={form.teammate}
+                setField={form.setTeammate}
               />
             ),
           },
@@ -250,13 +250,13 @@ export const BranchModal: React.FC<BranchModalProps> = ({
         />
       ),
     },
-    // Knowledge is assistant-only and intentionally last for now: it is
+    // Knowledge is teammate-only and intentionally last for now: it is
     // configuration-adjacent but less central than the primary branch/session tabs.
-    ...(isAnAssistant
+    ...(isATeammate
       ? [
           {
             key: 'knowledge',
-            label: 'Knowledge',
+            label: 'Teammate Knowledge',
             children: (
               <KnowledgeTab branch={branch} client={client} canEdit={form.canEditGeneral} />
             ),
@@ -266,7 +266,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   ];
 
   // Modal-level footer: one Save action for all form-contributing tabs
-  // (General, Assistant, Permissions). Tabs like Environment / Sessions /
+  // (General, Teammate, Permissions). Tabs like Environment / Sessions /
   // Files / Schedules have their own actions outside the form.
   const canSave =
     (form.canEditGeneral || form.canEditPermissions) && form.hasChanges && !form.saving;

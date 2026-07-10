@@ -1,5 +1,5 @@
 import type { Board, Branch, Session, User } from '@agor-live/client';
-import { getAssistantConfig, isAssistant } from '@agor-live/client';
+import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import {
   BranchesOutlined,
   RobotOutlined,
@@ -30,7 +30,7 @@ import {
 import { getTimeMs } from '../../utils/entityTime';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
-import { AssistantPill, BoardPill, BranchPill, SessionPill, UserPill } from '../Pill';
+import { BoardPill, BranchPill, SessionPill, TeammatePill, UserPill } from '../Pill';
 import { glassCardStyle } from './homeStyles';
 import type { HomePageProps } from './types';
 
@@ -38,7 +38,7 @@ const { Text } = Typography;
 
 const HOME_ACTIVITY_LIMIT = 100;
 
-type ActivityFilter = 'all' | 'branches' | 'sessions' | 'assistants';
+type ActivityFilter = 'all' | 'branches' | 'sessions' | 'teammates';
 type ActivityEventType = Exclude<ActivityFilter, 'all'>;
 
 // `t` is the numeric sort key, parsed once via the shared memoized util so the
@@ -66,7 +66,7 @@ const SESSION_PILL_STYLE: React.CSSProperties = {
 
 const activityIcon = (type: ActivityEventType): React.ReactNode => {
   if (type === 'sessions') return <UnorderedListOutlined />;
-  if (type === 'assistants') return <RobotOutlined />;
+  if (type === 'teammates') return <RobotOutlined />;
   return <BranchesOutlined />;
 };
 
@@ -156,18 +156,18 @@ const ActivityRow = memo(function ActivityRow({
     );
   } else {
     if (!branch) return null;
-    const assistant = type === 'assistants';
-    const assistantConfig = getAssistantConfig(branch);
-    const branchLabel = assistantConfig?.displayName ?? branch.name;
+    const teammate = type === 'teammates';
+    const teammateConfig = getTeammateConfig(branch);
+    const branchLabel = teammateConfig?.displayName ?? branch.name;
 
     message = (
       <Space size={4} wrap>
         {actor ? <UserPill user={actor} compact /> : <Text strong>Someone</Text>}
         <Text type="secondary">created</Text>
-        {assistant ? (
-          <AssistantPill
+        {teammate ? (
+          <TeammatePill
             name={branchLabel}
-            emoji={assistantConfig?.emoji}
+            emoji={teammateConfig?.emoji}
             compact
             title={branch.name}
             onClick={() => onBranchClick(branch.branch_id)}
@@ -235,10 +235,10 @@ export const HomeActivitySection: React.FC<ActivityCallbacks> = ({
     const events: ActivityEvent[] = [];
     for (const branch of branchById.values()) {
       if (branch.archived) continue;
-      const assistant = isAssistant(branch);
+      const teammate = isTeammate(branch);
       events.push({
         id: `branch:${branch.branch_id}`,
-        type: assistant ? 'assistants' : 'branches',
+        type: teammate ? 'teammates' : 'branches',
         dttm: branch.created_at,
         t: getTimeMs(branch, 'created_at'),
         entityId: branch.branch_id,
@@ -306,11 +306,11 @@ export const HomeActivitySection: React.FC<ActivityCallbacks> = ({
             },
             {
               label: (
-                <Tooltip title="Assistants">
-                  <RobotOutlined aria-label="Assistants" />
+                <Tooltip title="Teammates">
+                  <RobotOutlined aria-label="Teammates" />
                 </Tooltip>
               ),
-              value: 'assistants',
+              value: 'teammates',
             },
           ]}
         />

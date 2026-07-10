@@ -46,7 +46,7 @@ export const ENTITY_PILL_COLORS = {
   branch: 'cyan',
   session: 'default',
   board: 'blue',
-  assistant: 'geekblue',
+  teammate: 'geekblue',
   mcp: 'purple',
   user: 'orange',
   artifact: 'gold',
@@ -996,7 +996,7 @@ export const UserPill: React.FC<UserPillProps> = ({
   );
 };
 
-interface AssistantPillProps extends BasePillProps {
+interface TeammatePillProps extends BasePillProps {
   name: string;
   emoji?: string | null;
   compact?: boolean;
@@ -1004,7 +1004,7 @@ interface AssistantPillProps extends BasePillProps {
   onClick?: (e: EntityPillInteractionEvent) => void;
 }
 
-export const AssistantPill: React.FC<AssistantPillProps> = ({
+export const TeammatePill: React.FC<TeammatePillProps> = ({
   name,
   emoji,
   compact = false,
@@ -1014,7 +1014,7 @@ export const AssistantPill: React.FC<AssistantPillProps> = ({
 }) => (
   <EntityPill
     icon={<RobotOutlined />}
-    color={ENTITY_PILL_COLORS.assistant}
+    color={ENTITY_PILL_COLORS.teammate}
     label={name}
     emoji={emoji}
     compact={compact}
@@ -1024,6 +1024,8 @@ export const AssistantPill: React.FC<AssistantPillProps> = ({
     style={style}
   />
 );
+
+/** @deprecated Use TeammatePill instead. */
 
 interface SessionPillProps extends BasePillProps {
   label?: React.ReactNode;

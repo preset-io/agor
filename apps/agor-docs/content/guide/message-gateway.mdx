@@ -38,7 +38,7 @@ The Message Gateway connects external messaging platforms to Agor's agent sessio
 
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
-  alt="Slack thread where a user mentions an Agor assistant and the bot creates an Agor session, replies with a view-session link, and starts reading context"
+  alt="Slack thread where a user mentions an Agor teammate and the bot creates an Agor session, replies with a view-session link, and starts reading context"
   style={{ maxWidth: '920px', width: '100%', borderRadius: '14px', marginTop: '16px', marginBottom: '28px' }}
 />
 
@@ -46,13 +46,13 @@ The Message Gateway connects external messaging platforms to Agor's agent sessio
 
 A **Channel** is a portal into a branch. It defines:
 
-- **A home branch** — the persistent branch where every session spawned by this channel will operate. Think of it as a command center, like an [assistant](/guide/assistants) branch that supervises a project.
+- **A home branch** — the persistent branch where every session spawned by this channel will operate. Think of it as a command center, like an [teammate](/guide/teammates) branch that supervises a project.
 - **An agentic tool configuration** — which coding agent to use (Claude Code, Codex, Gemini, OpenCode), which model, permission mode, and which MCP servers to attach.
 - **Platform credentials** — bot token, app token, and other secrets needed to send and receive messages (encrypted at rest).
 
 You can create multiple channels for the same or different branches. For example:
 
-- **"Optimus Prime"** — Claude Code (Opus 4.8) on your main assistant branch, with Slack + GitHub MCP servers
+- **"Optimus Prime"** — Claude Code (Opus 4.8) on your main teammate branch, with Slack + GitHub MCP servers
 - **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review branch, trust mode, no MCP servers
 - **"Codex Runner"** — Codex on a `superset-frontend` branch for quick JS tasks
 
@@ -218,7 +218,7 @@ You can create the app through Agor's setup wizard or manually:
 2. Fill in:
    - **Name** — e.g., "GitHub: preset-io"
    - **Channel Type** — Select `github`.
-   - **Target Branch** — Pick the branch where sessions will run. Ideally, this is an [assistant](/guide/assistants) branch configured for GitHub work.
+   - **Target Branch** — Pick the branch where sessions will run. Ideally, this is an [teammate](/guide/teammates) branch configured for GitHub work.
    - **App ID** — Your GitHub App's ID.
    - **Private Key** — The PEM private key (encrypted at rest).
    - **Installation ID** — Found via the setup wizard or GitHub's API.
@@ -239,11 +239,11 @@ Comment `@agor review this PR` on any PR in a watched repo. Within 15 seconds:
 
 Follow-up `@agor` mentions on the same PR continue the same session — the agent has full conversation history.
 
-### Setting Up the Assistant
+### Setting Up the Teammate
 
-The gateway routes messages to a session on the target branch. What the agent _does_ with those messages is up to you — configured via the assistant's instructions on the target branch.
+The gateway routes messages to a session on the target branch. What the agent _does_ with those messages is up to you — configured via the teammate's instructions on the target branch.
 
-A minimal assistant prompt might be:
+A minimal teammate prompt might be:
 
 ```
 You handle GitHub mentions for preset-io/agor.
@@ -259,7 +259,7 @@ When mentioned on an issue:
 - Respond with analysis or next steps
 ```
 
-With a capable model (like Claude Opus) and Agor MCP tools available, even a minimal prompt produces good results — the agent figures out how to use branches, spawn sessions, and interact with GitHub. Over time, the assistant learns the codebase, team conventions, and review patterns across PRs.
+With a capable model (like Claude Opus) and Agor MCP tools available, even a minimal prompt produces good results — the agent figures out how to use branches, spawn sessions, and interact with GitHub. Over time, the teammate learns the codebase, team conventions, and review patterns across PRs.
 
 ## Setting Up Microsoft Teams Integration
 
@@ -294,7 +294,7 @@ Key differences from Slack and GitHub:
 2. Fill in:
    - **Name** — e.g., "Teams: Platform Team"
    - **Channel Type** — Select `teams`.
-   - **Target Branch** — Pick the branch where sessions will run. Ideally, this is an [assistant](/guide/assistants) branch.
+   - **Target Branch** — Pick the branch where sessions will run. Ideally, this is an [teammate](/guide/teammates) branch.
    - **App ID** — Your Azure Bot's Application (client) ID.
    - **App Password** — The Azure Bot client secret value (encrypted at rest).
    - **Tenant ID** — Your Azure AD tenant ID.

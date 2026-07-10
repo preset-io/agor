@@ -373,38 +373,9 @@ export function artifactRemoved(artifact: Artifact) {
   });
 }
 
-// ── Session ↔ MCP relationships ───────────────────────────────────────────--
-export function sessionMcpCreated(relationship: { session_id: string; mcp_server_id: string }) {
-  bumpRevision('sessionMcp');
-  setMap('sessionMcpServerIds', (prev) => {
-    const sessionMcpIds = prev.get(relationship.session_id) || [];
-    // Check if relationship already exists (duplicate event)
-    if (sessionMcpIds.includes(relationship.mcp_server_id)) return prev;
-
-    const next = new Map(prev);
-    next.set(relationship.session_id, [...sessionMcpIds, relationship.mcp_server_id]);
-    return next;
-  });
-}
-export function sessionMcpRemoved(relationship: { session_id: string; mcp_server_id: string }) {
-  bumpRevision('sessionMcp');
-  setMap('sessionMcpServerIds', (prev) => {
-    const sessionMcpIds = prev.get(relationship.session_id) || [];
-    const filtered = sessionMcpIds.filter((id) => id !== relationship.mcp_server_id);
-
-    // No change if MCP server wasn't in the list
-    if (filtered.length === sessionMcpIds.length) return prev;
-
-    const next = new Map(prev);
-    if (filtered.length > 0) {
-      next.set(relationship.session_id, filtered);
-    } else {
-      // Clean up empty arrays
-      next.delete(relationship.session_id);
-    }
-    return next;
-  });
-}
+// Re-export transport-neutral relationship actions so existing websocket
+// subscription wiring can keep using the realtime action namespace.
+export { sessionMcpCreated, sessionMcpRemoved } from './sessionMcpActions';
 
 // ── Board comments ────────────────────────────────────────────────────────--
 export function commentCreated(comment: BoardComment) {

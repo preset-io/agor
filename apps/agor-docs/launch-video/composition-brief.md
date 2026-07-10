@@ -39,7 +39,7 @@ that breaks out of the terminal into Agor's signature warm-orange multiplayer ca
 - Copy that must appear verbatim:
   - `one agent in a terminal is fine.`
   - `five across a team? chaos.`
-  - `Meet your team of AI assistants.`
+  - `Meet your AI teammates.`
   - `Live cursors. Comments. Presence.`
   - `Pick the best harness per session.`
   - `Reach them from Slack, GitHub, anywhere.`
@@ -92,7 +92,7 @@ Use the storyboard in `brag-output/brag-plan.md` as the creative contract. Scene
 1. **Terminal hook** — 3.5s — type "one agent in a terminal is fine.", then snap
    "five across a team? chaos." on the dark-teal + constellation bg. Cold, cramped.
 2. **The reveal** — 4.5s — terminal cracks; `board-hero.png` sweeps in with a slight 3D
-   tilt (cool→warm); headline "Meet your team of AI assistants." slams down. Hold the board.
+   tilt (cool→warm); headline "Meet your AI teammates." slams down. Hold the board.
 3. **Multiplayer presence** — 4.5s — facepile avatars pop in one by one; the orange Mina
    cursor glides across; the board-comment popover pops. Caption "Live cursors. Comments.
    Presence." Use the three `marketing/*presence/cursor/facepile/comment*` screenshots.

@@ -1,5 +1,5 @@
 import type { Branch, Session } from '@agor/core/types';
-import { isAssistant } from '@agor/core/types';
+import { isTeammate } from '@agor/core/types';
 
 export function buildBranchCreatedAnalyticsProperties(branch: Branch): Record<string, unknown> {
   return {
@@ -8,7 +8,7 @@ export function buildBranchCreatedAnalyticsProperties(branch: Branch): Record<st
     board_id: branch.board_id ?? null,
     ref_type: branch.ref_type ?? 'branch',
     new_branch: branch.new_branch,
-    is_assistant: isAssistant(branch),
+    is_teammate: isTeammate(branch),
   };
 }
 
