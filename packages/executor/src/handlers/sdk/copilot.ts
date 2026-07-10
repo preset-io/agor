@@ -65,7 +65,8 @@ export async function executeCopilotTask(params: {
           repos.mcpServers,
           repos.users,
           permissionService,
-          repos.sessionsService
+          repos.sessionsService,
+          repos.mcpOAuthAuthHeaders
         ),
     });
   } finally {

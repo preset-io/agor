@@ -7,10 +7,11 @@
 
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
+import type { SessionRow } from '../schema';
 import { dbTest } from '../test-helpers';
-import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
+import { AmbiguousIdError, EntityNotFoundError, getHiddenTenantId, RepositoryError } from './base';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
@@ -74,6 +75,67 @@ async function createTestBranch(db: any, overrides?: { branch_id?: UUID; repo_id
 
   return branch;
 }
+
+type SessionRowMapper = {
+  rowToSession(row: SessionRow, branchBoardId?: UUID | null, baseUrl?: string): Session;
+};
+
+function createPostgresStyleSessionRow(overrides?: Partial<SessionRow> & { tenant_id?: string }) {
+  const now = new Date('2026-01-01T00:00:00.000Z');
+  return {
+    tenant_id: 'tenant-session-row',
+    session_id: generateId(),
+    created_at: now,
+    updated_at: now,
+    created_by: generateId(),
+    unix_username: null,
+    status: SessionStatus.IDLE,
+    agentic_tool: 'claude-code',
+    board_id: null,
+    parent_session_id: null,
+    forked_from_session_id: null,
+    branch_id: generateId(),
+    scheduled_run_at: null,
+    scheduled_from_branch: false,
+    schedule_id: null,
+    ready_for_prompt: false,
+    archived: false,
+    archived_reason: null,
+    data: {
+      git_state: {
+        ref: 'main',
+        base_sha: 'abc123',
+        current_sha: 'def456',
+      },
+      genealogy: { children: [] },
+      contextFiles: [],
+      tasks: [],
+    },
+    ...overrides,
+  } satisfies SessionRow & { tenant_id: string };
+}
+
+function rowToSessionForTest(repo: SessionRepository, row: SessionRow): Session {
+  return (repo as unknown as SessionRowMapper).rowToSession(row);
+}
+
+// ============================================================================
+// Mapping
+// ============================================================================
+
+describe('SessionRepository row mapping', () => {
+  it('attaches Postgres tenant_id as hidden non-enumerable metadata', () => {
+    const repo = new SessionRepository({} as never);
+    const row = createPostgresStyleSessionRow();
+
+    const session = rowToSessionForTest(repo, row);
+
+    expect(getHiddenTenantId(session)).toBe('tenant-session-row');
+    expect((session as { tenant_id?: string }).tenant_id).toBe('tenant-session-row');
+    expect(Object.keys(session)).not.toContain('tenant_id');
+    expect(JSON.stringify(session)).not.toContain('tenant_id');
+  });
+});
 
 // ============================================================================
 // Create

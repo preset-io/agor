@@ -11,6 +11,7 @@
  */
 
 import { registerEnvVarsWidget } from './env-vars/index.js';
+import { registerGatewayTokenWidget } from './gateway-token/index.js';
 
 export type { WidgetRegistryEntry, WidgetSubmitCtx } from './registry.js';
 export { getWidget, listWidgetTypes, registerWidget } from './registry.js';
@@ -29,4 +30,5 @@ export { canResolveWidget, resolveWidget } from './submissions.js';
  */
 export function registerAllWidgets(): void {
   registerEnvVarsWidget();
+  registerGatewayTokenWidget();
 }

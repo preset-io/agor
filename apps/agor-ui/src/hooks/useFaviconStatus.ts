@@ -7,20 +7,25 @@
  * - No dots: Nothing active on current board
  */
 
-import type { BoardEntityObject, Session } from '@agor-live/client';
-import { SessionStatus } from '@agor-live/client';
 import { theme } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { brandMarkHref } from '../branding/brand';
+import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
+import { makeBoardSessionActivitySelector } from '../store/selectors';
 import { createFaviconWithDot } from '../utils/faviconDot';
 
-export function useFaviconStatus(
-  currentBoardId: string | null,
-  sessionsByBranch: Map<string, Session[]>,
-  boardObjectsForCurrentBoard: BoardEntityObject[]
-) {
+export function useFaviconStatus(currentBoardId: string | null) {
   const [baseFaviconUrl] = useState(brandMarkHref());
   const { token } = theme.useToken();
+
+  // Subscribe to the two derived flags rather than the whole session /
+  // board-object maps: the favicon only changes when a flag flips, so the
+  // host component stays quiet across ordinary session churn.
+  const { hasRunning, hasReady } = useStoreWithEqualityFn(
+    agorStore,
+    useMemo(() => makeBoardSessionActivitySelector(currentBoardId), [currentBoardId]),
+    shallow
+  );
 
   useEffect(() => {
     // createFaviconWithDot is async (it decodes an <img> and rasterizes to a
@@ -37,30 +42,8 @@ export function useFaviconStatus(
       }
     };
 
-    if (!currentBoardId) {
-      // No board selected - restore default favicon
-      createFaviconWithDot(baseFaviconUrl, false, false, token.colorSuccessText).then(applyFavicon);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const branchesOnBoard = new Set(
-      boardObjectsForCurrentBoard.filter((obj) => obj.branch_id).map((obj) => obj.branch_id!)
-    );
-
-    // Find sessions for those branches using O(1) Map lookups
-    const sessionsOnBoard = Array.from(branchesOnBoard)
-      .flatMap((branchId) => sessionsByBranch.get(branchId!) || [])
-      .filter((s) => !s.archived);
-
-    // Determine status: check for running and ready independently
-    // Use .some() for efficient short-circuiting
-    const hasRunning = sessionsOnBoard.some((session) => session.status === SessionStatus.RUNNING);
-
-    const hasReady = sessionsOnBoard.some((session) => session.ready_for_prompt);
-
-    // Update favicon with appropriate dots
+    // Update favicon with appropriate dots (both false with no board —
+    // the selector reports no activity — restoring the default favicon).
     // White dot (lower-left) for running, green dot (lower-right) for ready
     createFaviconWithDot(baseFaviconUrl, hasRunning, hasReady, token.colorSuccessText).then(
       applyFavicon
@@ -69,11 +52,5 @@ export function useFaviconStatus(
     return () => {
       cancelled = true;
     };
-  }, [
-    currentBoardId,
-    sessionsByBranch,
-    boardObjectsForCurrentBoard,
-    baseFaviconUrl,
-    token.colorSuccessText,
-  ]);
+  }, [hasRunning, hasReady, baseFaviconUrl, token.colorSuccessText]);
 }

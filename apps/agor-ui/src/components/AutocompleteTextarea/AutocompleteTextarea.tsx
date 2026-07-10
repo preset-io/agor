@@ -96,6 +96,12 @@ interface AutocompleteTextareaProps {
     maxRows?: number;
   };
   onFilesDrop?: (files: File[]) => void;
+  /** When true, drag/drop and paste file attachments are consumed but not routed. */
+  filesDropDisabled?: boolean;
+  /** When false, keep file drop routing but suppress this textarea's local drag overlay. */
+  showFilesDropOverlay?: boolean;
+  /** Suppress the empty/focus-style highlight while a parent composer affordance is active. */
+  suppressEmptyHighlight?: boolean;
   /** Available slash commands from the SDK (stored on session.custom_context) */
   slashCommands?: string[];
   /** Available skills from the SDK (stored on session.custom_context) */
@@ -365,6 +371,9 @@ export const AutocompleteTextarea = React.forwardRef<
       userById,
       autoSize,
       onFilesDrop,
+      filesDropDisabled = false,
+      showFilesDropOverlay = true,
+      suppressEmptyHighlight = false,
       slashCommands = EMPTY_SLASH_COMMANDS,
       skills = EMPTY_SKILLS,
       enableKnowledgeMentions = false,
@@ -1078,9 +1087,13 @@ export const AutocompleteTextarea = React.forwardRef<
         if (!onFilesDrop) return;
         e.preventDefault();
         e.stopPropagation();
-        setIsDragOver(true);
+        if (filesDropDisabled) {
+          setIsDragOver(false);
+          return;
+        }
+        setIsDragOver(showFilesDropOverlay);
       },
-      [onFilesDrop]
+      [filesDropDisabled, onFilesDrop, showFilesDropOverlay]
     );
 
     const handleDragLeave = useCallback(
@@ -1099,39 +1112,54 @@ export const AutocompleteTextarea = React.forwardRef<
         e.preventDefault();
         e.stopPropagation();
         setIsDragOver(false);
+        if (filesDropDisabled) return;
 
         const files = Array.from(e.dataTransfer.files);
         if (files.length > 0) {
           onFilesDrop(files);
         }
       },
-      [onFilesDrop]
+      [filesDropDisabled, onFilesDrop]
     );
 
     const handlePaste = useCallback(
       (e: React.ClipboardEvent) => {
         if (!onFilesDrop) return;
 
-        const imageFiles: File[] = [];
+        const pastedFiles: File[] = [];
         for (const item of Array.from(e.clipboardData.items)) {
-          if (item.kind === 'file' && item.type.startsWith('image/')) {
-            const file = item.getAsFile();
-            if (file) {
-              const ext = item.type.split('/')[1] || 'png';
-              const niceName = `pasted-screenshot-${new Date()
-                .toISOString()
-                .replace(/[:.]/g, '-')}.${ext}`;
-              imageFiles.push(new File([file], niceName, { type: file.type }));
-            }
+          if (item.kind !== 'file') continue;
+
+          const file = item.getAsFile();
+          if (!file) continue;
+
+          const mimeType = item.type || file.type;
+          if (mimeType.startsWith('image/')) {
+            const ext = mimeType.split('/')[1] || 'png';
+            const niceName = `pasted-screenshot-${new Date()
+              .toISOString()
+              .replace(/[:.]/g, '-')}.${ext}`;
+            pastedFiles.push(new File([file], niceName, { type: file.type || mimeType }));
+            continue;
           }
+
+          if (file.name) {
+            pastedFiles.push(file);
+            continue;
+          }
+
+          const ext = mimeType.split('/')[1] || 'bin';
+          const niceName = `pasted-file-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`;
+          pastedFiles.push(new File([file], niceName, { type: file.type || mimeType }));
         }
 
-        if (imageFiles.length === 0) return;
+        if (pastedFiles.length === 0) return;
 
         e.preventDefault();
-        onFilesDrop(imageFiles);
+        if (filesDropDisabled) return;
+        onFilesDrop(pastedFiles);
       },
-      [onFilesDrop]
+      [filesDropDisabled, onFilesDrop]
     );
 
     /**
@@ -1326,7 +1354,7 @@ export const AutocompleteTextarea = React.forwardRef<
     // Compute highlighted text
     const highlightColor = token.colorBgTextHover;
     const hasHighlights = value?.includes('@') ?? false;
-    const shouldHighlightEmpty = highlightWhenEmpty && !value.trim();
+    const shouldHighlightEmpty = highlightWhenEmpty && !value.trim() && !suppressEmptyHighlight;
 
     return (
       <div
@@ -1457,10 +1485,15 @@ export const AutocompleteTextarea = React.forwardRef<
           autoSize={autoSize || { minRows: 2, maxRows: 10 }}
           className="agor-textarea agor-textarea-with-highlights"
           style={{
-            borderColor: shouldHighlightEmpty ? token.colorPrimary : token.colorBorder,
-            boxShadow: shouldHighlightEmpty
-              ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
-              : undefined,
+            borderColor:
+              shouldHighlightEmpty && !suppressEmptyHighlight
+                ? token.colorPrimary
+                : token.colorBorder,
+            boxShadow: suppressEmptyHighlight
+              ? 'none'
+              : shouldHighlightEmpty
+                ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
+                : undefined,
             backgroundColor: hasHighlights ? 'transparent' : undefined,
             transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
             position: 'relative',

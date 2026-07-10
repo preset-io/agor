@@ -24,7 +24,11 @@ import type {
   Session,
   Task,
 } from '@agor/core/types';
-import type { ExecuteTaskData } from './services/sessions.js';
+import type {
+  ExecuteTaskData,
+  SessionArchiveOptions,
+  SessionArchiveResult,
+} from './services/sessions.js';
 
 // Re-export core types for convenience
 export type AuthenticatedUser = CoreAuthenticatedUser;
@@ -60,6 +64,16 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
     ancestors: import('@agor/core/types').Session[];
     children: import('@agor/core/types').Session[];
   }>;
+  archive(
+    id: string,
+    options?: SessionArchiveOptions,
+    params?: FeathersParams
+  ): Promise<SessionArchiveResult>;
+  unarchive(
+    id: string,
+    options?: SessionArchiveOptions,
+    params?: FeathersParams
+  ): Promise<SessionArchiveResult>;
   enrichRemoteRelationships(
     sessionList: import('@agor/core/types').Session[]
   ): Promise<import('@agor/core/types').Session[]>;
@@ -186,6 +200,11 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
   batchUpsertBoardObjects(
     boardId: string,
     objects: unknown[],
+    params?: FeathersParams
+  ): Promise<Board>;
+  mergeBoardObjectFields(
+    boardId: string,
+    patches: Record<string, unknown>,
     params?: FeathersParams
   ): Promise<Board>;
   deleteZone(

@@ -1264,6 +1264,134 @@ describe('BoardRepository.batchUpsertBoardObjects', () => {
   });
 });
 
+describe('BoardRepository.mergeBoardObjectFields', () => {
+  dbTest('merges only the given fields, preserving the rest of the object', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': {
+            type: 'zone',
+            x: 10,
+            y: 20,
+            width: 500,
+            height: 400,
+            label: 'Zone',
+            trigger: { template: 'hi', behavior: 'always_new' },
+          },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { zIndex: 250 },
+    });
+
+    // zIndex applied; label/trigger/position untouched (no field-drop).
+    expect(updated.objects?.['zone-1']).toEqual({
+      type: 'zone',
+      x: 10,
+      y: 20,
+      width: 500,
+      height: 400,
+      label: 'Zone',
+      trigger: { template: 'hi', behavior: 'always_new' },
+      zIndex: 250,
+    });
+  });
+
+  dbTest('applies patches to multiple objects in a single write', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+          'zone-2': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'B', zIndex: 105 },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { zIndex: 105 },
+      'zone-2': { zIndex: 100 },
+    });
+
+    expect(updated.objects?.['zone-1']?.zIndex).toBe(105);
+    expect(updated.objects?.['zone-2']?.zIndex).toBe(100);
+  });
+
+  dbTest('skips objects that no longer exist (never resurrects a deletion)', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { zIndex: 200 },
+      // 'zone-gone' was deleted concurrently — must not be re-created as a stub.
+      'zone-gone': { zIndex: 50 },
+    });
+
+    expect(updated.objects?.['zone-1']?.zIndex).toBe(200);
+    expect(updated.objects?.['zone-gone']).toBeUndefined();
+  });
+
+  dbTest('should throw EntityNotFoundError for non-existent board', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    await expect(
+      repo.mergeBoardObjectFields('99999999', { 'zone-1': { zIndex: 1 } })
+    ).rejects.toThrow(EntityNotFoundError);
+  });
+
+  dbTest(
+    'ignores non-zIndex fields and clamps zIndex into the board-object band',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const board = await repo.create(
+        createBoardData({
+          objects: {
+            'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+          },
+        })
+      );
+
+      const updated = await repo.mergeBoardObjectFields(board.board_id, {
+        // `type`/`label` are NOT mergeable — the narrow action must not reshape the
+        // object; only the clamped zIndex applies (600 → 499).
+        'zone-1': { type: 'markdown', label: 'hacked', zIndex: 600 } as never,
+      });
+
+      const obj = updated.objects?.['zone-1'];
+      expect(obj?.type).toBe('zone'); // type untouched
+      expect((obj as { label?: string })?.label).toBe('A'); // label untouched
+      expect(obj?.zIndex).toBe(499); // clamped below the card layer
+    }
+  );
+
+  dbTest('skips a patch whose zIndex is missing or non-finite', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { label: 'noop' } as never,
+    });
+
+    // No mergeable field → object left exactly as-is.
+    expect(updated.objects?.['zone-1']?.zIndex).toBe(100);
+    expect((updated.objects?.['zone-1'] as { label?: string })?.label).toBe('A');
+  });
+});
+
 // ============================================================================
 // DeleteZone (Deprecated)
 // ============================================================================

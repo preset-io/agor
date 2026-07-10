@@ -24,3 +24,12 @@ export const getToggleBoardPanelState = (state: BoardLeftPanelState): BoardLeftP
     collapsed: true,
   };
 };
+
+// Used by every AssistantPanelRail button when the panel is collapsed:
+// expand onto whichever tab was clicked.
+export const getSelectAssistantPanelTabState = (
+  tab: BoardAssistantPanelTab
+): BoardLeftPanelState => ({
+  collapsed: false,
+  activeTab: tab,
+});

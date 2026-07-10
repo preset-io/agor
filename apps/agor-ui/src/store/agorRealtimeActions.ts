@@ -14,12 +14,14 @@
  * bumps `sessions` too.
  *
  * IMMER breadth/depth rule applied here:
- *  - HOT single-entity `*:patched` writes → RAW reducer via `setMap`
+ *  - HOT single-map `*:patched` writes → RAW reducer via `setMap`
  *    (`new Map(prev); next.set(id, e)` through `replaceIfChanged`). No immer
  *    proxy on the hot path.
- *  - multi-map board-object index maintenance → the pure reducers
- *    (`upsertBoardObjectInMaps` / `removeBoardObjectFromMaps`) via `applyMaps`
- *    — reference-stable so the contract the tests pin holds exactly.
+ *  - multi-map maintenance (session `sessionById` + `sessionsByBranch`,
+ *    board-object index) → the pure reducers (`applySessionPatchToMaps` /
+ *    `upsertBoardObjectInMaps` / `removeBoardObjectFromMaps`) via `applyMaps`,
+ *    which commits every changed slice in ONE store notify — reference-stable so
+ *    the contract the tests pin holds exactly.
  *  - the branch-eviction CASCADE → the store's immer action
  *    (`evictBranchAndSessions`).
  */
@@ -37,12 +39,9 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
-import { shallowEqualEntity } from '../utils/shallowEqual';
 import { bumpRevision } from './agorHydration';
 import {
-  createRemoteSurrogateSession,
-  findSessionInBranchBuckets,
-  preserveSessionRelationshipFields,
+  applySessionPatchToMaps,
   removeBoardObjectFromMaps,
   replaceIfChanged,
   upsertBoardObjectInMaps,
@@ -89,158 +88,11 @@ export function sessionCreated(session: Session) {
 export function sessionPatched(session: Session) {
   // Patch (incl. archive, which removes the session from the active maps) counts
   // as a live write — bump so an in-flight sessions hydration can't clobber it or
-  // resurrect an archive with a pre-archive snapshot.
+  // resurrect an archive with a pre-archive snapshot. One `applyMaps` commits
+  // both `sessionById` and `sessionsByBranch` in a single store notify; the
+  // reducer returns `prev` untouched on a no-op patch so references stay stable.
   bumpRevision('sessions');
-  const isArchived = session.archived === true;
-  // Track old branch_id for migration detection
-  let oldBranchId: string | null = null;
-
-  // Update sessionById - add/update active sessions, remove archived sessions
-  setMap('sessionById', (prev) => {
-    const existing = prev.get(session.session_id);
-
-    // Capture old branch_id before updating
-    oldBranchId = existing?.branch_id || null;
-
-    if (isArchived) {
-      if (!existing) return prev;
-      const next = new Map(prev);
-      next.delete(session.session_id);
-      return next;
-    }
-
-    const mergedSession = preserveSessionRelationshipFields(session, existing);
-
-    // Bail out on no-op patches. Feathers always emits a fresh object so
-    // `existing === session` never holds, but the daemon does emit
-    // idempotent patches (e.g. callback bookkeeping that lands at the same
-    // status). Shallow-equal misses nested fields the daemon reserializes
-    // — that's a safe false negative.
-    if (existing && shallowEqualEntity(existing, mergedSession)) return prev;
-
-    const next = new Map(prev);
-    next.set(session.session_id, mergedSession);
-    return next;
-  });
-
-  // Update sessionsByBranch - keep active sessions only
-  setMap('sessionsByBranch', (prev) => {
-    let changed = false;
-    const next = new Map(prev);
-    const newBranchId = session.branch_id;
-
-    const removeFromBranch = (branchId: string) => {
-      const bucket = next.get(branchId) || [];
-      const filtered = bucket.filter((s) => s.session_id !== session.session_id);
-      if (filtered.length !== bucket.length) {
-        changed = true;
-        if (filtered.length > 0) {
-          next.set(branchId, filtered);
-        } else {
-          next.delete(branchId);
-        }
-      }
-    };
-
-    if (isArchived) {
-      for (const [branchId, bucket] of next) {
-        if (bucket.some((item) => item.session_id === session.session_id)) {
-          removeFromBranch(branchId);
-        }
-      }
-      return changed ? next : prev;
-    }
-
-    // Session moved between branches - remove from old bucket first
-    const branchMigrated = oldBranchId && oldBranchId !== newBranchId;
-    if (branchMigrated) {
-      removeFromBranch(oldBranchId!);
-    }
-
-    const branchSessions = next.get(newBranchId) || [];
-    const index = branchSessions.findIndex((s) => s.session_id === session.session_id);
-    let sourceSessionForRemoteProjection = session;
-
-    if (index === -1) {
-      next.set(newBranchId, [...branchSessions, session]);
-    } else {
-      const mergedSession = preserveSessionRelationshipFields(session, branchSessions[index]);
-      sourceSessionForRemoteProjection = mergedSession;
-
-      // Bail out when the session is content-equal to what we already hold.
-      // Mirrors the sessionById bailout above so an idempotent patch doesn't
-      // produce a fresh branch-bucket array — preserving the reference that
-      // `makeSessionsForBranchSelector(branchId)` returns, so a BranchNode
-      // subscribed to it doesn't re-render on a no-op patch.
-      if (
-        branchSessions[index] === mergedSession ||
-        shallowEqualEntity(branchSessions[index], mergedSession)
-      ) {
-        return changed ? next : prev;
-      }
-
-      const updatedSessions = [...branchSessions];
-      updatedSessions[index] = mergedSession;
-      next.set(newBranchId, updatedSessions);
-
-      // Also update any remote/surrogate projections of this session that
-      // live in source-branch buckets. Preserve their local tree placement
-      // while refreshing status/callback_config/etc. from the canonical row.
-      for (const [branchId, bucket] of next) {
-        if (branchId === newBranchId) continue;
-
-        let bucketChanged = false;
-        const refreshedBucket = bucket.map((item) => {
-          if (item.session_id !== session.session_id) return item;
-          bucketChanged = true;
-          return {
-            ...preserveSessionRelationshipFields(session, item),
-            branch_id: item.branch_id,
-            genealogy: item.genealogy,
-            remote_surrogate: item.remote_surrogate,
-          };
-        });
-
-        if (bucketChanged) {
-          next.set(branchId, refreshedBucket);
-        }
-      }
-    }
-
-    // Remote relationships are created after the canonical target session
-    // row. The daemon then emits a patched source session with
-    // remote_relationships.as_source populated. Project that single source
-    // row into muted remote-surrogate children now, instead of doing any
-    // expensive relationship work during render.
-    for (const relationship of sourceSessionForRemoteProjection.remote_relationships?.as_source ??
-      []) {
-      if (relationship.relationship_type !== 'remote_create') continue;
-
-      const targetSession = findSessionInBranchBuckets(next, relationship.target_session_id);
-      if (!targetSession) continue;
-
-      const sourceBranchSessions = next.get(sourceSessionForRemoteProjection.branch_id) ?? [];
-      if (
-        sourceBranchSessions.some((candidate) => candidate.session_id === targetSession.session_id)
-      ) {
-        continue;
-      }
-
-      const remoteSurrogate = createRemoteSurrogateSession(
-        sourceSessionForRemoteProjection,
-        targetSession,
-        relationship
-      );
-      if (!remoteSurrogate) continue;
-
-      next.set(sourceSessionForRemoteProjection.branch_id, [
-        ...sourceBranchSessions,
-        remoteSurrogate,
-      ]);
-    }
-
-    return next;
-  });
+  applyMaps((prev) => applySessionPatchToMaps(prev, session));
 }
 
 export function sessionRemoved(session: Session) {

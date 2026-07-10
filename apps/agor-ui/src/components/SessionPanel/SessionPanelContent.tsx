@@ -45,6 +45,8 @@ export interface SessionPanelContentProps {
    *  Tabs bar inline above the panel; when omitted, the parent is
    *  expected to render the bar itself (legacy header-level placement). */
   setCliViewMode?: (mode: 'terminal' | 'conversation') => void;
+  /** When true, all task blocks are force-expanded (used by in-session search) */
+  forceExpandAll?: boolean;
 }
 
 export const SessionPanelContent = React.memo<SessionPanelContentProps>(
@@ -66,6 +68,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     isOpen,
     cliViewMode = 'terminal',
     setCliViewMode,
+    forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
     const { showSuccess, showError } = useThemedMessage();
@@ -325,6 +328,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             assistantEmoji={
               branch && isAssistant(branch) ? getAssistantConfig(branch)?.emoji : undefined
             }
+            forceExpandAll={forceExpandAll}
           />
         </div>
 

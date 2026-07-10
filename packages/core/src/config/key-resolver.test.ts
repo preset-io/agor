@@ -27,9 +27,7 @@ beforeAll(() => {
   }
 });
 
-// biome-ignore lint/suspicious/noExplicitAny: test helper
 async function createUserWithToolCreds(
-  // biome-ignore lint/suspicious/noExplicitAny: test helper
   db: any,
   agenticTools: Record<string, Record<string, string>>
 ): Promise<UserID> {

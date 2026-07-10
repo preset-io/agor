@@ -31,7 +31,6 @@ function createSessionData(branchId: UUID, overrides?: Partial<Session>): Partia
   };
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: test helper
 async function setup(db: any) {
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);

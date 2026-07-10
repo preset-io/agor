@@ -26,6 +26,7 @@ import { shortId } from '@agor/core/db';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -114,7 +115,8 @@ export class GeminiPromptService {
     private mcpEnabled?: boolean,
     useNativeAuth?: boolean, // Flag from base-executor indicating OAuth should be used
     _usersRepo?: UsersRepository,
-    private tasksService?: TasksService
+    private tasksService?: TasksService,
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     this.apiKey = apiKey;
     this.useNativeAuth = useNativeAuth ?? false; // Default to false if not provided
@@ -717,6 +719,7 @@ export class GeminiPromptService {
         const serversWithSource = await getMcpServersForSession(sessionId, {
           sessionMCPRepo: this.sessionMCPRepo,
           mcpServerRepo: this.mcpServerRepo,
+          mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
           forUserId: contextUserId,
         });
 

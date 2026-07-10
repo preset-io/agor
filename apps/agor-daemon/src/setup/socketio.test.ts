@@ -711,6 +711,38 @@ describe('configureChannels tenant isolation', () => {
     expect(joins.has(tenantChannelName('tenant-b'))).toBe(false);
   });
 
+  it('joins tenant channel from login params when auth result has no tenant claim yet', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    });
+    const connection = { data: {} } as any;
+
+    handlers.get('login')?.(
+      {
+        user: { user_id: ALICE, email: 'alice@example.test' },
+        authentication: { payload: {} },
+      },
+      {
+        connection,
+        params: { tenant: { tenant_id: 'tenant-from-params', source: 'auth_claim' } },
+      }
+    );
+
+    expect(connection.tenant).toEqual({ tenant_id: 'tenant-from-params', source: 'auth_claim' });
+    expect(connection.data.tenant).toEqual({
+      tenant_id: 'tenant-from-params',
+      source: 'auth_claim',
+    });
+    expect(joins.get('authenticated')).toEqual([connection]);
+    expect(joins.get(tenantChannelName('tenant-from-params'))).toEqual([connection]);
+    expect(joins.get(tenantUserChannelName('tenant-from-params', ALICE))).toEqual([connection]);
+  });
+
   it('leaves tenant-scoped channels on logout', () => {
     const { app, handlers, leaves } = makeChannelHarness();
     configureChannels(app, {

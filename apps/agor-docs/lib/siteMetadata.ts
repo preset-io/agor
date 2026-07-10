@@ -23,6 +23,7 @@ export const SOCIAL_IMAGE_FIELDS = ['ogImage', 'socialImage', 'heroImage', 'imag
 export type FrontMatterLike = {
   canonical?: string;
   description?: string;
+  date?: string | number | Date;
   heroImage?: string;
   image?: string;
   imageHeight?: number | string;

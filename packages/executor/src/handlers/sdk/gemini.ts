@@ -44,7 +44,8 @@ export async function executeGeminiTask(params: {
         repos.sessionMCP,
         true, // mcpEnabled
         useNativeAuth, // Flag to use OAuth when no API key
-        repos.users
+        repos.users,
+        repos.mcpOAuthAuthHeaders
       ),
   });
 }

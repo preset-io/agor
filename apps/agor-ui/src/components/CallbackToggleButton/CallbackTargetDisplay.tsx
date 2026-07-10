@@ -3,9 +3,10 @@ import { shortId } from '@agor-live/client';
 import { DisconnectOutlined, LinkOutlined } from '@ant-design/icons';
 import { Badge, Space, Typography, theme } from 'antd';
 import type React from 'react';
+import { useMemo } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAgorStore } from '../../store/agorStore';
-import { selectSessionById } from '../../store/selectors';
+import { makeSessionSelector } from '../../store/selectors';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 
 interface CallbackTargetDisplayProps {
@@ -42,7 +43,6 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { onSessionClick } = useAppActions();
-  const sessionById = useAgorStore(selectSessionById);
 
   const remoteRelationship = session.remote_relationships?.as_target?.find(
     (relationship) => relationship.relationship_type === 'remote_create'
@@ -54,9 +54,12 @@ export const CallbackTargetDisplay: React.FC<CallbackTargetDisplayProps> = ({
     remoteParentId ??
     session.genealogy?.parent_session_id;
 
-  if (!targetId) return null;
+  // Subscribe to the single target session, not the whole session map — one
+  // of these renders per session footer/row, so a whole-map subscription
+  // would wake every instance on every session patch.
+  const target = useAgorStore(useMemo(() => makeSessionSelector(targetId), [targetId]));
 
-  const target = sessionById.get(targetId);
+  if (!targetId) return null;
   // Mirror CallbackToggleButton's resolution: spawned sessions default to
   // enabled unless explicitly disabled.
   const enabled = session.callback_config?.enabled ?? remoteRelationship?.callback_enabled ?? true;

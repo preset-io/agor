@@ -1,4 +1,4 @@
-import type { Board } from '@agor-live/client';
+import type { Board, Session } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -30,6 +30,15 @@ vi.mock('./HomeKnowledgeSection', () => ({
 
 const board = { board_id: 'board-1', name: 'Board', slug: 'board' } as unknown as Board;
 
+const session = {
+  session_id: 'session-1',
+  status: 'completed',
+  archived: false,
+  genealogy: {},
+  agentic_tool: 'claude',
+  last_updated: '2026-07-01T10:00:00.000Z',
+} as unknown as Session;
+
 function renderHome() {
   return render(
     <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
@@ -38,6 +47,8 @@ function renderHome() {
         onBoardClick={() => {}}
         onBranchClick={() => {}}
         onSessionClick={() => {}}
+        onOpenCreateDialog={() => {}}
+        onOpenSettings={() => {}}
       />
     </MemoryRouter>
   );
@@ -62,6 +73,31 @@ describe('HomePage store-selector re-render isolation', () => {
     // its subscriptions stay quiet and it does not re-render.
     act(() => {
       agorStore.setState({ commentById: new Map([['c-1', { board_id: 'board-1' } as never]]) });
+    });
+
+    expect(homeRenders).toBe(baseline);
+  });
+
+  it('a session patch does not re-render HomePage', async () => {
+    // Seed BEFORE the baseline so the patch below flips nothing derived
+    // anywhere in the subtree (e.g. the onboarding gate's "hasSessions").
+    agorStore.setState({ sessionById: new Map([[session.session_id, session]]) });
+    renderHome();
+
+    await waitFor(() => {
+      expect(homeRenders).toBeGreaterThanOrEqual(1);
+    });
+    const baseline = homeRenders;
+
+    // A streaming-style patch: same session, new object identity. HomePage
+    // selects no session-shaped slice (sections subscribe themselves), so the
+    // page must stay quiet.
+    act(() => {
+      agorStore.setState({
+        sessionById: new Map([
+          [session.session_id, { ...session, description: 'streamed token' } as Session],
+        ]),
+      });
     });
 
     expect(homeRenders).toBe(baseline);
@@ -119,6 +155,8 @@ const STABLE_HOME_PROPS = {
   currentUserId: 'u1',
   onBoardClick: noop,
   onBranchClick: noop,
+  onOpenCreateDialog: noop,
+  onOpenSettings: noop,
 } as const;
 
 // Parent harness rendering the REAL memo'd HomePage the way App does. The

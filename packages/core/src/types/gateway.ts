@@ -47,6 +47,45 @@ export const GATEWAY_SENSITIVE_CONFIG_FIELDS = [
 /** Sentinel value used by gateway APIs/tools to represent a redacted secret. */
 export const GATEWAY_REDACTED_SENTINEL = '••••••••';
 
+/**
+ * Secrets that MUST be present for a channel of the given type to function.
+ *
+ * This is the single source of truth for the "enabled requires secrets"
+ * invariant: an enabled channel can never exist without these values. It is
+ * consumed by the create schema (reject enabled creates that omit them), the
+ * repository enable-time guard (assert on every write path), and the token
+ * widget. Browser-safe and dependency-free so both the UI and the daemon can
+ * import it.
+ *
+ * A disabled ("draft") channel may legally omit all of these — the guard only
+ * fires once the channel becomes enabled.
+ */
+export function getRequiredSecretFields(
+  channelType: ChannelType,
+  config: Record<string, unknown>
+): string[] {
+  switch (channelType) {
+    case 'slack': {
+      // Slack needs an app_token whenever the channel LISTENS (Socket Mode):
+      // an explicit socket connection, or any inbound surface flag. Only a
+      // purely outbound channel (sends, never listens) may omit it.
+      const wantsInbound =
+        config.connection_mode === 'socket' ||
+        config.enable_channels === true ||
+        config.enable_groups === true ||
+        config.enable_mpim === true;
+      const outboundOnly = config.outbound_enabled === true && !wantsInbound;
+      return outboundOnly ? ['bot_token'] : ['bot_token', 'app_token'];
+    }
+    case 'github':
+      return ['private_key'];
+    case 'teams':
+      return ['app_password'];
+    default:
+      return [];
+  }
+}
+
 // ============================================================================
 // Connection Probe Results
 // ============================================================================

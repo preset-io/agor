@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { isBranchRbacEnabled, loadConfig } from '@agor/core/config';
 import { BranchRepository, shortId } from '@agor/core/db';
 import type {
+  AssistantConfig,
   BoardID,
   Branch,
   BranchID,
@@ -414,7 +415,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'To fork from an existing git branch under a unique name, set sourceBranch to the base git branch ' +
         'and branchName to your desired unique name (e.g., sourceBranch="issue-282", branchName="issue-282-review-1"). ' +
         'Use zoneId to place the branch in a specific zone (pin only, no trigger). ' +
-        'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation.',
+        'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation. ' +
+        'To create a long-lived Agor assistant (a persistent AI companion that manages other branches ' +
+        'and maintains memory), pass the assistant object — this is the ONLY supported way to make an ' +
+        'assistant via MCP. Assistant status cannot be toggled later with agor_branches_update.',
       inputSchema: z.object({
         repoId: mcpRequiredId(
           'repoId',
@@ -506,6 +510,40 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             'Common shallow value: 100. Trade-off: smaller disk footprint, but ' +
             '`git log` past N commits is broken and some rebase operations fail.'
         ),
+        assistant: z
+          .object({
+            displayName: z
+              .string({ error: 'assistant.displayName must be a string.' })
+              .trim()
+              .min(1, 'assistant.displayName cannot be empty')
+              .describe('Human-friendly display name for the assistant (e.g., "Siebel CRM").'),
+            emoji: z.string().optional().describe('Emoji icon for this assistant (e.g., "🧑‍💻").'),
+            frameworkRepo: z
+              .string()
+              .optional()
+              .describe(
+                'Template/framework repo slug this assistant is based on. ' +
+                  "Defaults to the created branch's repo slug when omitted."
+              ),
+            frameworkVersion: z
+              .string()
+              .optional()
+              .describe('Framework version at creation time, for later upgrade detection.'),
+            createdViaOnboarding: z
+              .boolean()
+              .optional()
+              .describe(
+                'Whether this assistant was created via the onboarding wizard (defaults to false).'
+              ),
+          })
+          .optional()
+          .describe(
+            'When provided, create this branch as a long-lived Agor assistant. ' +
+              'The assistant metadata is written to custom_context.assistant on the initial branch row, ' +
+              'the board primary assistant pointer is wired automatically, and the assistant Knowledge ' +
+              'namespace is provisioned. Knowledge namespace/grant config (the "kb" field) is managed ' +
+              'separately and cannot be set here.'
+          ),
       }),
     },
     async (args) => {
@@ -532,6 +570,38 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // Validate variant up front so the error lists the available variants.
       const variant = coerceString(args.variant);
       if (variant) assertValidVariant(repo, variant);
+
+      // Optional: mark the new branch as a long-lived assistant in one shot.
+      // Writing the assistant config onto the initial branch row (rather than a
+      // follow-up patch) is what the UI does too — it lets BranchesService.create
+      // wire the board primary_assistant_id pointer and provision the assistant
+      // Knowledge namespace atomically, and sidesteps the assertAssistantKindIsStable
+      // guard that (deliberately) blocks flipping assistant status via patch.
+      const assistantInput = args.assistant as
+        | {
+            displayName?: unknown;
+            emoji?: unknown;
+            frameworkRepo?: unknown;
+            frameworkVersion?: unknown;
+            createdViaOnboarding?: unknown;
+          }
+        | undefined;
+      let assistantConfig: AssistantConfig | undefined;
+      if (assistantInput) {
+        const displayName = coerceString(assistantInput.displayName)?.trim();
+        if (!displayName) throw new Error('assistant.displayName is required');
+        const emoji = coerceString(assistantInput.emoji);
+        const frameworkRepo = coerceString(assistantInput.frameworkRepo) ?? repo.slug;
+        const frameworkVersion = coerceString(assistantInput.frameworkVersion);
+        assistantConfig = {
+          kind: 'assistant',
+          displayName,
+          ...(emoji ? { emoji } : {}),
+          ...(frameworkRepo ? { frameworkRepo } : {}),
+          ...(frameworkVersion ? { frameworkVersion } : {}),
+          createdViaOnboarding: assistantInput.createdViaOnboarding === true,
+        };
+      }
 
       // Auto-suffix: resolve name conflicts by appending -2, -3, etc.
       // Uses direct DB query to bypass Feathers pagination limits
@@ -602,6 +672,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ...(variant ? { environment_variant: variant } : {}),
           ...(storageMode ? { storage_mode: storageMode } : {}),
           ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
+          ...(assistantConfig ? { custom_context: { assistant: assistantConfig } } : {}),
         },
         ctx.baseServiceParams
       );
@@ -611,6 +682,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
       if (branchName !== originalName) {
         response._note = `Name '${originalName}' was already taken. Created as '${branchName}' instead (autoSuffix applied).`;
+      }
+
+      if (assistantConfig) {
+        response._assistant = {
+          created: true,
+          display_name: assistantConfig.displayName,
+          note: 'Created as a long-lived Agor assistant. The board primary assistant pointer and the assistant Knowledge namespace were provisioned automatically.',
+        };
       }
 
       if (zoneId) {
@@ -666,7 +745,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .nullable()
           .optional()
           .describe(
-            'Custom context object for templates and automations. Pass null to clear existing context.'
+            'Custom context object for templates and automations. Pass null to clear existing context. ' +
+              'Note: this cannot toggle a branch between assistant and non-assistant status — that flip is ' +
+              'rejected. Create an assistant in one shot with the assistant param on agor_branches_create.'
           ),
         mcpServerIds: z
           .array(mcpRequiredId('mcpServerIds[]', 'MCP server', 'MCP server ID'))

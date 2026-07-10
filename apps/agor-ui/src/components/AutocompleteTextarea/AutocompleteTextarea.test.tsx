@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { AutocompleteTextarea, type KbDocMention } from './AutocompleteTextarea';
@@ -107,6 +107,43 @@ const renderMentionAutocomplete = (
   render(<Harness />);
   return screen.getByPlaceholderText('Prompt') as HTMLTextAreaElement;
 };
+
+const renderFilePasteTextarea = (
+  onFilesDrop = vi.fn(),
+  options: { filesDropDisabled?: boolean; showFilesDropOverlay?: boolean } = {}
+) => {
+  const Harness = () => {
+    const [value, setValue] = useState('');
+
+    return (
+      <AutocompleteTextarea
+        value={value}
+        onChange={setValue}
+        placeholder="Prompt"
+        client={null}
+        sessionId={null}
+        userById={new Map()}
+        onFilesDrop={onFilesDrop}
+        filesDropDisabled={options.filesDropDisabled}
+        showFilesDropOverlay={options.showFilesDropOverlay}
+        suppressEmptyHighlight={false}
+      />
+    );
+  };
+
+  render(<Harness />);
+  return {
+    textarea: screen.getByPlaceholderText('Prompt') as HTMLTextAreaElement,
+    onFilesDrop,
+  };
+};
+
+const clipboardFileItem = (file: File, type = file.type): DataTransferItem =>
+  ({
+    kind: 'file',
+    type,
+    getAsFile: () => file,
+  }) as DataTransferItem;
 
 const waitForDebounce = () => new Promise((resolve) => setTimeout(resolve, 350));
 const waitForStateUpdate = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -242,5 +279,86 @@ describe('AutocompleteTextarea', () => {
     });
     expect(kbSearchFind).not.toHaveBeenCalled();
     expect(kbDocumentsFind).not.toHaveBeenCalled();
+  });
+
+  it('routes pasted image files through file drop handling with screenshot names', () => {
+    const { textarea, onFilesDrop } = renderFilePasteTextarea();
+    const imageFile = new File(['image'], 'clipboard.png', { type: 'image/png' });
+    const pasteEvent = createEvent.paste(textarea, {
+      clipboardData: {
+        items: [clipboardFileItem(imageFile)],
+      },
+    });
+
+    fireEvent(textarea, pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    expect(onFilesDrop).toHaveBeenCalledTimes(1);
+    const [files] = onFilesDrop.mock.calls[0];
+    expect(files).toHaveLength(1);
+    expect(files[0].name).toMatch(/^pasted-screenshot-.*\.png$/);
+    expect(files[0].type).toBe('image/png');
+  });
+
+  it('routes pasted non-image files through file drop handling', () => {
+    const { textarea, onFilesDrop } = renderFilePasteTextarea();
+    const textFile = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    const pasteEvent = createEvent.paste(textarea, {
+      clipboardData: {
+        items: [clipboardFileItem(textFile)],
+      },
+    });
+
+    fireEvent(textarea, pasteEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    expect(onFilesDrop).toHaveBeenCalledWith([textFile]);
+  });
+
+  it('blocks pasted and dropped files when file handling is disabled', () => {
+    const { textarea, onFilesDrop } = renderFilePasteTextarea(vi.fn(), {
+      filesDropDisabled: true,
+    });
+    const imageFile = new File(['image'], 'clipboard.png', { type: 'image/png' });
+    const pasteEvent = createEvent.paste(textarea, {
+      clipboardData: {
+        items: [clipboardFileItem(imageFile)],
+      },
+    });
+    const dropEvent = createEvent.drop(textarea, {
+      dataTransfer: {
+        files: [imageFile],
+      },
+    });
+
+    fireEvent(textarea, pasteEvent);
+    fireEvent(textarea, dropEvent);
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    expect(dropEvent.defaultPrevented).toBe(true);
+    expect(onFilesDrop).not.toHaveBeenCalled();
+  });
+
+  it('can route dropped files without showing the textarea-local drop overlay', () => {
+    const { textarea, onFilesDrop } = renderFilePasteTextarea(vi.fn(), {
+      showFilesDropOverlay: false,
+    });
+    const imageFile = new File(['image'], 'chart.png', { type: 'image/png' });
+
+    fireEvent.dragOver(textarea, {
+      dataTransfer: {
+        files: [imageFile],
+      },
+    });
+
+    expect(screen.queryByText('Drop files here to upload')).not.toBeInTheDocument();
+
+    fireEvent.drop(textarea, {
+      dataTransfer: {
+        files: [imageFile],
+      },
+    });
+
+    expect(onFilesDrop).toHaveBeenCalledWith([imageFile]);
   });
 });

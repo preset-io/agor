@@ -4,7 +4,7 @@ export default {
     type: 'page',
     display: 'hidden', // Hide from sidebar
     theme: {
-      layout: 'raw', // Full page layout without sidebars/navbar
+      layout: 'full', // Full page layout without sidebars/navbar
     },
   },
   guide: 'Guide',

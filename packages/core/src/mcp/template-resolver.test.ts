@@ -3,6 +3,7 @@ import { generateId } from '../lib/ids';
 import type { MCPServer, MCPServerID } from '../types';
 import {
   buildMCPTemplateContextFromEnv,
+  isUserEnvPlaceholder,
   resolveMcpServerEnv,
   resolveMcpServerTemplates,
 } from './template-resolver';
@@ -21,6 +22,25 @@ function createTestServer(overrides: Partial<MCPServer> = {}): MCPServer {
     ...overrides,
   };
 }
+
+describe('isUserEnvPlaceholder', () => {
+  it('accepts a bare user.env placeholder, tolerating whitespace', () => {
+    expect(isUserEnvPlaceholder('{{ user.env.GARMIN_TOKEN }}')).toBe(true);
+    expect(isUserEnvPlaceholder('{{user.env.X}}')).toBe(true);
+    expect(isUserEnvPlaceholder('  {{ user.env.API_TOKEN }}  ')).toBe(true);
+  });
+
+  it('rejects non-user.env templates, helper/fallback expressions, and brace-bearing secrets', () => {
+    expect(isUserEnvPlaceholder('{{secret}}')).toBe(false);
+    expect(isUserEnvPlaceholder('{{ env.X }}')).toBe(false);
+    expect(isUserEnvPlaceholder('{{default user.env.MISSING "sk-live-abc"}}')).toBe(false);
+    expect(isUserEnvPlaceholder('{{ lookup user.env "SECRET" }}')).toBe(false);
+    expect(isUserEnvPlaceholder('sk-live-{{user.env.X}}-tail')).toBe(false);
+    expect(isUserEnvPlaceholder('{{user.env.A}}{{user.env.B}}')).toBe(false);
+    expect(isUserEnvPlaceholder('{{ outer {{ user.env.X }} }}')).toBe(false);
+    expect(isUserEnvPlaceholder('plain-secret')).toBe(false);
+  });
+});
 
 describe('buildMCPTemplateContextFromEnv', () => {
   it('should only include user-defined env vars (from AGOR_USER_ENV_KEYS)', () => {

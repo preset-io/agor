@@ -80,7 +80,7 @@ Fix all errors before presenting the result. Inspect warnings should be reviewed
 3. Timelines must be paused and registered on `window.__timelines`:
    ```js
    window.__timelines = window.__timelines || {};
-   window.__timelines["composition-id"] = gsap.timeline({ paused: true });
+   window.__timelines['composition-id'] = gsap.timeline({ paused: true });
    ```
 4. Videos use `muted` with a separate `<audio>` element for the audio track
 5. Sub-compositions use `data-composition-src="compositions/file.html"` to reference other HTML files
