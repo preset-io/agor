@@ -307,15 +307,11 @@ export function OnboardingWizard({
   useEffect(() => {
     if (!open || !user) return;
     const onboarding = user.preferences?.onboarding;
-    const legacyOnboarding = onboarding as
-      | (typeof onboarding & { assistantDisplayName?: string; assistantEmoji?: string })
-      | undefined;
-    const savedDisplayName =
-      onboarding?.teammateDisplayName ?? legacyOnboarding?.assistantDisplayName;
+    const savedDisplayName = onboarding?.teammateDisplayName ?? onboarding?.assistantDisplayName;
     if (typeof savedDisplayName === 'string') {
       setTeammateDisplayName(savedDisplayName || 'My Teammate');
     }
-    const savedEmoji = onboarding?.teammateEmoji ?? legacyOnboarding?.assistantEmoji;
+    const savedEmoji = onboarding?.teammateEmoji ?? onboarding?.assistantEmoji;
     if (typeof savedEmoji === 'string') {
       setTeammateEmoji(savedEmoji || '🤖');
     }

@@ -20,7 +20,7 @@ The public `preset-io/agor-teammate` framework is a markdown file manifold. Its 
 
 1. **Give every Agor Teammate branch an assigned KB namespace.** Store the namespace slug/id in `branch.custom_context.teammate.kb` and mirror it on the KB namespace as `kind: "branch"`, `branch_id`, and metadata identifying it as teammate-owned.
 2. **Make context-aware teammate tools the default write path.** Generic `agor_kb_put`, `agor_kb_edit`, and `agor_kb_search` should remain, but teammates should mostly call higher-level tools such as `agor_teammate_memory_append` and `agor_teammate_kb_search` that infer the teammate namespace from the current MCP session's branch.
-3. **Default teammate operational KB to private.** Public teammates/docs should be opt-in. If an teammate/branch is private, teammate memory writes should force `visibility: "private"` and `edit_policy: "owner"` or a branch-scoped equivalent once KB ACLs exist.
+3. **Default teammate operational KB to private.** Public teammates/docs should be opt-in. If a teammate/branch is private, teammate memory writes should force `visibility: "private"` and `edit_policy: "owner"` or a branch-scoped equivalent once KB ACLs exist.
 4. **Seed, then decouple KB ACLs from branch ACLs.** Teammate namespaces should be initialized from branch ownership/visibility, but KB should own its own permission model after that. Branch changes may offer an explicit sync/apply action, but KB reads/writes should not virtualize every decision through branch RBAC forever.
 5. **Migrate by layering KB over files, not replacing files immediately.** Keep the framework repo as portable bootstrap/instructions/skills scaffolding. Move volatile/personal memory and curated docs into KB gradually, with a filesystem fallback/export path.
 6. **Use append-only daily memory docs with deterministic block IDs.** Append one logical memory entry as one stable markdown block under `memory/YYYY-MM-DD.md`. Chunk/index by explicit block boundaries first, then headings/auto-split as fallback. Reuse unchanged block hashes across versions so only new/changed chunks require embeddings.
@@ -174,7 +174,7 @@ The generic tools should remain available because teammates sometimes need share
 - `IDENTITY`, `SOUL`, `USER`, long-term memory, and learned preferences: **private by default**.
 - Framework/template docs and generic skills: public or shared only when intentionally published outside the teammate namespace.
 - If a teammate branch is private or `others_can: "none"`, teammate memory writes should **force private**.
-- If an teammate is configured as team/shared, writes may default to private-to-team/branch once KB has richer ACLs; until then, use document `visibility: "private"` plus owner/admin access or `public` only by explicit config.
+- If a teammate is configured as team/shared, writes may default to private-to-team/branch once KB has richer ACLs; until then, use document `visibility: "private"` plus owner/admin access or `public` only by explicit config.
 
 ### Why private by default
 

@@ -359,6 +359,8 @@ export class ConfigService {
         data.onboarding.persistedAgentPending;
       if (teammatePending !== undefined) {
         config.onboarding.teammatePending = teammatePending;
+        delete config.onboarding.assistantPending;
+        delete config.onboarding.persistedAgentPending;
       }
       if (data.onboarding.frameworkRepoUrl !== undefined) {
         config.onboarding.frameworkRepoUrl = data.onboarding.frameworkRepoUrl;
