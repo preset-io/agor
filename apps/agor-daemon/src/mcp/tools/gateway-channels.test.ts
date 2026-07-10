@@ -1914,6 +1914,8 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       url_private_download: 'https://files.slack.com/files-pri/T1-F123/download/error.log',
     };
 
+    const slackFileResult = { file: slackFileInfo, sourceConversationIds: ['C123'] };
+
     let uploadDir: string;
 
     function withUploadDir(): string {
@@ -1938,7 +1940,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       );
       vi.stubGlobal('fetch', fetchMock);
 
-      const getFileInfo = vi.fn(async () => slackFileInfo);
+      const getFileInfo = vi.fn(async () => slackFileResult);
       vi.mocked(getConnector).mockReturnValue({ getFileInfo } as any);
       spyCallerGatewaySession('branch-1', gatewaySource);
       vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
@@ -2011,7 +2013,10 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       const fetchMock = vi.fn();
       vi.stubGlobal('fetch', fetchMock);
       vi.mocked(getConnector).mockReturnValue({
-        getFileInfo: vi.fn(async () => ({ ...slackFileInfo, mimetype: 'application/pdf' })),
+        getFileInfo: vi.fn(async () => ({
+          ...slackFileResult,
+          file: { ...slackFileInfo, mimetype: 'application/pdf' },
+        })),
       } as any);
       spyCallerGatewaySession('branch-1', gatewaySource);
       vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
@@ -2032,8 +2037,11 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       vi.stubGlobal('fetch', fetchMock);
       vi.mocked(getConnector).mockReturnValue({
         getFileInfo: vi.fn(async () => ({
-          ...slackFileInfo,
-          url_private_download: 'https://evil.example/files-pri/T1-F123/download/error.log',
+          ...slackFileResult,
+          file: {
+            ...slackFileInfo,
+            url_private_download: 'https://evil.example/files-pri/T1-F123/download/error.log',
+          },
         })),
       } as any);
       spyCallerGatewaySession('branch-1', gatewaySource);
@@ -2062,7 +2070,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         )
       );
       vi.mocked(getConnector).mockReturnValue({
-        getFileInfo: vi.fn(async () => slackFileInfo),
+        getFileInfo: vi.fn(async () => slackFileResult),
       } as any);
       vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
         fileDownloadEnabled as any
@@ -2101,6 +2109,107 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       expect(schema.safeParse({}).success).toBe(false);
       expect(schema.safeParse({ fileId: 'F0123ABC456' }).success).toBe(true);
       expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('is not marked read-only — it writes into the daemon upload directory', async () => {
+      const tools = await captureTools('member');
+      expect(tools.agor_gateway_slack_file_download.cfg.annotations).toEqual({
+        destructiveHint: false,
+        idempotentHint: true,
+      });
+    });
+
+    describe('allowed_channel_ids whitelist on file provenance', () => {
+      const restrictedDownloadEnabled = {
+        ...slackChannel,
+        config: {
+          ...slackChannel.config,
+          agent_tools: { file_download: true },
+          allowed_channel_ids: ['C123'],
+        },
+      };
+
+      function setupRestrictedDownload(sourceConversationIds: string[]) {
+        vi.mocked(getConnector).mockReturnValue({
+          getFileInfo: vi.fn(async () => ({ file: slackFileInfo, sourceConversationIds })),
+        } as any);
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          restrictedDownloadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+      }
+
+      it('denies a file whose only sources are non-whitelisted channels, without leaking them', async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        setupRestrictedDownload(['C777', 'G888']);
+
+        const tools = await captureTools('member');
+        const error = await tools.agor_gateway_slack_file_download
+          .handler({ fileId: 'F123' })
+          .then(() => null)
+          .catch((err: Error) => err);
+
+        expect(error).toBeTruthy();
+        expect(error!.message).toContain('allowed_channel_ids');
+        expect(error!.message).not.toContain('C777');
+        expect(error!.message).not.toContain('G888');
+        expect(error!.message).not.toContain('error.log');
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
+
+      it('denies a file with no visible source conversations when a whitelist is configured', async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        setupRestrictedDownload([]);
+
+        const tools = await captureTools('member');
+        await expect(
+          tools.agor_gateway_slack_file_download.handler({ fileId: 'F123' })
+        ).rejects.toThrow('allowed_channel_ids');
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
+
+      it('allows a file shared into a whitelisted channel', async () => {
+        withUploadDir();
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(
+            async () =>
+              new Response('log line one', {
+                status: 200,
+                headers: { 'content-type': 'text/plain' },
+              })
+          )
+        );
+        setupRestrictedDownload(['C777', 'C123']);
+
+        const tools = await captureTools('member');
+        const result = await tools.agor_gateway_slack_file_download.handler({ fileId: 'F123' });
+        const payload = JSON.parse(result.content[0].text);
+        expect(payload.downloaded).toBe(true);
+      });
+
+      it('allows a file shared in a DM even with a whitelist configured', async () => {
+        withUploadDir();
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(
+            async () =>
+              new Response('log line one', {
+                status: 200,
+                headers: { 'content-type': 'text/plain' },
+              })
+          )
+        );
+        setupRestrictedDownload(['D999']);
+
+        const tools = await captureTools('member');
+        const result = await tools.agor_gateway_slack_file_download.handler({ fileId: 'F123' });
+        const payload = JSON.parse(result.content[0].text);
+        expect(payload.downloaded).toBe(true);
+      });
     });
   });
 });

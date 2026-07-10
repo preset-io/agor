@@ -10,12 +10,13 @@ import {
 import {
   buildSlackManifest,
   getConnector,
-  type InboundFile,
+  isSlackFileSourceAllowed,
   isSlackWriteTargetAllowed,
   requiredBotEvents,
   requiredBotScopes,
   type SlackChannelHistoryRequest,
   type SlackChannelHistoryResult,
+  type SlackFileInfo,
   type SlackThreadHistoryMessage,
   type SlackThreadHistoryRequest,
   type SlackThreadHistoryResult,
@@ -1047,7 +1048,7 @@ const slackFileDownloadSchema = z.strictObject({
 });
 
 interface SlackFileInfoConnector {
-  getFileInfo(fileId: string): Promise<InboundFile>;
+  getFileInfo(fileId: string): Promise<SlackFileInfo>;
 }
 
 function assertSlackFileInfoConnector(
@@ -1685,15 +1686,26 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_slack_file_download',
     {
       description:
-        "Download a Slack file into the daemon upload directory through a gateway channel without exposing Slack tokens, returning the stored absolute path so the session agent can Read it. Pass a fileId from the files metadata returned by the Slack history tools. Gated by the channel's agent_tools.file_download capability (disabled by default — an admin enables it per channel, which also adds the files:read OAuth scope to the app manifest). Only image and text-like files (screenshots, logs, CSV, JSON, markdown) are downloaded — the same allowlist and size limits as inbound attachment ingestion. When called from a gateway-created session, gatewayChannelId defaults to that session's own channel; calls are restricted to gateway channels whose target branch matches the calling session's branch. Callers without session context need admin role or 'all' branch permission.",
-      annotations: { readOnlyHint: true },
+        "Download a Slack file into the daemon upload directory through a gateway channel without exposing Slack tokens, returning the stored absolute path so the session agent can Read it. Pass a fileId from the files metadata returned by the Slack history tools. Gated by the channel's agent_tools.file_download capability (disabled by default — an admin enables it per channel, which also adds the files:read OAuth scope to the app manifest). Only image and text-like files (screenshots, logs, CSV, JSON, markdown) are downloaded — the same allowlist and size limits as inbound attachment ingestion — and when the channel restricts allowed_channel_ids, only files shared in a permitted conversation or DM. When called from a gateway-created session, gatewayChannelId defaults to that session's own channel; calls are restricted to gateway channels whose target branch matches the calling session's branch. Callers without session context need admin role or 'all' branch permission.",
+      annotations: { destructiveHint: false, idempotentHint: true },
       inputSchema: slackFileDownloadSchema,
     },
     async (args) => {
       const target = await resolveGatewaySlackChannelTarget(ctx, args, 'file_download');
       const connector = getConnector('slack', target.channel.config);
       assertSlackFileInfoConnector(connector);
-      const file = await connector.getFileInfo(args.fileId);
+      const { file, sourceConversationIds } = await connector.getFileInfo(args.fileId);
+      // files.info resolves any file the bot can see workspace-wide, so the
+      // channel's allowed_channel_ids whitelist must bind the file's SOURCE
+      // conversations, exactly like every other gateway tool binds its target.
+      // Checked before any metadata-bearing error so a denied caller learns
+      // nothing about the file. The error deliberately omits where the file
+      // lives.
+      if (!isSlackFileSourceAllowed(target.channel.config, sourceConversationIds)) {
+        throw new Error(
+          `Slack file ${args.fileId} is not shared in any conversation permitted by this gateway channel's allowed_channel_ids whitelist.`
+        );
+      }
       if (!isIngestableFile(file)) {
         throw new Error(
           `Slack file "${file.name}" has type ${file.mimetype}, which the gateway does not download. Only image and text-like files (png/jpeg/gif/webp, plain text, markdown, CSV, JSON) are supported.`

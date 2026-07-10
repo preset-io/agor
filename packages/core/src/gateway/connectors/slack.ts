@@ -118,6 +118,17 @@ export interface SlackHistoryFile {
   size: number;
 }
 
+/**
+ * Result of {@link SlackConnector.getFileInfo}. Server-side only: `file`
+ * carries the bot-token-authenticated download URL, and
+ * `sourceConversationIds` (the conversations the file is shared into) exists
+ * solely for the gateway's whitelist check — neither may reach agent output.
+ */
+export interface SlackFileInfo {
+  file: InboundFile;
+  sourceConversationIds: string[];
+}
+
 export interface SlackThreadHistoryMessage {
   ts: string;
   iso_time: string;
@@ -751,6 +762,29 @@ export function isSlackWriteTargetAllowed(
   const allowedChannelIds = normalizeAllowedChannelIds(config.allowed_channel_ids);
   const channelType = isSlackDirectMessageId(channelId) ? 'im' : 'channel';
   return isChannelAllowedByWhitelist(channelType, channelId, allowedChannelIds);
+}
+
+/**
+ * Whether a Slack file may be downloaded through this gateway channel, given
+ * the conversations the file is shared into and the channel's
+ * `allowed_channel_ids` config.
+ *
+ * `files.info` resolves ANY file the bot can see workspace-wide, so without
+ * this check a file id (from a permalink or prompt injection) would bypass the
+ * whitelist that bounds every other gateway tool. Policy mirrors
+ * {@link isSlackWriteTargetAllowed} per source conversation — DMs are always
+ * exempt, an empty/absent whitelist allows everything — and requires at least
+ * one source conversation to pass. A file with no visible source conversations
+ * is only allowed when no whitelist is configured, so the whitelist fails
+ * closed rather than open.
+ */
+export function isSlackFileSourceAllowed(
+  config: Record<string, unknown>,
+  sourceConversationIds: string[]
+): boolean {
+  const allowedChannelIds = normalizeAllowedChannelIds(config.allowed_channel_ids);
+  if (allowedChannelIds.length === 0) return true;
+  return sourceConversationIds.some((id) => isSlackWriteTargetAllowed(config, id));
 }
 
 export class SlackConnector implements GatewayConnector {
@@ -1475,8 +1509,12 @@ export class SlackConnector implements GatewayConnector {
    * `url_private_download`) via `files.info`. The returned {@link InboundFile}
    * is for server-side download plumbing only — callers exposing file data to
    * agents must strip the URL (see {@link SlackHistoryFile}).
+   * `sourceConversationIds` preserves where the file is shared
+   * (channels + groups + ims) so the gateway can enforce its
+   * `allowed_channel_ids` whitelist ({@link isSlackFileSourceAllowed});
+   * it must not be exposed to agents either.
    */
-  async getFileInfo(fileId: string): Promise<InboundFile> {
+  async getFileInfo(fileId: string): Promise<SlackFileInfo> {
     const result = await this.web.files.info({ file: fileId });
     if (!result.ok) {
       throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
@@ -1485,7 +1523,11 @@ export class SlackConnector implements GatewayConnector {
     if (!file) {
       throw new Error(`Slack files.info returned no downloadable file for ${fileId}`);
     }
-    return file;
+    const raw = result.file as { channels?: unknown; groups?: unknown; ims?: unknown };
+    const sourceConversationIds = [raw.channels, raw.groups, raw.ims].flatMap((ids) =>
+      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
+    );
+    return { file, sourceConversationIds };
   }
 
   /** Resolve a Slack channel by its human name (with or without #). */
