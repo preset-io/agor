@@ -27,10 +27,10 @@
   "devDependencies": {
     "@types/node": "^24.6.0",
     "glob": "^11.1.0",
-    "oclif": "^4.23.10",
-    "tsx": "^4.22.4",
+    "oclif": "^4.23.27",
+    "tsx": "^4.23.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8",
+    "vitest": "^4.1.10",
     "tsup": "^8.5.1"
   },
   "oclif": {

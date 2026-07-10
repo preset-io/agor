@@ -28,7 +28,7 @@
     "@types/node": "^24.6.0",
     "@types/react": "^19.2.17",
     "next-sitemap": "^4.2.3",
-    "tsx": "^4.22.4",
+    "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   }
 }
