@@ -91,6 +91,9 @@ export type ProcessedEvent =
       parent_tool_use_id?: string | null;
       agentSessionId?: string;
       resolvedModel?: string;
+      /** Set on the synthesized result message emitted for a zero-turn success
+       * (no real assistant turns) — the only signal safe to gate auth classification on. */
+      isSynthesizedResult?: boolean;
     }
   | {
       type: 'tool_start';
@@ -631,6 +634,7 @@ export class SDKMessageProcessor {
           parent_tool_use_id: null,
           agentSessionId: this.state.capturedAgentSessionId,
           resolvedModel: this.state.resolvedModel,
+          isSynthesizedResult: true,
         });
       }
     }

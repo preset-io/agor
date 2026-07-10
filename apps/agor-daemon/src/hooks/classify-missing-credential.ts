@@ -42,13 +42,9 @@ export function classifyMissingCredentialFailure(
     if (!data?.task_id || !data.session_id) return context;
 
     const isThrownFailureNotice = data.metadata?.is_task_failure === true;
-    const isUnverifiedZeroTokenSuccess =
-      data.type === 'assistant' &&
-      data.role === MessageRole.ASSISTANT &&
-      data.metadata?.tokens?.input === 0 &&
-      data.metadata?.tokens?.output === 0;
+    const isZeroTurnResult = data.metadata?.is_zero_turn_result === true;
 
-    if (!isThrownFailureNotice && !isUnverifiedZeroTokenSuccess) return context;
+    if (!isThrownFailureNotice && !isZeroTurnResult) return context;
 
     try {
       const [task, session] = await Promise.all([

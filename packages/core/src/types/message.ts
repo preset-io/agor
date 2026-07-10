@@ -283,6 +283,10 @@ export interface Message {
      * `classifyMissingCredentialFailure` can find it without type/role guessing. */
     is_task_failure?: boolean;
 
+    /** Marks the synthesized message from a zero-turn success (no real model
+     * call), the only signal safe to gate missing-credential detection on. */
+    is_zero_turn_result?: boolean;
+
     /**
      * Set server-side when a task failure resolves to "no credential for this
      * session's provider". Drives the Connect-AI empty state instead of the

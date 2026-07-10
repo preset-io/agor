@@ -802,7 +802,8 @@ export class ClaudeTool implements ITool {
               this.messagesService!,
               this.tasksService,
               completeEvent.parent_tool_use_id ?? null,
-              tokenUsage
+              tokenUsage,
+              completeEvent.isSynthesizedResult
             );
             return true;
           });
@@ -1164,7 +1165,8 @@ export class ClaudeTool implements ITool {
               this.messagesService!,
               this.tasksService,
               completeEvent.parent_tool_use_id ?? null,
-              tokenUsage
+              tokenUsage,
+              completeEvent.isSynthesizedResult
             );
             return true;
           } else if (completeEvent.role === MessageRole.SYSTEM) {

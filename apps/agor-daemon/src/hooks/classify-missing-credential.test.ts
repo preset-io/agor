@@ -70,29 +70,27 @@ describe('classifyMissingCredentialFailure', () => {
     expect((ctx.data as Message).content).not.toContain('/login');
   });
 
-  describe('zero-token "success" pathway (claude CLI reports success but never called the model)', () => {
-    // Reproduces the live repro from a fresh no-credential container: the SDK's
-    // result event has subtype 'success' with zero real assistant turns, so
-    // message-processor.ts synthesizes the result text into a plain assistant
-    // message instead of throwing — no `is_task_failure` marker exists for
-    // this pathway, so classification falls back to the zero-token signal.
-    const zeroTokenAssistantMessage: Partial<Message> = {
+  describe('zero-turn "success" pathway (claude CLI reports success but never called the model)', () => {
+    // A subtype:'success' result with zero real assistant turns: the executor
+    // synthesizes the result text into an assistant message stamped with
+    // `is_zero_turn_result` (no `is_task_failure` marker on this pathway).
+    const zeroTurnAssistantMessage: Partial<Message> = {
       task_id: 'task-1' as Message['task_id'],
       session_id: 'session-1' as Message['session_id'],
       type: 'assistant',
       role: MessageRole.ASSISTANT,
       content: [{ type: 'text', text: 'Not logged in · Please run /login' }],
-      metadata: { tokens: { input: 0, output: 0 } },
+      metadata: { is_zero_turn_result: true },
     };
 
-    it('classifies a zero-token assistant message when no credential resolves anywhere', async () => {
+    it('classifies a zero-turn assistant message when no credential resolves anywhere', async () => {
       vi.mocked(resolveApiKey).mockResolvedValue({
         apiKey: undefined,
         source: 'none',
         useNativeAuth: true,
       });
 
-      const ctx = await runHook()(makeContext({ ...zeroTokenAssistantMessage }));
+      const ctx = await runHook()(makeContext({ ...zeroTurnAssistantMessage }));
       const result = ctx.data as Message;
 
       expect(result.metadata?.error_kind).toBe('missing_credential');
@@ -104,7 +102,7 @@ describe('classifyMissingCredentialFailure', () => {
       expect(JSON.stringify(result.content)).not.toContain('/login');
     });
 
-    it('does not classify (and does not touch) a real assistant reply with nonzero tokens', async () => {
+    it('does not classify (and does not touch) a real assistant reply with no zero-turn marker', async () => {
       const realReply: Partial<Message> = {
         task_id: 'task-1' as Message['task_id'],
         session_id: 'session-1' as Message['session_id'],
@@ -121,12 +119,10 @@ describe('classifyMissingCredentialFailure', () => {
       expect(resolveApiKey).not.toHaveBeenCalled();
     });
 
-    it('does not reclassify legitimate zero-token output (e.g. /cost) when the user IS authenticated', async () => {
-      // Same structural shape as a genuine auth failure (zero tokens, no
-      // is_task_failure marker) — this is the local-slash-command case the
-      // heuristic can't structurally distinguish from an auth failure.
-      // resolveApiKey is the actual arbiter: a real credential means this
-      // output is left completely untouched.
+    it('does not reclassify legitimate zero-turn output (e.g. /cost) when the user IS authenticated', async () => {
+      // A local slash-command result (e.g. /cost) is also a zero-turn success,
+      // so it carries the same marker as an auth failure. resolveApiKey is the
+      // arbiter: a real credential means the output is left untouched.
       vi.mocked(resolveApiKey).mockResolvedValue({
         apiKey: 'sk-ant-user-key',
         source: 'user',
@@ -139,7 +135,7 @@ describe('classifyMissingCredentialFailure', () => {
         type: 'assistant',
         role: MessageRole.ASSISTANT,
         content: [{ type: 'text', text: 'Total cost: $0.42' }],
-        metadata: { tokens: { input: 0, output: 0 } },
+        metadata: { is_zero_turn_result: true },
       };
 
       const ctx = await runHook()(makeContext({ ...localCommandOutput }));
@@ -151,14 +147,14 @@ describe('classifyMissingCredentialFailure', () => {
       expect(JSON.stringify(result.content)).toContain('Total cost');
     });
 
-    it('does not trigger for user- or system-role messages even with zero tokens', async () => {
+    it('does not trigger for messages lacking any zero-turn / failure marker', async () => {
       const userMessage: Partial<Message> = {
         task_id: 'task-1' as Message['task_id'],
         session_id: 'session-1' as Message['session_id'],
         type: 'user',
         role: MessageRole.USER,
         content: 'hello',
-        metadata: { tokens: { input: 0, output: 0 } },
+        metadata: {},
       };
 
       const ctx = await runHook()(makeContext({ ...userMessage }));
