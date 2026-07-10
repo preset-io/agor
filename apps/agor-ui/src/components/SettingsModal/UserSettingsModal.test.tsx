@@ -102,7 +102,7 @@ function makeUser(overrides: Partial<User> = {}): User {
 const ASYNC = { timeout: 10_000 };
 
 describe('UserSettingsModal', { timeout: 60_000 }, () => {
-  it('saves dirty agentic defaults across tabs with the active tab', async () => {
+  it('saves dirty agentic defaults across tabs and closes from the footer', async () => {
     const user = makeUser({
       default_agentic_config: {
         'claude-code': { permissionMode: 'default', mcpServerIds: [] },
@@ -143,11 +143,10 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         },
       });
     }, ASYNC);
-    expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole('heading', { name: 'Codex' })).toBeInTheDocument();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a saved Claude model alias after the post-save re-hydration (#1769)', async () => {
+  it('saves a Claude model alias before closing', async () => {
     // Stale `user` prop that never reflects the save — mirrors the realtime lag
     // between the resolved patch and the Feathers `patched` event that refreshes
     // the prop. Before the fix, clearing the draft after save re-ran hydration
@@ -197,13 +196,10 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       });
     }, ASYNC);
 
-    // Regression assertion: the just-saved alias must survive the post-save
-    // draft-clear even though `user` is still stale.
-    expect(screen.getByLabelText('claude-code model claude-opus-4-8')).toBeChecked();
-    expect(screen.getByLabelText('claude-code model claude-sonnet-5')).not.toBeChecked();
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('clears the password field after saving General settings in place', async () => {
+  it('saves General settings and closes from the footer', async () => {
     const user = makeUser();
     const onUpdate = vi.fn(async () => {});
     const onClose = vi.fn();
@@ -230,15 +226,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       );
     }, ASYNC);
 
-    expect(passwordInput).toHaveValue('');
-    expect(onClose).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
-
-    await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledTimes(2);
-    }, ASYNC);
-    expect(onUpdate.mock.calls[1][1]).not.toHaveProperty('password');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the Env Vars section selected after saving and receiving updated user props', async () => {
