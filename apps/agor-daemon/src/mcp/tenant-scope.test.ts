@@ -4,7 +4,7 @@ import type { McpContext } from './server';
 import { tenantScopedToolProxy } from './tenant-scope';
 
 describe('tenantScopedToolProxy', () => {
-  it('runs the complete tool handler in the authenticated tenant scope', async () => {
+  it('runs the complete tool handler with tenant identity but no DB transaction', async () => {
     let registeredHandler: ((args: unknown, extra?: unknown) => unknown) | undefined;
     const server = {
       registerTool: vi.fn((_name, _config, handler) => {
@@ -12,7 +12,7 @@ describe('tenantScopedToolProxy', () => {
       }),
     } as never;
     const db = {
-      transaction: async (work: (tx: unknown) => unknown) => work(db),
+      transaction: vi.fn(async (work: (tx: unknown) => unknown) => work(db)),
       execute: async () => undefined,
     };
     const ctx = {
@@ -26,6 +26,7 @@ describe('tenantScopedToolProxy', () => {
     proxy.registerTool('test', {} as never, async () => getCurrentTenantId());
 
     expect(await registeredHandler?.({}, {})).toBe('tenant-a');
+    expect(db.transaction).not.toHaveBeenCalled();
     expect(getCurrentTenantId()).toBeUndefined();
   });
 
@@ -37,7 +38,7 @@ describe('tenantScopedToolProxy', () => {
       }),
     } as never;
     const db = {
-      transaction: async (work: (tx: unknown) => unknown) => work(db),
+      transaction: vi.fn(async (work: (tx: unknown) => unknown) => work(db)),
       execute: async () => undefined,
     };
     const ctx = {

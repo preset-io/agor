@@ -5,6 +5,7 @@ import type { BranchesServiceImpl, ReposServiceImpl } from '../../declarations.j
 import { mcpOptionalString, mcpRequiredId } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 import { assertValidVariant } from './_environment-helpers.js';
 
 export function registerEnvironmentTools(server: McpServer, ctx: McpContext): void {
@@ -23,9 +24,8 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
       const branchId = coerceString(args.branchId)!;
       const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
       try {
-        const branch = await branchesService.startEnvironment(
-          branchId as BranchID,
-          ctx.baseServiceParams
+        const branch = await runWithMcpTenantDatabaseScope(ctx, () =>
+          branchesService.startEnvironment(branchId as BranchID, ctx.baseServiceParams)
         );
         return textResult({
           success: true,
@@ -63,9 +63,8 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
       const branchId = coerceString(args.branchId)!;
       const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
       try {
-        const branch = await branchesService.stopEnvironment(
-          branchId as BranchID,
-          ctx.baseServiceParams
+        const branch = await runWithMcpTenantDatabaseScope(ctx, () =>
+          branchesService.stopEnvironment(branchId as BranchID, ctx.baseServiceParams)
         );
         return textResult({
           success: true,
@@ -96,7 +95,9 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
     async (args) => {
       const branchId = coerceString(args.branchId)!;
       const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
-      const branch = await branchesService.checkHealth(branchId as BranchID, ctx.baseServiceParams);
+      const branch = await runWithMcpTenantDatabaseScope(ctx, () =>
+        branchesService.checkHealth(branchId as BranchID, ctx.baseServiceParams)
+      );
       const envStatus = branch.environment_instance?.status;
       const isActive = envStatus === 'running' || envStatus === 'starting';
       const startedAt = isActive
@@ -131,7 +132,9 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
     async (args) => {
       const branchId = coerceString(args.branchId)!;
       const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
-      const logsResult = await branchesService.getLogs(branchId as BranchID, ctx.baseServiceParams);
+      const logsResult = await runWithMcpTenantDatabaseScope(ctx, () =>
+        branchesService.getLogs(branchId as BranchID, ctx.baseServiceParams)
+      );
       return textResult(logsResult);
     }
   );
@@ -221,7 +224,9 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
 
         if (variant) {
           const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
-          const repo = await reposService.get(branch.repo_id, ctx.baseServiceParams);
+          const repo = await runWithMcpTenantDatabaseScope(ctx, () =>
+            reposService.get(branch.repo_id, ctx.baseServiceParams)
+          );
           assertValidVariant(repo, variant);
         }
 
@@ -230,10 +235,12 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         // uniformly. The error it throws is propagated by the outer catch
         // below.
 
-        const updated = await branchesService.renderEnvironment(
-          branchId as BranchID,
-          targetVariant ? { variant: targetVariant } : undefined,
-          ctx.baseServiceParams
+        const updated = await runWithMcpTenantDatabaseScope(ctx, () =>
+          branchesService.renderEnvironment(
+            branchId as BranchID,
+            targetVariant ? { variant: targetVariant } : undefined,
+            ctx.baseServiceParams
+          )
         );
 
         if (!andStart) {
@@ -247,9 +254,8 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
         // The variant has now been persisted. If start fails, surface that
         // distinctly so callers know the configuration change DID land.
         try {
-          const started = await branchesService.startEnvironment(
-            branchId as BranchID,
-            ctx.baseServiceParams
+          const started = await runWithMcpTenantDatabaseScope(ctx, () =>
+            branchesService.startEnvironment(branchId as BranchID, ctx.baseServiceParams)
           );
           return textResult({
             success: true,
@@ -302,9 +308,8 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
       const branchId = coerceString(args.branchId)!;
       const branchesService = ctx.app.service('branches') as unknown as BranchesServiceImpl;
       try {
-        const branch = await branchesService.nukeEnvironment(
-          branchId as BranchID,
-          ctx.baseServiceParams
+        const branch = await runWithMcpTenantDatabaseScope(ctx, () =>
+          branchesService.nukeEnvironment(branchId as BranchID, ctx.baseServiceParams)
         );
         return textResult({
           success: true,

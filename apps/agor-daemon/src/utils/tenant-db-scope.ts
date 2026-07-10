@@ -8,6 +8,7 @@ import {
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -152,6 +153,13 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
       throw error;
     }
 
-    await runWithTenantDatabaseScope(options.db, context.params.tenant?.tenant_id, next);
+    const tenantId = context.params.tenant?.tenant_id;
+    if (!tenantId) {
+      await runWithTenantDatabaseScope(options.db, tenantId, next);
+      return;
+    }
+    await runWithTenantContext(tenantId, () =>
+      runWithTenantDatabaseScope(options.db, tenantId, next)
+    );
   };
 }

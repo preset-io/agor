@@ -1,4 +1,4 @@
-import { runWithTenantDatabaseScope } from '@agor/core/db';
+import { runWithTenantContext, runWithTenantDatabaseScope } from '@agor/core/db';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { wrapRegisterTool } from './register-tool-proxy.js';
 import type { McpContext } from './server.js';
@@ -8,7 +8,7 @@ import type { McpContext } from './server.js';
  * enter the tenant database scope. Re-enter that scope when authentication
  * supplied a tenant, while preserving static/single-tenant behavior.
  */
-export async function runWithMcpTenantScope<T>(
+export async function runWithMcpTenantDatabaseScope<T>(
   ctx: McpContext,
   work: () => Promise<T>
 ): Promise<T> {
@@ -26,8 +26,10 @@ export async function runWithMcpTenantScope<T>(
  */
 export function tenantScopedToolProxy(server: McpServer, ctx: McpContext): McpServer {
   return wrapRegisterTool(server, (register, name, config, handler) =>
-    register(name, config, (args, extra) =>
-      runWithMcpTenantScope(ctx, () => Promise.resolve(handler(args, extra)))
-    )
+    register(name, config, (args, extra) => {
+      const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
+      const invoke = () => Promise.resolve(handler(args, extra));
+      return tenantId ? runWithTenantContext(tenantId, invoke) : invoke();
+    })
   );
 }

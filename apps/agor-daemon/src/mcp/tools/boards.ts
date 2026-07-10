@@ -19,6 +19,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 const BOARD_OBJECT_TYPES = [
   'zone',
@@ -282,10 +283,12 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         typeof args.upsertObjects === 'object' &&
         !Array.isArray(args.upsertObjects)
       ) {
-        const updatedBoard = await boardsService.batchUpsertBoardObjects(
-          boardId,
-          args.upsertObjects as unknown as unknown[],
-          ctx.baseServiceParams
+        const updatedBoard = await runWithMcpTenantDatabaseScope(ctx, () =>
+          boardsService.batchUpsertBoardObjects(
+            boardId,
+            args.upsertObjects as unknown as unknown[],
+            ctx.baseServiceParams
+          )
         );
         emitServiceEvent(ctx.app, {
           path: 'boards',
@@ -298,10 +301,8 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       if (args.removeObjects && Array.isArray(args.removeObjects)) {
         let finalBoard: Board | undefined;
         for (const objectId of args.removeObjects) {
-          finalBoard = await boardsService.removeBoardObject(
-            boardId,
-            objectId,
-            ctx.baseServiceParams
+          finalBoard = await runWithMcpTenantDatabaseScope(ctx, () =>
+            boardsService.removeBoardObject(boardId, objectId, ctx.baseServiceParams)
           );
         }
         if (finalBoard)
