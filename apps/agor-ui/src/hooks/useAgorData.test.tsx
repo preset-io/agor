@@ -821,8 +821,8 @@ describe('useAgorData — bulk-write revision bumps', () => {
       expect(result.current.initialLoadComplete).toBe(true);
     });
 
-    expect(result.current.linkById.get('l-realtime')).toBe(realtimePinnedLink);
-    expect(result.current.linksByBranch.get('b-live')).toEqual([realtimePinnedLink]);
+    expect(agorStore.getState().linkById.get('l-realtime')).toBe(realtimePinnedLink);
+    expect(agorStore.getState().linksByBranch.get('b-live')).toEqual([realtimePinnedLink]);
   });
 
   it('silent reconnect removes stale archived-branch pinned links without dropping other link scopes', async () => {
@@ -850,15 +850,15 @@ describe('useAgorData — bulk-write revision bumps', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    await waitFor(() => expect(result.current.linkById.get('l-pinned')).toBe(pinnedLink));
-    await waitFor(() => expect(result.current.branchById.get('b-1')).toBe(branch));
+    await waitFor(() => expect(agorStore.getState().linkById.get('l-pinned')).toBe(pinnedLink));
+    await waitFor(() => expect(agorStore.getState().branchById.get('b-1')).toBe(branch));
 
     act(() => {
       emit('links', 'created', unpinnedBranchLink);
       emit('links', 'created', sessionLink);
     });
-    expect(result.current.linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
-    expect(result.current.linkById.get('l-session')).toBe(sessionLink);
+    expect(agorStore.getState().linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
+    expect(agorStore.getState().linkById.get('l-session')).toBe(sessionLink);
 
     // The archive event was missed. On reconnect, active branch hydration drops
     // the archived branch and the global pinned branch link snapshot no longer
@@ -870,12 +870,12 @@ describe('useAgorData — bulk-write revision bumps', () => {
       await new Promise<void>((r) => setTimeout(r, 0));
     });
 
-    await waitFor(() => expect(result.current.linkById.has('l-pinned')).toBe(false));
-    expect(result.current.branchById.has('b-1')).toBe(false);
-    expect(result.current.linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
-    expect(result.current.linkById.get('l-session')).toBe(sessionLink);
-    expect(result.current.linksByBranch.get('b-1')).toEqual([unpinnedBranchLink]);
-    expect(result.current.linksBySession.get('s-1')).toEqual([sessionLink]);
+    await waitFor(() => expect(agorStore.getState().linkById.has('l-pinned')).toBe(false));
+    expect(agorStore.getState().branchById.has('b-1')).toBe(false);
+    expect(agorStore.getState().linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
+    expect(agorStore.getState().linkById.get('l-session')).toBe(sessionLink);
+    expect(agorStore.getState().linksByBranch.get('b-1')).toEqual([unpinnedBranchLink]);
+    expect(agorStore.getState().linksBySession.get('s-1')).toEqual([sessionLink]);
   });
 
   it('reconnect bulk-replace bumps revisions so an in-flight hydration discards (no clobber)', async () => {

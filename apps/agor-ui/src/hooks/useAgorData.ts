@@ -44,8 +44,6 @@ import {
   buildById,
   buildSessionMaps,
   buildSessionMcpMap,
-  type DataMaps,
-  pickMaps,
   reconcilePinnedBranchLinksIntoMaps,
   replaceIfChanged,
 } from '../store/agorMaps';
