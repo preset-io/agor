@@ -71,7 +71,7 @@ Your env vars:
   GITHUB_TOKEN
     Exposed to: ☑ any consumer in [datagor repo ▾]
   HUBSPOT_API_KEY
-    Exposed to: ☑ any consumer in [assistants repo ▾]
+    Exposed to: ☑ any consumer in [teammates repo ▾]
 ```
 
 Default for a new env var: exposed nowhere until user opts in. Explicit, reviewable, safe.
@@ -173,7 +173,7 @@ Applied to a real `User Settings → Env Vars` list:
 | `GIT_AUTHOR_EMAIL`        | Part B          | `global`                             |
 | `AGOR_API_KEY`            | Part B          | `artifact_feature` (Artifacts)       |
 | `SHORTCUT_API_TOKEN`      | Part B          | `mcp_server` (Shortcut MCP)          |
-| `HUBSPOT_API_KEY`         | Part B          | `repo` (assistants)                  |
+| `HUBSPOT_API_KEY`         | Part B          | `repo` (teammates)                   |
 | `FIVETRAN_API_KEY`        | Part B          | `repo` (datagor)                     |
 
 Session-scope isn't in the target state for this data (every var above has a more specific home), but it's in the scope enum and ships in **v0.5** (see below) as the UX proving ground before the richer scope values are wired.

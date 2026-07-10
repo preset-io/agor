@@ -1,4 +1,4 @@
-import { getAssistantConfig } from '@agor-live/client';
+import { getTeammateConfig } from '@agor-live/client';
 import { Typography, theme } from 'antd';
 import type React from 'react';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
@@ -61,7 +61,7 @@ export const SearchResult: React.FC<SearchResultProps> = ({
       }}
     >
       {/* Icon column is opt-in: rendered only when the entity itself has an
-          emoji/icon (assistant `config.emoji`, board `item.icon`). For other
+          emoji/icon (teammate `config.emoji`, board `item.icon`). For other
           types the section header above already conveys the kind, so we drop
           the per-row glyph to keep visual noise down. */}
       {icon && <span style={{ fontSize: 18, lineHeight: '20px', flexShrink: 0 }}>{icon}</span>}
@@ -126,7 +126,7 @@ function renderResult(result: SearchResultItem): {
   tag?: string;
   secondary?: string;
   time?: string;
-  /** Only set when the entity itself has an emoji/icon (assistant config,
+  /** Only set when the entity itself has an emoji/icon (teammate config,
    * board icon). Generic per-type emojis dropped — section headers carry
    * the entity-kind affordance instead. */
   icon?: string;
@@ -148,8 +148,8 @@ function renderResult(result: SearchResultItem): {
         time: formatRelativeTimeSafe(result.item.updated_at),
       };
     }
-    case 'assistant': {
-      const config = getAssistantConfig(result.item);
+    case 'teammate': {
+      const config = getTeammateConfig(result.item);
       return {
         icon: config?.emoji,
         title: config?.displayName ?? result.item.name,

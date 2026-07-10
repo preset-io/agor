@@ -117,9 +117,9 @@ export interface ConversationViewProps {
   };
 
   /**
-   * Emoji override for assistant avatar in message bubbles
+   * Emoji override for teammate avatar in message bubbles
    */
-  assistantEmoji?: string;
+  teammateEmoji?: string;
 
   /**
    * When true, all task blocks are force-expanded (used by in-session search)
@@ -143,7 +143,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     emptyStateMessage = 'No messages yet. Send a prompt to start the conversation.',
     isActive = true,
     genealogy,
-    assistantEmoji,
+    teammateEmoji,
     forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
@@ -206,7 +206,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
     // Queued tasks belong to the queue drawer, not the conversation. They
     // haven't run yet — there's no message_range, no user-message row, no
-    // assistant output to render — so showing them here as TaskBlocks just
+    // agent output to render — so showing them here as TaskBlocks just
     // duplicates what the queue panel already shows.
     //
     // Memoized so the filtered array's identity is stable across re-renders
@@ -502,7 +502,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
               onLoadTaskMessages={handleLoadTaskMessages}
               onUnloadTaskMessages={handleUnloadTaskMessages}
-              assistantEmoji={assistantEmoji}
+              teammateEmoji={teammateEmoji}
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}
             />

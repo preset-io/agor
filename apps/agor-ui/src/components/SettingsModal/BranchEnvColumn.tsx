@@ -1,6 +1,6 @@
 /**
  * Shared environment status column helpers for branch tables.
- * Used by both BranchesTable and AssistantsTable to avoid duplication.
+ * Used by both BranchesTable and TeammatesTable to avoid duplication.
  */
 
 import type { Branch, Repo } from '@agor-live/client';

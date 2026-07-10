@@ -1,6 +1,6 @@
 ---
 title: 'Raise a Team Helper Agent in an Afternoon'
-description: 'A practical recipe for turning an Agor Assistant into a PM-style teammate that remembers context, coordinates work, reports progress, and keeps a team aligned.'
+description: 'A practical recipe for turning an Agor Teammate into a PM-style teammate that remembers context, coordinates work, reports progress, and keeps a team aligned.'
 date: 2026-06-17
 image: '/images/blog/raise-team-helper-agent.png'
 ---
@@ -11,11 +11,11 @@ Imagine a teammate who is always caught up.
 
 Every engineer gets the slice of context they need to be effective. New work lands with the relevant roadmap notes, owner hints, open questions, and coordination risks attached. Stakeholders can ask, “where are we on this?” and get a detailed answer instead of a vague status ping. Daily and weekly updates appear without someone spending Friday afternoon spelunking through Slack, GitHub, and sprint notes.
 
-That is the shape of a good team-helper agent in Agor: a 24/7 PM-style assistant with memory, access, cadence, and enough initiative to turn messy team activity into clear next actions.
+That is the shape of a good team-helper agent in Agor: a 24/7 PM-style teammate with memory, access, cadence, and enough initiative to turn messy team activity into clear next actions.
 
 Not an omniscient robot. Not a manager replacement. A practical coordination layer.
 
-This post is a fast recipe for raising one with [Agor Assistants](/guide/assistants), [Knowledge](/guide/knowledge), [Boards](/guide/boards), [branches](/guide/branches), [sessions](/guide/sessions), the [scheduler](/guide/scheduler), and MCP-connected tools where useful.
+This post is a fast recipe for raising one with [Agor Teammates](/guide/teammates), [Knowledge](/guide/knowledge), [Boards](/guide/boards), [branches](/guide/branches), [sessions](/guide/sessions), the [scheduler](/guide/scheduler), and MCP-connected tools where useful.
 
 ## What the agent should do
 
@@ -37,19 +37,19 @@ Do not start by trying to write the perfect system prompt.
 
 Start with a loop:
 
-1. **Identity** — who the assistant serves and how it should behave.
+1. **Identity** — who the teammate serves and how it should behave.
 2. **Memory** — where durable team context lives.
 3. **Context dump** — goals, people, roadmap, risks, meetings, rituals.
 4. **Tool access** — the work surfaces the team already uses.
 5. **Visible value** — useful summaries and docs immediately.
 6. **Cadence** — daily and weekly routines through schedules.
-7. **Correction** — humans review, correct, and improve the assistant over time.
+7. **Correction** — humans review, correct, and improve the teammate over time.
 
-That loop is faster than a formal requirements workshop. You can get useful output the same day, then keep tightening the assistant as the team uses it.
+That loop is faster than a formal requirements workshop. You can get useful output the same day, then keep tightening the teammate as the team uses it.
 
 ## 1. Give it a job, not just a name
 
-An [Assistant](/guide/assistants) is a persistent agent with identity, memory, skills, and scheduled heartbeats. Treat the first hour like onboarding.
+An [Teammate](/guide/teammates) is a persistent agent with identity, memory, skills, and scheduled heartbeats. Treat the first hour like onboarding.
 
 Write a short operating brief:
 
@@ -81,7 +81,7 @@ For a PM-style helper, “useful but not noisy” is a good default.
 
 Do not rely on chat history alone. Chat transcripts are useful, but team memory should be visible, searchable, and editable by humans.
 
-Create a canonical [Knowledge](/guide/knowledge) space for the team or project. Use it for the context the assistant should preserve across sessions:
+Create a canonical [Knowledge](/guide/knowledge) space for the team or project. Use it for the context the teammate should preserve across sessions:
 
 ```text
 README.md
@@ -97,7 +97,7 @@ runbooks/daily-standup.md
 runbooks/weekly-report.md
 ```
 
-Keep the structure boring. The assistant can reorganize later, but it needs somewhere obvious to write today.
+Keep the structure boring. The teammate can reorganize later, but it needs somewhere obvious to write today.
 
 A good first instruction:
 
@@ -107,7 +107,7 @@ That turns the agent from a transient chat into a teammate with a shared noteboo
 
 ## 3. Dump context fast, then ask it to structure the mess
 
-The fastest way to raise a team assistant is not a polished prompt. It is a messy context dump followed by organization.
+The fastest way to raise a team teammate is not a polished prompt. It is a messy context dump followed by organization.
 
 Give it raw material:
 
@@ -121,7 +121,7 @@ Give it raw material:
 - which channels, meetings, repos, and boards matter,
 - what a good daily or weekly update should include.
 
-Then ask the assistant to file the dump into useful pages:
+Then ask the teammate to file the dump into useful pages:
 
 ```md
 Turn the context above into:
@@ -140,7 +140,7 @@ This pattern is extremely effective:
 
 > Human dumps messy context → agent extracts facts, decisions, questions, owners, and risks → agent files structured docs → human corrects → agent updates memory.
 
-You are not trying to make the first version perfect. You are creating the substrate the assistant can keep improving.
+You are not trying to make the first version perfect. You are creating the substrate the teammate can keep improving.
 
 ## 4. Connect the real work surfaces
 
@@ -158,7 +158,7 @@ Start read-heavy and approval-oriented. Good first tasks are:
 - produce a stakeholder update draft,
 - capture unresolved questions in Knowledge.
 
-If you connect Slack or GitHub through a [Message Gateway](/guide/message-gateway) or MCP server, be deliberate about permission mode, credentials, and who can reach the assistant. A team helper that can post or comment should usually draft first and act after approval until its runbooks are proven.
+If you connect Slack or GitHub through a [Message Gateway](/guide/message-gateway) or MCP server, be deliberate about permission mode, credentials, and who can reach the teammate. A team helper that can post or comment should usually draft first and act after approval until its runbooks are proven.
 
 ## 5. Put active work on a board
 
@@ -173,7 +173,7 @@ A simple setup:
 - **Ready for update** — work that should appear in the next report.
 - **Done / shipped** — completed or archived work.
 
-Because Agor boards are branch-centric, each card can hold sessions, environment status, PR links, notes, and spatial meaning. The assistant can use that structure to answer questions like:
+Because Agor boards are branch-centric, each card can hold sessions, environment status, PR links, notes, and spatial meaning. The teammate can use that structure to answer questions like:
 
 - “What is active right now?”
 - “Which work needs a human?”
@@ -181,7 +181,7 @@ Because Agor boards are branch-centric, each card can hold sessions, environment
 - “Which branches are stale?”
 - “What should go into the weekly update?”
 
-Zones can also trigger templated prompts when a branch is dropped into them. For example, a “Needs coordination” zone can prompt the assistant to identify owners, summarize the blocker, and draft a coordination note.
+Zones can also trigger templated prompts when a branch is dropped into them. For example, a “Needs coordination” zone can prompt the teammate to identify owners, summarize the blocker, and draft a coordination note.
 
 ## 6. Prove value immediately
 
@@ -221,7 +221,7 @@ That gives the team something concrete to review. The corrections become trainin
 
 ## 7. Add cadence with the scheduler
 
-Once the assistant has enough context, give it recurring jobs through the [Branch Scheduler](/guide/scheduler).
+Once the teammate has enough context, give it recurring jobs through the [Branch Scheduler](/guide/scheduler).
 
 Keep schedule prompts short. Put the detailed process in Knowledge runbooks.
 
@@ -248,11 +248,11 @@ Good recurring routines:
 - decision log cleanup,
 - risk and blocker scan.
 
-Keep recurring work idempotent. The assistant should write where it wrote, link what it used, and avoid double-posting.
+Keep recurring work idempotent. The teammate should write where it wrote, link what it used, and avoid double-posting.
 
 ## 8. Teach it how to slice work
 
-A PM-like assistant should not only summarize. It should help convert ambiguity into tractable work.
+A PM-like teammate should not only summarize. It should help convert ambiguity into tractable work.
 
 A useful division of labor is:
 
@@ -261,7 +261,7 @@ A useful division of labor is:
 - **Branches and sessions** for execution, experiments, and investigation.
 - **External task systems** for whatever your organization already treats as source of truth.
 
-Ask the assistant to propose workstreams:
+Ask the teammate to propose workstreams:
 
 ```md
 Given the roadmap brief and current board, propose the next five workstreams.
@@ -275,7 +275,7 @@ For each one, include:
 - and what should be tracked outside Agor.
 ```
 
-This is where the assistant starts feeling PM-like: it notices the coordination cost, not just the tasks.
+This is where the teammate starts feeling PM-like: it notices the coordination cost, not just the tasks.
 
 ## 9. Make accountability explicit
 
@@ -303,13 +303,13 @@ A good report section looks like:
 
 That is accountability as visibility, not nagging.
 
-## 10. Keep improving the assistant like a product
+## 10. Keep improving the teammate like a product
 
 The first version will miss things. That is fine.
 
 When it produces a weak report, correct the output and update the runbook. When it asks something already documented, point it to the right Knowledge page. When it posts too much detail, tighten the format. When it misses a risk, add a checklist item.
 
-Also let the assistant capture its own friction:
+Also let the teammate capture its own friction:
 
 - Which tools were hard to use?
 - Which docs were missing?
@@ -317,24 +317,24 @@ Also let the assistant capture its own friction:
 - Which reports were too noisy?
 - Which questions did humans keep correcting?
 
-That feedback is valuable whether you are improving the assistant, the team process, or Agor itself.
+That feedback is valuable whether you are improving the teammate, the team process, or Agor itself.
 
 ## A practical starter checklist
 
 If you want to do this quickly, start here:
 
-1. Create an [Assistant](/guide/assistants) for the team.
+1. Create an [Teammate](/guide/teammates) for the team.
 2. Write a short identity and operating brief.
 3. Create a team [Knowledge](/guide/knowledge) space with a README.
 4. Add a roster, roadmap brief, current risks, and daily/weekly runbooks.
-5. Dump messy project context and ask the assistant to structure it.
+5. Dump messy project context and ask the teammate to structure it.
 6. Put active work on a [Board](/guide/boards) with simple zones.
 7. Connect only the tools it needs for the first useful workflows.
 8. Ask for one immediate artifact: daily brief, sprint plan, or stakeholder FAQ.
 9. Review and correct the artifact.
 10. Add a daily or weekly [schedule](/guide/scheduler) that points to a runbook.
 11. Keep actions approval-gated until the team trusts the routine.
-12. Revisit memory and runbooks weekly until the assistant feels boringly useful.
+12. Revisit memory and runbooks weekly until the teammate feels boringly useful.
 
 ## The mindset
 
@@ -344,4 +344,4 @@ Raise a teammate.
 
 Give it context. Give it access carefully. Give it a shared memory. Let it do useful work immediately. Correct it. Put it into the team’s rituals. Make its output visible. Keep the loop tight.
 
-That is enough to change the texture of team coordination: fewer status scavenger hunts, fewer repeated questions, better handoffs, clearer risks, and a shared assistant that helps everyone get exactly what they need to be effective.
+That is enough to change the texture of team coordination: fewer status scavenger hunts, fewer repeated questions, better handoffs, clearer risks, and a shared teammate that helps everyone get exactly what they need to be effective.
