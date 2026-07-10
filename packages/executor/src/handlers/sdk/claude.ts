@@ -66,7 +66,8 @@ export async function executeClaudeCodeTask(params: {
           repos.repos,
           true, // mcpEnabled
           useNativeAuth, // Flag for Claude CLI OAuth (`claude login`)
-          repos.users
+          repos.users,
+          repos.mcpOAuthAuthHeaders
         ),
     });
   } finally {

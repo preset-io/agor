@@ -21,6 +21,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   enrichSessionFindResultWithRemoteRelationships,
+  getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
   shouldDrainQueueAfterSessionPostTurnPatch,
@@ -50,6 +51,22 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
 describe('tenant-owned service registration', () => {
   it('wraps gateway inbound routing in tenant database scope', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
+  });
+
+  it('wraps MCP OAuth/session helper services in tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
+      expect.arrayContaining([
+        'sessions/:id/mcp-servers',
+        'mcp-servers/discover',
+        'mcp-servers/oauth-auth-headers',
+        'mcp-servers/oauth-complete',
+        'mcp-servers/oauth-disconnect',
+        'mcp-servers/oauth-refresh',
+        'mcp-servers/oauth-start',
+        'mcp-servers/oauth-status',
+        'mcp-servers/test-oauth',
+      ])
+    );
   });
 });
 
@@ -81,6 +98,25 @@ describe('shouldRunSessionPostTurnHooks', () => {
     expect(shouldRunSessionPostTurnHooks({ status: 'running', ready_for_prompt: false })).toBe(
       false
     );
+  });
+});
+
+describe('getTrustedSessionTenantId', () => {
+  it('reads non-enumerable tenant metadata from session DTOs without requiring JSON exposure', () => {
+    const session = makeSession('session-1');
+    Object.defineProperty(session, 'tenant_id', {
+      value: 'tenant-from-row',
+      enumerable: false,
+    });
+
+    expect(getTrustedSessionTenantId(session)).toBe('tenant-from-row');
+    expect(Object.keys(session)).not.toContain('tenant_id');
+    expect(JSON.stringify(session)).not.toContain('tenant_id');
+  });
+
+  it('ignores absent or empty tenant metadata', () => {
+    expect(getTrustedSessionTenantId(makeSession('session-1'))).toBeUndefined();
+    expect(getTrustedSessionTenantId({ tenant_id: '' })).toBeUndefined();
   });
 });
 

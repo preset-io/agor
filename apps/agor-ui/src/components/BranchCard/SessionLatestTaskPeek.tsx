@@ -183,10 +183,18 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
         ? 'Queue a prompt for this session…'
         : 'Prompt this session…';
 
-    const handlePromptSubmit = useCallback(() => {
+    const handlePromptSubmit = useCallback(async () => {
       if (!onSendPrompt || !trimmedPrompt || connectionDisabled) return;
-      onSendPrompt(currentSession.session_id, trimmedPrompt, promptPermissionMode);
-      setPrompt('');
+      try {
+        const sendResult = await onSendPrompt(
+          currentSession.session_id,
+          trimmedPrompt,
+          promptPermissionMode
+        );
+        if (sendResult !== false) setPrompt('');
+      } catch (error) {
+        console.error('Failed to send prompt from task peek:', error);
+      }
     }, [
       connectionDisabled,
       currentSession.session_id,

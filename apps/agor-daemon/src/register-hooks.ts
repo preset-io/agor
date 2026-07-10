@@ -57,6 +57,7 @@ import type {
   BoardID,
   Branch,
   BranchID,
+  GroupID,
   HookContext,
   MCPServer,
   Paginated,
@@ -78,6 +79,7 @@ import type {
   SessionsServiceImpl,
 } from './declarations.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
+import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { ArtifactsService } from './services/artifacts.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
@@ -139,6 +141,7 @@ import {
   recomputeNextRunAt,
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
+import { deferWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
 import {
   isTerminalQueueProcessingSuppressed,
   sessionCanStartTask,
@@ -329,6 +332,11 @@ export function shouldDrainQueueAfterSessionPostTurnPatch(
   );
 }
 
+export function getTrustedSessionTenantId(session: unknown): string | undefined {
+  const tenantId = (session as { tenant_id?: unknown } | undefined)?.tenant_id;
+  return typeof tenantId === 'string' && tenantId.length > 0 ? tenantId : undefined;
+}
+
 export async function enrichSessionFindResultWithRemoteRelationships(
   result: Paginated<Session> | Session[],
   sessionsService: Pick<SessionsServiceImpl, 'enrichRemoteRelationships'>
@@ -387,6 +395,7 @@ export interface RegisterHooksContext {
  */
 export const TENANT_OWNED_SERVICE_PATHS = [
   'sessions',
+  'sessions/:id/mcp-servers',
   'session-relationships',
   'tasks',
   'messages',
@@ -404,6 +413,14 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'boards/:id/group-grants',
   'app-variables',
   'mcp-servers',
+  'mcp-servers/discover',
+  'mcp-servers/oauth-auth-headers',
+  'mcp-servers/oauth-complete',
+  'mcp-servers/oauth-disconnect',
+  'mcp-servers/oauth-refresh',
+  'mcp-servers/oauth-start',
+  'mcp-servers/oauth-status',
+  'mcp-servers/test-oauth',
   'card-types',
   'cards',
   'artifacts',
@@ -655,19 +672,41 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     return context;
   };
 
-  const syncUnixAccessForAllBranches = async (
+  const membershipGroupIdFromContext = (context: HookContext): GroupID | undefined => {
+    const resultGroupId = (context.result as { group_id?: unknown } | undefined)?.group_id;
+    if (typeof resultGroupId === 'string' && resultGroupId.length > 0) {
+      return resultGroupId as GroupID;
+    }
+    const dataGroupId = (context.data as { group_id?: unknown } | undefined)?.group_id;
+    if (typeof dataGroupId === 'string' && dataGroupId.length > 0) return dataGroupId as GroupID;
+    const queryGroupId = context.params.query?.group_id;
+    if (typeof queryGroupId === 'string' && queryGroupId.length > 0) return queryGroupId as GroupID;
+    const routeGroupId = context.params.route?.groupId;
+    if (typeof routeGroupId === 'string' && routeGroupId.length > 0) return routeGroupId as GroupID;
+    return undefined;
+  };
+
+  const syncUnixAccessForGroupGrantedBranches = async (
     context: HookContext,
     logPrefix: string
   ): Promise<HookContext> => {
     if (!executionMode.unixFsIsolationEnabled) return context;
-    const branches = await branchRepository.findAll({ includeArchived: false });
-    for (const branch of branches) {
-      syncBranchUnixAccess(
-        branch.branch_id as BranchID,
-        logPrefix,
-        context.params as Partial<AuthenticatedParams>
+    const groupId = membershipGroupIdFromContext(context);
+    if (!groupId) {
+      console.warn(
+        `[Unix Integration] Could not resolve group_id for ${context.path}.${context.method}; skipping group membership permission sync`
       );
-      await invalidateRealtimeBranchAccess(branch.branch_id);
+      return context;
+    }
+
+    const branchIds = await branchRepository.findExplicitFsAccessBranchIdsForGroup(groupId);
+    if (branchIds.length === 0) return context;
+    console.log(
+      `[Unix Integration] Queueing group membership permission sync for ${branchIds.length} branch(es) granted to group ${shortId(groupId)}`
+    );
+    for (const branchId of branchIds) {
+      syncBranchUnixAccess(branchId, logPrefix, context.params as Partial<AuthenticatedParams>);
+      await invalidateRealtimeBranchAccess(branchId);
     }
     return context;
   };
@@ -1398,7 +1437,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const queryForUserId = (context.params?.query as Record<string, unknown>)?.forUserId as
       | string
       | undefined;
-    const userId = context.params?.user?.user_id || queryForUserId;
+    const authPayloadType = (
+      context.params?.authentication as { payload?: { type?: unknown } } | undefined
+    )?.payload?.type;
+    const userId = resolveForUserIdWithGate({
+      queryForUserId,
+      isServiceAccount: context.params?.user?._isServiceAccount,
+      authPayloadType,
+      callerUserId: context.params?.user?.user_id,
+    });
     if (!userId) {
       return context;
     }
@@ -1867,12 +1914,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         clearRealtimeBranchVisibility,
         (context: HookContext) =>
-          syncUnixAccessForAllBranches(context, '[Executor/group-memberships.create]'),
+          syncUnixAccessForGroupGrantedBranches(context, '[Executor/group-memberships.create]'),
       ],
       remove: [
         clearRealtimeBranchVisibility,
         (context: HookContext) =>
-          syncUnixAccessForAllBranches(context, '[Executor/group-memberships.remove]'),
+          syncUnixAccessForGroupGrantedBranches(context, '[Executor/group-memberships.remove]'),
       ],
     },
   });
@@ -2699,23 +2746,37 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             });
 
             if (shouldDrainQueueAfterSessionPostTurnPatch(session, context.params)) {
+              const sessionTenantId = getTrustedSessionTenantId(session);
               // Same fresh-scope pattern: queue processing must run outside the
               // outer transaction but still inside the session tenant for RLS.
-              deferWithTenantDatabaseScope(db, context.params, async () => {
-                try {
+              // Some completion/background paths have minimal params, so this
+              // relies on params.tenant, current tenant ALS, the already-returned
+              // session row tenant_id, or static tenant config and otherwise
+              // fails closed.
+              deferWithSessionQueueTenantScope(
+                {
+                  db,
+                  config,
+                  sessionId: session.session_id,
+                  params: context.params,
+                  tenantIdHint: sessionTenantId,
+                  label: 'SessionsService.after.patch queue drain',
+                },
+                async (queueParams) => {
                   console.log(
                     `🔄 [SessionsService.after.patch] Session ${shortId(session.session_id)} became promptable (${session.status}), checking for queued tasks...`
                   );
 
-                  await sessionsService.triggerQueueProcessing(session.session_id, context.params);
-                } catch (error) {
+                  await sessionsService.triggerQueueProcessing(session.session_id, queueParams);
+                },
+                (error) => {
                   console.error(
                     `❌ [SessionsService.after.patch] Failed to process queue for session ${shortId(session.session_id)}:`,
                     error
                   );
                   // Don't throw - queue processing failure shouldn't break session patches
                 }
-              });
+              );
             } else {
               console.log(
                 `⏭️  [SessionsService.after.patch] Queue drain suppressed for session ${shortId(session.session_id)} (suppressTerminalQueueProcessing or not ready)`
@@ -2984,6 +3045,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           if (_action === 'batchUpsertObjects' && objects) {
             if (!context.id) throw new Error('Board ID required');
             const result = await boardsService!.batchUpsertBoardObjects(
+              context.id as string,
+              objects
+            );
+            context.result = result;
+            // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            app.service('boards').emit('patched', result);
+            // Skip normal patch flow to prevent double emit
+            context.dispatch = result;
+            return context;
+          }
+
+          if (_action === 'mergeObjectFields' && objects) {
+            if (!context.id) throw new Error('Board ID required');
+            const result = await boardsService!.mergeBoardObjectFields(
               context.id as string,
               objects
             );

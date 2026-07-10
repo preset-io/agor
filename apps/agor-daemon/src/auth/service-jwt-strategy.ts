@@ -15,6 +15,10 @@ import type { Params, UserAuthMetadata } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import type { SessionTokenService } from '../services/session-token-service.js';
 import { markAuthenticationUserLookup } from '../services/users.js';
+import {
+  getExecutorSessionTokenSessionId,
+  isExecutorSessionTokenPayload,
+} from './executor-session-token.js';
 import { readRuntimeTenantClaim } from './runtime-tokens.js';
 import { assertUserTokenNotInvalidated, type UserAuthTokenPayload } from './token-invalidation.js';
 
@@ -158,14 +162,14 @@ export class ServiceJWTStrategy extends JWTStrategy {
     }
 
     if (payload?.type === 'executor-session') {
-      if (payload.purpose !== 'executor-task') {
+      if (!isExecutorSessionTokenPayload(payload)) {
         throw new Error('Invalid executor token purpose');
       }
       const token = authentication?.accessToken;
       if (!token || !this.sessionTokenService) {
         throw new Error('Executor token validation unavailable');
       }
-      const sessionId = payload.session_id ?? payload.sessionId;
+      const sessionId = getExecutorSessionTokenSessionId(payload);
       const sessionInfo = await this.sessionTokenService.validateToken(token, {
         sessionId,
         taskId: payload.task_id,

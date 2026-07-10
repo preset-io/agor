@@ -11,15 +11,16 @@ import {
 
 describe('Codex model registry', () => {
   it('keeps current defaults on supported Codex models', () => {
-    expect(DEFAULT_CODEX_MODEL).toBe('gpt-5.5');
-    expect(CODEX_MINI_MODEL).toBe('gpt-5.4-mini');
+    expect(DEFAULT_CODEX_MODEL).toBe('gpt-5.6-sol');
+    expect(CODEX_MINI_MODEL).toBe('gpt-5.6-terra');
   });
 
   it('surfaces only selectable models to callers', () => {
     const selectableIds = Object.keys(CODEX_MODEL_METADATA);
 
-    expect(selectableIds).toContain('gpt-5.5');
-    expect(selectableIds).toContain('gpt-5.4-mini');
+    expect(selectableIds).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+    expect(selectableIds).not.toContain('gpt-5.5');
+    expect(selectableIds).not.toContain('gpt-5.4-mini');
     expect(selectableIds).not.toContain('gpt-5.4');
     expect(selectableIds).not.toContain('gpt-5-codex');
   });
@@ -28,7 +29,7 @@ describe('Codex model registry', () => {
     expect(CODEX_MODEL_REGISTRY['gpt-5-codex']).toMatchObject({
       selectable: false,
       availability: 'unsupported',
-      replacement: 'gpt-5.5',
+      replacement: 'gpt-5.6-sol',
     });
   });
 
@@ -43,12 +44,15 @@ describe('Codex model registry', () => {
     expect(getCodexModelLifecycle('gpt-5.4-mini-2026-01-01')).toBe(
       CODEX_MODEL_REGISTRY['gpt-5.4-mini']
     );
+    expect(getCodexModelLifecycle('gpt-5.6-luna-2026-07-09')).toBe(
+      CODEX_MODEL_REGISTRY['gpt-5.6-luna']
+    );
   });
 
   it('flags only known unsupported Agor Codex aliases', () => {
     expect(isUnsupportedAgorCodexModel('gpt-5-codex')).toBe(true);
     expect(isUnsupportedAgorCodexModel('gpt-5-codex-mini')).toBe(true);
-    expect(isUnsupportedAgorCodexModel('gpt-5.5')).toBe(false);
+    expect(isUnsupportedAgorCodexModel('gpt-5.6-sol')).toBe(false);
     expect(isUnsupportedAgorCodexModel('internal-model-v1')).toBe(false);
   });
 
@@ -56,7 +60,7 @@ describe('Codex model registry', () => {
     const message = formatUnsupportedAgorCodexModelMessage('gpt-5-codex');
 
     expect(message).toContain('gpt-5-codex');
-    expect(message).toContain('gpt-5.5');
+    expect(message).toContain('gpt-5.6-sol');
     expect(message).toContain('user defaults');
     expect(message).toContain('omit modelConfig');
   });

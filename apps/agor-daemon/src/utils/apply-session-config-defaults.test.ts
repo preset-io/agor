@@ -157,7 +157,7 @@ describe('applySessionConfigDefaults', () => {
           user_id: ALICE,
           default_agentic_config: {
             'claude-code': {
-              modelConfig: { model: 'claude-sonnet-4-6', advisorModel: 'opus' },
+              modelConfig: { model: 'claude-sonnet-5', advisorModel: 'opus' },
             },
           },
         },
@@ -167,7 +167,7 @@ describe('applySessionConfigDefaults', () => {
     expect(
       (ctx.data as { model_config: { model: string; advisorModel: string } }).model_config
     ).toMatchObject({
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       advisorModel: 'opus',
     });
   });
@@ -189,7 +189,7 @@ describe('applySessionConfigDefaults', () => {
       (ctx.data as { model_config: { mode: string; model: string; effort: string } }).model_config
     ).toMatchObject({
       mode: 'alias',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       effort: 'max',
     });
   });
@@ -212,7 +212,7 @@ describe('applySessionConfigDefaults', () => {
         .model_config
     ).toMatchObject({
       mode: 'alias',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       advisorModel: 'opus',
     });
   });

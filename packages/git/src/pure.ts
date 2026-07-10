@@ -7,7 +7,7 @@ import { Buffer } from 'node:buffer';
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 
 const DEFAULT_AUTH_HEADER_HOST = 'github.com';
 

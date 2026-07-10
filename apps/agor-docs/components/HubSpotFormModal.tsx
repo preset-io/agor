@@ -1,3 +1,5 @@
+'use client';
+
 import { useEffect } from 'react';
 import { HubSpotForm } from './HubSpotForm';
 import styles from './HubSpotFormModal.module.css';

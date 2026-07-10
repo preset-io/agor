@@ -4,6 +4,7 @@ import {
   type Session,
   tokenizeSearchQuery,
 } from '@agor-live/client';
+import { getTimeMs } from './entityTime';
 import { getSessionDisplayTitle } from './sessionTitle';
 
 export const SESSION_SORT_STORAGE_KEY = 'agor:session-sort';
@@ -92,7 +93,7 @@ export function scoreSession(session: Session, query: string, now = Date.now()):
   // session appear in search results.
   if (score === 0) return 0;
 
-  const updatedAt = new Date(session.last_updated).getTime();
+  const updatedAt = getTimeMs(session, 'last_updated');
   if (Number.isFinite(updatedAt)) {
     const ageDays = Math.max(0, (now - updatedAt) / 86_400_000);
     score += Math.round(SCORE_WEIGHTS.RECENCY_MAX * Math.exp(-ageDays));
@@ -175,11 +176,11 @@ export function sortSessions(sessions: Session[], sort: SessionSort): Session[] 
 }
 
 function compareByRecent(a: Session, b: Session): number {
-  return new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime();
+  return getTimeMs(b, 'last_updated') - getTimeMs(a, 'last_updated');
 }
 
 function compareByOldest(a: Session, b: Session): number {
-  return new Date(a.last_updated).getTime() - new Date(b.last_updated).getTime();
+  return getTimeMs(a, 'last_updated') - getTimeMs(b, 'last_updated');
 }
 
 function compareByTitle(a: Session, b: Session): number {

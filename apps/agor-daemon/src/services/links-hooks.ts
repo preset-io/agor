@@ -29,6 +29,24 @@ export function isExternalFileBackedLinkMutation(data: unknown): boolean {
   );
 }
 
+export function getExternalLinkProvenanceMutationError(
+  data: unknown,
+  method: 'create' | 'patch'
+): string | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  if ('source_message_id' in record) {
+    return "Link field 'source_message_id' is server-managed";
+  }
+  if (method === 'patch' && 'source' in record) {
+    return "Link field 'source' is immutable";
+  }
+  if (method === 'create' && record.source !== 'manual') {
+    return "External links must use source 'manual'";
+  }
+  return null;
+}
+
 interface LinksHooksContext {
   db: TenantScopeAwareDatabase;
   branchRepository: BranchRepository;
@@ -179,6 +197,17 @@ export function linksHooks({
     return context;
   };
 
+  const rejectExternalLinkProvenanceMutations = (context: HookContext) => {
+    if (!context.params.provider) return context;
+    const records = Array.isArray(context.data) ? context.data : [context.data];
+    const method = context.method === 'patch' ? 'patch' : 'create';
+    for (const record of records) {
+      const error = getExternalLinkProvenanceMutationError(record, method);
+      if (error) throw new Forbidden(error);
+    }
+    return context;
+  };
+
   return {
     before: {
       all: [typedValidateQuery(linkQueryValidator), requireAuth, executorRuntimeScopeGuard()],
@@ -187,6 +216,7 @@ export function linksHooks({
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create links'),
         rejectLinkDerivedFields,
+        rejectExternalLinkProvenanceMutations,
         rejectExternalFileBackedLinkMutations,
         injectCreatedBy(),
         ensureLinkOwnerAccess('mutate'),
@@ -194,6 +224,7 @@ export function linksHooks({
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update links'),
         rejectLinkDerivedFields,
+        rejectExternalLinkProvenanceMutations,
         rejectExternalFileBackedLinkMutations,
         rejectLinkOwnerPatch,
         ensureLinkOwnerAccess('mutate'),

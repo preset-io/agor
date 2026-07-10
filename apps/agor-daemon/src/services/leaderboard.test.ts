@@ -477,6 +477,49 @@ describe('LeaderboardService bucketing', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Value filters
+// ---------------------------------------------------------------------------
+
+describe('LeaderboardService value filters', () => {
+  dbTest('accepts scalar and array filters for slice-and-dice queries', async ({ db }) => {
+    await seedCanonicalDataset(db);
+    const service = new LeaderboardService(db);
+
+    const result = await service.find({
+      query: {
+        userId: ['user-alice', 'user-bob'],
+        tool: 'claude-code',
+        model: ['claude-sonnet-4-6', 'claude-opus-4-6'],
+        groupBy: 'user,model',
+      },
+    });
+
+    expect(result.data).toHaveLength(2);
+    expect(new Set(result.data.map((row) => row.userId))).toEqual(new Set(['user-alice']));
+    expect(new Set(result.data.map((row) => row.model))).toEqual(
+      new Set(['claude-sonnet-4-6', 'claude-opus-4-6'])
+    );
+  });
+
+  dbTest('supports plural aliases and comma-separated values for filters', async ({ db }) => {
+    await seedCanonicalDataset(db);
+    const service = new LeaderboardService(db);
+
+    const result = await service.find({
+      query: {
+        userIds: 'user-alice,user-bob',
+        tools: ['codex'],
+        groupBy: 'user,tool',
+      },
+    });
+
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].userId).toBe('user-bob');
+    expect(result.data[0].tool).toBe('codex');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Date filters
 // ---------------------------------------------------------------------------
 
@@ -576,5 +619,15 @@ describe('LeaderboardService input validation', () => {
     await expect(service.find({ query: { groupBy: 'user,wombat' } })).rejects.toThrow(
       /Invalid groupBy dimension/
     );
+  });
+
+  dbTest('normalizes string pagination params and caps large limits', async ({ db }) => {
+    await seedCanonicalDataset(db);
+    const service = new LeaderboardService(db);
+
+    const result = await service.find({ query: { groupBy: 'user', limit: '50000', offset: '1' } });
+
+    expect(result.limit).toBe(10_000);
+    expect(result.offset).toBe(1);
   });
 });

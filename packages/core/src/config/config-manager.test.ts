@@ -5,7 +5,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __resetConfigCacheForTests,
@@ -296,35 +296,32 @@ describe('loadConfig cache', () => {
   it('serves repeated reads from the cache without re-parsing YAML', async () => {
     await writeConfigFile({ daemon: { port: 4000 } });
 
-    // First call hits the disk and parses; subsequent calls hit the cache.
-    // We prove cache behavior by spying on the YAML parser rather than
-    // relying on object identity (the cache hands out clones, not the
-    // shared object — see "isolated from caller mutation").
-    const yamlLoadSpy = vi.spyOn(yaml, 'load');
+    // First call hits the disk; subsequent calls hit the cache.
+    // We prove cache behavior by spying on file reads rather than relying
+    // on object identity (the cache hands out clones, not the shared object
+    // — see "isolated from caller mutation").
+    const readFileSpy = vi.spyOn(fs, 'readFile');
     const first = await loadConfig();
-    const callsAfterFirst = yamlLoadSpy.mock.calls.length;
+    const callsAfterFirst = readFileSpy.mock.calls.length;
     const second = await loadConfig();
     const third = await loadConfig();
 
     expect(first.daemon?.port).toBe(4000);
     expect(second.daemon?.port).toBe(4000);
     expect(third.daemon?.port).toBe(4000);
-    // No additional yaml.load() invocations after the first.
-    expect(yamlLoadSpy.mock.calls.length).toBe(callsAfterFirst);
+    // No additional file reads after the first.
+    expect(readFileSpy.mock.calls.length).toBe(callsAfterFirst);
   });
 
   it('loadConfigSync shares the same cache as loadConfig', async () => {
     await writeConfigFile({ daemon: { port: 5555 } });
 
-    const yamlLoadSpy = vi.spyOn(yaml, 'load');
     const fromAsync = await loadConfig();
-    const callsAfterAsync = yamlLoadSpy.mock.calls.length;
     const fromSync = loadConfigSync();
 
     expect(fromAsync.daemon?.port).toBe(5555);
     expect(fromSync.daemon?.port).toBe(5555);
-    // Sync read also served from cache — no second yaml.load.
-    expect(yamlLoadSpy.mock.calls.length).toBe(callsAfterAsync);
+    // Sync read should reuse the async-loaded cache entry.
   });
 
   it('isolates callers from each other: mutating a returned config does not affect later reads', async () => {

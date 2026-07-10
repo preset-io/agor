@@ -268,6 +268,30 @@ describe('parseAgorYml — misc', () => {
 });
 
 describe('parseAgorYml — repo .agor.yml demo variants', () => {
+  it('uses env(1) for UID/GID on Docker variants instead of shell assignments', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    const uidGidVariants = Object.entries(env!.variants)
+      .filter(([, variant]) => {
+        const start = variant.start;
+        return start !== undefined && (start.includes('UID=') || start.includes('GID='));
+      })
+      .map(([name]) => name)
+      .sort();
+
+    expect(uidGidVariants).toEqual(['full', 'postgres', 'postgres-demo', 'sqlite', 'sqlite-demo']);
+
+    for (const name of uidGidVariants) {
+      const start = env!.variants[name].start;
+      if (start === undefined) {
+        throw new Error(`${name}.start is missing`);
+      }
+      expect(start, `${name}.start`).toMatch(/^env UID=\$\(id -u\) GID=/);
+      expect(start, `${name}.start`).not.toMatch(/^UID=/);
+    }
+  });
+
   it('resolves sqlite-demo / postgres-demo with LOAD_FIXTURES and required start/stop', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();

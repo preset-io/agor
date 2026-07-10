@@ -232,7 +232,7 @@ describe('run-as-user', () => {
       // shell string (e.g. `SEED=true docker compose up -d`) as a single
       // program name and failed with `exec: <whole string>: not found`.
       const ENV_COMMAND =
-        'SEED=true UID=$(id -u) GID=$(id -g) docker compose -p agor-x up -d --build';
+        'env UID=$(id -u) GID=$(id -g) SEED=true docker compose -p agor-x up -d --build';
 
       it('uses `exec bash -c "$2"` to shell-interpret the command (with envFilePath)', () => {
         const result = buildSpawnArgs(ENV_COMMAND, [], {
