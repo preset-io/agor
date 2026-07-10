@@ -50,8 +50,8 @@ import type {
 } from '@agor/core/types';
 import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
-  getAssistantConfig,
-  isAssistant,
+  getTeammateConfig,
+  isTeammate,
 } from '@agor/core/types';
 import {
   getGidFromGroupName,
@@ -74,9 +74,9 @@ import {
   spawnExecutor,
 } from '../utils/spawn-executor.js';
 import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
-import { ensureAssistantKnowledgeNamespace as ensureAssistantKnowledgeNamespaceForBranch } from './assistant-knowledge.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import type { InternalEnrichmentParams } from './sessions';
+import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
 
 /**
  * Branch service params
@@ -709,9 +709,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
       const created = (await super.create(withDefaults, params)) as Branch[];
       const readyBranches = await Promise.all(
-        created.map((branch) => this.maybeEnsureAssistantKnowledgeNamespace(branch, params))
+        created.map((branch) => this.maybeEnsureTeammateKnowledgeNamespace(branch, params))
       );
-      await Promise.all(readyBranches.map((branch) => this.maybeSetBoardPrimaryAssistant(branch)));
+      await Promise.all(readyBranches.map((branch) => this.maybeSetBoardPrimaryTeammate(branch)));
       for (const branch of readyBranches) {
         this.trackBranchCreated(branch);
       }
@@ -720,8 +720,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     assertHasBoard(data);
     const withDefaults = await this.applyBranchCreateDefaults(data);
     const created = (await super.create(withDefaults, params)) as Branch;
-    const readyBranch = await this.maybeEnsureAssistantKnowledgeNamespace(created, params);
-    await this.maybeSetBoardPrimaryAssistant(readyBranch);
+    const readyBranch = await this.maybeEnsureTeammateKnowledgeNamespace(created, params);
+    await this.maybeSetBoardPrimaryTeammate(readyBranch);
     this.trackBranchCreated(readyBranch);
     return readyBranch;
   }
@@ -732,11 +732,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     });
   }
 
-  private async maybeSetBoardPrimaryAssistant(branch: Branch): Promise<void> {
-    if (!branch.board_id || !isAssistant(branch)) return;
+  private async maybeSetBoardPrimaryTeammate(branch: Branch): Promise<void> {
+    if (!branch.board_id || !isTeammate(branch)) return;
 
     try {
-      const updatedBoard = await this.boardRepo.setPrimaryAssistantIfUnset(
+      const updatedBoard = await this.boardRepo.setPrimaryTeammateIfUnset(
         branch.board_id,
         branch.branch_id
       );
@@ -745,19 +745,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     } catch (error) {
       console.warn(
-        `⚠️ Failed to set primary assistant for board ${branch.board_id}:`,
+        `⚠️ Failed to set primary teammate for board ${branch.board_id}:`,
         error instanceof Error ? error.message : String(error)
       );
     }
   }
 
-  private async maybeEnsureAssistantKnowledgeNamespace(
+  private async maybeEnsureTeammateKnowledgeNamespace(
     branch: Branch,
     params?: BranchParams
   ): Promise<Branch> {
-    if (!isAssistant(branch)) return branch;
+    if (!isTeammate(branch)) return branch;
     const userId = (params?.user?.user_id as UserID | undefined) ?? (branch.created_by as UserID);
-    const result = await ensureAssistantKnowledgeNamespaceForBranch(
+    const result = await ensureTeammateKnowledgeNamespaceForBranch(
       this.db,
       branch.branch_id,
       userId
@@ -765,7 +765,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return result.branch;
   }
 
-  private async assertCanManageAssistantKnowledge(branch: Branch, params?: BranchParams) {
+  private async assertCanManageTeammateKnowledge(branch: Branch, params?: BranchParams) {
     const user = params?.user;
     const userId = user?.user_id as UserID | undefined;
     if (isKnowledgeAdmin(user as never)) return;
@@ -774,17 +774,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (await this.branchRepo.isOwner(branch.branch_id, userId)) {
       return;
     }
-    throw new Forbidden('Only branch owners or admins can manage assistant knowledge');
+    throw new Forbidden('Only branch owners or admins can manage teammate knowledge');
   }
 
-  private containsAssistantKnowledgeConfigMutation(data: Partial<Branch>): boolean {
+  private containsTeammateKnowledgeConfigMutation(data: Partial<Branch>): boolean {
     if (!Object.hasOwn(data, 'custom_context')) return false;
     const customContext = data.custom_context;
     if (customContext === null) return true;
     if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
       return false;
     }
-    for (const key of ['assistant', 'agent']) {
+    for (const key of ['teammate', 'assistant', 'agent']) {
       const value = customContext[key];
       if (value && typeof value === 'object' && !Array.isArray(value)) {
         if (Object.hasOwn(value as Record<string, unknown>, 'kb')) return true;
@@ -793,30 +793,30 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return false;
   }
 
-  private async assertCanMutateAssistantKnowledgeConfig(
+  private async assertCanMutateTeammateKnowledgeConfig(
     branch: Branch,
     data: Partial<Branch>,
     params?: BranchParams
   ): Promise<void> {
-    if (!isAssistant(branch)) return;
-    if (!this.containsAssistantKnowledgeConfigMutation(data)) return;
-    await this.assertCanManageAssistantKnowledge(branch, params);
-    await this.assertCanUseAssistantHomeNamespace(branch, data, params);
+    if (!isTeammate(branch)) return;
+    if (!this.containsTeammateKnowledgeConfigMutation(data)) return;
+    await this.assertCanManageTeammateKnowledge(branch, params);
+    await this.assertCanUseTeammateHomeNamespace(branch, data, params);
   }
 
-  private extractAssistantKnowledgeConfigPatch(
+  private extractTeammateKnowledgeConfigPatch(
     data: Partial<Branch>
   ): Record<string, unknown> | null {
     const customContext = data.custom_context;
     if (!customContext || typeof customContext !== 'object' || Array.isArray(customContext)) {
       return null;
     }
-    for (const key of ['assistant', 'agent']) {
-      const assistantPatch = customContext[key];
-      if (!assistantPatch || typeof assistantPatch !== 'object' || Array.isArray(assistantPatch)) {
+    for (const key of ['teammate', 'assistant', 'agent']) {
+      const teammatePatch = customContext[key];
+      if (!teammatePatch || typeof teammatePatch !== 'object' || Array.isArray(teammatePatch)) {
         continue;
       }
-      const kbPatch = (assistantPatch as Record<string, unknown>).kb;
+      const kbPatch = (teammatePatch as Record<string, unknown>).kb;
       if (kbPatch && typeof kbPatch === 'object' && !Array.isArray(kbPatch)) {
         return kbPatch as Record<string, unknown>;
       }
@@ -824,27 +824,27 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return null;
   }
 
-  private async assertCanUseAssistantHomeNamespace(
+  private async assertCanUseTeammateHomeNamespace(
     branch: Branch,
     data: Partial<Branch>,
     params?: BranchParams
   ): Promise<void> {
-    const kbPatch = this.extractAssistantKnowledgeConfigPatch(data);
+    const kbPatch = this.extractTeammateKnowledgeConfigPatch(data);
     const namespaceId = kbPatch?.primary_namespace_id;
     if (typeof namespaceId !== 'string' || !namespaceId) return;
 
-    const currentNamespaceId = getAssistantConfig(branch)?.kb?.primary_namespace_id;
+    const currentNamespaceId = getTeammateConfig(branch)?.kb?.primary_namespace_id;
     if (namespaceId === currentNamespaceId) return;
 
     const namespaces = new KnowledgeNamespaceRepository(this.db);
     const namespace = await namespaces.findById(namespaceId);
     if (!namespace || namespace.archived) {
-      throw new BadRequest('Assistant home Knowledge namespace not found');
+      throw new BadRequest('Teammate home Knowledge namespace not found');
     }
 
     const namespaceSlug = kbPatch.primary_namespace_slug;
     if (typeof namespaceSlug === 'string' && namespaceSlug && namespaceSlug !== namespace.slug) {
-      throw new BadRequest('Assistant home Knowledge namespace slug does not match its ID');
+      throw new BadRequest('Teammate home Knowledge namespace slug does not match its ID');
     }
 
     const user = params?.user;
@@ -854,13 +854,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const permission = await namespaces.resolveNamespacePermission(namespace.namespace_id, userId);
     if (permission !== 'write' && permission !== 'own') {
-      throw new Forbidden(
-        'You need write access to use this Knowledge namespace as assistant home'
-      );
+      throw new Forbidden('You need write access to use this Knowledge namespace as teammate home');
     }
   }
 
-  async ensureAssistantKnowledgeNamespace(
+  async ensureTeammateKnowledgeNamespace(
     data: { branchId?: string; branch_id?: string } | string,
     params?: BranchParams
   ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }> {
@@ -868,9 +866,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (!branchId || branchId === 'undefined') throw new BadRequest('branchId is required');
     const branch = await this.branchRepo.findById(branchId);
     if (!branch) throw new BadRequest(`Branch not found: ${branchId}`);
-    if (!isAssistant(branch)) throw new BadRequest('Branch is not an assistant');
-    await this.assertCanManageAssistantKnowledge(branch, params);
-    return ensureAssistantKnowledgeNamespaceForBranch(
+    if (!isTeammate(branch)) throw new BadRequest('Branch is not a teammate');
+    await this.assertCanManageTeammateKnowledge(branch, params);
+    return ensureTeammateKnowledgeNamespaceForBranch(
       this.db,
       branch.branch_id,
       (params?.user?.user_id as UserID | undefined) ?? (branch.created_by as UserID)
@@ -889,7 +887,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   /**
    * Mirrors BranchRepository's patch merge semantics so we can reject
-   * assistant/non-assistant conversions before the repository writes them.
+   * teammate/non-teammate conversions before the repository writes them.
    */
   private mergePatchPreview(
     target: Record<string, unknown>,
@@ -920,36 +918,36 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return result;
   }
 
-  private assertAssistantKindIsStable(currentBranch: Branch, patchData: Partial<Branch>): void {
+  private assertTeammateKindIsStable(currentBranch: Branch, patchData: Partial<Branch>): void {
     const wouldBeBranch = this.mergePatchPreview(
       currentBranch as unknown as Record<string, unknown>,
       patchData as Record<string, unknown>
     ) as unknown as Branch;
-    if (isAssistant(currentBranch) === isAssistant(wouldBeBranch)) return;
+    if (isTeammate(currentBranch) === isTeammate(wouldBeBranch)) return;
 
     throw new BadRequest(
-      'Branches cannot be converted between assistant and non-assistant types. Create a new branch or assistant instead.'
+      'Branches cannot be converted between teammate and non-teammate types. Create a new branch or AI teammate instead.'
     );
   }
 
-  private async maintainPrimaryAssistantAfterPatch(
+  private async maintainPrimaryTeammateAfterPatch(
     previousBranch: Branch,
     updatedBranch: Branch
   ): Promise<void> {
     const oldBoardId = previousBranch.board_id;
     const newBoardId = updatedBranch.board_id;
-    const wasAssistant = isAssistant(previousBranch);
-    const isNowAssistant = isAssistant(updatedBranch);
+    const wasTeammate = isTeammate(previousBranch);
+    const isNowTeammate = isTeammate(updatedBranch);
 
     const shouldClearOldPrimary = Boolean(
       oldBoardId &&
-        wasAssistant &&
-        (oldBoardId !== newBoardId || !isNowAssistant || updatedBranch.archived === true)
+        wasTeammate &&
+        (oldBoardId !== newBoardId || !isNowTeammate || updatedBranch.archived === true)
     );
 
     const shouldSetNewPrimary = Boolean(
       newBoardId &&
-        isNowAssistant &&
+        isNowTeammate &&
         updatedBranch.archived !== true &&
         (oldBoardId !== newBoardId || previousBranch.archived === true)
     );
@@ -958,7 +956,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     try {
       if (shouldClearOldPrimary) {
-        const updatedOldBoard = await this.boardRepo.clearPrimaryAssistantIfMatches(
+        const updatedOldBoard = await this.boardRepo.clearPrimaryTeammateIfMatches(
           oldBoardId!,
           previousBranch.branch_id
         );
@@ -968,7 +966,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
 
       if (shouldSetNewPrimary) {
-        const updatedNewBoard = await this.boardRepo.setPrimaryAssistantIfUnset(
+        const updatedNewBoard = await this.boardRepo.setPrimaryTeammateIfUnset(
           newBoardId!,
           updatedBranch.branch_id
         );
@@ -978,7 +976,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     } catch (error) {
       console.warn(
-        `⚠️ Failed to maintain primary assistant pointer for branch ${updatedBranch.branch_id}:`,
+        `⚠️ Failed to maintain primary teammate pointer for branch ${updatedBranch.branch_id}:`,
         error instanceof Error ? error.message : String(error)
       );
     }
@@ -998,8 +996,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   ): Promise<BranchWithZoneAndSessions> {
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
-    await this.assertCanMutateAssistantKnowledgeConfig(currentBranch, data, params);
-    this.assertAssistantKindIsStable(currentBranch, data);
+    await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
+    this.assertTeammateKindIsStable(currentBranch, data);
 
     const oldBoardId = currentBranch.board_id;
     const boardIdProvided = Object.hasOwn(data, 'board_id');
@@ -1018,7 +1016,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Call parent patch
     const updatedBranch = (await super.patch(id, data, params)) as Branch;
-    await this.maintainPrimaryAssistantAfterPatch(currentBranch, updatedBranch);
+    await this.maintainPrimaryTeammateAfterPatch(currentBranch, updatedBranch);
 
     // Handle board_objects changes if board_id changed
     if (!boardIdProvided) {
@@ -1082,8 +1080,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   async update(id: BranchID, data: Partial<Branch>, params?: BranchParams): Promise<Branch> {
     const currentBranch = await super.get(id, params);
-    await this.assertCanMutateAssistantKnowledgeConfig(currentBranch, data, params);
-    this.assertAssistantKindIsStable(currentBranch, data);
+    await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
+    this.assertTeammateKindIsStable(currentBranch, data);
     if (
       currentBranch.board_id !== data.board_id &&
       currentBranch.permission_source === 'board' &&

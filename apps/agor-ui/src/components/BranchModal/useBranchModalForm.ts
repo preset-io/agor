@@ -1,7 +1,7 @@
 /**
- * Unified form state for the Branch / Assistant modal.
+ * Unified form state for the Branch / Teammate modal.
  *
- * Lifts state for the General, Assistant, and Permissions tabs into a single
+ * Lifts state for the General, Teammate, and Permissions tabs into a single
  * place so the modal can offer one consolidated Save action. Each tab consumes
  * the slice it needs as controlled props.
  *
@@ -19,15 +19,15 @@
 
 import type {
   AgorClient,
-  AssistantConfig,
   Branch,
   BranchGroupGrantWithGroup,
   BranchPermissionLevel,
   EffectiveBranchAccess,
   Group,
+  TeammateConfig,
   User,
 } from '@agor-live/client';
-import { getAssistantConfig, hasMinimumRole, isAssistant, ROLES } from '@agor-live/client';
+import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /** Patchable subset of `Branch` writable from the modal form. */
@@ -52,7 +52,7 @@ export interface GeneralFormState {
   mcpServerIds: string[];
 }
 
-export interface AssistantFormState {
+export interface TeammateFormState {
   displayName: string;
   emoji: string;
   description: string;
@@ -75,10 +75,10 @@ export interface BranchModalFormApi {
   setGeneral: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
   generalChanged: boolean;
 
-  // Assistant slice
-  assistant: AssistantFormState;
-  setAssistant: <K extends keyof AssistantFormState>(key: K, value: AssistantFormState[K]) => void;
-  assistantChanged: boolean;
+  // Teammate slice
+  teammate: TeammateFormState;
+  setTeammate: <K extends keyof TeammateFormState>(key: K, value: TeammateFormState[K]) => void;
+  teammateChanged: boolean;
 
   // Permissions slice
   permissions: PermissionsFormState;
@@ -137,8 +137,8 @@ const buildGeneralDefaults = (branch: Branch | null): GeneralFormState => ({
   mcpServerIds: branch?.mcp_server_ids || [],
 });
 
-const buildAssistantDefaults = (branch: Branch | null): AssistantFormState => {
-  const config = branch ? getAssistantConfig(branch) : null;
+const buildTeammateDefaults = (branch: Branch | null): TeammateFormState => {
+  const config = branch ? getTeammateConfig(branch) : null;
   return {
     displayName: config?.displayName || '',
     emoji: config?.emoji || '',
@@ -183,8 +183,8 @@ export function useBranchModalForm({
 
   // Form slices
   const [general, setGeneralState] = useState<GeneralFormState>(() => buildGeneralDefaults(branch));
-  const [assistant, setAssistantState] = useState<AssistantFormState>(() =>
-    buildAssistantDefaults(branch)
+  const [teammate, setTeammateState] = useState<TeammateFormState>(() =>
+    buildTeammateDefaults(branch)
   );
   const [permissions, setPermissionsState] = useState<PermissionsFormState>(() =>
     buildPermissionsDefaults(branch, [])
@@ -197,7 +197,7 @@ export function useBranchModalForm({
   // in sync with the latest server state via WebSocket-driven prop changes;
   // touched slices are left alone until Save or Reset.
   const generalTouchedRef = useRef<boolean>(false);
-  const assistantTouchedRef = useRef<boolean>(false);
+  const teammateTouchedRef = useRef<boolean>(false);
   const permissionsTouchedRef = useRef<boolean>(false);
 
   const setGeneral = useCallback<BranchModalFormApi['setGeneral']>((key, value) => {
@@ -205,9 +205,9 @@ export function useBranchModalForm({
     setGeneralState((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  const setAssistant = useCallback<BranchModalFormApi['setAssistant']>((key, value) => {
-    assistantTouchedRef.current = true;
-    setAssistantState((prev) => ({ ...prev, [key]: value }));
+  const setTeammate = useCallback<BranchModalFormApi['setTeammate']>((key, value) => {
+    teammateTouchedRef.current = true;
+    setTeammateState((prev) => ({ ...prev, [key]: value }));
   }, []);
 
   const setPermissions = useCallback<BranchModalFormApi['setPermissions']>((key, value) => {
@@ -225,7 +225,7 @@ export function useBranchModalForm({
     if (!open || !branch) {
       initBranchIdRef.current = null;
       generalTouchedRef.current = false;
-      assistantTouchedRef.current = false;
+      teammateTouchedRef.current = false;
       permissionsTouchedRef.current = false;
       return;
     }
@@ -233,10 +233,10 @@ export function useBranchModalForm({
     if (isNewBranch) {
       initBranchIdRef.current = branch.branch_id;
       generalTouchedRef.current = false;
-      assistantTouchedRef.current = false;
+      teammateTouchedRef.current = false;
       permissionsTouchedRef.current = false;
       setGeneralState(buildGeneralDefaults(branch));
-      setAssistantState(buildAssistantDefaults(branch));
+      setTeammateState(buildTeammateDefaults(branch));
       setPermissionsState(buildPermissionsDefaults(branch, []));
       setOwners([]);
       setAllUsers([]);
@@ -251,8 +251,8 @@ export function useBranchModalForm({
     if (!generalTouchedRef.current) {
       setGeneralState(buildGeneralDefaults(branch));
     }
-    if (!assistantTouchedRef.current) {
-      setAssistantState(buildAssistantDefaults(branch));
+    if (!teammateTouchedRef.current) {
+      setTeammateState(buildTeammateDefaults(branch));
     }
     // Permissions slice — only non-owner fields here; selectedOwnerIds is
     // resynced from the owners-load effect below using the same touched gate.
@@ -391,10 +391,10 @@ export function useBranchModalForm({
   }, [open, client, branch]);
 
   // Change detection per slice
-  const isAssistantBranch = branch ? isAssistant(branch) : false;
+  const isTeammateBranch = branch ? isTeammate(branch) : false;
   const generalChanged = useMemo(() => {
     if (!branch) return false;
-    const notesChanged = !isAssistantBranch && general.notes !== (branch.notes || '');
+    const notesChanged = !isTeammateBranch && general.notes !== (branch.notes || '');
     return (
       general.boardId !== (branch.board_id || undefined) ||
       general.issueUrl !== (branch.issue_url || '') ||
@@ -402,18 +402,18 @@ export function useBranchModalForm({
       notesChanged ||
       sortedJson(general.mcpServerIds) !== sortedJson(branch.mcp_server_ids || [])
     );
-  }, [branch, general, isAssistantBranch]);
+  }, [branch, general, isTeammateBranch]);
 
-  const assistantChanged = useMemo(() => {
-    if (!branch || !isAssistantBranch) return false;
-    const config = getAssistantConfig(branch);
+  const teammateChanged = useMemo(() => {
+    if (!branch || !isTeammateBranch) return false;
+    const config = getTeammateConfig(branch);
     if (!config) return false;
     return (
-      assistant.displayName.trim() !== config.displayName ||
-      assistant.emoji !== (config.emoji || '') ||
-      assistant.description.trim() !== (branch.notes || '')
+      teammate.displayName.trim() !== config.displayName ||
+      teammate.emoji !== (config.emoji || '') ||
+      teammate.description.trim() !== (branch.notes || '')
     );
-  }, [branch, assistant, isAssistantBranch]);
+  }, [branch, teammate, isTeammateBranch]);
 
   // Owner add/remove diffs vs. permission-field edits are tracked separately:
   // owner changes route to the nested owners service while field changes go
@@ -448,7 +448,7 @@ export function useBranchModalForm({
 
   const permissionsChanged = ownersChanged || permissionFieldsChanged || groupGrantsChanged;
 
-  const hasChanges = generalChanged || assistantChanged || permissionsChanged;
+  const hasChanges = generalChanged || teammateChanged || permissionsChanged;
 
   // Permission gating
   const currentUserId = currentUser?.user_id;
@@ -473,10 +473,10 @@ export function useBranchModalForm({
 
   const reset = useCallback(() => {
     setGeneralState(buildGeneralDefaults(branch));
-    setAssistantState(buildAssistantDefaults(branch));
+    setTeammateState(buildTeammateDefaults(branch));
     setPermissionsState(buildPermissionsDefaults(branch, owners));
     generalTouchedRef.current = false;
-    assistantTouchedRef.current = false;
+    teammateTouchedRef.current = false;
     permissionsTouchedRef.current = false;
   }, [branch, owners]);
 
@@ -531,7 +531,7 @@ export function useBranchModalForm({
         updates.board_id = general.boardId || undefined;
         updates.issue_url = general.issueUrl.trim() === '' ? null : general.issueUrl;
         updates.pull_request_url = general.prUrl.trim() === '' ? null : general.prUrl;
-        if (!isAssistantBranch) {
+        if (!isTeammateBranch) {
           updates.notes = general.notes.trim() === '' ? null : general.notes;
         }
         if (sortedJson(general.mcpServerIds) !== sortedJson(branch.mcp_server_ids || [])) {
@@ -539,17 +539,17 @@ export function useBranchModalForm({
         }
       }
 
-      if (assistantChanged && isAssistantBranch && canEditGeneral) {
-        const config = getAssistantConfig(branch);
+      if (teammateChanged && isTeammateBranch && canEditGeneral) {
+        const config = getTeammateConfig(branch);
         if (config) {
-          const updatedConfig: AssistantConfig = {
+          const updatedConfig: TeammateConfig = {
             ...config,
-            kind: 'assistant',
-            displayName: assistant.displayName.trim(),
-            emoji: assistant.emoji || undefined,
+            kind: 'teammate',
+            displayName: teammate.displayName.trim(),
+            emoji: teammate.emoji || undefined,
           };
-          updates.custom_context = { assistant: updatedConfig };
-          updates.notes = assistant.description.trim() || null;
+          updates.custom_context = { ...(branch.custom_context ?? {}), teammate: updatedConfig };
+          updates.notes = teammate.description.trim() || null;
         }
       }
 
@@ -610,15 +610,15 @@ export function useBranchModalForm({
         }
       }
 
-      // 5. Assistant emoji → board icon side effect. Cosmetic only — log on
+      // 5. Teammate emoji → board icon side effect. Cosmetic only — log on
       // failure, don't fail the save.
-      if (assistantChanged && isAssistantBranch && canEditGeneral && branch.board_id) {
-        const config = getAssistantConfig(branch);
-        const emojiChanged = config && assistant.emoji !== (config.emoji || '');
+      if (teammateChanged && isTeammateBranch && canEditGeneral && branch.board_id) {
+        const config = getTeammateConfig(branch);
+        const emojiChanged = config && teammate.emoji !== (config.emoji || '');
         if (emojiChanged) {
           try {
             await client.service('boards').patch(branch.board_id, {
-              icon: assistant.emoji || '🤖',
+              icon: teammate.emoji || '🤖',
             });
           } catch (err) {
             console.error('Failed to update board icon:', err);
@@ -647,7 +647,7 @@ export function useBranchModalForm({
       // Clear all touched flags — the form is once again clean against the
       // server state. WebSocket-driven prop updates may resync slices freely.
       generalTouchedRef.current = false;
-      assistantTouchedRef.current = false;
+      teammateTouchedRef.current = false;
       permissionsTouchedRef.current = false;
 
       return { ok: true };
@@ -671,18 +671,18 @@ export function useBranchModalForm({
     generalChanged,
     canEditGeneral,
     general,
-    isAssistantBranch,
-    assistantChanged,
-    assistant,
+    isTeammateBranch,
+    teammateChanged,
+    teammate,
   ]);
 
   return {
     general,
     setGeneral,
     generalChanged,
-    assistant,
-    setAssistant,
-    assistantChanged,
+    teammate,
+    setTeammate,
+    teammateChanged,
     permissions,
     setPermissions,
     permissionsChanged,

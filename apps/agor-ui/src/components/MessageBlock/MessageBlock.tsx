@@ -5,7 +5,7 @@
  * - Text content (string or TextBlock)
  * - Tool use blocks
  * - Tool result blocks
- * - User vs Assistant styling
+ * - User vs agent-message styling
  * - User emoji avatars
  */
 
@@ -90,7 +90,7 @@ interface MessageBlockProps {
   taskId?: string;
   isFirstPendingPermission?: boolean; // For sequencing permission requests
   isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
-  assistantEmoji?: string; // Emoji override for assistant avatar (replaces tool icon)
+  teammateEmoji?: string; // Emoji override for teammate avatar (replaces tool icon)
   /** Authenticated Feathers client, forwarded to WidgetBlock for inline-form submission. */
   client?: AgorClient | null;
   onPermissionDecision?: (
@@ -200,16 +200,16 @@ function isTaskToolResult(message: Message): boolean {
 }
 
 /**
- * Compute the avatar element for an agent/assistant message.
- * Centralizes the priority: callback logo > assistant emoji > agentic tool icon > robot fallback.
+ * Compute the avatar element for an agent message.
+ * Centralizes the priority: callback logo > teammate emoji > agentic tool icon > robot fallback.
  */
 function getAgentAvatar({
-  assistantEmoji,
+  teammateEmoji,
   agentic_tool,
   isCallback,
   token,
 }: {
-  assistantEmoji?: string;
+  teammateEmoji?: string;
   agentic_tool?: string;
   isCallback?: boolean;
   token: ReturnType<typeof theme.useToken>['token'];
@@ -223,8 +223,8 @@ function getAgentAvatar({
       />
     );
   }
-  if (assistantEmoji) {
-    return <AgorAvatar>{assistantEmoji}</AgorAvatar>;
+  if (teammateEmoji) {
+    return <AgorAvatar>{teammateEmoji}</AgorAvatar>;
   }
   if (agentic_tool) {
     return <ToolIcon tool={agentic_tool} size={32} />;
@@ -312,7 +312,7 @@ function DaemonRestartNotice({
 //   - `message`: stable per message_id (only the actively streaming message
 //     gets a new ref each chunk — correct: it should re-render)
 //   - `userById`: from AppUserDataContext (stable across session patches)
-//   - `currentUserId`, `agentic_tool`, `sessionId`, `taskId`, `assistantEmoji`,
+//   - `currentUserId`, `agentic_tool`, `sessionId`, `taskId`, `teammateEmoji`,
 //     `isTaskRunning`, `isLatestMessage`, `isFirstPending*`: primitives or
 //     stable derived values
 //   - `onPermissionDecision`, `onInputResponse`: useCallback-wrapped in App.tsx
@@ -328,7 +328,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   isFirstPendingPermission = false,
   isLatestMessage = false,
   onPermissionDecision,
-  assistantEmoji,
+  teammateEmoji,
   client = null,
 }) => {
   const { token } = theme.useToken();
@@ -653,7 +653,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           const avatar = isUser ? (
             <UserIdentityAvatar user={currentUser} />
           ) : (
-            getAgentAvatar({ assistantEmoji, agentic_tool, isCallback, token })
+            getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token })
           );
 
           return (
@@ -790,7 +790,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {/* Response text after tools */}
       {hasTextAfter &&
         (() => {
-          const avatar = getAgentAvatar({ assistantEmoji, agentic_tool, isCallback, token });
+          const avatar = getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token });
 
           return (
             <div style={{ margin: `${token.sizeUnit}px 0` }}>

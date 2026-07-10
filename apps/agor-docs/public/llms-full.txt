@@ -1,6 +1,6 @@
 # Agor
 
-> Agor is a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini). It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding assistants.
+> Agor is a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini). It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding agents.
 
 Agor is open-source software licensed under BSL 1.1, created by Preset Inc.
 
@@ -37,8 +37,8 @@ Zones are spatial regions on boards that trigger templated prompts (using Handle
 ### Environments
 Environments are runtime instances (dev servers, Docker containers, etc.) for branches. Each branch gets unique ports via templates, preventing conflicts when running multiple branches simultaneously.
 
-### Assistants
-Assistants are persistent AI companions with memory (MEMORY.md, SOUL.md), orchestration capabilities, and scheduled heartbeats. They coordinate work across your workspace.
+### Teammates
+Teammates are persistent AI companions with memory (MEMORY.md, SOUL.md), orchestration capabilities, and scheduled heartbeats. They coordinate work across your workspace.
 
 ## Key Features
 
@@ -89,12 +89,12 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 - [Sessions & Trees](https://agor.live/guide/sessions): Conversations that fork, spawn subsessions, ask side questions
 - [Boards & Zones](https://agor.live/guide/boards): 2D spatial canvases with templated zone triggers
 - [Features Overview](https://agor.live/guide/features-overview): Map of all features
-- [Assistants](https://agor.live/guide/assistants): Persistent AI companions with memory and orchestration
+- [Teammates](https://agor.live/guide/teammates): Persistent AI companions with memory and orchestration
 - [Agor MCP Server](https://agor.live/guide/internal-mcp): Anything a user can do, an agent can do too
 - [Rich Chat UX](https://agor.live/guide/rich-chat-ux): Token/$ accounting, context viz, tool blocks, queueing, Streamdown
 - [Multiplayer & Social](https://agor.live/guide/multiplayer-social): Cursors, facepile, comments, attention pulse, shared terminals
 - [Environments](https://agor.live/guide/environment-configuration): Per-branch dev environments with unique ports
-- [Scheduler](https://agor.live/guide/scheduler): Cron-driven agent automation, powers assistant heartbeats
+- [Scheduler](https://agor.live/guide/scheduler): Cron-driven agent automation, powers teammate heartbeats
 - [Cards](https://agor.live/guide/cards): Generic workflow entities on boards (beta)
 - [Artifacts](https://agor.live/guide/artifacts): Live, interactive Sandpack apps on the canvas
 - [Message Gateway](https://agor.live/guide/message-gateway): Slack/GitHub integration

@@ -275,7 +275,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
               onLoadTaskMessages={handleLoadTaskMessages}
               onUnloadTaskMessages={safeUnloadTaskMessages}
-              assistantEmoji={undefined}
+              teammateEmoji={undefined}
               isLatestTask={true}
               client={client}
             />

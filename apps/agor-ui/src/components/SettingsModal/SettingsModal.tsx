@@ -54,7 +54,6 @@ import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
 import { ArtifactsTable } from './ArtifactsTable';
-import { AssistantsTable } from './AssistantsTable';
 import { BoardsTable } from './BoardsTable';
 import { BranchesTable } from './BranchesTable';
 import { CardsTable } from './CardsTable';
@@ -62,6 +61,7 @@ import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
 import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
+import { TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
 
 const { Sider, Content } = Layout;
@@ -117,7 +117,7 @@ export interface SettingsModalProps {
   onDeleteGatewayChannel?: (channelId: string) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
-  onCreateAssistant?: () => void;
+  onCreateTeammate?: () => void;
   branchStorageConfig?: BranchStorageConfig;
 }
 
@@ -153,7 +153,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onDeleteGatewayChannel,
   onUpdateArtifact,
   onDeleteArtifact,
-  onCreateAssistant,
+  onCreateTeammate,
   branchStorageConfig,
 }) => {
   // Entity maps come straight from the store rather than through App props:
@@ -246,8 +246,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             icon: <BranchesOutlined />,
           },
           {
-            key: 'assistants',
-            label: 'Assistants',
+            key: 'teammates',
+            label: 'Teammates',
             icon: <RobotOutlined />,
           },
           ...(cardsEnabled
@@ -400,9 +400,9 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             branchStorageConfig={branchStorageConfig}
           />
         );
-      case 'assistants':
+      case 'teammates':
         return (
-          <AssistantsTable
+          <TeammatesTable
             branchById={branchById}
             repoById={repoById}
             boardById={boardById}
@@ -410,7 +410,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             userById={userById}
             onArchiveOrDelete={onArchiveOrDeleteBranch}
             onRowClick={handleBranchRowClick}
-            onCreateAssistant={onCreateAssistant}
+            onCreateTeammate={onCreateTeammate ?? onCreateTeammate}
             onClose={onClose}
           />
         );

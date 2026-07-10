@@ -1,10 +1,10 @@
 import type {
   AgorClient,
-  AssistantConfig,
   Branch,
   KnowledgeNamespace,
   Link,
   Repo,
+  TeammateConfig,
   User,
 } from '@agor-live/client';
 import { render } from '@testing-library/react';
@@ -182,19 +182,19 @@ export function makeBranch(overrides: Partial<Branch> = {}): Branch {
   } as unknown as Branch;
 }
 
-export function makeAssistantBranch(
+export function makeTeammateBranch(
   overrides: Partial<Branch> = {},
-  configOverrides: Partial<AssistantConfig> = {}
+  configOverrides: Partial<TeammateConfig> = {}
 ): Branch {
   return makeBranch({
     board_id: 'board-1' as Branch['board_id'],
     custom_context: {
-      assistant: {
-        kind: 'assistant',
-        displayName: 'My Assistant',
+      teammate: {
+        kind: 'teammate',
+        displayName: 'My Teammate',
         emoji: '🤖',
         ...configOverrides,
-      } as AssistantConfig,
+      } as TeammateConfig,
     },
     ...overrides,
   });

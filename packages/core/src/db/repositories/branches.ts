@@ -451,21 +451,23 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
-   * Find active assistant branches without paginating the whole branch list first.
+   * Find active teammate branches without paginating the whole branch list first.
    *
-   * A branch is discoverable as an assistant when it has the canonical assistant
+   * A branch is discoverable as a teammate when it has the canonical teammate
    * marker in custom_context (new or legacy key), or as a read-time backfill for
-   * older hand-bootstrapped assistants, when it has at least one enabled
+   * older hand-bootstrapped teammates, when it has at least one enabled
    * first-class schedule.
    */
-  async findAssistantBranches(filter?: {
+  async findTeammateBranches(filter?: {
     repo_id?: UUID;
     archived?: boolean;
     userId?: UUID;
     limit?: number;
   }): Promise<Branch[]> {
-    const assistantKindConditions = [
+    const teammateKindConditions = [
+      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.teammate.kind')}`, 'teammate'),
       eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`, 'assistant'),
+      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`, 'teammate'),
       eq(
         sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`,
         'persisted-agent'
@@ -485,7 +487,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         .where(and(eq(schedules.branch_id, branches.branch_id), eq(schedules.enabled, true)))
     );
 
-    const conditions = [or(...assistantKindConditions, hasEnabledSchedule) ?? sql`false`];
+    const conditions = [or(...teammateKindConditions, hasEnabledSchedule) ?? sql`false`];
     if (filter?.repo_id) conditions.push(eq(branches.repo_id, filter.repo_id));
     if (filter?.archived !== undefined) conditions.push(eq(branches.archived, filter.archived));
     if (filter?.userId) conditions.push(visibleBranchAccessCondition(this.db, filter.userId));
