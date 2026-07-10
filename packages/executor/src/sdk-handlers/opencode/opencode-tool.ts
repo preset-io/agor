@@ -627,7 +627,6 @@ export class OpenCodeTool implements ITool {
           if (eventType !== 'server.heartbeat') {
             console.log('[OpenCodeTool] Event:', eventType);
           }
-          pulseOpenCodeEvent(event, this.runtime);
 
           // Check if this event is for our session
           if ('properties' in event) {
@@ -640,6 +639,7 @@ export class OpenCodeTool implements ITool {
               'sessionID' in event.properties &&
               event.properties.sessionID === context.opencodeSessionId
             ) {
+              pulseOpenCodeEvent(event, this.runtime);
               const permId = event.properties.id as string;
               const permType = (
                 'type' in event.properties ? event.properties.type : 'unknown'
@@ -670,6 +670,7 @@ export class OpenCodeTool implements ITool {
               event.properties.info.sessionID === context.opencodeSessionId &&
               event.properties.info.role === 'assistant'
             ) {
+              pulseOpenCodeEvent(event, this.runtime);
               if (!assistantMessageId) {
                 assistantMessageId = event.properties.info.id;
                 console.log('[OpenCodeTool] Assistant message identified:', assistantMessageId);
@@ -695,6 +696,7 @@ export class OpenCodeTool implements ITool {
                 );
                 continue;
               }
+              pulseOpenCodeEvent(event, this.runtime);
 
               // Store this part for later processing (building final message)
               const existingPartIndex = allParts.findIndex((p) => p.id === part.id);
@@ -777,7 +779,12 @@ export class OpenCodeTool implements ITool {
             }
 
             // Check for session idle status - indicates response is complete
-            if (event.type === 'session.status' && event.properties.status.type === 'idle') {
+            if (
+              event.type === 'session.status' &&
+              event.properties.sessionID === context.opencodeSessionId &&
+              event.properties.status.type === 'idle'
+            ) {
+              pulseOpenCodeEvent(event, this.runtime);
               console.log('[OpenCodeTool] Session became idle, response complete');
               _responseCompleted = true;
               break; // Exit event loop

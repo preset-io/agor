@@ -564,10 +564,30 @@ describe('OpenCodeTool', () => {
             info: { id: 'assistant-1', sessionID: 'oc-session-tool', role: 'assistant' },
           },
         },
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'other-part',
+              messageID: 'other-assistant',
+              type: 'tool',
+              tool: 'OtherTool',
+              callID: 'other-call',
+              state: { status: 'running' },
+            },
+          },
+        },
         toolPart('pending'),
         toolPart('running'),
         toolPart('completed'),
-        { type: 'session.status', properties: { status: { type: 'idle' } } },
+        {
+          type: 'session.status',
+          properties: { sessionID: 'other-session', status: { type: 'idle' } },
+        },
+        {
+          type: 'session.status',
+          properties: { sessionID: 'oc-session-tool', status: { type: 'idle' } },
+        },
       ];
 
       const callbacks = {
@@ -590,6 +610,9 @@ describe('OpenCodeTool', () => {
         id: 'call-1',
         label: 'Bash',
       });
+      expect(runtime.pulse).not.toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'other-call', label: 'OtherTool' })
+      );
       expect(runtime.pulse).toHaveBeenCalledWith({
         kind: 'tool.progress',
         id: 'call-1',
@@ -600,6 +623,11 @@ describe('OpenCodeTool', () => {
         id: 'call-1',
         label: 'Bash',
       });
+      expect(
+        runtime.pulse.mock.calls.filter(
+          ([pulse]) => pulse.kind === 'sdk.opencode_event' && pulse.label === 'session.status'
+        )
+      ).toHaveLength(1);
     });
 
     it('should use directory-scoped client based on session branch path', async () => {
