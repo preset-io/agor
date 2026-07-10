@@ -704,6 +704,40 @@ export function isChannelAllowedByWhitelist(
   return !!channelId && allowedChannelIds.includes(channelId);
 }
 
+/**
+ * Whether a Slack conversation ID is a direct message (IM).
+ *
+ * DM conversation IDs reliably start with "D" — unlike the "C" prefix (which
+ * is ambiguous between public and private channels, see the prefix-inference
+ * notes in {@link SlackConnector.startListening}), "D" is never used for a
+ * channel-like surface, so this is safe to use without an API round trip.
+ */
+export function isSlackDirectMessageId(channelId: string): boolean {
+  return channelId.startsWith('D');
+}
+
+/**
+ * Whether an agent-callable Slack WRITE tool (reactions, file upload) may
+ * target `channelId` given this gateway channel's `allowed_channel_ids`
+ * config.
+ *
+ * Mirrors the inbound listening whitelist ({@link isChannelAllowedByWhitelist}):
+ * `allowed_channel_ids` is a channel-like-surface concept, so DMs are always
+ * allowed regardless of the configured whitelist. These write tools default
+ * to the calling session's own conversation (via `gateway_source`), which is
+ * frequently a DM — applying the whitelist there would silently block the
+ * agent from reacting to/uploading into the very conversation that summoned
+ * it, the primary use case.
+ */
+export function isSlackWriteTargetAllowed(
+  config: Record<string, unknown>,
+  channelId: string
+): boolean {
+  const allowedChannelIds = normalizeAllowedChannelIds(config.allowed_channel_ids);
+  const channelType = isSlackDirectMessageId(channelId) ? 'im' : 'channel';
+  return isChannelAllowedByWhitelist(channelType, channelId, allowedChannelIds);
+}
+
 export class SlackConnector implements GatewayConnector {
   readonly channelType: ChannelType = 'slack';
 

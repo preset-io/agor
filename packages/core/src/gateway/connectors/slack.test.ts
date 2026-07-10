@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   extractSlackInboundFiles,
   isChannelAllowedByWhitelist,
+  isSlackDirectMessageId,
+  isSlackWriteTargetAllowed,
   markdownToMrkdwn,
   markdownToSlackPayload,
   SlackConnector,
@@ -1129,6 +1131,36 @@ describe('isChannelAllowedByWhitelist', () => {
   it('accepts everything when no whitelist is configured', () => {
     expect(isChannelAllowedByWhitelist('channel', 'C999', undefined)).toBe(true);
     expect(isChannelAllowedByWhitelist('channel', 'C999', [])).toBe(true);
+  });
+});
+
+describe('isSlackDirectMessageId', () => {
+  it('treats D-prefixed ids as direct messages', () => {
+    expect(isSlackDirectMessageId('D123ABC')).toBe(true);
+  });
+
+  it('treats C/G-prefixed and other ids as not a direct message', () => {
+    expect(isSlackDirectMessageId('C123ABC')).toBe(false);
+    expect(isSlackDirectMessageId('G123ABC')).toBe(false);
+  });
+});
+
+describe('isSlackWriteTargetAllowed', () => {
+  it('always allows DMs even when a channel whitelist is configured', () => {
+    expect(isSlackWriteTargetAllowed({ allowed_channel_ids: ['C123'] }, 'D999')).toBe(true);
+  });
+
+  it('denies a channel-like target not in the whitelist', () => {
+    expect(isSlackWriteTargetAllowed({ allowed_channel_ids: ['C123'] }, 'C999')).toBe(false);
+  });
+
+  it('allows a channel-like target that is in the whitelist', () => {
+    expect(isSlackWriteTargetAllowed({ allowed_channel_ids: ['C123'] }, 'C123')).toBe(true);
+  });
+
+  it('allows everything when no whitelist is configured', () => {
+    expect(isSlackWriteTargetAllowed({}, 'C999')).toBe(true);
+    expect(isSlackWriteTargetAllowed({ allowed_channel_ids: [] }, 'C999')).toBe(true);
   });
 });
 

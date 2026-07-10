@@ -10,6 +10,7 @@ import {
 import {
   buildSlackManifest,
   getConnector,
+  isSlackWriteTargetAllowed,
   requiredBotEvents,
   requiredBotScopes,
   type SlackChannelHistoryRequest,
@@ -905,18 +906,40 @@ function assertSlackFileUploadConnector(
  * reaches a Slack API call. Not a security boundary (Slack itself validates
  * these), just low-cost hardening against typos and malformed input.
  */
-const slackReactionChannelIdSchema = z
-  .string()
-  .regex(/^[A-Z0-9]+$/, 'slackChannelId must look like a Slack conversation ID, e.g. C0123ABC456.')
-  .optional()
-  .describe(
-    'Slack conversation ID containing the message, e.g. C0123ABC456. Optional when called from a Slack gateway session, which defaults to its own Slack channel.'
-  );
+const SLACK_CHANNEL_ID_PATTERN = /^[A-Z0-9]+$/;
+const SLACK_TIMESTAMP_PATTERN = /^\d+\.\d+$/;
 
-const slackReactionTsSchema = z
-  .string()
-  .regex(/^\d+\.\d+$/, 'ts must be a Slack message timestamp, e.g. 171234.000100.')
-  .describe('Slack message timestamp to react to, e.g. 171234.000100.');
+function slackConversationIdSchema(fieldName: string, description: string) {
+  return z
+    .string()
+    .regex(
+      SLACK_CHANNEL_ID_PATTERN,
+      `${fieldName} must look like a Slack conversation ID, e.g. C0123ABC456.`
+    )
+    .optional()
+    .describe(description);
+}
+
+function slackTimestampSchema(fieldName: string, description: string) {
+  return z
+    .string()
+    .regex(
+      SLACK_TIMESTAMP_PATTERN,
+      `${fieldName} must be a Slack message timestamp, e.g. 171234.000100.`
+    )
+    .describe(description);
+}
+
+function slackOptionalTimestampSchema(fieldName: string, description: string) {
+  return z
+    .string()
+    .regex(
+      SLACK_TIMESTAMP_PATTERN,
+      `${fieldName} must be a Slack message timestamp, e.g. 171234.000100.`
+    )
+    .optional()
+    .describe(description);
+}
 
 const slackReactionEmojiSchema = z
   .string()
@@ -932,8 +955,11 @@ const slackReactionSchema = z.strictObject({
     'Gateway channel',
     'Slack gateway channel ID (UUIDv7 or short ID). Optional when called from a gateway-created session, which defaults to its own gateway channel.'
   ),
-  slackChannelId: slackReactionChannelIdSchema,
-  ts: slackReactionTsSchema,
+  slackChannelId: slackConversationIdSchema(
+    'slackChannelId',
+    'Slack conversation ID containing the message, e.g. C0123ABC456. Optional when called from a Slack gateway session, which defaults to its own Slack channel.'
+  ),
+  ts: slackTimestampSchema('ts', 'Slack message timestamp to react to, e.g. 171234.000100.'),
   emoji: slackReactionEmojiSchema,
 });
 
@@ -943,11 +969,11 @@ const slackFileUploadSchema = z.strictObject({
     'Gateway channel',
     'Slack gateway channel ID (UUIDv7 or short ID). Optional when called from a gateway-created session, which defaults to its own gateway channel.'
   ),
-  slackChannelId: mcpOptionalNonEmptyString(
+  slackChannelId: slackConversationIdSchema(
     'slackChannelId',
     'Slack conversation ID to upload into, e.g. C0123ABC456. Optional when called from a Slack gateway session, which defaults to its own Slack channel.'
   ),
-  threadTs: mcpOptionalNonEmptyString(
+  threadTs: slackOptionalTimestampSchema(
     'threadTs',
     'Optional Slack thread timestamp to upload the file as a reply into.'
   ),
@@ -1023,6 +1049,20 @@ async function resolveGatewaySlackToolTarget(
     );
   }
 
+  // WRITE tools (reactions, file upload) additionally honor the channel's
+  // allowed_channel_ids whitelist — an admin restricting inbound listening to
+  // specific channels also expects it to bind what an agent can write to.
+  // channel_history intentionally keeps its own existing (already-reviewed)
+  // enforcement at the connector level, unchanged by this check.
+  if (
+    (capability === 'reactions' || capability === 'file_upload') &&
+    !isSlackWriteTargetAllowed(channel.config, slackChannelId)
+  ) {
+    throw new Error(
+      `Slack channel ${slackChannelId} is not in this gateway channel's allowed_channel_ids whitelist.`
+    );
+  }
+
   return { channel, branch, slackChannelId };
 }
 
@@ -1048,7 +1088,7 @@ async function resolveGatewayUploadFilePath(
     const canonical = await canonicalizeExistingPrefix(trimmed);
     if (!isPathInsideRoot(uploadRoot, canonical)) {
       throw new Error(
-        `path escapes the daemon upload directory (${uploadRoot}); pass an absolute path inside it or a path relative to the branch workspace.`
+        'path escapes the daemon upload directory; pass an absolute path inside it or a path relative to the branch workspace.'
       );
     }
     if (!fs.existsSync(canonical)) {
@@ -1551,7 +1591,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         ),
         message: mcpRequiredString('message', 'Message to send to Slack.'),
         target: outboundTargetSchema.optional().describe('Omit to use default_outbound_target.'),
-        threadTs: mcpOptionalNonEmptyString(
+        threadTs: slackOptionalTimestampSchema(
           'threadTs',
           'Optional Slack thread timestamp to reply into, e.g. 171234.000100. Omit to start a new thread/DM message.'
         ),

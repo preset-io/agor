@@ -865,6 +865,28 @@ describe('agor_gateway_channels MCP tools', () => {
     );
   });
 
+  it('rejects a malformed threadTs before any gateway service call', async () => {
+    const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage: vi.fn() } }));
+    const schema = tools.agor_gateway_emit_message.cfg.inputSchema;
+
+    expect(
+      schema.safeParse({
+        gatewayChannelId: 'chan-1',
+        message: 'hi',
+        target: 'channel:C123',
+        threadTs: 'not-a-timestamp',
+      }).success
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        gatewayChannelId: 'chan-1',
+        message: 'hi',
+        target: 'channel:C123',
+        threadTs: '171234.000100',
+      }).success
+    ).toBe(true);
+  });
+
   it('validates outbound target grammar', async () => {
     const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage: vi.fn() } }));
 
@@ -1457,6 +1479,154 @@ describe('gateway agent-tool capability gating (MCP)', () => {
     expect(getConnector).not.toHaveBeenCalled();
   });
 
+  describe('allowed_channel_ids whitelist on reaction writes', () => {
+    const restrictedReactionsEnabled = {
+      ...slackChannel,
+      config: {
+        ...slackChannel.config,
+        agent_tools: { reactions: true },
+        allowed_channel_ids: ['C123'],
+      },
+    };
+
+    it('denies reacting to a channel-like slackChannelId outside the allowlist', async () => {
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        restrictedReactionsEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_reaction_add.handler({
+          slackChannelId: 'C999',
+          ts: '171234.000100',
+          emoji: 'thumbsup',
+        })
+      ).rejects.toThrow("not in this gateway channel's allowed_channel_ids whitelist");
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('allows reacting to a DM slackChannelId even with an allowlist configured', async () => {
+      const addReaction = vi.fn(async () => undefined);
+      const removeReaction = vi.fn(async () => undefined);
+      vi.mocked(getConnector).mockReturnValue({ addReaction, removeReaction } as any);
+      spyCallerGatewaySession('branch-1', {
+        ...gatewaySource,
+        slack_channel_id: 'D123',
+      });
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        restrictedReactionsEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      const result = await tools.agor_gateway_slack_reaction_add.handler({
+        ts: '171234.000100',
+        emoji: 'thumbsup',
+      });
+      const payload = JSON.parse(result.content[0].text);
+
+      expect(addReaction).toHaveBeenCalledWith({
+        channel: 'D123',
+        timestamp: '171234.000100',
+        name: 'thumbsup',
+      });
+      expect(payload).toMatchObject({ added: true, slack_channel_id: 'D123' });
+    });
+
+    it('allows any channel-like slackChannelId when no allowlist is configured', async () => {
+      const addReaction = vi.fn(async () => undefined);
+      const removeReaction = vi.fn(async () => undefined);
+      vi.mocked(getConnector).mockReturnValue({ addReaction, removeReaction } as any);
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        reactionsEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      const result = await tools.agor_gateway_slack_reaction_add.handler({
+        slackChannelId: 'C999',
+        ts: '171234.000100',
+        emoji: 'thumbsup',
+      });
+      const payload = JSON.parse(result.content[0].text);
+
+      expect(addReaction).toHaveBeenCalledWith({
+        channel: 'C999',
+        timestamp: '171234.000100',
+        name: 'thumbsup',
+      });
+      expect(payload).toMatchObject({ added: true, slack_channel_id: 'C999' });
+    });
+  });
+
+  describe('allowed_channel_ids whitelist on file_upload', () => {
+    const restrictedFileUploadEnabled = {
+      ...slackChannel,
+      config: {
+        ...slackChannel.config,
+        agent_tools: { file_upload: true },
+        allowed_channel_ids: ['C123'],
+      },
+    };
+
+    it('denies uploading to a channel-like slackChannelId outside the allowlist', async () => {
+      const uploadDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-upload-allowlist-'));
+      const filePath = path.join(uploadDir, 'screenshot.png');
+      fs.writeFileSync(filePath, Buffer.from('bytes'));
+      vi.mocked(getUploadDirectory).mockReturnValue(uploadDir);
+      try {
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          restrictedFileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+        const tools = await captureTools('member');
+        await expect(
+          tools.agor_gateway_slack_file_upload.handler({ slackChannelId: 'C999', path: filePath })
+        ).rejects.toThrow("not in this gateway channel's allowed_channel_ids whitelist");
+        expect(getConnector).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(uploadDir, { recursive: true, force: true });
+      }
+    });
+
+    it('allows uploading to a DM slackChannelId even with an allowlist configured', async () => {
+      const uploadDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-upload-allowlist-dm-'));
+      const filePath = path.join(uploadDir, 'screenshot.png');
+      fs.writeFileSync(filePath, Buffer.from('bytes'));
+      vi.mocked(getUploadDirectory).mockReturnValue(uploadDir);
+      try {
+        const uploadFile = vi.fn(async () => ({
+          id: 'F999',
+          permalink: null,
+          name: 'screenshot.png',
+        }));
+        vi.mocked(getConnector).mockReturnValue({ uploadFile } as any);
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          restrictedFileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+        const tools = await captureTools('member');
+        const result = await tools.agor_gateway_slack_file_upload.handler({
+          slackChannelId: 'D123',
+          path: filePath,
+        });
+        const payload = JSON.parse(result.content[0].text);
+
+        expect(uploadFile).toHaveBeenCalledWith(expect.objectContaining({ channel: 'D123' }));
+        expect(payload).toMatchObject({ uploaded: true, slack_channel_id: 'D123' });
+      } finally {
+        fs.rmSync(uploadDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('agor_gateway_slack_file_upload', () => {
     let uploadDir: string;
 
@@ -1695,6 +1865,30 @@ describe('gateway agent-tool capability gating (MCP)', () => {
           path: '/tmp/whatever.png',
         })
       ).rejects.toThrow('targets a different branch');
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed slackChannelId/threadTs before any Slack call', async () => {
+      const tools = await captureTools('member');
+      const schema = tools.agor_gateway_slack_file_upload.cfg.inputSchema;
+
+      expect(
+        schema.safeParse({ slackChannelId: 'not-a-channel', path: '/tmp/x.png' }).success
+      ).toBe(false);
+      expect(
+        schema.safeParse({
+          slackChannelId: 'C123',
+          threadTs: 'not-a-timestamp',
+          path: '/tmp/x.png',
+        }).success
+      ).toBe(false);
+      expect(
+        schema.safeParse({
+          slackChannelId: 'C123',
+          threadTs: '171234.000100',
+          path: '/tmp/x.png',
+        }).success
+      ).toBe(true);
       expect(getConnector).not.toHaveBeenCalled();
     });
   });
