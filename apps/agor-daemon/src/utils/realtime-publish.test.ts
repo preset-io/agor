@@ -1,4 +1,8 @@
-import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Branch, BranchPermissionLevel, Session, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -192,6 +196,47 @@ describe('configureRealtimePublish', () => {
     // No ambient tenant DB scope here — tenant resolves purely from the hook.
     const channel = await app.runPublish(
       { branch_id: 'b1' },
+      {
+        path: 'branches',
+        method: 'patch',
+        event: 'patched',
+        id: 'b1',
+        params: { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
+      }
+    );
+
+    expect(channel.connections).toEqual([{ user: tenantUser }]);
+  });
+
+  it('re-enters the event tenant scope before branch RBAC visibility lookups', async () => {
+    const tenantUser = user('tenant-user');
+    const app = makeApp(
+      [{ user: tenantUser }],
+      {},
+      {
+        authenticated: [{ user: tenantUser }],
+        'tenant:tenant-a': [{ user: tenantUser }],
+      }
+    );
+    const r = repos({ branch: branch('b1', 'view'), permissions: {} });
+    vi.mocked(r.branchRepository.findRealtimeVisibilityBranch).mockImplementation(async () => {
+      expect(getCurrentTenantId()).toBe('tenant-a');
+      return branch('b1', 'view');
+    });
+    configureRealtimePublish({
+      app,
+      db: scopeOnlyDb,
+      branchRbacEnabled: true,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    const channel = await app.runPublish(
+      { branch_id: 'b1', environment_instance: { status: 'running' } },
       {
         path: 'branches',
         method: 'patch',

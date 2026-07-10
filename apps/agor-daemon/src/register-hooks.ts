@@ -2298,6 +2298,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   configureRealtimePublish({
     app,
+    db,
     branchRbacEnabled,
     branchRepository,
     sessionsRepository,
