@@ -148,6 +148,22 @@ describe('OnboardingWizard', () => {
     );
   });
 
+  it('hydrates teammate identity from legacy assistant onboarding preferences', () => {
+    renderWizard({
+      user: makeUser({
+        preferences: {
+          onboarding: {
+            assistantDisplayName: 'Legacy Scout',
+            assistantEmoji: '🛰️',
+          },
+        },
+      } as Partial<User>),
+    });
+
+    expect(screen.getByDisplayValue('Legacy Scout')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /emoji picker/i })).toHaveTextContent('🛰️');
+  });
+
   it('can skip setup after confirmation', async () => {
     const onComplete = vi.fn();
     const onCreateRepo = vi.fn(async () => undefined);

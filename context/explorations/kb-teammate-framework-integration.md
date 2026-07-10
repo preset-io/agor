@@ -1,6 +1,6 @@
 # Knowledge Base Teammate Framework Integration
 
-**Date:** 2026-06-07  
+**Date:** 2026-06-07
 **Scope:** How Agor Knowledge Base should support the `preset-io/agor-teammate` file-based teammate framework. This is an options/design note, not an implementation PR.
 
 ## Current state inspected
@@ -173,7 +173,7 @@ The generic tools should remain available because teammates sometimes need share
 - Daily memories: **private by default**.
 - `IDENTITY`, `SOUL`, `USER`, long-term memory, and learned preferences: **private by default**.
 - Framework/template docs and generic skills: public or shared only when intentionally published outside the teammate namespace.
-- If an teammate branch is private or `others_can: "none"`, teammate memory writes should **force private**.
+- If a teammate branch is private or `others_can: "none"`, teammate memory writes should **force private**.
 - If an teammate is configured as team/shared, writes may default to private-to-team/branch once KB has richer ACLs; until then, use document `visibility: "private"` plus owner/admin access or `public` only by explicit config.
 
 ### Why private by default

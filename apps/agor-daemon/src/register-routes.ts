@@ -3650,7 +3650,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           description: config.daemon?.instanceDescription,
         },
         onboarding: {
-          teammatePending: config.onboarding?.teammatePending ?? false,
+          teammatePending:
+            config.onboarding?.teammatePending ??
+            config.onboarding?.assistantPending ??
+            config.onboarding?.persistedAgentPending ??
+            false,
           frameworkRepoUrl: config.onboarding?.frameworkRepoUrl,
           systemCredentials: {
             ANTHROPIC_API_KEY: !!(

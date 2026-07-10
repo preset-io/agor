@@ -353,8 +353,12 @@ export class ConfigService {
       if (!config.onboarding) {
         config.onboarding = {};
       }
-      if (data.onboarding.teammatePending !== undefined) {
-        config.onboarding.teammatePending = data.onboarding.teammatePending;
+      const teammatePending =
+        data.onboarding.teammatePending ??
+        data.onboarding.assistantPending ??
+        data.onboarding.persistedAgentPending;
+      if (teammatePending !== undefined) {
+        config.onboarding.teammatePending = teammatePending;
       }
       if (data.onboarding.frameworkRepoUrl !== undefined) {
         config.onboarding.frameworkRepoUrl = data.onboarding.frameworkRepoUrl;

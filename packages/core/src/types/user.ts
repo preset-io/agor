@@ -370,8 +370,12 @@ export interface OnboardingState {
   boardId?: string;
   /** Teammate display name captured during onboarding identity step */
   teammateDisplayName?: string;
+  /** @deprecated Use teammateDisplayName. Read for pre-rename preferences compatibility only. */
+  assistantDisplayName?: string;
   /** Teammate emoji captured during onboarding identity step */
   teammateEmoji?: string;
+  /** @deprecated Use teammateEmoji. Read for pre-rename preferences compatibility only. */
+  assistantEmoji?: string;
 }
 
 /**

@@ -142,7 +142,7 @@ Resolution:
 
 1. Require MCP session context; otherwise return the existing session-context help pattern.
 2. Load current session, then branch.
-3. Require `isTeammate(branch)`; otherwise say this tool only works from an teammate branch/session.
+3. Require `isTeammate(branch)`; otherwise say this tool only works from a teammate branch/session.
 4. Resolve the teammate primary namespace. Do not create or reconfigure it from this mutating memory tool. If missing, fail with `namespace for this agent is not set up`.
 5. Check branch policy grant for the namespace is `write` and user's KB permission is `write` or `own`.
 6. Append to `memory/YYYY-MM-DD.md` by default.
