@@ -143,6 +143,61 @@ describe('linkPromotion', () => {
     ).toMatchObject({ canPromote: false, reason: 'same-owner' });
   });
 
+  it('keeps unresolved file and internal promotion unavailable', () => {
+    expect(
+      getAssistantPromotionState({
+        item: item({
+          kind: 'document',
+          source: 'upload',
+          filePath: '/uploads/report.pdf',
+          url: undefined,
+          targetKey: 'file:/uploads/report.pdf',
+        }),
+        assistantBranchId: 'assistant-1',
+        sourceBranchId: 'branch-1',
+        assistantLinks: [],
+      })
+    ).toMatchObject({ canPromote: false, reason: 'file-lifetime' });
+
+    expect(
+      getAssistantPromotionState({
+        item: item({
+          kind: 'internal',
+          refUri: 'agor://branch/branch-2',
+          url: undefined,
+          targetKey: 'ref:agor://branch/branch-2',
+        }),
+        assistantBranchId: 'assistant-1',
+        sourceBranchId: 'branch-1',
+        assistantLinks: [],
+      })
+    ).toMatchObject({ canPromote: false, reason: 'internal-target-access' });
+  });
+
+  it('allows an existing legacy assistant copy to be removed', () => {
+    const assistantFile = link({
+      kind: 'document',
+      source: 'upload',
+      url: null,
+      file_path: '/uploads/report.pdf',
+      target_key: 'file:/uploads/report.pdf',
+    });
+    expect(
+      getAssistantPromotionState({
+        item: item({
+          kind: 'document',
+          source: 'upload',
+          filePath: '/uploads/report.pdf',
+          url: undefined,
+          targetKey: 'file:/uploads/report.pdf',
+        }),
+        assistantBranchId: 'assistant-1',
+        sourceBranchId: 'branch-1',
+        assistantLinks: [assistantFile],
+      })
+    ).toMatchObject({ canPromote: true, isPromoted: true, assistantLink: assistantFile });
+  });
+
   it('calls the promotion service path with only assistant target payload', async () => {
     const create = vi.fn(async () => link());
     const client = {

@@ -1,4 +1,4 @@
-import { BranchRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import { BranchRepository, LinksRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import type {
@@ -37,23 +37,22 @@ interface LinkPromotionServiceOptions {
 type LinksCrudService = {
   get(id: string, params?: Params): Promise<Link>;
   create(data: Partial<LinkCreate>, params?: Params): Promise<Link>;
+  patch(id: string, data: Partial<Link>, params?: Params): Promise<Link>;
 };
 
 function sourceLinkIdFromParams(params?: LinkPromotionRouteParams): string | null {
   return params?.route?.sourceLinkId ?? params?.route?.id ?? null;
 }
 
-function promotedFromOwner(source: Link): {
-  branch_id: BranchID | null;
-  session_id: string | null;
-} {
-  return {
-    branch_id: source.branch_id ?? null,
-    session_id: source.session_id ?? null,
-  };
-}
-
 function trustedTargetCreateFields(source: Link): Partial<LinkCreate> {
+  if (source.file_path || source.source === 'upload') {
+    throw new BadRequest('File-backed links cannot be promoted until upload retention is defined');
+  }
+  if (source.kind === 'internal' || source.target_object_type || source.target_object_id) {
+    throw new BadRequest(
+      'Internal links cannot be promoted until target access checks are enforced'
+    );
+  }
   if (source.url) {
     return {
       url: source.url,
@@ -63,20 +62,11 @@ function trustedTargetCreateFields(source: Link): Partial<LinkCreate> {
       target_object_id: null,
     };
   }
-  if (source.ref_uri) {
+  if (source.kind === 'kb_ref' && source.ref_uri) {
     return {
       url: null,
       ref_uri: source.ref_uri,
       file_path: null,
-      target_object_type: source.target_object_type ?? null,
-      target_object_id: source.target_object_id ?? null,
-    };
-  }
-  if (source.file_path) {
-    return {
-      url: null,
-      ref_uri: null,
-      file_path: source.file_path,
       target_object_type: null,
       target_object_id: null,
     };
@@ -86,9 +76,11 @@ function trustedTargetCreateFields(source: Link): Partial<LinkCreate> {
 
 export class LinkPromotionService {
   private branchRepository: BranchRepository;
+  private linksRepository: LinksRepository;
 
   constructor(private readonly options: LinkPromotionServiceOptions) {
     this.branchRepository = options.branchRepository ?? new BranchRepository(options.db);
+    this.linksRepository = new LinksRepository(options.db);
   }
 
   private linksService(): LinksCrudService {
@@ -144,31 +136,34 @@ export class LinkPromotionService {
 
     await this.ensureCanMutateAssistantBranch(assistantBranch, params);
 
-    const now = new Date().toISOString();
     const callerId = (params?.user?.user_id as UUID | undefined) ?? null;
-    const promotedMetadata = {
-      ...(source.metadata ?? {}),
-      promoted_from_link_id: source.link_id,
-      promoted_from_owner: promotedFromOwner(source),
-      promoted_at: now,
-      promoted_by: callerId,
-    };
+    const targetFields = trustedTargetCreateFields(source);
+    const existing = await this.linksRepository.findByOwnerAndTarget({
+      branch_id: assistantBranch.branch_id,
+      session_id: null,
+      ...targetFields,
+    });
+    if (existing) {
+      return this.linksService().patch(
+        existing.link_id,
+        { is_pinned: true },
+        { ...params, provider: undefined }
+      );
+    }
 
     const createData: Partial<LinkCreate> = {
       branch_id: assistantBranch.branch_id,
       session_id: null,
       kind: source.kind,
-      source: source.source,
-      ...trustedTargetCreateFields(source),
+      source: 'manual',
+      ...targetFields,
       is_pinned: true,
       title: source.title ?? null,
-      mime_type: source.mime_type ?? null,
-      metadata: promotedMetadata,
       created_by: callerId,
     };
 
-    // Use an internal create so trusted file-backed source links can be copied
-    // without exposing client-controlled file_path/source/kind fields.
+    // Promotion is an explicit user action, so the assistant-owned copy starts
+    // with manual provenance and no metadata from the source ownership boundary.
     return this.linksService().create(createData, { ...params, provider: undefined });
   }
 }

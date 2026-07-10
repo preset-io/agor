@@ -112,25 +112,19 @@ describe('LinkPromotionService', () => {
       url: 'https://example.com/promote-me',
       is_pinned: true,
       title: 'Promote me',
-    });
-    expect(promoted.metadata).toMatchObject({
-      source_note: 'trusted',
-      promoted_from_link_id: source.link_id,
-      promoted_from_owner: { branch_id: branch.branch_id, session_id: null },
+      metadata: null,
     });
   });
 
-  dbTest('promotes ref_uri links with internal object target fields', async ({ db }) => {
+  dbTest('promotes knowledge references without copying source metadata', async ({ db }) => {
     const branch = await seedBranch(db);
     const assistant = await seedBranch(db, { assistant: true });
-    const objectId = generateId() as UUID;
     const source = await new LinksRepository(db).create({
       branch_id: branch.branch_id,
-      kind: 'internal',
-      source: 'manual',
-      ref_uri: `agor://branch/${objectId}`,
-      target_object_type: 'branch',
-      target_object_id: objectId,
+      kind: 'kb_ref',
+      source: 'parsed',
+      ref_uri: 'agor://kb/team/runbook.md',
+      metadata: { private_source_context: true },
     });
 
     const { service } = promotionService(db);
@@ -141,16 +135,15 @@ describe('LinkPromotionService', () => {
 
     expect(promoted).toMatchObject({
       branch_id: assistant.branch_id,
-      kind: 'internal',
+      kind: 'kb_ref',
       source: 'manual',
-      ref_uri: `agor://branch/${objectId}`,
-      target_object_type: 'branch',
-      target_object_id: objectId,
+      ref_uri: 'agor://kb/team/runbook.md',
       is_pinned: true,
+      metadata: null,
     });
   });
 
-  dbTest('promotes file-backed uploaded links by copying trusted file fields', async ({ db }) => {
+  dbTest('rejects file-backed links until upload retention is defined', async ({ db }) => {
     const branch = await seedBranch(db);
     const session = await seedSession(db, branch.branch_id);
     const assistant = await seedBranch(db, { assistant: true });
@@ -165,29 +158,34 @@ describe('LinkPromotionService', () => {
     });
 
     const { service } = promotionService(db);
-    const promoted = await service.create(
-      {
-        target: 'assistant',
-        assistant_branch_id: assistant.branch_id,
-        file_path: '/tmp/client-spoof.png',
-      } as never,
-      { route: { sourceLinkId: source.link_id } }
-    );
+    await expect(
+      service.create(
+        { target: 'assistant', assistant_branch_id: assistant.branch_id },
+        { route: { sourceLinkId: source.link_id } }
+      )
+    ).rejects.toThrow('File-backed links cannot be promoted');
+  });
 
-    expect(promoted).toMatchObject({
-      branch_id: assistant.branch_id,
-      kind: 'image',
-      source: 'upload',
-      file_path: '/tmp/agor-upload/image.png',
-      title: 'image.png',
-      mime_type: 'image/png',
-      is_pinned: true,
+  dbTest('rejects internal links until target access checks are enforced', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const assistant = await seedBranch(db, { assistant: true });
+    const objectId = generateId() as UUID;
+    const source = await new LinksRepository(db).create({
+      branch_id: branch.branch_id,
+      kind: 'internal',
+      source: 'manual',
+      ref_uri: `agor://branch/${objectId}`,
+      target_object_type: 'branch',
+      target_object_id: objectId,
     });
-    expect(promoted.metadata).toMatchObject({
-      filename: 'stored.png',
-      size: 123,
-      promoted_from_owner: { branch_id: null, session_id: session.session_id },
-    });
+
+    const { service } = promotionService(db);
+    await expect(
+      service.create(
+        { target: 'assistant', assistant_branch_id: assistant.branch_id },
+        { route: { sourceLinkId: source.link_id } }
+      )
+    ).rejects.toThrow('Internal links cannot be promoted');
   });
 
   dbTest('rejects promotion to a non-assistant branch', async ({ db }) => {
@@ -256,6 +254,8 @@ describe('LinkPromotionService', () => {
       source: 'manual',
       url: 'https://example.com/dedupe#other',
       is_pinned: false,
+      title: 'Assistant title',
+      metadata: { assistant_owned: true },
     });
 
     const { service } = promotionService(db);
@@ -266,6 +266,8 @@ describe('LinkPromotionService', () => {
 
     expect(promoted.link_id).toBe(existing.link_id);
     expect(promoted.is_pinned).toBe(true);
+    expect(promoted.title).toBe('Assistant title');
+    expect(promoted.metadata).toEqual({ assistant_owned: true });
   });
 
   dbTest('removing assistant-owned copy leaves source link intact', async ({ db }) => {
@@ -298,10 +300,12 @@ describe('LinkPromotionService', () => {
         link_id: generateId(),
         branch_id: null,
         session_id: null,
-        kind: 'document',
-        source: 'upload',
-        file_path: '/trusted/source.pdf',
-        target_key: 'file:/trusted/source.pdf',
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/trusted-source',
+        ref_uri: null,
+        file_path: null,
+        target_key: 'url:https://example.com/trusted-source',
         is_pinned: false,
         title: 'source.pdf',
         mime_type: 'application/pdf',
@@ -315,10 +319,11 @@ describe('LinkPromotionService', () => {
         ...data,
         link_id: generateId(),
       }));
+      const patch = vi.fn();
       const app = {
         service(path: string) {
           if (path !== 'links') throw new Error(`Unexpected service: ${path}`);
-          return { get, create };
+          return { get, create, patch };
         },
       };
       const service = new LinkPromotionService({
@@ -334,17 +339,13 @@ describe('LinkPromotionService', () => {
       };
 
       await service.create(
-        {
-          target: 'assistant',
-          assistant_branch_id: assistant.branch_id,
-          file_path: '/client/spoof.pdf',
-        } as never,
+        { target: 'assistant', assistant_branch_id: assistant.branch_id },
         params
       );
 
       expect(get).toHaveBeenCalledWith(source.link_id, params);
       expect(create).toHaveBeenCalledWith(
-        expect.objectContaining({ file_path: '/trusted/source.pdf' }),
+        expect.objectContaining({ url: 'https://example.com/trusted-source', source: 'manual' }),
         expect.objectContaining({ provider: undefined })
       );
     }
