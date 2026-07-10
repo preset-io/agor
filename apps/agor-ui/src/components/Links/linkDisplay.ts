@@ -312,6 +312,7 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
   if (!targetKey) return null;
 
   const target = targetForLinkDisplay({ url: link.url, refUri: link.ref_uri });
+  const promotedFromSessionId = getPromotedFromSessionId(link.metadata);
   const base = {
     key: `link:${link.link_id}`,
     targetKey,
@@ -319,10 +320,10 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
     source: link.source,
     ownerScope: link.session_id ? 'session' : 'branch',
     isPinned: Boolean(link.is_pinned),
-    isPromoted: Boolean(getPromotedFromSessionId(link.metadata)),
+    isPromoted: Boolean(promotedFromSessionId),
     linkId: String(link.link_id),
     sessionId: link.session_id ?? undefined,
-    sourceSessionId: link.session_id ?? getPromotedFromSessionId(link.metadata),
+    sourceSessionId: link.session_id ?? promotedFromSessionId,
     mimeType: link.mime_type ?? undefined,
     href: target?.href,
     navigation: target?.navigation,

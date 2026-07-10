@@ -180,22 +180,12 @@ function isLatestFullLinkRequest(
   return fullLinkRequestGeneration.get(fullLinkOwnerKey(scope, ownerId)) === generation;
 }
 
-function linkOwnerSignature(links: readonly Link[] | undefined): string {
-  if (!links || links.length === 0) return '0:';
-  return `${links.length}:${links
-    .map((link) => `${link.link_id}:${JSON.stringify(link)}`)
-    .sort()
-    .join('|')}`;
-}
-
-function fullLinkOwnerSignature(
+function fullLinkOwnerBucket(
   state: AgorState,
   scope: FullLinkOwnerScope,
   ownerId: string
-): string {
-  return linkOwnerSignature(
-    scope === 'branch' ? state.linksByBranch.get(ownerId) : state.linksBySession.get(ownerId)
-  );
+): readonly Link[] | undefined {
+  return scope === 'branch' ? state.linksByBranch.get(ownerId) : state.linksBySession.get(ownerId);
 }
 
 async function fetchAndReplaceFullOwnerLinks(
@@ -205,7 +195,7 @@ async function fetchAndReplaceFullOwnerLinks(
   ownerId: string
 ): Promise<Link[]> {
   const requestGeneration = invalidateFullLinkRequest(scope, ownerId);
-  const beforeSignature = fullLinkOwnerSignature(get(), scope, ownerId);
+  const beforeBucket = fullLinkOwnerBucket(get(), scope, ownerId);
   const query =
     scope === 'branch'
       ? {
@@ -222,7 +212,7 @@ async function fetchAndReplaceFullOwnerLinks(
 
   if (
     !isLatestFullLinkRequest(scope, ownerId, requestGeneration) ||
-    fullLinkOwnerSignature(get(), scope, ownerId) !== beforeSignature
+    fullLinkOwnerBucket(get(), scope, ownerId) !== beforeBucket
   ) {
     return [];
   }

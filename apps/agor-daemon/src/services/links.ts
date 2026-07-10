@@ -189,7 +189,13 @@ export function ingestParsedLinksAfterMessageCreate(app: Application) {
       };
       const task = await taskService
         .get(message.task_id, { ...context.params, provider: undefined } as Params)
-        .catch(() => null);
+        .catch((error) => {
+          console.warn(
+            `[Links] Failed to resolve task ${message.task_id} for message ${message.message_id}:`,
+            error
+          );
+          return null;
+        });
       const uploadLinkIds = task?.metadata?.upload_link_ids;
       const taskCreatedBy = task?.created_by ?? null;
       if (!Array.isArray(uploadLinkIds) || uploadLinkIds.length === 0) continue;
