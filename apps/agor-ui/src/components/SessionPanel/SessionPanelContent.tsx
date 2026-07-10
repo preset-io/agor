@@ -138,16 +138,18 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             <Space size={8} wrap style={{ flex: 1 }}>
               {/* Unified Branch Pill */}
               {branch && repo && (
-                <BranchHeaderPill
-                  repo={repo}
-                  branch={branch}
-                  onOpenBranch={onOpenBranch}
-                  onStartEnvironment={onStartEnvironment}
-                  onStopEnvironment={onStopEnvironment}
-                  onNukeEnvironment={onNukeEnvironment}
-                  onViewLogs={onViewLogs}
-                  identityLink={sessionPath(session.session_id)}
-                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <BranchHeaderPill
+                    repo={repo}
+                    branch={branch}
+                    onOpenBranch={onOpenBranch}
+                    onStartEnvironment={onStartEnvironment}
+                    onStopEnvironment={onStopEnvironment}
+                    onNukeEnvironment={onNukeEnvironment}
+                    onViewLogs={onViewLogs}
+                    identityLink={sessionPath(session.session_id)}
+                  />
+                </div>
               )}
               {/* Issue and PR Pills */}
               {branch?.issue_url && (

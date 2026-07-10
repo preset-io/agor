@@ -131,10 +131,12 @@ export function BranchHeaderPill({
         </>
       )}
       <span
+        title={branch.name}
         style={{
           fontFamily: token.fontFamilyCode,
           fontSize: token.fontSizeSM,
-          maxWidth: compact ? 220 : 180,
+          flex: 1,
+          minWidth: 0,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -200,7 +202,7 @@ export function BranchHeaderPill({
       ? `${repo.slug} / ${branch.name} · Open branch settings`
       : 'Open branch settings';
   const identityLinkStyle: React.CSSProperties = {
-    display: 'inline-flex',
+    display: 'flex',
     alignItems: 'center',
     gap: 4,
     padding: compact ? '0 6px' : '0 8px',
@@ -208,6 +210,8 @@ export function BranchHeaderPill({
     height: PILL_HEIGHT,
     color: 'inherit',
     textDecoration: 'none',
+    flex: 1,
+    minWidth: 0,
   };
   const isInternalIdentityLink = identityLink?.startsWith('/');
 
@@ -221,9 +225,11 @@ export function BranchHeaderPill({
         padding: 0,
         overflow: 'hidden',
         lineHeight: `${PILL_HEIGHT}px`,
-        display: 'inline-flex',
+        display: 'flex',
         alignItems: 'stretch',
         cursor: 'default',
+        width: '100%',
+        minWidth: 0,
       }}
     >
       {/* Section 1: Repo + Branch — click opens either the supplied identity URL or the branch modal. */}
@@ -251,6 +257,8 @@ export function BranchHeaderPill({
               border: 'none',
               color: 'inherit',
               font: 'inherit',
+              flex: 1,
+              minWidth: 0,
             }}
           >
             {identityContent}
@@ -268,6 +276,7 @@ export function BranchHeaderPill({
             padding: '0 4px',
             height: PILL_HEIGHT,
             borderLeft: `1px solid ${token.colorBorderSecondary}`,
+            flexShrink: 0,
           }}
         >
           {hasConfig ? (
@@ -443,6 +452,7 @@ export function BranchHeaderPill({
           padding: '0 3px',
           height: PILL_HEIGHT,
           borderLeft: `1px solid ${token.colorBorderSecondary}`,
+          flexShrink: 0,
         }}
       >
         <Tooltip title={`Sessions${sessionCount != null ? ` (${sessionCount})` : ''}`}>
