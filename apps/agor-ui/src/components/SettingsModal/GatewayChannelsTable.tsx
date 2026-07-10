@@ -401,6 +401,8 @@ const SLACK_PROBE_FIELDS = new Set<string>([
   'ingest_files',
   'agent_thread_history',
   'agent_channel_history',
+  'agent_reactions',
+  'agent_file_upload',
   'slack_public_scope',
   'allowed_channel_ids',
 ]);
@@ -716,6 +718,10 @@ const SlackSetupWizard: React.FC<{
     Form.useWatch('agent_thread_history', form) ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history;
   const agentChannelHistory =
     Form.useWatch('agent_channel_history', form) ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history;
+  const agentReactions =
+    Form.useWatch('agent_reactions', form) ?? SLACK_AGENT_TOOL_DEFAULTS.reactions;
+  const agentFileUpload =
+    Form.useWatch('agent_file_upload', form) ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload;
   const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
 
   const wizardOptions: SlackWizardOptions = useMemo(
@@ -730,6 +736,8 @@ const SlackSetupWizard: React.FC<{
       agentTools: {
         thread_history: agentThreadHistory,
         channel_history: agentChannelHistory,
+        reactions: agentReactions,
+        file_upload: agentFileUpload,
       },
     }),
     [
@@ -742,6 +750,8 @@ const SlackSetupWizard: React.FC<{
       ingestFiles,
       agentThreadHistory,
       agentChannelHistory,
+      agentReactions,
+      agentFileUpload,
     ]
   );
 
@@ -959,6 +969,26 @@ const SlackSetupWizard: React.FC<{
           valuePropName="checked"
           initialValue={SLACK_AGENT_TOOL_DEFAULTS.channel_history}
           tooltip="Let session agents fetch recent whole-channel history through the gateway MCP tool. Adds the channels:history, groups:history, and mpim:history scopes."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          label="Agents can add/remove reactions"
+          name="agent_reactions"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Let session agents add/remove emoji reactions on Slack messages through the gateway MCP tools. Adds the reactions:write scope."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          label="Agents can upload files"
+          name="agent_file_upload"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Let session agents upload files/images to a channel or thread through the gateway MCP tool. Adds the files:write scope."
         >
           <Switch />
         </Form.Item>
@@ -1221,6 +1251,12 @@ const ChannelFormFields: React.FC<{
   const agentChannelHistory = Boolean(
     Form.useWatch('agent_channel_history', form) ?? storedAgentTools.channel_history
   );
+  const agentReactions = Boolean(
+    Form.useWatch('agent_reactions', form) ?? storedAgentTools.reactions
+  );
+  const agentFileUpload = Boolean(
+    Form.useWatch('agent_file_upload', form) ?? storedAgentTools.file_upload
+  );
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
   // Track the live Name field so the manifest preview reflects in-progress edits,
   // falling back to the stored channel name.
@@ -1243,6 +1279,8 @@ const ChannelFormFields: React.FC<{
       agentTools: {
         thread_history: agentThreadHistory,
         channel_history: agentChannelHistory,
+        reactions: agentReactions,
+        file_upload: agentFileUpload,
       },
     }),
     [
@@ -1255,6 +1293,8 @@ const ChannelFormFields: React.FC<{
       ingestFiles,
       agentThreadHistory,
       agentChannelHistory,
+      agentReactions,
+      agentFileUpload,
     ]
   );
   const slackScopes = useMemo(() => requiredBotScopes(slackOptions), [slackOptions]);
@@ -2184,6 +2224,26 @@ const ChannelFormFields: React.FC<{
                       <Switch />
                     </Form.Item>
 
+                    <Form.Item
+                      label="Agents can add/remove reactions"
+                      name="agent_reactions"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Let session agents add/remove emoji reactions on Slack messages through the gateway MCP tools. Requires the reactions:write scope."
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Agents can upload files"
+                      name="agent_file_upload"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Let session agents upload files/images to a channel or thread through the gateway MCP tool. Requires the files:write scope."
+                    >
+                      <Switch />
+                    </Form.Item>
+
                     {sourcesEnabled && (
                       <CompactAlert
                         type="info"
@@ -2578,6 +2638,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       agent_tools: {
         thread_history: values.agent_thread_history ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history,
         channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
+        reactions: values.agent_reactions ?? SLACK_AGENT_TOOL_DEFAULTS.reactions,
+        file_upload: values.agent_file_upload ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload,
       },
     };
     setSlackTestLoading(true);
@@ -2737,6 +2799,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.agent_tools = {
         thread_history: values.agent_thread_history ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history,
         channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
+        reactions: values.agent_reactions ?? SLACK_AGENT_TOOL_DEFAULTS.reactions,
+        file_upload: values.agent_file_upload ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload,
       };
     }
 
@@ -2900,6 +2964,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       const agentTools = resolveSlackAgentTools(config?.agent_tools);
       formValues.agent_thread_history = agentTools.thread_history;
       formValues.agent_channel_history = agentTools.channel_history;
+      formValues.agent_reactions = agentTools.reactions;
+      formValues.agent_file_upload = agentTools.file_upload;
     } else if (channel.channel_type === 'github') {
       formValues.github_app_id = config?.app_id;
       formValues.github_installation_id = config?.installation_id;
