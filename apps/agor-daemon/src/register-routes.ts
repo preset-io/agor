@@ -127,6 +127,7 @@ import {
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
+import { emitServiceEvent } from './utils/emit-service-event.js';
 import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
@@ -1545,7 +1546,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             });
             // Bypassing the service means no native 'created' emit; do it here
             // so reactive clients see the new task before the executor spawns.
-            app.service('tasks').emit('created', task);
+            emitServiceEvent(app, {
+              path: 'tasks',
+              event: 'created',
+              data: task,
+              params,
+              id: task.task_id,
+            });
 
             return await spawnTaskExecutor(
               task,
@@ -2817,7 +2824,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (!data.user_id) throw new Error('user_id required');
           if (!data.emoji) throw new Error('emoji required');
           const updated = await boardCommentsService.toggleReaction(id, data, params);
-          app.service('board-comments').emit('patched', updated);
+          emitServiceEvent(app, {
+            path: 'board-comments',
+            event: 'patched',
+            data: updated,
+            params,
+            id: updated.comment_id,
+          });
           return updated;
         },
       },
@@ -2843,7 +2856,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (!callerId) throw new Error('Authentication required');
           data.created_by = callerId as import('@agor/core/types').UserID;
           const reply = await boardCommentsService.createReply(id, data, params);
-          app.service('board-comments').emit('created', reply);
+          emitServiceEvent(app, {
+            path: 'board-comments',
+            event: 'created',
+            data: reply,
+            params,
+            id: reply.comment_id,
+          });
           return reply;
         },
       },
@@ -3454,7 +3473,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             enabled: true,
             added_at: new Date(),
           };
-          app.service('session-mcp-servers').emit('created', relationship);
+          emitServiceEvent(app, {
+            path: 'session-mcp-servers',
+            event: 'created',
+            data: relationship,
+            params,
+          });
 
           return relationship;
         },
@@ -3474,7 +3498,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             session_id: id,
             mcp_server_id: mcpId,
           };
-          app.service('session-mcp-servers').emit('removed', relationship);
+          emitServiceEvent(app, {
+            path: 'session-mcp-servers',
+            event: 'removed',
+            data: relationship,
+            params,
+          });
 
           return relationship;
         },
@@ -3570,7 +3599,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           env_var_name: name,
         };
         try {
-          app.service('session-env-selections').emit('created', relationship);
+          emitServiceEvent(app, {
+            path: 'session-env-selections',
+            event: 'created',
+            data: relationship,
+            params,
+          });
         } catch {
           // Event emission is non-fatal
         }
@@ -3587,7 +3621,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           env_var_name: name,
         };
         try {
-          app.service('session-env-selections').emit('removed', relationship);
+          emitServiceEvent(app, {
+            path: 'session-env-selections',
+            event: 'removed',
+            data: relationship,
+            params,
+          });
         } catch {
           // Event emission is non-fatal
         }
@@ -3600,9 +3639,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         await requireSessionScopedConfigOwnerOrAdmin(id, params);
         await sessionEnvSelectionsService.setAll(id as SessionID, envVarNames, params);
         try {
-          app
-            .service('session-env-selections')
-            .emit('patched', { session_id: id, env_var_names: envVarNames });
+          emitServiceEvent(app, {
+            path: 'session-env-selections',
+            event: 'patched',
+            data: { session_id: id, env_var_names: envVarNames },
+            params,
+          });
         } catch {
           // Event emission is non-fatal
         }

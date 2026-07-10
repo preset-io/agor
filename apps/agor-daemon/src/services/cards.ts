@@ -182,14 +182,14 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   /**
    * Archive a card
    */
-  async archive(id: string): Promise<Card> {
+  async archive(id: string, _params?: CardParams): Promise<Card> {
     return this.cardRepo.archive(id);
   }
 
   /**
    * Unarchive a card
    */
-  async unarchive(id: string): Promise<Card> {
+  async unarchive(id: string, _params?: CardParams): Promise<Card> {
     return this.cardRepo.unarchive(id);
   }
 
@@ -199,7 +199,8 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   async moveToZone(
     cardId: CardID,
     zoneId: string | null,
-    zoneData?: ZoneBoardObject
+    zoneData?: ZoneBoardObject,
+    _params?: CardParams
   ): Promise<BoardEntityObject> {
     const boardObj = await this.boardObjectRepo.findByCardId(cardId);
     if (!boardObj) {

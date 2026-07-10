@@ -711,7 +711,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const readyBranches = await Promise.all(
         created.map((branch) => this.maybeEnsureTeammateKnowledgeNamespace(branch, params))
       );
-      await Promise.all(readyBranches.map((branch) => this.maybeSetBoardPrimaryTeammate(branch)));
+      await Promise.all(
+        readyBranches.map((branch) => this.maybeSetBoardPrimaryTeammate(branch, params))
+      );
       for (const branch of readyBranches) {
         this.trackBranchCreated(branch);
       }
@@ -721,7 +723,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const withDefaults = await this.applyBranchCreateDefaults(data);
     const created = (await super.create(withDefaults, params)) as Branch;
     const readyBranch = await this.maybeEnsureTeammateKnowledgeNamespace(created, params);
-    await this.maybeSetBoardPrimaryTeammate(readyBranch);
+    await this.maybeSetBoardPrimaryTeammate(readyBranch, params);
     this.trackBranchCreated(readyBranch);
     return readyBranch;
   }
@@ -732,7 +734,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     });
   }
 
-  private async maybeSetBoardPrimaryTeammate(branch: Branch): Promise<void> {
+  private async maybeSetBoardPrimaryTeammate(branch: Branch, params?: BranchParams): Promise<void> {
     if (!branch.board_id || !isTeammate(branch)) return;
 
     try {
@@ -741,7 +743,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         branch.branch_id
       );
       if (updatedBoard) {
-        this.app.service('boards').emit('patched', updatedBoard);
+        emitServiceEvent(this.app, {
+          path: 'boards',
+          event: 'patched',
+          data: updatedBoard,
+          params,
+          id: updatedBoard.board_id,
+        });
       }
     } catch (error) {
       console.warn(
@@ -932,7 +940,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   private async maintainPrimaryTeammateAfterPatch(
     previousBranch: Branch,
-    updatedBranch: Branch
+    updatedBranch: Branch,
+    params?: BranchParams
   ): Promise<void> {
     const oldBoardId = previousBranch.board_id;
     const newBoardId = updatedBranch.board_id;
@@ -961,7 +970,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           previousBranch.branch_id
         );
         if (updatedOldBoard) {
-          this.app.service('boards').emit('patched', updatedOldBoard);
+          emitServiceEvent(this.app, {
+            path: 'boards',
+            event: 'patched',
+            data: updatedOldBoard,
+            params,
+            id: updatedOldBoard.board_id,
+          });
         }
       }
 
@@ -971,7 +986,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           updatedBranch.branch_id
         );
         if (updatedNewBoard) {
-          this.app.service('boards').emit('patched', updatedNewBoard);
+          emitServiceEvent(this.app, {
+            path: 'boards',
+            event: 'patched',
+            data: updatedNewBoard,
+            params,
+            id: updatedNewBoard.board_id,
+          });
         }
       }
     } catch (error) {
@@ -1016,7 +1037,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Call parent patch
     const updatedBranch = (await super.patch(id, data, params)) as Branch;
-    await this.maintainPrimaryTeammateAfterPatch(currentBranch, updatedBranch);
+    await this.maintainPrimaryTeammateAfterPatch(currentBranch, updatedBranch, params);
 
     // Handle board_objects changes if board_id changed
     if (!boardIdProvided) {

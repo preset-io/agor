@@ -797,11 +797,13 @@ describe('BranchesService.patch primary teammate invariants', () => {
     expect(boardRepo.setPrimaryTeammateIfUnset).toHaveBeenCalledWith(boardB, branchId);
     expect(boardsService.emit).toHaveBeenCalledWith(
       'patched',
-      expect.objectContaining({ board_id: boardA })
+      expect.objectContaining({ board_id: boardA }),
+      expect.objectContaining({ path: 'boards', method: 'patch', id: boardA })
     );
     expect(boardsService.emit).toHaveBeenCalledWith(
       'patched',
-      expect.objectContaining({ board_id: boardB })
+      expect.objectContaining({ board_id: boardB }),
+      expect.objectContaining({ path: 'boards', method: 'patch', id: boardB })
     );
     expect(boardObjectsService.create).toHaveBeenCalledWith({
       board_id: boardB,
@@ -949,7 +951,8 @@ describe('BranchesService one-shot teammate creation wiring', () => {
     expect(boardRepo.setPrimaryTeammateIfUnset).toHaveBeenCalledWith('board-a', 'teammate-new');
     expect(boardsEmit).toHaveBeenCalledWith(
       'patched',
-      expect.objectContaining({ board_id: 'board-a' })
+      expect.objectContaining({ board_id: 'board-a' }),
+      expect.objectContaining({ path: 'boards', method: 'patch', id: 'board-a' })
     );
   });
 

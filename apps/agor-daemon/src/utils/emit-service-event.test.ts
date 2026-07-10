@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { Application } from '@agor/core/feathers';
 import { describe, expect, it, vi } from 'vitest';
 import { emitServiceEvent } from './emit-service-event';
@@ -61,5 +62,18 @@ describe('emitServiceEvent', () => {
     emitServiceEvent(app, { path: 'branches', event: 'custom', data: {}, method: 'get' });
 
     expect(emit.mock.calls[0][2]).toMatchObject({ method: 'get' });
+  });
+});
+
+describe('board patch custom actions', () => {
+  it('preserves the original hook params for every manually emitted patched event', () => {
+    const source = readFileSync(new URL('../register-hooks.ts', import.meta.url), 'utf8');
+    const patchHook = source.slice(
+      source.indexOf("if (_action === 'upsertObject')"),
+      source.indexOf('return context;', source.indexOf("if (_action === 'deleteZone'"))
+    );
+
+    expect(patchHook.match(/params: context\.params/g)).toHaveLength(5);
+    expect(patchHook.match(/emitServiceEvent\(app/g)).toHaveLength(5);
   });
 });

@@ -124,6 +124,7 @@ import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
+import { emitServiceEvent } from './utils/emit-service-event.js';
 import { escapeHtml } from './utils/html.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -309,8 +310,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   if (svcEnabled('boards')) {
     app.use(
       '/boards',
-      createBoardsService(db, (boardObject) => {
-        app.service('board-objects').emit('patched', boardObject);
+      createBoardsService(db, (boardObject, params) => {
+        emitServiceEvent(app, {
+          path: 'board-objects',
+          event: 'patched',
+          data: boardObject,
+          params,
+          id: boardObject.object_id,
+        });
       }),
       {
         methods: [

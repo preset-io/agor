@@ -119,6 +119,7 @@ import {
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
 import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
+import { emitServiceEvent } from './utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
@@ -2963,8 +2964,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const ensureCanViewBoard = (action: string) => ensureBoardAccess('view', action);
   const ensureCanMutateBoard = (action: string) => ensureBoardAccess('mutate', action);
 
-  const emitBoardPatched = (board?: Board) => {
-    if (board) app.service('boards').emit('patched', board);
+  const emitBoardPatched = (board: Board | undefined, context: HookContext<Board>) => {
+    if (board) {
+      emitServiceEvent(app, {
+        path: 'boards',
+        event: 'patched',
+        data: board,
+        params: context.params,
+        id: context.id,
+      });
+    }
   };
 
   safeService('boards')?.hooks({
@@ -3012,7 +3021,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               objects: result.objects,
             });
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
-            app.service('boards').emit('patched', result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result,
+              params: context.params,
+              id: context.id,
+            });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
             return context;
@@ -3026,7 +3041,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
-            app.service('boards').emit('patched', result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result,
+              params: context.params,
+              id: context.id,
+            });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
             return context;
@@ -3040,7 +3061,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
-            app.service('boards').emit('patched', result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result,
+              params: context.params,
+              id: context.id,
+            });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
             return context;
@@ -3054,7 +3081,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
-            app.service('boards').emit('patched', result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result,
+              params: context.params,
+              id: context.id,
+            });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
             return context;
@@ -3069,7 +3102,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result.board;
             // Manually emit 'patched' event for WebSocket broadcasting
-            app.service('boards').emit('patched', result.board);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result.board,
+              params: context.params,
+              id: context.id,
+            });
             return context;
           }
 
@@ -3181,7 +3220,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
-            app.service('boards').emit('created', context.result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'created',
+              data: context.result,
+              params: context.params,
+            });
           }
           return context;
         },
@@ -3190,7 +3234,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
-            app.service('boards').emit('created', context.result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'created',
+              data: context.result,
+              params: context.params,
+            });
           }
           return context;
         },
@@ -3199,7 +3248,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
-            app.service('boards').emit('created', context.result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'created',
+              data: context.result,
+              params: context.params,
+            });
           }
           return context;
         },
@@ -3207,14 +3261,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       setPrimaryTeammate: [
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
-          emitBoardPatched(context.result);
+          emitBoardPatched(context.result, context);
           return context;
         },
       ],
       clearPrimaryTeammate: [
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
-          emitBoardPatched(context.result);
+          emitBoardPatched(context.result, context);
           return context;
         },
       ],
@@ -3225,7 +3279,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             teammateWelcomeNoteMutated?: boolean;
           };
           if (context.result && teammateWelcomeNoteMutated.teammateWelcomeNoteMutated) {
-            emitBoardPatched(context.result);
+            emitBoardPatched(context.result, context);
           }
           return context;
         },

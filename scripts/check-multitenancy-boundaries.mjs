@@ -37,20 +37,15 @@ const checks = [
     // Baseline of existing call sites. New occurrences should go through the
     // tenant-aware realtime facade instead of adding more raw emits/rooms.
     baseline: {
-      // Lowered after consolidating teammate board custom-method emits behind a single local helper.
-      'apps/agor-daemon/src/register-hooks.ts': 10,
-      'apps/agor-daemon/src/register-services.ts': 12,
-      'apps/agor-daemon/src/register-routes.ts': 19,
+      'apps/agor-daemon/src/register-hooks.ts': 1,
+      'apps/agor-daemon/src/register-services.ts': 11,
+      'apps/agor-daemon/src/register-routes.ts': 12,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
-      'apps/agor-daemon/src/services/artifacts.ts': 9,
-      'apps/agor-daemon/src/services/branches.ts': 3,
+      'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,
       'apps/agor-daemon/src/services/repos.ts': 1,
-      'apps/agor-daemon/src/services/claude-cli-integration.ts': 3,
-      'apps/agor-daemon/src/mcp/tools/artifacts.ts': 1,
-      'apps/agor-daemon/src/mcp/tools/boards.ts': 2,
-      'apps/agor-daemon/src/mcp/tools/cards.ts': 8,
+      'apps/agor-daemon/src/services/claude-cli-integration.ts': 2,
       // The tenant-aware realtime facade: tenant/session channel join, the
       // publish handler, session-stream join, the existence-gated room lookup
       // (existingChannel — used by publish + leave paths so they never
@@ -61,8 +56,19 @@ const checks = [
   },
 
   {
+    name: 'raw CRUD service emits',
+    roots: ['apps/agor-daemon/src'],
+    excludeTests: true,
+    patterns: [/\.service\([^\n]+\)\.emit\s*\(\s*['"](?:created|patched|updated|removed)['"]/g],
+    // Manual CRUD events must use emitServiceEvent() so realtime publishing
+    // receives the service path, original params, and tenant-aware context.
+    baseline: {},
+  },
+
+  {
     name: 'raw tenant database scope imports',
     roots: ['apps/agor-daemon/src'],
+    excludeTests: true,
     patterns: [/import\s*{[^}]*\btenantDatabaseScope\b[^}]*}\s*from\s*['"]@agor\/core\/db['"]/gs],
     baseline: {},
   },

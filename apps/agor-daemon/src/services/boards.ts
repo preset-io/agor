@@ -53,11 +53,17 @@ export interface BoardParams
 export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardParams> {
   private boardRepo: BoardRepository;
   private boardObjectRepo: BoardObjectRepository;
-  private emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void;
+  private emitBoardObjectPatched?: (
+    boardObject: BoardObjectPatchedEventPayload,
+    params?: BoardParams
+  ) => void;
 
   constructor(
     db: TenantScopeAwareDatabase,
-    emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void
+    emitBoardObjectPatched?: (
+      boardObject: BoardObjectPatchedEventPayload,
+      params?: BoardParams
+    ) => void
   ) {
     const boardRepo = new BoardRepository(db);
     super(boardRepo, {
@@ -208,7 +214,9 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       });
 
       for (const boardObject of cleared) {
-        this.emitBoardObjectPatched?.(toBoardObjectPatchedEventPayload(boardObject));
+        const payload = toBoardObjectPatchedEventPayload(boardObject);
+        if (_params) this.emitBoardObjectPatched?.(payload, _params);
+        else this.emitBoardObjectPatched?.(payload);
       }
     }
 
@@ -512,7 +520,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
  */
 export function createBoardsService(
   db: TenantScopeAwareDatabase,
-  emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void
+  emitBoardObjectPatched?: (
+    boardObject: BoardObjectPatchedEventPayload,
+    params?: BoardParams
+  ) => void
 ): BoardsService {
   return new BoardsService(db, emitBoardObjectPatched);
 }

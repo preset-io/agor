@@ -79,6 +79,7 @@ import {
 } from '@agor/core/unix';
 import { DrizzleService } from '../adapters/drizzle';
 import { buildInitialUserMessage } from '../utils/build-initial-user-message.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { canControlCliSession } from '../utils/mcp-token-authorization.js';
 import { getDaemonUrl } from '../utils/spawn-executor.js';
 import {
@@ -563,7 +564,12 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         tool_use_count: 0,
         metadata: { source: 'cli-repl' },
       })) as Task;
-      app.service('tasks').emit('created', task);
+      emitServiceEvent(app, {
+        path: 'tasks',
+        event: 'created',
+        data: task,
+        id: task.task_id,
+      });
       // Patch session: RUNNING + append task id. The watcher's turn_end
       // handler flips it back to IDLE.
       await app
