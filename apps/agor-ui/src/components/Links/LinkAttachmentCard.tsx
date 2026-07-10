@@ -18,13 +18,12 @@ import { downloadLinkContent, getSafeLinkContentLabel } from './linkContent';
 import {
   getLinkDisplayCategory,
   type LinkDisplayCategory,
+  type LinkDisplayTarget,
   routeForKnowledgeRefUri,
+  targetForLinkDisplay,
 } from './linkDisplay';
 
-export interface LinkAttachmentTarget {
-  href: string;
-  navigation: 'spa' | 'external';
-}
+export type LinkAttachmentTarget = LinkDisplayTarget;
 
 export interface LinkAttachmentCardProps {
   kind?: LinkKind | null;
@@ -47,22 +46,6 @@ export interface LinkAttachmentCardProps {
 
 type AttachmentCategory = LinkDisplayCategory;
 
-const KNOWLEDGE_PREFIX = 'agor://kb/';
-const SAFE_WEB_PROTOCOLS = new Set(['http:', 'https:']);
-
-function getSafeWebUrl(value?: string | null): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  try {
-    const parsed = new URL(trimmed);
-    if (!SAFE_WEB_PROTOCOLS.has(parsed.protocol.toLowerCase())) return null;
-    if (!parsed.hostname) return null;
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-}
-
 export function routeForKnowledgeUri(uri?: string | null, basePath = '/kb'): string | null {
   return routeForKnowledgeRefUri(uri, basePath);
 }
@@ -71,13 +54,7 @@ export function targetForLinkAttachment(args: {
   url?: string | null;
   refUri?: string | null;
 }): LinkAttachmentTarget | null {
-  if (args.refUri?.startsWith(KNOWLEDGE_PREFIX)) {
-    const route = routeForKnowledgeUri(args.refUri);
-    return route ? { href: route, navigation: 'spa' } : null;
-  }
-  const safeUrl = getSafeWebUrl(args.url);
-  if (safeUrl) return { href: safeUrl, navigation: 'external' };
-  return null;
+  return targetForLinkDisplay(args);
 }
 
 export function canUseLinkContentRoute(args: {

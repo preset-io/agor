@@ -70,9 +70,10 @@ function cleanSegment(value: string): string {
 }
 
 function safeWebUrl(value?: string | null): string | null {
-  if (!value) return null;
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
   try {
-    const parsed = new URL(value);
+    const parsed = new URL(trimmed);
     return SAFE_WEB_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : null;
   } catch {
     return null;
