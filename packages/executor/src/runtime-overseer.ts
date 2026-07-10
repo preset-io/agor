@@ -135,38 +135,24 @@ export class RuntimeOverseer implements AgenticToolRuntime {
     }
   }
 
-  private waitFor(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  private async waitFor(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
     if (timeoutMs <= 0) {
-      return promise.then(
-        () => true,
-        () => true
-      );
+      await promise.catch(() => undefined);
+      return true;
     }
 
-    return new Promise((resolve) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        resolve(false);
-      }, timeoutMs);
-
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const completed = await Promise.race([
       promise.then(
-        () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(true);
-        },
-        () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          // The caller deliberately treats flush as best-effort.
-          resolve(true);
-        }
-      );
-    });
+        () => true,
+        () => true
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    return completed;
   }
 
   private clearTimer(): void {
