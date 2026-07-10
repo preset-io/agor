@@ -121,8 +121,8 @@ function createPatchHarness(opts: {
     })),
   };
   Object.assign(boardRepo, {
-    clearPrimaryAssistantIfMatches: boardRepo.clearPrimaryTeammateIfMatches,
-    setPrimaryAssistantIfUnset: boardRepo.setPrimaryTeammateIfUnset,
+    clearPrimaryTeammateIfMatches: boardRepo.clearPrimaryTeammateIfMatches,
+    setPrimaryTeammateIfUnset: boardRepo.setPrimaryTeammateIfUnset,
   });
   const service = new BranchesService(createTenantScopeTestDb() as never, app);
   (service as unknown as { repository: typeof repository }).repository = repository;
@@ -138,10 +138,10 @@ function createPatchHarness(opts: {
   return { service, repository, boardRepo, boardObjectsService, boardsService, branchId };
 }
 
-const assistantContext = {
-  assistant: {
-    kind: 'assistant',
-    displayName: 'Assistant',
+const teammateContext = {
+  teammate: {
+    kind: 'teammate',
+    displayName: 'Teammate',
   },
 };
 
@@ -685,20 +685,20 @@ describe('BranchesService environment start async behavior', () => {
 });
 
 describe('BranchesService.patch primary teammate invariants', () => {
-  it('clears the old primary and sets the new board primary when an assistant moves boards', async () => {
+  it('clears the old primary and sets the new board primary when a teammate moves boards', async () => {
     const boardA = 'board-a' as BoardID;
     const boardB = 'board-b' as BoardID;
-    const branchId = 'assistant-1' as BranchID;
+    const branchId = 'teammate-1' as BranchID;
     const { service, boardRepo, boardObjectsService, boardsService } = createPatchHarness({
       current: {
         branch_id: branchId,
         board_id: boardA,
-        custom_context: assistantContext,
+        custom_context: teammateContext,
       },
       updated: {
         branch_id: branchId,
         board_id: boardB,
-        custom_context: assistantContext,
+        custom_context: teammateContext,
       },
     });
 
@@ -721,21 +721,21 @@ describe('BranchesService.patch primary teammate invariants', () => {
     });
   });
 
-  it('clears the primary pointer when an assistant is archived in place', async () => {
+  it('clears the primary pointer when a teammate is archived in place', async () => {
     const boardId = 'board-a' as BoardID;
-    const branchId = 'assistant-archive' as BranchID;
+    const branchId = 'teammate-archive' as BranchID;
     const { service, boardRepo } = createPatchHarness({
       current: {
         branch_id: branchId,
         board_id: boardId,
         archived: false,
-        custom_context: assistantContext,
+        custom_context: teammateContext,
       },
       updated: {
         branch_id: branchId,
         board_id: boardId,
         archived: true,
-        custom_context: assistantContext,
+        custom_context: teammateContext,
       },
     });
 
@@ -773,7 +773,7 @@ describe('BranchesService.patch primary teammate invariants', () => {
     expect(boardObjectsService.patch).not.toHaveBeenCalled();
   });
 
-  it('rejects converting a normal branch into an assistant', async () => {
+  it('rejects converting a normal branch into a teammate', async () => {
     const boardId = 'board-a' as BoardID;
     const branchId = 'branch-1' as BranchID;
     const { service, repository } = createPatchHarness({
@@ -785,33 +785,33 @@ describe('BranchesService.patch primary teammate invariants', () => {
       updated: {
         branch_id: branchId,
         board_id: boardId,
-        custom_context: assistantContext,
+        custom_context: teammateContext,
       },
     });
 
-    await expect(service.patch(branchId, { custom_context: assistantContext })).rejects.toThrow(
+    await expect(service.patch(branchId, { custom_context: teammateContext })).rejects.toThrow(
       /cannot be converted/i
     );
     expect(repository.update).not.toHaveBeenCalled();
   });
 
-  it('rejects converting an assistant into a normal branch', async () => {
+  it('rejects converting a teammate into a normal branch', async () => {
     const boardId = 'board-a' as BoardID;
-    const branchId = 'assistant-2' as BranchID;
+    const branchId = 'teammate-2' as BranchID;
     const { service, repository } = createPatchHarness({
       current: {
         branch_id: branchId,
         board_id: boardId,
-        custom_context: assistantContext,
+        custom_context: teammateContext,
       },
       updated: {
         branch_id: branchId,
         board_id: boardId,
-        custom_context: { assistant: null },
+        custom_context: { teammate: null },
       },
     });
 
-    await expect(service.patch(branchId, { custom_context: { assistant: null } })).rejects.toThrow(
+    await expect(service.patch(branchId, { custom_context: { teammate: null } })).rejects.toThrow(
       /cannot be converted/i
     );
     expect(repository.update).not.toHaveBeenCalled();
@@ -854,7 +854,7 @@ describe('BranchesService one-shot teammate creation wiring', () => {
     await invoke({
       branch_id: 'teammate-new' as BranchID,
       board_id: 'board-a' as BoardID,
-      custom_context: assistantContext,
+      custom_context: teammateContext,
     });
 
     expect(boardRepo.setPrimaryTeammateIfUnset).toHaveBeenCalledWith('board-a', 'teammate-new');
@@ -1473,50 +1473,50 @@ describe('BranchesService managed environment control authorization', () => {
   });
 });
 
-describe('BranchesService assistant home Knowledge namespace guard', () => {
-  async function createAssistantKbHarness(db: Database) {
+describe('BranchesService teammate home Knowledge namespace guard', () => {
+  async function createTeammateKbHarness(db: Database) {
     const users = new UsersRepository(db);
     const repos = new RepoRepository(db);
     const branches = new BranchRepository(db);
     const namespaces = new KnowledgeNamespaceRepository(db);
 
     const owner = await users.create({
-      email: 'assistant-kb-owner@example.com',
-      name: 'Assistant KB Owner',
+      email: 'teammate-kb-owner@example.com',
+      name: 'Teammate KB Owner',
       role: 'member',
     });
     const namespaceOwner = await users.create({
-      email: 'assistant-kb-namespace-owner@example.com',
-      name: 'Assistant KB Namespace Owner',
+      email: 'teammate-kb-namespace-owner@example.com',
+      name: 'Teammate KB Namespace Owner',
       role: 'member',
     });
     const repo = await repos.create({
-      name: 'assistant-kb-repo',
-      slug: 'assistant-kb-repo',
+      name: 'teammate-kb-repo',
+      slug: 'teammate-kb-repo',
       repo_type: 'local',
-      local_path: '/tmp/assistant-kb-repo',
+      local_path: '/tmp/teammate-kb-repo',
       default_branch: 'main',
     });
 
     const currentNamespace = await namespaces.create({
-      slug: 'assistant-current-home',
-      display_name: 'Assistant Current Home',
+      slug: 'teammate-current-home',
+      display_name: 'Teammate Current Home',
       owner_user_id: namespaceOwner.user_id,
       others_can: 'read',
     });
     const branch = await branches.create({
       branch_id: '019f0000-0000-7000-8000-00000000e101' as BranchID,
       repo_id: repo.repo_id,
-      name: 'assistant-kb',
-      ref: 'assistant-kb',
-      path: '/tmp/assistant-kb-repo/assistant-kb',
+      name: 'teammate-kb',
+      ref: 'teammate-kb',
+      path: '/tmp/teammate-kb-repo/teammate-kb',
       created_by: owner.user_id as UUID,
       branch_unique_id: 9101,
       new_branch: true,
       custom_context: {
-        assistant: {
-          kind: 'assistant',
-          displayName: 'Assistant KB',
+        teammate: {
+          kind: 'teammate',
+          displayName: 'Teammate KB',
           kb: {
             primary_namespace_id: currentNamespace.namespace_id,
             primary_namespace_slug: currentNamespace.slug,
@@ -1549,7 +1549,7 @@ describe('BranchesService assistant home Knowledge namespace guard', () => {
   function homeNamespacePatch(namespaceId: string, namespaceSlug: string) {
     return {
       custom_context: {
-        assistant: {
+        teammate: {
           kb: {
             primary_namespace_id: namespaceId,
             primary_namespace_slug: namespaceSlug,
@@ -1564,9 +1564,9 @@ describe('BranchesService assistant home Knowledge namespace guard', () => {
   }
 
   dbTest('allows saving policy when the home namespace is unchanged', async ({ db }) => {
-    const { branch, service, params } = await createAssistantKbHarness(db);
+    const { branch, service, params } = await createTeammateKbHarness(db);
     const currentKb = (
-      branch.custom_context?.assistant as
+      branch.custom_context?.teammate as
         | { kb?: { primary_namespace_id?: string; primary_namespace_slug?: string } }
         | undefined
     )?.kb;
@@ -1576,7 +1576,7 @@ describe('BranchesService assistant home Knowledge namespace guard', () => {
         branch.branch_id,
         {
           custom_context: {
-            assistant: {
+            teammate: {
               kb: {
                 primary_namespace_id: currentKb?.primary_namespace_id,
                 primary_namespace_slug: currentKb?.primary_namespace_slug,
@@ -1595,10 +1595,10 @@ describe('BranchesService assistant home Knowledge namespace guard', () => {
 
   dbTest('rejects changing home namespace to a namespace without write access', async ({ db }) => {
     const { branch, namespaceOwner, namespaces, service, params } =
-      await createAssistantKbHarness(db);
+      await createTeammateKbHarness(db);
     const readOnly = await namespaces.create({
-      slug: 'assistant-read-only-home',
-      display_name: 'Assistant Read Only Home',
+      slug: 'teammate-read-only-home',
+      display_name: 'Teammate Read Only Home',
       owner_user_id: namespaceOwner.user_id,
       others_can: 'read',
     });
@@ -1613,10 +1613,10 @@ describe('BranchesService assistant home Knowledge namespace guard', () => {
   });
 
   dbTest('rejects changing home namespace when ID and slug disagree', async ({ db }) => {
-    const { branch, namespaces, service, params } = await createAssistantKbHarness(db);
+    const { branch, namespaces, service, params } = await createTeammateKbHarness(db);
     const writable = await namespaces.create({
-      slug: 'assistant-writable-home',
-      display_name: 'Assistant Writable Home',
+      slug: 'teammate-writable-home',
+      display_name: 'Teammate Writable Home',
       others_can: 'write',
     });
 
@@ -1630,10 +1630,10 @@ describe('BranchesService assistant home Knowledge namespace guard', () => {
   });
 
   dbTest('allows changing home namespace to a writable namespace', async ({ db }) => {
-    const { branch, namespaces, service, params } = await createAssistantKbHarness(db);
+    const { branch, namespaces, service, params } = await createTeammateKbHarness(db);
     const writable = await namespaces.create({
-      slug: 'assistant-writable-home-ok',
-      display_name: 'Assistant Writable Home OK',
+      slug: 'teammate-writable-home-ok',
+      display_name: 'Teammate Writable Home OK',
       others_can: 'write',
     });
 
@@ -1645,7 +1645,7 @@ describe('BranchesService assistant home Knowledge namespace guard', () => {
       )
     ).resolves.toMatchObject({
       custom_context: {
-        assistant: {
+        teammate: {
           kb: {
             primary_namespace_id: writable.namespace_id,
             primary_namespace_slug: writable.slug,

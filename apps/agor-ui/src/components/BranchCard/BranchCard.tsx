@@ -579,7 +579,7 @@ const BranchCardComponent = ({
         </div>
       )}
 
-      {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
+      {/* Sessions & Scheduled Runs - composable content shared with the teammate panel */}
       <div
         className={REACT_FLOW_NO_DRAG_CLASS}
         style={sectionsReady ? undefined : { minHeight: sessionShellMinHeight }}

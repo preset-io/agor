@@ -1,8 +1,8 @@
-export interface PrimaryAssistantRestoreInput {
+export interface PrimaryTeammateRestoreInput {
   currentBoardId: string | null | undefined;
   primaryTeammateBranchId: string | null | undefined;
   effectiveSelectedSessionId: string | null | undefined;
-  autoOpenedAssistantBoardId: string | null | undefined;
+  autoOpenedTeammateBoardId: string | null | undefined;
   restoreAllowed: boolean;
   sessions: Array<{ session_id: string; archived: boolean; last_updated: string }>;
 }
@@ -20,13 +20,13 @@ export function getPrimaryTeammateSessionToRestore({
   currentBoardId,
   primaryTeammateBranchId,
   effectiveSelectedSessionId,
-  autoOpenedAssistantBoardId,
+  autoOpenedTeammateBoardId,
   restoreAllowed,
   sessions,
-}: PrimaryAssistantRestoreInput): string | null {
+}: PrimaryTeammateRestoreInput): string | null {
   if (!restoreAllowed) return null;
   if (!currentBoardId || !primaryTeammateBranchId || effectiveSelectedSessionId) return null;
-  if (autoOpenedAssistantBoardId === currentBoardId) return null;
+  if (autoOpenedTeammateBoardId === currentBoardId) return null;
 
   return (
     sessions

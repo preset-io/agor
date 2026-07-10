@@ -216,16 +216,9 @@ export interface TeammateWelcomeNoteRequest {
   id?: BoardID | string;
   /** User-provided teammate display name. */
   teammateName?: string;
-  /** Optional legacy alias accepted by compatibility callers. */
-  assistantName?: string;
   /** Optional user-provided teammate emoji/icon. */
   teammateEmoji?: string | null;
-  /** Optional legacy alias accepted by compatibility callers. */
-  assistantEmoji?: string | null;
 }
-
-/** @deprecated Use TeammateWelcomeNoteRequest instead */
-export type AssistantWelcomeNoteRequest = TeammateWelcomeNoteRequest;
 
 export type BoardAccessMode = 'private' | 'shared';
 export type BoardDefaultFsAccess = 'none' | 'read' | 'write';
@@ -250,8 +243,6 @@ export interface Board {
 
   description?: string;
   primary_teammate_id?: BranchID;
-  /** @deprecated Use primary_teammate_id instead */
-  primary_assistant_id?: BranchID;
 
   /**
    * DEPRECATED: Sessions and layout are now tracked in board_objects table

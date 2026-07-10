@@ -484,7 +484,7 @@ function AppContent() {
     branchId: string;
     sessionId: string;
     boardId: string;
-    path: 'teammate' | 'assistant' | 'own-repo';
+    path: 'teammate' | 'own-repo';
   }) => {
     setOnboardingWizardOpen(false);
 
@@ -510,7 +510,7 @@ function AppContent() {
     ).catch(() => {});
 
     // Clear the AI teammate pending flag if applicable
-    if ((result.path === 'teammate' || result.path === 'assistant') && client) {
+    if (result.path === 'teammate' && client) {
       try {
         await client.service('config').patch(null, { onboarding: { teammatePending: false } });
       } catch {
@@ -1775,11 +1775,7 @@ function AppContent() {
               };
             }
           }}
-          assistantPending={
-            onboardingConfig?.teammatePending ??
-            onboardingConfig?.assistantPending ??
-            onboardingConfig?.persistedAgentPending
-          }
+          teammatePending={onboardingConfig?.teammatePending}
           frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
         />
 

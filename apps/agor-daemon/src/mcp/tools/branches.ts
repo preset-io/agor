@@ -273,10 +273,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .boolean()
           .optional()
           .describe('Exclude long-lived teammate branches. Default: true.'),
-        excludeAssistants: z
-          .boolean()
-          .optional()
-          .describe('Deprecated alias for excludeTeammates.'),
         excludePrivate: z
           .boolean()
           .optional()
@@ -306,7 +302,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             ? [args.filesystemStatus]
             : [...CLEANUP_CANDIDATE_DEFAULT_FILESYSTEM_STATUSES])
       );
-      const excludeTeammates = args.excludeTeammates ?? args.excludeAssistants ?? true;
+      const excludeTeammates = args.excludeTeammates ?? true;
       const excludePrivate = args.excludePrivate ?? true;
       const limit = args.limit ?? 50;
       const skip = args.skip ?? 0;
@@ -381,7 +377,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         issue_url: branch.issue_url ?? null,
         notes_preview: notesPreview(branch.notes),
         is_teammate: isTeammate(branch),
-        is_assistant: isTeammate(branch),
         is_private: branch.others_can === 'none',
       }));
 
@@ -399,7 +394,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             cutoff.source === 'archivedOlderThanDays' ? cutoff.olderThanDays : null,
           filesystem_statuses: [...statuses],
           exclude_teammates: excludeTeammates,
-          exclude_assistants: excludeTeammates,
           exclude_private: excludePrivate,
           path_exists_filter: args.pathExists ?? null,
         },
@@ -550,16 +544,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               'namespace is provisioned. Knowledge namespace/grant config (the "kb" field) is managed ' +
               'separately and cannot be set here.'
           ),
-        assistant: z
-          .object({
-            displayName: z.string().trim().min(1).optional(),
-            emoji: z.string().optional(),
-            frameworkRepo: z.string().optional(),
-            frameworkVersion: z.string().optional(),
-            createdViaOnboarding: z.boolean().optional(),
-          })
-          .optional()
-          .describe('Deprecated alias for teammate. Use teammate for new MCP calls.'),
       }),
     },
     async (args) => {
@@ -593,7 +577,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // wire the board primary_teammate_id pointer and provision the teammate
       // Knowledge namespace atomically, and sidesteps the assertTeammateKindIsStable
       // guard that (deliberately) blocks flipping teammate status via patch.
-      const teammateInput = (args.teammate ?? args.assistant) as
+      const teammateInput = args.teammate as
         | {
             displayName?: unknown;
             emoji?: unknown;
@@ -707,10 +691,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           note: 'Created as a long-lived Agor teammate. The board primary teammate pointer and the teammate Knowledge namespace were provisioned automatically.',
         };
         response._teammate = teammateResult;
-        response._assistant = {
-          deprecated: true,
-          ...teammateResult,
-        };
       }
 
       if (zoneId) {
@@ -767,8 +747,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe(
             'Custom context object for templates and automations. Pass null to clear existing context. ' +
-              'Note: this cannot toggle a branch between assistant and non-assistant status — that flip is ' +
-              'rejected. Create an assistant in one shot with the assistant param on agor_branches_create.'
+              'Note: this cannot toggle a branch between teammate and non-teammate status — that flip is ' +
+              'rejected. Create a teammate in one shot with the teammate param on agor_branches_create.'
           ),
         mcpServerIds: z
           .array(mcpRequiredId('mcpServerIds[]', 'MCP server', 'MCP server ID'))
@@ -1405,7 +1385,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     return textResult({
       total: shaped.length,
       teammates: shaped,
-      assistants: shaped,
     });
   };
 
@@ -1415,19 +1394,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     {
       description:
         "List all teammates (long-lived AI teammates with schedules). Returns each teammate's name, description, schedule status, and last activity timestamp. Use this to discover other teammates on the platform.",
-      annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        repoId: mcpOptionalId('repoId', 'Repository', 'Filter teammates by repository ID'),
-        limit: mcpLimit(200),
-      }),
-    },
-    listTeammatesHandler
-  );
-
-  server.registerTool(
-    'agor_assistants_list',
-    {
-      description: 'Deprecated alias for agor_teammates_list. Assistants are now called teammates.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         repoId: mcpOptionalId('repoId', 'Repository', 'Filter teammates by repository ID'),

@@ -512,16 +512,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     return (rows as BranchRow[]).map((row) => this.rowToBranch(row, baseUrl));
   }
 
-  /** @deprecated Use findTeammateBranches instead. */
-  async findAssistantBranches(filter?: {
-    repo_id?: UUID;
-    archived?: boolean;
-    userId?: UUID;
-    limit?: number;
-  }): Promise<Branch[]> {
-    return this.findTeammateBranches(filter);
-  }
-
   /**
    * Update branch by ID (atomic with database-level transaction)
    *

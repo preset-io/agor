@@ -8,7 +8,7 @@ import { BoardTeammatePanel } from './BoardTeammatePanel';
 
 vi.mock('../BranchCard', () => ({
   BranchSessionSections: ({ defaultExpanded }: { defaultExpanded?: boolean }) => (
-    <div data-testid="assistant-session-sections">defaultExpanded:{String(defaultExpanded)}</div>
+    <div data-testid="teammate-session-sections">defaultExpanded:{String(defaultExpanded)}</div>
   ),
 }));
 
@@ -25,12 +25,12 @@ const primaryTeammateBranch = {
 } as Branch;
 const primaryTeammateRepo = { repo_id: 'repo-1', slug: 'preset-io/agor' } as Repo;
 
-describe('BoardTeammatePanel assistant tab', () => {
+describe('BoardTeammatePanel teammate tab', () => {
   beforeEach(() => {
     agorStore.setState({ ...EMPTY_MAPS });
   });
 
-  it('expands the assistant Sessions section by default', () => {
+  it('expands the teammate Sessions section by default', () => {
     render(
       <AntApp>
         <BoardTeammatePanel
@@ -46,7 +46,7 @@ describe('BoardTeammatePanel assistant tab', () => {
       </AntApp>
     );
 
-    expect(screen.getByTestId('assistant-session-sections')).toHaveTextContent(
+    expect(screen.getByTestId('teammate-session-sections')).toHaveTextContent(
       'defaultExpanded:true'
     );
   });

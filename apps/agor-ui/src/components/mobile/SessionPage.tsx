@@ -130,7 +130,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           scheduledRunAt={session.scheduled_run_at}
           genealogy={session.genealogy}
           emptyStateMessage="Tap the menu icon to browse boards and sessions"
-          assistantEmoji={
+          teammateEmoji={
             branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
           }
         />

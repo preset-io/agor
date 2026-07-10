@@ -26,7 +26,7 @@ import type { TeammateTabResult } from './tabs/TeammateTab';
 import { TeammateTab } from './tabs/TeammateTab';
 
 type ActiveTab = 'branch' | 'teammate' | 'board' | 'repository';
-type CreateDialogTab = ActiveTab | 'assistant';
+type CreateDialogTab = ActiveTab;
 
 export interface CreateDialogProgress {
   onStatusChange?: (status: string) => void;
@@ -66,7 +66,7 @@ const ACTION_LABELS: Record<ActiveTab, string> = {
   repository: 'Add Repository',
 };
 
-const normalizeTab = (tab: CreateDialogTab): ActiveTab => (tab === 'assistant' ? 'teammate' : tab);
+const normalizeTab = (tab: CreateDialogTab): ActiveTab => tab;
 
 export interface CreateDialogProps {
   open: boolean;
@@ -82,11 +82,6 @@ export interface CreateDialogProps {
   onCreateRepo: (data: CreateRepoRequest) => unknown;
   onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateTeammate?: (
-    result: TeammateTabResult,
-    progress?: CreateDialogProgress
-  ) => void | Promise<void>;
-  /** @deprecated Use onCreateTeammate instead. */
-  onCreateAssistant?: (
     result: TeammateTabResult,
     progress?: CreateDialogProgress
   ) => void | Promise<void>;
@@ -116,7 +111,6 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   onCreateRepo,
   onCreateLocalRepo,
   onCreateTeammate,
-  onCreateAssistant,
   branchStorageConfig,
 }) => {
   // Entity maps are read from the store rather than drilled through props so
@@ -157,7 +151,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   }, []);
 
   const handleBranchValid = useCallback((v: boolean) => setTabValid('branch', v), [setTabValid]);
-  const handleAssistantValid = useCallback(
+  const handleTeammateValid = useCallback(
     (v: boolean) => setTabValid('teammate', v),
     [setTabValid]
   );
@@ -212,7 +206,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           const result = await teammateFormRef.current?.();
           if (result) {
             setSubmitStatus('Creating AI teammate…');
-            await (onCreateTeammate ?? onCreateAssistant)?.(result, {
+            await (onCreateTeammate ?? onCreateTeammate)?.(result, {
               onStatusChange: setSubmitStatus,
             });
             onClose();
@@ -251,7 +245,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
           />
           <TeammateTab
             repoById={repoById}
-            onValidityChange={handleAssistantValid}
+            onValidityChange={handleTeammateValid}
             formRef={teammateFormRef}
             onCreateRepo={onCreateRepo}
             availableAgents={availableAgents}

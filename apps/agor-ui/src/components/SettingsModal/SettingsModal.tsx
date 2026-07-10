@@ -118,8 +118,6 @@ export interface SettingsModalProps {
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
   onCreateTeammate?: () => void;
-  /** @deprecated Use onCreateTeammate instead. */
-  onCreateAssistant?: () => void;
   branchStorageConfig?: BranchStorageConfig;
 }
 
@@ -156,7 +154,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onUpdateArtifact,
   onDeleteArtifact,
   onCreateTeammate,
-  onCreateAssistant,
   branchStorageConfig,
 }) => {
   // Entity maps come straight from the store rather than through App props:
@@ -413,7 +410,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             userById={userById}
             onArchiveOrDelete={onArchiveOrDeleteBranch}
             onRowClick={handleBranchRowClick}
-            onCreateTeammate={onCreateTeammate ?? onCreateAssistant}
+            onCreateTeammate={onCreateTeammate ?? onCreateTeammate}
             onClose={onClose}
           />
         );

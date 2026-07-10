@@ -116,9 +116,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         primary_teammate_id:
           ((row.primary_teammate_id ?? row.primary_assistant_id) as Board['primary_teammate_id']) ??
           undefined,
-        primary_assistant_id:
-          ((row.primary_teammate_id ??
-            row.primary_assistant_id) as Board['primary_assistant_id']) ?? undefined,
         created_at: new Date(row.created_at).toISOString(),
         last_updated: row.updated_at
           ? new Date(row.updated_at).toISOString()
@@ -155,7 +152,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       board_id: boardId,
       name: board.name ?? 'Untitled Board',
       slug: board.slug !== undefined ? board.slug : null,
-      primary_teammate_id: board.primary_teammate_id ?? board.primary_assistant_id ?? null,
+      primary_teammate_id: board.primary_teammate_id ?? null,
       created_at: new Date(board.created_at ?? now),
       updated_at: board.last_updated ? new Date(board.last_updated) : new Date(now),
       created_by: board.created_by,
@@ -177,7 +174,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   }
 
   private rejectGenericPrimaryTeammateWrite(data: Partial<Board>, operation: string): void {
-    if (Object.hasOwn(data, 'primary_teammate_id') || Object.hasOwn(data, 'primary_assistant_id')) {
+    if (Object.hasOwn(data, 'primary_teammate_id')) {
       throw new RepositoryError(
         `Cannot ${operation} primary_teammate_id via generic board writes; use setPrimaryTeammate() or clearPrimaryTeammate()`
       );
@@ -614,11 +611,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     }
   }
 
-  /** @deprecated Use getPrimaryTeammate instead. */
-  async getPrimaryAssistant(boardId: string): Promise<Branch | null> {
-    return this.getPrimaryTeammate(boardId);
-  }
-
   /**
    * Set a board's primary teammate after validating that the branch is an
    * teammate branch already attached to the board.
@@ -651,11 +643,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         error
       );
     }
-  }
-
-  /** @deprecated Use setPrimaryTeammate instead. */
-  async setPrimaryAssistant(boardId: string, branchId: string): Promise<Board> {
-    return this.setPrimaryTeammate(boardId, branchId);
   }
 
   /**
@@ -695,11 +682,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     }
   }
 
-  /** @deprecated Use setPrimaryTeammateIfUnset instead. */
-  async setPrimaryAssistantIfUnset(boardId: string, branchId: string): Promise<Board | null> {
-    return this.setPrimaryTeammateIfUnset(boardId, branchId);
-  }
-
   /**
    * Clear a board's primary teammate only if it still points at branchId.
    *
@@ -735,11 +717,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     }
   }
 
-  /** @deprecated Use clearPrimaryTeammateIfMatches instead. */
-  async clearPrimaryAssistantIfMatches(boardId: string, branchId: string): Promise<Board | null> {
-    return this.clearPrimaryTeammateIfMatches(boardId, branchId);
-  }
-
   /**
    * Clear a board's primary teammate pointer without deleting either entity.
    */
@@ -763,11 +740,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         error
       );
     }
-  }
-
-  /** @deprecated Use clearPrimaryTeammate instead. */
-  async clearPrimaryAssistant(boardId: string): Promise<Board> {
-    return this.clearPrimaryTeammate(boardId);
   }
 
   private async getValidatedPrimaryTeammateBranch(

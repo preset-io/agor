@@ -215,10 +215,3 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
     </Form>
   );
 };
-
-/** @deprecated Use TeammateTabResult instead. */
-export type AssistantTabResult = TeammateTabResult;
-/** @deprecated Use TeammateTabProps instead. */
-export type AssistantTabProps = TeammateTabProps;
-/** @deprecated Use TeammateTab instead. */
-export const AssistantTab = TeammateTab;

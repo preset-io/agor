@@ -457,6 +457,3 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
     </div>
   );
 };
-
-/** @deprecated Use buildTeammateKnowledgePatch instead. */
-export const buildAssistantKnowledgePatch = buildTeammateKnowledgePatch;

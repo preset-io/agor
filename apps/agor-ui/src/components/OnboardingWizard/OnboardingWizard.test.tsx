@@ -18,12 +18,12 @@ vi.mock('../../utils/startTeammateBootstrapSession', () => {
   const start = vi.fn(async ({ onCreateSession, sessionConfig, boardId }) => {
     return (await onCreateSession(sessionConfig, boardId)) || 'session-1';
   });
-  return { startTeammateBootstrapSession: start, startAssistantBootstrapSession: start };
+  return { startTeammateBootstrapSession: start };
 });
 
 vi.mock('../../utils/teammateWelcomeNote', () => {
   const ensure = vi.fn(async () => undefined);
-  return { ensureTeammateWelcomeNote: ensure, ensureAssistantWelcomeNote: ensure };
+  return { ensureTeammateWelcomeNote: ensure };
 });
 
 function makeUser(overrides: Partial<User> = {}): User {

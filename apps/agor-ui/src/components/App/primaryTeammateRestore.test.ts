@@ -5,7 +5,7 @@ const base = {
   currentBoardId: 'board-1',
   primaryTeammateBranchId: 'branch-1',
   effectiveSelectedSessionId: null,
-  autoOpenedAssistantBoardId: null,
+  autoOpenedTeammateBoardId: null,
   restoreAllowed: true,
   sessions: [
     { session_id: 'older', archived: false, last_updated: '2026-01-01T00:00:00.000Z' },
@@ -14,7 +14,7 @@ const base = {
 };
 
 describe('getPrimaryTeammateSessionToRestore', () => {
-  it('restores the latest active primary-assistant session for generic board/app URLs', () => {
+  it('restores the latest active primary-teammate session for generic board/app URLs', () => {
     expect(getPrimaryTeammateSessionToRestore(base)).toBe('newer');
   });
 
@@ -40,7 +40,7 @@ describe('getPrimaryTeammateSessionToRestore', () => {
     expect(
       getPrimaryTeammateSessionToRestore({
         ...base,
-        autoOpenedAssistantBoardId: 'board-1',
+        autoOpenedTeammateBoardId: 'board-1',
       })
     ).toBeNull();
   });

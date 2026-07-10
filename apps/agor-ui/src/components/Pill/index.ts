@@ -1,6 +1,5 @@
 export { EventStreamPill } from './EventStreamPill';
 export {
-  AssistantPill,
   BoardPill,
   BranchPill,
   ChannelPill,

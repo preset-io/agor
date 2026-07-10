@@ -278,7 +278,6 @@ describe('BoardsService - Custom Methods', () => {
         teammateWelcomeNoteMutated: true,
       });
       expect(note?.type).toBe('markdown');
-      expect(note?.content).not.toContain('{{assistant.name}}');
       expect(note?.content).not.toContain('<img src=x onerror=alert(1)>');
       expect(note?.content).toContain('&lt;img src&#x3D;x onerror&#x3D;alert(1)&gt;');
       expect(note?.content).toContain('🤖');
@@ -299,7 +298,7 @@ describe('BoardsService - Custom Methods', () => {
             x: 12,
             y: 34,
             width: 456,
-            content: '# Welcome to {{assistant.name}}',
+            content: '# Welcome to {{teammate.name}}',
           },
         },
       })) as Board;
@@ -429,7 +428,6 @@ describe('BoardsService - Custom Methods', () => {
     expect(typeof service.fromYaml).toBe('function');
     expect(typeof service.clone).toBe('function');
     expect(typeof service.ensureTeammateWelcomeNote).toBe('function');
-    expect(typeof service.ensureAssistantWelcomeNote).toBe('function');
   });
 });
 

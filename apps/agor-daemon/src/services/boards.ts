@@ -234,18 +234,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       throw new NotFoundError('Board', String(boardIdentifier));
     }
 
-    const teammateName =
-      typeof data.teammateName === 'string'
-        ? data.teammateName
-        : typeof data.assistantName === 'string'
-          ? data.assistantName
-          : '';
-    const teammateEmoji =
-      typeof data.teammateEmoji === 'string'
-        ? data.teammateEmoji
-        : typeof data.assistantEmoji === 'string'
-          ? data.assistantEmoji
-          : null;
+    const teammateName = typeof data.teammateName === 'string' ? data.teammateName : '';
+    const teammateEmoji = typeof data.teammateEmoji === 'string' ? data.teammateEmoji : null;
     const objectData = buildTeammateWelcomeNoteObject({
       teammateName,
       teammateEmoji,
@@ -264,14 +254,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     );
   }
 
-  /** @deprecated Use ensureTeammateWelcomeNote instead. */
-  async ensureAssistantWelcomeNote(
-    data: TeammateWelcomeNoteRequest,
-    params?: BoardParams
-  ): Promise<Board> {
-    return this.ensureTeammateWelcomeNote(data, params);
-  }
-
   /**
    * Custom method: Set the board's primary teammate branch.
    */
@@ -287,25 +269,11 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     return this.boardRepo.setPrimaryTeammate(boardId, branchId);
   }
 
-  /** @deprecated Use setPrimaryTeammate instead. */
-  async setPrimaryAssistant(
-    data: { boardId?: string; id?: string; branchId?: string } | string,
-    branchIdOrParams?: string | BoardParams,
-    maybeParams?: BoardParams
-  ): Promise<Board> {
-    return this.setPrimaryTeammate(data, branchIdOrParams, maybeParams);
-  }
-
   /**
    * Custom method: Clear the board's primary teammate branch.
    */
   async clearPrimaryTeammate(boardId: string, _params?: BoardParams): Promise<Board> {
     return this.boardRepo.clearPrimaryTeammate(boardId);
-  }
-
-  /** @deprecated Use clearPrimaryTeammate instead. */
-  async clearPrimaryAssistant(boardId: string, params?: BoardParams): Promise<Board> {
-    return this.clearPrimaryTeammate(boardId, params);
   }
 
   /**

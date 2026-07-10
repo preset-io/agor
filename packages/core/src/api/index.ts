@@ -428,15 +428,6 @@ export interface BoardsService extends AgorService<Board> {
    * happens server-side from a static template; callers only provide values.
    */
   ensureTeammateWelcomeNote(data: TeammateWelcomeNoteRequest, params?: Params): Promise<Board>;
-  /** @deprecated Use setPrimaryTeammate instead. */
-  setPrimaryAssistant(
-    data: { id?: string; boardId?: string; branchId: string },
-    params?: Params
-  ): Promise<Board>;
-  /** @deprecated Use clearPrimaryTeammate instead. */
-  clearPrimaryAssistant(boardId: string, params?: Params): Promise<Board>;
-  /** @deprecated Use ensureTeammateWelcomeNote instead. */
-  ensureAssistantWelcomeNote(data: TeammateWelcomeNoteRequest, params?: Params): Promise<Board>;
 }
 
 /**
@@ -478,12 +469,6 @@ export interface BranchesService extends AgorService<Branch> {
     data: { branchId?: string; branch_id?: string } | string,
     params?: Params
   ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }>;
-  /** @deprecated Use ensureTeammateKnowledgeNamespace instead. */
-  ensureAssistantKnowledgeNamespace(
-    data: { branchId?: string; branch_id?: string } | string,
-    params?: Params
-  ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }>;
-
   /**
    * Find branch by repo_id and name
    */
@@ -639,10 +624,7 @@ function extendBoardsService(client: AgorClient): void {
         'clone',
         'setPrimaryTeammate',
         'clearPrimaryTeammate',
-        'ensureTeammateWelcomeNote',
-        'setPrimaryAssistant',
-        'clearPrimaryAssistant',
-        'ensureAssistantWelcomeNote'
+        'ensureTeammateWelcomeNote'
       );
     }
   };
@@ -858,8 +840,7 @@ function extendBranchesService(client: AgorClient): void {
     branchesService.methods(
       'updateEnvironment',
       'initializeUnixGroup',
-      'ensureTeammateKnowledgeNamespace',
-      'ensureAssistantKnowledgeNamespace'
+      'ensureTeammateKnowledgeNamespace'
     );
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;

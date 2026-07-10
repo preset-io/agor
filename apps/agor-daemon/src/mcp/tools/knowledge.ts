@@ -823,7 +823,6 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     return textResult({
       branch_id: branch.branch_id,
       teammate: getTeammateConfig(branch),
-      assistant: getTeammateConfig(branch),
       namespace,
       memory,
     });
@@ -834,16 +833,6 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     {
       description:
         "Read the current teammate branch's Knowledge memory/context namespace and recent memory documents. Does not mutate teammate Knowledge config or grants.",
-      annotations: { readOnlyHint: true },
-      inputSchema: teammateContextSchema,
-    },
-    teammateContextHandler
-  );
-
-  server.registerTool(
-    'agor_assistant_context',
-    {
-      description: 'Deprecated alias for agor_teammate_context.',
       annotations: { readOnlyHint: true },
       inputSchema: teammateContextSchema,
     },
@@ -882,16 +871,6 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     {
       description:
         "Search the current teammate branch's primary Knowledge memory namespace. Does not mutate teammate Knowledge config or grants.",
-      annotations: { readOnlyHint: true },
-      inputSchema: teammateMemorySearchSchema,
-    },
-    teammateMemorySearchHandler
-  );
-
-  server.registerTool(
-    'agor_assistant_memory_search',
-    {
-      description: 'Deprecated alias for agor_teammate_memory_search.',
       annotations: { readOnlyHint: true },
       inputSchema: teammateMemorySearchSchema,
     },
@@ -954,16 +933,6 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     {
       description:
         'Search Knowledge through the current teammate branch policy. The teammate policy (whole-KB fallback plus namespace overrides) is checked before the normal user namespace permissions.',
-      annotations: { readOnlyHint: true },
-      inputSchema: teammateKnowledgeSearchSchema,
-    },
-    teammateKnowledgeSearchHandler
-  );
-
-  server.registerTool(
-    'agor_assistant_knowledge_search',
-    {
-      description: 'Deprecated alias for agor_teammate_knowledge_search.',
       annotations: { readOnlyHint: true },
       inputSchema: teammateKnowledgeSearchSchema,
     },
@@ -1074,8 +1043,6 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
           metadata: {
             teammate_memory: true,
             teammate_branch_id: branch.branch_id,
-            assistant_memory: true,
-            assistant_branch_id: branch.branch_id,
             memory_date: date,
           },
         },
@@ -1091,16 +1058,6 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     {
       description:
         "Append one or more memory bullets to the current teammate branch's daily Knowledge memory document.",
-      annotations: { idempotentHint: true },
-      inputSchema: teammateMemoryAppendSchema,
-    },
-    teammateMemoryAppendHandler
-  );
-
-  server.registerTool(
-    'agor_assistant_memory_append',
-    {
-      description: 'Deprecated alias for agor_teammate_memory_append.',
       annotations: { idempotentHint: true },
       inputSchema: teammateMemoryAppendSchema,
     },

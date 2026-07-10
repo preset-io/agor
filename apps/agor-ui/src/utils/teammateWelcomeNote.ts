@@ -26,25 +26,3 @@ export async function ensureTeammateWelcomeNote({
     console.warn('Failed to create teammate welcome note:', error);
   }
 }
-
-export interface AssistantWelcomeNoteInput {
-  client: AgorClient | null;
-  boardId: BoardID | string;
-  assistantName: string;
-  assistantEmoji?: string | null;
-}
-
-/** @deprecated Use ensureTeammateWelcomeNote instead. */
-export async function ensureAssistantWelcomeNote({
-  client,
-  boardId,
-  assistantName,
-  assistantEmoji,
-}: AssistantWelcomeNoteInput): Promise<void> {
-  return ensureTeammateWelcomeNote({
-    client,
-    boardId,
-    teammateName: assistantName,
-    teammateEmoji: assistantEmoji,
-  });
-}

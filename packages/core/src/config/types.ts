@@ -992,10 +992,6 @@ export interface AgorCredentials {
 export interface AgorOnboardingSettings {
   /** Whether AI teammate setup is pending (canonical key consumed by UI wizard) */
   teammatePending?: boolean;
-  /** @deprecated Use teammatePending instead */
-  assistantPending?: boolean;
-  /** @deprecated Use teammatePending instead */
-  persistedAgentPending?: boolean;
   /** Clone URL for the framework repo */
   frameworkRepoUrl?: string;
 }

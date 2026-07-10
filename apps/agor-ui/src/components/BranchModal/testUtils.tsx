@@ -175,7 +175,7 @@ export function makeBranch(overrides: Partial<Branch> = {}): Branch {
   } as unknown as Branch;
 }
 
-export function makeAssistantBranch(
+export function makeTeammateBranch(
   overrides: Partial<Branch> = {},
   configOverrides: Partial<TeammateConfig> = {}
 ): Branch {

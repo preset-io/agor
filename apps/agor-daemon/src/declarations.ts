@@ -229,14 +229,7 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
     data: { id?: string; boardId?: string; branchId: string },
     params?: FeathersParams
   ): Promise<Board>;
-  /** @deprecated Use setPrimaryTeammate instead. */
-  setPrimaryAssistant(
-    data: { id?: string; boardId?: string; branchId: string },
-    params?: FeathersParams
-  ): Promise<Board>;
   clearPrimaryTeammate(boardId: string, params?: FeathersParams): Promise<Board>;
-  /** @deprecated Use clearPrimaryTeammate instead. */
-  clearPrimaryAssistant(boardId: string, params?: FeathersParams): Promise<Board>;
   archive(id: string, params?: FeathersParams): Promise<Board>;
   unarchive(id: string, params?: FeathersParams): Promise<Board>;
 }

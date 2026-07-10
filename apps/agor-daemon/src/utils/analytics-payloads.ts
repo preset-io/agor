@@ -9,7 +9,6 @@ export function buildBranchCreatedAnalyticsProperties(branch: Branch): Record<st
     ref_type: branch.ref_type ?? 'branch',
     new_branch: branch.new_branch,
     is_teammate: isTeammate(branch),
-    is_assistant: isTeammate(branch),
   };
 }
 

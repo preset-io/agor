@@ -355,16 +355,6 @@ export class ConfigService {
       }
       if (data.onboarding.teammatePending !== undefined) {
         config.onboarding.teammatePending = data.onboarding.teammatePending;
-        config.onboarding.assistantPending = data.onboarding.teammatePending;
-      }
-      // Backward compat: also handle legacy field names
-      if (data.onboarding.assistantPending !== undefined) {
-        config.onboarding.teammatePending = data.onboarding.assistantPending;
-        config.onboarding.assistantPending = data.onboarding.assistantPending;
-      }
-      if (data.onboarding.persistedAgentPending !== undefined) {
-        config.onboarding.teammatePending = data.onboarding.persistedAgentPending;
-        config.onboarding.assistantPending = data.onboarding.persistedAgentPending;
       }
       if (data.onboarding.frameworkRepoUrl !== undefined) {
         config.onboarding.frameworkRepoUrl = data.onboarding.frameworkRepoUrl;

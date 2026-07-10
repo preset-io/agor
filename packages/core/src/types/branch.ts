@@ -781,19 +781,6 @@ export interface TeammateConfig {
   kb?: TeammateKnowledgeConfig;
 }
 
-/** @deprecated Use TeammateKnowledgeGrantAccess instead */
-export type AssistantKnowledgeGrantAccess = TeammateKnowledgeGrantAccess;
-/** @deprecated Use TeammateKnowledgeGrant instead */
-export type AssistantKnowledgeGrant = TeammateKnowledgeGrant;
-/** @deprecated Use TeammateKnowledgeConfig instead */
-export type AssistantKnowledgeConfig = TeammateKnowledgeConfig;
-/** @deprecated Use TeammateConfig instead */
-export type AssistantConfig = Omit<TeammateConfig, 'kind'> & {
-  kind: 'teammate' | 'assistant' | 'persisted-agent';
-};
-/** @deprecated Use TeammateConfig instead */
-export type PersistedAgentConfig = AssistantConfig;
-
 /**
  * Type guard: checks if a branch is a teammate.
  * Supports canonical (`custom_context.teammate`) plus legacy
@@ -813,9 +800,6 @@ export function isTeammate(branch: { custom_context?: Record<string, unknown> })
   );
 }
 
-/** @deprecated Use isTeammate instead */
-export const isAssistant = isTeammate;
-/** @deprecated Use isTeammate instead */
 export const isPersistedAgent = isTeammate;
 
 /**
@@ -829,11 +813,10 @@ export function getTeammateConfig(branch: {
   if (!isTeammate(branch)) return null;
   const config = (branch.custom_context!.teammate ??
     branch.custom_context!.assistant ??
-    branch.custom_context!.agent) as TeammateConfig | AssistantConfig;
+    branch.custom_context!.agent) as Omit<TeammateConfig, 'kind'> & {
+    kind: 'teammate' | 'assistant' | 'persisted-agent';
+  };
   return { ...config, kind: 'teammate' };
 }
 
-/** @deprecated Use getTeammateConfig instead */
-export const getAssistantConfig = getTeammateConfig;
-/** @deprecated Use getTeammateConfig instead */
 export const getPersistedAgentConfig = getTeammateConfig;

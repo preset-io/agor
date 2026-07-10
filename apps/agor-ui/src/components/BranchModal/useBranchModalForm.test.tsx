@@ -21,7 +21,7 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { makeAssistantBranch, makeBranch, makeStubClient, makeUser, wrapper } from './testUtils';
+import { makeBranch, makeStubClient, makeTeammateBranch, makeUser, wrapper } from './testUtils';
 import { useBranchModalForm } from './useBranchModalForm';
 
 describe('useBranchModalForm — unified save', () => {
@@ -209,9 +209,9 @@ describe('useBranchModalForm — unified save', () => {
     expect(result.current.generalChanged).toBe(true);
   });
 
-  it('updates board icon only when assistant emoji actually changed', async () => {
+  it('updates board icon only when teammate emoji actually changed', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
-    const branch = makeAssistantBranch({}, { emoji: '🤖' });
+    const branch = makeTeammateBranch({}, { emoji: '🤖' });
     const { client, calls } = makeStubClient({ owners: [alice], users: [alice] });
 
     const { result } = renderHook(
@@ -223,7 +223,7 @@ describe('useBranchModalForm — unified save', () => {
 
     // Change only the display name, leave emoji alone
     act(() => {
-      result.current.setAssistant('displayName', 'Renamed Teammate');
+      result.current.setTeammate('displayName', 'Renamed Teammate');
     });
 
     await act(async () => {
@@ -234,9 +234,9 @@ describe('useBranchModalForm — unified save', () => {
     expect(boardPatches).toHaveLength(0);
   });
 
-  it('does patch the board icon when assistant emoji actually changed', async () => {
+  it('does patch the board icon when teammate emoji actually changed', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
-    const branch = makeAssistantBranch({}, { emoji: '🤖' });
+    const branch = makeTeammateBranch({}, { emoji: '🤖' });
     const { client, calls } = makeStubClient({ owners: [alice], users: [alice] });
 
     const { result } = renderHook(
@@ -247,7 +247,7 @@ describe('useBranchModalForm — unified save', () => {
     await waitFor(() => expect(result.current.loadingOwners).toBe(false));
 
     act(() => {
-      result.current.setAssistant('emoji', '🎯');
+      result.current.setTeammate('emoji', '🎯');
     });
 
     await act(async () => {
@@ -471,9 +471,9 @@ describe('useBranchModalForm — unified save', () => {
     expect(result.current.canControlEnvironment).toBe(true);
   });
 
-  it('shows permissions for assistant branches when the current admin is an owner', async () => {
+  it('shows permissions for teammate branches when the current admin is an owner', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
-    const branch = makeAssistantBranch();
+    const branch = makeTeammateBranch();
     const { client } = makeStubClient({ owners: [alice], users: [alice] });
 
     const { result } = renderHook(

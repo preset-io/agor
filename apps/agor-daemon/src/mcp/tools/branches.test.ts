@@ -316,14 +316,8 @@ describe('agor_branches_create', () => {
 
     const payload = JSON.parse(result.content[0].text) as {
       _teammate?: Record<string, unknown>;
-      _assistant?: Record<string, unknown>;
     };
     expect(payload._teammate).toMatchObject({ created: true, display_name: 'Siebel CRM' });
-    expect(payload._assistant).toMatchObject({
-      deprecated: true,
-      created: true,
-      display_name: 'Siebel CRM',
-    });
   });
 
   it('does not set custom_context when no teammate metadata is provided', async () => {
@@ -425,7 +419,7 @@ describe('branch MCP input schemas', () => {
         repoId: 'repo-1',
         branchName: 'siebel-crm',
         boardId: 'board-1',
-        assistant: { displayName: '   ' },
+        teammate: { displayName: '   ' },
       }).success
     ).toBe(false);
   });
@@ -922,7 +916,7 @@ describe('agor_branches_cleanup_candidates', () => {
     };
   }
 
-  it('applies safe defaults: archived only, older than 7 days, not deleted, not assistant/private', async () => {
+  it('applies safe defaults: archived only, older than 7 days, not deleted, not teammate/private', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
 
@@ -937,9 +931,9 @@ describe('agor_branches_cleanup_candidates', () => {
       }),
       makeBranch({ branch_id: 'deleted', filesystem_status: 'deleted' }),
       makeBranch({
-        branch_id: 'assistant',
+        branch_id: 'teammate',
         filesystem_status: 'ready',
-        custom_context: { assistant: { kind: 'assistant', displayName: 'Helper' } },
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Helper' } },
       }),
       makeBranch({ branch_id: 'private', filesystem_status: 'ready', others_can: 'none' }),
       makeBranch({ branch_id: 'active', archived: false, filesystem_status: 'ready' }),
@@ -966,7 +960,7 @@ describe('agor_branches_cleanup_candidates', () => {
       archived_only: true,
       archived_older_than_days: 7,
       filesystem_statuses: ['ready', 'preserved', 'cleaned'],
-      exclude_assistants: true,
+      exclude_teammates: true,
       exclude_private: true,
     });
     expect(parsed.candidates[0]).toMatchObject({
@@ -1097,15 +1091,15 @@ describe('agor_branches_cleanup_candidates', () => {
     ).toEqual(['good-date']);
   });
 
-  it('supports explicit archivedBefore and opt-in inclusion of assistant/private branches', async () => {
+  it('supports explicit archivedBefore and opt-in inclusion of teammate/private branches', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-03T00:00:00.000Z'));
 
     const { app } = makeCleanupApp([
       makeBranch({
-        branch_id: 'assistant',
+        branch_id: 'teammate',
         filesystem_status: 'ready',
-        custom_context: { assistant: { kind: 'assistant', displayName: 'Helper' } },
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Helper' } },
       }),
       makeBranch({ branch_id: 'private', filesystem_status: 'ready', others_can: 'none' }),
       makeBranch({
@@ -1123,18 +1117,18 @@ describe('agor_branches_cleanup_candidates', () => {
 
     const result = await cleanupCandidates({
       archivedBefore: '2026-05-21T00:00:00.000Z',
-      excludeAssistants: false,
+      excludeTeammates: false,
       excludePrivate: false,
     });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(
       parsed.candidates.map((candidate: { branch_id: string }) => candidate.branch_id)
-    ).toEqual(['assistant', 'private']);
+    ).toEqual(['teammate', 'private']);
     expect(parsed.safety).toMatchObject({
       cutoff_source: 'archivedBefore',
       archived_older_than_days: null,
-      exclude_assistants: false,
+      exclude_teammates: false,
       exclude_private: false,
     });
   });
@@ -1197,15 +1191,15 @@ describe('agor_branches_cleanup_candidates', () => {
   });
 });
 
-describe('agor_assistants_list', () => {
-  it('delegates to the targeted assistant repository query instead of paginating branches first', async () => {
+describe('agor_teammates_list', () => {
+  it('delegates to the targeted teammate repository query instead of paginating branches first', async () => {
     const baseServiceParams = {
       authenticated: true,
       provider: 'mcp',
       user: { user_id: 'user-1', role: 'member' },
     };
     const hodorLikeBranch = {
-      branch_id: 'assistant-branch-1',
+      branch_id: 'teammate-branch-1',
       repo_id: 'repo-1',
       name: 'private-hodor-like',
       board_id: 'board-1',
@@ -1213,8 +1207,8 @@ describe('agor_assistants_list', () => {
       archived: false,
       storage_mode: 'clone',
       custom_context: {
-        assistant: {
-          kind: 'assistant',
+        teammate: {
+          kind: 'teammate',
           displayName: 'Hodor-like',
           emoji: '🚪',
           kb: {
@@ -1238,20 +1232,20 @@ describe('agor_assistants_list', () => {
       },
     };
 
-    const listAssistants = registerAndCaptureHandler('agor_assistants_list', {
+    const listTeammates = registerAndCaptureHandler('agor_teammates_list', {
       app,
       userId: 'user-1',
       baseServiceParams,
     });
 
-    const result = await listAssistants({ limit: 200 });
+    const result = await listTeammates({ limit: 200 });
     const parsed = JSON.parse(result.content[0].text);
 
     expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
     expect(parsed.total).toBe(1);
-    expect(parsed.assistants).toEqual([
+    expect(parsed.teammates).toEqual([
       expect.objectContaining({
-        branch_id: 'assistant-branch-1',
+        branch_id: 'teammate-branch-1',
         name: 'private-hodor-like',
         display_name: 'Hodor-like',
         emoji: '🚪',
@@ -1260,7 +1254,7 @@ describe('agor_assistants_list', () => {
     ]);
   });
 
-  it('shapes schedule-only legacy assistant backfill rows returned by the repository', async () => {
+  it('shapes schedule-only legacy teammate backfill rows returned by the repository', async () => {
     const baseServiceParams = {
       authenticated: true,
       provider: 'mcp',
@@ -1270,7 +1264,7 @@ describe('agor_assistants_list', () => {
       branch_id: 'legacy-scheduled-branch',
       repo_id: 'repo-1',
       name: 'datagor-like',
-      notes: 'Legacy assistant bootstrapped before custom_context marker backfill.',
+      notes: 'Legacy teammate bootstrapped before custom_context marker backfill.',
       board_id: 'board-1',
       last_used: '2026-06-24T00:00:00.000Z',
       archived: false,
@@ -1285,27 +1279,27 @@ describe('agor_assistants_list', () => {
       },
     };
 
-    const listAssistants = registerAndCaptureHandler('agor_assistants_list', {
+    const listTeammates = registerAndCaptureHandler('agor_teammates_list', {
       app,
       userId: 'user-1',
       baseServiceParams,
     });
 
-    const result = await listAssistants({});
+    const result = await listTeammates({});
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.total).toBe(1);
-    expect(parsed.assistants[0]).toEqual(
+    expect(parsed.teammates[0]).toEqual(
       expect.objectContaining({
         branch_id: 'legacy-scheduled-branch',
         name: 'datagor-like',
         display_name: 'datagor-like',
-        description: 'Legacy assistant bootstrapped before custom_context marker backfill.',
+        description: 'Legacy teammate bootstrapped before custom_context marker backfill.',
       })
     );
   });
 
-  it('does not scope assistant discovery for superadmins when superadmin bypass is enabled', async () => {
+  it('does not scope teammate discovery for superadmins when superadmin bypass is enabled', async () => {
     vi.spyOn(configModule, 'isBranchRbacEnabled').mockReturnValue(true);
     vi.spyOn(configModule, 'loadConfig').mockResolvedValue({
       execution: { allow_superadmin: true },
@@ -1320,7 +1314,7 @@ describe('agor_assistants_list', () => {
       },
     };
 
-    const listAssistants = registerAndCaptureHandler('agor_assistants_list', {
+    const listTeammates = registerAndCaptureHandler('agor_teammates_list', {
       app,
       userId: 'superadmin-1',
       authenticatedUser: {
@@ -1330,12 +1324,12 @@ describe('agor_assistants_list', () => {
       },
     });
 
-    await listAssistants({});
+    await listTeammates({});
 
     expect(findTeammateBranches).toHaveBeenCalledWith({ archived: false, limit: 200 });
   });
 
-  it('scopes assistant discovery for superadmins when superadmin bypass is disabled', async () => {
+  it('scopes teammate discovery for superadmins when superadmin bypass is disabled', async () => {
     vi.spyOn(configModule, 'isBranchRbacEnabled').mockReturnValue(true);
     vi.spyOn(configModule, 'loadConfig').mockResolvedValue({
       execution: { allow_superadmin: false },
@@ -1350,7 +1344,7 @@ describe('agor_assistants_list', () => {
       },
     };
 
-    const listAssistants = registerAndCaptureHandler('agor_assistants_list', {
+    const listTeammates = registerAndCaptureHandler('agor_teammates_list', {
       app,
       userId: 'superadmin-1',
       authenticatedUser: {
@@ -1360,7 +1354,7 @@ describe('agor_assistants_list', () => {
       },
     });
 
-    await listAssistants({});
+    await listTeammates({});
 
     expect(findTeammateBranches).toHaveBeenCalledWith({
       archived: false,

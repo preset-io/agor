@@ -325,7 +325,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             // listeners stay live underneath.
             isActive={isOpen}
             genealogy={session.genealogy}
-            assistantEmoji={
+            teammateEmoji={
               branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
             }
             forceExpandAll={forceExpandAll}

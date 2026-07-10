@@ -87,12 +87,3 @@ export function buildTeammateBootstrapPromptContext({
 export function buildTeammateBootstrapPrompt(input: TeammateBootstrapPromptInput): string {
   return formatTeammateBootstrapPrompt(buildTeammateBootstrapPromptContext(input));
 }
-
-/** @deprecated Use TeammateBootstrapPromptInput instead. */
-export type AssistantBootstrapPromptInput = TeammateBootstrapPromptInput;
-/** @deprecated Use TeammateBootstrapPromptContext instead. */
-export type AssistantBootstrapPromptContext = TeammateBootstrapPromptContext;
-/** @deprecated Use buildTeammateBootstrapPromptContext instead. */
-export const buildAssistantBootstrapPromptContext = buildTeammateBootstrapPromptContext;
-/** @deprecated Use buildTeammateBootstrapPrompt instead. */
-export const buildAssistantBootstrapPrompt = buildTeammateBootstrapPrompt;

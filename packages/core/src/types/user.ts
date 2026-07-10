@@ -361,7 +361,7 @@ export interface EventStreamPreferences {
  */
 export interface OnboardingState {
   /** Which path the user took */
-  path?: 'teammate' | 'assistant' | 'own-repo' | 'persisted-agent';
+  path?: 'teammate' | 'own-repo';
   /** The repo ID associated with this onboarding (framework repo or user's repo) */
   repoId?: string;
   /** The branch ID created during onboarding */
@@ -372,10 +372,6 @@ export interface OnboardingState {
   teammateDisplayName?: string;
   /** Teammate emoji captured during onboarding identity step */
   teammateEmoji?: string;
-  /** @deprecated Use teammateDisplayName instead. */
-  assistantDisplayName?: string;
-  /** @deprecated Use teammateEmoji instead. */
-  assistantEmoji?: string;
 }
 
 /**

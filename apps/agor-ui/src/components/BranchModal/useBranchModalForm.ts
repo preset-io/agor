@@ -77,14 +77,8 @@ export interface BranchModalFormApi {
 
   // Teammate slice
   teammate: TeammateFormState;
-  /** @deprecated Use teammate instead. */
-  assistant: TeammateFormState;
   setTeammate: <K extends keyof TeammateFormState>(key: K, value: TeammateFormState[K]) => void;
   teammateChanged: boolean;
-  /** @deprecated Use setTeammate instead. */
-  setAssistant: <K extends keyof TeammateFormState>(key: K, value: TeammateFormState[K]) => void;
-  /** @deprecated Use teammateChanged instead. */
-  assistantChanged: boolean;
 
   // Permissions slice
   permissions: PermissionsFormState;
@@ -687,11 +681,8 @@ export function useBranchModalForm({
     setGeneral,
     generalChanged,
     teammate,
-    assistant: teammate,
     setTeammate,
-    setAssistant: setTeammate,
     teammateChanged,
-    assistantChanged: teammateChanged,
     permissions,
     setPermissions,
     permissionsChanged,
@@ -713,6 +704,3 @@ export function useBranchModalForm({
     reset,
   };
 }
-
-/** @deprecated Use TeammateFormState instead. */
-export type AssistantFormState = TeammateFormState;

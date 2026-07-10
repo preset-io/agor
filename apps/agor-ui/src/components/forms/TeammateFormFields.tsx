@@ -182,8 +182,3 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
     </>
   );
 };
-
-/** @deprecated Use TeammateFormFields instead. */
-export type AssistantFormFieldsProps = TeammateFormFieldsProps;
-/** @deprecated Use TeammateFormFields instead. */
-export const AssistantFormFields = TeammateFormFields;

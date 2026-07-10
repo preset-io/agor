@@ -73,7 +73,7 @@ const { useToken } = theme;
 
 const CLONE_TIMEOUT_MS = 120_000;
 
-type WizardPath = 'teammate' | 'assistant';
+type WizardPath = 'teammate';
 type WizardStep = 'identity' | 'llm' | 'loading';
 type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth';
 type SetupStage = 'idle' | 'cloning' | 'board' | 'branch' | 'session' | 'done' | 'error';
@@ -117,8 +117,6 @@ export interface OnboardingWizardProps {
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
   teammatePending?: boolean;
-  /** @deprecated Use teammatePending instead. */
-  assistantPending?: boolean;
   frameworkRepoUrl?: string;
 }
 
@@ -309,11 +307,11 @@ export function OnboardingWizard({
   useEffect(() => {
     if (!open || !user) return;
     const onboarding = user.preferences?.onboarding;
-    const savedDisplayName = onboarding?.teammateDisplayName ?? onboarding?.assistantDisplayName;
+    const savedDisplayName = onboarding?.teammateDisplayName;
     if (typeof savedDisplayName === 'string') {
       setTeammateDisplayName(savedDisplayName || 'My Teammate');
     }
-    const savedEmoji = onboarding?.teammateEmoji ?? onboarding?.assistantEmoji;
+    const savedEmoji = onboarding?.teammateEmoji;
     if (typeof savedEmoji === 'string') {
       setTeammateEmoji(savedEmoji || '🤖');
     }

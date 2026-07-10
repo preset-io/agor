@@ -159,7 +159,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   };
 
   // Derive board comments only when the comments tab is actually visible. The
-  // default assistant tab does not need to scan the global comment map during
+  // default teammate tab does not need to scan the global comment map during
   // Home → board navigation.
   const comments = useMemo(
     () =>
@@ -213,7 +213,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     setSelectedTeammateId(teammateOptions[0]?.value);
   }, [teammateOptions, selectedTeammateId]);
 
-  const handleAssignAssistant = async () => {
+  const handleAssignTeammate = async () => {
     if (!board || !client || !selectedTeammateId) return;
 
     const teammate = branchById.get(selectedTeammateId);
@@ -417,7 +417,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           )}
           <Button
             type="primary"
-            onClick={handleAssignAssistant}
+            onClick={handleAssignTeammate}
             loading={assigningTeammate}
             disabled={!selectedTeammateId || !board || !client}
           >

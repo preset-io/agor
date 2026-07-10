@@ -366,7 +366,7 @@ export const App: React.FC<AppProps> = ({
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<
-    'branch' | 'teammate' | 'assistant' | 'board' | 'repository'
+    'branch' | 'teammate' | 'board' | 'repository'
   >('teammate');
   const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
     x: number;
@@ -697,7 +697,7 @@ export const App: React.FC<AppProps> = ({
   );
 
   const handleHomeOpenCreateDialog = useCallback(
-    (tab?: 'branch' | 'teammate' | 'assistant' | 'board' | 'repository', boardId?: string) => {
+    (tab?: 'branch' | 'teammate' | 'board' | 'repository', boardId?: string) => {
       if (boardId) navigation.goToBoard(boardId);
       setNewBranchDefaultPosition(null);
       setCreateDialogDefaultTab(tab || 'teammate');
@@ -795,7 +795,7 @@ export const App: React.FC<AppProps> = ({
 
   // Shared by every TeammatePanelRail button: expand the panel onto
   // whichever tab was clicked.
-  const handleSelectAssistantPanelTab = useCallback(
+  const handleSelectTeammatePanelTab = useCallback(
     (tab: BoardTeammatePanelTab) => {
       applyLeftPanelState(getSelectTeammatePanelTabState(tab));
     },
@@ -950,7 +950,7 @@ export const App: React.FC<AppProps> = ({
         `AI teammate branch was created, but the first session could not start: ${
           error instanceof Error ? error.message : String(error)
         }. Opening the branch instead.`,
-        { key: 'assistant-bootstrap-session', duration: 8 }
+        { key: 'teammate-bootstrap-session', duration: 8 }
       );
     }
 
@@ -1071,8 +1071,7 @@ export const App: React.FC<AppProps> = ({
   const sessionSettingsSession =
     useAgorStore(useMemo(() => makeSessionSelector(sessionSettingsId), [sessionSettingsId])) ??
     null;
-  const primaryTeammateId =
-    currentBoard?.primary_teammate_id ?? currentBoard?.primary_assistant_id ?? null;
+  const primaryTeammateId = currentBoard?.primary_teammate_id ?? null;
   const primaryTeammateBranch = useAgorStore(
     useMemo(() => makeBranchSelector(primaryTeammateId), [primaryTeammateId])
   );
@@ -1226,10 +1225,10 @@ export const App: React.FC<AppProps> = ({
   const stableOnResolveComment = useStableCallback(onResolveComment);
   const stableOnToggleReaction = useStableCallback(onToggleReaction);
   const stableOnDeleteComment = useStableCallback(onDeleteComment);
-  const handleAssistantSendComment = useStableCallback((content: string) =>
+  const handleTeammateSendComment = useStableCallback((content: string) =>
     onSendComment?.(currentBoardId || '', content)
   );
-  const handleAssistantCollapse = useStableCallback(() => setCommentsPanelCollapsed(true));
+  const handleTeammateCollapse = useStableCallback(() => setCommentsPanelCollapsed(true));
 
   // Identity-stable branch actions for EventStreamPanel (previously an inline
   // object literal whose identity flipped on every shell render).
@@ -1331,7 +1330,7 @@ export const App: React.FC<AppProps> = ({
             }}
           >
             <Panel
-              id="assistant-panel"
+              id="teammate-panel"
               order={1}
               ref={commentsPanelRef}
               collapsible
@@ -1350,7 +1349,7 @@ export const App: React.FC<AppProps> = ({
               {leftPanelCollapsed ? (
                 leftPanelRailVisible && (
                   <TeammatePanelRail
-                    onSelectTab={handleSelectAssistantPanelTab}
+                    onSelectTab={handleSelectTeammatePanelTab}
                     unreadCommentsCount={unreadCommentsCount}
                     hasUserMentions={hasUserMentions}
                   />
@@ -1379,14 +1378,14 @@ export const App: React.FC<AppProps> = ({
                   onViewLogs={setLogsModalBranchId}
                   onNukeEnvironment={stableOnNukeEnvironment}
                   onExecuteScheduleNow={stableOnExecuteScheduleNow}
-                  onSendComment={handleAssistantSendComment}
+                  onSendComment={handleTeammateSendComment}
                   onReplyComment={stableOnReplyComment}
                   onResolveComment={stableOnResolveComment}
                   onToggleReaction={stableOnToggleReaction}
                   onDeleteComment={stableOnDeleteComment}
                   hoveredCommentId={hoveredCommentId}
                   selectedCommentId={selectedCommentId}
-                  onCollapse={handleAssistantCollapse}
+                  onCollapse={handleTeammateCollapse}
                   deferSessionDetails={homeExitPanelDetailsDeferred}
                   onDeferredDetailsHydrated={handleDeferredDetailsHydrated}
                 />

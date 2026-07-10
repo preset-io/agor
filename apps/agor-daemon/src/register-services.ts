@@ -328,9 +328,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           'setPrimaryTeammate',
           'clearPrimaryTeammate',
           'ensureTeammateWelcomeNote',
-          'setPrimaryAssistant',
-          'clearPrimaryAssistant',
-          'ensureAssistantWelcomeNote',
         ],
       }
     );
@@ -372,7 +369,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'updateEnvironment',
       'initializeUnixGroup',
       'ensureTeammateKnowledgeNamespace',
-      'ensureAssistantKnowledgeNamespace',
     ],
   });
 

@@ -3103,18 +3103,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireMinimumRole(ROLES.MEMBER, 'create teammate welcome note'),
         ensureCanMutateBoard('create teammate welcome note'),
       ],
-      setPrimaryAssistant: [
-        requireMinimumRole(ROLES.MEMBER, 'set primary teammate'),
-        ensureCanMutateBoard('set primary teammate'),
-      ],
-      clearPrimaryAssistant: [
-        requireMinimumRole(ROLES.MEMBER, 'clear primary teammate'),
-        ensureCanMutateBoard('clear primary teammate'),
-      ],
-      ensureAssistantWelcomeNote: [
-        requireMinimumRole(ROLES.MEMBER, 'create teammate welcome note'),
-        ensureCanMutateBoard('create teammate welcome note'),
-      ],
     },
     after: {
       // Strip private artifact objects from board.objects for non-owners
@@ -3237,32 +3225,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             teammateWelcomeNoteMutated?: boolean;
           };
           if (context.result && teammateWelcomeNoteMutated.teammateWelcomeNoteMutated) {
-            emitBoardPatched(context.result);
-          }
-          return context;
-        },
-      ],
-      setPrimaryAssistant: [
-        clearRealtimeBranchVisibility,
-        async (context: HookContext<Board>) => {
-          emitBoardPatched(context.result);
-          return context;
-        },
-      ],
-      clearPrimaryAssistant: [
-        clearRealtimeBranchVisibility,
-        async (context: HookContext<Board>) => {
-          emitBoardPatched(context.result);
-          return context;
-        },
-      ],
-      ensureAssistantWelcomeNote: [
-        clearRealtimeBranchVisibility,
-        async (context: HookContext<Board>) => {
-          const welcomeNoteMutated = context.params as typeof context.params & {
-            teammateWelcomeNoteMutated?: boolean;
-          };
-          if (context.result && welcomeNoteMutated.teammateWelcomeNoteMutated) {
             emitBoardPatched(context.result);
           }
           return context;

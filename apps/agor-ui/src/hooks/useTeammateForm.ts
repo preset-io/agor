@@ -65,6 +65,3 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
     resetForm,
   };
 }
-
-/** @deprecated Use useTeammateForm instead. */
-export const useAssistantForm = useTeammateForm;

@@ -19,7 +19,6 @@ import { type BranchUpdate, useBranchModalForm } from './useBranchModalForm';
 export type BranchModalTab =
   | 'general'
   | 'teammate'
-  | 'assistant'
   | 'knowledge'
   | 'sessions'
   | 'environment'
@@ -94,7 +93,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
   useEffect(() => {
     if (open) {
-      setActiveTab(defaultTab === 'assistant' ? 'teammate' : defaultTab || 'general');
+      setActiveTab(defaultTab || 'general');
     }
   }, [open, defaultTab]);
 

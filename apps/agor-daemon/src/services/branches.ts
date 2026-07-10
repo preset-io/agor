@@ -875,14 +875,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
   }
 
-  /** @deprecated Use ensureTeammateKnowledgeNamespace instead. */
-  async ensureAssistantKnowledgeNamespace(
-    data: { branchId?: string; branch_id?: string } | string,
-    params?: BranchParams
-  ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }> {
-    return this.ensureTeammateKnowledgeNamespace(data, params);
-  }
-
   private isPlainObject(value: unknown): value is Record<string, unknown> {
     return (
       value !== null &&

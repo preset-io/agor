@@ -47,8 +47,6 @@ export const ENTITY_PILL_COLORS = {
   session: 'default',
   board: 'blue',
   teammate: 'geekblue',
-  /** @deprecated Use teammate instead. */
-  assistant: 'geekblue',
   mcp: 'purple',
   user: 'orange',
   artifact: 'gold',
@@ -1028,7 +1026,6 @@ export const TeammatePill: React.FC<TeammatePillProps> = ({
 );
 
 /** @deprecated Use TeammatePill instead. */
-export const AssistantPill = TeammatePill;
 
 interface SessionPillProps extends BasePillProps {
   label?: React.ReactNode;

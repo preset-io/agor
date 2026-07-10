@@ -103,10 +103,3 @@ export async function createTeammateBranch(
 
   return branch;
 }
-
-/** @deprecated Use TeammateCreationInput instead. */
-export type AssistantCreationInput = TeammateCreationInput;
-/** @deprecated Use TeammateCreationDeps instead. */
-export type AssistantCreationDeps = TeammateCreationDeps;
-/** @deprecated Use createTeammateBranch instead. */
-export const createAssistantBranch = createTeammateBranch;

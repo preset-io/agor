@@ -12,10 +12,10 @@ import { describe, expect, it } from 'vitest';
 import { BranchModal } from './BranchModal';
 import { buildTeammateKnowledgePatch } from './tabs/KnowledgeTab';
 import {
-  makeAssistantBranch,
   makeBranch,
   makeRepo,
   makeStubClient,
+  makeTeammateBranch,
   makeUser,
   renderWithApp,
 } from './testUtils';
@@ -83,7 +83,7 @@ describe('BranchModal — permissions tab visibility', () => {
     const seb = makeUser({ user_id: 'seb', role: 'admin' });
 
     renderBranchModal({
-      branch: makeAssistantBranch(),
+      branch: makeTeammateBranch(),
       currentUser: seb,
       client: makeStubClient({ owners: [seb], users: [seb] }).client,
     });
@@ -93,7 +93,7 @@ describe('BranchModal — permissions tab visibility', () => {
   });
 
   it('builds Knowledge patches against modern custom_context.teammate storage', () => {
-    const branch = makeAssistantBranch();
+    const branch = makeTeammateBranch();
     const kb = {
       primary_namespace_id: 'ns-new',
       primary_namespace_slug: 'new-home',
