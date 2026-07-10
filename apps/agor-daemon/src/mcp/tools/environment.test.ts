@@ -172,6 +172,55 @@ describe('environment tool authorization plumbing', () => {
     );
     expect(startCalls).toEqual([['wt-1', params]]);
   });
+
+  it('validates environment variants through tenant-scoped repo reads', async () => {
+    const { runWithTenantDatabaseScope } = await import('@agor/core/db');
+    vi.mocked(runWithTenantDatabaseScope).mockClear();
+
+    const params = {
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' as const },
+    };
+    const repoGetCalls: unknown[][] = [];
+    const renderCalls: unknown[][] = [];
+    const ctx = {
+      ...makeCtx({
+        repos: {
+          get: async (...args: unknown[]) => {
+            repoGetCalls.push(args);
+            return fakeRepo;
+          },
+        },
+        branches: {
+          get: async () => ({
+            branch_id: 'wt-1',
+            repo_id: 'repo-1',
+            environment_variant: 'dev',
+            environment_instance: { status: 'stopped' },
+          }),
+          renderEnvironment: async (...args: unknown[]) => {
+            renderCalls.push(args);
+            return { branch_id: 'wt-1', environment_variant: 'e2e' };
+          },
+        },
+      }),
+      baseServiceParams: params,
+    };
+
+    const handler = await captureEnvironmentTool(ctx, 'agor_environment_set');
+    const result = await handler({ branchId: 'wt-1', variant: 'e2e' });
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.success).toBe(true);
+    expect(runWithTenantDatabaseScope).toHaveBeenCalledWith(
+      ctx.db,
+      'tenant-a',
+      expect.any(Function)
+    );
+    expect(repoGetCalls).toEqual([['repo-1', params]]);
+    expect(renderCalls).toEqual([['wt-1', { variant: 'e2e' }, params]]);
+  });
 });
 
 // ---------------------------------------------------------------------------

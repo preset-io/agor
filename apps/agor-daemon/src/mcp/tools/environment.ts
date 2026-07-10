@@ -230,7 +230,9 @@ export function registerEnvironmentTools(server: McpServer, ctx: McpContext): vo
 
         if (variant) {
           const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
-          const repo = await reposService.get(branch.repo_id);
+          const repo = await runWithMcpEnvironmentTenant(ctx, () =>
+            reposService.get(branch.repo_id, ctx.baseServiceParams)
+          );
           assertValidVariant(repo, variant);
         }
 
