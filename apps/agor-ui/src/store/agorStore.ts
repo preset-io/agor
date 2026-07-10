@@ -29,7 +29,7 @@ import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createStore } from 'zustand/vanilla';
 import type { InitialLoadItemKey, InitialLoadingStage } from '../hooks/useAgorData';
-import { bumpRevision, getHydrationRevision } from './agorHydration';
+import { bumpRevision } from './agorHydration';
 import {
   type DataMaps,
   EMPTY_MAPS,
@@ -187,19 +187,6 @@ function branchLinkOwnerSignature(state: AgorState, branchId: string): string {
 
 function sessionLinkOwnerSignature(state: AgorState, sessionId: string): string {
   return linkOwnerSignature(state.linksBySession.get(sessionId));
-}
-
-function shouldSuppressFullOwnerLinksResult(
-  beforeRevision: number,
-  beforeSignature: string,
-  currentSignature: string
-): boolean {
-  const revisionChanged = getHydrationRevision('links') !== beforeRevision;
-  if (!revisionChanged && currentSignature === beforeSignature) return false;
-  // Suppress only when this owner changed while the request was in flight.
-  // Unrelated link writes may bump the global links revision, but they should
-  // not cancel this owner-scoped replacement.
-  return currentSignature !== beforeSignature;
 }
 
 export const agorStore = createStore<AgorState>()(
@@ -365,7 +352,6 @@ export const agorStore = createStore<AgorState>()(
 
     fetchAndReplaceFullSessionLinks: async (client, sessionId) => {
       const requestGeneration = invalidateSessionFullLinkRequests(sessionId);
-      const beforeRevision = getHydrationRevision('links');
       const beforeSignature = sessionLinkOwnerSignature(get(), sessionId);
       const links = await client.service('links').findAll({
         query: {
@@ -377,11 +363,7 @@ export const agorStore = createStore<AgorState>()(
 
       if (
         !isLatestSessionFullLinkRequest(sessionId, requestGeneration) ||
-        shouldSuppressFullOwnerLinksResult(
-          beforeRevision,
-          beforeSignature,
-          sessionLinkOwnerSignature(get(), sessionId)
-        )
+        sessionLinkOwnerSignature(get(), sessionId) !== beforeSignature
       ) {
         return [];
       }
@@ -392,7 +374,6 @@ export const agorStore = createStore<AgorState>()(
 
     fetchAndReplaceFullBranchLinks: async (client, branchId) => {
       const requestGeneration = invalidateBranchFullLinkRequests(branchId);
-      const beforeRevision = getHydrationRevision('links');
       const beforeSignature = branchLinkOwnerSignature(get(), branchId);
       const links = await client.service('links').findAll({
         query: {
@@ -404,11 +385,7 @@ export const agorStore = createStore<AgorState>()(
 
       if (
         !isLatestBranchFullLinkRequest(branchId, requestGeneration) ||
-        shouldSuppressFullOwnerLinksResult(
-          beforeRevision,
-          beforeSignature,
-          branchLinkOwnerSignature(get(), branchId)
-        )
+        branchLinkOwnerSignature(get(), branchId) !== beforeSignature
       ) {
         return [];
       }
