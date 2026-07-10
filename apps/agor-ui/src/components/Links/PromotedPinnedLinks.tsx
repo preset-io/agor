@@ -11,7 +11,7 @@ import {
 import { Button, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getLinkContentAction } from './linkContent';
+import { getLinkContentAction, getLinkUnavailableReason } from './linkContent';
 import {
   getCompactLinkDisplayName,
   getLinkDisplaySecondaryLabel,
@@ -25,14 +25,6 @@ interface PromotedPinnedLinksProps {
   items: PromotedPinnedLinkItem[];
   onOverflow?: () => void;
   'data-testid'?: string;
-}
-
-function disabledReasonForItem(item: PromotedPinnedLinkItem): string | null {
-  if (getLinkContentAction(item) || item.href) return null;
-  if (item.source === 'upload' || item.filePath || item.kind === 'image') {
-    return 'Preview/download unavailable';
-  }
-  return 'No safe route is available for this item yet.';
 }
 
 function getTargetDisplay(item: PromotedPinnedLinkItem): string {
@@ -98,7 +90,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
         }}
       >
         {visibleItems.map((item) => {
-          const disabledReason = disabledReasonForItem(item);
+          const disabledReason = getLinkUnavailableReason(item);
           const disabled = Boolean(disabledReason);
           return (
             <Tooltip

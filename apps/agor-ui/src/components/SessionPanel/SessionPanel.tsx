@@ -75,6 +75,7 @@ import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import {
   buildLinkDisplayItems,
   getTeammatePromotionState,
+  getTeammatePromotionUnavailableReason,
   type LinkDisplayItem,
   promoteLinkToTeammate,
 } from '../Links';
@@ -1138,20 +1139,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       sourceBranchId: branch?.branch_id ?? null,
       teammateLinks,
     });
-    const unavailableReason =
-      state.reason === 'no-teammate'
-        ? 'No teammate configured'
-        : state.reason === 'same-owner'
-          ? 'Already on teammate branch'
-          : state.reason === 'missing-source-link'
-            ? 'Cannot promote generated branch metadata'
-            : state.reason === 'missing-target'
-              ? 'Cannot promote a link without a target'
-              : state.reason === 'file-lifetime'
-                ? 'File promotion awaits upload retention support'
-                : state.reason === 'internal-target-access'
-                  ? 'Internal promotion awaits target access checks'
-                  : null;
+    const unavailableReason = getTeammatePromotionUnavailableReason(state);
     const actionKey = state.isPromoted ? state.teammateLink.link_id : item.linkId;
     return {
       isPromoted: state.isPromoted,

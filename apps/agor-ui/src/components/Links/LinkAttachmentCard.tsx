@@ -14,12 +14,18 @@ import type React from 'react';
 import { useThemedMessage } from '../../utils/message';
 import type { LinkImagePreviewTarget } from './LinkImagePreviewModal';
 import { LinkImageThumbnail } from './LinkImageThumbnail';
-import { downloadLinkContent, getSafeLinkContentLabel } from './linkContent';
+import {
+  downloadLinkContent,
+  getLinkContentAction,
+  getLinkPreviewKind,
+  getLinkUnavailableReason,
+  getSafeLinkContentLabel,
+  type LinkContentItem,
+} from './linkContent';
 import {
   getLinkDisplayCategory,
   type LinkDisplayCategory,
   type LinkDisplayTarget,
-  routeForKnowledgeRefUri,
   targetForLinkDisplay,
 } from './linkDisplay';
 
@@ -46,10 +52,6 @@ export interface LinkAttachmentCardProps {
 
 type AttachmentCategory = LinkDisplayCategory;
 
-export function routeForKnowledgeUri(uri?: string | null, basePath = '/kb'): string | null {
-  return routeForKnowledgeRefUri(uri, basePath);
-}
-
 export function targetForLinkAttachment(args: {
   url?: string | null;
   refUri?: string | null;
@@ -57,15 +59,7 @@ export function targetForLinkAttachment(args: {
   return targetForLinkDisplay(args);
 }
 
-export function canUseLinkContentRoute(args: {
-  source?: LinkSource | 'branch' | 'fixture' | string | null;
-  linkId?: string | null;
-  filePath?: string | null;
-}): boolean {
-  return args.source === 'upload' && Boolean(args.linkId) && Boolean(args.filePath);
-}
-
-export function inferLinkAttachmentCategory(args: {
+function inferLinkAttachmentCategory(args: {
   kind?: LinkKind | string | null;
   mimeType?: string | null;
   title?: string | null;
@@ -73,27 +67,6 @@ export function inferLinkAttachmentCategory(args: {
   refUri?: string | null;
 }): AttachmentCategory {
   return getLinkDisplayCategory(args);
-}
-
-export function canPreviewMarkdownLinkAttachment(args: {
-  source?: LinkSource | 'branch' | 'fixture' | string | null;
-  linkId?: string | null;
-  kind?: LinkKind | string | null;
-  mimeType?: string | null;
-  title?: string | null;
-  filePath?: string | null;
-  refUri?: string | null;
-}): boolean {
-  const category = inferLinkAttachmentCategory(args);
-  return canUseLinkContentRoute(args) && (category === 'markdown' || category === 'text');
-}
-
-export function canDownloadLinkAttachment(args: {
-  source?: LinkSource | 'branch' | 'fixture' | string | null;
-  linkId?: string | null;
-  filePath?: string | null;
-}): boolean {
-  return canUseLinkContentRoute(args);
 }
 
 function visualForCategory(category: AttachmentCategory) {
@@ -123,17 +96,6 @@ function visualForCategory(category: AttachmentCategory) {
     default:
       return { label: 'FILE', color: '#595959', icon: <FileOutlined /> };
   }
-}
-
-export function getLinkAttachmentKindLabel(args: {
-  kind?: LinkKind | string | null;
-  mimeType?: string | null;
-  title?: string | null;
-  filePath?: string | null;
-  refUri?: string | null;
-}): string {
-  const category = inferLinkAttachmentCategory(args);
-  return visualForCategory(category).label;
 }
 
 export const LinkAttachmentGlyph: React.FC<{
@@ -215,22 +177,21 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
   const target = targetForLinkAttachment({ url, refUri });
-  const canPreviewImage =
-    kind === 'image' && source === 'upload' && Boolean(linkId) && !disabledReason;
-  const canPreviewMarkdown =
-    canPreviewMarkdownLinkAttachment({ source, linkId, kind, mimeType, title, filePath, refUri }) &&
-    !disabledReason;
-  const canDownload =
-    canDownloadLinkAttachment({ source, linkId, filePath }) &&
-    !canPreviewImage &&
-    !canPreviewMarkdown;
-  const disabled =
-    Boolean(disabledReason) || (!canPreviewImage && !canPreviewMarkdown && !canDownload && !target);
-  const reason =
-    disabledReason ??
-    (!target && !canPreviewImage && !canPreviewMarkdown && !canDownload
-      ? 'Preview/download unavailable'
-      : null);
+  const contentItem: LinkContentItem = {
+    category: inferLinkAttachmentCategory({ kind, mimeType, title, filePath, refUri }),
+    source: source === 'upload' ? 'upload' : undefined,
+    linkId: linkId ?? undefined,
+    filePath: filePath ?? undefined,
+    kind: kind ?? undefined,
+    href: target?.href,
+  };
+  const previewKind = disabledReason ? null : getLinkPreviewKind(contentItem);
+  const contentAction = disabledReason ? null : getLinkContentAction(contentItem);
+  const canPreviewImage = previewKind === 'image';
+  const canPreviewMarkdown = previewKind === 'markdown' || previewKind === 'text';
+  const canDownload = contentAction === 'download';
+  const reason = disabledReason ?? getLinkUnavailableReason(contentItem);
+  const disabled = Boolean(reason);
   const description = getSafeLinkContentLabel(subtitle ?? refUri ?? url ?? filePath);
 
   if (imageThumbnail && canPreviewImage && linkId && onOpenImage) {

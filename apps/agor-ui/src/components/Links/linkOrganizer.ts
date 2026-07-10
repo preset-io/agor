@@ -45,11 +45,11 @@ export function isKnowledgeLinkDisplayItem(item: LinkDisplayItem): boolean {
   return item.category === 'knowledge' || Boolean(item.refUri?.startsWith(KB_URI_PREFIX));
 }
 
-export function isIssuePrLinkDisplayItem(item: LinkDisplayItem): boolean {
+function isIssuePrLinkDisplayItem(item: LinkDisplayItem): boolean {
   return item.category === 'issue' || item.category === 'pr';
 }
 
-export function isWebLinkDisplayItem(item: LinkDisplayItem): boolean {
+function isWebLinkDisplayItem(item: LinkDisplayItem): boolean {
   return (
     !isFileLinkDisplayItem(item) &&
     !isKnowledgeLinkDisplayItem(item) &&

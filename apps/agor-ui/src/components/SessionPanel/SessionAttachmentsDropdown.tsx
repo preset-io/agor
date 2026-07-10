@@ -38,7 +38,6 @@ import {
   matchesSessionAttachmentSearch as itemMatchesSearch,
   matchesSessionAttachmentCategory as matchesCategory,
   type SessionAttachmentItem,
-  targetForSessionAttachment as targetForItem,
 } from './sessionAttachmentModel';
 
 export type { SessionAttachmentItem } from './sessionAttachmentModel';
@@ -142,14 +141,13 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
       void downloadItem(item);
       return;
     }
-    const target = targetForItem(item);
-    if (!target) return;
+    if (!item.href) return;
     setPopoverOpen(false);
-    if (target.navigation === 'spa') {
-      navigate(target.href);
+    if (item.navigation === 'spa') {
+      navigate(item.href);
       return;
     }
-    window.open(target.href, '_blank', 'noopener,noreferrer');
+    window.open(item.href, '_blank', 'noopener,noreferrer');
   };
 
   const drawerItems = visibleItems

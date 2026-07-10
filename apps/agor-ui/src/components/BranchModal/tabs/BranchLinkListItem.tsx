@@ -13,11 +13,11 @@ import {
   getCompactLinkDisplayName,
   getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
+  getTeammatePromotionActionLabel,
   getTeammatePromotionState,
-  isFileLinkDisplayItem,
   type LinkDisplayItem,
 } from '../../Links';
-import { getLinkContentAction } from '../../Links/linkContent';
+import { getLinkContentAction, getLinkUnavailableReason } from '../../Links/linkContent';
 
 interface BranchLinkListItemProps {
   item: LinkDisplayItem;
@@ -33,13 +33,6 @@ interface BranchLinkListItemProps {
   onTogglePinned: (item: LinkDisplayItem) => void | Promise<void>;
   onPromote: (item: LinkDisplayItem) => void | Promise<void>;
   onRemove: (item: LinkDisplayItem, teammateLinkId: string) => void | Promise<void>;
-}
-
-function unavailableReason(item: LinkDisplayItem): string | null {
-  if (item.href || getLinkContentAction(item)) return null;
-  return isFileLinkDisplayItem(item)
-    ? 'No preview/download route is available yet.'
-    : 'No safe route is available for this item yet.';
 }
 
 function shouldIgnoreActivation(target: EventTarget | null): boolean {
@@ -198,17 +191,6 @@ function PinAction({
   );
 }
 
-function promotionLabel(state: ReturnType<typeof getTeammatePromotionState>): string {
-  if (state.canPromote) return state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
-  if (state.reason === 'no-teammate') return 'No teammate configured';
-  if (state.reason === 'same-owner') return 'Already on teammate branch';
-  if (state.reason === 'missing-source-link') return 'Cannot add generated branch metadata';
-  if (state.reason === 'file-lifetime') return 'File promotion awaits upload retention support';
-  if (state.reason === 'internal-target-access')
-    return 'Internal promotion awaits target access checks';
-  return 'Cannot add this link';
-}
-
 function PromotionAction(props: BranchLinkListItemProps) {
   const { token } = theme.useToken();
   const state = getTeammatePromotionState({
@@ -219,7 +201,7 @@ function PromotionAction(props: BranchLinkListItemProps) {
   });
   const busy =
     props.teammateBusyKey === (state.teammateLink?.link_id ?? props.item.linkId ?? props.item.key);
-  const label = promotionLabel(state);
+  const label = getTeammatePromotionActionLabel(state);
   return (
     <Tooltip title={state.canPromote ? 'Teammate link actions' : label}>
       <Dropdown
@@ -269,7 +251,7 @@ function PromotionAction(props: BranchLinkListItemProps) {
 
 export function BranchLinkListItem(props: BranchLinkListItemProps) {
   const { token } = theme.useToken();
-  const disabledReason = unavailableReason(props.item);
+  const disabledReason = getLinkUnavailableReason(props.item);
   const disabled = Boolean(disabledReason);
   const targetLabel = getLinkDisplaySecondaryLabel(props.item);
   const activate = () => {

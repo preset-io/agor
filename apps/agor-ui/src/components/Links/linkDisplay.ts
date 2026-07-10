@@ -136,7 +136,7 @@ export function targetForLinkDisplay(args: {
   return null;
 }
 
-export function getRefDisplayLabel(refUri: string): string {
+function getRefDisplayLabel(refUri: string): string {
   if (refUri.startsWith(KB_DOCUMENT_URI_PREFIX)) {
     return `KB document ${refUri.slice(KB_DOCUMENT_URI_PREFIX.length, KB_DOCUMENT_URI_PREFIX.length + 8)}`;
   }
@@ -255,43 +255,6 @@ export function getLinkDisplayGlyphLabel(category: LinkDisplayCategory): string 
   }
 }
 
-export function getLinkDisplayPillLabel(category: LinkDisplayCategory): string {
-  switch (category) {
-    case 'knowledge':
-      return 'Knowledge';
-    case 'image':
-      return 'Image';
-    case 'pdf':
-      return 'PDF';
-    case 'spreadsheet':
-      return 'XLS';
-    case 'csv':
-      return 'CSV';
-    case 'document':
-      return 'Doc';
-    case 'markdown':
-      return 'MD';
-    case 'text':
-      return 'Text';
-    case 'code':
-      return 'Code';
-    case 'json':
-      return 'JSON';
-    case 'log':
-      return 'Log';
-    case 'issue':
-      return 'Issue';
-    case 'pr':
-      return 'PR';
-    case 'url':
-      return 'Link';
-    case 'internal':
-      return 'Ref';
-    default:
-      return 'Link';
-  }
-}
-
 export function getCompactLinkDisplayName(
   item: Pick<LinkDisplayItem, 'name' | 'category'>
 ): string {
@@ -336,7 +299,7 @@ export function getLinkDisplaySecondaryLabel(
   return filename && filename !== item.filePath ? filename : 'Uploaded file';
 }
 
-export function targetKeyForLink(link: Link): string | null {
+function targetKeyForLink(link: Link): string | null {
   if (link.target_key) return link.target_key;
   if (link.url) return normalizeUrlTargetKey(link.url);
   if (link.ref_uri) return normalizeRefTargetKey(link.ref_uri);
@@ -430,7 +393,7 @@ function branchUrlToDisplayItem(args: {
   };
 }
 
-export function mergeLinkDisplayItems(items: LinkDisplayItem[]): LinkDisplayItem[] {
+function mergeLinkDisplayItems(items: LinkDisplayItem[]): LinkDisplayItem[] {
   const byTarget = new Map<string, LinkDisplayItem>();
   for (const item of items) {
     // targetKey is already canonicalized by the shared core helpers. Do not
@@ -448,7 +411,7 @@ export function mergeLinkDisplayItems(items: LinkDisplayItem[]): LinkDisplayItem
   return Array.from(byTarget.values());
 }
 
-export function compareLinkDisplayItems(a: LinkDisplayItem, b: LinkDisplayItem): number {
+function compareLinkDisplayItems(a: LinkDisplayItem, b: LinkDisplayItem): number {
   if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
   const nameOrder = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
   if (nameOrder !== 0) return nameOrder;

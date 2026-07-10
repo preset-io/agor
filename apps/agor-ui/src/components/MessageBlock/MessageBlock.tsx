@@ -34,11 +34,7 @@ import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { CopyableContent } from '../CopyableContent';
-import {
-  LinkAttachmentCard,
-  type LinkAttachmentTarget,
-  routeForKnowledgeUri,
-} from '../Links/LinkAttachmentCard';
+import { LinkAttachmentCard, type LinkAttachmentTarget } from '../Links/LinkAttachmentCard';
 import { LinkImagePreviewModal, type LinkImagePreviewTarget } from '../Links/LinkImagePreviewModal';
 import {
   LinkMarkdownPreviewModal,
@@ -133,18 +129,6 @@ function getAttachmentSubtitle(link: Link): string | null {
   if (link.url) return link.url;
   if (link.kind === 'image' && link.file_path) {
     return getSafeLinkContentLabel(link.file_path);
-  }
-  return null;
-}
-
-function getAttachmentUnavailableReason(link: Link): string | null {
-  if (link.kind === 'image' && link.source === 'upload' && link.file_path && link.link_id)
-    return null;
-  if (link.source === 'upload' && link.file_path && link.link_id) return null;
-  if (link.kind === 'document' || link.file_path || link.source === 'upload')
-    return 'Preview/download unavailable';
-  if (link.kind === 'kb_ref' && !routeForKnowledgeUri(link.ref_uri)) {
-    return 'No safe Knowledge route available';
   }
   return null;
 }
@@ -862,7 +846,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                               refUri={link.ref_uri}
                               filePath={link.file_path}
                               mimeType={link.mime_type}
-                              disabledReason={getAttachmentUnavailableReason(link)}
                               compact
                               onDark={isUser}
                               imageThumbnail

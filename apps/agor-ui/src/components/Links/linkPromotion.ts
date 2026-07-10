@@ -28,6 +28,31 @@ export type TeammatePromotionState =
       reason: null;
     };
 
+export function getTeammatePromotionUnavailableReason(
+  state: TeammatePromotionState
+): string | null {
+  if (state.canPromote) return null;
+  switch (state.reason) {
+    case 'no-teammate':
+      return 'No teammate configured';
+    case 'same-owner':
+      return 'Already on teammate branch';
+    case 'missing-source-link':
+      return 'Cannot promote generated branch metadata';
+    case 'missing-target':
+      return 'Cannot promote a link without a target';
+    case 'file-lifetime':
+      return 'File promotion awaits upload retention support';
+    case 'internal-target-access':
+      return 'Internal promotion awaits target access checks';
+  }
+}
+
+export function getTeammatePromotionActionLabel(state: TeammatePromotionState): string {
+  if (state.canPromote) return state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
+  return getTeammatePromotionUnavailableReason(state) ?? 'Cannot promote this link';
+}
+
 export function findTeammateLinkForTarget(
   source: Pick<LinkDisplayItem, 'targetKey'>,
   teammateLinks: readonly Link[]

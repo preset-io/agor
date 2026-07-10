@@ -2,16 +2,15 @@ import type { LinkDisplayItem } from '../Links';
 import {
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
-  isFileLinkDisplayItem,
   type LinkCategoryTabKey,
   type LinkSortKey,
   matchesLinkCategoryTab,
   matchesLinkDisplaySearch,
 } from '../Links';
-import { type LinkAttachmentTarget, targetForLinkAttachment } from '../Links/LinkAttachmentCard';
 import {
   getLinkContentAction,
   getLinkPreviewKind,
+  getLinkUnavailableReason,
   getSafeLinkContentLabel,
 } from '../Links/linkContent';
 
@@ -33,12 +32,6 @@ export function displayItemToSessionAttachmentItem(item: LinkDisplayItem): Sessi
   };
 }
 
-export function targetForSessionAttachment(
-  item: SessionAttachmentItem
-): LinkAttachmentTarget | null {
-  return targetForLinkAttachment({ url: item.url, refUri: item.refUri });
-}
-
 export function canPreviewSessionImage(item: SessionAttachmentItem): boolean {
   return getLinkPreviewKind(item) === 'image' && !item.disabled;
 }
@@ -54,18 +47,7 @@ export function canDownloadSessionFile(item: SessionAttachmentItem): boolean {
 
 export function sessionAttachmentDisabledReason(item: SessionAttachmentItem): string | null {
   if (item.disabled) return item.note || 'Preview/download unavailable';
-  if (
-    canPreviewSessionImage(item) ||
-    canPreviewSessionMarkdown(item) ||
-    canDownloadSessionFile(item)
-  ) {
-    return null;
-  }
-  if (item.source === 'upload' || isFileLinkDisplayItem(item)) {
-    return item.note || 'Preview/download unavailable';
-  }
-  if (!targetForSessionAttachment(item)) return 'No safe route is available for this item yet.';
-  return null;
+  return getLinkUnavailableReason(item);
 }
 
 export function getSessionAttachmentTargetDisplay(item: SessionAttachmentItem): string {

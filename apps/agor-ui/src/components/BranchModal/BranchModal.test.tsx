@@ -8,6 +8,7 @@
 
 import type { AgorClient, Branch, Link, TeammateConfig, User } from '@agor-live/client';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -55,15 +56,17 @@ function renderBranchModal({
   client: AgorClient;
 }) {
   return renderWithApp(
-    <BranchModal
-      open={true}
-      onClose={() => {}}
-      branch={branch}
-      repo={makeRepo()}
-      sessions={[]}
-      client={client}
-      currentUser={currentUser}
-    />
+    <MemoryRouter>
+      <BranchModal
+        open={true}
+        onClose={() => {}}
+        branch={branch}
+        repo={makeRepo()}
+        sessions={[]}
+        client={client}
+        currentUser={currentUser}
+      />
+    </MemoryRouter>
   );
 }
 

@@ -8,9 +8,13 @@ export interface LinkContentTarget {
   subtitle?: string | null;
 }
 
-export type LinkContentDisposition = 'inline' | 'attachment';
-export type LinkContentAction = 'preview' | 'download';
+type LinkContentDisposition = 'inline' | 'attachment';
+type LinkContentAction = 'preview' | 'download';
 export type LinkPreviewKind = 'image' | 'markdown' | 'text';
+export type LinkContentItem = Pick<
+  LinkDisplayItem,
+  'category' | 'filePath' | 'href' | 'kind' | 'linkId' | 'source'
+>;
 
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const INLINE_IMAGE_ACCEPT = [...INLINE_IMAGE_MIME_TYPES].join(', ');
@@ -31,7 +35,7 @@ const DOWNLOAD_CATEGORIES = new Set<LinkDisplayCategory>([
   'log',
 ]);
 
-export function getLinkContentPath(
+function getLinkContentPath(
   linkId: string,
   disposition: LinkContentDisposition = 'attachment'
 ): string {
@@ -39,7 +43,7 @@ export function getLinkContentPath(
   return `/link-content/${encodedId}?disposition=${disposition}`;
 }
 
-export function getLinkContentUrl(
+function getLinkContentUrl(
   linkId: string,
   disposition: LinkContentDisposition = 'attachment',
   daemonUrl = getDaemonUrl()
@@ -47,12 +51,12 @@ export function getLinkContentUrl(
   return `${daemonUrl.replace(/\/$/, '')}${getLinkContentPath(linkId, disposition)}`;
 }
 
-export function getLinkPreviewKind(item: LinkDisplayItem): LinkPreviewKind | null {
+export function getLinkPreviewKind(item: LinkContentItem): LinkPreviewKind | null {
   if (item.source !== 'upload' || !item.linkId || !item.filePath) return null;
   return PREVIEW_CATEGORIES[item.category] ?? null;
 }
 
-export function getLinkContentAction(item: LinkDisplayItem): LinkContentAction | null {
+export function getLinkContentAction(item: LinkContentItem): LinkContentAction | null {
   if (getLinkPreviewKind(item)) return 'preview';
   if (
     item.source === 'upload' &&
@@ -63,6 +67,14 @@ export function getLinkContentAction(item: LinkDisplayItem): LinkContentAction |
     return 'download';
   }
   return null;
+}
+
+export function getLinkUnavailableReason(item: LinkContentItem): string | null {
+  if (getLinkContentAction(item) || item.href) return null;
+  if (item.source === 'upload' || item.filePath || item.kind === 'image') {
+    return 'Preview/download unavailable';
+  }
+  return 'No safe route is available for this item yet.';
 }
 
 function isLocalFilePathLike(value: string): boolean {
@@ -129,7 +141,7 @@ async function fetchLinkContent(
   return response;
 }
 
-export async function fetchLinkObjectUrl(
+async function fetchLinkObjectUrl(
   linkId: string,
   options?: {
     download?: boolean;
