@@ -163,10 +163,17 @@ export function ingestParsedLinksAfterMessageCreate(app: Application) {
     }
 
     if (drafts.length > 0) {
-      await linksService.create(drafts, {
-        ...context.params,
-        provider: undefined,
-      } as Params);
+      try {
+        await linksService.create(drafts, {
+          ...context.params,
+          provider: undefined,
+        } as Params);
+      } catch (error) {
+        // Link extraction is derived data. The message has already been persisted
+        // when this after hook runs, so a link failure must not turn a successful
+        // message write into a client-visible failure (and possible retry).
+        console.warn('[Links] Failed to ingest parsed message links:', error);
+      }
     }
 
     for (const message of messages) {

@@ -8,6 +8,21 @@
 import type { ChannelType, SlackTestResult } from '../types/gateway';
 
 /**
+ * File attached to an inbound message (provider-neutral shape).
+ *
+ * `url_private_download` is a platform URL that requires the channel's
+ * credentials to fetch; connectors pass it through verbatim and the gateway
+ * decides whether/how to download it.
+ */
+export interface InboundFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  size: number;
+  url_private_download: string;
+}
+
+/**
  * Inbound message from a messaging platform
  */
 export interface InboundMessage {
@@ -15,6 +30,7 @@ export interface InboundMessage {
   text: string;
   userId: string;
   timestamp: string;
+  files?: InboundFile[];
   metadata?: Record<string, unknown>;
 }
 

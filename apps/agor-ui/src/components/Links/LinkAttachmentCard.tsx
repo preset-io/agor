@@ -15,7 +15,11 @@ import { useThemedMessage } from '../../utils/message';
 import type { LinkImagePreviewTarget } from './LinkImagePreviewModal';
 import { LinkImageThumbnail } from './LinkImageThumbnail';
 import { downloadLinkContent, getSafeLinkContentLabel } from './linkContent';
-import { routeForKnowledgeRefUri } from './linkDisplay';
+import {
+  getLinkDisplayCategory,
+  type LinkDisplayCategory,
+  routeForKnowledgeRefUri,
+} from './linkDisplay';
 
 export interface LinkAttachmentTarget {
   href: string;
@@ -41,19 +45,7 @@ export interface LinkAttachmentCardProps {
   onOpenTarget?: (target: LinkAttachmentTarget) => void;
 }
 
-type AttachmentCategory =
-  | 'knowledge'
-  | 'image'
-  | 'pdf'
-  | 'spreadsheet'
-  | 'csv'
-  | 'document'
-  | 'markdown'
-  | 'text'
-  | 'code'
-  | 'json'
-  | 'log'
-  | 'unknown';
+type AttachmentCategory = LinkDisplayCategory;
 
 const KNOWLEDGE_PREFIX = 'agor://kb/';
 const SAFE_WEB_PROTOCOLS = new Set(['http:', 'https:']);
@@ -70,12 +62,6 @@ function getSafeWebUrl(value?: string | null): string | null {
     return null;
   }
 }
-
-const extensionFromPath = (value?: string | null): string => {
-  const cleaned = (value ?? '').split(/[?#]/)[0]?.split('/').pop() ?? '';
-  const dot = cleaned.lastIndexOf('.');
-  return dot >= 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
-};
 
 export function routeForKnowledgeUri(uri?: string | null, basePath = '/kb'): string | null {
   return routeForKnowledgeRefUri(uri, basePath);
@@ -109,63 +95,7 @@ export function inferLinkAttachmentCategory(args: {
   filePath?: string | null;
   refUri?: string | null;
 }): AttachmentCategory {
-  if (args.kind === 'kb_ref' || args.refUri?.startsWith(KNOWLEDGE_PREFIX)) return 'knowledge';
-  if (args.kind === 'image' || args.mimeType?.startsWith('image/')) return 'image';
-
-  const mime = args.mimeType?.split(';')[0]?.trim().toLowerCase() ?? '';
-  const ext = extensionFromPath(args.filePath) || extensionFromPath(args.title);
-
-  if (mime === 'application/pdf' || ext === 'pdf') return 'pdf';
-  if (mime === 'text/csv' || ['csv', 'tsv'].includes(ext)) return 'csv';
-  if (
-    mime.includes('spreadsheet') ||
-    mime.includes('excel') ||
-    ['xls', 'xlsx', 'ods'].includes(ext)
-  ) {
-    return 'spreadsheet';
-  }
-  if (
-    mime.includes('wordprocessingml') ||
-    mime === 'application/msword' ||
-    ['doc', 'docx', 'rtf', 'odt'].includes(ext)
-  ) {
-    return 'document';
-  }
-  if (mime === 'application/json' || ext === 'json') return 'json';
-  if (ext === 'log') return 'log';
-  if (['md', 'markdown'].includes(ext) || mime === 'text/markdown') return 'markdown';
-  if (mime.startsWith('text/') || ['txt', 'adoc', 'rst'].includes(ext)) return 'text';
-  if (
-    [
-      'js',
-      'jsx',
-      'ts',
-      'tsx',
-      'py',
-      'rb',
-      'go',
-      'rs',
-      'java',
-      'c',
-      'cc',
-      'cpp',
-      'h',
-      'hpp',
-      'css',
-      'scss',
-      'html',
-      'xml',
-      'yaml',
-      'yml',
-      'toml',
-      'sql',
-      'sh',
-      'zsh',
-    ].includes(ext)
-  ) {
-    return 'code';
-  }
-  return 'unknown';
+  return getLinkDisplayCategory(args);
 }
 
 export function canPreviewMarkdownLinkAttachment(args: {

@@ -136,10 +136,6 @@ export const bumpRevision = (collection: HydratedCollection): void => {
   liveRevisions[collection] += 1;
 };
 
-/** Read the current live-write revision for request-scoped race guards. */
-export const getHydrationRevision = (collection: HydratedCollection): number =>
-  liveRevisions[collection];
-
 /**
  * Current live-write revision for a collection. The session-patch queue stamps
  * each enqueued entry with this (captured right after the synchronous bump) so a

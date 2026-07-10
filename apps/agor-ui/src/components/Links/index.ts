@@ -4,6 +4,7 @@ export * from './LinkImageThumbnail';
 export * from './LinkMarkdownPreviewModal';
 export * from './linkContent';
 export * from './linkDisplay';
+export * from './linkOrganizer';
 export * from './linkPromotion';
 export * from './PromotedPinnedLinks';
 export * from './SessionLinksControl';

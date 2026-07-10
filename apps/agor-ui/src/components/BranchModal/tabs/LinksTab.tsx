@@ -1,29 +1,8 @@
 import type { AgorClient, Branch, Link, Session } from '@agor-live/client';
-import {
-  EllipsisOutlined,
-  GithubOutlined,
-  PushpinFilled,
-  PushpinOutlined,
-  StopOutlined,
-} from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Dropdown,
-  Empty,
-  Input,
-  List,
-  Select,
-  Space,
-  Spin,
-  Tabs,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Alert, Empty, Input, List, Select, Space, Spin, Tabs, Typography, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link as RouterLink, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAgorStore } from '../../../store/agorStore';
 import {
   makeLinksForBranchSelector,
@@ -40,16 +19,14 @@ import {
   compareLinkDisplayItemsBySort,
   getCompactLinkDisplayName,
   getLinkCategoryCounts,
-  getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
-  getTeammatePromotionState,
-  isFileLinkDisplayItem,
   LINK_CATEGORY_TAB_LABELS,
   LINK_SORT_LABELS,
   type LinkCategoryTabKey,
   type LinkDisplayItem,
   type LinkSortKey,
   matchesLinkCategoryTab,
+  matchesLinkDisplaySearch,
   promoteLinkToTeammate,
 } from '../../Links';
 import {
@@ -65,278 +42,13 @@ import {
   getLinkContentAction,
   getLinkPreviewKind,
 } from '../../Links/linkContent';
+import { BranchLinkListItem } from './BranchLinkListItem';
 
 interface LinksTabProps {
   branch: Branch;
   client: AgorClient | null;
   active: boolean;
   open: boolean;
-}
-
-function isFileItem(item: LinkDisplayItem): boolean {
-  return isFileLinkDisplayItem(item);
-}
-
-function getUnavailableReason(item: LinkDisplayItem): string | null {
-  if (item.href || getLinkContentAction(item)) return null;
-  if (isFileItem(item)) return 'No preview/download route is available yet.';
-  return 'No safe route is available for this item yet.';
-}
-
-function BranchGlyph({ item, disabled = false }: { item: LinkDisplayItem; disabled?: boolean }) {
-  const { token } = theme.useToken();
-  const isGitHubLink = item.category === 'issue' || item.category === 'pr';
-  return (
-    <span
-      className="agor-action-link-icon"
-      aria-hidden="true"
-      style={{
-        width: 28,
-        height: 28,
-        borderRadius: token.borderRadiusLG,
-        background: token.colorFillTertiary,
-        color: disabled
-          ? token.colorTextDisabled
-          : `var(--agor-link-icon-color, ${token.colorTextTertiary})`,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontSize: 10,
-        fontWeight: 800,
-        letterSpacing: 0.2,
-        flex: '0 0 auto',
-      }}
-    >
-      {disabled ? (
-        <StopOutlined style={{ fontSize: 13 }} />
-      ) : isGitHubLink ? (
-        <GithubOutlined style={{ fontSize: 13 }} />
-      ) : (
-        getLinkDisplayGlyphLabel(item.category)
-      )}
-    </span>
-  );
-}
-
-function BranchTitle({
-  item,
-  onPreview,
-  onDownload,
-}: {
-  item: LinkDisplayItem;
-  onPreview: (item: LinkDisplayItem) => void;
-  onDownload: (item: LinkDisplayItem) => void;
-}) {
-  const { token } = theme.useToken();
-  const title = getCompactLinkDisplayName(item);
-  const contentAction = getLinkContentAction(item);
-  const disabled = Boolean(getUnavailableReason(item));
-  const style: React.CSSProperties = {
-    color: disabled ? token.colorTextDisabled : `var(--agor-link-title-color, ${token.colorText})`,
-    fontWeight: 600,
-    lineHeight: 1.25,
-  };
-
-  if (item.href && item.navigation === 'spa') {
-    return (
-      <RouterLink
-        className="agor-action-link-title"
-        to={item.href}
-        style={{ ...style, textDecoration: 'none' }}
-        title={title}
-      >
-        {title}
-      </RouterLink>
-    );
-  }
-
-  if (item.href) {
-    return (
-      <a
-        className="agor-action-link-title"
-        href={item.href}
-        target="_blank"
-        rel="noreferrer"
-        style={{ ...style, textDecoration: 'none' }}
-        title={title}
-      >
-        {title}
-      </a>
-    );
-  }
-
-  if (contentAction) {
-    return (
-      <button
-        className="agor-action-link-title"
-        type="button"
-        onClick={() => {
-          if (contentAction === 'preview') onPreview(item);
-          else onDownload(item);
-        }}
-        style={{
-          ...style,
-          border: 0,
-          background: 'transparent',
-          padding: 0,
-          cursor: 'pointer',
-          textAlign: 'left',
-        }}
-        title={title}
-      >
-        {title}
-      </button>
-    );
-  }
-
-  return (
-    <Typography.Text disabled style={style} title={title}>
-      {title}
-    </Typography.Text>
-  );
-}
-
-function BranchStatusPill({
-  item,
-  onTogglePinned,
-  pinning = false,
-}: {
-  item: LinkDisplayItem;
-  onTogglePinned: (item: LinkDisplayItem) => void | Promise<void>;
-  pinning?: boolean;
-}) {
-  const { token } = theme.useToken();
-  const title = getCompactLinkDisplayName(item);
-  const canTogglePin = Boolean(item.linkId);
-  const actionLabel = item.isPinned ? 'Unpin from branch card' : 'Pin to branch card';
-  return (
-    <Tooltip title={actionLabel}>
-      <button
-        type="button"
-        disabled={!canTogglePin || pinning}
-        aria-label={`${actionLabel} ${title}`}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          onTogglePinned(item);
-        }}
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 0,
-          width: 24,
-          height: 24,
-          padding: 0,
-          border: 0,
-          borderRadius: token.borderRadiusSM,
-          background: item.isPinned ? token.colorWarningBg : token.colorFillTertiary,
-          color: item.isPinned ? token.colorWarning : token.colorTextSecondary,
-          fontSize: 12,
-          cursor: canTogglePin && !pinning ? 'pointer' : 'default',
-          opacity: pinning ? 0.55 : 1,
-        }}
-      >
-        {item.isPinned ? <PushpinFilled /> : <PushpinOutlined />}
-      </button>
-    </Tooltip>
-  );
-}
-
-function teammatePromotionLabel(state: ReturnType<typeof getTeammatePromotionState>): string {
-  if (!state.canPromote) {
-    if (state.reason === 'no-teammate') return 'No teammate configured';
-    if (state.reason === 'same-owner') return 'Already on teammate branch';
-    if (state.reason === 'missing-source-link') return 'Cannot add generated branch metadata';
-    if (state.reason === 'file-lifetime') return 'File promotion awaits upload retention support';
-    if (state.reason === 'internal-target-access') {
-      return 'Internal promotion awaits target access checks';
-    }
-    return 'Cannot add this link';
-  }
-  return state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
-}
-
-function BranchTeammatePromotionAction({
-  item,
-  teammateBranchId,
-  teammateLinks,
-  sourceBranchId,
-  busyKey,
-  onPromote,
-  onRemove,
-}: {
-  item: LinkDisplayItem;
-  teammateBranchId?: string | null;
-  teammateLinks: Link[];
-  sourceBranchId: string;
-  busyKey?: string | null;
-  onPromote: (item: LinkDisplayItem) => void | Promise<void>;
-  onRemove: (item: LinkDisplayItem, teammateLinkId: string) => void | Promise<void>;
-}) {
-  const { token } = theme.useToken();
-  const state = getTeammatePromotionState({
-    item,
-    teammateBranchId,
-    teammateLinks,
-    sourceBranchId,
-  });
-  const busy = busyKey === (state.teammateLink?.link_id ?? item.linkId ?? item.key);
-  const label = teammatePromotionLabel(state);
-
-  return (
-    <Tooltip title={state.canPromote ? 'Teammate link actions' : label}>
-      <Dropdown
-        trigger={['click']}
-        menu={{
-          items: [
-            {
-              key: state.isPromoted ? 'remove-teammate' : 'promote-teammate',
-              label,
-              disabled: !state.canPromote || busy,
-            },
-          ],
-          onClick: ({ domEvent }) => {
-            domEvent.preventDefault();
-            domEvent.stopPropagation();
-            if (!state.canPromote || busy) return;
-            if (state.isPromoted && state.teammateLink) {
-              void onRemove(item, state.teammateLink.link_id);
-            } else {
-              void onPromote(item);
-            }
-          },
-        }}
-      >
-        <Button
-          type="text"
-          size="small"
-          loading={busy}
-          aria-label={`Teammate actions for ${getCompactLinkDisplayName(item)}`}
-          icon={<EllipsisOutlined />}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          style={{
-            width: 24,
-            minWidth: 24,
-            height: 24,
-            padding: 0,
-            color: token.colorTextTertiary,
-          }}
-        />
-      </Dropdown>
-    </Tooltip>
-  );
-}
-
-function shouldIgnoreRowActivation(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && Boolean(target.closest('a,button,[role="button"]'));
-}
-
-function normalizeSearchText(value: string): string {
-  return value.trim().toLowerCase();
 }
 
 function getSessionLabel(session: Session | undefined, sessionId: string): string {
@@ -358,18 +70,7 @@ function itemMatchesSearch(
   query: string,
   sessionById: Map<string, Session>
 ): boolean {
-  const normalizedQuery = normalizeSearchText(query);
-  if (!normalizedQuery) return true;
-  const fields = [
-    item.name,
-    getCompactLinkDisplayName(item),
-    getLinkDisplaySecondaryLabel(item),
-    item.url,
-    item.refUri,
-    item.filePath,
-    getSourceSessionLabel(item, sessionById),
-  ];
-  return fields.some((field) => field?.toLowerCase().includes(normalizedQuery));
+  return matchesLinkDisplaySearch(item, query, [getSourceSessionLabel(item, sessionById)]);
 }
 
 const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }) => {
@@ -641,115 +342,24 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                 <List
                   style={{ padding: `0 ${token.paddingLG}px` }}
                   dataSource={visibleItems}
-                  renderItem={(item) => {
-                    const disabledReason = getUnavailableReason(item);
-                    const disabled = Boolean(disabledReason);
-                    const targetLabel = getLinkDisplaySecondaryLabel(item);
-                    const sourceSessionLabel = getSourceSessionLabel(item, sessionById);
-                    return (
-                      <List.Item
-                        className="agor-action-link-row"
-                        key={item.key}
-                        role={disabled ? undefined : 'link'}
-                        tabIndex={disabled ? -1 : 0}
-                        aria-disabled={disabled || undefined}
-                        onClick={(event) => {
-                          if (disabled || shouldIgnoreRowActivation(event.target)) return;
-                          openItem(item);
-                        }}
-                        onKeyDown={(event) => {
-                          if (disabled || shouldIgnoreRowActivation(event.target)) return;
-                          if (event.key !== 'Enter' && event.key !== ' ') return;
-                          event.preventDefault();
-                          openItem(item);
-                        }}
-                        style={
-                          {
-                            '--agor-link-title-color': disabled
-                              ? token.colorTextDisabled
-                              : token.colorText,
-                            '--agor-link-icon-color': disabled
-                              ? token.colorTextDisabled
-                              : token.colorTextTertiary,
-                            '--agor-link-row-hover-bg': token.colorFillTertiary,
-                            '--agor-link-row-hover-color': token.colorPrimary,
-                            borderColor: token.colorBorderSecondary,
-                            borderRadius: token.borderRadius,
-                            cursor: disabled ? 'default' : 'pointer',
-                            paddingRight: token.sizeSM,
-                          } as React.CSSProperties
-                        }
-                        actions={[
-                          <BranchStatusPill
-                            key="state"
-                            item={item}
-                            onTogglePinned={handleTogglePinned}
-                            pinning={item.linkId === pinningLinkId}
-                          />,
-                          <BranchTeammatePromotionAction
-                            key="teammate"
-                            item={item}
-                            teammateBranchId={teammateBranchId}
-                            teammateLinks={teammatePromotionLinks}
-                            sourceBranchId={branch.branch_id}
-                            busyKey={teammatePromotionBusyKey}
-                            onPromote={handlePromoteToTeammate}
-                            onRemove={handleRemoveFromTeammate}
-                          />,
-                        ]}
-                      >
-                        <List.Item.Meta
-                          avatar={<BranchGlyph item={item} disabled={disabled} />}
-                          title={
-                            <span
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: token.sizeXS,
-                                minWidth: 0,
-                              }}
-                            >
-                              <BranchTitle
-                                item={item}
-                                onPreview={openPreview}
-                                onDownload={downloadItem}
-                              />
-                            </span>
-                          }
-                          description={
-                            <span>
-                              {targetLabel && (
-                                <Typography.Text
-                                  type="secondary"
-                                  ellipsis
-                                  style={{ display: 'block' }}
-                                >
-                                  {targetLabel}
-                                </Typography.Text>
-                              )}
-                              {sourceSessionLabel && (
-                                <Typography.Text
-                                  type="secondary"
-                                  ellipsis
-                                  style={{ display: 'block', fontSize: 12, marginTop: 2 }}
-                                >
-                                  From {sourceSessionLabel}
-                                </Typography.Text>
-                              )}
-                              {disabledReason && (
-                                <Typography.Text
-                                  type="warning"
-                                  style={{ display: 'block', fontSize: 12, marginTop: 2 }}
-                                >
-                                  {disabledReason}
-                                </Typography.Text>
-                              )}
-                            </span>
-                          }
-                        />
-                      </List.Item>
-                    );
-                  }}
+                  renderItem={(item) => (
+                    <BranchLinkListItem
+                      key={item.key}
+                      item={item}
+                      sourceSessionLabel={getSourceSessionLabel(item, sessionById)}
+                      teammateBranchId={teammateBranchId}
+                      teammateLinks={teammatePromotionLinks}
+                      sourceBranchId={branch.branch_id}
+                      teammateBusyKey={teammatePromotionBusyKey}
+                      pinning={item.linkId === pinningLinkId}
+                      onOpen={openItem}
+                      onPreview={openPreview}
+                      onDownload={downloadItem}
+                      onTogglePinned={handleTogglePinned}
+                      onPromote={handlePromoteToTeammate}
+                      onRemove={handleRemoveFromTeammate}
+                    />
+                  )}
                 />
               ) : (
                 <Empty

@@ -3,20 +3,22 @@ import { normalizeRefTargetKey, normalizeUrlTargetKey } from '@agor-live/client'
 import { describe, expect, it } from 'vitest';
 import {
   buildLinkDisplayItems,
-  compareLinkDisplayItemsBySort,
   getCompactLinkDisplayName,
-  getLinkCategoryCounts,
-  getLinkCategorySummary,
   getLinkDisplayCategory,
   getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
   type LinkDisplayItem,
   linkToDisplayItem,
-  matchesLinkCategoryTab,
   routeForKnowledgeRefUri,
   sortLinkDisplayItems,
   targetForLinkDisplay,
 } from './linkDisplay';
+import {
+  compareLinkDisplayItemsBySort,
+  getLinkCategoryCounts,
+  getLinkCategorySummary,
+  matchesLinkCategoryTab,
+} from './linkOrganizer';
 
 const now = '2026-07-01T00:00:00.000Z';
 
@@ -133,6 +135,31 @@ describe('link display helpers', () => {
     });
 
     expect(items.map((entry) => entry.name).sort()).toEqual(['Report.pdf', 'report.pdf']);
+    expect(items).toHaveLength(2);
+  });
+
+  it('keeps case-distinct URL paths visible', () => {
+    const upper = 'https://example.com/Report';
+    const lower = 'https://example.com/report';
+    const items = buildLinkDisplayItems({
+      links: [
+        makeLink({
+          link_id: 'link-url-upper' as Link['link_id'],
+          kind: 'url',
+          source: 'manual',
+          url: upper,
+          target_key: normalizeUrlTargetKey(upper),
+        }),
+        makeLink({
+          link_id: 'link-url-lower' as Link['link_id'],
+          kind: 'url',
+          source: 'manual',
+          url: lower,
+          target_key: normalizeUrlTargetKey(lower),
+        }),
+      ],
+    });
+
     expect(items).toHaveLength(2);
   });
 

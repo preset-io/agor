@@ -204,6 +204,7 @@ const BranchCardComponent = ({
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [archiveDeleteModalMounted, setArchiveDeleteModalMounted] = useState(false);
   const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
 
   // Notes expansion state
@@ -610,7 +611,10 @@ const BranchCardComponent = ({
               <ArchiveActionButton
                 tooltip="Archive or delete branch"
                 disabled={connectionDisabled}
-                onClick={() => setArchiveDeleteModalOpen(true)}
+                onClick={() => {
+                  setArchiveDeleteModalMounted(true);
+                  setArchiveDeleteModalOpen(true);
+                }}
               />
             )}
           </div>
@@ -739,18 +743,21 @@ const BranchCardComponent = ({
         />
       )}
 
-      {/* Archive/Delete Modal */}
-      <ArchiveDeleteBranchModal
-        open={archiveDeleteModalOpen}
-        branch={branch}
-        sessionCount={sessions.length}
-        environmentRunning={branch.environment_instance?.status === 'running'}
-        onConfirm={(options) => {
-          onArchiveOrDelete?.(branch.branch_id, options);
-          setArchiveDeleteModalOpen(false);
-        }}
-        onCancel={() => setArchiveDeleteModalOpen(false)}
-      />
+      {/* Branch cards are repeated across the canvas, so mount this only on demand. */}
+      {archiveDeleteModalMounted && (
+        <ArchiveDeleteBranchModal
+          open={archiveDeleteModalOpen}
+          branch={branch}
+          sessionCount={sessions.length}
+          environmentRunning={branch.environment_instance?.status === 'running'}
+          onConfirm={(options) => {
+            onArchiveOrDelete?.(branch.branch_id, options);
+            setArchiveDeleteModalOpen(false);
+          }}
+          onCancel={() => setArchiveDeleteModalOpen(false)}
+          afterClose={() => setArchiveDeleteModalMounted(false)}
+        />
+      )}
     </Card>
   );
 };

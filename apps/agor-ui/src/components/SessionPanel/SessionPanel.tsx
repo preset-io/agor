@@ -1184,7 +1184,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const teammateStateForAttachment = (item: SessionAttachmentItem) => {
-    return item.displayItem ? teammateStateForSessionLink(item.displayItem) : null;
+    return teammateStateForSessionLink(item);
   };
 
   const handlePromoteSessionLinkToTeammate = async (item: LinkDisplayItem) => {
@@ -1208,7 +1208,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handlePromoteAttachmentToTeammate = async (item: SessionAttachmentItem) => {
-    if (item.displayItem) await handlePromoteSessionLinkToTeammate(item.displayItem);
+    await handlePromoteSessionLinkToTeammate(item);
   };
 
   const handleRemoveSessionLinkFromTeammate = async (
@@ -1234,9 +1234,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     item: SessionAttachmentItem,
     teammateLinkId: string
   ) => {
-    if (item.displayItem) {
-      await handleRemoveSessionLinkFromTeammate(item.displayItem, teammateLinkId);
-    }
+    await handleRemoveSessionLinkFromTeammate(item, teammateLinkId);
   };
 
   const handleFork = async () => {

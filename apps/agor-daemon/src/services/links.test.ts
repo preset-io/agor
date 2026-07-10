@@ -295,6 +295,38 @@ describe('LinksService', () => {
     expect(links).toHaveLength(3);
   });
 
+  it('does not fail a persisted message when derived link ingestion fails', async () => {
+    const failure = new Error('link store unavailable');
+    const create = vi.fn(async () => {
+      throw failure;
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const app = {
+      service: vi.fn((path: string) => {
+        if (path !== 'links') throw new Error(`Unexpected service: ${path}`);
+        return { create };
+      }),
+    };
+    const hook = ingestParsedLinksAfterMessageCreate(app as never);
+    const message = {
+      message_id: generateId() as MessageID,
+      session_id: generateId() as SessionID,
+      type: 'user',
+      role: 'user',
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content_preview: 'See https://example.com/failure',
+      content: 'See https://example.com/failure',
+    } as Message;
+
+    await expect(hook({ result: message, params: {} } as never)).resolves.toMatchObject({
+      result: message,
+    });
+    expect(create).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith('[Links] Failed to ingest parsed message links:', failure);
+    warn.mockRestore();
+  });
+
   it('preserves tenant context for internal parsed-link creation', async () => {
     const create = vi.fn(async () => []);
     const app = {

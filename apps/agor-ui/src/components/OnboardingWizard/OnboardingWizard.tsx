@@ -1155,10 +1155,22 @@ export function OnboardingWizard({
             {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
             {manualTestResult && (
               <Alert
-                type={manualTestResult.authenticated ? 'success' : 'warning'}
+                type={
+                  manualTestResult.status === 'authenticated'
+                    ? 'success'
+                    : manualTestResult.status === 'unknown'
+                      ? 'info'
+                      : 'warning'
+                }
                 showIcon
                 style={{ marginBottom: 16, textAlign: 'left' }}
-                message={manualTestResult.authenticated ? 'Connection works' : 'Not authenticated'}
+                message={
+                  manualTestResult.status === 'authenticated'
+                    ? 'Connection works'
+                    : manualTestResult.status === 'unknown'
+                      ? "Couldn't verify"
+                      : 'Not authenticated'
+                }
                 description={manualTestResult.hint}
               />
             )}
