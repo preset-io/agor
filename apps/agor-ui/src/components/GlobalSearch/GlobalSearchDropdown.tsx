@@ -31,7 +31,7 @@ const { Text } = Typography;
 const SECTION_ICONS: Record<SearchEntityType, React.ReactNode> = {
   session: <MessageOutlined />,
   branch: <BranchesOutlined />,
-  assistant: <RobotOutlined />,
+  teammate: <RobotOutlined />,
   artifact: <ExperimentOutlined />,
   board: <AppstoreOutlined />,
   mcp: <ApiOutlined />,
@@ -186,7 +186,7 @@ function resultKey(result: SearchResultItem): string {
     case 'session':
       return `session-${result.item.session_id}`;
     case 'branch':
-    case 'assistant':
+    case 'teammate':
       return `${result.type}-${result.item.branch_id}`;
     case 'artifact':
       return `artifact-${result.item.artifact_id}`;

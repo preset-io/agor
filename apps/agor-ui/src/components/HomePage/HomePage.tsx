@@ -42,7 +42,7 @@ function hasVisibleSession(sessionById: AgorState['sessionById'], currentUserId?
 }
 
 const NEW_MENU_ITEMS: MenuProps['items'] = [
-  { key: 'assistant', label: 'New assistant', icon: <RobotOutlined /> },
+  { key: 'teammate', label: 'New AI teammate', icon: <RobotOutlined /> },
   { key: 'branch', label: 'New branch', icon: <BranchesOutlined /> },
   { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
 ];
@@ -247,10 +247,10 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>();
-  const [createType, setCreateType] = useState<'assistant' | 'branch'>('assistant');
+  const [createType, setCreateType] = useState<'teammate' | 'branch'>('teammate');
 
   const handleNewSession = useCallback(
-    (defaultType: 'assistant' | 'branch' = 'assistant') => {
+    (defaultType: 'teammate' | 'branch' = 'teammate') => {
       setCreateType(defaultType);
       setSelectedBoardId(defaultBoardId);
       setCreateOpen(true);
@@ -305,7 +305,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                   menu={{
                     items: NEW_MENU_ITEMS,
                     onClick: ({ key }) => {
-                      if (key === 'assistant' || key === 'branch') {
+                      if (key === 'teammate' || key === 'branch') {
                         handleNewSession(key);
                       } else {
                         props.onOpenCreateDialog(key as 'board');
@@ -445,7 +445,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
       </div>
 
       <Modal
-        title={createType === 'branch' ? 'New branch' : 'New assistant'}
+        title={createType === 'branch' ? 'New branch' : 'New AI teammate'}
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         width={420}
@@ -476,7 +476,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                   disabled={!selectedBoardId}
                   onClick={handleConfirmCreate}
                 >
-                  {createType === 'assistant' ? 'Start assistant' : 'Create branch'}
+                  {createType === 'teammate' ? 'Start AI teammate' : 'Create branch'}
                 </Button>,
               ]
         }
@@ -491,10 +491,10 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
           <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Segmented
               value={createType}
-              onChange={(v) => setCreateType(v as 'assistant' | 'branch')}
+              onChange={(v) => setCreateType(v as 'teammate' | 'branch')}
               block
               options={[
-                { value: 'assistant', label: 'AI assistant', icon: <RobotOutlined /> },
+                { value: 'teammate', label: 'AI teammate', icon: <RobotOutlined /> },
                 { value: 'branch', label: 'Branch / Worktree', icon: <BranchesOutlined /> },
               ]}
             />

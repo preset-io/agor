@@ -3,17 +3,17 @@
 ## What is this app?
 
 Agor is a multiplayer, Figma-like spatial canvas where a whole team runs their AI coding
-agents — Claude Code, Codex, Gemini, and long-lived assistants — side by side on isolated
+agents — Claude Code, Codex, Gemini, and long-lived AI teammates — side by side on isolated
 git branches, with live cursors, comments, and presence. The team command center for all
 things agentic.
 
 ## The angle
 
 A premium, cinematic product tour that **follows the agor.live flow**: break out of the
-terminal → meet your team of AI assistants on the warm canvas → the harnesses you already
-use → multiplayer presence → a flash tour of the product surfaces → raise team assistants →
+terminal → meet your AI teammates on the warm canvas → the harnesses you already
+use → multiplayer presence → a flash tour of the product surfaces → raise AI teammates →
 tagline. Cool dark-teal everywhere, one warm orange board moment, scored to an epic
-adventure build that peaks right as we land the "team assistants" beat.
+adventure build that peaks right as we land the "AI teammates" beat.
 
 ## Hook (first 2-3 seconds)
 
@@ -42,7 +42,7 @@ then the line resolves to the site's own provocation: **"Break out of the termin
 - Cue preset (bed-relative): `assets/music/cues/agor-epic-40s.music-cues.json`.
 - Arc: soft intro under the terminal (0–5s) → first lift at **5.39s** = board reveal →
   rising energy through harnesses/multiplayer/montage → build peak at **29.4 & 32.7s**
-  (intensity 0.94) = last feature + "team assistants" beat → outro hit **38.05s** → fade.
+  (intensity 0.94) = last feature + "AI teammates" beat → outro hit **38.05s** → fade.
 - Bed volume 0.32–0.38. Cinematic SFX (deeper hits), sparse and motion-matched.
 - Audio-reactive: subtle — board glow + constellation breathe with RMS/bass on the reveal.
   Regenerate per-frame audio data from the 40s bed (delete the stale 20s `audio-data.*`).
@@ -52,7 +52,7 @@ then the line resolves to the site's own provocation: **"Break out of the termin
 - **Board reveal headline → 5.39s** (strong lift, intensity 0.87). `// beat-locked`
 - Feature montage cards (5) snap to consecutive strong cues: ~18.72 / 21.39 / 24.06 /
   26.70 / 29.38s. `// beat-grid`
-- "Team assistants" beat lands on **32.71s** (intensity 0.94 — the build's peak).
+- "AI teammates" beat lands on **32.71s** (intensity 0.94 — the build's peak).
 - Outro wordmark lands on **38.05s**; music fades 38.8→40.0s.
 - Harness logos + facepile pops may snap to the ~0.5s beat grid (icons, not text).
 
@@ -71,7 +71,7 @@ Transition: the terminal cracks/dissolves → Scene 2 (dramatic).
 On the **5.39s lift**, the terminal cracks and the warm-orange board
 `assets/screenshots/board-hero.png` sweeps in near-fullscreen with a cinematic 3D tilt
 (cool→warm). Headline slams down (heavy white, weight 800–900, tracking -0.05em):
-**"Meet your team of AI assistants."** Hold on the board.
+**"Meet your AI teammates."** Hold on the board.
 Audio: whoosh + deep bell/impact on the lift; board glow breathes with RMS.
 Transition: push-in → Scene 3.
 
@@ -104,10 +104,10 @@ Section title beat "So much more than a chat box." Then 5 surfaces flash, each ~
    Each card holds past its reading floor (label ≥0.8s settled). Hard-but-smooth cuts.
    Audio: a cinematic tick/hit per card on its cue. Transition: → Scene 6.
 
-### Scene 6 — Raise team assistants — 31.5→36.0s (4.5s)
+### Scene 6 — Raise AI teammates — 31.5→36.0s (4.5s)
 
-Lands on the **32.71s build peak**. Eyebrow "The shared workspace." `assistants-list.png`
-presents, headline: **"Raise team assistants — memory, skills, a place to work."** Then a
+Lands on the **32.71s build peak**. Eyebrow "The shared workspace." `teammates-list.png`
+presents, headline: **"Raise AI teammates — memory, skills, a place to work."** Then a
 sub-beat: the Slack thread `marketing/agor-marketing-slack-thread.png` slides in with
 **"Reach them from Slack, GitHub, anywhere."** (message gateway).
 Audio: the music peak carries it; a soft notification chime as the Slack card lands.
@@ -122,4 +122,4 @@ This is the only scene that may fade elements out.
 
 **Audio summary:** A soft epic intro under the terminal blooms into a warm cinematic swell
 on the board reveal, rises through harnesses/multiplayer/feature-flash, peaks on the "team
-assistants" beat (32.7s), and resolves on the wordmark with a clean fade.
+teammates" beat (32.7s), and resolves on the wordmark with a clean fade.

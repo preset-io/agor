@@ -12,17 +12,17 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import {
-  ASSISTANT_WELCOME_NOTE_OBJECT_ID,
-  buildAssistantWelcomeNoteObject,
-} from '@agor/core/templates/assistant-welcome-note';
+  buildTeammateWelcomeNoteObject,
+  TEAMMATE_WELCOME_NOTE_OBJECT_ID,
+} from '@agor/core/templates/teammate-welcome-note';
 import type {
-  AssistantWelcomeNoteRequest,
   AuthenticatedParams,
   Board,
   BoardExportBlob,
   BoardID,
   BoardObject,
   QueryParams,
+  TeammateWelcomeNoteRequest,
   UUID,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
@@ -41,8 +41,8 @@ export interface BoardParams
     name?: string;
   }> {
   user?: AuthenticatedParams['user'];
-  /** Internal hook signal; set only when ensureAssistantWelcomeNote writes. */
-  assistantWelcomeNoteMutated?: boolean;
+  /** Internal hook signal; set only when ensureTeammateWelcomeNote writes. */
+  teammateWelcomeNoteMutated?: boolean;
   /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
   _agorSqlBoardAccessUserId?: UUID;
 }
@@ -216,14 +216,14 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   }
 
   /**
-   * Custom method: Create the bundled assistant welcome note when missing.
+   * Custom method: Create the bundled teammate welcome note when missing.
    *
    * Rendering is intentionally server-side from a static Handlebars template so
    * the browser bundle does not import Handlebars (blocked by CSP unsafe-eval),
    * and callers never provide template source for this path.
    */
-  async ensureAssistantWelcomeNote(
-    data: AssistantWelcomeNoteRequest,
+  async ensureTeammateWelcomeNote(
+    data: TeammateWelcomeNoteRequest,
     params?: BoardParams
   ): Promise<Board> {
     const boardIdentifier = data.boardId ?? data.id;
@@ -234,26 +234,30 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       throw new NotFoundError('Board', String(boardIdentifier));
     }
 
-    const objectData = buildAssistantWelcomeNoteObject({
-      assistantName: typeof data.assistantName === 'string' ? data.assistantName : '',
-      assistantEmoji: typeof data.assistantEmoji === 'string' ? data.assistantEmoji : null,
+    const teammateName = typeof data.teammateName === 'string' ? data.teammateName : '';
+    const teammateEmoji = typeof data.teammateEmoji === 'string' ? data.teammateEmoji : null;
+    const objectData = buildTeammateWelcomeNoteObject({
+      teammateName,
+      teammateEmoji,
     });
 
-    const existing = board.objects?.[ASSISTANT_WELCOME_NOTE_OBJECT_ID];
+    const existing = board.objects?.[TEAMMATE_WELCOME_NOTE_OBJECT_ID];
     if (existing) return board;
 
-    if (params) params.assistantWelcomeNoteMutated = true;
+    if (params) {
+      params.teammateWelcomeNoteMutated = true;
+    }
     return this.boardRepo.upsertBoardObject(
       board.board_id,
-      ASSISTANT_WELCOME_NOTE_OBJECT_ID,
+      TEAMMATE_WELCOME_NOTE_OBJECT_ID,
       objectData
     );
   }
 
   /**
-   * Custom method: Set the board's primary assistant branch.
+   * Custom method: Set the board's primary teammate branch.
    */
-  async setPrimaryAssistant(
+  async setPrimaryTeammate(
     data: { boardId?: string; id?: string; branchId?: string } | string,
     branchIdOrParams?: string | BoardParams,
     _maybeParams?: BoardParams
@@ -262,14 +266,14 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const branchId = typeof data === 'string' ? branchIdOrParams : data.branchId;
     if (!boardId) throw new Error('Board ID required');
     if (!branchId || typeof branchId !== 'string') throw new Error('Branch ID required');
-    return this.boardRepo.setPrimaryAssistant(boardId, branchId);
+    return this.boardRepo.setPrimaryTeammate(boardId, branchId);
   }
 
   /**
-   * Custom method: Clear the board's primary assistant branch.
+   * Custom method: Clear the board's primary teammate branch.
    */
-  async clearPrimaryAssistant(boardId: string, _params?: BoardParams): Promise<Board> {
-    return this.boardRepo.clearPrimaryAssistant(boardId);
+  async clearPrimaryTeammate(boardId: string, _params?: BoardParams): Promise<Board> {
+    return this.boardRepo.clearPrimaryTeammate(boardId);
   }
 
   /**

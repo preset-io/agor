@@ -1,0 +1,175 @@
+---
+title: Teammates
+description: Persistent AI teammates with memory, skills, orchestration, and scheduled heartbeats
+heroImage: '/screenshots/teammates-list.png'
+---
+
+# Teammates
+
+<div style={{ padding: '12px 16px', borderLeft: '4px solid #3b82f6', borderRadius: '8px', background: 'rgba(59, 130, 246, 0.12)', margin: '16px 0' }}>
+  <strong>Rename note:</strong> In July 2026, Agor renamed <strong>Assistants</strong> to <strong>Teammates</strong>. If you arrived from <code>/guide/assistants</code>, this is the canonical guide. Older references to <code>assistant</code> may still appear where they describe LLM message roles or provider protocol terms.
+</div>
+
+An **AI teammate** is a persistent AI companion that lives in your Agor workspace. While a normal branch is _where_ code gets written, an AI teammate is a _who_ — a persistent entity with memory, skills, and the ability to orchestrate work across your entire workspace.
+
+<img
+  src="/screenshots/teammates-list.png"
+  alt="A chat response listing twelve teammates in an Agor instance — a mix of coding orchestrators (AgorClaw, GitHub Handler), ops bots (patch-bot, OpEx), and business helpers (Saul, Blake, Peggy, Hippa) — each with an emoji, name, and one-line function"
+  style={{ maxWidth: '600px', borderRadius: '8px' }}
+/>
+
+_A real Agor instance with a curated mix of coding, ops, and business teammates — each callable from any session via the `agor_teammates_list` MCP tool._
+
+The teammate framework is heavily inspired by [OpenClaw](https://github.com/ricklamers/openclaw), a proven pattern for building persistent AI agents with file-based memory and identity. Agor's implementation adapts the core ideas — markdown-based memory, identity files, and scheduled loops — while making the teammate deeply aware of its environment through Agor's [MCP tools](/guide/internal-mcp). An Agor teammate can create branches, spawn sessions, manage boards, and coordinate multi-agent workflows — capabilities that go well beyond the original pattern.
+
+**Framework repository:** [github.com/preset-io/agor-teammate](https://github.com/preset-io/agor-teammate)
+
+## How it works
+
+An AI teammate is a special branch backed by the **framework repository** — a template repo containing memory files, identity configuration, skills, and task templates. When you create a teammate, Agor:
+
+1. Forks the framework repo into a new branch
+2. Tags the branch with teammate metadata (name, framework version)
+3. Creates a dedicated board for the teammate's work
+4. Launches your first session — triggering `BOOTSTRAP.md`
+
+From there, every session in that branch picks up the teammate's accumulated memory and context.
+
+## Key concepts
+
+### BOOTSTRAP.md — First boot
+
+When a teammate is created for the first time, it runs through `BOOTSTRAP.md` — the initialization script that sets up identity, preferences, and initial state. This is where the teammate introduces itself, learns about you, and configures its working environment. Think of it as the teammate's "first day" checklist.
+
+### Memory across sessions
+
+Teammates maintain file-based memory in their branch. Memory is organized into two layers:
+
+**Identity files** (root of the branch):
+
+- **SOUL.md** — Personality, communication style, core principles
+- **IDENTITY.md** — Who the teammate is, its name, and purpose
+- **USER.md** — Knowledge about you, your preferences, and patterns
+
+**Daily memory** (`memory/` directory):
+
+- **`memory/{YYYY-MM-DD}.md`** — Daily journal entries. Each day the teammate works, it appends observations, decisions, and learnings to that day's file. This creates a chronological, searchable record of everything the teammate has done and learned.
+
+Each new session reads the identity files and recent memory, giving the teammate continuity across conversations. As the teammate works, it updates these files — building a richer understanding over time. All memory is plain markdown — fully inspectable, editable, and version-controlled.
+
+### BOARD.md — Resident board semantics
+
+Every teammate has a `BOARD.md` file that describes the semantics of its main (resident) board. This file tells the teammate what each zone on the board means, how branches should be organized spatially, and what the overall layout represents. When the teammate creates or moves branches on its board, it refers to `BOARD.md` to understand the intended structure — ensuring consistent spatial organization across sessions.
+
+### HEARTBEAT.md — Scheduled tick workflows
+
+`HEARTBEAT.md` contains the instructions and workflows the teammate processes every time a scheduled tick occurs. Think of it as a flowchart in pseudo-code: a set of steps the teammate follows on each heartbeat, such as:
+
+- Check the status of in-progress branches
+- Review `BOARD.md` to assess spatial organization
+- Look for new issues or PRs to triage
+- Summarize progress to daily memory (`memory/{YYYY-MM-DD}.md`)
+- Start new work based on priorities
+
+Configure heartbeat frequency through Agor's [scheduler](/guide/scheduler) — from every few minutes to once a day.
+
+### Skills
+
+Teammates aren't limited to code generation — they can be equipped with **skills** that extend their capabilities through tools, APIs, and integrations. Skills are defined in the framework repo and give your teammate the ability to interact with external systems.
+
+Examples of what skills enable:
+
+- **SaaS integrations** — Query Jira for open tickets, post updates to Linear, fetch metrics from Datadog or PagerDuty
+- **Communication** — Send Slack messages, create GitHub issues, post comments on PRs
+- **CLI tools** — Run linters, test suites, deployment scripts, or any command-line tooling in your stack
+- **REST APIs** — Call internal or external APIs to fetch data, trigger webhooks, or sync state
+- **MCP servers** — Connect to any [MCP-compatible service](/guide/mcp-servers) for specialized capabilities (databases, cloud providers, monitoring systems)
+
+Skills make teammates practical for real workflows — not just coding, but the coordination and communication around it.
+
+### Workspace orchestration
+
+Through Agor's [MCP tools](/guide/internal-mcp), teammates can:
+
+- **Create branches** — Spin up new isolated work environments for specific tasks
+- **Spawn sessions** — Delegate work to child sessions with focused prompts
+- **Manage boards** — Organize branches across spatial canvases (guided by `BOARD.md`)
+- **Check on work** — Review session status, read files, assess progress
+
+This makes teammates natural orchestrators — they can break down complex tasks, distribute work across multiple branches, and synthesize results.
+
+### Learning and adaptation
+
+As your teammate works with you, it naturally improves:
+
+- Learns your coding patterns and preferences (stored in `USER.md`)
+- Understands your repository structure and conventions
+- Builds knowledge about your team's workflows (daily memory)
+- Adapts its communication style to match yours (refined in `SOUL.md`)
+
+## Creating a teammate
+
+### From the onboarding wizard
+
+When you first log into Agor, choose **"Set up your AI teammate"**. The wizard will:
+
+1. Clone the [teammate framework repository](https://github.com/preset-io/agor-teammate)
+2. Create a personal board
+3. Set up a branch with your own branch
+4. Configure API keys
+5. Launch your first session (which runs `BOOTSTRAP.md`)
+
+### From Settings
+
+Go to **Settings > Teammates > Create AI teammate**:
+
+1. Enter a display name (e.g., "PR Reviewer", "Command Center")
+2. Choose or create a board
+3. Optionally customize the framework repo and branch
+4. Click Create
+
+### From the CLI
+
+During `agor init`, you'll be prompted to set up a teammate. This queues the setup for the UI wizard on your next login.
+
+## Teammate vs. Agent
+
+These terms mean different things in Agor:
+
+| Term | Meaning | Example |
+|------|---------|---------|
+| **Teammate** | A persistent entity with memory, skills, and orchestration | "My PR Reviewer teammate" |
+| **Agent** | The execution engine that powers a session | Claude Code, Codex, Gemini |
+
+A teammate _uses_ an agent to do its work. When you create a session for your teammate, you choose which agent runs it (Claude Code is the default).
+
+Think of it this way:
+- "Start my teammate" = open a session on your persistent AI companion's branch
+- "Choose an agent" = pick which AI model/tool runs that session
+
+## Managing teammates
+
+### Settings > Teammates
+
+The Teammates table in Settings shows all your teammates with:
+
+- Display name and branch name
+- Environment status (start/stop controls)
+- Framework repository
+- Branch and session count
+
+### BranchModal > Teammate tab
+
+Click any teammate's branch card to open its modal. The **Teammate** tab shows:
+
+- Editable display name
+- Framework repo and version
+- Creation method (onboarding vs manual)
+
+### Boards
+
+Teammates appear as branch cards on boards, distinguished by a robot icon and blue border. We recommend giving each teammate its own board for clarity.
+
+## Real-world examples
+
+For real-world use cases and the story behind Agor Teammates, see our blog post: [Introducing Agor Teammates](/blog/agor-assistants).

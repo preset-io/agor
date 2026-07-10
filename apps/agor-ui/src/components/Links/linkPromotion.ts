@@ -2,13 +2,13 @@ import type { AgorClient, Link } from '@agor-live/client';
 import { normalizeRefTargetKey, normalizeUrlTargetKey } from '@agor-live/client';
 import type { LinkDisplayItem } from './linkDisplay';
 
-export type AssistantPromotionState =
+export type TeammatePromotionState =
   | {
       canPromote: false;
       isPromoted: false;
-      assistantLink: null;
+      teammateLink: null;
       reason:
-        | 'no-assistant'
+        | 'no-teammate'
         | 'same-owner'
         | 'missing-source-link'
         | 'missing-target'
@@ -18,23 +18,23 @@ export type AssistantPromotionState =
   | {
       canPromote: true;
       isPromoted: false;
-      assistantLink: null;
+      teammateLink: null;
       reason: null;
     }
   | {
       canPromote: true;
       isPromoted: true;
-      assistantLink: Link;
+      teammateLink: Link;
       reason: null;
     };
 
-export function findAssistantLinkForTarget(
+export function findTeammateLinkForTarget(
   source: Pick<LinkDisplayItem, 'targetKey'>,
-  assistantLinks: readonly Link[]
+  teammateLinks: readonly Link[]
 ): Link | null {
   const sourceTargetKey = normalizePromotionTargetKey(source.targetKey);
   return (
-    assistantLinks.find(
+    teammateLinks.find(
       (link) => normalizePromotionTargetKey(link.target_key) === sourceTargetKey
     ) ?? null
   );
@@ -51,37 +51,37 @@ function normalizePromotionTargetKey(targetKey: string): string {
   return targetKey.toLowerCase();
 }
 
-export function getAssistantPromotionState(args: {
+export function getTeammatePromotionState(args: {
   item: LinkDisplayItem;
-  assistantBranchId?: string | null;
+  teammateBranchId?: string | null;
   sourceBranchId?: string | null;
-  assistantLinks: readonly Link[];
-}): AssistantPromotionState {
-  if (!args.assistantBranchId) {
-    return { canPromote: false, isPromoted: false, assistantLink: null, reason: 'no-assistant' };
+  teammateLinks: readonly Link[];
+}): TeammatePromotionState {
+  if (!args.teammateBranchId) {
+    return { canPromote: false, isPromoted: false, teammateLink: null, reason: 'no-teammate' };
   }
-  if (args.sourceBranchId && args.sourceBranchId === args.assistantBranchId) {
-    return { canPromote: false, isPromoted: false, assistantLink: null, reason: 'same-owner' };
+  if (args.sourceBranchId && args.sourceBranchId === args.teammateBranchId) {
+    return { canPromote: false, isPromoted: false, teammateLink: null, reason: 'same-owner' };
   }
   if (!args.item.linkId) {
     return {
       canPromote: false,
       isPromoted: false,
-      assistantLink: null,
+      teammateLink: null,
       reason: 'missing-source-link',
     };
   }
   if (!args.item.targetKey) {
-    return { canPromote: false, isPromoted: false, assistantLink: null, reason: 'missing-target' };
+    return { canPromote: false, isPromoted: false, teammateLink: null, reason: 'missing-target' };
   }
 
-  const assistantLink = findAssistantLinkForTarget(args.item, args.assistantLinks);
-  if (assistantLink) return { canPromote: true, isPromoted: true, assistantLink, reason: null };
+  const teammateLink = findTeammateLinkForTarget(args.item, args.teammateLinks);
+  if (teammateLink) return { canPromote: true, isPromoted: true, teammateLink, reason: null };
   if (args.item.filePath || args.item.source === 'upload') {
     return {
       canPromote: false,
       isPromoted: false,
-      assistantLink: null,
+      teammateLink: null,
       reason: 'file-lifetime',
     };
   }
@@ -89,20 +89,20 @@ export function getAssistantPromotionState(args: {
     return {
       canPromote: false,
       isPromoted: false,
-      assistantLink: null,
+      teammateLink: null,
       reason: 'internal-target-access',
     };
   }
-  return { canPromote: true, isPromoted: false, assistantLink: null, reason: null };
+  return { canPromote: true, isPromoted: false, teammateLink: null, reason: null };
 }
 
-export async function promoteLinkToAssistant(args: {
+export async function promoteLinkToTeammate(args: {
   client: AgorClient;
   sourceLinkId: string;
-  assistantBranchId: string;
+  teammateBranchId: string;
 }): Promise<Link> {
   return args.client.service(`links/${args.sourceLinkId}/promote`).create({
-    target: 'assistant',
-    assistant_branch_id: args.assistantBranchId,
+    target: 'teammate',
+    teammate_branch_id: args.teammateBranchId,
   });
 }

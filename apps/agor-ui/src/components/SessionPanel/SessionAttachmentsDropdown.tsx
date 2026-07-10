@@ -68,9 +68,9 @@ export type SessionAttachmentSource = 'branch' | 'manual' | 'parsed' | 'upload';
 type LinksCategoryTab = LinkCategoryTabKey;
 type LinksSort = LinkSortKey;
 
-interface AssistantAttachmentActionState {
+interface TeammateAttachmentActionState {
   isPromoted: boolean;
-  assistantLinkId?: string;
+  teammateLinkId?: string;
   disabled?: boolean;
   loading?: boolean;
   unavailableReason?: string | null;
@@ -110,13 +110,13 @@ interface Props {
   pinningLinkId?: string | null;
   onTogglePinned?: (item: SessionAttachmentItem) => void | Promise<void>;
   onRegisterOpenPinnedManager?: (openPinnedManager: (() => void) | null) => void;
-  getAssistantActionState?: (item: SessionAttachmentItem) => AssistantAttachmentActionState | null;
-  onPromoteToAssistant?: (item: SessionAttachmentItem) => void | Promise<void>;
-  onRemoveFromAssistant?: (
+  getTeammateActionState?: (item: SessionAttachmentItem) => TeammateAttachmentActionState | null;
+  onPromoteToTeammate?: (item: SessionAttachmentItem) => void | Promise<void>;
+  onRemoveFromTeammate?: (
     item: SessionAttachmentItem,
-    assistantLinkId: string
+    teammateLinkId: string
   ) => void | Promise<void>;
-  assistantPromotionBusyKey?: string | null;
+  teammatePromotionBusyKey?: string | null;
 }
 
 function attachmentKindForDisplayItem(item: LinkDisplayItem): SessionAttachmentKind {
@@ -343,10 +343,10 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   pinningLinkId = null,
   onTogglePinned,
   onRegisterOpenPinnedManager,
-  getAssistantActionState,
-  onPromoteToAssistant,
-  onRemoveFromAssistant,
-  assistantPromotionBusyKey = null,
+  getTeammateActionState,
+  onPromoteToTeammate,
+  onRemoveFromTeammate,
+  teammatePromotionBusyKey = null,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -574,19 +574,19 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     );
   };
 
-  const renderAssistantPromotionMenu = (item: SessionAttachmentItem) => {
-    if (!getAssistantActionState) return <span aria-hidden />;
+  const renderTeammatePromotionMenu = (item: SessionAttachmentItem) => {
+    if (!getTeammateActionState) return <span aria-hidden />;
 
-    const state = getAssistantActionState(item);
+    const state = getTeammateActionState(item);
     if (!state) return <span aria-hidden />;
 
-    const busyKey = state.assistantLinkId ?? item.linkId ?? item.key;
-    const busy = state.loading || assistantPromotionBusyKey === busyKey;
-    const disabled = state.disabled || busy || (state.isPromoted && !state.assistantLinkId);
-    const actionLabel = state.isPromoted ? 'Remove from assistant' : 'Promote to assistant';
+    const busyKey = state.teammateLinkId ?? item.linkId ?? item.key;
+    const busy = state.loading || teammatePromotionBusyKey === busyKey;
+    const disabled = state.disabled || busy || (state.isPromoted && !state.teammateLinkId);
+    const actionLabel = state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
     const menuItems: MenuProps['items'] = [
       {
-        key: state.isPromoted ? 'remove-assistant' : 'promote-assistant',
+        key: state.isPromoted ? 'remove-teammate' : 'promote-teammate',
         label: actionLabel,
         disabled,
         title: state.unavailableReason ?? undefined,
@@ -594,7 +594,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     ];
 
     return (
-      <Tooltip title={state.unavailableReason ?? 'Assistant link actions'}>
+      <Tooltip title={state.unavailableReason ?? 'Teammate link actions'}>
         <Dropdown
           trigger={['click']}
           menu={{
@@ -604,10 +604,9 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               domEvent.stopPropagation();
               if (disabled) return;
               if (state.isPromoted) {
-                if (state.assistantLinkId)
-                  void onRemoveFromAssistant?.(item, state.assistantLinkId);
+                if (state.teammateLinkId) void onRemoveFromTeammate?.(item, state.teammateLinkId);
               } else {
-                void onPromoteToAssistant?.(item);
+                void onPromoteToTeammate?.(item);
               }
             },
           }}
@@ -615,7 +614,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
           <Button
             type="text"
             size="small"
-            aria-label={`Assistant actions for ${item.name}`}
+            aria-label={`Teammate actions for ${item.name}`}
             loading={busy}
             icon={<EllipsisOutlined />}
             onClick={stopNavigation}
@@ -709,7 +708,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
           </span>
         </div>
         {renderMiniPin(item)}
-        {renderAssistantPromotionMenu(item)}
+        {renderTeammatePromotionMenu(item)}
       </div>
     );
   };

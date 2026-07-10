@@ -437,7 +437,7 @@
         height: 628px;
       }
 
-      /* ===== Scene 6 — Raise team assistants + Slack ===== */
+      /* ===== Scene 6 — Raise AI teammates + Slack ===== */
       #s6 .scene-content {
         align-items: center;
         justify-content: center;
@@ -647,7 +647,7 @@
             </div>
           </div>
         </div>
-        <div class="reveal-headline" id="s2-head">Meet your team of AI assistants.</div>
+        <div class="reveal-headline" id="s2-head">Meet your AI teammates.</div>
        </div>
       </div>
 
@@ -719,16 +719,16 @@
        </div>
       </div>
 
-      <!-- ============ SCENE 6 — RAISE TEAM ASSISTANTS ============ -->
+      <!-- ============ SCENE 6 — RAISE AI TEAMMATES ============ -->
       <div id="s6" class="scene teal-bg clip" data-start="31.4" data-duration="4.6" data-track-index="16">
        <div class="scene-inner" id="s6-inner" data-layout-allow-overflow>
         <canvas id="cst6" class="constellation" width="1920" height="1080"></canvas>
         <div class="scene-content"></div>
         <div class="s6-eyebrow eyebrow" id="s6-eyebrow">The shared workspace.</div>
         <div class="assist-card" id="s6-assist">
-          <img src="assets/screenshots/assistants-list.png" alt="Team assistants" />
+          <img src="assets/screenshots/teammates-list.png" alt="AI teammates" />
         </div>
-        <div class="s6-head" id="s6-head">Raise team assistants — <span class="hl">memory, skills,</span> a place to work.</div>
+        <div class="s6-head" id="s6-head">Raise AI teammates — <span class="hl">memory, skills,</span> a place to work.</div>
         <div class="s6-slack-cap" id="s6-slackcap">Reach them from Slack, GitHub, anywhere.</div>
         <div class="slack-card" id="s6-slack">
           <img src="assets/screenshots/marketing/agor-marketing-slack-thread.png" alt="Slack thread" />
@@ -989,13 +989,13 @@
       tl.to("#s5-inner", { opacity: 0, filter: "blur(14px)", scale: 1.04, duration: 0.45, ease: "power2.in" }, 31.1);
 
       // ============================================================
-      // SCENE 6 — Raise team assistants (31.4 - 36.0) — peak 32.72
+      // SCENE 6 — Raise AI teammates (31.4 - 36.0) — peak 32.72
       // ============================================================
       var s6nodes = buildField(67013, 34);
       var c6 = document.getElementById("cst6").getContext("2d");
       tl.fromTo("#s6-inner", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power2.out" }, 31.4);
       tl.fromTo("#s6-eyebrow", { opacity: 0, y: -22 }, { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" }, 31.6);
-      // headline (top) lands ON the 32.72 build peak; assistants card sits bottom-left
+      // headline (top) lands ON the 32.72 build peak; teammates card sits bottom-left
       tl.fromTo("#s6-head", { opacity: 0, y: -50, scale: 1.04, filter: "blur(6px)" }, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", duration: 0.55, ease: "power4.out" }, 32.72);
       tl.fromTo("#s6-assist", { opacity: 0, x: -90, y: 30, filter: "blur(8px)" }, { opacity: 1, x: 0, y: 0, filter: "blur(0px)", duration: 0.6, ease: "power3.out" }, 31.9);
       // sub-beat: slack card slides into the bottom-right column (own space, no overlap), holds to scene end. chime at 33.4

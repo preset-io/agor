@@ -1,5 +1,5 @@
 import type { Board, Branch, MCPServer, Repo, Session } from '@agor-live/client';
-import { isAssistant } from '@agor-live/client';
+import { isTeammate } from '@agor-live/client';
 import { FolderOutlined, LinkOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
 import { useState } from 'react';
@@ -53,7 +53,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
     onArchiveOrDelete?.(branch.branch_id, options);
   };
 
-  const isAssistantBranch = isAssistant(branch);
+  const isTeammateBranch = isTeammate(branch);
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
@@ -151,8 +151,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            {/* Hide Notes for assistants — edited as "Description" in the Assistant tab */}
-            {!isAssistantBranch && (
+            {/* Hide Notes for teammates — edited as "Description" in the Teammate tab */}
+            {!isTeammateBranch && (
               <Form.Item
                 label={
                   <Space size={4}>

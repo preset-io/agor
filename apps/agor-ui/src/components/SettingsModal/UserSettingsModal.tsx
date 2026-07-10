@@ -858,7 +858,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   Onboarding
                 </Typography.Title>
                 <Typography.Paragraph type="secondary">
-                  Reopen the assistant setup wizard from the beginning. Existing repos, boards,
+                  Reopen the AI teammate setup wizard from the beginning. Existing repos, boards,
                   branches, and credentials stay in place.
                 </Typography.Paragraph>
                 <Popconfirm

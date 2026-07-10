@@ -3728,7 +3728,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           description: config.daemon?.instanceDescription,
         },
         onboarding: {
-          assistantPending:
+          teammatePending:
+            config.onboarding?.teammatePending ??
             config.onboarding?.assistantPending ??
             config.onboarding?.persistedAgentPending ??
             false,

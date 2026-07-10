@@ -124,9 +124,9 @@ export interface ConversationViewProps {
   };
 
   /**
-   * Emoji override for assistant avatar in message bubbles
+   * Emoji override for teammate avatar in message bubbles
    */
-  assistantEmoji?: string;
+  teammateEmoji?: string;
 
   /** Upload links keyed by source user-message id. */
   attachmentLinksByMessageId?: Map<string, Link[]>;
@@ -153,7 +153,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     emptyStateMessage = 'No messages yet. Send a prompt to start the conversation.',
     isActive = true,
     genealogy,
-    assistantEmoji,
+    teammateEmoji,
     attachmentLinksByMessageId,
     forceExpandAll = false,
   }) => {
@@ -217,7 +217,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
     // Queued tasks belong to the queue drawer, not the conversation. They
     // haven't run yet — there's no message_range, no user-message row, no
-    // assistant output to render — so showing them here as TaskBlocks just
+    // agent output to render — so showing them here as TaskBlocks just
     // duplicates what the queue panel already shows.
     //
     // Memoized so the filtered array's identity is stable across re-renders
@@ -513,7 +513,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
               onLoadTaskMessages={handleLoadTaskMessages}
               onUnloadTaskMessages={handleUnloadTaskMessages}
-              assistantEmoji={assistantEmoji}
+              teammateEmoji={teammateEmoji}
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}
               attachmentLinksByMessageId={attachmentLinksByMessageId}

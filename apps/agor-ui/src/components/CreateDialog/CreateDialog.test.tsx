@@ -40,9 +40,9 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
 
 const frameworkRepo = makeRepo({
   repo_id: 'framework-repo',
-  slug: 'preset-io/agor-assistant',
-  name: 'agor-assistant',
-  remote_url: 'https://github.com/preset-io/agor-assistant.git',
+  slug: 'preset-io/agor-teammate',
+  name: 'agor-teammate',
+  remote_url: 'https://github.com/preset-io/agor-teammate.git',
 });
 
 const userRepo = makeRepo({
@@ -71,7 +71,7 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
       onCreateBoard={vi.fn()}
       onCreateRepo={vi.fn()}
       onCreateLocalRepo={vi.fn()}
-      onCreateAssistant={vi.fn()}
+      onCreateTeammate={vi.fn()}
       {...props}
     />
   );
@@ -87,60 +87,60 @@ function renderDialog(props: Partial<React.ComponentProps<typeof CreateDialog>> 
 const ASYNC = { timeout: 10_000 };
 
 describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () => {
-  it('defaults to Assistant as the primary create path', async () => {
+  it('defaults to Teammate as the primary create path', async () => {
     renderDialog();
 
-    expect(await screen.findByRole('tab', { name: /Assistant/i }, ASYNC)).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: /Teammate/i }, ASYNC)).toHaveAttribute(
       'aria-selected',
       'true'
     );
-    expect(screen.getByRole('button', { name: /Create Assistant/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Create AI teammate/i })).toBeDisabled();
   });
 
-  it('enables Create Assistant once Name is typed', async () => {
-    renderDialog({ defaultTab: 'assistant' });
+  it('enables Create AI teammate once Name is typed', async () => {
+    renderDialog({ defaultTab: 'teammate' });
 
     const displayName = (await screen.findByPlaceholderText(
       /PR Reviewer/i,
       undefined,
       ASYNC
     )) as HTMLInputElement;
-    fireEvent.change(displayName, { target: { value: 'My Assistant' } });
+    fireEvent.change(displayName, { target: { value: 'My Teammate' } });
 
-    const button = screen.getByRole('button', { name: /Create Assistant/i });
+    const button = screen.getByRole('button', { name: /Create AI teammate/i });
     await waitFor(() => {
       expect(button).not.toBeDisabled();
     }, ASYNC);
   });
 
-  it('preserves Assistant validity when user switches tabs and switches back', async () => {
-    renderDialog({ defaultTab: 'assistant' });
+  it('preserves Teammate validity when user switches tabs and switches back', async () => {
+    renderDialog({ defaultTab: 'teammate' });
 
     const displayName = (await screen.findByPlaceholderText(
       /PR Reviewer/i,
       undefined,
       ASYNC
     )) as HTMLInputElement;
-    fireEvent.change(displayName, { target: { value: 'My Assistant' } });
+    fireEvent.change(displayName, { target: { value: 'My Teammate' } });
 
     // Switch away and back without asserting on the interim state — that
     // assertion isn't load-bearing for this regression and each waitFor pass
     // adds 5-8s of overhead in CI.
     fireEvent.click(screen.getByRole('tab', { name: /Board/i }));
-    fireEvent.click(screen.getByRole('tab', { name: /Assistant/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Teammate/i }));
 
     // Name is still filled — submit must be enabled without the user
     // having to re-touch the field. Pre-fix: handleTabChange reset the shared
-    // isValid to false and AssistantTab's useEffect didn't re-fire (its
+    // isValid to false and TeammateTab's useEffect didn't re-fire (its
     // isFormValid hadn't changed), so the button stayed stuck disabled.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Create Assistant/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /Create AI teammate/i })).not.toBeDisabled();
     }, ASYNC);
   });
 
-  it('submits assistant agentic defaults with the assistant fields', async () => {
-    const onCreateAssistant = vi.fn();
-    renderDialog({ defaultTab: 'assistant', onCreateAssistant });
+  it('submits teammate agentic defaults with the teammate fields', async () => {
+    const onCreateTeammate = vi.fn();
+    renderDialog({ defaultTab: 'teammate', onCreateTeammate });
 
     const displayName = (await screen.findByPlaceholderText(
       /PR Reviewer/i,
@@ -149,7 +149,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     )) as HTMLInputElement;
     fireEvent.change(displayName, { target: { value: 'Bootstrap Bot' } });
 
-    const button = screen.getByRole('button', { name: /Create Assistant/i });
+    const button = screen.getByRole('button', { name: /Create AI teammate/i });
     await waitFor(() => {
       expect(button).not.toBeDisabled();
     }, ASYNC);
@@ -157,7 +157,7 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     fireEvent.click(button);
 
     await waitFor(() => {
-      expect(onCreateAssistant).toHaveBeenCalledWith(
+      expect(onCreateTeammate).toHaveBeenCalledWith(
         expect.objectContaining({
           displayName: 'Bootstrap Bot',
           emoji: '🤖',
@@ -170,20 +170,20 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
   });
 
   it('reports each tab its own validity (no spillover when switching to an empty tab)', async () => {
-    renderDialog({ defaultTab: 'assistant' });
+    renderDialog({ defaultTab: 'teammate' });
 
     const displayName = (await screen.findByPlaceholderText(
       /PR Reviewer/i,
       undefined,
       ASYNC
     )) as HTMLInputElement;
-    fireEvent.change(displayName, { target: { value: 'My Assistant' } });
+    fireEvent.change(displayName, { target: { value: 'My Teammate' } });
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Create Assistant/i })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: /Create AI teammate/i })).not.toBeDisabled();
     }, ASYNC);
 
     // Switch to Board (its form is empty). The footer's submit must reflect
-    // Board's validity, not leak Assistant's "true" into Create Board.
+    // Board's validity, not leak Teammate's "true" into Create Board.
     fireEvent.click(screen.getByRole('tab', { name: /Board/i }));
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Create Board/i })).toBeDisabled();

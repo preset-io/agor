@@ -38,11 +38,11 @@ import { useThemedMessage } from '../../../utils/message';
 import {
   buildLinkDisplayItems,
   compareLinkDisplayItemsBySort,
-  getAssistantPromotionState,
   getCompactLinkDisplayName,
   getLinkCategoryCounts,
   getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
+  getTeammatePromotionState,
   isFileLinkDisplayItem,
   LINK_CATEGORY_TAB_LABELS,
   LINK_SORT_LABELS,
@@ -50,7 +50,7 @@ import {
   type LinkDisplayItem,
   type LinkSortKey,
   matchesLinkCategoryTab,
-  promoteLinkToAssistant,
+  promoteLinkToTeammate,
 } from '../../Links';
 import {
   LinkImagePreviewModal,
@@ -243,10 +243,10 @@ function BranchStatusPill({
   );
 }
 
-function assistantPromotionLabel(state: ReturnType<typeof getAssistantPromotionState>): string {
+function teammatePromotionLabel(state: ReturnType<typeof getTeammatePromotionState>): string {
   if (!state.canPromote) {
-    if (state.reason === 'no-assistant') return 'No assistant configured';
-    if (state.reason === 'same-owner') return 'Already on assistant branch';
+    if (state.reason === 'no-teammate') return 'No teammate configured';
+    if (state.reason === 'same-owner') return 'Already on teammate branch';
     if (state.reason === 'missing-source-link') return 'Cannot add generated branch metadata';
     if (state.reason === 'file-lifetime') return 'File promotion awaits upload retention support';
     if (state.reason === 'internal-target-access') {
@@ -254,44 +254,44 @@ function assistantPromotionLabel(state: ReturnType<typeof getAssistantPromotionS
     }
     return 'Cannot add this link';
   }
-  return state.isPromoted ? 'Remove from assistant' : 'Promote to assistant';
+  return state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
 }
 
-function BranchAssistantPromotionAction({
+function BranchTeammatePromotionAction({
   item,
-  assistantBranchId,
-  assistantLinks,
+  teammateBranchId,
+  teammateLinks,
   sourceBranchId,
   busyKey,
   onPromote,
   onRemove,
 }: {
   item: LinkDisplayItem;
-  assistantBranchId?: string | null;
-  assistantLinks: Link[];
+  teammateBranchId?: string | null;
+  teammateLinks: Link[];
   sourceBranchId: string;
   busyKey?: string | null;
   onPromote: (item: LinkDisplayItem) => void | Promise<void>;
-  onRemove: (item: LinkDisplayItem, assistantLinkId: string) => void | Promise<void>;
+  onRemove: (item: LinkDisplayItem, teammateLinkId: string) => void | Promise<void>;
 }) {
   const { token } = theme.useToken();
-  const state = getAssistantPromotionState({
+  const state = getTeammatePromotionState({
     item,
-    assistantBranchId,
-    assistantLinks,
+    teammateBranchId,
+    teammateLinks,
     sourceBranchId,
   });
-  const busy = busyKey === (state.assistantLink?.link_id ?? item.linkId ?? item.key);
-  const label = assistantPromotionLabel(state);
+  const busy = busyKey === (state.teammateLink?.link_id ?? item.linkId ?? item.key);
+  const label = teammatePromotionLabel(state);
 
   return (
-    <Tooltip title={state.canPromote ? 'Assistant link actions' : label}>
+    <Tooltip title={state.canPromote ? 'Teammate link actions' : label}>
       <Dropdown
         trigger={['click']}
         menu={{
           items: [
             {
-              key: state.isPromoted ? 'remove-assistant' : 'promote-assistant',
+              key: state.isPromoted ? 'remove-teammate' : 'promote-teammate',
               label,
               disabled: !state.canPromote || busy,
             },
@@ -300,8 +300,8 @@ function BranchAssistantPromotionAction({
             domEvent.preventDefault();
             domEvent.stopPropagation();
             if (!state.canPromote || busy) return;
-            if (state.isPromoted && state.assistantLink) {
-              void onRemove(item, state.assistantLink.link_id);
+            if (state.isPromoted && state.teammateLink) {
+              void onRemove(item, state.teammateLink.link_id);
             } else {
               void onPromote(item);
             }
@@ -312,7 +312,7 @@ function BranchAssistantPromotionAction({
           type="text"
           size="small"
           loading={busy}
-          aria-label={`Assistant actions for ${getCompactLinkDisplayName(item)}`}
+          aria-label={`Teammate actions for ${getCompactLinkDisplayName(item)}`}
           icon={<EllipsisOutlined />}
           onClick={(event) => {
             event.preventDefault();
@@ -387,20 +387,20 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
     [branch.branch_id]
   );
   const links = useAgorStore(branchLinksSelector) ?? [];
-  const assistantBranchId = branch.board_id
-    ? (boardById.get(branch.board_id)?.primary_assistant_id ?? null)
+  const teammateBranchId = branch.board_id
+    ? (boardById.get(branch.board_id)?.primary_teammate_id ?? null)
     : null;
-  const assistantLinksSelector = useMemo(
-    () => makeLinksForBranchSelector(assistantBranchId ?? ''),
-    [assistantBranchId]
+  const teammateLinksSelector = useMemo(
+    () => makeLinksForBranchSelector(teammateBranchId ?? ''),
+    [teammateBranchId]
   );
-  const assistantLinks = useAgorStore(assistantLinksSelector) ?? [];
-  const assistantPromotionLinks = assistantBranchId === branch.branch_id ? links : assistantLinks;
+  const teammateLinks = useAgorStore(teammateLinksSelector) ?? [];
+  const teammatePromotionLinks = teammateBranchId === branch.branch_id ? links : teammateLinks;
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
-  const [assistantPromotionBusyKey, setAssistantPromotionBusyKey] = useState<string | null>(null);
+  const [teammatePromotionBusyKey, setTeammatePromotionBusyKey] = useState<string | null>(null);
   const [busyLinkId, setBusyLinkId] = useState<string | null>(null);
   const [previewTarget, setPreviewTarget] = useState<LinkImagePreviewTarget | null>(null);
   const [markdownTarget, setMarkdownTarget] = useState<LinkMarkdownPreviewTarget | null>(null);
@@ -414,8 +414,8 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
     setError(null);
     try {
       const requests = [fetchAndReplaceFullBranchLinks(client, branch.branch_id)];
-      if (assistantBranchId && assistantBranchId !== branch.branch_id) {
-        requests.push(fetchAndReplaceFullBranchLinks(client, assistantBranchId));
+      if (teammateBranchId && teammateBranchId !== branch.branch_id) {
+        requests.push(fetchAndReplaceFullBranchLinks(client, teammateBranchId));
       }
       await Promise.all(requests);
     } catch (err) {
@@ -424,7 +424,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
     } finally {
       setLoading(false);
     }
-  }, [assistantBranchId, branch.branch_id, client, fetchAndReplaceFullBranchLinks]);
+  }, [teammateBranchId, branch.branch_id, client, fetchAndReplaceFullBranchLinks]);
 
   useEffect(() => {
     if (!open || !active || !client) return;
@@ -520,51 +520,51 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
     [applyLinkMutationResult, client, pinningLinkId, showError]
   );
 
-  const handlePromoteToAssistant = useCallback(
+  const handlePromoteToTeammate = useCallback(
     async (item: LinkDisplayItem) => {
-      if (!client || !assistantBranchId || !item.linkId || assistantPromotionBusyKey) return;
-      setAssistantPromotionBusyKey(item.linkId);
+      if (!client || !teammateBranchId || !item.linkId || teammatePromotionBusyKey) return;
+      setTeammatePromotionBusyKey(item.linkId);
       try {
-        const promoted = await promoteLinkToAssistant({
+        const promoted = await promoteLinkToTeammate({
           client,
           sourceLinkId: item.linkId,
-          assistantBranchId,
+          teammateBranchId,
         });
         applyKnownLinkCreatedResult(promoted);
-        showSuccess('Promoted to assistant');
+        showSuccess('Promoted to teammate');
       } catch (err) {
         showError(`Failed to promote link: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
-        setAssistantPromotionBusyKey(null);
+        setTeammatePromotionBusyKey(null);
       }
     },
     [
       applyKnownLinkCreatedResult,
-      assistantBranchId,
-      assistantPromotionBusyKey,
+      teammateBranchId,
+      teammatePromotionBusyKey,
       client,
       showError,
       showSuccess,
     ]
   );
 
-  const handleRemoveFromAssistant = useCallback(
-    async (_item: LinkDisplayItem, assistantLinkId: string) => {
-      if (!client || assistantPromotionBusyKey) return;
-      setAssistantPromotionBusyKey(assistantLinkId);
+  const handleRemoveFromTeammate = useCallback(
+    async (_item: LinkDisplayItem, teammateLinkId: string) => {
+      if (!client || teammatePromotionBusyKey) return;
+      setTeammatePromotionBusyKey(teammateLinkId);
       try {
-        const removed = (await client.service('links').remove(assistantLinkId)) as Link;
+        const removed = (await client.service('links').remove(teammateLinkId)) as Link;
         applyKnownLinkRemovedResult(removed);
-        showSuccess('Removed from assistant');
+        showSuccess('Removed from teammate');
       } catch (err) {
         showError(
-          `Failed to remove assistant link: ${err instanceof Error ? err.message : String(err)}`
+          `Failed to remove teammate link: ${err instanceof Error ? err.message : String(err)}`
         );
       } finally {
-        setAssistantPromotionBusyKey(null);
+        setTeammatePromotionBusyKey(null);
       }
     },
-    [applyKnownLinkRemovedResult, assistantPromotionBusyKey, client, showError, showSuccess]
+    [applyKnownLinkRemovedResult, teammatePromotionBusyKey, client, showError, showSuccess]
   );
 
   return (
@@ -686,15 +686,15 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                             onTogglePinned={handleTogglePinned}
                             pinning={item.linkId === pinningLinkId}
                           />,
-                          <BranchAssistantPromotionAction
-                            key="assistant"
+                          <BranchTeammatePromotionAction
+                            key="teammate"
                             item={item}
-                            assistantBranchId={assistantBranchId}
-                            assistantLinks={assistantPromotionLinks}
+                            teammateBranchId={teammateBranchId}
+                            teammateLinks={teammatePromotionLinks}
                             sourceBranchId={branch.branch_id}
-                            busyKey={assistantPromotionBusyKey}
-                            onPromote={handlePromoteToAssistant}
-                            onRemove={handleRemoveFromAssistant}
+                            busyKey={teammatePromotionBusyKey}
+                            onPromote={handlePromoteToTeammate}
+                            onRemove={handleRemoveFromTeammate}
                           />,
                         ]}
                       >

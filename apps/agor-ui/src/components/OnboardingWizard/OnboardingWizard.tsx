@@ -2,15 +2,14 @@
  * OnboardingWizard - streamlined two-input setup for new users.
  *
  * Flow:
- * 1. Assistant identity (name + emoji)
+ * 1. AI teammate identity (name + emoji)
  * 2. LLM/provider configuration
- * 3. One progress screen while Agor creates the default assistant workspace
+ * 3. One progress screen while Agor creates the default AI teammate workspace
  */
 
 import type {
   AgenticToolConfigField,
   AgenticToolName,
-  AssistantConfig,
   AuthCheckResult,
   Branch,
   CloneRepositoryResult,
@@ -21,6 +20,7 @@ import type {
   DefaultModelConfig,
   PermissionMode,
   Repo,
+  TeammateConfig,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -60,10 +60,10 @@ import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectRepoById } from '../../store/selectors';
 import type { CreateRepoOptions } from '../../types';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
-import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
-import { ensureAssistantWelcomeNote } from '../../utils/assistantWelcomeNote';
 import { slugify } from '../../utils/repoSlug';
-import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
+import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
+import { buildTeammateBootstrapPrompt } from '../../utils/teammateBootstrapPrompt';
+import { ensureTeammateWelcomeNote } from '../../utils/teammateWelcomeNote';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 import { ToolIcon } from '../ToolIcon';
@@ -73,7 +73,7 @@ const { useToken } = theme;
 
 const CLONE_TIMEOUT_MS = 120_000;
 
-type WizardPath = 'assistant';
+type WizardPath = 'teammate';
 type WizardStep = 'identity' | 'llm' | 'loading';
 type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth';
 type SetupStage = 'idle' | 'cloning' | 'board' | 'branch' | 'session' | 'done' | 'error';
@@ -116,7 +116,7 @@ export interface OnboardingWizardProps {
   onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => Promise<void>;
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
-  assistantPending?: boolean;
+  teammatePending?: boolean;
   frameworkRepoUrl?: string;
 }
 
@@ -128,8 +128,8 @@ function sanitizeBranchName(input: string): string {
     .replace(/^-|-$/g, '');
 }
 
-function defaultAssistantBranchName(displayName: string): string {
-  const slug = slugify(displayName.trim() || 'My Assistant') || 'my-assistant';
+function defaultTeammateBranchName(displayName: string): string {
+  const slug = slugify(displayName.trim() || 'My Teammate') || 'my-teammate';
   return sanitizeBranchName(`private-${slug}`);
 }
 
@@ -256,8 +256,8 @@ export function OnboardingWizard({
   const boardById = useAgorStore(selectBoardById);
   const { token } = useToken();
   const [currentStep, setCurrentStep] = useState<WizardStep>('identity');
-  const [assistantDisplayName, setAssistantDisplayName] = useState('My Assistant');
-  const [assistantEmoji, setAssistantEmoji] = useState('🤖');
+  const [teammateDisplayName, setTeammateDisplayName] = useState('My Teammate');
+  const [teammateEmoji, setTeammateEmoji] = useState('🤖');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
   const [lastRecommendedAgent, setLastRecommendedAgent] = useState<AgenticToolName>('claude-code');
   const [useDifferentProvider, setUseDifferentProvider] = useState(false);
@@ -279,8 +279,8 @@ export function OnboardingWizard({
   const effectiveFrameworkUrl = frameworkRepoUrl || FRAMEWORK_REPO_URL;
 
   const defaultBranchName = useMemo(
-    () => defaultAssistantBranchName(assistantDisplayName),
-    [assistantDisplayName]
+    () => defaultTeammateBranchName(teammateDisplayName),
+    [teammateDisplayName]
   );
 
   const saveOnboardingProgress = useCallback(
@@ -289,8 +289,8 @@ export function OnboardingWizard({
       repoId?: string;
       boardId?: string;
       branchId?: string;
-      assistantDisplayName?: string;
-      assistantEmoji?: string;
+      teammateDisplayName?: string;
+      teammateEmoji?: string;
     }) => {
       if (!user) return;
       const current = user.preferences?.onboarding || {};
@@ -307,11 +307,13 @@ export function OnboardingWizard({
   useEffect(() => {
     if (!open || !user) return;
     const onboarding = user.preferences?.onboarding;
-    if (typeof onboarding?.assistantDisplayName === 'string') {
-      setAssistantDisplayName(onboarding.assistantDisplayName || 'My Assistant');
+    const savedDisplayName = onboarding?.teammateDisplayName ?? onboarding?.assistantDisplayName;
+    if (typeof savedDisplayName === 'string') {
+      setTeammateDisplayName(savedDisplayName || 'My Teammate');
     }
-    if (typeof onboarding?.assistantEmoji === 'string') {
-      setAssistantEmoji(onboarding.assistantEmoji || '🤖');
+    const savedEmoji = onboarding?.teammateEmoji ?? onboarding?.assistantEmoji;
+    if (typeof savedEmoji === 'string') {
+      setTeammateEmoji(savedEmoji || '🤖');
     }
   }, [open, user]);
 
@@ -379,9 +381,9 @@ export function OnboardingWizard({
       const sessionConfig: NewSessionConfig = {
         branch_id: branchId,
         agent: selectedAgent,
-        initialPrompt: buildAssistantBootstrapPrompt({
-          displayName: assistantDisplayName.trim() || 'My Assistant',
-          emoji: assistantEmoji || '🤖',
+        initialPrompt: buildTeammateBootstrapPrompt({
+          displayName: teammateDisplayName.trim() || 'My Teammate',
+          emoji: teammateEmoji || '🤖',
           userName: user?.name,
           userEmail: user?.email,
         }),
@@ -405,12 +407,12 @@ export function OnboardingWizard({
 
       return sessionConfig;
     },
-    [assistantDisplayName, assistantEmoji, selectedAgent, user]
+    [teammateDisplayName, teammateEmoji, selectedAgent, user]
   );
 
   const branches = useMemo(() => Array.from(branchById.values()), [branchById]);
 
-  const findExistingAssistantBranch = useCallback(
+  const findExistingTeammateBranch = useCallback(
     async (repoId: string, branchName: string): Promise<Branch | null> => {
       for (const branch of branches) {
         if (
@@ -442,7 +444,7 @@ export function OnboardingWizard({
     [branches, client]
   );
 
-  const findExistingAssistantSession = useCallback(
+  const findExistingTeammateSession = useCallback(
     async (branchId: string): Promise<string | null> => {
       try {
         const result = await client?.service('sessions').find({
@@ -497,7 +499,7 @@ export function OnboardingWizard({
         saveOnboardingProgress({ repoId });
 
         setSetupStage('board');
-        setOperationText('Creating your assistant board…');
+        setOperationText('Creating your AI teammate board…');
         const existingBoardId = user?.preferences?.mainBoardId;
         let boardId =
           existingBoardId && user && boardById.get(existingBoardId)?.created_by === user.user_id
@@ -506,28 +508,28 @@ export function OnboardingWizard({
 
         if (!boardId) {
           const board = await client?.service('boards').create({
-            name: `${assistantDisplayName.trim() || 'My Assistant'}'s Board`,
-            icon: assistantEmoji || '🤖',
+            name: `${teammateDisplayName.trim() || 'My Teammate'}'s Board`,
+            icon: teammateEmoji || '🤖',
           });
           boardId = board?.board_id ?? null;
         }
-        if (!boardId) throw new Error('Failed to create assistant board.');
+        if (!boardId) throw new Error('Failed to create AI teammate board.');
         saveOnboardingProgress({ boardId });
-        await ensureAssistantWelcomeNote({
+        await ensureTeammateWelcomeNote({
           client,
           boardId,
-          assistantName: assistantDisplayName.trim() || 'My Assistant',
-          assistantEmoji,
+          teammateName: teammateDisplayName.trim() || 'My Teammate',
+          teammateEmoji,
         });
 
         setSetupStage('branch');
-        setOperationText('Creating the default assistant branch…');
+        setOperationText('Creating the default AI teammate branch…');
         const sourceBranch =
           repoOverride?.default_branch || repoById.get(repoId)?.default_branch || 'main';
-        const assistantConfig: AssistantConfig = {
-          kind: 'assistant',
-          displayName: assistantDisplayName.trim() || 'My Assistant',
-          emoji: assistantEmoji || undefined,
+        const teammateConfig: TeammateConfig = {
+          kind: 'teammate',
+          displayName: teammateDisplayName.trim() || 'My Teammate',
+          emoji: teammateEmoji || undefined,
           frameworkRepo: FRAMEWORK_REPO_SLUG,
           createdViaOnboarding: true,
         };
@@ -543,7 +545,7 @@ export function OnboardingWizard({
         let lastCreateError: unknown;
 
         for (const branchName of branchNameCandidates) {
-          existingBranch = await findExistingAssistantBranch(repoId, branchName);
+          existingBranch = await findExistingTeammateBranch(repoId, branchName);
           if (existingBranch) {
             branch = existingBranch;
             break;
@@ -557,7 +559,7 @@ export function OnboardingWizard({
               sourceBranch,
               pullLatest: true,
               boardId,
-              custom_context: { assistant: assistantConfig },
+              custom_context: { teammate: teammateConfig },
             });
             if (branch?.branch_id) break;
           } catch (err) {
@@ -574,23 +576,21 @@ export function OnboardingWizard({
 
         if (!branch?.branch_id) {
           if (lastCreateError instanceof Error) throw lastCreateError;
-          throw new Error('Failed to create assistant branch.');
+          throw new Error('Failed to create AI teammate branch.');
         }
         if (existingBranch?.board_id && existingBranch.board_id !== boardId) {
           boardId = existingBranch.board_id;
           saveOnboardingProgress({ boardId });
         }
         saveOnboardingProgress({ branchId: branch.branch_id });
-        await client
-          ?.service('boards')
-          .setPrimaryAssistant({ boardId, branchId: branch.branch_id });
+        await client?.service('boards').setPrimaryTeammate({ boardId, branchId: branch.branch_id });
 
         setSetupStage('session');
-        setOperationText('Starting your assistant…');
-        const existingSessionId = await findExistingAssistantSession(branch.branch_id);
+        setOperationText('Starting your AI teammate…');
+        const existingSessionId = await findExistingTeammateSession(branch.branch_id);
         const sessionId =
           existingSessionId ??
-          (await startAssistantBootstrapSession({
+          (await startTeammateBootstrapSession({
             client,
             branchId: branch.branch_id,
             boardId,
@@ -600,8 +600,8 @@ export function OnboardingWizard({
           }));
 
         setSetupStage('done');
-        setOperationText('Opening your assistant…');
-        onComplete({ branchId: branch.branch_id, sessionId, boardId, path: 'assistant' });
+        setOperationText('Opening your AI teammate…');
+        onComplete({ branchId: branch.branch_id, sessionId, boardId, path: 'teammate' });
       } catch (err) {
         completingRepoRef.current = null;
         setSetupStage('error');
@@ -609,14 +609,14 @@ export function OnboardingWizard({
       }
     },
     [
-      assistantDisplayName,
-      assistantEmoji,
+      teammateDisplayName,
+      teammateEmoji,
       boardById,
       buildSessionConfig,
       client,
       defaultBranchName,
-      findExistingAssistantBranch,
-      findExistingAssistantSession,
+      findExistingTeammateBranch,
+      findExistingTeammateSession,
       onComplete,
       onCreateBranch,
       onCreateSession,
@@ -665,13 +665,13 @@ export function OnboardingWizard({
   const startSetup = useCallback(async () => {
     setCurrentStep('loading');
     setSetupStage('cloning');
-    setOperationText('Cloning assistant framework…');
+    setOperationText('Cloning AI teammate framework…');
     setError(null);
     completingRepoRef.current = null;
 
     const readyRepo = findReadyFrameworkRepo(repoById);
     if (readyRepo) {
-      setOperationText('Preparing assistant workspace…');
+      setOperationText('Preparing AI teammate workspace…');
       void finishSetupFromRepo(readyRepo[0], readyRepo[1]);
       return;
     }
@@ -703,7 +703,7 @@ export function OnboardingWizard({
       );
 
       if (cloneResult?.status === 'exists') {
-        setOperationText('Preparing assistant workspace…');
+        setOperationText('Preparing AI teammate workspace…');
       }
 
       if (cloneResult?.repo_id) {
@@ -718,7 +718,7 @@ export function OnboardingWizard({
           pollRepoUntilReady(existingRepo.repo_id);
           startCloneTimeout();
         } else {
-          setOperationText('Preparing assistant workspace…');
+          setOperationText('Preparing AI teammate workspace…');
           void finishSetupFromRepo(existingRepo.repo_id, existingRepo);
         }
         return;
@@ -728,7 +728,7 @@ export function OnboardingWizard({
     } catch (err) {
       const existingRepo = await fetchExistingFrameworkRepo();
       if (existingRepo?.repo_id) {
-        setOperationText('Preparing assistant workspace…');
+        setOperationText('Preparing AI teammate workspace…');
         if (existingRepo.clone_status === 'cloning') {
           pollRepoUntilReady(existingRepo.repo_id);
           startCloneTimeout();
@@ -760,8 +760,12 @@ export function OnboardingWizard({
     for (const repo of repoById.values()) {
       if (repo.clone_status !== 'failed') continue;
       if (knownFailedRepoIdsRef.current.has(repo.repo_id)) continue;
-      if (repo.slug !== FRAMEWORK_REPO_SLUG && !repo.remote_url?.includes('agor-assistant'))
-        continue;
+      const isFrameworkRepo =
+        repo.slug === FRAMEWORK_REPO_SLUG ||
+        repo.slug === 'preset-io/agor-assistant' ||
+        repo.remote_url?.includes('agor-teammate') ||
+        repo.remote_url?.includes('agor-assistant');
+      if (!isFrameworkRepo) continue;
       setSetupStage('error');
       setError(
         repo.clone_error?.message ?? `Clone failed (exit ${repo.clone_error?.exit_code ?? '?'}).`
@@ -778,7 +782,12 @@ export function OnboardingWizard({
     if (!client?.io) return;
     const handleCloneError = (data: { slug?: string; url?: string; error: string }) => {
       if (currentStep !== 'loading' || setupStage !== 'cloning') return;
-      if (data.slug !== FRAMEWORK_REPO_SLUG && !data.url?.includes('agor-assistant')) return;
+      const isFrameworkRepo =
+        data.slug === FRAMEWORK_REPO_SLUG ||
+        data.slug === 'preset-io/agor-assistant' ||
+        data.url?.includes('agor-teammate') ||
+        data.url?.includes('agor-assistant');
+      if (!isFrameworkRepo) return;
       setSetupStage('error');
       setError(data.error);
       if (cloneTimeoutRef.current) {
@@ -790,17 +799,17 @@ export function OnboardingWizard({
     return () => client.io.off('repo:cloneError', handleCloneError);
   }, [client, currentStep, setupStage]);
 
-  const handleAssistantIdentityContinue = useCallback(() => {
-    const trimmedName = assistantDisplayName.trim() || 'My Assistant';
-    setAssistantDisplayName(trimmedName);
+  const handleTeammateIdentityContinue = useCallback(() => {
+    const trimmedName = teammateDisplayName.trim() || 'My Teammate';
+    setTeammateDisplayName(trimmedName);
     saveOnboardingProgress({
-      path: 'assistant',
-      assistantDisplayName: trimmedName,
-      assistantEmoji: assistantEmoji || '🤖',
+      path: 'teammate',
+      teammateDisplayName: trimmedName,
+      teammateEmoji: teammateEmoji || '🤖',
     });
     setError(null);
     setCurrentStep('llm');
-  }, [assistantDisplayName, assistantEmoji, saveOnboardingProgress]);
+  }, [teammateDisplayName, teammateEmoji, saveOnboardingProgress]);
 
   const handleSaveApiKey = useCallback(async () => {
     if (!user || !apiKey.trim()) return;
@@ -833,7 +842,7 @@ export function OnboardingWizard({
 
   const handleSkip = useCallback(() => {
     if (!user) return;
-    onComplete({ branchId: '', sessionId: '', boardId: '', path: 'assistant' });
+    onComplete({ branchId: '', sessionId: '', boardId: '', path: 'teammate' });
   }, [onComplete, user]);
 
   const renderIdentity = () => (
@@ -845,11 +854,11 @@ export function OnboardingWizard({
         Start by creating your{' '}
         <Typography.Link
           strong
-          href="https://agor.live/guide/assistants"
+          href="https://agor.live/guide/teammates"
           target="_blank"
           rel="noopener noreferrer"
         >
-          Agor assistant
+          Agor AI teammate
         </Typography.Link>
         : a persistent agent that can help set up your workspace and keep things moving.
       </Paragraph>
@@ -863,7 +872,7 @@ export function OnboardingWizard({
           marginBottom: 16,
         }}
       >
-        <Text strong>Your assistant can help:</Text>
+        <Text strong>Your AI teammate can help:</Text>
         <ul style={{ margin: '8px 0 0', paddingLeft: 20, color: token.colorTextSecondary }}>
           <li>🧰 Connect tools and credentials</li>
           <li>🗺️ Set up your board and workflow</li>
@@ -875,15 +884,11 @@ export function OnboardingWizard({
       <Form layout="vertical">
         <Form.Item label="Name and emoji" required>
           <Space.Compact style={{ display: 'flex' }}>
-            <EmojiPickerInput
-              value={assistantEmoji}
-              onChange={setAssistantEmoji}
-              defaultEmoji="🤖"
-            />
+            <EmojiPickerInput value={teammateEmoji} onChange={setTeammateEmoji} defaultEmoji="🤖" />
             <Input
-              placeholder="My Assistant"
-              value={assistantDisplayName}
-              onChange={(event) => setAssistantDisplayName(event.target.value)}
+              placeholder="My Teammate"
+              value={teammateDisplayName}
+              onChange={(event) => setTeammateDisplayName(event.target.value)}
               autoFocus
               style={{ flex: 1 }}
             />
@@ -893,8 +898,8 @@ export function OnboardingWizard({
       {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
       <Button
         type="primary"
-        onClick={handleAssistantIdentityContinue}
-        disabled={!assistantDisplayName.trim()}
+        onClick={handleTeammateIdentityContinue}
+        disabled={!teammateDisplayName.trim()}
       >
         Continue
       </Button>
@@ -986,7 +991,7 @@ export function OnboardingWizard({
       <div>
         <Title level={4}>Choose your LLM</Title>
         <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-          Pick what powers your assistant.
+          Pick what powers your AI teammate.
         </Paragraph>
 
         <Space orientation="vertical" size="middle" style={{ width: '100%', marginBottom: 16 }}>
@@ -1239,7 +1244,7 @@ export function OnboardingWizard({
             title="Skip setup?"
             description={
               <div style={{ maxWidth: 250 }}>
-                Are you sure? Your assistant has been waiting their whole life to meet you.
+                Are you sure? Your AI teammate has been waiting their whole life to meet you.
                 <br />
                 <br />
                 <Text type="secondary" style={{ fontSize: 12 }}>

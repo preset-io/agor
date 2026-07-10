@@ -1,6 +1,5 @@
 export { EventStreamPill } from './EventStreamPill';
 export {
-  AssistantPill,
   BoardPill,
   BranchPill,
   ChannelPill,
@@ -26,6 +25,7 @@ export {
   SessionPill,
   SpawnPill,
   StatusPill,
+  TeammatePill,
   TokenCountPill,
   ToolCountPill,
   UserPill,

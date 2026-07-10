@@ -96,7 +96,7 @@ interface TaskBlockProps {
   taskMessagesLoaded: boolean;
   onLoadTaskMessages: (taskId: string) => Promise<void> | void;
   onUnloadTaskMessages: (taskId: string) => void;
-  assistantEmoji?: string;
+  teammateEmoji?: string;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
   client?: AgorClient | null;
   /** Upload links keyed by source user-message id. */
@@ -124,7 +124,7 @@ function isAgentChainMessage(message: Message): boolean {
     if (hasOnlyToolResults) return true; // Part of agent chain, don't break it
   }
 
-  // Only assistant messages beyond this point
+  // Only agent messages beyond this point
   if (message.role !== MessageRole.ASSISTANT) return false;
 
   // String content - this is user-facing response, NOT agent chain
@@ -169,8 +169,8 @@ function isAgentChainMessage(message: Message): boolean {
 
 /**
  * Group messages into blocks:
- * - Consecutive assistant messages with thoughts/tools → AgentChain
- * - User messages and assistant text responses → individual MessageBlocks
+ * - Consecutive agent messages with thoughts/tools → AgentChain
+ * - User messages and agent text responses → individual MessageBlocks
  * - Task tool nested operations → AgentChain (grouped by parent_tool_use_id)
  * - Compaction events (system_status + system_complete) → Compaction block
  * - Permission requests are now just messages, rendered inline naturally
@@ -418,7 +418,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     taskMessagesLoaded,
     onLoadTaskMessages,
     onUnloadTaskMessages,
-    assistantEmoji,
+    teammateEmoji,
     isLatestTask = false,
     client = null,
     attachmentLinksByMessageId,
@@ -730,7 +730,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               isFirstPendingPermission={isFirstPending}
                               isLatestMessage={isLatestMessage}
                               taskId={task.task_id}
-                              assistantEmoji={assistantEmoji}
+                              teammateEmoji={teammateEmoji}
                               client={client}
                               attachmentLinks={attachmentLinksByMessageId?.get(
                                 block.message.message_id
@@ -779,8 +779,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       <Bubble
                         placement="start"
                         avatar={
-                          assistantEmoji ? (
-                            <AgorAvatar>{assistantEmoji}</AgorAvatar>
+                          teammateEmoji ? (
+                            <AgorAvatar>{teammateEmoji}</AgorAvatar>
                           ) : agentic_tool ? (
                             <ToolIcon tool={agentic_tool} size={32} />
                           ) : (
