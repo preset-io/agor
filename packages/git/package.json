@@ -26,7 +26,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "js-yaml": "^5.2.0",
+    "js-yaml": "^5.2.1",
     "simple-git": "^3.36.0"
   },
   "devDependencies": {
