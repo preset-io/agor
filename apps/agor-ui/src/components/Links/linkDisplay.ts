@@ -25,7 +25,7 @@ export type LinkDisplayCategory =
   | 'internal'
   | 'unknown';
 
-type LinkDisplayNavigation = 'external' | 'spa';
+export type LinkDisplayNavigation = 'external' | 'spa';
 type LinkDisplaySource = LinkSource | 'branch';
 
 export interface LinkDisplayTarget {

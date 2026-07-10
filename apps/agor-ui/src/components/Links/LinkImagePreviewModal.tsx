@@ -5,6 +5,7 @@ import {
   getSafeLinkContentLabel,
   type LinkContentTarget,
 } from './linkContent';
+import styles from './linkUi.module.css';
 
 export type LinkImagePreviewTarget = LinkContentTarget;
 
@@ -73,12 +74,12 @@ export const LinkImagePreviewModal: React.FC<LinkImagePreviewModalProps> = ({
     >
       <div data-testid="link-image-preview-modal">
         {safeSubtitle && (
-          <Typography.Text type="secondary" ellipsis style={{ display: 'block', marginBottom: 12 }}>
+          <Typography.Text className={styles.previewSubtitle} type="secondary" ellipsis>
             {safeSubtitle}
           </Typography.Text>
         )}
         {loading && (
-          <div style={{ display: 'grid', placeItems: 'center', minHeight: 260 }}>
+          <div className={`${styles.previewCenter} ${styles.imagePreviewLoading}`}>
             <Spin tip="Loading image preview…" />
           </div>
         )}
@@ -96,10 +97,10 @@ export const LinkImagePreviewModal: React.FC<LinkImagePreviewModalProps> = ({
             }}
           >
             <img
+              className={styles.previewImage}
               data-testid="link-image-preview-image"
               src={objectUrl}
               alt={target?.title ?? 'Uploaded image preview'}
-              style={{ maxWidth: '100%', maxHeight: '68vh', objectFit: 'contain' }}
             />
           </div>
         )}

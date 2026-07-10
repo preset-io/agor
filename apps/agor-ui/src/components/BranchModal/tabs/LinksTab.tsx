@@ -1,17 +1,5 @@
 import type { AgorClient, Branch, Link, Session } from '@agor-live/client';
-import {
-  Alert,
-  Empty,
-  Flex,
-  Input,
-  List,
-  Segmented,
-  Select,
-  Space,
-  Spin,
-  Typography,
-  theme,
-} from 'antd';
+import { Alert, Empty, Flex, List, Space, Spin, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -30,8 +18,6 @@ import {
   buildLinkDisplayItems,
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
-  LINK_CATEGORY_TAB_LABELS,
-  LINK_SORT_LABELS,
   type LinkCategoryTabKey,
   type LinkDisplayItem,
   type LinkSortKey,
@@ -39,7 +25,8 @@ import {
   matchesLinkDisplaySearch,
   promoteLinkToTeammate,
 } from '../../Links';
-import { getLinkContentAction } from '../../Links/linkContent';
+import { LinkCollectionControls } from '../../Links/LinkCollectionControls';
+import styles from '../../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../../Links/SessionLinksControl';
 import { BranchLinkListItem } from './BranchLinkListItem';
 
@@ -101,7 +88,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   const [error, setError] = useState<string | null>(null);
   const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
   const [teammatePromotionBusyKey, setTeammatePromotionBusyKey] = useState<string | null>(null);
-  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
+  const { preview, setPreview, openItem } = useLinkFileActions(navigate);
   const [activeCategory, setActiveCategory] = useState<LinkCategoryTabKey>('all');
   const [sortOrder, setSortOrder] = useState<LinkSortKey>('az');
   const [searchQuery, setSearchQuery] = useState('');
@@ -131,14 +118,6 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
 
   const items = useMemo(() => buildLinkDisplayItems({ branch, links }), [branch, links]);
   const categoryCounts = useMemo(() => getLinkCategoryCounts(items), [items]);
-  const categoryTabs = useMemo(
-    () =>
-      (['all', 'files', 'links', 'knowledge', 'issues'] as const).map((key) => ({
-        value: key,
-        label: `${LINK_CATEGORY_TAB_LABELS[key]} ${categoryCounts[key]}`,
-      })),
-    [categoryCounts]
-  );
   const visibleItems = useMemo(
     () =>
       items
@@ -146,28 +125,6 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
         .filter((item) => itemMatchesSearch(item, searchQuery, sessionById))
         .sort((a, b) => compareLinkDisplayItemsBySort(a, b, sortOrder)),
     [activeCategory, items, searchQuery, sessionById, sortOrder]
-  );
-
-  const openItem = useCallback(
-    (item: LinkDisplayItem) => {
-      const contentAction = getLinkContentAction(item);
-      if (contentAction === 'preview') {
-        openPreview(item);
-        return;
-      }
-      if (contentAction === 'download') {
-        void downloadItem(item);
-        return;
-      }
-      if (item.href && item.navigation === 'spa') {
-        navigate(item.href);
-        return;
-      }
-      if (item.href) {
-        window.open(item.href, '_blank', 'noopener,noreferrer');
-      }
-    },
-    [downloadItem, navigate, openPreview]
   );
 
   const handleTogglePinned = useCallback(
@@ -238,11 +195,8 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   return (
     <>
       <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
-      <div
-        style={{ width: '100%', height: '70vh', overflowY: 'auto' }}
-        data-testid="branch-links-tab"
-      >
-        <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
+      <div className={styles.linkListViewport} data-testid="branch-links-tab">
+        <Space className={styles.fullWidth} direction="vertical" size={token.sizeMD}>
           {error && (
             <div style={{ padding: `0 ${token.paddingLG}px` }}>
               <Alert message="Error" description={error} type="error" showIcon />
@@ -250,51 +204,21 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
           )}
 
           {loading ? (
-            <Flex align="center" justify="center" style={{ minHeight: 180 }}>
+            <Flex className={styles.linkListLoading} align="center" justify="center">
               <Spin />
             </Flex>
           ) : items.length > 0 ? (
-            <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
+            <Space className={styles.fullWidth} direction="vertical" size={token.sizeMD}>
               <div style={{ padding: `0 ${token.paddingLG}px` }}>
-                <Segmented<LinkCategoryTabKey>
-                  block
-                  value={activeCategory}
-                  options={categoryTabs}
-                  onChange={setActiveCategory}
+                <LinkCollectionControls
+                  categoryCounts={categoryCounts}
+                  activeCategory={activeCategory}
+                  onCategoryChange={setActiveCategory}
+                  searchQuery={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  sortOrder={sortOrder}
+                  onSortChange={setSortOrder}
                 />
-                <Flex
-                  align="center"
-                  gap="small"
-                  wrap
-                  style={{
-                    width: '100%',
-                    marginTop: token.sizeMD,
-                  }}
-                >
-                  <Input.Search
-                    allowClear
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="Search links"
-                    aria-label="Search links"
-                    style={{ flex: '1 1 320px', minWidth: 220 }}
-                  />
-                  <Space size={token.sizeXS} style={{ flex: '0 0 auto' }}>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Sort
-                    </Typography.Text>
-                    <Select<LinkSortKey>
-                      size="small"
-                      value={sortOrder}
-                      options={(Object.keys(LINK_SORT_LABELS) as LinkSortKey[]).map((key) => ({
-                        value: key,
-                        label: LINK_SORT_LABELS[key],
-                      }))}
-                      onChange={setSortOrder}
-                      style={{ width: 128 }}
-                    />
-                  </Space>
-                </Flex>
               </div>
               {visibleItems.length > 0 ? (
                 <List

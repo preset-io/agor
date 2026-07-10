@@ -1,10 +1,8 @@
 import type { Link } from '@agor-live/client';
-import { GithubOutlined, StopOutlined } from '@ant-design/icons';
 import { Flex, List, Typography, theme } from 'antd';
 import {
   ActionLinkRow,
   getCompactLinkDisplayName,
-  getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
   getTeammatePromotionActionLabel,
   getTeammatePromotionState,
@@ -12,7 +10,9 @@ import {
   LinkOverflowAction,
   LinkPinAction,
 } from '../../Links';
+import { getLinkCompactGlyph } from '../../Links/LinkVisual';
 import { getLinkUnavailableReason } from '../../Links/linkContent';
+import styles from '../../Links/linkUi.module.css';
 
 interface BranchLinkListItemProps {
   item: LinkDisplayItem;
@@ -30,31 +30,19 @@ interface BranchLinkListItemProps {
 
 function BranchGlyph({ item, disabled }: { item: LinkDisplayItem; disabled: boolean }) {
   const { token } = theme.useToken();
-  const isGitHubLink = item.category === 'issue' || item.category === 'pr';
   return (
     <Flex
+      className={`${styles.glyph} ${styles.branchGlyph}`}
       align="center"
       justify="center"
       aria-hidden="true"
       style={{
-        width: 28,
-        height: 28,
         borderRadius: token.borderRadiusLG,
         background: token.colorFillTertiary,
         color: disabled ? token.colorTextDisabled : token.colorTextTertiary,
-        fontSize: 10,
-        fontWeight: 800,
-        letterSpacing: 0.2,
-        flex: '0 0 auto',
       }}
     >
-      {disabled ? (
-        <StopOutlined style={{ fontSize: 13 }} />
-      ) : isGitHubLink ? (
-        <GithubOutlined style={{ fontSize: 13 }} />
-      ) : (
-        getLinkDisplayGlyphLabel(item.category)
-      )}
+      {getLinkCompactGlyph(item.category, disabled)}
     </Flex>
   );
 }
@@ -88,6 +76,7 @@ function PromotionAction(props: BranchLinkListItemProps) {
 }
 
 export function BranchLinkListItem(props: BranchLinkListItemProps) {
+  const { token } = theme.useToken();
   const disabledReason = getLinkUnavailableReason(props.item);
   const disabled = Boolean(disabledReason);
   const title = getCompactLinkDisplayName(props.item);
@@ -99,7 +88,9 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
       <ActionLinkRow
         disabled={disabled}
         ariaLabel={disabledReason ? `${title}: ${disabledReason}` : `Open ${title}`}
-        onActivate={() => props.onOpen(props.item)}
+        href={props.item.href}
+        navigation={props.item.navigation}
+        onActivate={props.item.href ? undefined : () => props.onOpen(props.item)}
         actions={
           <>
             <LinkPinAction
@@ -113,9 +104,9 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
           </>
         }
       >
-        <Flex align="flex-start" gap="small" style={{ minWidth: 0 }}>
+        <Flex align="flex-start" gap="small" className={styles.minWidthZero}>
           <BranchGlyph item={props.item} disabled={disabled} />
-          <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
+          <Flex vertical gap={token.sizeXXS} className={styles.rowContent}>
             <Typography.Text strong ellipsis disabled={disabled} style={{ lineHeight: 1.25 }}>
               {title}
             </Typography.Text>
@@ -125,12 +116,12 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
               </Typography.Text>
             )}
             {props.sourceSessionLabel && (
-              <Typography.Text type="secondary" ellipsis style={{ fontSize: 12 }}>
+              <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
                 From {props.sourceSessionLabel}
               </Typography.Text>
             )}
             {disabledReason && (
-              <Typography.Text type="warning" style={{ fontSize: 12 }}>
+              <Typography.Text type="warning" style={{ fontSize: token.fontSizeSM }}>
                 {disabledReason}
               </Typography.Text>
             )}

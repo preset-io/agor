@@ -1,6 +1,6 @@
 import type { AgorClient, Board, Branch, Link, Repo, SpawnConfig } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { LeftOutlined, PushpinFilled, RobotOutlined } from '@ant-design/icons';
+import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
   App as AntApp,
@@ -35,14 +35,12 @@ import { BoardSessionList } from '../BranchListDrawer';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
 import { buildLinkDisplayItems, type LinkDisplayItem } from '../Links';
-import { LinkPreviewModal, LinkRow, useLinkFileActions } from '../Links/SessionLinksControl';
+import { PinnedLinkList } from '../Links/PinnedLinkList';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 
 export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'comments';
-const TEAMMATE_PINNED_LINK_INLINE_LIMIT = 6;
-
 function TeammatePinnedLinksBlock({
   items,
   loading,
@@ -58,87 +56,17 @@ function TeammatePinnedLinksBlock({
   pinningLinkId?: string | null;
   onOpenMore?: () => void;
 }) {
-  const { token } = theme.useToken();
-  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
-  const pinnedItems = useMemo(() => items.filter((item) => item.isPinned), [items]);
-  const inlineItems = useMemo(
-    () => pinnedItems.slice(0, TEAMMATE_PINNED_LINK_INLINE_LIMIT),
-    [pinnedItems]
-  );
-  const hiddenCount = pinnedItems.length - inlineItems.length;
-
-  if (!loading && !error && pinnedItems.length === 0) return null;
-
   return (
-    <>
-      <div
-        style={{
-          margin: `${token.sizeUnit}px 0 ${token.sizeUnit * 3}px`,
-          padding: `${token.sizeUnit * 0.5}px 0 ${token.sizeUnit * 2}px`,
-          borderBottom: `1px dashed ${token.colorBorderSecondary}`,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: token.sizeUnit,
-            marginBottom: pinnedItems.length > 0 || loading || error ? token.sizeXS : 0,
-          }}
-        >
-          <PushpinFilled style={{ color: token.colorTextTertiary, fontSize: 11 }} />
-          <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 600 }}>
-            Pinned links
-          </Typography.Text>
-          {pinnedItems.length > 0 && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {pinnedItems.length}
-            </Typography.Text>
-          )}
-          {loading && <Spin size="small" style={{ marginLeft: 'auto' }} />}
-        </div>
-
-        {error ? (
-          <Typography.Text type="danger" style={{ fontSize: 12 }}>
-            {error}
-          </Typography.Text>
-        ) : inlineItems.length > 0 ? (
-          <Space direction="vertical" size={token.sizeXS} style={{ width: '100%' }}>
-            {inlineItems.map((item) => (
-              <LinkRow
-                key={item.key}
-                item={item}
-                compact
-                onPreview={openPreview}
-                onDownload={downloadItem}
-                onTogglePinned={onTogglePinned}
-                pinning={item.linkId === pinningLinkId}
-              />
-            ))}
-            {hiddenCount > 0 && (
-              <Button
-                type="link"
-                size="small"
-                onClick={onOpenMore}
-                style={{
-                  alignSelf: 'flex-start',
-                  height: 24,
-                  padding: `0 ${token.sizeUnit * 1.5}px`,
-                  fontSize: 12,
-                }}
-              >
-                +{hiddenCount} more
-              </Button>
-            )}
-          </Space>
-        ) : loading ? (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Loading teammate links…
-          </Typography.Text>
-        ) : null}
-      </div>
-      <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
-    </>
+    <PinnedLinkList
+      items={items}
+      loading={loading}
+      error={error}
+      countMode="total"
+      loadingLabel="Loading teammate links…"
+      onTogglePinned={onTogglePinned}
+      pinningLinkId={pinningLinkId}
+      onOpenMore={onOpenMore}
+    />
   );
 }
 

@@ -1,10 +1,15 @@
 import { Button, Flex, theme } from 'antd';
 import type React from 'react';
+import { Link as RouterLink } from 'react-router-dom';
+import type { LinkDisplayNavigation } from './linkDisplay';
+import styles from './linkUi.module.css';
 
 interface ActionLinkRowProps {
   children: React.ReactNode;
-  onActivate: () => void;
+  onActivate?: () => void;
   ariaLabel: string;
+  href?: string;
+  navigation?: LinkDisplayNavigation;
   actions?: React.ReactNode;
   disabled?: boolean;
   compact?: boolean;
@@ -21,6 +26,8 @@ export function ActionLinkRow({
   children,
   onActivate,
   ariaLabel,
+  href,
+  navigation,
   actions,
   disabled = false,
   compact = false,
@@ -28,42 +35,51 @@ export function ActionLinkRow({
   style,
 }: ActionLinkRowProps) {
   const { token } = theme.useToken();
+  const primaryPadding = compact
+    ? `${token.sizeXXS}px ${token.sizeXS}px`
+    : `${token.sizeSM}px ${token.sizeXS}px`;
+  const primary =
+    href && !disabled && navigation === 'spa' ? (
+      <RouterLink
+        className={styles.actionRowLink}
+        aria-label={ariaLabel}
+        to={href}
+        onClick={onActivate}
+        style={{ padding: primaryPadding }}
+      >
+        {children}
+      </RouterLink>
+    ) : (
+      <Button
+        className={styles.actionRowPrimary}
+        type="text"
+        block
+        href={href && !disabled ? href : undefined}
+        target={href && navigation === 'external' ? '_blank' : undefined}
+        rel={href && navigation === 'external' ? 'noreferrer' : undefined}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        onClick={onActivate}
+        style={{ padding: primaryPadding }}
+      >
+        {children}
+      </Button>
+    );
 
   return (
     <Flex
+      className={styles.actionRow}
       align="center"
       gap={token.sizeXS}
       style={{
-        width: '100%',
-        minWidth: 0,
         borderBottom: bordered ? `1px solid ${token.colorBorderSecondary}` : undefined,
         borderRadius: token.borderRadius,
         ...style,
       }}
     >
-      <Button
-        type="text"
-        block
-        disabled={disabled}
-        aria-label={ariaLabel}
-        onClick={onActivate}
-        style={{
-          height: 'auto',
-          minWidth: 0,
-          flex: 1,
-          padding: compact
-            ? `${token.sizeXXS}px ${token.sizeXS}px`
-            : `${token.sizeSM}px ${token.sizeXS}px`,
-          alignItems: 'stretch',
-          justifyContent: 'flex-start',
-          whiteSpace: 'normal',
-          textAlign: 'left',
-        }}
-      >
-        {children}
-      </Button>
+      {primary}
       {actions && (
-        <Flex align="center" gap={token.sizeXXS} style={{ flex: '0 0 auto' }}>
+        <Flex className={styles.actionRowActions} align="center" gap={token.sizeXXS}>
           {actions}
         </Flex>
       )}

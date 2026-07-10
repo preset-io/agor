@@ -1,5 +1,4 @@
-import { GithubOutlined, GlobalOutlined, LinkOutlined, StopOutlined } from '@ant-design/icons';
-import { Flex, Tooltip, Typography } from 'antd';
+import { Flex, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import {
   ActionLinkRow,
@@ -9,6 +8,8 @@ import {
   LinkPinAction,
 } from '../Links';
 import { LinkAttachmentGlyph } from '../Links/LinkAttachmentCard';
+import { getLinkItemIcon } from '../Links/LinkVisual';
+import styles from '../Links/linkUi.module.css';
 import {
   canDownloadSessionFile,
   canPreviewSessionImage,
@@ -56,15 +57,7 @@ function attachmentIcon(item: SessionAttachmentItem, disabled: boolean): React.R
       />
     );
   }
-  if (disabled) return <StopOutlined />;
-  const target = item.url ?? item.refUri ?? '';
-  try {
-    const { hostname } = new URL(target);
-    if (hostname === 'github.com' || hostname.endsWith('.github.com')) return <GithubOutlined />;
-  } catch {
-    // Ignore non-URL targets; availability is handled by the canonical resolver.
-  }
-  return item.category === 'url' ? <GlobalOutlined /> : <LinkOutlined />;
+  return getLinkItemIcon(item, disabled);
 }
 
 function canTogglePinned(
@@ -122,6 +115,7 @@ function promotionAction(props: DrawerProps) {
 }
 
 export function SessionAttachmentQuickRow(props: SharedProps) {
+  const { token } = theme.useToken();
   const disabledReason = sessionAttachmentDisabledReason(props.item);
   const disabled = Boolean(disabledReason);
   const actionLabel =
@@ -142,11 +136,16 @@ export function SessionAttachmentQuickRow(props: SharedProps) {
           onActivate={() => props.onOpen(props.item)}
           actions={pinAction(props)}
         >
-          <Flex align="center" gap="small" style={{ minWidth: 0 }}>
-            <Flex align="center" justify="center" style={{ width: 26, flex: '0 0 auto' }}>
+          <Flex align="center" gap="small" className={styles.minWidthZero}>
+            <Flex className={styles.quickGlyph} align="center" justify="center">
               {attachmentIcon(props.item, disabled)}
             </Flex>
-            <Typography.Text ellipsis disabled={disabled} style={{ fontSize: 13, minWidth: 0 }}>
+            <Typography.Text
+              className={styles.minWidthZero}
+              ellipsis
+              disabled={disabled}
+              style={{ fontSize: token.fontSizeSM }}
+            >
               {props.item.name}
             </Typography.Text>
           </Flex>
@@ -157,6 +156,7 @@ export function SessionAttachmentQuickRow(props: SharedProps) {
 }
 
 export function SessionAttachmentDrawerRow(props: DrawerProps) {
+  const { token } = theme.useToken();
   const disabledReason = sessionAttachmentDisabledReason(props.item);
   const disabled = Boolean(disabledReason);
 
@@ -175,17 +175,17 @@ export function SessionAttachmentDrawerRow(props: DrawerProps) {
         </>
       }
     >
-      <Flex align="flex-start" gap="small" style={{ minWidth: 0 }}>
+      <Flex align="flex-start" gap="small" className={styles.minWidthZero}>
         <span aria-hidden="true">{attachmentIcon(props.item, disabled)}</span>
-        <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
+        <Flex vertical gap={token.sizeXXS} className={styles.rowContent}>
           <Typography.Text strong ellipsis disabled={disabled}>
             {props.item.name}
           </Typography.Text>
-          <Typography.Text type="secondary" ellipsis style={{ fontSize: 12 }}>
+          <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
             {getSessionAttachmentTargetDisplay(props.item)}
           </Typography.Text>
           {disabledReason && (
-            <Typography.Text type="warning" style={{ fontSize: 12 }}>
+            <Typography.Text type="warning" style={{ fontSize: token.fontSizeSM }}>
               {disabledReason}
             </Typography.Text>
           )}

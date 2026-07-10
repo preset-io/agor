@@ -6,6 +6,7 @@ import {
   getSafeLinkContentLabel,
   type LinkContentTarget,
 } from './linkContent';
+import styles from './linkUi.module.css';
 
 export type LinkMarkdownPreviewTarget = LinkContentTarget;
 
@@ -72,12 +73,12 @@ export const LinkMarkdownPreviewModal: React.FC<LinkMarkdownPreviewModalProps> =
     >
       <div data-testid="link-markdown-preview-modal">
         {safeSubtitle && (
-          <Typography.Text type="secondary" ellipsis style={{ display: 'block', marginBottom: 12 }}>
+          <Typography.Text className={styles.previewSubtitle} type="secondary" ellipsis>
             {safeSubtitle}
           </Typography.Text>
         )}
         {loading && (
-          <div style={{ display: 'grid', placeItems: 'center', minHeight: 220 }}>
+          <div className={`${styles.previewCenter} ${styles.markdownPreviewLoading}`}>
             <Spin tip="Loading markdown preview…" />
           </div>
         )}
@@ -86,9 +87,7 @@ export const LinkMarkdownPreviewModal: React.FC<LinkMarkdownPreviewModalProps> =
           !error &&
           content &&
           (plainText ? (
-            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-              {content}
-            </pre>
+            <pre className={styles.plainTextPreview}>{content}</pre>
           ) : (
             <MarkdownRenderer content={content} />
           ))}

@@ -1,8 +1,9 @@
 import { FileImageOutlined } from '@ant-design/icons';
-import { Spin, Tooltip, Typography, theme } from 'antd';
+import { Button, Flex, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import type { LinkImagePreviewTarget } from './LinkImagePreviewModal';
 import { fetchLinkImageObjectUrl, getSafeLinkContentLabel } from './linkContent';
+import styles from './linkUi.module.css';
 
 interface LinkImageThumbnailProps {
   linkId: string;
@@ -19,7 +20,7 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
 }) => {
   const { token } = theme.useToken();
   const safeSubtitle = getSafeLinkContentLabel(subtitle);
-  const buttonRef = React.useRef<HTMLButtonElement>(null);
+  const thumbnailRef = React.useRef<HTMLDivElement>(null);
   const [shouldLoad, setShouldLoad] = React.useState(
     () => typeof IntersectionObserver === 'undefined'
   );
@@ -29,7 +30,7 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
 
   React.useEffect(() => {
     if (shouldLoad) return;
-    const node = buttonRef.current;
+    const node = thumbnailRef.current;
     if (!node || typeof IntersectionObserver === 'undefined') {
       setShouldLoad(true);
       return;
@@ -89,77 +90,56 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
   };
 
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      aria-label={`Open image preview for ${title}`}
-      onClick={handleOpen}
-      style={{
-        display: 'block',
-        width: 260,
-        maxWidth: '100%',
-        marginTop: token.sizeUnit,
-        padding: 0,
-        border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: token.borderRadiusLG,
-        background: token.colorBgContainer,
-        overflow: 'hidden',
-        cursor: 'zoom-in',
-        color: token.colorText,
-        font: 'inherit',
-        textAlign: 'left',
-      }}
-    >
-      <div
+    <div ref={thumbnailRef} style={{ marginTop: token.sizeUnit }}>
+      <Button
+        className={styles.thumbnailButton}
+        type="text"
+        aria-label={`Open image preview for ${title}`}
+        onClick={handleOpen}
         style={{
-          width: '100%',
-          height: 146,
-          maxWidth: '100%',
-          display: 'grid',
-          placeItems: 'center',
-          background: token.colorFillQuaternary,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: token.borderRadiusLG,
+          background: token.colorBgContainer,
+          cursor: 'zoom-in',
+          color: token.colorText,
         }}
       >
-        {objectUrl && !failed ? (
-          <img
-            src={objectUrl}
-            alt={title}
-            decoding="async"
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-            onError={() => setFailed(true)}
-          />
-        ) : (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: token.sizeXS,
-              color: token.colorTextTertiary,
-            }}
-          >
-            {loading ? <Spin size="small" /> : <FileImageOutlined style={{ fontSize: 28 }} />}
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              {loading ? 'Loading preview…' : 'Click to preview'}
-            </Typography.Text>
-          </div>
-        )}
-      </div>
-      <Tooltip title={safeSubtitle || title} mouseEnterDelay={0.6}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: token.sizeXS,
-            padding: `${token.paddingXXS}px ${token.paddingXS}px`,
-          }}
-        >
-          <FileImageOutlined style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
-          <Typography.Text ellipsis style={{ maxWidth: 230, fontSize: token.fontSizeSM }}>
-            {title}
-          </Typography.Text>
+        <div className={styles.thumbnailCanvas} style={{ background: token.colorFillQuaternary }}>
+          {objectUrl && !failed ? (
+            <img
+              className={styles.thumbnailImage}
+              src={objectUrl}
+              alt={title}
+              decoding="async"
+              onError={() => setFailed(true)}
+            />
+          ) : (
+            <Flex vertical align="center" gap="small" style={{ color: token.colorTextTertiary }}>
+              {loading ? (
+                <Spin size="small" />
+              ) : (
+                <FileImageOutlined style={{ fontSize: token.fontSizeHeading2 }} />
+              )}
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                {loading ? 'Loading preview…' : 'Click to preview'}
+              </Typography.Text>
+            </Flex>
+          )}
         </div>
-      </Tooltip>
-    </button>
+        <Tooltip title={safeSubtitle || title} mouseEnterDelay={0.6}>
+          <Flex
+            className={styles.thumbnailFooter}
+            align="center"
+            gap="small"
+            style={{ padding: `${token.paddingXXS}px ${token.paddingXS}px` }}
+          >
+            <FileImageOutlined style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
+            <Typography.Text ellipsis style={{ maxWidth: 230, fontSize: token.fontSizeSM }}>
+              {title}
+            </Typography.Text>
+          </Flex>
+        </Tooltip>
+      </Button>
+    </div>
   );
 };

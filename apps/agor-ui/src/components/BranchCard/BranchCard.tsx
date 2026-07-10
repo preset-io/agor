@@ -26,7 +26,7 @@ import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { buildLinkDisplayItems, type LinkDisplayItem } from '../Links';
-import { LinkPreviewModal, LinkRow, useLinkFileActions } from '../Links/SessionLinksControl';
+import { PinnedLinkList } from '../Links/PinnedLinkList';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -37,8 +37,6 @@ import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
-const BRANCH_CARD_PINNED_LINK_INLINE_LIMIT = 6;
-
 function BranchCardPinnedLinksBlock({
   items,
   onTogglePinned,
@@ -48,58 +46,14 @@ function BranchCardPinnedLinksBlock({
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
   pinningLinkId?: string | null;
 }) {
-  const { token } = theme.useToken();
-  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
-  const inlineItems = useMemo(() => items.slice(0, BRANCH_CARD_PINNED_LINK_INLINE_LIMIT), [items]);
-
-  if (items.length === 0) return null;
-
   return (
-    <>
-      <div
-        data-testid="branch-card-pinned-links"
-        className={REACT_FLOW_NO_DRAG_CLASS}
-        style={{
-          margin: `${token.sizeUnit}px 0 ${token.sizeUnit * 3}px`,
-          padding: `${token.sizeUnit * 0.5}px 0 ${token.sizeUnit * 2}px`,
-          borderBottom: `1px dashed ${token.colorBorderSecondary}`,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: token.sizeUnit,
-            marginBottom: token.sizeXS,
-          }}
-        >
-          <PushpinFilled style={{ color: token.colorTextTertiary, fontSize: 11 }} />
-          <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 600 }}>
-            Pinned links
-          </Typography.Text>
-          {items.length > inlineItems.length && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              +{items.length - inlineItems.length} more
-            </Typography.Text>
-          )}
-        </div>
-
-        <Space direction="vertical" size={token.sizeXS} style={{ width: '100%' }}>
-          {inlineItems.map((item) => (
-            <LinkRow
-              key={item.key}
-              item={item}
-              compact
-              onPreview={openPreview}
-              onDownload={downloadItem}
-              onTogglePinned={onTogglePinned}
-              pinning={item.linkId === pinningLinkId}
-            />
-          ))}
-        </Space>
-      </div>
-      <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
-    </>
+    <PinnedLinkList
+      items={items}
+      className={REACT_FLOW_NO_DRAG_CLASS}
+      data-testid="branch-card-pinned-links"
+      onTogglePinned={onTogglePinned}
+      pinningLinkId={pinningLinkId}
+    />
   );
 }
 

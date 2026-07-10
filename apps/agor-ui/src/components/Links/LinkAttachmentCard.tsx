@@ -1,19 +1,11 @@
 import type { LinkKind, LinkSource } from '@agor-live/client';
-import {
-  BookOutlined,
-  CodeOutlined,
-  DownloadOutlined,
-  FileExcelOutlined,
-  FileImageOutlined,
-  FileOutlined,
-  FilePdfOutlined,
-  FileTextOutlined,
-} from '@ant-design/icons';
-import { Tooltip, Typography, theme } from 'antd';
+import { DownloadOutlined } from '@ant-design/icons';
+import { Button, Flex, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useThemedMessage } from '../../utils/message';
 import type { LinkImagePreviewTarget } from './LinkImagePreviewModal';
 import { LinkImageThumbnail } from './LinkImageThumbnail';
+import { getLinkCategoryIcon, getLinkCategoryLabel } from './LinkVisual';
 import {
   downloadLinkContent,
   getLinkContentAction,
@@ -28,6 +20,7 @@ import {
   type LinkDisplayTarget,
   targetForLinkDisplay,
 } from './linkDisplay';
+import styles from './linkUi.module.css';
 
 export type LinkAttachmentTarget = LinkDisplayTarget;
 
@@ -69,35 +62,6 @@ function inferLinkAttachmentCategory(args: {
   return getLinkDisplayCategory(args);
 }
 
-function visualForCategory(category: AttachmentCategory) {
-  switch (category) {
-    case 'knowledge':
-      return { label: 'KB', color: '#722ed1', icon: <BookOutlined /> };
-    case 'image':
-      return { label: 'IMG', color: '#1677ff', icon: <FileImageOutlined /> };
-    case 'pdf':
-      return { label: 'PDF', color: '#cf1322', icon: <FilePdfOutlined /> };
-    case 'spreadsheet':
-      return { label: 'XLS', color: '#389e0d', icon: <FileExcelOutlined /> };
-    case 'csv':
-      return { label: 'CSV', color: '#389e0d', icon: <FileExcelOutlined /> };
-    case 'document':
-      return { label: 'DOC', color: '#0958d9', icon: <FileTextOutlined /> };
-    case 'markdown':
-      return { label: 'MD', color: '#531dab', icon: <FileTextOutlined /> };
-    case 'text':
-      return { label: 'TXT', color: '#531dab', icon: <FileTextOutlined /> };
-    case 'json':
-      return { label: 'JSON', color: '#d46b08', icon: <CodeOutlined /> };
-    case 'log':
-      return { label: 'LOG', color: '#ad6800', icon: <FileTextOutlined /> };
-    case 'code':
-      return { label: 'CODE', color: '#08979c', icon: <CodeOutlined /> };
-    default:
-      return { label: 'FILE', color: '#595959', icon: <FileOutlined /> };
-  }
-}
-
 export const LinkAttachmentGlyph: React.FC<{
   kind?: LinkKind | string | null;
   mimeType?: string | null;
@@ -118,38 +82,34 @@ export const LinkAttachmentGlyph: React.FC<{
   size = 'md',
 }) => {
   const { token } = theme.useToken();
-  const visual = visualForCategory(
-    inferLinkAttachmentCategory({ kind, mimeType, title, filePath, refUri })
-  );
+  const category = inferLinkAttachmentCategory({ kind, mimeType, title, filePath, refUri });
   const dimension = size === 'sm' ? 28 : 38;
   return (
     <span
+      className={`${styles.glyph} ${styles.glyphStacked} ${onDark ? styles.onDarkGlyph : ''}`}
       aria-hidden
       style={{
         width: dimension,
         height: dimension,
         borderRadius: token.borderRadiusLG,
-        background: 'transparent',
         color: onDark
-          ? 'rgba(255, 255, 255, 0.78)'
+          ? token.colorTextLightSolid
           : disabled
             ? token.colorTextSecondary
             : token.colorTextTertiary,
-        border: `1px solid ${onDark ? 'rgba(255, 255, 255, 0.26)' : token.colorBorderSecondary}`,
-        display: 'inline-flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        lineHeight: 1,
-        flex: '0 0 auto',
+        border: `1px solid ${
+          onDark
+            ? `color-mix(in srgb, ${token.colorTextLightSolid} 26%, transparent)`
+            : token.colorBorderSecondary
+        }`,
       }}
     >
       {size === 'sm' ? (
-        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.2 }}>{visual.label}</span>
+        <span className={styles.glyphLabelSmall}>{getLinkCategoryLabel(category)}</span>
       ) : (
         <>
-          <span style={{ fontSize: 15 }}>{visual.icon}</span>
-          <span style={{ fontSize: 9, fontWeight: 700, marginTop: 3 }}>{visual.label}</span>
+          <span className={styles.glyphIcon}>{getLinkCategoryIcon(category, disabled)}</span>
+          <span className={styles.glyphLabel}>{getLinkCategoryLabel(category)}</span>
         </>
       )}
     </span>
@@ -205,7 +165,7 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
     );
   }
 
-  const open = (event: React.MouseEvent | React.KeyboardEvent) => {
+  const open = (event: React.MouseEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
     if (disabled) return;
@@ -225,116 +185,101 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
     }
   };
 
+  const surfaceColor = onDark
+    ? `color-mix(in srgb, ${token.colorTextLightSolid} 9%, transparent)`
+    : token.colorBgContainer;
+  const textColor = onDark ? token.colorTextLightSolid : token.colorText;
+  const borderColor = onDark
+    ? `color-mix(in srgb, ${token.colorTextLightSolid} 16%, transparent)`
+    : disabled
+      ? token.colorBorderSecondary
+      : token.colorBorder;
+
   return (
     <Tooltip title={reason ?? description ?? title} mouseEnterDelay={0.6}>
-      <button
-        type="button"
+      <Button
+        className={styles.attachmentButton}
+        type="text"
+        block
         disabled={disabled}
         aria-label={disabled ? `${title}: ${reason}` : `Open ${title}`}
         onClick={open}
         style={{
           width: compact ? '100%' : 'min(100%, 360px)',
-          maxWidth: '100%',
-          border: `1px solid ${
-            onDark
-              ? 'rgba(255, 255, 255, 0.16)'
-              : disabled
-                ? token.colorBorderSecondary
-                : token.colorBorder
-          }`,
+          border: `1px solid ${borderColor}`,
           borderRadius: token.borderRadiusLG,
-          background: onDark
-            ? 'rgba(255, 255, 255, 0.09)'
-            : disabled
-              ? token.colorFillQuaternary
-              : token.colorBgContainer,
-          color: onDark ? 'rgba(255, 255, 255, 0.92)' : token.colorText,
+          background: disabled ? token.colorFillQuaternary : surfaceColor,
+          color: textColor,
           cursor: disabled ? 'not-allowed' : canPreviewImage ? 'zoom-in' : 'pointer',
           padding: compact ? `${token.paddingXXS + 2}px ${token.paddingXS}px` : token.paddingSM,
-          font: 'inherit',
-          textAlign: 'left',
-          display: 'flex',
-          alignItems: 'center',
-          gap: token.sizeSM,
-          opacity: 1,
         }}
       >
-        <LinkAttachmentGlyph
-          kind={kind}
-          mimeType={mimeType}
-          title={title}
-          filePath={filePath}
-          refUri={refUri}
-          disabled={disabled}
-          onDark={onDark}
-          size={compact ? 'sm' : 'md'}
-        />
-        <span style={{ minWidth: 0, flex: 1 }}>
-          <Typography.Text
-            strong={!compact}
-            ellipsis
-            style={{
-              display: 'block',
-              color: onDark
-                ? 'rgba(255, 255, 255, 0.94)'
-                : disabled
-                  ? token.colorTextSecondary
-                  : token.colorText,
-              fontSize: compact ? 13 : undefined,
-              minWidth: 0,
-            }}
-          >
-            {title}
-          </Typography.Text>
-          {description && (
+        <Flex className={styles.fullWidth} align="center" gap="small">
+          <LinkAttachmentGlyph
+            kind={kind}
+            mimeType={mimeType}
+            title={title}
+            filePath={filePath}
+            refUri={refUri}
+            disabled={disabled}
+            onDark={onDark}
+            size={compact ? 'sm' : 'md'}
+          />
+          <span className={styles.attachmentContent}>
             <Typography.Text
+              className={styles.blockText}
+              strong={!compact}
               ellipsis
               style={{
-                display: 'block',
-                color: onDark ? 'rgba(255, 255, 255, 0.62)' : token.colorTextSecondary,
-                fontSize: compact ? 11 : 12,
+                color: disabled ? token.colorTextSecondary : textColor,
+                fontSize: compact ? token.fontSizeSM : undefined,
               }}
             >
-              {description}
+              {title}
             </Typography.Text>
-          )}
-          {reason && (
-            <Typography.Text
-              ellipsis
-              style={{
-                display: 'block',
-                marginTop: compact ? 0 : 4,
-                color: onDark ? 'rgba(255, 255, 255, 0.58)' : token.colorTextTertiary,
-                fontSize: 11,
-              }}
-            >
-              {reason}
-            </Typography.Text>
-          )}
-        </span>
-        {canDownload && linkId && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: token.sizeXXS }}>
+            {description && (
+              <Typography.Text
+                className={`${styles.blockText} ${onDark ? styles.onDarkSecondary : ''}`}
+                ellipsis
+                style={{
+                  color: onDark ? textColor : token.colorTextSecondary,
+                  fontSize: token.fontSizeSM,
+                }}
+              >
+                {description}
+              </Typography.Text>
+            )}
+            {reason && (
+              <Typography.Text
+                className={`${styles.blockText} ${onDark ? styles.onDarkTertiary : ''}`}
+                ellipsis
+                style={{
+                  marginTop: compact ? 0 : token.sizeXXS,
+                  color: onDark ? textColor : token.colorTextTertiary,
+                  fontSize: token.fontSizeSM,
+                }}
+              >
+                {reason}
+              </Typography.Text>
+            )}
+          </span>
+          {canDownload && linkId && (
             <Tooltip title="Download file">
               <span
+                className={styles.downloadIndicator}
                 aria-hidden
                 style={{
-                  width: 24,
-                  height: 24,
-                  borderRadius: 999,
-                  color: onDark ? 'rgba(255, 255, 255, 0.78)' : token.colorTextSecondary,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  flex: '0 0 auto',
+                  width: token.controlHeightSM,
+                  height: token.controlHeightSM,
+                  color: onDark ? textColor : token.colorTextSecondary,
                 }}
               >
                 <DownloadOutlined />
               </span>
             </Tooltip>
-          </span>
-        )}
-      </button>
+          )}
+        </Flex>
+      </Button>
     </Tooltip>
   );
 };

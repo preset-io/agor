@@ -5,10 +5,7 @@ import {
   Drawer,
   Empty,
   Flex,
-  Input,
   Popover,
-  Segmented,
-  Select,
   Space,
   Tooltip,
   Typography,
@@ -16,13 +13,9 @@ import {
 } from 'antd';
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  isFileLinkDisplayItem,
-  LINK_CATEGORY_TAB_LABELS,
-  LINK_SORT_LABELS,
-  type LinkCategoryTabKey,
-  type LinkSortKey,
-} from '../Links';
+import { isFileLinkDisplayItem, type LinkCategoryTabKey, type LinkSortKey } from '../Links';
+import { LinkCollectionControls } from '../Links/LinkCollectionControls';
+import styles from '../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../Links/SessionLinksControl';
 import {
   SessionAttachmentDrawerRow,
@@ -30,9 +23,6 @@ import {
   type SessionAttachmentTeammateState,
 } from './SessionAttachmentRows';
 import {
-  canDownloadSessionFile as canDownloadFile,
-  canPreviewSessionImage as canPreviewImage,
-  canPreviewSessionMarkdown as canPreviewMarkdown,
   compareSessionAttachments as compareDrawerItems,
   sessionAttachmentDisabledReason as disabledReasonForItem,
   getSessionAttachmentCategoryCounts as getCategoryCounts,
@@ -79,7 +69,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
-  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
+  const { preview, setPreview, openItem } = useLinkFileActions(navigate);
   const [popoverOpen, setPopoverOpen] = React.useState(false);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [activeCategory, setActiveCategory] = React.useState<LinksCategoryTab>('all');
@@ -94,14 +84,6 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     (item) => !item.isPinned && !isFileLinkDisplayItem(item)
   );
   const categoryCounts = React.useMemo(() => getCategoryCounts(visibleItems), [visibleItems]);
-  const categoryTabs = React.useMemo(
-    () =>
-      (['all', 'files', 'links', 'knowledge', 'issues'] as const).map((key) => ({
-        value: key,
-        label: `${LINK_CATEGORY_TAB_LABELS[key]} ${categoryCounts[key]}`,
-      })),
-    [categoryCounts]
-  );
 
   const openPinnedManager = React.useCallback(() => {
     setActiveCategory('all');
@@ -127,28 +109,8 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
   const openTarget = (item: SessionAttachmentItem) => {
     if (disabledReasonForItem(item)) return;
-    if (canPreviewImage(item) && item.linkId) {
-      setPopoverOpen(false);
-      openPreview(item);
-      return;
-    }
-    if (canPreviewMarkdown(item) && item.linkId) {
-      setPopoverOpen(false);
-      openPreview(item);
-      return;
-    }
-    if (canDownloadFile(item) && item.linkId) {
-      setPopoverOpen(false);
-      void downloadItem(item);
-      return;
-    }
-    if (!item.href) return;
     setPopoverOpen(false);
-    if (item.navigation === 'spa') {
-      navigate(item.href);
-      return;
-    }
-    window.open(item.href, '_blank', 'noopener,noreferrer');
+    openItem(item);
   };
 
   const drawerItems = visibleItems
@@ -157,7 +119,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     .sort((a, b) => compareDrawerItems(a, b, sortOrder));
 
   const quickContent = (
-    <div style={{ width: 312 }} data-testid="links-organizer-popover">
+    <div className={styles.organizerPopover} data-testid="links-organizer-popover">
       <Flex align="flex-start" justify="space-between" gap="small">
         <div style={{ minWidth: 0 }}>
           <Typography.Text strong>Links</Typography.Text>
@@ -179,7 +141,11 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
       {error && (
         <div style={{ marginTop: token.sizeSM }}>
-          <Typography.Text type="danger" style={{ display: 'block', fontSize: 12 }}>
+          <Typography.Text
+            className={styles.blockText}
+            type="danger"
+            style={{ fontSize: token.fontSizeSM }}
+          >
             {error}
           </Typography.Text>
           {onRetry && (
@@ -197,15 +163,14 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
           style={{ margin: `${token.sizeSM}px 0` }}
         />
       ) : (
-        <div
+        <Flex
+          className={`${styles.organizerScroll} ${styles.organizerQuickList}`}
+          vertical
           style={{
-            display: 'grid',
-            gap: token.sizeXXS,
             marginTop: token.sizeSM,
-            maxHeight: 308,
-            overflowY: 'auto',
             paddingRight: token.sizeXXS,
           }}
+          gap={token.sizeXXS}
         >
           {quickItems.map((item) => (
             <SessionAttachmentQuickRow
@@ -216,7 +181,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               onTogglePinned={onTogglePinned}
             />
           ))}
-        </div>
+        </Flex>
       )}
     </div>
   );
@@ -230,8 +195,8 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
           content={quickContent}
           trigger="click"
           placement="bottomRight"
-          overlayInnerStyle={{
-            border: `1px solid ${token.colorBorderSecondary}`,
+          styles={{
+            container: { border: `1px solid ${token.colorBorderSecondary}` },
           }}
         >
           <Tooltip title="Attachments">
@@ -257,49 +222,26 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
       <Drawer
         title="Manage links"
         open={drawerOpen}
-        width={720}
+        size={720}
         onClose={() => setDrawerOpen(false)}
       >
         <div data-testid="links-organizer-manage">
-          <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
-            <Segmented<LinksCategoryTab>
-              block
-              value={activeCategory}
-              options={categoryTabs}
-              onChange={setActiveCategory}
+          <Space className={styles.fullWidth} direction="vertical" size={token.sizeMD}>
+            <LinkCollectionControls
+              categoryCounts={categoryCounts}
+              activeCategory={activeCategory}
+              onCategoryChange={setActiveCategory}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              sortOrder={sortOrder}
+              onSortChange={setSortOrder}
             />
-            <Flex align="center" gap="small" wrap style={{ width: '100%' }}>
-              <Input.Search
-                allowClear
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search links"
-                aria-label="Search links"
-                style={{ flex: '1 1 320px', minWidth: 220 }}
-              />
-              <Space size={token.sizeXS} style={{ flex: '0 0 auto' }}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Sort
-                </Typography.Text>
-                <Select<LinksSort>
-                  size="small"
-                  value={sortOrder}
-                  options={(Object.keys(LINK_SORT_LABELS) as LinksSort[]).map((key) => ({
-                    value: key,
-                    label: LINK_SORT_LABELS[key],
-                  }))}
-                  onChange={setSortOrder}
-                  style={{ width: 128 }}
-                />
-              </Space>
-            </Flex>
             {drawerItems.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links in this view." />
             ) : (
               <div
+                className={`${styles.organizerScroll} ${styles.organizerDrawerList}`}
                 style={{
-                  maxHeight: 'min(58vh, 560px)',
-                  overflowY: 'auto',
                   paddingRight: token.sizeXS,
                 }}
               >
