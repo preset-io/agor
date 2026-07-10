@@ -334,6 +334,21 @@ describe('SessionCanvas zoom shortcuts', () => {
         // Guard returns currentNodes unchanged so React can bail out on re-render
         expect(result).toBe(mockNodes);
       });
+
+      it('returns the same node array reference when zone zIndex is already current', () => {
+        const { onNodesChange } = renderCanvas(null);
+        setNodesUnsafeSpy.mockClear();
+
+        act(() => onNodesChange([{ type: 'select', id: 'zone-1', selected: true }]));
+
+        const updater = getLastSetNodesUpdater();
+        expect(updater).toBeDefined();
+        const mockNodes = [{ id: 'zone-1', type: 'zone', zIndex: 101 }];
+        const result = updater!(mockNodes);
+        // No-op select echoes from React Flow must not allocate a fresh nodes
+        // array, or controlled ReactFlow can re-emit selection indefinitely.
+        expect(result).toBe(mockNodes);
+      });
     });
   });
 });

@@ -16,6 +16,7 @@ import {
   MCPServerRepository,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
+  SessionRepository,
   shortId,
   type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
@@ -106,6 +107,12 @@ interface EmitGatewayMessageData {
   target?: string;
   purpose?: string;
   emittedByUserId: UserID;
+  /**
+   * Trust contract: must be sourced from verified auth context (MCP
+   * ctx.sessionId), never from tool/user input. When set, the outbound emit is
+   * hard-bound to the session's branch — it is denied unless the session's
+   * branch matches the channel's target branch, regardless of user role.
+   */
   emittedBySessionId?: SessionID;
   emittedByTaskId?: string;
   emittedByScheduleId?: string;
@@ -278,6 +285,14 @@ function oneLineForPrompt(text: string, maxChars = 900): string {
   const normalized = text.replace(/\s+/g, ' ').trim() || '(no text)';
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+const SLACK_GATEWAY_REPLY_NOTE =
+  'Note: Any assistant message you send in this current Agor session is streamed back directly to the Slack conversation. Only use outbound gateway tools when you intentionally need to start a separate thread, DM, or message.';
+
+function prependSlackGatewayReplyNote(prompt: string): string {
+  if (prompt.includes(SLACK_GATEWAY_REPLY_NOTE)) return prompt;
+  return `${SLACK_GATEWAY_REPLY_NOTE}\n\n${prompt}`;
 }
 
 function formatSlackCatchUpPrompt(args: {
@@ -538,6 +553,7 @@ export class GatewayService {
   private threadMapRepo: ThreadSessionMapRepository;
   private outboundRepo: GatewayOutboundMessageRepository;
   private branchRepo: BranchRepository;
+  private sessionRepo: SessionRepository;
   private usersRepo: UsersRepository;
 
   private mcpServerRepo: MCPServerRepository;
@@ -586,6 +602,7 @@ export class GatewayService {
     this.threadMapRepo = new ThreadSessionMapRepository(db);
     this.outboundRepo = new GatewayOutboundMessageRepository(db);
     this.branchRepo = new BranchRepository(db);
+    this.sessionRepo = new SessionRepository(db);
     this.usersRepo = new UsersRepository(db);
 
     this.mcpServerRepo = new MCPServerRepository(db);
@@ -1323,6 +1340,28 @@ export class GatewayService {
     }
   }
 
+  /**
+   * Session-context emits are hard-bound to the session's branch, with no
+   * admin-role bypass — agent sessions run as admin users, so a role bypass
+   * would let any session impersonate another assistant's channel. The error
+   * deliberately never echoes the channel's target branch, so a denied emit
+   * cannot be used to enumerate which branch a foreign channel serves.
+   */
+  private async ensureSessionBranchBoundToChannel(
+    channel: GatewayChannel,
+    sessionId: SessionID
+  ): Promise<void> {
+    const session = await this.sessionRepo.findById(sessionId);
+    if (!session) {
+      throw new Error('Gateway outbound denied: emitting session not found');
+    }
+    if (session.branch_id !== channel.target_branch_id) {
+      throw new Error(
+        `Gateway outbound denied: session ${shortId(sessionId)} runs on branch ${shortId(session.branch_id)}, but this channel targets a different branch. Sessions can emit only through gateway channels whose target branch matches their own. Call agor_gateway_outbound_targets_list to see usable channels.`
+      );
+    }
+  }
+
   private async ensureCanEmitFromChannel(
     channel: GatewayChannel,
     userId: UserID,
@@ -1366,6 +1405,9 @@ export class GatewayService {
       throw new Error('Gateway outbound is disabled for this channel');
     }
 
+    if (data.emittedBySessionId) {
+      await this.ensureSessionBranchBoundToChannel(channel, data.emittedBySessionId);
+    }
     await this.ensureCanEmitFromChannel(channel, data.emittedByUserId, data.userRole);
 
     const target =
@@ -2159,6 +2201,10 @@ export class GatewayService {
         if (contextPrefix) {
           promptText = contextPrefix + promptText;
         }
+      }
+
+      if (channel.channel_type === 'slack') {
+        promptText = prependSlackGatewayReplyNote(promptText);
       }
 
       // Prepend MCP auth warning to the initial prompt so the agent is aware

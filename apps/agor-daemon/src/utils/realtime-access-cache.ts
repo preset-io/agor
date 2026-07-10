@@ -14,6 +14,7 @@ export type RealtimeAccessBranchRepository = {
 
 export type RealtimeAccessSessionRepository = {
   findBranchIdBySessionId(sessionId: string): Promise<BranchID | null>;
+  findCreatedByBySessionId(sessionId: string): Promise<UUID | null>;
 };
 
 type BranchVisibilityCacheEntry = BranchRealtimeVisibility & {
@@ -22,6 +23,11 @@ type BranchVisibilityCacheEntry = BranchRealtimeVisibility & {
 
 type SessionBranchCacheEntry = {
   branchId: BranchID | null;
+  expiresAt: number;
+};
+
+type SessionOwnerCacheEntry = {
+  ownerId: UserID | null;
   expiresAt: number;
 };
 
@@ -50,6 +56,7 @@ function branchAllowsAllAuthenticated(branch: Pick<Branch, 'others_can'>): boole
 export class RealtimeAccessCache {
   private readonly branchVisibility = new Map<BranchID, BranchVisibilityCacheEntry>();
   private readonly sessionBranches = new Map<string, SessionBranchCacheEntry>();
+  private readonly sessionOwners = new Map<string, SessionOwnerCacheEntry>();
   private readonly branchVisibilityTtlMs: number;
   private readonly sessionBranchTtlMs: number;
   private readonly now: () => number;
@@ -75,6 +82,30 @@ export class RealtimeAccessCache {
       expiresAt: now + this.sessionBranchTtlMs,
     });
     return branchId;
+  }
+
+  /**
+   * Owning user id for a session, cached on the same cadence as the
+   * session→branch map. Used only to offer streaming events to the session
+   * creator's own connections as a fallback when they haven't subscribed to
+   * the per-session stream channel yet.
+   */
+  async getSessionOwnerId(sessionId: string): Promise<UserID | null> {
+    const cached = this.sessionOwners.get(sessionId);
+    const now = this.now();
+    if (cached && cached.expiresAt > now) {
+      return cached.ownerId;
+    }
+
+    const ownerId =
+      ((await this.options.sessionsRepository.findCreatedByBySessionId(
+        sessionId
+      )) as UserID | null) ?? null;
+    this.sessionOwners.set(sessionId, {
+      ownerId,
+      expiresAt: now + this.sessionBranchTtlMs,
+    });
+    return ownerId;
   }
 
   async getBranchVisibility(branchId: BranchID): Promise<BranchRealtimeVisibility | null> {
@@ -119,6 +150,7 @@ export class RealtimeAccessCache {
 
   invalidateSession(sessionId: string): void {
     this.sessionBranches.delete(sessionId);
+    this.sessionOwners.delete(sessionId);
   }
 
   clearVisibility(): void {
@@ -128,6 +160,7 @@ export class RealtimeAccessCache {
   clearAll(): void {
     this.branchVisibility.clear();
     this.sessionBranches.clear();
+    this.sessionOwners.clear();
   }
 
   private visibilityFromEntry(entry: BranchVisibilityCacheEntry): BranchRealtimeVisibility {

@@ -261,17 +261,43 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   };
 
   const archiveSession = async (sessionId: SessionID): Promise<Session | null> => {
-    return updateSession(sessionId, {
-      archived: true,
-      archived_reason: 'manual',
-    } as Partial<Session>);
+    if (!client) {
+      setError('Client not connected');
+      return null;
+    }
+
+    try {
+      setError(null);
+      const result = (await client.service(`sessions/${sessionId}/archive`).create({})) as {
+        session: Session;
+      };
+      return result.session;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to archive session';
+      setError(message);
+      console.error('Failed to archive session:', err);
+      return null;
+    }
   };
 
   const unarchiveSession = async (sessionId: SessionID): Promise<Session | null> => {
-    return updateSession(sessionId, {
-      archived: false,
-      archived_reason: undefined,
-    } as Partial<Session>);
+    if (!client) {
+      setError('Client not connected');
+      return null;
+    }
+
+    try {
+      setError(null);
+      const result = (await client.service(`sessions/${sessionId}/unarchive`).create({})) as {
+        session: Session;
+      };
+      return result.session;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to unarchive session';
+      setError(message);
+      console.error('Failed to unarchive session:', err);
+      return null;
+    }
   };
 
   return {

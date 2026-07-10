@@ -49,6 +49,8 @@ export interface SessionPanelContentProps {
   attachmentLinksByMessageId?: Map<string, Link[]>;
   pinnedSessionLinks?: PromotedPinnedLinkItem[];
   onPinnedOverflow?: () => void;
+  /** When true, all task blocks are force-expanded (used by in-session search) */
+  forceExpandAll?: boolean;
 }
 
 export const SessionPanelContent = React.memo<SessionPanelContentProps>(
@@ -73,6 +75,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     attachmentLinksByMessageId,
     pinnedSessionLinks = [],
     onPinnedOverflow,
+    forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
     const { showSuccess, showError } = useThemedMessage();
@@ -374,6 +377,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               branch && isAssistant(branch) ? getAssistantConfig(branch)?.emoji : undefined
             }
             attachmentLinksByMessageId={attachmentLinksByMessageId}
+            forceExpandAll={forceExpandAll}
           />
         </div>
 

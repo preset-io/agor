@@ -5,7 +5,12 @@
  * Each tool tab displays its API key configuration and tool-specific settings.
  */
 
-import type { AgenticToolName, AgorClient, AgorConfig } from '@agor-live/client';
+import type {
+  AgenticToolConfigField,
+  AgenticToolName,
+  AgorClient,
+  AgorConfig,
+} from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -57,9 +62,9 @@ const ApiKeyTabContent: React.FC<{
   tool: AgenticToolName;
   fieldStatus: FieldStatus;
   keysError: string | null;
-  savingKeys: Record<string, boolean>;
-  onSave: (field: string, value: string) => Promise<void>;
-  onClear: (field: string) => Promise<void>;
+  savingKeys: Partial<Record<AgenticToolConfigField, boolean>>;
+  onSave: (field: AgenticToolConfigField, value: string) => Promise<void>;
+  onClear: (field: AgenticToolConfigField) => Promise<void>;
   onClearError: () => void;
 }> = ({ tool, fieldStatus, keysError, savingKeys, onSave, onClear, onClearError }) => {
   const { token } = theme.useToken();
@@ -117,7 +122,9 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   // each per-tool tab projects out only the fields it owns via
   // `GLOBAL_TOOL_FIELDS[tool]`.
   const [loadingKeys, setLoadingKeys] = useState(true);
-  const [savingKeys, setSavingKeys] = useState<Record<string, boolean>>({});
+  const [savingKeys, setSavingKeys] = useState<Partial<Record<AgenticToolConfigField, boolean>>>(
+    {}
+  );
   const [keysError, setKeysError] = useState<string | null>(null);
   const [fieldStatus, setFieldStatus] = useState<FieldStatus>({});
 
@@ -192,7 +199,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   }, [client]);
 
   // Save API key
-  const handleSaveKey = async (field: string, value: string) => {
+  const handleSaveKey = async (field: AgenticToolConfigField, value: string) => {
     if (!client) return;
 
     try {
@@ -216,7 +223,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   };
 
   // Clear API key
-  const handleClearKey = async (field: string) => {
+  const handleClearKey = async (field: AgenticToolConfigField) => {
     if (!client) return;
 
     try {

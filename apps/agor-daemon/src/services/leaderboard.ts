@@ -15,6 +15,7 @@ import {
   desc,
   eq,
   gte,
+  inArray,
   jsonExtract,
   lte,
   type SQL,
@@ -37,11 +38,20 @@ export type LeaderboardDimension = 'user' | 'branch' | 'repo' | 'model' | 'tool'
 
 const ALL_DIMENSIONS: LeaderboardDimension[] = ['user', 'branch', 'repo', 'model', 'tool'];
 
+type StringFilterValue = string | string[];
+
 export interface LeaderboardQuery {
   // Filters
-  userId?: string;
-  branchId?: string;
-  repoId?: string;
+  userId?: StringFilterValue;
+  userIds?: StringFilterValue;
+  branchId?: StringFilterValue;
+  branchIds?: StringFilterValue;
+  repoId?: StringFilterValue;
+  repoIds?: StringFilterValue;
+  model?: StringFilterValue;
+  models?: StringFilterValue;
+  tool?: StringFilterValue;
+  tools?: StringFilterValue;
 
   // Time period (optional - ISO timestamps)
   startDate?: string;
@@ -99,6 +109,46 @@ export interface LeaderboardResult {
 }
 
 const VALID_BUCKETS = new Set<DateBucket>(['hour', 'day', 'week', 'month']);
+const MAX_LIMIT = 10_000;
+
+function parseIntegerParam(
+  value: unknown,
+  fallback: number,
+  { min, max }: { min: number; max: number }
+): number {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
+}
+
+function normalizeStringFilterValues(...values: unknown[]): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (typeof value !== 'string') return;
+    for (const part of value.split(',')) {
+      const trimmed = part.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      normalized.push(trimmed);
+    }
+  };
+
+  for (const value of values) visit(value);
+  return normalized;
+}
+
+function stringFilter(column: unknown, values: string[]): SQL | undefined {
+  if (values.length === 0) return undefined;
+  if (values.length === 1) return eq(column as never, values[0]);
+  return inArray(column as never, values);
+}
 
 /**
  * Parse the comma-separated groupBy string into a set of known dimensions.
@@ -143,17 +193,25 @@ export class LeaderboardService {
     // Extract query params
     const {
       userId,
+      userIds: userIdsQuery,
       branchId,
+      branchIds: branchIdsQuery,
       repoId,
+      repoIds: repoIdsQuery,
+      model,
+      models,
+      tool,
+      tools,
       startDate,
       endDate,
       groupBy = 'user,branch,repo',
       bucket,
       sortBy = 'cost',
       sortOrder = 'desc',
-      limit = 50,
-      offset = 0,
     } = query;
+
+    const limit = parseIntegerParam(query.limit, 50, { min: 1, max: MAX_LIMIT });
+    const offset = parseIntegerParam(query.offset, 0, { min: 0, max: Number.MAX_SAFE_INTEGER });
 
     if (bucket !== undefined && !VALID_BUCKETS.has(bucket)) {
       throw new Error(`Invalid bucket: "${bucket}". Expected one of: hour, day, week, month.`);
@@ -166,21 +224,37 @@ export class LeaderboardService {
     const includeRepo = dims.has('repo');
     const includeModel = dims.has('model');
     const includeTool = dims.has('tool');
+    const repoIds = normalizeStringFilterValues(repoId, repoIdsQuery);
+    const needsBranchesJoin = includeBranch || includeRepo || repoIds.length > 0;
+
+    const modelExpr = jsonExtract(this.db, tasks.data, 'model');
 
     // Build WHERE conditions
     const conditions: SQL[] = [];
 
-    if (userId) {
-      conditions.push(eq(tasks.created_by, userId));
-    }
+    const userFilter = stringFilter(
+      tasks.created_by,
+      normalizeStringFilterValues(userId, userIdsQuery)
+    );
+    if (userFilter) conditions.push(userFilter);
 
-    if (branchId) {
-      conditions.push(eq(sessions.branch_id, branchId));
-    }
+    const branchFilter = stringFilter(
+      sessions.branch_id,
+      normalizeStringFilterValues(branchId, branchIdsQuery)
+    );
+    if (branchFilter) conditions.push(branchFilter);
 
-    if (repoId) {
-      conditions.push(eq(branches.repo_id, repoId));
-    }
+    const repoFilter = stringFilter(branches.repo_id, repoIds);
+    if (repoFilter) conditions.push(repoFilter);
+
+    const modelFilter = stringFilter(modelExpr, normalizeStringFilterValues(model, models));
+    if (modelFilter) conditions.push(modelFilter);
+
+    const toolFilter = stringFilter(
+      sessions.agentic_tool,
+      normalizeStringFilterValues(tool, tools)
+    );
+    if (toolFilter) conditions.push(toolFilter);
 
     // Use gte/lte so drizzle encodes the bound via the column's timestamp mapper
     // (integer ms on SQLite, timestamp-with-tz on Postgres). Passing an ISO string
@@ -211,7 +285,6 @@ export class LeaderboardService {
     // back to the top-level `tasks.data.duration_ms`. Tasks without either field
     // (legacy / in-flight) contribute 0 duration, which is the same behaviour as
     // tokens/cost today.
-    const modelExpr = jsonExtract(this.db, tasks.data, 'model');
     const inputTokensExpr = jsonExtract(
       this.db,
       tasks.data,
@@ -306,16 +379,21 @@ export class LeaderboardService {
     const metricOrder = sortOrder === 'desc' ? desc(sortField) : asc(sortField);
     const orderClauses = bucketExpr ? [asc(sql`bucket`), metricOrder] : [metricOrder];
 
-    // Execute aggregation query
-    // Join: tasks -> sessions -> branches, optionally LEFT JOIN users for display info
+    // Execute aggregation query. We only join branches when a selected/filtering
+    // dimension needs it; common dashboard views such as groupBy=tool or model can
+    // aggregate from tasks -> sessions without paying for the extra join.
+    // Optionally LEFT JOIN users for display info
     // Cast required: Database is a LibSQL|Postgres union; TypeScript cannot narrow the union
     // for dynamic-field SELECT queries even though both dialects share identical .select() API.
     // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
     let qb = (this.db as any)
       .select(selectFields)
       .from(tasks)
-      .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-      .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      .innerJoin(sessions, eq(tasks.session_id, sessions.session_id));
+
+    if (needsBranchesJoin) {
+      qb = qb.innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+    }
 
     if (includeUser) {
       qb = qb.leftJoin(users, eq(tasks.created_by, users.user_id));
@@ -336,13 +414,21 @@ export class LeaderboardService {
     if (groupByFields.length === 0) {
       // No grouping: the main query returns a single aggregate row.
       total = results.length;
+    } else if (offset === 0 && results.length < limit) {
+      // If the first page is not full, the data query already proved the exact
+      // number of groups. Avoid repeating the same expensive aggregation just to
+      // COUNT it; leaderboard metrics extract/cast JSON on every matching task.
+      total = results.length;
     } else {
       // biome-ignore lint/suspicious/noExplicitAny: Database union type prevents calling .select() with dynamic fields
       let countInner = (this.db as any)
         .select({ one: sql`1` })
         .from(tasks)
-        .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-        .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+        .innerJoin(sessions, eq(tasks.session_id, sessions.session_id));
+
+      if (needsBranchesJoin) {
+        countInner = countInner.innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
+      }
 
       if (includeUser) {
         countInner = countInner.leftJoin(users, eq(tasks.created_by, users.user_id));

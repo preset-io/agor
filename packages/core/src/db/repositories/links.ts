@@ -23,7 +23,7 @@ import {
 } from '../../types/link';
 import type { Database } from '../client';
 import { isUniqueConstraintError } from '../constraint-errors';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
 import { branches, type LinkInsert, type LinkRow, links, sessions } from '../schema';
 import { attachHiddenTenant, RepositoryError } from './base';
 import {
@@ -90,6 +90,22 @@ function preserveExistingSourceMessageOnDedupe(
   return { ...data, source_message_id: existing.source_message_id };
 }
 
+function isDefinedCondition<T>(condition: T | undefined): condition is T {
+  return condition !== undefined;
+}
+
+function postgresBranchTenantMatchesLink(db: Database) {
+  return isPostgresDatabase(db)
+    ? sql.raw('"branches"."tenant_id" = "links"."tenant_id"')
+    : undefined;
+}
+
+function postgresSessionTenantMatchesLink(db: Database) {
+  return isPostgresDatabase(db)
+    ? sql.raw('"sessions"."tenant_id" = "links"."tenant_id"')
+    : undefined;
+}
+
 function branchOwnerOnBoardExists(db: Database, boardId: UUID) {
   return exists(
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads.
@@ -98,9 +114,12 @@ function branchOwnerOnBoardExists(db: Database, boardId: UUID) {
       .from(branches)
       .where(
         and(
-          eq(branches.branch_id, links.branch_id),
-          eq(branches.board_id, boardId),
-          eq(branches.archived, false)
+          ...[
+            postgresBranchTenantMatchesLink(db),
+            eq(branches.branch_id, links.branch_id),
+            eq(branches.board_id, boardId),
+            eq(branches.archived, false),
+          ].filter(isDefinedCondition)
         )
       )
   );
@@ -112,7 +131,15 @@ function activeBranchOwnerExists(db: Database) {
     (db as any)
       .select({ _: sql`1` })
       .from(branches)
-      .where(and(eq(branches.branch_id, links.branch_id), eq(branches.archived, false)))
+      .where(
+        and(
+          ...[
+            postgresBranchTenantMatchesLink(db),
+            eq(branches.branch_id, links.branch_id),
+            eq(branches.archived, false),
+          ].filter(isDefinedCondition)
+        )
+      )
   );
 }
 
@@ -125,10 +152,14 @@ function sessionOwnerOnBoardExists(db: Database, boardId: UUID) {
       .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
       .where(
         and(
-          eq(sessions.session_id, links.session_id),
-          eq(branches.board_id, boardId),
-          eq(branches.archived, false),
-          eq(sessions.archived, false)
+          ...[
+            postgresSessionTenantMatchesLink(db),
+            postgresBranchTenantMatchesLink(db),
+            eq(sessions.session_id, links.session_id),
+            eq(branches.board_id, boardId),
+            eq(branches.archived, false),
+            eq(sessions.archived, false),
+          ].filter(isDefinedCondition)
         )
       )
   );

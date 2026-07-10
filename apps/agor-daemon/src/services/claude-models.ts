@@ -47,11 +47,21 @@ interface AuthenticatedParams extends Params {
  * that already has the alias form. Keep only alias-style entries.
  */
 function isAlias(id: string): boolean {
-  return /^claude-[a-z]+-\d+-\d+$/.test(id);
+  return /^claude-[a-z]+-\d+(?:-\d+)?$/.test(id);
 }
 
 const CONTEXT_1M_BETA = 'context-1m-2025-08-07';
 const ONE_MILLION_TOKENS = 900_000; // threshold to detect 1M-eligible models
+
+/**
+ * Fable 5 ships a 1M context window natively — it's the default, not a beta
+ * opt-in — so it must NOT get a synthetic `[1m]` variant. That suffix maps to
+ * the `context-1m-2025-08-07` beta flag (see parseModelWithBetas), which Fable
+ * doesn't use; the bare id already is the 1M model.
+ */
+function hasNativeMillionContext(id: string): boolean {
+  return id.startsWith('claude-fable');
+}
 
 /**
  * Build the option list from the API response. Models whose
@@ -69,7 +79,11 @@ function toModelOptions(models: Anthropic.ModelInfo[]): ClaudeModelOption[] {
       description: undefined,
       source: 'dynamic',
     });
-    if (m.max_input_tokens && m.max_input_tokens >= ONE_MILLION_TOKENS) {
+    if (
+      m.max_input_tokens &&
+      m.max_input_tokens >= ONE_MILLION_TOKENS &&
+      !hasNativeMillionContext(m.id)
+    ) {
       options.push({
         id: `${m.id}[1m]`,
         displayName: `${m.display_name} (1M context)`,

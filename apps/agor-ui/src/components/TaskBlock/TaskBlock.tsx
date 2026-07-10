@@ -9,9 +9,8 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
-import type { AgorClient, StreamingMessageState } from '@agor-live/client';
+import type { AgorClient, Link, StreamingMessageState } from '@agor-live/client';
 import {
-  type Link,
   type Message,
   MessageRole,
   type PermissionRequestContent,
@@ -32,7 +31,7 @@ import {
 } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Collapse, Flex, Spin, Typography, theme } from 'antd';
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { getContextWindowGradient } from '../../utils/contextWindow';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
@@ -56,10 +55,14 @@ import { ToolIcon } from '../ToolIcon';
 
 const { Paragraph } = Typography;
 
+// Default-param `= new Map()` would mint a fresh Map per render and defeat
+// the MessageBlock memos below whenever the prop is omitted.
+const EMPTY_USER_MAP = new Map<string, User>();
+
 /**
  * Block types for rendering
  */
-type Block =
+export type Block =
   | { type: 'message'; message: Message }
   | { type: 'agent-chain'; messages: Message[] }
   | { type: 'compaction'; messages: Message[] }; // System messages (start + optional complete)
@@ -96,6 +99,7 @@ interface TaskBlockProps {
   assistantEmoji?: string;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
   client?: AgorClient | null;
+  /** Upload links keyed by source user-message id. */
   attachmentLinksByMessageId?: Map<string, Link[]>;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
@@ -171,7 +175,7 @@ function isAgentChainMessage(message: Message): boolean {
  * - Compaction events (system_status + system_complete) → Compaction block
  * - Permission requests are now just messages, rendered inline naturally
  */
-function groupMessagesIntoBlocks(messages: Message[]): Block[] {
+export function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   // Separate top-level messages from nested (parent_tool_use_id)
   const topLevel = messages.filter((m) => !m.parent_tool_use_id);
   const nested = messages.filter((m) => m.parent_tool_use_id);
@@ -344,7 +348,55 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
     blocks.splice(insertPosition, 0, block);
   }
 
+  // Display-order only: stable-move widget_request blocks to the END of the
+  // task's block list so an inline widget (e.g. the gateway token form) renders
+  // BELOW the agent's closing text for the same turn — making it the last thing
+  // the user sees. Widgets are stamped at tool-call time (mid-turn), so by
+  // message index they'd otherwise sort above the agent's closing explanation.
+  // Non-widget blocks keep their original order; widget blocks keep their
+  // relative order at the end. This touches render order ONLY — message.index /
+  // identity (genealogy markers, streaming, React keys) are untouched.
+  const isWidgetBlock = (b: Block): boolean =>
+    b.type === 'message' && b.message.type === 'widget_request';
+  if (blocks.some(isWidgetBlock)) {
+    return [...blocks.filter((b) => !isWidgetBlock(b)), ...blocks.filter(isWidgetBlock)];
+  }
+
   return blocks;
+}
+
+/**
+ * Identity key for reconciling a block across renders — mirrors the React
+ * `key` each block type renders with.
+ */
+function getBlockKey(block: Block): string {
+  return block.type === 'message'
+    ? `m:${block.message.message_id}`
+    : `${block.type}:${block.messages[0]?.message_id || 'unknown'}`;
+}
+
+/**
+ * Marker value for a block's `data-conversation-block` wrapper. In-session
+ * search re-scans on the 'streaming' → 'settled' attribute flip: a message
+ * that finishes streaming settles inside the SAME wrapper node (same key), so
+ * without the flip its final text would only become findable at the next
+ * block mount/unmount.
+ */
+function getBlockMarker(block: Block): 'streaming' | 'settled' {
+  const messages = block.type === 'message' ? [block.message] : block.messages;
+  return messages.some((m) => (m as { isStreaming?: boolean }).isStreaming === true)
+    ? 'streaming'
+    : 'settled';
+}
+
+/** Same composition: identical message references in identical order. */
+function blocksHaveSameMessages(a: Block, b: Block): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === 'message' && b.type === 'message') return a.message === b.message;
+  const aMessages = (a as { messages: Message[] }).messages;
+  const bMessages = (b as { messages: Message[] }).messages;
+  if (aMessages.length !== bMessages.length) return false;
+  return aMessages.every((msg, i) => msg === bMessages[i]);
 }
 
 export const TaskBlock = React.memo<TaskBlockProps>(
@@ -352,7 +404,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     task,
     agentic_tool,
     sessionModel,
-    userById = new Map(),
+    userById = EMPTY_USER_MAP,
     currentUserId,
     isExpanded,
     onExpandChange,
@@ -411,8 +463,24 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       );
     }, [taskMessages, streamingForTask, streamingMessages]);
 
-    // Group messages into blocks
-    const blocks = useMemo(() => groupMessagesIntoBlocks(messages), [messages]);
+    // Group messages into blocks, then reconcile against the previous render:
+    // a streaming chunk rebuilds `messages` (new array identity) every frame,
+    // but only the streamed message's block actually changed. Reusing the
+    // previous block objects — and crucially their `messages` arrays, which
+    // are minted fresh by groupMessagesIntoBlocks — keeps the props of the
+    // memoized AgentChain/CompactionBlock children reference-stable, so the
+    // untouched (often large) tool-chain subtrees bail out of re-rendering.
+    const prevBlocksRef = useRef<Block[]>([]);
+    const blocks = useMemo(() => {
+      const next = groupMessagesIntoBlocks(messages);
+      const prevByKey = new Map(prevBlocksRef.current.map((b) => [getBlockKey(b), b]));
+      const reconciled = next.map((block) => {
+        const prev = prevByKey.get(getBlockKey(block));
+        return prev && blocksHaveSameMessages(prev, block) ? prev : block;
+      });
+      prevBlocksRef.current = reconciled;
+      return reconciled;
+    }, [messages]);
 
     // Index of the last agent-chain block — used for isLatest so that a streaming
     // text bubble appearing after the chain doesn't prematurely collapse it
@@ -565,203 +633,220 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     );
 
     return (
-      <Collapse
-        activeKey={isExpanded ? ['task-content'] : []}
-        onChange={(keys) => onExpandChange(task.task_id, keys.length > 0)}
-        expandIcon={() => null}
-        style={{ background: 'transparent', margin: `${token.sizeUnit * 3}px 0` }}
-        items={[
-          {
-            key: 'task-content',
-            label: taskHeader,
-            styles: {
-              header: {
-                padding: token.sizeUnit * 2,
-                alignItems: 'flex-start',
-                background: taskHeaderGradient || 'transparent',
-                borderRadius: isExpanded ? '8px 8px 0 0' : 8,
+      <div data-task-block={task.task_id}>
+        <Collapse
+          activeKey={isExpanded ? ['task-content'] : []}
+          onChange={(keys) => onExpandChange(task.task_id, keys.length > 0)}
+          expandIcon={() => null}
+          style={{ background: 'transparent', margin: `${token.sizeUnit * 3}px 0` }}
+          items={[
+            {
+              key: 'task-content',
+              label: taskHeader,
+              styles: {
+                header: {
+                  padding: token.sizeUnit * 2,
+                  alignItems: 'flex-start',
+                  background: taskHeaderGradient || 'transparent',
+                  borderRadius: isExpanded ? '8px 8px 0 0' : 8,
+                },
+                body: {
+                  background: 'transparent',
+                  padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 2}px`,
+                },
               },
-              body: {
-                background: 'transparent',
-                padding: `${token.sizeUnit * 2}px ${token.sizeUnit * 2}px`,
-              },
-            },
-            children: (
-              <div style={{ paddingTop: token.sizeUnit }}>
-                {/* Show loading spinner while fetching messages */}
-                {messagesLoading && (
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'center',
-                      padding: `${token.sizeUnit * 2}px 0`,
-                    }}
-                  >
-                    <Spin size="small" />
-                  </div>
-                )}
-
-                {/* Render all blocks (messages and agent chains) */}
-                {!messagesLoading &&
-                  blocks.map((block, blockIndex) => {
-                    if (block.type === 'message') {
-                      // Find if this is a permission request and if it's the first pending one
-                      const isPermissionRequest = block.message.type === 'permission_request';
-                      let isFirstPending = false;
-
-                      if (isPermissionRequest) {
-                        const content = block.message.content as PermissionRequestContent;
-                        if (content.status === PermissionStatus.PENDING) {
-                          // Check if this is the first pending permission request
-                          isFirstPending = !blocks.slice(0, blockIndex).some((b) => {
-                            if (b.type === 'message' && b.message.type === 'permission_request') {
-                              const c = b.message.content as PermissionRequestContent;
-                              return c.status === PermissionStatus.PENDING;
-                            }
-                            return false;
-                          });
-                        }
-                      }
-
-                      // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
-                      if (isSdkStatusMessage(block.message)) {
-                        return (
-                          <RateLimitBlock
-                            key={block.message.message_id}
-                            message={block.message}
-                            agentic_tool={agentic_tool}
-                          />
-                        );
-                      }
-
-                      // Check if this is the latest agent message (last message block)
-                      const isLatestMessage =
-                        block.message.role === MessageRole.ASSISTANT &&
-                        blockIndex === blocks.length - 1;
-
-                      return (
-                        <MessageBlock
-                          key={block.message.message_id}
-                          message={block.message}
-                          agentic_tool={agentic_tool}
-                          userById={userById}
-                          currentUserId={task.created_by}
-                          isTaskRunning={task.status === TaskStatus.RUNNING}
-                          sessionId={sessionId}
-                          onPermissionDecision={onPermissionDecision}
-                          isFirstPendingPermission={isFirstPending}
-                          isLatestMessage={isLatestMessage}
-                          taskId={task.task_id}
-                          assistantEmoji={assistantEmoji}
-                          client={client}
-                          attachmentLinks={attachmentLinksByMessageId?.get(
-                            block.message.message_id
-                          )}
-                        />
-                      );
-                    }
-                    if (block.type === 'agent-chain') {
-                      // Use first message ID as key for agent chain
-                      const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
-                      return (
-                        <AgentChain
-                          key={blockKey}
-                          messages={block.messages}
-                          isTaskRunning={task.status === TaskStatus.RUNNING}
-                          isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
-                        />
-                      );
-                    }
-                    if (block.type === 'compaction') {
-                      // Render compaction block with aggregated messages
-                      const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
-                      return (
-                        <CompactionBlock
-                          key={blockKey}
-                          messages={block.messages}
-                          agentic_tool={agentic_tool}
-                        />
-                      );
-                    }
-                    return null;
-                  })}
-
-                {/* Keep latest TODO visible even after completion (Claude parity). */}
-                <StickyTodoRenderer messages={messages} taskStatus={task.status} />
-
-                {/* Show typing indicator whenever task is actively running */}
-                {task.status === TaskStatus.RUNNING && (
-                  <div style={{ margin: `${token.sizeUnit}px 0` }}>
-                    <Bubble
-                      placement="start"
-                      avatar={
-                        assistantEmoji ? (
-                          <AgorAvatar>{assistantEmoji}</AgorAvatar>
-                        ) : agentic_tool ? (
-                          <ToolIcon tool={agentic_tool} size={32} />
-                        ) : (
-                          <AgorAvatar
-                            icon={<RobotOutlined />}
-                            style={{ backgroundColor: token.colorSuccess }}
-                          />
-                        )
-                      }
-                      loading={true}
-                      content=""
-                      variant="outlined"
-                    />
-                  </div>
-                )}
-
-                {/* Show commit message if available */}
-                {task.git_state.commit_message && (
-                  <div
-                    style={{
-                      marginTop: token.sizeUnit * 1.5,
-                      padding: `${token.sizeUnit * 0.75}px ${token.sizeUnit * 1.25}px`,
-                      background: 'rgba(0, 0, 0, 0.02)',
-                      borderRadius: token.borderRadius,
-                    }}
-                  >
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      <GithubOutlined /> Commit:{' '}
-                    </Typography.Text>
-                    <Typography.Text code style={{ fontSize: 11 }}>
-                      {typeof task.git_state.commit_message === 'string'
-                        ? task.git_state.commit_message
-                        : JSON.stringify(task.git_state.commit_message)}
-                    </Typography.Text>
-                  </div>
-                )}
-
-                {/* Show report if available */}
-                {task.report && (
-                  <div style={{ marginTop: token.sizeUnit * 1.5 }}>
-                    <Tag icon={<FileTextOutlined />} color="green">
-                      Task Report
-                    </Tag>
-                    <Paragraph
+              children: (
+                <div style={{ paddingTop: token.sizeUnit }}>
+                  {/* Show loading spinner while fetching messages */}
+                  {messagesLoading && (
+                    <div
                       style={{
-                        marginTop: token.sizeUnit,
-                        padding: token.sizeUnit * 1.5,
-                        background: 'rgba(82, 196, 26, 0.05)',
-                        border: `1px solid ${token.colorSuccessBorder}`,
-                        borderRadius: token.borderRadius,
-                        fontSize: 13,
-                        whiteSpace: 'pre-wrap',
+                        display: 'flex',
+                        justifyContent: 'center',
+                        padding: `${token.sizeUnit * 2}px 0`,
                       }}
                     >
-                      {typeof task.report === 'string'
-                        ? task.report
-                        : JSON.stringify(task.report, null, 2)}
-                    </Paragraph>
-                  </div>
-                )}
-              </div>
-            ),
-          },
-        ]}
-      />
+                      <Spin size="small" />
+                    </div>
+                  )}
+
+                  {/* Render all blocks (messages and agent chains). Each block
+                      gets a `data-conversation-block` wrapper: in-session
+                      search's MutationObserver keys off these boundaries to
+                      tell structural transcript changes (new message/chain,
+                      task hydration, a block settling after streaming) apart
+                      from per-frame streaming churn inside a block. */}
+                  {!messagesLoading &&
+                    blocks.map((block, blockIndex) => {
+                      if (block.type === 'message') {
+                        // Find if this is a permission request and if it's the first pending one
+                        const isPermissionRequest = block.message.type === 'permission_request';
+                        let isFirstPending = false;
+
+                        if (isPermissionRequest) {
+                          const content = block.message.content as PermissionRequestContent;
+                          if (content.status === PermissionStatus.PENDING) {
+                            // Check if this is the first pending permission request
+                            isFirstPending = !blocks.slice(0, blockIndex).some((b) => {
+                              if (b.type === 'message' && b.message.type === 'permission_request') {
+                                const c = b.message.content as PermissionRequestContent;
+                                return c.status === PermissionStatus.PENDING;
+                              }
+                              return false;
+                            });
+                          }
+                        }
+
+                        // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
+                        if (isSdkStatusMessage(block.message)) {
+                          return (
+                            <div
+                              key={block.message.message_id}
+                              data-conversation-block={getBlockMarker(block)}
+                            >
+                              <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
+                            </div>
+                          );
+                        }
+
+                        // Check if this is the latest agent message (last message block)
+                        const isLatestMessage =
+                          block.message.role === MessageRole.ASSISTANT &&
+                          blockIndex === blocks.length - 1;
+
+                        return (
+                          <div
+                            key={block.message.message_id}
+                            data-conversation-block={getBlockMarker(block)}
+                          >
+                            <MessageBlock
+                              message={block.message}
+                              agentic_tool={agentic_tool}
+                              userById={userById}
+                              currentUserId={task.created_by}
+                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              sessionId={sessionId}
+                              onPermissionDecision={onPermissionDecision}
+                              isFirstPendingPermission={isFirstPending}
+                              isLatestMessage={isLatestMessage}
+                              taskId={task.task_id}
+                              assistantEmoji={assistantEmoji}
+                              client={client}
+                              attachmentLinks={attachmentLinksByMessageId?.get(
+                                block.message.message_id
+                              )}
+                            />
+                          </div>
+                        );
+                      }
+                      if (block.type === 'agent-chain') {
+                        // Use first message ID as key for agent chain
+                        const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
+                        return (
+                          <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
+                            <AgentChain
+                              messages={block.messages}
+                              isTaskRunning={task.status === TaskStatus.RUNNING}
+                              isLatest={isLatestTask && blockIndex === lastAgentChainIndex}
+                            />
+                          </div>
+                        );
+                      }
+                      if (block.type === 'compaction') {
+                        // Render compaction block with aggregated messages
+                        const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
+                        return (
+                          <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
+                            <CompactionBlock
+                              messages={block.messages}
+                              agentic_tool={agentic_tool}
+                            />
+                          </div>
+                        );
+                      }
+                      return null;
+                    })}
+
+                  {/* Keep latest TODO visible even after completion (Claude parity). */}
+                  <StickyTodoRenderer messages={messages} taskStatus={task.status} />
+
+                  {/* Show typing indicator whenever task is actively running.
+                      Marked as a conversation block so its unmount at stream
+                      end gives search one final structural re-scan that picks
+                      up the finished message text. */}
+                  {task.status === TaskStatus.RUNNING && (
+                    <div data-conversation-block style={{ margin: `${token.sizeUnit}px 0` }}>
+                      <Bubble
+                        placement="start"
+                        avatar={
+                          assistantEmoji ? (
+                            <AgorAvatar>{assistantEmoji}</AgorAvatar>
+                          ) : agentic_tool ? (
+                            <ToolIcon tool={agentic_tool} size={32} />
+                          ) : (
+                            <AgorAvatar
+                              icon={<RobotOutlined />}
+                              style={{ backgroundColor: token.colorSuccess }}
+                            />
+                          )
+                        }
+                        loading={true}
+                        content=""
+                        variant="outlined"
+                      />
+                    </div>
+                  )}
+
+                  {/* Show commit message if available */}
+                  {task.git_state.commit_message && (
+                    <div
+                      style={{
+                        marginTop: token.sizeUnit * 1.5,
+                        padding: `${token.sizeUnit * 0.75}px ${token.sizeUnit * 1.25}px`,
+                        background: 'rgba(0, 0, 0, 0.02)',
+                        borderRadius: token.borderRadius,
+                      }}
+                    >
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        <GithubOutlined /> Commit:{' '}
+                      </Typography.Text>
+                      <Typography.Text code style={{ fontSize: 11 }}>
+                        {typeof task.git_state.commit_message === 'string'
+                          ? task.git_state.commit_message
+                          : JSON.stringify(task.git_state.commit_message)}
+                      </Typography.Text>
+                    </div>
+                  )}
+
+                  {/* Show report if available */}
+                  {task.report && (
+                    <div style={{ marginTop: token.sizeUnit * 1.5 }}>
+                      <Tag icon={<FileTextOutlined />} color="green">
+                        Task Report
+                      </Tag>
+                      <Paragraph
+                        style={{
+                          marginTop: token.sizeUnit,
+                          padding: token.sizeUnit * 1.5,
+                          background: 'rgba(82, 196, 26, 0.05)',
+                          border: `1px solid ${token.colorSuccessBorder}`,
+                          borderRadius: token.borderRadius,
+                          fontSize: 13,
+                          whiteSpace: 'pre-wrap',
+                        }}
+                      >
+                        {typeof task.report === 'string'
+                          ? task.report
+                          : JSON.stringify(task.report, null, 2)}
+                      </Paragraph>
+                    </div>
+                  )}
+                </div>
+              ),
+            },
+          ]}
+        />
+      </div>
     );
   }
 );

@@ -44,7 +44,7 @@ import { useThemedMessage } from '@/utils/message';
 import { ensureSandpackCryptoSubtle } from '@/utils/sandpackCrypto';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { ArtifactConsentModal } from '../../ArtifactConsentModal/ArtifactConsentModal';
-import { withBodyReset } from './utils/sandpackDefaults';
+import { useStableSandpackProviderInputs } from './utils/sandpackDefaults';
 
 ensureSandpackCryptoSubtle();
 
@@ -69,6 +69,7 @@ export interface ArtifactNodeData {
 
 const MIN_WIDTH = 300;
 const MIN_HEIGHT = 200;
+const EMPTY_SANDPACK_FILES: Record<string, string> = {};
 
 /**
  * Eject the rendered artifact to a fresh CodeSandbox sandbox in a new tab.
@@ -176,6 +177,17 @@ export const ArtifactNode = ({
   const [error, setError] = useState<string | null>(null);
   const [consentOpen, setConsentOpen] = useState(false);
   const lastHashRef = useRef<string | null>(null);
+  const sandpackConfig = payload?.sandpack_config;
+  const sandpackOptions = sandpackConfig?.options;
+  const sandpackTemplate = (sandpackConfig?.template ?? payload?.template ?? 'react') as 'react';
+  const sandpackInputs = useStableSandpackProviderInputs({
+    template: sandpackTemplate,
+    files: payload?.files ?? EMPTY_SANDPACK_FILES,
+    customSetup: sandpackConfig?.customSetup,
+    dependencies: payload?.dependencies,
+    entryFile: payload?.entry,
+    options: sandpackOptions,
+  });
 
   // Fetch artifact payload from daemon
   const fetchPayload = useCallback(async () => {
@@ -540,15 +552,6 @@ export const ArtifactNode = ({
 
   if (!payload) return null;
 
-  const sandpackConfig = payload.sandpack_config ?? {};
-  const sandpackOptions = sandpackConfig.options ?? {};
-  const customSetup = {
-    ...(sandpackConfig.customSetup ?? {}),
-    ...(payload.dependencies && !sandpackConfig.customSetup?.dependencies
-      ? { dependencies: payload.dependencies }
-      : {}),
-  };
-  const sandpackTemplate = (sandpackConfig.template ?? payload.template) as 'react';
   const legacyBanner = payload.legacy?.is_legacy ? (
     <LegacyBanner upgradeInstructions={payload.legacy.upgrade_instructions} />
   ) : null;
@@ -611,19 +614,11 @@ export const ArtifactNode = ({
           )}
           <SandpackProvider
             key={payload.content_hash}
-            template={sandpackTemplate}
-            files={withBodyReset(payload.files)}
-            customSetup={
-              Object.keys(customSetup).length > 0 ? (customSetup as SandpackSetup) : undefined
-            }
-            theme={sandpackConfig.theme as never}
-            options={{
-              initMode: 'user-visible',
-              ...sandpackOptions,
-              ...(payload.entry && !sandpackOptions.activeFile
-                ? { activeFile: payload.entry }
-                : {}),
-            }}
+            template={sandpackInputs.template as 'react'}
+            files={sandpackInputs.files}
+            customSetup={sandpackInputs.customSetup as SandpackSetup | undefined}
+            theme={sandpackConfig?.theme as never}
+            options={sandpackInputs.options}
           >
             <SandpackPreview
               style={{

@@ -9,12 +9,20 @@
  * store (idempotent patch, archive event for an unknown id, etc.), an
  * earlier bug always produced a fresh `maps` reference, cascading
  * re-renders into the board canvas. These tests pin down the bailout
- * contract: if an event doesn't change byId content, the hook return
- * shape is reference-stable.
+ * contract: if an event doesn't change byId content, the entity map
+ * references in the store are stable.
+ *
+ * The hook itself returns only load-state (it no longer surfaces the entity
+ * maps); the maps live in `agorStore`, so map assertions read them via
+ * `agorStore.getState().<map>` while load-state reads stay on `result.current`.
  */
 import type { Link } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../store/agorStore';
+// Session `patched`/`updated` writes are coalesced to one flush per frame (see
+// realtimeBatch); flush synchronously in tests that assert the post-patch store.
+import { flushRealtimeNow } from '../store/realtimeBatch';
 import { useAgorData } from './useAgorData';
 
 /**
@@ -239,12 +247,12 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client, { directSessionId: 's-archived' }));
     await waitForInitialLoad(result);
 
-    expect(result.current.sessionById.get('s-archived-full')).toMatchObject({
+    expect(agorStore.getState().sessionById.get('s-archived-full')).toMatchObject({
       archived: true,
       branch_id: 'b-archived',
     });
-    expect(result.current.sessionsByBranch.has('b-archived')).toBe(false);
-    expect(result.current.branchById.has('b-archived')).toBe(false);
+    expect(agorStore.getState().sessionsByBranch.has('b-archived')).toBe(false);
+    expect(agorStore.getState().branchById.has('b-archived')).toBe(false);
   });
 
   it('drops a duplicate `sessions.patched` (content-equal) without changing byId references', async () => {
@@ -253,15 +261,15 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    const beforeSessions = result.current.sessionById;
-    const beforeByBranch = result.current.sessionsByBranch;
+    const beforeSessions = agorStore.getState().sessionById;
+    const beforeByBranch = agorStore.getState().sessionsByBranch;
 
     // Feathers re-emits a fresh object on every patch — same content,
     // different reference. The hook MUST bail out (no-op patch).
     act(() => emit('sessions', 'patched', { ...session }));
 
-    expect(result.current.sessionById).toBe(beforeSessions);
-    expect(result.current.sessionsByBranch).toBe(beforeByBranch);
+    expect(agorStore.getState().sessionById).toBe(beforeSessions);
+    expect(agorStore.getState().sessionsByBranch).toBe(beforeByBranch);
   });
 
   it('updates byId references when a session field actually changes', async () => {
@@ -270,12 +278,15 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    const beforeSessions = result.current.sessionById;
+    const beforeSessions = agorStore.getState().sessionById;
 
-    act(() => emit('sessions', 'patched', { ...session, status: 'running' }));
+    act(() => {
+      emit('sessions', 'patched', { ...session, status: 'running' });
+      flushRealtimeNow();
+    });
 
-    expect(result.current.sessionById).not.toBe(beforeSessions);
-    expect(result.current.sessionById.get('s-1')).toMatchObject({ status: 'running' });
+    expect(agorStore.getState().sessionById).not.toBe(beforeSessions);
+    expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'running' });
   });
 
   it('updates branch-card session buckets when stop patches a running session idle', async () => {
@@ -284,19 +295,20 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    act(() =>
+    act(() => {
       emit('sessions', 'patched', {
         ...session,
         status: 'idle',
         ready_for_prompt: true,
-      })
-    );
+      });
+      flushRealtimeNow();
+    });
 
-    expect(result.current.sessionById.get('s-1')).toMatchObject({
+    expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({
       status: 'idle',
       ready_for_prompt: true,
     });
-    expect(result.current.sessionsByBranch.get('b-1')?.[0]).toMatchObject({
+    expect(agorStore.getState().sessionsByBranch.get('b-1')?.[0]).toMatchObject({
       status: 'idle',
       ready_for_prompt: true,
     });
@@ -307,13 +319,13 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    const beforeSessions = result.current.sessionById;
-    const beforeByBranch = result.current.sessionsByBranch;
+    const beforeSessions = agorStore.getState().sessionById;
+    const beforeByBranch = agorStore.getState().sessionsByBranch;
 
     act(() => emit('sessions', 'removed', makeSession({ session_id: 'unknown' })));
 
-    expect(result.current.sessionById).toBe(beforeSessions);
-    expect(result.current.sessionsByBranch).toBe(beforeByBranch);
+    expect(agorStore.getState().sessionById).toBe(beforeSessions);
+    expect(agorStore.getState().sessionsByBranch).toBe(beforeByBranch);
   });
 
   it('drops a no-op `branches.patched` (idempotent content)', async () => {
@@ -322,9 +334,9 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    const before = result.current.branchById;
+    const before = agorStore.getState().branchById;
     act(() => emit('branches', 'patched', { ...branch }));
-    expect(result.current.branchById).toBe(before);
+    expect(agorStore.getState().branchById).toBe(before);
   });
 
   it('updates branchById when a branch field flips', async () => {
@@ -333,11 +345,11 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    const before = result.current.branchById;
+    const before = agorStore.getState().branchById;
     act(() => emit('branches', 'patched', { ...branch, name: 'feature/x' }));
 
-    expect(result.current.branchById).not.toBe(before);
-    expect(result.current.branchById.get('b-1')?.name).toBe('feature/x');
+    expect(agorStore.getState().branchById).not.toBe(before);
+    expect(agorStore.getState().branchById.get('b-1')?.name).toBe('feature/x');
   });
 
   it('drops a duplicate `sessions.created` for an existing id', async () => {
@@ -346,13 +358,13 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    const beforeSessions = result.current.sessionById;
-    const beforeByBranch = result.current.sessionsByBranch;
+    const beforeSessions = agorStore.getState().sessionById;
+    const beforeByBranch = agorStore.getState().sessionsByBranch;
 
     act(() => emit('sessions', 'created', { ...session }));
 
-    expect(result.current.sessionById).toBe(beforeSessions);
-    expect(result.current.sessionsByBranch).toBe(beforeByBranch);
+    expect(agorStore.getState().sessionById).toBe(beforeSessions);
+    expect(agorStore.getState().sessionsByBranch).toBe(beforeByBranch);
   });
 
   it('keeps unrelated byId maps reference-stable across a session patch', async () => {
@@ -362,18 +374,18 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    const beforeBranches = result.current.branchById;
-    const beforeBoards = result.current.boardById;
-    const beforeUsers = result.current.userById;
+    const beforeBranches = agorStore.getState().branchById;
+    const beforeBoards = agorStore.getState().boardById;
+    const beforeUsers = agorStore.getState().userById;
 
     act(() => emit('sessions', 'patched', { ...session, status: 'running' }));
 
     // Only sessionById / sessionsByBranch flip — the rest must stay put so
     // their consumers (SessionCanvas, boards UI, user settings) don't
     // needlessly re-render.
-    expect(result.current.branchById).toBe(beforeBranches);
-    expect(result.current.boardById).toBe(beforeBoards);
-    expect(result.current.userById).toBe(beforeUsers);
+    expect(agorStore.getState().branchById).toBe(beforeBranches);
+    expect(agorStore.getState().boardById).toBe(beforeBoards);
+    expect(agorStore.getState().userById).toBe(beforeUsers);
   });
 
   it('migrates a session between branches when branch_id changes', async () => {
@@ -382,14 +394,27 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    expect(result.current.sessionsByBranch.get('b-1')?.map((s) => s.session_id)).toEqual(['s-1']);
+    expect(
+      agorStore
+        .getState()
+        .sessionsByBranch.get('b-1')
+        ?.map((s) => s.session_id)
+    ).toEqual(['s-1']);
 
-    act(() => emit('sessions', 'patched', { ...session, branch_id: 'b-2' }));
+    act(() => {
+      emit('sessions', 'patched', { ...session, branch_id: 'b-2' });
+      flushRealtimeNow();
+    });
 
     // Old branch bucket is cleaned up; new branch bucket holds the session.
-    expect(result.current.sessionsByBranch.has('b-1')).toBe(false);
-    expect(result.current.sessionsByBranch.get('b-2')?.map((s) => s.session_id)).toEqual(['s-1']);
-    expect(result.current.sessionById.get('s-1')?.branch_id).toBe('b-2');
+    expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);
+    expect(
+      agorStore
+        .getState()
+        .sessionsByBranch.get('b-2')
+        ?.map((s) => s.session_id)
+    ).toEqual(['s-1']);
+    expect(agorStore.getState().sessionById.get('s-1')?.branch_id).toBe('b-2');
   });
 
   it('evicts a branch and its sessions on `branches.removed`', async () => {
@@ -399,15 +424,15 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    expect(result.current.branchById.has('b-1')).toBe(true);
-    expect(result.current.sessionById.has('s-1')).toBe(true);
-    expect(result.current.sessionsByBranch.has('b-1')).toBe(true);
+    expect(agorStore.getState().branchById.has('b-1')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
+    expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(true);
 
     act(() => emit('branches', 'removed', branch));
 
-    expect(result.current.branchById.has('b-1')).toBe(false);
-    expect(result.current.sessionById.has('s-1')).toBe(false);
-    expect(result.current.sessionsByBranch.has('b-1')).toBe(false);
+    expect(agorStore.getState().branchById.has('b-1')).toBe(false);
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
+    expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);
   });
 
   it('dispatches `agor:artifact-patched` when the artifact actually changes', async () => {
@@ -430,7 +455,7 @@ describe('useAgorData — socket-event bailouts', () => {
       act(() => emit('artifacts', 'patched', { ...artifact, content_hash: 'h2' }));
 
       expect(events).toEqual([{ artifactId: 'a-1', contentHash: 'h2' }]);
-      expect(result.current.artifactById.get('a-1')?.content_hash).toBe('h2');
+      expect(agorStore.getState().artifactById.get('a-1')?.content_hash).toBe('h2');
     } finally {
       window.removeEventListener('agor:artifact-patched', listener);
     }
@@ -452,11 +477,11 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    const before = result.current.artifactById;
+    const before = agorStore.getState().artifactById;
 
     act(() => emit('artifacts', 'patched', { ...artifact }));
 
-    expect(result.current.artifactById).toBe(before);
+    expect(agorStore.getState().artifactById).toBe(before);
   });
 
   it('builds derived board-object indexes during initial load', async () => {
@@ -478,16 +503,23 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    expect(result.current.boardObjectById.get('bo-branch')).toMatchObject({ branch_id: 'b-1' });
-    expect(result.current.boardObjectsByBoardId.get('board-1')?.map((bo) => bo.object_id)).toEqual([
-      'bo-branch',
-      'bo-card',
-    ]);
-    expect(result.current.boardObjectsByBoardId.get('board-2')?.map((bo) => bo.object_id)).toEqual([
-      'bo-other',
-    ]);
-    expect(result.current.boardObjectByBranchId.get('b-1')?.object_id).toBe('bo-branch');
-    expect(result.current.boardObjectByCardId.get('c-1')?.object_id).toBe('bo-card');
+    expect(agorStore.getState().boardObjectById.get('bo-branch')).toMatchObject({
+      branch_id: 'b-1',
+    });
+    expect(
+      agorStore
+        .getState()
+        .boardObjectsByBoardId.get('board-1')
+        ?.map((bo) => bo.object_id)
+    ).toEqual(['bo-branch', 'bo-card']);
+    expect(
+      agorStore
+        .getState()
+        .boardObjectsByBoardId.get('board-2')
+        ?.map((bo) => bo.object_id)
+    ).toEqual(['bo-other']);
+    expect(agorStore.getState().boardObjectByBranchId.get('b-1')?.object_id).toBe('bo-branch');
+    expect(agorStore.getState().boardObjectByCardId.get('c-1')?.object_id).toBe('bo-card');
   });
 
   it('keeps board-object derived indexes in sync across patch and remove events', async () => {
@@ -510,18 +542,21 @@ describe('useAgorData — socket-event bailouts', () => {
       })
     );
 
-    expect(result.current.boardObjectsByBoardId.has('board-1')).toBe(false);
-    expect(result.current.boardObjectsByBoardId.get('board-2')?.map((bo) => bo.object_id)).toEqual([
-      'bo-1',
-    ]);
-    expect(result.current.boardObjectByBranchId.has('b-1')).toBe(false);
-    expect(result.current.boardObjectByBranchId.get('b-2')?.zone_id).toBe('zone-b');
+    expect(agorStore.getState().boardObjectsByBoardId.has('board-1')).toBe(false);
+    expect(
+      agorStore
+        .getState()
+        .boardObjectsByBoardId.get('board-2')
+        ?.map((bo) => bo.object_id)
+    ).toEqual(['bo-1']);
+    expect(agorStore.getState().boardObjectByBranchId.has('b-1')).toBe(false);
+    expect(agorStore.getState().boardObjectByBranchId.get('b-2')?.zone_id).toBe('zone-b');
 
     act(() => emit('board-objects', 'removed', { ...boardObject, board_id: 'board-2' }));
 
-    expect(result.current.boardObjectById.has('bo-1')).toBe(false);
-    expect(result.current.boardObjectsByBoardId.has('board-2')).toBe(false);
-    expect(result.current.boardObjectByBranchId.has('b-2')).toBe(false);
+    expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(false);
+    expect(agorStore.getState().boardObjectsByBoardId.has('board-2')).toBe(false);
+    expect(agorStore.getState().boardObjectByBranchId.has('b-2')).toBe(false);
   });
 
   it('keeps unrelated board-object buckets reference-stable on other-board patches', async () => {
@@ -537,7 +572,7 @@ describe('useAgorData — socket-event bailouts', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    const beforeCurrentBoardBucket = result.current.boardObjectsByBoardId.get('board-1');
+    const beforeCurrentBoardBucket = agorStore.getState().boardObjectsByBoardId.get('board-1');
 
     act(() =>
       emit('board-objects', 'patched', {
@@ -546,8 +581,10 @@ describe('useAgorData — socket-event bailouts', () => {
       })
     );
 
-    expect(result.current.boardObjectsByBoardId.get('board-1')).toBe(beforeCurrentBoardBucket);
-    expect(result.current.boardObjectsByBoardId.get('board-2')?.[0]?.zone_id).toBe(
+    expect(agorStore.getState().boardObjectsByBoardId.get('board-1')).toBe(
+      beforeCurrentBoardBucket
+    );
+    expect(agorStore.getState().boardObjectsByBoardId.get('board-2')?.[0]?.zone_id).toBe(
       'zone-on-other-board'
     );
   });
@@ -583,13 +620,14 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    expect(result.current.sessionById.has('s-1')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
     // s-2 was absent from first paint and only arrives via the hydration.
-    expect(result.current.sessionById.has('s-2')).toBe(true);
-    expect(result.current.branchById.has('b-1')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-2')).toBe(true);
+    expect(agorStore.getState().branchById.has('b-1')).toBe(true);
     expect(
-      result.current.sessionsByBranch
-        .get('b-1')
+      agorStore
+        .getState()
+        .sessionsByBranch.get('b-1')
         ?.map((s) => s.session_id)
         .sort()
     ).toEqual(['s-1', 's-2']);
@@ -616,8 +654,8 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     // The first snapshot was discarded (it raced) and a second fetch applied.
     expect(fetchCount('sessions', 'findAll')).toBe(2);
     // The racing live create survived AND the hydration filled in s-2.
-    expect(result.current.sessionById.has('s-3')).toBe(true);
-    expect(result.current.sessionById.has('s-2')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-3')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-2')).toBe(true);
   });
 
   it('retries after races until a quiet window, then applies the fresh snapshot (never gives up)', async () => {
@@ -637,7 +675,7 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    await waitFor(() => expect(result.current.sessionById.has('s-2')).toBe(true), {
+    await waitFor(() => expect(agorStore.getState().sessionById.has('s-2')).toBe(true), {
       timeout: 4000,
     });
     // Applied on the first quiet window (3rd attempt) — not skipped forever.
@@ -669,10 +707,10 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
       timeout: 5000,
     });
 
-    expect(result.current.sessionById.has('s-1')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
     // The stale snapshot was never applied (it never went quiet), so s-2 stays
     // removed — a racy snapshot is never force-applied.
-    expect(result.current.sessionById.has('s-2')).toBe(false);
+    expect(agorStore.getState().sessionById.has('s-2')).toBe(false);
   });
 
   it('applies an unrelated collection while another keeps racing (per-collection revisions)', async () => {
@@ -694,10 +732,10 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     await waitForInitialLoad(result);
 
     // …the mcp-servers hydration is independent of `sessions`, so it applied.
-    await waitFor(() => expect(result.current.mcpServerById.has('m-1')).toBe(true));
-    expect(result.current.mcpServerById.has('m-2')).toBe(true);
+    await waitFor(() => expect(agorStore.getState().mcpServerById.has('m-1')).toBe(true));
+    expect(agorStore.getState().mcpServerById.has('m-2')).toBe(true);
     // …while the still-racing sessions hydration has not applied (s-2 absent).
-    expect(result.current.sessionById.has('s-2')).toBe(false);
+    expect(agorStore.getState().sessionById.has('s-2')).toBe(false);
   });
 
   it('decouples per-collection hydration: session churn does not block the branch apply', async () => {
@@ -720,9 +758,9 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     await waitForInitialLoad(result);
 
     // Branches hydrated on their own quiet window despite perpetual session churn.
-    await waitFor(() => expect(result.current.branchById.has('b-1')).toBe(true));
+    await waitFor(() => expect(agorStore.getState().branchById.has('b-1')).toBe(true));
     // Sessions still racing → not applied (coupling would have blocked branches).
-    expect(result.current.sessionById.has('s-2')).toBe(false);
+    expect(agorStore.getState().sessionById.has('s-2')).toBe(false);
   });
 
   it('runs backoff retries with delays preceding attempts (off-by-one)', async () => {
@@ -744,7 +782,7 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    await waitFor(() => expect(result.current.sessionById.has('s-2')).toBe(true), {
+    await waitFor(() => expect(agorStore.getState().sessionById.has('s-2')).toBe(true), {
       timeout: 4000,
     });
     expect(fetchCount('sessions', 'findAll')).toBe(6);
@@ -783,8 +821,8 @@ describe('useAgorData — bulk-write revision bumps', () => {
       expect(result.current.initialLoadComplete).toBe(true);
     });
 
-    expect(result.current.linkById.get('l-realtime')).toBe(realtimePinnedLink);
-    expect(result.current.linksByBranch.get('b-live')).toEqual([realtimePinnedLink]);
+    expect(agorStore.getState().linkById.get('l-realtime')).toBe(realtimePinnedLink);
+    expect(agorStore.getState().linksByBranch.get('b-live')).toEqual([realtimePinnedLink]);
   });
 
   it('silent reconnect removes stale archived-branch pinned links without dropping other link scopes', async () => {
@@ -812,15 +850,15 @@ describe('useAgorData — bulk-write revision bumps', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
-    await waitFor(() => expect(result.current.linkById.get('l-pinned')).toBe(pinnedLink));
-    await waitFor(() => expect(result.current.branchById.get('b-1')).toBe(branch));
+    await waitFor(() => expect(agorStore.getState().linkById.get('l-pinned')).toBe(pinnedLink));
+    await waitFor(() => expect(agorStore.getState().branchById.get('b-1')).toBe(branch));
 
     act(() => {
       emit('links', 'created', unpinnedBranchLink);
       emit('links', 'created', sessionLink);
     });
-    expect(result.current.linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
-    expect(result.current.linkById.get('l-session')).toBe(sessionLink);
+    expect(agorStore.getState().linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
+    expect(agorStore.getState().linkById.get('l-session')).toBe(sessionLink);
 
     // The archive event was missed. On reconnect, active branch hydration drops
     // the archived branch and the global pinned branch link snapshot no longer
@@ -832,12 +870,12 @@ describe('useAgorData — bulk-write revision bumps', () => {
       await new Promise<void>((r) => setTimeout(r, 0));
     });
 
-    await waitFor(() => expect(result.current.linkById.has('l-pinned')).toBe(false));
-    expect(result.current.branchById.has('b-1')).toBe(false);
-    expect(result.current.linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
-    expect(result.current.linkById.get('l-session')).toBe(sessionLink);
-    expect(result.current.linksByBranch.get('b-1')).toEqual([unpinnedBranchLink]);
-    expect(result.current.linksBySession.get('s-1')).toEqual([sessionLink]);
+    await waitFor(() => expect(agorStore.getState().linkById.has('l-pinned')).toBe(false));
+    expect(agorStore.getState().branchById.has('b-1')).toBe(false);
+    expect(agorStore.getState().linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
+    expect(agorStore.getState().linkById.get('l-session')).toBe(sessionLink);
+    expect(agorStore.getState().linksByBranch.get('b-1')).toEqual([unpinnedBranchLink]);
+    expect(agorStore.getState().linksBySession.get('s-1')).toEqual([sessionLink]);
   });
 
   it('reconnect bulk-replace bumps revisions so an in-flight hydration discards (no clobber)', async () => {
@@ -869,7 +907,7 @@ describe('useAgorData — bulk-write revision bumps', () => {
       await new Promise<void>((r) => setTimeout(r, 0));
     });
     // Reconnect applied the newer snapshot and bumped revisions.
-    expect(result.current.sessionById.has('s-new')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-new')).toBe(true);
 
     // Release the stale in-flight hydration. Its snapshot ([s-1] only) would, if
     // applied, drop s-new — but the reconnect's revision bump fails its quiet
@@ -879,8 +917,8 @@ describe('useAgorData — bulk-write revision bumps', () => {
       await new Promise<void>((r) => setTimeout(r, 0));
     });
     await flush();
-    expect(result.current.sessionById.has('s-new')).toBe(true);
-    expect(result.current.sessionById.has('s-1')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-new')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
   });
 
   it('logout reset bumps generation/revisions so an in-flight hydration cannot repopulate after logout', async () => {
@@ -906,7 +944,7 @@ describe('useAgorData — bulk-write revision bumps', () => {
       rerender({ c: null });
       await new Promise<void>((r) => setTimeout(r, 0));
     });
-    expect(result.current.sessionById.size).toBe(0);
+    expect(agorStore.getState().sessionById.size).toBe(0);
 
     // Release the in-flight hydration. Its snapshot ([s-1]) must NOT repopulate
     // the cleared Maps: the reset bumped the generation (cancels the loop) and
@@ -916,8 +954,8 @@ describe('useAgorData — bulk-write revision bumps', () => {
       await new Promise<void>((r) => setTimeout(r, 0));
     });
     await flush();
-    expect(result.current.sessionById.size).toBe(0);
-    expect(result.current.sessionById.has('s-1')).toBe(false);
+    expect(agorStore.getState().sessionById.size).toBe(0);
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
   });
 });
 
@@ -955,7 +993,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     const { result } = renderHook(() => useAgorData(client));
     try {
       await waitForInitialLoad(result);
-      const board = result.current.boardById.get('board-D');
+      const board = agorStore.getState().boardById.get('board-D');
       expect(board?.objects).toBeDefined();
       expect(Object.keys(board?.objects ?? {})).toContain('zone-1');
       expect(board?.custom_css).toBe('.x{}');
@@ -995,7 +1033,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     const { result } = renderHook(() => useAgorData(client));
     try {
       await waitForInitialLoad(result);
-      const board = result.current.boardById.get(boardId);
+      const board = agorStore.getState().boardById.get(boardId);
       expect(board?.objects).toBeDefined();
       expect(Object.keys(board?.objects ?? {})).toContain('zone-1');
       expect(board?.custom_css).toBe('.x{}');
@@ -1026,7 +1064,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
     await flush();
-    expect(result.current.boardById.get('board-A')?.objects).toBeDefined();
-    expect(result.current.boardById.get('board-B')?.objects).toBeDefined();
+    expect(agorStore.getState().boardById.get('board-A')?.objects).toBeDefined();
+    expect(agorStore.getState().boardById.get('board-B')?.objects).toBeDefined();
   });
 });

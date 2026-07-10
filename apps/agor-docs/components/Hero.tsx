@@ -1,3 +1,5 @@
+'use client';
+
 import Link from 'next/link';
 import { useState } from 'react';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';

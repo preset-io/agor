@@ -978,6 +978,8 @@ async function renderEnvironmentTemplates(
         custom_context: branch.custom_context,
         unix_gid: unixGid,
         host_ip_address: hostIpAddress,
+        base_ref: branch.base_ref,
+        ref_type: branch.ref_type,
       },
       branch.environment_variant
     );

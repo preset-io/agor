@@ -54,7 +54,7 @@ describe('resolveChildSessionConfig', () => {
       });
       expect(r.model_config).toEqual({
         mode: 'alias',
-        model: 'gpt-5.5',
+        model: 'gpt-5.6-sol',
         updated_at: now.toISOString(),
       });
       expect(r.model_config?.model).not.toBe('claude-opus-4-7');

@@ -7,7 +7,13 @@ export type AssistantPromotionState =
       canPromote: false;
       isPromoted: false;
       assistantLink: null;
-      reason: 'no-assistant' | 'same-owner' | 'missing-source-link' | 'missing-target';
+      reason:
+        | 'no-assistant'
+        | 'same-owner'
+        | 'missing-source-link'
+        | 'missing-target'
+        | 'file-lifetime'
+        | 'internal-target-access';
     }
   | {
       canPromote: true;
@@ -71,6 +77,22 @@ export function getAssistantPromotionState(args: {
 
   const assistantLink = findAssistantLinkForTarget(args.item, args.assistantLinks);
   if (assistantLink) return { canPromote: true, isPromoted: true, assistantLink, reason: null };
+  if (args.item.filePath || args.item.source === 'upload') {
+    return {
+      canPromote: false,
+      isPromoted: false,
+      assistantLink: null,
+      reason: 'file-lifetime',
+    };
+  }
+  if (args.item.kind === 'internal') {
+    return {
+      canPromote: false,
+      isPromoted: false,
+      assistantLink: null,
+      reason: 'internal-target-access',
+    };
+  }
   return { canPromote: true, isPromoted: false, assistantLink: null, reason: null };
 }
 

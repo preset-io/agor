@@ -1,14 +1,12 @@
 import { Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Params } from '@agor/core/types';
-
-type ExecutorTokenPayload = {
-  type?: string;
-  purpose?: string;
-  session_id?: string;
-  sessionId?: string;
-  task_id?: string;
-  branch_id?: string;
-};
+import {
+  EXECUTOR_SESSION_TOKEN_PURPOSE,
+  EXECUTOR_SESSION_TOKEN_TYPE,
+  type ExecutorSessionTokenPayload,
+  getExecutorSessionTokenSessionId,
+  isExecutorSessionTokenPayload,
+} from './executor-session-token.js';
 
 type Scope = {
   sessionId?: string;
@@ -16,11 +14,11 @@ type Scope = {
   branchId?: string;
 };
 
-function scopedPayload(context: HookContext): ExecutorTokenPayload | null {
-  const params = context.params as AuthenticatedParams & ExecutorTokenPayload;
-  const payload = params.authentication?.payload as ExecutorTokenPayload | undefined;
-  if (payload?.type === 'executor-session') {
-    if (payload.purpose !== 'executor-task') {
+function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null {
+  const params = context.params as AuthenticatedParams & ExecutorSessionTokenPayload;
+  const payload = params.authentication?.payload as ExecutorSessionTokenPayload | undefined;
+  if (payload?.type === EXECUTOR_SESSION_TOKEN_TYPE) {
+    if (!isExecutorSessionTokenPayload(payload)) {
       throw new Forbidden('Executor token is not valid for this request');
     }
     return payload;
@@ -32,8 +30,8 @@ function scopedPayload(context: HookContext): ExecutorTokenPayload | null {
   // claim; normal user/API-key auth must continue through unscoped.
   if (params.authentication?.strategy === 'jwt' && params.task_id) {
     return {
-      type: 'executor-session',
-      purpose: 'executor-task',
+      type: EXECUTOR_SESSION_TOKEN_TYPE,
+      purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
       task_id: params.task_id,
       session_id: params.session_id,
       sessionId: params.sessionId,
@@ -197,7 +195,7 @@ export function executorRuntimeScopeGuard() {
     if (!payload) return context;
 
     const scope = {
-      sessionId: payload.session_id ?? payload.sessionId,
+      sessionId: getExecutorSessionTokenSessionId(payload),
       taskId: payload.task_id,
       branchId: payload.branch_id,
     };

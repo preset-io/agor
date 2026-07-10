@@ -1334,42 +1334,16 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const includeChildren = args.includeChildren !== false;
       const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
-      let archivedCount = 0;
-
-      await ctx.app
-        .service('sessions')
-        .patch(
-          args.sessionId,
-          { archived: true, archived_reason: 'manual' },
-          ctx.baseServiceParams
-        );
-      archivedCount++;
-
-      if (includeChildren) {
-        const collectDescendantIds = async (parentId: string): Promise<string[]> => {
-          const gen = await sessionsService.getGenealogy(parentId, ctx.baseServiceParams);
-          const ids: string[] = [];
-          for (const child of gen.children) {
-            ids.push(child.session_id);
-            const nested = await collectDescendantIds(child.session_id);
-            ids.push(...nested);
-          }
-          return ids;
-        };
-
-        const descendantIds = await collectDescendantIds(args.sessionId);
-        for (const childId of descendantIds) {
-          await ctx.app
-            .service('sessions')
-            .patch(childId, { archived: true, archived_reason: 'manual' }, ctx.baseServiceParams);
-          archivedCount++;
-        }
-      }
+      const result = await sessionsService.archive(
+        args.sessionId,
+        { includeChildren },
+        ctx.baseServiceParams
+      );
 
       return textResult({
         success: true,
-        archivedCount,
-        message: `Archived ${archivedCount} session(s).`,
+        archivedCount: result.count,
+        message: `Archived ${result.count} session(s).`,
       });
     }
   );
@@ -1395,42 +1369,16 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const includeChildren = args.includeChildren !== false;
       const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
-      let unarchivedCount = 0;
-
-      await ctx.app
-        .service('sessions')
-        .patch(
-          args.sessionId,
-          { archived: false, archived_reason: undefined },
-          ctx.baseServiceParams
-        );
-      unarchivedCount++;
-
-      if (includeChildren) {
-        const collectDescendantIds = async (parentId: string): Promise<string[]> => {
-          const gen = await sessionsService.getGenealogy(parentId, ctx.baseServiceParams);
-          const ids: string[] = [];
-          for (const child of gen.children) {
-            ids.push(child.session_id);
-            const nested = await collectDescendantIds(child.session_id);
-            ids.push(...nested);
-          }
-          return ids;
-        };
-
-        const descendantIds = await collectDescendantIds(args.sessionId);
-        for (const childId of descendantIds) {
-          await ctx.app
-            .service('sessions')
-            .patch(childId, { archived: false, archived_reason: undefined }, ctx.baseServiceParams);
-          unarchivedCount++;
-        }
-      }
+      const result = await sessionsService.unarchive(
+        args.sessionId,
+        { includeChildren },
+        ctx.baseServiceParams
+      );
 
       return textResult({
         success: true,
-        unarchivedCount,
-        message: `Unarchived ${unarchivedCount} session(s).`,
+        unarchivedCount: result.count,
+        message: `Unarchived ${result.count} session(s).`,
       });
     }
   );
@@ -1682,7 +1630,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codex: {
           default: DEFAULT_CODEX_MODEL,
           models: codexModels,
-          note: 'Codex defaults to gpt-5.5; omit modelConfig unless a specific model is required. Use gpt-5.4-mini for lighter subagents. Legacy Codex aliases are intentionally omitted from this selectable list.',
+          note: 'Codex defaults to gpt-5.6-sol; omit modelConfig unless a specific model is required. Use gpt-5.6-terra for balanced everyday work or gpt-5.6-luna for clear, high-volume tasks. Legacy Codex aliases are intentionally omitted from this selectable list.',
         },
         copilot: {
           default: DEFAULT_COPILOT_MODEL,

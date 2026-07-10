@@ -156,6 +156,16 @@ export class ReactiveSessionHandle {
   private readyPromise: Promise<void>;
   private disposed = false;
 
+  /**
+   * The canonical (full-UUID) session id. When this handle was constructed with
+   * a short id / alias, incoming realtime events still carry the full UUID, so
+   * event matching must accept it too. Learned from the subscribe ack and from
+   * hydration (the fetched session row's `session_id` is always canonical); we
+   * deliberately do NOT overwrite `sessionId`, which echoes back what the
+   * caller passed (API calls resolve short ids server-side anyway).
+   */
+  private canonicalSessionId: string | null = null;
+
   private stateSnapshot: ReactiveSessionState;
 
   constructor(client: AgorClient, sessionId: string, options?: ReactiveSessionOptions) {
@@ -180,11 +190,49 @@ export class ReactiveSessionHandle {
     };
 
     this.attachListeners();
-    this.readyPromise = this.bootstrap();
+    // Retain the shared per-connection stream subscription for this session and
+    // AWAIT its ack BEFORE hydrating: a chunk arriving after the ack lands on
+    // top of hydrated state, and anything earlier is captured by the hydration
+    // itself — a viewer opening mid-stream can't fall into the gap where early
+    // chunks arrive with no streaming state and get dropped. Reconnects apply
+    // the same ordering via onSocketConnect (rooms are per-connection; a
+    // reconnect is a new one).
+    this.readyPromise = this.subscribeThenHydrate(
+      retainSessionStream(this.client, this.sessionId),
+      () => this.bootstrap()
+    );
+  }
+
+  /**
+   * Await the streaming subscription ack, then run the hydration step, so chunk
+   * delivery and state hydration can't interleave into a lost-update gap. Used
+   * on both attach (retain) and reconnect (re-subscribe) with the same ordering.
+   */
+  private async subscribeThenHydrate(
+    subscribed: Promise<void>,
+    hydrate: () => Promise<void>
+  ): Promise<void> {
+    await subscribed;
+    // Learn the canonical id from the ack so events (full-UUID) arriving before
+    // hydration completes already match — the mid-stream chunk case.
+    const canonical = getCanonicalSessionId(this.client, this.sessionId);
+    if (canonical) this.canonicalSessionId = canonical;
+    if (this.disposed) return;
+    await hydrate();
   }
 
   get sessionId(): string {
     return this.stateSnapshot.sessionId;
+  }
+
+  /**
+   * True when a realtime event's session id belongs to this handle — matching
+   * either the id the caller requested or the canonical id learned from the
+   * subscribe ack / hydration. Events always carry the canonical (full-UUID)
+   * id, so a short-id handle relies on the canonical match.
+   */
+  private matchesSession(id: string): boolean {
+    return id === this.sessionId || id === this.canonicalSessionId;
   }
 
   get state(): ReactiveSessionState {
@@ -294,6 +342,11 @@ export class ReactiveSessionHandle {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    // Release this handle's refcount on the shared per-connection subscription.
+    // The last handle for the session sends the actual `remove`; disposing one
+    // of several handles must NOT evict the shared connection from the room and
+    // kill the others' streams.
+    releaseSessionStream(this.client, this.sessionId);
     for (const cleanup of this.disposeCallbacks) {
       cleanup();
     }
@@ -338,6 +391,10 @@ export class ReactiveSessionHandle {
           .catch(() => ({ data: [] }) as QueueFindResult),
       ]);
 
+      // The fetched row's id is canonical even when we asked by short id — the
+      // authoritative source for event matching.
+      if (session?.session_id) this.canonicalSessionId = session.session_id;
+
       let messagesByTask = new Map<string, Message[]>();
       let loadedTaskIds = new Set<string>();
 
@@ -381,6 +438,9 @@ export class ReactiveSessionHandle {
         tasks,
         messagesByTask,
         loadedTaskIds,
+        // Repair task_id on any stream initialized from a chunk that arrived
+        // before tasks were hydrated (task_id was undefined then).
+        streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
         queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
         loading: false,
         error: null,
@@ -411,7 +471,14 @@ export class ReactiveSessionHandle {
     const onSocketConnect = () => {
       if (this.disposed) return;
       this.updateState((prev) => ({ ...prev, connected: true }));
-      this.readyPromise = this.resync();
+      // A reconnect is a new connection with no room membership. Await the
+      // shared re-subscribe (deduped to one join per session across handles)
+      // BEFORE resyncing — the same subscribe-then-hydrate ordering as attach,
+      // so a chunk arriving after the join lands on top of the resynced state.
+      this.readyPromise = this.subscribeThenHydrate(
+        resubscribeSessionStream(this.client, this.sessionId),
+        () => this.resync()
+      );
     };
     const onSocketDisconnect = () => {
       if (this.disposed) return;
@@ -423,7 +490,7 @@ export class ReactiveSessionHandle {
     this.disposeCallbacks.push(() => this.client.io.off('disconnect', onSocketDisconnect));
 
     const onSessionPatched = (session: Session) => {
-      if (session.session_id !== this.sessionId) return;
+      if (!this.matchesSession(session.session_id)) return;
       this.updateState((prev) => ({
         ...prev,
         session,
@@ -431,7 +498,7 @@ export class ReactiveSessionHandle {
       }));
     };
     const onSessionRemoved = (session: Session) => {
-      if (session.session_id !== this.sessionId) return;
+      if (!this.matchesSession(session.session_id)) return;
       this.updateState((prev) => ({
         ...prev,
         session: null,
@@ -448,7 +515,7 @@ export class ReactiveSessionHandle {
     this.disposeCallbacks.push(() => sessionsService.removeListener('removed', onSessionRemoved));
 
     const onTaskCreated = (task: Task) => {
-      if (task.session_id !== this.sessionId) return;
+      if (!this.matchesSession(task.session_id)) return;
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
           ? prev.tasks
@@ -468,7 +535,7 @@ export class ReactiveSessionHandle {
       });
     };
     const onTaskPatched = (task: Task) => {
-      if (task.session_id !== this.sessionId) return;
+      if (!this.matchesSession(task.session_id)) return;
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
         const nextTasks = index === -1 ? [...prev.tasks, task] : [...prev.tasks];
@@ -499,7 +566,7 @@ export class ReactiveSessionHandle {
       });
     };
     const onTaskRemoved = (task: Task) => {
-      if (task.session_id !== this.sessionId) return;
+      if (!this.matchesSession(task.session_id)) return;
       this.updateState((prev) => {
         const nextByTask = new Map(prev.messagesByTask);
         nextByTask.delete(task.task_id);
@@ -538,7 +605,7 @@ export class ReactiveSessionHandle {
     );
 
     const onToolStart = (event: ToolStartEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.some((t) => t.toolUseId === event.tool_use_id)) return prev;
@@ -558,7 +625,7 @@ export class ReactiveSessionHandle {
       });
     };
     const onToolComplete = (event: ToolCompleteEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.length === 0) return prev;
@@ -585,7 +652,7 @@ export class ReactiveSessionHandle {
     );
 
     const onMessageCreated = (message: Message) => {
-      if (message.session_id !== this.sessionId) return;
+      if (!this.matchesSession(message.session_id)) return;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.delete(message.message_id);
@@ -625,7 +692,7 @@ export class ReactiveSessionHandle {
 
     const onMessagePatched = (message: Message) => {
       const taskId = message.task_id;
-      if (message.session_id !== this.sessionId || !taskId) return;
+      if (!this.matchesSession(message.session_id) || !taskId) return;
       this.updateState((prev) => {
         const current = prev.messagesByTask.get(taskId);
         if (!current) return prev;
@@ -644,7 +711,7 @@ export class ReactiveSessionHandle {
     };
 
     const onMessageRemoved = (message: Message) => {
-      if (message.session_id !== this.sessionId) return;
+      if (!this.matchesSession(message.session_id)) return;
       const taskId = message.task_id;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
@@ -672,7 +739,7 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingStart = (event: StreamingStartEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.set(event.message_id, {
@@ -693,15 +760,33 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingChunk = (event: StreamingChunkEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
-        if (!current) return prev;
         const nextStreaming = new Map(prev.streamingMessages);
-        nextStreaming.set(event.message_id, {
-          ...current,
-          content: current.content + event.chunk,
-        });
+        if (current) {
+          nextStreaming.set(event.message_id, {
+            ...current,
+            content: current.content + event.chunk,
+          });
+        } else {
+          // Attached or reconnected after streaming:start already fired: the
+          // start event won't repeat, so initialize the stream from this chunk
+          // instead of dropping it. Content begins here; earlier text arrives
+          // when the message row lands at the next boundary (onMessageCreated
+          // then clears this entry). task_id is inferred from the active task
+          // so the live text groups under the right TaskBlock.
+          nextStreaming.set(event.message_id, {
+            message_id: event.message_id,
+            session_id: event.session_id,
+            task_id: findLatestHydratableTask(prev.tasks)?.task_id,
+            role: 'assistant',
+            content: event.chunk,
+            thinkingContent: '',
+            timestamp: new Date().toISOString(),
+            isStreaming: true,
+          });
+        }
         return {
           ...prev,
           streamingMessages: nextStreaming,
@@ -710,7 +795,7 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingEnd = (event: StreamingEndEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         if (!current) return prev;
@@ -727,7 +812,7 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingError = (event: StreamingErrorEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         if (!current) return prev;
@@ -745,7 +830,7 @@ export class ReactiveSessionHandle {
     };
 
     const onThinkingStart = (event: ThinkingStartEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         const existing = nextStreaming.get(event.message_id);
@@ -768,16 +853,32 @@ export class ReactiveSessionHandle {
     };
 
     const onThinkingChunk = (event: ThinkingChunkEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
-        if (!current) return prev;
         const nextStreaming = new Map(prev.streamingMessages);
-        nextStreaming.set(event.message_id, {
-          ...current,
-          isThinking: true,
-          thinkingContent: (current.thinkingContent || '') + event.chunk,
-        });
+        if (current) {
+          nextStreaming.set(event.message_id, {
+            ...current,
+            isThinking: true,
+            thinkingContent: (current.thinkingContent || '') + event.chunk,
+          });
+        } else {
+          // Attached mid-thinking (a long thinking block, no start replay):
+          // initialize from this chunk so live thinking renders under the
+          // active task instead of being dropped.
+          nextStreaming.set(event.message_id, {
+            message_id: event.message_id,
+            session_id: event.session_id,
+            task_id: findLatestHydratableTask(prev.tasks)?.task_id,
+            role: 'assistant',
+            content: '',
+            thinkingContent: event.chunk,
+            timestamp: new Date().toISOString(),
+            isStreaming: true,
+            isThinking: true,
+          });
+        }
         return {
           ...prev,
           streamingMessages: nextStreaming,
@@ -786,7 +887,7 @@ export class ReactiveSessionHandle {
     };
 
     const onThinkingEnd = (event: ThinkingEndEvent) => {
-      if (event.session_id !== this.sessionId) return;
+      if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         if (!current) return prev;
@@ -914,6 +1015,9 @@ export class ReactiveSessionHandle {
           .catch(() => ({ data: [] }) as QueueFindResult),
       ]);
 
+      // The fetched row's id is canonical even when we asked by short id.
+      if (session?.session_id) this.canonicalSessionId = session.session_id;
+
       let messagesByTask = this.stateSnapshot.messagesByTask;
       let loadedTaskIds = this.stateSnapshot.loadedTaskIds;
 
@@ -958,6 +1062,7 @@ export class ReactiveSessionHandle {
         queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
         messagesByTask,
         loadedTaskIds,
+        streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
         error: null,
         terminal: false,
         lastSyncedAt: new Date().toISOString(),
@@ -1014,6 +1119,273 @@ export function attachReactiveSessionApi(client: AgorClient): ReactiveAgorClient
   };
 
   return reactiveClient;
+}
+
+// --- Per-connection stream subscription registry ---------------------------
+//
+// A session-stream room membership is per socket CONNECTION, but several
+// ReactiveSessionHandles (e.g. a board peek, an open panel, and a transcript,
+// each with its own taskHydration) share ONE connection for the same session.
+// If every handle sent its own `remove` on dispose, disposing any one would
+// evict the shared connection from the room and silently kill the others'
+// streams. So subscription is refcounted; a single shared op chain orders
+// create/remove across handles (a late create from a disposing handle can't
+// land after a newer handle's create), and on reconnect every still-wanted
+// session re-subscribes exactly once.
+//
+// The room is keyed by the CANONICAL session id the daemon echoes from
+// `create` — not the caller-supplied id — because deep-link URLs carry short
+// ids while other surfaces use the full UUID, and both resolve to one room.
+// Two mechanisms keep exactly ONE refcounted membership per (client, canonical
+// room): (1) `keyToCanonical` re-keys/aliases an entry to the canonical id once
+// its ack returns, so a later retain of either id form reuses it without a
+// second `create`; (2) `roomWanters` counts the entries currently joined to a
+// canonical room, so `remove` fires only when the LAST retainer across all id
+// forms releases — even in the race where both forms subscribe before either
+// ack lands (their entries merge, and the count still gates the single remove).
+
+interface StreamSubscription {
+  refCount: number;
+  chain: Promise<void>;
+  /** Canonical room id echoed by create; used so `remove` leaves the right room. */
+  roomId: string | null;
+  wantSubscribed: boolean;
+  /** True once this entry has contributed +1 to `roomWanters[roomId]`. */
+  joined: boolean;
+  /** Set when this entry was folded into the canonical entry; its ops no-op. */
+  superseded: boolean;
+  /**
+   * The re-subscribe op for the CURRENT connection, shared by every handle so a
+   * reconnect re-subscribes each session exactly once. Reset to null on socket
+   * disconnect so the next reconnect issues a fresh join.
+   */
+  reconnect: Promise<void> | null;
+}
+
+interface ClientStreamState {
+  subs: Map<string, StreamSubscription>;
+  /** Caller-supplied id (short or full) → canonical room id, learned from acks. */
+  keyToCanonical: Map<string, string>;
+  /** Canonical room id → count of entries currently joined to it. */
+  roomWanters: Map<string, number>;
+  disconnectHandler: (() => void) | null;
+}
+
+const CLIENT_STREAM_STATE = new WeakMap<AgorClient, ClientStreamState>();
+
+function getClientStreamState(client: AgorClient): ClientStreamState {
+  let state = CLIENT_STREAM_STATE.get(client);
+  if (!state) {
+    state = {
+      subs: new Map(),
+      keyToCanonical: new Map(),
+      roomWanters: new Map(),
+      disconnectHandler: null,
+    };
+    CLIENT_STREAM_STATE.set(client, state);
+  }
+  return state;
+}
+
+function resolveStreamKey(state: ClientStreamState, sessionId: string): string {
+  return state.keyToCanonical.get(sessionId) ?? sessionId;
+}
+
+/**
+ * The canonical session id the daemon echoed for a caller-supplied id, learned
+ * from a `create` ack, or null if not yet known. Lets a short-id handle match
+ * incoming events (which carry the full UUID) once its subscription is acked.
+ */
+function getCanonicalSessionId(client: AgorClient, sessionId: string): string | null {
+  const state = CLIENT_STREAM_STATE.get(client);
+  const canonical = state?.keyToCanonical.get(sessionId);
+  return canonical && canonical !== sessionId ? canonical : null;
+}
+
+/** Serialize a create/remove op onto the subscription's shared chain. */
+function runSubscriptionOp(sub: StreamSubscription, op: () => Promise<void>): Promise<void> {
+  const next = sub.chain.then(op, op);
+  sub.chain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
+async function createSubscription(
+  client: AgorClient,
+  sessionId: string,
+  sub: StreamSubscription,
+  key: string
+): Promise<void> {
+  // Released or folded before this op ran — nothing to join.
+  if (!sub.wantSubscribed || sub.superseded) return;
+  let canonical: string | undefined;
+  try {
+    const result = (await client.service('session-streams').create({ session_id: sessionId })) as
+      | { session_id?: string }
+      | undefined;
+    canonical = typeof result?.session_id === 'string' ? result.session_id : undefined;
+  } catch {
+    // Deploy skew / access error: the daemon's owner fallback covers the
+    // creator's own tabs, and access errors also surface via bootstrap/resync.
+  }
+  if (!canonical) return;
+
+  const state = CLIENT_STREAM_STATE.get(client);
+  if (!state) return;
+
+  // Learn the mapping so future retains of either id form resolve to the room.
+  state.keyToCanonical.set(sessionId, canonical);
+  state.keyToCanonical.set(canonical, canonical);
+  if (key !== canonical) state.keyToCanonical.set(key, canonical);
+
+  // Normalize this entry onto the canonical id.
+  let target = sub;
+  if (key !== canonical && state.subs.get(canonical) !== sub) {
+    const existing = state.subs.get(canonical);
+    if (existing) {
+      // Race: another id form already established the canonical entry. Fold
+      // this entry's refcount into it and retire this one (its pending ops
+      // no-op via `superseded`); both joined the same room, so the count is
+      // taken from the canonical entry only.
+      existing.refCount += sub.refCount;
+      existing.wantSubscribed = existing.wantSubscribed || sub.wantSubscribed;
+      sub.superseded = true;
+      if (state.subs.get(key) === sub) state.subs.delete(key);
+      target = existing;
+    } else {
+      if (state.subs.get(key) === sub) state.subs.delete(key);
+      state.subs.set(canonical, sub);
+    }
+  }
+
+  target.roomId = canonical;
+  // The server-side join actually happened, so account for it even if the
+  // entry was released mid-flight — the pending remove (enqueued after this
+  // create) will then leave the room. Skipping this would leak the membership.
+  if (!target.joined) {
+    target.joined = true;
+    state.roomWanters.set(canonical, (state.roomWanters.get(canonical) ?? 0) + 1);
+  }
+}
+
+async function removeSubscription(client: AgorClient, sub: StreamSubscription): Promise<void> {
+  if (sub.superseded) return;
+  const state = CLIENT_STREAM_STATE.get(client);
+  const roomId = sub.roomId;
+  // Never joined (create failed / not yet acked): nothing to leave.
+  if (!sub.joined || !roomId || !state) return;
+  sub.joined = false;
+  const remaining = (state.roomWanters.get(roomId) ?? 1) - 1;
+  if (remaining > 0) {
+    // Another id-form entry still wants the room — keep the membership.
+    state.roomWanters.set(roomId, remaining);
+    return;
+  }
+  state.roomWanters.delete(roomId);
+  try {
+    await client.service('session-streams').remove(roomId);
+  } catch {
+    // Ignore — socket teardown removes room membership regardless.
+  }
+}
+
+// A reconnect is a new connection with no room membership. Reset each sub's
+// re-subscribe token on disconnect so the next `resubscribeSessionStream` (one
+// per session, driven by the handles' connect listeners) issues a fresh join.
+function ensureStreamDisconnectHandler(client: AgorClient, state: ClientStreamState): void {
+  if (state.disconnectHandler) return;
+  const handler = () => {
+    for (const sub of state.subs.values()) {
+      sub.reconnect = null;
+    }
+  };
+  state.disconnectHandler = handler;
+  client.io.on('disconnect', handler);
+}
+
+function retainSessionStream(client: AgorClient, sessionId: string): Promise<void> {
+  const state = getClientStreamState(client);
+  const key = resolveStreamKey(state, sessionId);
+  let sub = state.subs.get(key);
+  if (!sub) {
+    sub = {
+      refCount: 0,
+      chain: Promise.resolve(),
+      roomId: null,
+      wantSubscribed: false,
+      joined: false,
+      superseded: false,
+      reconnect: null,
+    };
+    state.subs.set(key, sub);
+  }
+  const was = sub.refCount;
+  sub.refCount += 1;
+  sub.wantSubscribed = true;
+  ensureStreamDisconnectHandler(client, state);
+  // First attach (including re-attach while a prior remove is still draining on
+  // the shared chain) enqueues the create; it lands after any pending remove.
+  if (was === 0) {
+    const target = sub;
+    return runSubscriptionOp(target, () => createSubscription(client, sessionId, target, key));
+  }
+  return sub.chain;
+}
+
+/**
+ * Re-subscribe a still-wanted session on reconnect and return the shared op
+ * promise so the caller can await the join BEFORE resyncing. Deduped per
+ * connection: the first handle to call it enqueues the create; every other
+ * handle for the same session awaits the same promise (exactly one join).
+ */
+function resubscribeSessionStream(client: AgorClient, sessionId: string): Promise<void> {
+  const state = CLIENT_STREAM_STATE.get(client);
+  if (!state) return Promise.resolve();
+  const key = resolveStreamKey(state, sessionId);
+  const sub = state.subs.get(key);
+  if (!sub?.wantSubscribed) return Promise.resolve();
+  if (!sub.reconnect) {
+    sub.reconnect = runSubscriptionOp(sub, () => createSubscription(client, sessionId, sub, key));
+  }
+  return sub.reconnect;
+}
+
+function releaseSessionStream(client: AgorClient, sessionId: string): void {
+  const state = CLIENT_STREAM_STATE.get(client);
+  if (!state) return;
+  const key = resolveStreamKey(state, sessionId);
+  const sub = state.subs.get(key);
+  if (!sub || sub.refCount === 0) return;
+  sub.refCount -= 1;
+  if (sub.refCount > 0) return;
+  sub.wantSubscribed = false;
+  void runSubscriptionOp(sub, () => removeSubscription(client, sub)).then(() => {
+    // Re-resolve the key: the create ack (which ran before this remove on the
+    // shared chain) may have re-keyed the entry from the id we captured to its
+    // canonical id — e.g. a short-id handle disposed before its ack. Consulting
+    // the stale key would leave the entry (and the connect-handler lifecycle)
+    // orphaned. Drop it only if nothing re-attached while the remove drained.
+    const currentKey = resolveStreamKey(state, sessionId);
+    if (sub.refCount === 0 && !sub.wantSubscribed && state.subs.get(currentKey) === sub) {
+      state.subs.delete(currentKey);
+      if (state.subs.size === 0 && state.disconnectHandler) {
+        client.io.off('disconnect', state.disconnectHandler);
+        state.disconnectHandler = null;
+        CLIENT_STREAM_STATE.delete(client);
+      }
+    }
+  });
+}
+
+/**
+ * @internal Test-only: number of live stream-subscription registry entries for
+ * a client (0 once the last release has torn the client's state down). Lets
+ * tests assert the registry doesn't leak entries across re-key / dispose races.
+ */
+export function __streamSubscriptionCountForTest(client: AgorClient): number {
+  return CLIENT_STREAM_STATE.get(client)?.subs.size ?? 0;
 }
 
 interface SharedReactiveSessionEntry {
@@ -1106,6 +1478,29 @@ function findLatestHydratableTask(tasks: Task[]): Task | undefined {
     if (tasks[i].status !== TaskStatus.QUEUED) return tasks[i];
   }
   return undefined;
+}
+
+/**
+ * Fill in task_id for streaming messages initialized from a chunk that arrived
+ * before task state was hydrated (task_id left undefined). Once tasks are known
+ * the latest hydratable task is the active one, so grouping repairs and the
+ * live text renders under the right TaskBlock. Returns the same map reference
+ * when nothing changed, to preserve downstream memoization.
+ */
+function restampStreamingTaskIds(
+  streamingMessages: ReactiveStreamingMessagesById,
+  tasks: Task[]
+): ReactiveStreamingMessagesById {
+  const activeTaskId = findLatestHydratableTask(tasks)?.task_id;
+  if (!activeTaskId) return streamingMessages;
+  let next = streamingMessages;
+  for (const [id, message] of streamingMessages) {
+    if (!message.task_id) {
+      if (next === streamingMessages) next = new Map(streamingMessages);
+      next.set(id, { ...message, task_id: activeTaskId });
+    }
+  }
+  return next;
 }
 
 function sortMessagesByIndex(messages: Message[]): Message[] {

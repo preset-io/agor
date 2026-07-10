@@ -44,7 +44,8 @@ export async function executeCodexTask(params: {
         repos.tasksStreamingService,
         useNativeAuth, // Flag for native auth (if applicable)
         repos.mcpServers, // MCPServerRepository for global MCP server resolution
-        repos.users
+        repos.users,
+        repos.mcpOAuthAuthHeaders
       ),
   });
 }

@@ -14,21 +14,14 @@ import { BRAND, brandMarkHref } from '../../branding/brand';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
-import {
-  selectArtifactById,
-  selectBoardById,
-  selectBranchById,
-  selectMcpServerById,
-  selectSessionById,
-  selectUserById,
-} from '../../store/selectors';
+import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BrandLogo } from '../BrandLogo';
 import { ConnectionStatus } from '../ConnectionStatus';
-import { GlobalSearch } from '../GlobalSearch';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { ThemeSwitcher } from '../ThemeSwitcher';
+import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
 
 const { Header } = Layout;
@@ -148,9 +141,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   const boardById = useAgorStore(selectBoardById);
   const userById = useAgorStore(selectUserById);
   const branchById = useAgorStore(selectBranchById);
-  const sessionById = useAgorStore(selectSessionById);
-  const artifactById = useAgorStore(selectArtifactById);
-  const mcpServerById = useAgorStore(selectMcpServerById);
   const boards = useMemo(() => mapToArray(boardById), [boardById]);
   const presenceUsers = useMemo(() => mapToArray(userById), [userById]);
   // Derive the recent-board pills here (not as a prop): the source array is the
@@ -290,13 +280,10 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           staticActiveUsers={staticActiveUsers}
           maxVisible={presenceMaxVisible}
         />
-        <GlobalSearch
+        <AppHeaderGlobalSearch
           currentUserId={currentUserId}
-          sessionById={sessionById}
           branchById={branchById}
-          artifactById={artifactById}
           boardById={boardById}
-          mcpServerById={mcpServerById}
           onSettingsClick={onSettingsClick}
         />
         <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />

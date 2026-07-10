@@ -16,6 +16,7 @@ import type {
 import {
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
+  getRequiredSecretFields,
   prefixToLikePattern,
 } from '@agor/core/types';
 import { eq, like } from 'drizzle-orm';
@@ -200,6 +201,34 @@ export class GatewayChannelRepository
   }
 
   /**
+   * Enforce the "enabled requires secrets" invariant on every write path.
+   *
+   * An enabled channel can never exist without the secrets its type needs to
+   * function. Runs on the post-merge, decrypted config so a patch that only
+   * flips `enabled: true` on a channel with already-stored tokens passes.
+   * Disabled ("draft") channels are exempt.
+   */
+  private assertRequiredSecretsWhenEnabled(channel: Partial<GatewayChannel>): void {
+    // Insert defaults `enabled` to true, so treat undefined as enabled here.
+    if (channel.enabled === false) return;
+
+    const channelType = channel.channel_type ?? 'slack';
+    const config = channel.config ?? {};
+    const missing = getRequiredSecretFields(channelType, config).filter((field) => {
+      const value = config[field];
+      return (
+        typeof value !== 'string' || value.trim() === '' || value === GATEWAY_REDACTED_SENTINEL
+      );
+    });
+
+    if (missing.length > 0) {
+      throw new RepositoryError(
+        `Cannot enable ${channelType} gateway channel: missing required secret(s) ${missing.join(', ')}`
+      );
+    }
+  }
+
+  /**
    * Resolve short ID to full ID
    */
   private async resolveId(id: string): Promise<string> {
@@ -239,6 +268,8 @@ export class GatewayChannelRepository
         id: data.id ?? generateId(),
         channel_key: data.channel_key ?? generateId(),
       });
+
+      this.assertRequiredSecretsWhenEnabled(data);
 
       await insert(this.db, gatewayChannels).values(insertData).run();
 
@@ -329,6 +360,8 @@ export class GatewayChannelRepository
         }
         merged.config = mergedConfig;
       }
+
+      this.assertRequiredSecretsWhenEnabled(merged);
 
       const insertData = this.channelToInsert(merged);
 
