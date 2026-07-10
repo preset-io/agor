@@ -110,6 +110,34 @@ describe('requiredBotScopes', () => {
     );
   });
 
+  it('adds reactions:write for the reactions capability and omits it otherwise', () => {
+    expect(requiredBotScopes(withOptions({ agentTools: { reactions: true } }))).toEqual([
+      'chat:write',
+      'im:history',
+      'im:read',
+      'reactions:write',
+      'users:read',
+    ]);
+    expect(requiredBotScopes(baseOptions)).not.toContain('reactions:write');
+    expect(requiredBotScopes(withOptions({ agentTools: { reactions: false } }))).not.toContain(
+      'reactions:write'
+    );
+  });
+
+  it('adds files:write for the file_upload capability and omits it otherwise', () => {
+    expect(requiredBotScopes(withOptions({ agentTools: { file_upload: true } }))).toEqual([
+      'chat:write',
+      'files:write',
+      'im:history',
+      'im:read',
+      'users:read',
+    ]);
+    expect(requiredBotScopes(baseOptions)).not.toContain('files:write');
+    expect(requiredBotScopes(withOptions({ agentTools: { file_upload: false } }))).not.toContain(
+      'files:write'
+    );
+  });
+
   it('all capabilities on — de-duplicated and sorted', () => {
     const allOn = withOptions({
       publicChannels: true,
@@ -118,7 +146,12 @@ describe('requiredBotScopes', () => {
       alignUsers: true,
       outbound: true,
       ingestFiles: true,
-      agentTools: { thread_history: true, channel_history: true },
+      agentTools: {
+        thread_history: true,
+        channel_history: true,
+        reactions: true,
+        file_upload: true,
+      },
     });
     expect(requiredBotScopes(allOn)).toEqual([
       'app_mentions:read',
@@ -127,6 +160,7 @@ describe('requiredBotScopes', () => {
       'chat:write',
       'chat:write.public',
       'files:read',
+      'files:write',
       'groups:history',
       'groups:read',
       'im:history',
@@ -134,6 +168,7 @@ describe('requiredBotScopes', () => {
       'im:write',
       'mpim:history',
       'mpim:read',
+      'reactions:write',
       'users:read',
       'users:read.email',
     ]);
@@ -162,21 +197,34 @@ describe('requiredBotScopes', () => {
 });
 
 describe('resolveSlackAgentTools', () => {
-  it('defaults thread_history ON and channel_history OFF for absent config', () => {
+  it('defaults thread_history ON and channel_history/reactions/file_upload OFF for absent config', () => {
     expect(resolveSlackAgentTools(undefined)).toEqual({
       thread_history: true,
       channel_history: false,
+      reactions: false,
+      file_upload: false,
     });
     expect(resolveSlackAgentTools({})).toEqual({
       thread_history: true,
       channel_history: false,
+      reactions: false,
+      file_upload: false,
     });
   });
 
   it('honors explicit values', () => {
-    expect(resolveSlackAgentTools({ thread_history: false, channel_history: true })).toEqual({
+    expect(
+      resolveSlackAgentTools({
+        thread_history: false,
+        channel_history: true,
+        reactions: true,
+        file_upload: true,
+      })
+    ).toEqual({
       thread_history: false,
       channel_history: true,
+      reactions: true,
+      file_upload: true,
     });
   });
 
@@ -184,14 +232,27 @@ describe('resolveSlackAgentTools', () => {
     expect(resolveSlackAgentTools('yes')).toEqual({
       thread_history: true,
       channel_history: false,
+      reactions: false,
+      file_upload: false,
     });
-    expect(resolveSlackAgentTools({ thread_history: 'yes', channel_history: 1 })).toEqual({
+    expect(
+      resolveSlackAgentTools({
+        thread_history: 'yes',
+        channel_history: 1,
+        reactions: 'true',
+        file_upload: 0,
+      })
+    ).toEqual({
       thread_history: true,
       channel_history: false,
+      reactions: false,
+      file_upload: false,
     });
     expect(resolveSlackAgentTools([true])).toEqual({
       thread_history: true,
       channel_history: false,
+      reactions: false,
+      file_upload: false,
     });
   });
 });

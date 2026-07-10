@@ -111,6 +111,8 @@ interface EmitGatewayMessageData {
   gatewayChannelId: string;
   message: string;
   target?: string;
+  /** Optional Slack thread timestamp to reply into. Omit to start a new thread/DM message. */
+  threadTs?: string;
   purpose?: string;
   emittedByUserId: UserID;
   /**
@@ -1477,6 +1479,7 @@ export class GatewayService {
         channel: resolvedChannel,
         text,
         blocks,
+        ...(data.threadTs ? { thread_ts: data.threadTs } : {}),
         metadata: {
           ...(data.purpose ? { purpose: data.purpose } : {}),
           ...resolvedTargetMetadata,
