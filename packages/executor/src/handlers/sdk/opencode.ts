@@ -75,7 +75,8 @@ export async function executeOpenCodeTask(params: ToolRunnerParams): Promise<voi
       repos.messagesService,
       repos.sessionMCP,
       repos.mcpServers,
-      repos.mcpOAuthAuthHeaders
+      repos.mcpOAuthAuthHeaders,
+      params.runtime
     );
 
     let opencodeSessionId: string;

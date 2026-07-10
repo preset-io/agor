@@ -27,6 +27,7 @@ import type {
   MCPServerRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
@@ -44,6 +45,59 @@ import type { ITool } from '../base/tool.interface.js';
 export interface OpenCodeConfig {
   enabled: boolean;
   serverUrl: string;
+}
+
+const OPENCODE_RUNTIME_EVENT_TYPES = new Set([
+  'message.part.updated',
+  'message.updated',
+  'permission.asked',
+  'permission.updated',
+  'session.error',
+  'session.status',
+]);
+const OPENCODE_TOOL_TERMINAL_STATUSES = new Set(['completed', 'error', 'failed']);
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function pulseOpenCodeEvent(event: unknown, runtime?: AgenticToolRuntime): void {
+  if (!runtime) return;
+
+  const eventRecord = asRecord(event);
+  const eventType = typeof eventRecord?.type === 'string' ? eventRecord.type : 'unknown';
+  if (eventType === 'server.heartbeat') return;
+
+  const properties = asRecord(eventRecord?.properties);
+  const part = asRecord(properties?.part);
+  if (eventType === 'message.part.updated' && part?.type === 'tool') {
+    const state = asRecord(part.state);
+    const status = typeof state?.status === 'string' ? state.status : 'unknown';
+    const id =
+      typeof part.callID === 'string'
+        ? part.callID
+        : typeof part.id === 'string'
+          ? part.id
+          : undefined;
+    const label = typeof part.tool === 'string' ? part.tool : undefined;
+    runtime.pulse({
+      kind: OPENCODE_TOOL_TERMINAL_STATUSES.has(status)
+        ? 'tool.completed'
+        : status === 'pending'
+          ? 'tool.started'
+          : 'tool.progress',
+      id,
+      label,
+    });
+    return;
+  }
+
+  runtime.pulse({
+    kind: 'sdk.opencode_event',
+    label: OPENCODE_RUNTIME_EVENT_TYPES.has(eventType) ? eventType : 'unknown',
+  });
 }
 
 /**
@@ -103,7 +157,8 @@ export class OpenCodeTool implements ITool {
     messagesService?: MessagesService,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpServerRepo?: MCPServerRepository,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private runtime?: AgenticToolRuntime
   ) {
     this.config = config;
     this.messagesService = messagesService;
@@ -572,6 +627,7 @@ export class OpenCodeTool implements ITool {
           if (eventType !== 'server.heartbeat') {
             console.log('[OpenCodeTool] Event:', eventType);
           }
+          pulseOpenCodeEvent(event, this.runtime);
 
           // Check if this event is for our session
           if ('properties' in event) {

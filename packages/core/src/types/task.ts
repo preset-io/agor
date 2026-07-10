@@ -151,8 +151,6 @@ export interface Pulse {
   id?: string;
   /** Privacy-safe label: Bash, Read, Cursor tool_call, etc. */
   label?: string;
-  /** Small sanitized metadata; executors currently persist only event, status, and type. */
-  metadata?: Record<string, string | number | boolean | null>;
 }
 
 export interface PulseSnapshot extends Pulse {

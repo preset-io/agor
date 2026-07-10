@@ -17,6 +17,13 @@ const createdClients: Array<{ baseUrl: string; directory?: string }> = [];
 
 // Mock MCP add calls per client
 const mockMcpAddCalls: Array<{ name: string; config: unknown }> = [];
+let mockEventStream: Array<Record<string, unknown>> = [];
+
+async function* streamMockEvents() {
+  for (const event of mockEventStream) {
+    yield event;
+  }
+}
 
 // Create a mock client factory
 function createMockClient(opts: { baseUrl: string; directory?: string }) {
@@ -32,7 +39,7 @@ function createMockClient(opts: { baseUrl: string; directory?: string }) {
       messages: vi.fn().mockResolvedValue({ data: [] }),
     },
     event: {
-      subscribe: vi.fn().mockResolvedValue({ stream: [] }),
+      subscribe: vi.fn().mockImplementation(async () => ({ stream: streamMockEvents() })),
     },
     mcp: {
       add: vi
@@ -79,6 +86,7 @@ describe('OpenCodeTool', () => {
     clientCreateCount = 0;
     createdClients.length = 0;
     mockMcpAddCalls.length = 0;
+    mockEventStream = [];
     vi.clearAllMocks();
   });
 
@@ -524,6 +532,76 @@ describe('OpenCodeTool', () => {
   });
 
   describe('executeTask Integration', () => {
+    it('emits runtime pulses for native tool lifecycle events', async () => {
+      const runtime = { pulse: vi.fn() };
+      const tool = new OpenCodeTool(
+        { enabled: true, serverUrl: 'http://localhost:4096' },
+        mockMessagesService,
+        mockSessionMCPRepo,
+        mockMCPServerRepo,
+        undefined,
+        runtime
+      );
+      tool.setSessionContext('session-tool', 'oc-session-tool');
+
+      const toolPart = (status: string) => ({
+        type: 'message.part.updated',
+        properties: {
+          part: {
+            id: 'part-1',
+            messageID: 'assistant-1',
+            type: 'tool',
+            tool: 'Bash',
+            callID: 'call-1',
+            state: { status },
+          },
+        },
+      });
+      mockEventStream = [
+        {
+          type: 'message.updated',
+          properties: {
+            info: { id: 'assistant-1', sessionID: 'oc-session-tool', role: 'assistant' },
+          },
+        },
+        toolPart('pending'),
+        toolPart('running'),
+        toolPart('completed'),
+        { type: 'session.status', properties: { status: { type: 'idle' } } },
+      ];
+
+      const callbacks = {
+        onStreamStart: vi.fn().mockResolvedValue(undefined),
+        onStreamChunk: vi.fn().mockResolvedValue(undefined),
+        onStreamEnd: vi.fn().mockResolvedValue(undefined),
+        onStreamError: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const result = await tool.executeTask?.(
+        'session-tool',
+        'run a command',
+        'task-tool',
+        callbacks
+      );
+
+      expect(result?.status).toBe('completed');
+      expect(runtime.pulse).toHaveBeenCalledWith({
+        kind: 'tool.started',
+        id: 'call-1',
+        label: 'Bash',
+      });
+      expect(runtime.pulse).toHaveBeenCalledWith({
+        kind: 'tool.progress',
+        id: 'call-1',
+        label: 'Bash',
+      });
+      expect(runtime.pulse).toHaveBeenCalledWith({
+        kind: 'tool.completed',
+        id: 'call-1',
+        label: 'Bash',
+      });
+    });
+
     it('should use directory-scoped client based on session branch path', async () => {
       const tool = new OpenCodeTool(
         { enabled: true, serverUrl: 'http://localhost:4096' },

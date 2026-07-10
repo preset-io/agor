@@ -248,7 +248,7 @@ async function buildCursorMcpServers(args: {
 }
 
 function pulseCursorEvent(event: SDKMessage, runtime?: AgenticToolRuntime): void {
-  runtime?.pulse({ kind: 'sdk.cursor_event', metadata: { type: event.type } });
+  runtime?.pulse({ kind: 'sdk.cursor_event', label: event.type });
 
   if (!runtime || event.type !== 'tool_call') return;
 

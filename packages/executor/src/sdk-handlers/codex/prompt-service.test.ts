@@ -1259,18 +1259,15 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
 
     expect(runtime.pulse).toHaveBeenNthCalledWith(1, {
       kind: 'sdk.first_event',
-      label: 'codex',
-      metadata: { event: 'turn.started' },
+      label: 'turn.started',
     });
     expect(runtime.pulse).toHaveBeenNthCalledWith(2, {
       kind: 'sdk.progress',
-      label: 'codex',
-      metadata: { event: 'event_msg.task_started' },
+      label: 'event_msg.task_started',
     });
     expect(runtime.pulse).toHaveBeenNthCalledWith(3, {
       kind: 'sdk.progress',
-      label: 'codex',
-      metadata: { event: 'event_msg.turn_context' },
+      label: 'event_msg.turn_context',
     });
   });
 

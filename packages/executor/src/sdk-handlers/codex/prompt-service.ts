@@ -1260,8 +1260,7 @@ export class CodexPromptService {
         codexDebug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
         this.runtime?.pulse({
           kind: eventCount === 1 ? 'sdk.first_event' : 'sdk.progress',
-          label: 'codex',
-          metadata: { event: describeCodexRuntimeEvent(event) },
+          label: describeCodexRuntimeEvent(event),
         });
 
         // Check if stop was requested

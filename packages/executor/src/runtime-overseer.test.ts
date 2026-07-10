@@ -190,15 +190,12 @@ describe('RuntimeOverseer', () => {
 });
 
 describe('sanitizePulse', () => {
-  it('keeps only allowlisted bounded metadata', () => {
+  it('keeps only bounded pulse fields and drops unmodeled data', () => {
     const pulse = sanitizePulse({
       kind: 'sdk.progress',
       id: ` ${'x'.repeat(200)} `,
       label: ` ${'B'.repeat(140)} `,
       metadata: {
-        event: 'e'.repeat(300),
-        type: 'event_msg',
-        status: 'running',
         token: 'secret',
         prompt: 'private prompt',
         command: 'cat ~/.agor/config.yaml',
@@ -206,20 +203,12 @@ describe('sanitizePulse', () => {
         output: 'raw output',
         cwd: '/private/worktree',
         url: 'https://user:password@example.com',
-        object: { raw: true } as unknown as string,
-        count: 3,
-        ok: true,
-        nil: null,
-        long: 'y'.repeat(300),
+        object: { raw: true },
       },
-    });
+    } as unknown as Parameters<typeof sanitizePulse>[0]);
 
     expect(pulse.id).toHaveLength(160);
     expect(pulse.label).toHaveLength(120);
-    expect(pulse.metadata).toEqual({
-      event: 'e'.repeat(200),
-      type: 'event_msg',
-      status: 'running',
-    });
+    expect(pulse).not.toHaveProperty('metadata');
   });
 });
