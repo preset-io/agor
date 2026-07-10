@@ -74,10 +74,10 @@ import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import {
   buildLinkDisplayItems,
-  getAssistantPromotionState,
+  getTeammatePromotionState,
   type LinkDisplayItem,
   PinnedLinksStrip,
-  promoteLinkToAssistant,
+  promoteLinkToTeammate,
   SessionLinksControl,
 } from '../Links';
 import type { ModelConfig } from '../ModelSelector';
@@ -333,14 +333,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   );
   const sessionLinks = useAgorStore(sessionLinksSelector) ?? [];
   const boardById = useAgorStore(selectBoardById);
-  const assistantBranchId = branch?.board_id
-    ? (boardById.get(branch.board_id)?.primary_assistant_id ?? null)
+  const teammateBranchId = branch?.board_id
+    ? (boardById.get(branch.board_id)?.primary_teammate_id ?? null)
     : null;
-  const assistantLinksSelector = React.useMemo(
-    () => makeLinksForBranchSelector(assistantBranchId ?? ''),
-    [assistantBranchId]
+  const teammateLinksSelector = React.useMemo(
+    () => makeLinksForBranchSelector(teammateBranchId ?? ''),
+    [teammateBranchId]
   );
-  const assistantLinks = useAgorStore(assistantLinksSelector) ?? [];
+  const teammateLinks = useAgorStore(teammateLinksSelector) ?? [];
   const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
   const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
   const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
@@ -444,7 +444,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
   const [pinningLinkId, setPinningLinkId] = React.useState<string | null>(null);
-  const [assistantActionKey, setAssistantActionKey] = React.useState<string | null>(null);
+  const [teammateActionKey, setTeammateActionKey] = React.useState<string | null>(null);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
@@ -510,14 +510,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   React.useEffect(() => {
     if (!open || !client || !session?.session_id) return;
     const requests = [fetchAndReplaceFullSessionLinks(client, session.session_id)];
-    if (assistantBranchId && assistantBranchId !== branch?.branch_id) {
-      requests.push(fetchAndReplaceFullBranchLinks(client, assistantBranchId));
+    if (teammateBranchId && teammateBranchId !== branch?.branch_id) {
+      requests.push(fetchAndReplaceFullBranchLinks(client, teammateBranchId));
     }
     Promise.all(requests).catch((error: unknown) => {
-      console.error('[SessionPanel] Failed to fetch session/assistant links:', error);
+      console.error('[SessionPanel] Failed to fetch session/teammate links:', error);
     });
   }, [
-    assistantBranchId,
+    teammateBranchId,
     branch?.branch_id,
     client,
     fetchAndReplaceFullBranchLinks,
@@ -1077,57 +1077,57 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const assistantStateForSessionLink = (item: LinkDisplayItem) => {
-    const state = getAssistantPromotionState({
+  const teammateStateForSessionLink = (item: LinkDisplayItem) => {
+    const state = getTeammatePromotionState({
       item,
-      assistantBranchId,
+      teammateBranchId,
       sourceBranchId: branch?.branch_id ?? null,
-      assistantLinks,
+      teammateLinks,
     });
     if (!state.canPromote) return null;
-    const actionKey = state.isPromoted ? state.assistantLink.link_id : item.linkId;
+    const actionKey = state.isPromoted ? state.teammateLink.link_id : item.linkId;
     return {
       isPromoted: state.isPromoted,
-      assistantLinkId: state.assistantLink?.link_id,
+      teammateLinkId: state.teammateLink?.link_id,
       disabled: !client || connectionDisabled,
-      loading: actionKey ? assistantActionKey === actionKey : false,
+      loading: actionKey ? teammateActionKey === actionKey : false,
     };
   };
 
-  const handlePromoteSessionLinkToAssistant = async (item: LinkDisplayItem) => {
-    if (!client || !assistantBranchId || !item.linkId) return;
-    setAssistantActionKey(item.linkId);
+  const handlePromoteSessionLinkToTeammate = async (item: LinkDisplayItem) => {
+    if (!client || !teammateBranchId || !item.linkId) return;
+    setTeammateActionKey(item.linkId);
     try {
-      const promoted = await promoteLinkToAssistant({
+      const promoted = await promoteLinkToTeammate({
         client,
         sourceLinkId: item.linkId,
-        assistantBranchId,
+        teammateBranchId,
       });
       applyKnownLinkCreatedResult(promoted);
     } catch (error) {
       showError(
-        `Failed to add link to assistant: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to add link to teammate: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
-      setAssistantActionKey(null);
+      setTeammateActionKey(null);
     }
   };
 
-  const handleRemoveSessionLinkFromAssistant = async (
+  const handleRemoveSessionLinkFromTeammate = async (
     _item: LinkDisplayItem,
-    assistantLinkId: string
+    teammateLinkId: string
   ) => {
     if (!client) return;
-    setAssistantActionKey(assistantLinkId);
+    setTeammateActionKey(teammateLinkId);
     try {
-      const removed = (await client.service('links').remove(assistantLinkId)) as Link;
+      const removed = (await client.service('links').remove(teammateLinkId)) as Link;
       applyKnownLinkRemovedResult(removed);
     } catch (error) {
       showError(
-        `Failed to remove link from assistant: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to remove link from teammate: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
-      setAssistantActionKey(null);
+      setTeammateActionKey(null);
     }
   };
 
@@ -1425,9 +1425,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               disabled={!client || connectionDisabled}
               pinningLinkId={pinningLinkId}
               onTogglePinned={handleToggleSessionLinkPinned}
-              getAssistantActionState={assistantStateForSessionLink}
-              onPromoteToAssistant={handlePromoteSessionLinkToAssistant}
-              onRemoveFromAssistant={handleRemoveSessionLinkFromAssistant}
+              getTeammateActionState={teammateStateForSessionLink}
+              onPromoteToTeammate={handlePromoteSessionLinkToTeammate}
+              onRemoveFromTeammate={handleRemoveSessionLinkFromTeammate}
             />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">

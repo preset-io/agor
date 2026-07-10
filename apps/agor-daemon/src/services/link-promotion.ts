@@ -10,7 +10,7 @@ import type {
   Params,
   UUID,
 } from '@agor/core/types';
-import { isAssistant } from '@agor/core/types';
+import { isTeammate } from '@agor/core/types';
 import {
   isSuperAdmin,
   PERMISSION_RANK,
@@ -22,8 +22,8 @@ interface LinkPromotionRouteParams extends AuthenticatedParams {
 }
 
 export interface LinkPromotionData {
-  target?: 'assistant';
-  assistant_branch_id?: BranchID | string;
+  target?: 'teammate';
+  teammate_branch_id?: BranchID | string;
 }
 
 interface LinkPromotionServiceOptions {
@@ -87,8 +87,8 @@ export class LinkPromotionService {
     return this.options.app.service('links') as unknown as LinksCrudService;
   }
 
-  private async ensureCanMutateAssistantBranch(
-    assistantBranch: Branch,
+  private async ensureCanMutateTeammateBranch(
+    teammateBranch: Branch,
     params?: LinkPromotionRouteParams
   ): Promise<void> {
     if (!this.options.branchRbacEnabled || !params?.provider) return;
@@ -98,13 +98,13 @@ export class LinkPromotionService {
     if (isSuperAdmin(user.role, this.options.superadminOpts.allowSuperadmin)) return;
 
     const userId = user.user_id as UUID;
-    const isOwner = await this.branchRepository.isOwner(assistantBranch.branch_id, userId);
+    const isOwner = await this.branchRepository.isOwner(teammateBranch.branch_id, userId);
     const branchPermission = await this.branchRepository.resolveUserPermission(
-      assistantBranch,
+      teammateBranch,
       userId
     );
     const effectiveLevel = resolveBranchPermission(
-      assistantBranch,
+      teammateBranch,
       userId,
       isOwner,
       user.role,
@@ -114,32 +114,32 @@ export class LinkPromotionService {
 
     if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.all) return;
     throw new Forbidden(
-      `You need 'all' permission to promote links to this assistant. You have '${effectiveLevel}' permission.`
+      `You need 'all' permission to promote links to this teammate. You have '${effectiveLevel}' permission.`
     );
   }
 
   async create(data: LinkPromotionData, params?: LinkPromotionRouteParams): Promise<Link> {
     const sourceLinkId = sourceLinkIdFromParams(params);
     if (!sourceLinkId) throw new BadRequest('Source link ID is required');
-    if (data?.target !== 'assistant') {
-      throw new BadRequest("links promote target must be 'assistant'");
+    if (data?.target !== 'teammate') {
+      throw new BadRequest("links promote target must be 'teammate'");
     }
-    const assistantBranchId = data.assistant_branch_id;
-    if (!assistantBranchId) throw new BadRequest('assistant_branch_id is required');
+    const teammateBranchId = data.teammate_branch_id;
+    if (!teammateBranchId) throw new BadRequest('teammate_branch_id is required');
 
     // Important: load through links.get with the original caller params so the
     // source link's normal visibility hooks decide whether this caller can see it.
     const source = await this.linksService().get(sourceLinkId, params);
-    const assistantBranch = await this.branchRepository.findById(String(assistantBranchId));
-    if (!assistantBranch) throw new NotFound(`Assistant branch not found: ${assistantBranchId}`);
-    if (!isAssistant(assistantBranch)) throw new BadRequest('Target branch is not an assistant');
+    const teammateBranch = await this.branchRepository.findById(String(teammateBranchId));
+    if (!teammateBranch) throw new NotFound(`Teammate branch not found: ${teammateBranchId}`);
+    if (!isTeammate(teammateBranch)) throw new BadRequest('Target branch is not an teammate');
 
-    await this.ensureCanMutateAssistantBranch(assistantBranch, params);
+    await this.ensureCanMutateTeammateBranch(teammateBranch, params);
 
     const callerId = (params?.user?.user_id as UUID | undefined) ?? null;
     const targetFields = trustedTargetCreateFields(source);
     const existing = await this.linksRepository.findByOwnerAndTarget({
-      branch_id: assistantBranch.branch_id,
+      branch_id: teammateBranch.branch_id,
       session_id: null,
       ...targetFields,
     });
@@ -152,7 +152,7 @@ export class LinkPromotionService {
     }
 
     const createData: Partial<LinkCreate> = {
-      branch_id: assistantBranch.branch_id,
+      branch_id: teammateBranch.branch_id,
       session_id: null,
       kind: source.kind,
       source: 'manual',
@@ -162,7 +162,7 @@ export class LinkPromotionService {
       created_by: callerId,
     };
 
-    // Promotion is an explicit user action, so the assistant-owned copy starts
+    // Promotion is an explicit user action, so the teammate-owned copy starts
     // with manual provenance and no metadata from the source ownership boundary.
     return this.linksService().create(createData, { ...params, provider: undefined });
   }

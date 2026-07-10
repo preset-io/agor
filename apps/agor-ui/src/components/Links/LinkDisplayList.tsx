@@ -10,9 +10,9 @@ import {
   type LinkDisplayItem,
 } from './linkDisplay';
 
-export interface AssistantLinkDisplayActionState {
+export interface TeammateLinkDisplayActionState {
   isPromoted: boolean;
-  assistantLinkId?: string;
+  teammateLinkId?: string;
   disabled?: boolean;
   loading?: boolean;
 }
@@ -25,9 +25,9 @@ interface LinkDisplayListProps {
   pinActionDisabled?: boolean;
   pinningLinkId?: string | null;
   onTogglePinned?: (item: LinkDisplayItem) => void;
-  getAssistantActionState?: (item: LinkDisplayItem) => AssistantLinkDisplayActionState | null;
-  onPromoteToAssistant?: (item: LinkDisplayItem) => void;
-  onRemoveFromAssistant?: (item: LinkDisplayItem, assistantLinkId: string) => void;
+  getTeammateActionState?: (item: LinkDisplayItem) => TeammateLinkDisplayActionState | null;
+  onPromoteToTeammate?: (item: LinkDisplayItem) => void;
+  onRemoveFromTeammate?: (item: LinkDisplayItem, teammateLinkId: string) => void;
 }
 
 function LinkTitle({ item }: { item: LinkDisplayItem }) {
@@ -49,9 +49,9 @@ export const LinkDisplayList: React.FC<LinkDisplayListProps> = ({
   pinActionDisabled = false,
   pinningLinkId = null,
   onTogglePinned,
-  getAssistantActionState,
-  onPromoteToAssistant,
-  onRemoveFromAssistant,
+  getTeammateActionState,
+  onPromoteToTeammate,
+  onRemoveFromTeammate,
 }) => {
   const { token } = theme.useToken();
 
@@ -67,7 +67,7 @@ export const LinkDisplayList: React.FC<LinkDisplayListProps> = ({
       renderItem={(item) => {
         const secondary = getLinkDisplaySecondaryLabel(item);
         const canTogglePin = showPinActions && Boolean(item.linkId) && onTogglePinned;
-        const assistantAction = getAssistantActionState?.(item) ?? null;
+        const teammateAction = getTeammateActionState?.(item) ?? null;
         const actions: React.ReactNode[] = [];
         if (canTogglePin) {
           actions.push(
@@ -90,30 +90,28 @@ export const LinkDisplayList: React.FC<LinkDisplayListProps> = ({
             </Tooltip>
           );
         }
-        if (assistantAction) {
-          const itemKey = assistantAction.isPromoted ? 'remove-assistant' : 'promote-assistant';
+        if (teammateAction) {
+          const itemKey = teammateAction.isPromoted ? 'remove-teammate' : 'promote-teammate';
           actions.push(
             <Dropdown
-              key="assistant"
+              key="teammate"
               trigger={['click']}
               menu={{
                 items: [
                   {
                     key: itemKey,
-                    label: assistantAction.isPromoted
-                      ? 'Remove from assistant'
-                      : 'Add to assistant',
-                    danger: assistantAction.isPromoted,
-                    disabled: assistantAction.disabled || assistantAction.loading,
+                    label: teammateAction.isPromoted ? 'Remove from teammate' : 'Add to teammate',
+                    danger: teammateAction.isPromoted,
+                    disabled: teammateAction.disabled || teammateAction.loading,
                   },
                 ],
                 onClick: ({ domEvent }) => {
                   domEvent.stopPropagation();
-                  if (assistantAction.disabled || assistantAction.loading) return;
-                  if (assistantAction.isPromoted && assistantAction.assistantLinkId) {
-                    onRemoveFromAssistant?.(item, assistantAction.assistantLinkId);
+                  if (teammateAction.disabled || teammateAction.loading) return;
+                  if (teammateAction.isPromoted && teammateAction.teammateLinkId) {
+                    onRemoveFromTeammate?.(item, teammateAction.teammateLinkId);
                   } else {
-                    onPromoteToAssistant?.(item);
+                    onPromoteToTeammate?.(item);
                   }
                 },
               }}
@@ -121,10 +119,10 @@ export const LinkDisplayList: React.FC<LinkDisplayListProps> = ({
               <Button
                 type="text"
                 size="small"
-                aria-label={`Assistant actions for ${item.name}`}
+                aria-label={`Teammate actions for ${item.name}`}
                 icon={<EllipsisOutlined />}
-                loading={assistantAction.loading}
-                disabled={assistantAction.disabled}
+                loading={teammateAction.loading}
+                disabled={teammateAction.disabled}
                 onClick={(event) => event.stopPropagation()}
               />
             </Dropdown>

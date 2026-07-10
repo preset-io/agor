@@ -3,7 +3,7 @@ import { LinkOutlined } from '@ant-design/icons';
 import { Badge, Button, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useMemo } from 'react';
-import { type AssistantLinkDisplayActionState, LinkDisplayList } from './LinkDisplayList';
+import { LinkDisplayList, type TeammateLinkDisplayActionState } from './LinkDisplayList';
 import { buildLinkDisplayItems, type LinkDisplayItem } from './linkDisplay';
 
 interface SessionLinksControlProps {
@@ -12,9 +12,9 @@ interface SessionLinksControlProps {
   disabled?: boolean;
   pinningLinkId?: string | null;
   onTogglePinned?: (item: LinkDisplayItem) => void;
-  getAssistantActionState?: (item: LinkDisplayItem) => AssistantLinkDisplayActionState | null;
-  onPromoteToAssistant?: (item: LinkDisplayItem) => void;
-  onRemoveFromAssistant?: (item: LinkDisplayItem, assistantLinkId: string) => void;
+  getTeammateActionState?: (item: LinkDisplayItem) => TeammateLinkDisplayActionState | null;
+  onPromoteToTeammate?: (item: LinkDisplayItem) => void;
+  onRemoveFromTeammate?: (item: LinkDisplayItem, teammateLinkId: string) => void;
 }
 
 export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
@@ -23,9 +23,9 @@ export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
   disabled = false,
   pinningLinkId = null,
   onTogglePinned,
-  getAssistantActionState,
-  onPromoteToAssistant,
-  onRemoveFromAssistant,
+  getTeammateActionState,
+  onPromoteToTeammate,
+  onRemoveFromTeammate,
 }) => {
   const { token } = theme.useToken();
   const items = useMemo(() => buildLinkDisplayItems({ branch, links }), [branch, links]);
@@ -41,9 +41,9 @@ export const SessionLinksControl: React.FC<SessionLinksControlProps> = ({
         pinActionDisabled={disabled}
         pinningLinkId={pinningLinkId}
         onTogglePinned={onTogglePinned}
-        getAssistantActionState={getAssistantActionState}
-        onPromoteToAssistant={onPromoteToAssistant}
-        onRemoveFromAssistant={onRemoveFromAssistant}
+        getTeammateActionState={getTeammateActionState}
+        onPromoteToTeammate={onPromoteToTeammate}
+        onRemoveFromTeammate={onRemoveFromTeammate}
       />
     </div>
   );

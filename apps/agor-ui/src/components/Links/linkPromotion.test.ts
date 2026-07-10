@@ -2,15 +2,15 @@ import type { Link } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { LinkDisplayItem } from './linkDisplay';
 import {
-  findAssistantLinkForTarget,
-  getAssistantPromotionState,
-  promoteLinkToAssistant,
+  findTeammateLinkForTarget,
+  getTeammatePromotionState,
+  promoteLinkToTeammate,
 } from './linkPromotion';
 
 function link(overrides: Partial<Link> = {}): Link {
   return {
     link_id: 'link-1' as Link['link_id'],
-    branch_id: 'assistant-1' as Link['branch_id'],
+    branch_id: 'teammate-1' as Link['branch_id'],
     session_id: null,
     kind: 'url',
     source: 'manual',
@@ -44,17 +44,17 @@ function item(overrides: Partial<LinkDisplayItem> = {}): LinkDisplayItem {
 }
 
 describe('linkPromotion', () => {
-  it('finds assistant links by exact target key', () => {
-    const assistantLink = link({ target_key: 'url:https://example.com/' });
-    expect(findAssistantLinkForTarget(item(), [assistantLink])).toBe(assistantLink);
+  it('finds teammate links by exact target key', () => {
+    const teammateLink = link({ target_key: 'url:https://example.com/' });
+    expect(findTeammateLinkForTarget(item(), [teammateLink])).toBe(teammateLink);
     expect(
-      findAssistantLinkForTarget(item(), [link({ target_key: 'URL:https://example.com/' })])
+      findTeammateLinkForTarget(item(), [link({ target_key: 'URL:https://example.com/' })])
     ).toBeNull();
   });
 
   it('does not collide file-backed target keys that differ only by path case', () => {
     const reportPdf = link({
-      link_id: 'assistant-report-upper' as Link['link_id'],
+      link_id: 'teammate-report-upper' as Link['link_id'],
       kind: 'document',
       source: 'upload',
       url: null,
@@ -63,7 +63,7 @@ describe('linkPromotion', () => {
       title: 'Report.pdf',
     });
     const reportLowerPdf = link({
-      link_id: 'assistant-report-lower' as Link['link_id'],
+      link_id: 'teammate-report-lower' as Link['link_id'],
       kind: 'document',
       source: 'upload',
       url: null,
@@ -73,7 +73,7 @@ describe('linkPromotion', () => {
     });
 
     expect(
-      findAssistantLinkForTarget(
+      findTeammateLinkForTarget(
         item({
           targetKey: 'file:/uploads/Report.pdf',
           filePath: '/uploads/Report.pdf',
@@ -83,7 +83,7 @@ describe('linkPromotion', () => {
       )
     ).toBe(reportPdf);
     expect(
-      findAssistantLinkForTarget(
+      findTeammateLinkForTarget(
         item({
           targetKey: 'file:/uploads/REPORT.pdf',
           filePath: '/uploads/REPORT.pdf',
@@ -96,56 +96,56 @@ describe('linkPromotion', () => {
 
   it('computes promotable and promoted states', () => {
     expect(
-      getAssistantPromotionState({
+      getTeammatePromotionState({
         item: item(),
-        assistantBranchId: 'assistant-1',
+        teammateBranchId: 'teammate-1',
         sourceBranchId: 'branch-1',
-        assistantLinks: [],
+        teammateLinks: [],
       })
     ).toMatchObject({ canPromote: true, isPromoted: false });
 
     expect(
-      getAssistantPromotionState({
+      getTeammatePromotionState({
         item: item(),
-        assistantBranchId: 'assistant-1',
+        teammateBranchId: 'teammate-1',
         sourceBranchId: 'branch-1',
-        assistantLinks: [link()],
+        teammateLinks: [link()],
       })
-    ).toMatchObject({ canPromote: true, isPromoted: true, assistantLink: link() });
+    ).toMatchObject({ canPromote: true, isPromoted: true, teammateLink: link() });
   });
 
-  it('does not promote missing source links, missing assistants, or assistant-owned links', () => {
+  it('does not promote missing source links, missing teammates, or teammate-owned links', () => {
     expect(
-      getAssistantPromotionState({
+      getTeammatePromotionState({
         item: item({ linkId: undefined }),
-        assistantBranchId: 'assistant-1',
+        teammateBranchId: 'teammate-1',
         sourceBranchId: 'branch-1',
-        assistantLinks: [],
+        teammateLinks: [],
       })
     ).toMatchObject({ canPromote: false, reason: 'missing-source-link' });
 
     expect(
-      getAssistantPromotionState({
+      getTeammatePromotionState({
         item: item(),
-        assistantBranchId: null,
+        teammateBranchId: null,
         sourceBranchId: 'branch-1',
-        assistantLinks: [],
+        teammateLinks: [],
       })
-    ).toMatchObject({ canPromote: false, reason: 'no-assistant' });
+    ).toMatchObject({ canPromote: false, reason: 'no-teammate' });
 
     expect(
-      getAssistantPromotionState({
+      getTeammatePromotionState({
         item: item(),
-        assistantBranchId: 'assistant-1',
-        sourceBranchId: 'assistant-1',
-        assistantLinks: [],
+        teammateBranchId: 'teammate-1',
+        sourceBranchId: 'teammate-1',
+        teammateLinks: [],
       })
     ).toMatchObject({ canPromote: false, reason: 'same-owner' });
   });
 
   it('keeps unresolved file and internal promotion unavailable', () => {
     expect(
-      getAssistantPromotionState({
+      getTeammatePromotionState({
         item: item({
           kind: 'document',
           source: 'upload',
@@ -153,29 +153,29 @@ describe('linkPromotion', () => {
           url: undefined,
           targetKey: 'file:/uploads/report.pdf',
         }),
-        assistantBranchId: 'assistant-1',
+        teammateBranchId: 'teammate-1',
         sourceBranchId: 'branch-1',
-        assistantLinks: [],
+        teammateLinks: [],
       })
     ).toMatchObject({ canPromote: false, reason: 'file-lifetime' });
 
     expect(
-      getAssistantPromotionState({
+      getTeammatePromotionState({
         item: item({
           kind: 'internal',
           refUri: 'agor://branch/branch-2',
           url: undefined,
           targetKey: 'ref:agor://branch/branch-2',
         }),
-        assistantBranchId: 'assistant-1',
+        teammateBranchId: 'teammate-1',
         sourceBranchId: 'branch-1',
-        assistantLinks: [],
+        teammateLinks: [],
       })
     ).toMatchObject({ canPromote: false, reason: 'internal-target-access' });
   });
 
-  it('allows an existing legacy assistant copy to be removed', () => {
-    const assistantFile = link({
+  it('allows an existing legacy teammate copy to be removed', () => {
+    const teammateFile = link({
       kind: 'document',
       source: 'upload',
       url: null,
@@ -183,7 +183,7 @@ describe('linkPromotion', () => {
       target_key: 'file:/uploads/report.pdf',
     });
     expect(
-      getAssistantPromotionState({
+      getTeammatePromotionState({
         item: item({
           kind: 'document',
           source: 'upload',
@@ -191,29 +191,29 @@ describe('linkPromotion', () => {
           url: undefined,
           targetKey: 'file:/uploads/report.pdf',
         }),
-        assistantBranchId: 'assistant-1',
+        teammateBranchId: 'teammate-1',
         sourceBranchId: 'branch-1',
-        assistantLinks: [assistantFile],
+        teammateLinks: [teammateFile],
       })
-    ).toMatchObject({ canPromote: true, isPromoted: true, assistantLink: assistantFile });
+    ).toMatchObject({ canPromote: true, isPromoted: true, teammateLink: teammateFile });
   });
 
-  it('calls the promotion service path with only assistant target payload', async () => {
+  it('calls the promotion service path with only teammate target payload', async () => {
     const create = vi.fn(async () => link());
     const client = {
       service: vi.fn(() => ({ create })),
     };
 
-    await promoteLinkToAssistant({
+    await promoteLinkToTeammate({
       client: client as never,
       sourceLinkId: 'source-1',
-      assistantBranchId: 'assistant-1',
+      teammateBranchId: 'teammate-1',
     });
 
     expect(client.service).toHaveBeenCalledWith('links/source-1/promote');
     expect(create).toHaveBeenCalledWith({
-      target: 'assistant',
-      assistant_branch_id: 'assistant-1',
+      target: 'teammate',
+      teammate_branch_id: 'teammate-1',
     });
   });
 });

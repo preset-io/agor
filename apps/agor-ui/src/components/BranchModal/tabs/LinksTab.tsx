@@ -15,11 +15,11 @@ import {
 import { useThemedMessage } from '../../../utils/message';
 import {
   buildLinkDisplayItems,
-  getAssistantPromotionState,
   getLinkCategorySummary,
+  getTeammatePromotionState,
   type LinkDisplayItem,
   LinkDisplayList,
-  promoteLinkToAssistant,
+  promoteLinkToTeammate,
 } from '../../Links';
 
 interface LinksTabProps {
@@ -41,16 +41,16 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
-  const [assistantActionKey, setAssistantActionKey] = useState<string | null>(null);
+  const [teammateActionKey, setTeammateActionKey] = useState<string | null>(null);
 
-  const assistantBranchId = branch.board_id
-    ? (boardById.get(branch.board_id)?.primary_assistant_id ?? null)
+  const teammateBranchId = branch.board_id
+    ? (boardById.get(branch.board_id)?.primary_teammate_id ?? null)
     : null;
-  const assistantLinksSelector = useMemo(
-    () => makeLinksForBranchSelector(assistantBranchId ?? ''),
-    [assistantBranchId]
+  const teammateLinksSelector = useMemo(
+    () => makeLinksForBranchSelector(teammateBranchId ?? ''),
+    [teammateBranchId]
   );
-  const assistantLinks = useAgorStore(assistantLinksSelector) ?? [];
+  const teammateLinks = useAgorStore(teammateLinksSelector) ?? [];
 
   const displayItems = useMemo(() => buildLinkDisplayItems({ branch, links }), [branch, links]);
 
@@ -61,8 +61,8 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
     setLoading(true);
     setLoadError(null);
     const requests = [fetchAndReplaceFullBranchLinks(client, branch.branch_id)];
-    if (assistantBranchId && assistantBranchId !== branch.branch_id) {
-      requests.push(fetchAndReplaceFullBranchLinks(client, assistantBranchId));
+    if (teammateBranchId && teammateBranchId !== branch.branch_id) {
+      requests.push(fetchAndReplaceFullBranchLinks(client, teammateBranchId));
     }
     Promise.all(requests)
       .catch((error: unknown) => {
@@ -77,7 +77,7 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
     return () => {
       cancelled = true;
     };
-  }, [active, assistantBranchId, branch.branch_id, client, fetchAndReplaceFullBranchLinks, open]);
+  }, [active, teammateBranchId, branch.branch_id, client, fetchAndReplaceFullBranchLinks, open]);
 
   const refresh = async () => {
     if (!client) return;
@@ -85,8 +85,8 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
     setLoadError(null);
     try {
       await fetchAndReplaceFullBranchLinks(client, branch.branch_id);
-      if (assistantBranchId && assistantBranchId !== branch.branch_id) {
-        await fetchAndReplaceFullBranchLinks(client, assistantBranchId);
+      if (teammateBranchId && teammateBranchId !== branch.branch_id) {
+        await fetchAndReplaceFullBranchLinks(client, teammateBranchId);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -111,57 +111,57 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
     }
   };
 
-  const assistantStateForItem = useCallback(
+  const teammateStateForItem = useCallback(
     (item: LinkDisplayItem) => {
-      const state = getAssistantPromotionState({
+      const state = getTeammatePromotionState({
         item,
-        assistantBranchId,
+        teammateBranchId,
         sourceBranchId: branch.branch_id,
-        assistantLinks,
+        teammateLinks,
       });
       if (!state.canPromote) return null;
-      const actionKey = state.isPromoted ? state.assistantLink.link_id : item.linkId;
+      const actionKey = state.isPromoted ? state.teammateLink.link_id : item.linkId;
       return {
         isPromoted: state.isPromoted,
-        assistantLinkId: state.assistantLink?.link_id,
+        teammateLinkId: state.teammateLink?.link_id,
         disabled: !client,
-        loading: actionKey ? assistantActionKey === actionKey : false,
+        loading: actionKey ? teammateActionKey === actionKey : false,
       };
     },
-    [assistantActionKey, assistantBranchId, assistantLinks, branch.branch_id, client]
+    [teammateActionKey, teammateBranchId, teammateLinks, branch.branch_id, client]
   );
 
-  const handlePromoteToAssistant = async (item: LinkDisplayItem) => {
-    if (!client || !assistantBranchId || !item.linkId) return;
-    setAssistantActionKey(item.linkId);
+  const handlePromoteToTeammate = async (item: LinkDisplayItem) => {
+    if (!client || !teammateBranchId || !item.linkId) return;
+    setTeammateActionKey(item.linkId);
     try {
-      const promoted = await promoteLinkToAssistant({
+      const promoted = await promoteLinkToTeammate({
         client,
         sourceLinkId: item.linkId,
-        assistantBranchId,
+        teammateBranchId,
       });
       applyKnownLinkCreatedResult(promoted);
     } catch (error) {
       showError(
-        `Failed to add link to assistant: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to add link to teammate: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
-      setAssistantActionKey(null);
+      setTeammateActionKey(null);
     }
   };
 
-  const handleRemoveFromAssistant = async (_item: LinkDisplayItem, assistantLinkId: string) => {
+  const handleRemoveFromTeammate = async (_item: LinkDisplayItem, teammateLinkId: string) => {
     if (!client) return;
-    setAssistantActionKey(assistantLinkId);
+    setTeammateActionKey(teammateLinkId);
     try {
-      const removed = (await client.service('links').remove(assistantLinkId)) as Link;
+      const removed = (await client.service('links').remove(teammateLinkId)) as Link;
       applyKnownLinkRemovedResult(removed);
     } catch (error) {
       showError(
-        `Failed to remove link from assistant: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to remove link from teammate: ${error instanceof Error ? error.message : String(error)}`
       );
     } finally {
-      setAssistantActionKey(null);
+      setTeammateActionKey(null);
     }
   };
 
@@ -197,9 +197,9 @@ export const LinksTab: React.FC<LinksTabProps> = ({ branch, client, active, open
             pinActionDisabled={!client}
             pinningLinkId={pinningLinkId}
             onTogglePinned={handleTogglePinned}
-            getAssistantActionState={assistantStateForItem}
-            onPromoteToAssistant={handlePromoteToAssistant}
-            onRemoveFromAssistant={handleRemoveFromAssistant}
+            getTeammateActionState={teammateStateForItem}
+            onPromoteToTeammate={handlePromoteToTeammate}
+            onRemoveFromTeammate={handleRemoveFromTeammate}
           />
         </Space>
       </Card>

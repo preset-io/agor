@@ -139,7 +139,7 @@ function makeClient(links: Link[]) {
 
 function makePromotionClient(args: {
   sessionLinks: Link[];
-  assistantLinks: Link[];
+  teammateLinks: Link[];
   promoted: Link;
 }) {
   const calls: Array<{ service: string; method: string; args: unknown[] }> = [];
@@ -153,7 +153,7 @@ function makePromotionClient(args: {
         },
         async findAll(params?: { query?: { owner_scope?: string; branch_id?: string } }) {
           calls.push({ service: path, method: 'findAll', args: [params] });
-          if (params?.query?.owner_scope === 'branch') return args.assistantLinks;
+          if (params?.query?.owner_scope === 'branch') return args.teammateLinks;
           return args.sessionLinks;
         },
         async patch(id: string, body: unknown) {
@@ -233,23 +233,23 @@ describe('SessionPanel session links', () => {
     expect(agorStore.getState().linksBySession.get('session-1')).toEqual([link]);
   });
 
-  it('promotes a session link to the board primary assistant', async () => {
+  it('promotes a session link to the board primary teammate', async () => {
     const source = makeLink();
     const promoted = makeLink({
-      link_id: 'assistant-link' as Link['link_id'],
-      branch_id: 'assistant-1' as Link['branch_id'],
+      link_id: 'teammate-link' as Link['link_id'],
+      branch_id: 'teammate-1' as Link['branch_id'],
       session_id: null,
       is_pinned: true,
     });
     agorStore.setState({
       ...EMPTY_MAPS,
       boardById: new Map([
-        ['board-1', { board_id: 'board-1', primary_assistant_id: 'assistant-1' } as Board],
+        ['board-1', { board_id: 'board-1', primary_teammate_id: 'teammate-1' } as Board],
       ]),
     });
     const { client, calls } = makePromotionClient({
       sessionLinks: [source],
-      assistantLinks: [],
+      teammateLinks: [],
       promoted,
     });
 
@@ -257,38 +257,38 @@ describe('SessionPanel session links', () => {
 
     await screen.findByText('Session Runbook');
     fireEvent.click(screen.getByLabelText('Session links'));
-    fireEvent.click(await screen.findByLabelText('Assistant actions for Session Runbook'));
-    fireEvent.click(await screen.findByText('Add to assistant'));
+    fireEvent.click(await screen.findByLabelText('Teammate actions for Session Runbook'));
+    fireEvent.click(await screen.findByText('Add to teammate'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
         service: 'links/link-1/promote',
         method: 'create',
-        args: [{ target: 'assistant', assistant_branch_id: 'assistant-1' }],
+        args: [{ target: 'teammate', teammate_branch_id: 'teammate-1' }],
       });
     });
-    expect(agorStore.getState().linksByBranch.get('assistant-1')).toEqual([promoted]);
+    expect(agorStore.getState().linksByBranch.get('teammate-1')).toEqual([promoted]);
   });
 
-  it('removes an assistant copy from the session links popover', async () => {
+  it('removes an teammate copy from the session links popover', async () => {
     const source = makeLink();
     const promoted = makeLink({
-      link_id: 'assistant-link' as Link['link_id'],
-      branch_id: 'assistant-1' as Link['branch_id'],
+      link_id: 'teammate-link' as Link['link_id'],
+      branch_id: 'teammate-1' as Link['branch_id'],
       session_id: null,
       is_pinned: true,
     });
     agorStore.setState({
       ...EMPTY_MAPS,
       boardById: new Map([
-        ['board-1', { board_id: 'board-1', primary_assistant_id: 'assistant-1' } as Board],
+        ['board-1', { board_id: 'board-1', primary_teammate_id: 'teammate-1' } as Board],
       ]),
-      linksByBranch: new Map([['assistant-1', [promoted]]]),
+      linksByBranch: new Map([['teammate-1', [promoted]]]),
       linkById: new Map([[promoted.link_id, promoted]]),
     });
     const { client, calls } = makePromotionClient({
       sessionLinks: [source],
-      assistantLinks: [promoted],
+      teammateLinks: [promoted],
       promoted,
     });
 
@@ -296,17 +296,17 @@ describe('SessionPanel session links', () => {
 
     await screen.findByText('Session Runbook');
     fireEvent.click(screen.getByLabelText('Session links'));
-    fireEvent.click(await screen.findByLabelText('Assistant actions for Session Runbook'));
-    fireEvent.click(await screen.findByText('Remove from assistant'));
+    fireEvent.click(await screen.findByLabelText('Teammate actions for Session Runbook'));
+    fireEvent.click(await screen.findByText('Remove from teammate'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
         service: 'links',
         method: 'remove',
-        args: ['assistant-link'],
+        args: ['teammate-link'],
       });
     });
-    expect(agorStore.getState().linkById.has('assistant-link')).toBe(false);
+    expect(agorStore.getState().linkById.has('teammate-link')).toBe(false);
     expect(agorStore.getState().linksBySession.get('session-1')).toEqual([source]);
   });
 });
