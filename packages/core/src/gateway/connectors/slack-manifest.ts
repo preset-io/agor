@@ -54,6 +54,8 @@ export interface SlackWizardOptions {
 export const SLACK_AGENT_TOOL_SCOPES: Record<SlackAgentToolCapability, string[]> = {
   thread_history: [],
   channel_history: ['channels:history', 'groups:history', 'mpim:history'],
+  reactions: ['reactions:write'],
+  file_upload: ['files:write'],
 };
 
 export interface SlackBotEventSubscriptions {
