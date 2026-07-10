@@ -494,7 +494,6 @@ function AppContent() {
     sessionId: string;
     boardId: string;
     path: 'teammate' | 'own-repo';
-    integrationsToSetup: string[];
   }) => {
     setOnboardingWizardOpen(false);
 
@@ -542,13 +541,6 @@ function AppContent() {
       );
     } else {
       navigate('/');
-    }
-
-    // If the user selected integrations to set up, open workspace Settings at the MCP tab only
-    if (result.integrationsToSetup.length > 0) {
-      setTimeout(() => {
-        setSettingsTabToOpen('mcp');
-      }, 800);
     }
   };
 
@@ -1781,7 +1773,6 @@ function AppContent() {
           user={currentUser}
           client={client}
           onCreateRepo={handleCreateRepo}
-          onCreateLocalRepo={handleCreateLocalRepo}
           onCreateBranch={handleCreateBranch}
           onCreateSession={handleCreateSession}
           onUpdateUser={(userId, updates) => handleUpdateUser(userId, updates, { silent: true })}
@@ -1790,7 +1781,6 @@ function AppContent() {
           }
           onCheckAuth={handleCheckAuth}
           teammatePending={onboardingConfig?.teammatePending}
-          frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
           initialStep={onboardingStartStep}
         />
 

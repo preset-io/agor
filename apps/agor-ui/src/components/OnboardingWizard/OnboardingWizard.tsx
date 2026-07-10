@@ -9,7 +9,6 @@ import type {
   AuthCheckResult,
   Branch,
   CloneRepositoryResult,
-  CreateLocalRepoRequest,
   CreateRepoRequest,
   UpdateUserInput,
   User,
@@ -37,9 +36,7 @@ const { useToken } = theme;
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export type WizardStep = 'persona' | 'llm' | 'workspace' | 'integrations' | 'done';
-type WizardPath = 'teammate';
 type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth';
-type IntegrationId = 'slack' | 'github' | 'linear' | 'jira' | 'notion';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -324,9 +321,12 @@ function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | nu
   switch (agent) {
     case 'claude-code':
       if (!k.startsWith('sk-ant-')) return 'Claude keys start with sk-ant-…';
+      if (k.startsWith('sk-ant-oat'))
+        return 'That looks like a subscription token - use the Subscription token option above.';
       if (k.length < 50) return 'Key looks incomplete - copy the full key.';
       return null;
     case 'codex':
+      if (k.startsWith('sk-ant-')) return 'That looks like a Claude key - pick Claude above.';
       if (!k.startsWith('sk-')) return 'OpenAI keys start with sk-…';
       if (k.length < 30) return 'Key looks incomplete.';
       return null;
@@ -453,8 +453,7 @@ export interface OnboardingWizardProps {
     branchId: string;
     sessionId: string;
     boardId: string;
-    path: WizardPath;
-    integrationsToSetup: IntegrationId[];
+    path: 'teammate';
   }) => void;
   /** Called when the user dismisses the wizard without completing it. */
   onDismiss?: () => void;
@@ -467,7 +466,6 @@ export interface OnboardingWizardProps {
     data: CreateRepoRequest,
     options?: CreateRepoOptions
   ) => Promise<CloneRepositoryResult | undefined>;
-  onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
   onCreateBranch: (
     repoId: string,
     data: {
@@ -490,7 +488,6 @@ export interface OnboardingWizardProps {
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
   teammatePending?: boolean;
-  frameworkRepoUrl?: string;
 
   /** Re-open wizard starting at a specific step (used by persistent banners). */
   initialStep?: WizardStep;
@@ -577,7 +574,6 @@ export function OnboardingWizard({
   const [boardError, setBoardError] = useState<string | null>(null);
 
   // ── Step 4: integrations ─────────────────────────────────────────────────
-  const [wantMcpSettings, setWantMcpSettings] = useState(false);
 
   // ── Reset on open ────────────────────────────────────────────────────────
   // Reset wizard state when modal opens. Clears all local state so re-opens are
@@ -598,7 +594,6 @@ export function OnboardingWizard({
     setCreatedBoardId(null);
     setBoardError(null);
     setBoardCreating(false);
-    setWantMcpSettings(false);
     // Force seed effect to re-run on every open for the same user
     userSeedRef.current = null;
     authCheckInFlightRef.current.clear();
@@ -936,7 +931,6 @@ export function OnboardingWizard({
         break;
       }
       case 'integrations': {
-        setWantMcpSettings(true);
         goToStep('done');
         break;
       }
@@ -948,7 +942,6 @@ export function OnboardingWizard({
           sessionId: '',
           boardId: boardIdToUse,
           path: 'teammate',
-          integrationsToSetup: wantMcpSettings ? (['slack'] as IntegrationId[]) : [],
         });
         break;
       }
@@ -970,7 +963,6 @@ export function OnboardingWizard({
     boardName,
     boardEmoji,
     saveOnboardingProgress,
-    wantMcpSettings,
     createdBoardId,
     existingBoardId,
     existingBoard,

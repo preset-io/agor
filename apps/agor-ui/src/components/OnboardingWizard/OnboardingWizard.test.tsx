@@ -323,7 +323,7 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Notion')).toBeInTheDocument();
   });
 
-  it('completes the full flow and calls onComplete with the created board and requested integrations', async () => {
+  it('completes the full flow and calls onComplete with the created board', async () => {
     const onComplete = vi.fn();
     const { onCreateRepo, onCreateBranch, onCreateSession } = renderWizard({ onComplete });
 
@@ -355,7 +355,6 @@ describe('OnboardingWizard', () => {
       sessionId: '',
       boardId: 'board-1',
       path: 'teammate',
-      integrationsToSetup: ['slack'],
     });
     // Repo/branch/session provisioning is deferred to normal app flows now —
     // the wizard itself never invokes these.
@@ -390,7 +389,6 @@ describe('OnboardingWizard', () => {
       sessionId: '',
       boardId: '',
       path: 'teammate',
-      integrationsToSetup: [],
     });
   });
 
