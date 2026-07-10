@@ -14,6 +14,7 @@
  * This mapper wires the relevant events to StreamingCallbacks for real-time UI updates.
  */
 
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { MessageID, SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { StreamingCallbacks } from '../base/index.js';
@@ -112,6 +113,33 @@ export interface CollectedToolUse {
   status?: string;
 }
 
+export interface CopilotToolEventObserver {
+  runtime?: AgenticToolRuntime;
+  onStart?(data: CopilotToolStartData, toolName: string): void;
+  onComplete?(data: CopilotToolCompleteData, toolName: string): void;
+}
+
+export function observeCopilotToolEvents(
+  session: CopilotSessionEvents,
+  observer: CopilotToolEventObserver
+): void {
+  session.on('tool.execution_start', ({ data }) => {
+    const toolName = data.mcpServerName
+      ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
+      : data.toolName;
+    observer.runtime?.pulse({ kind: 'tool.started', id: data.toolCallId, label: toolName });
+    observer.onStart?.(data, toolName);
+  });
+
+  session.on('tool.execution_complete', ({ data }) => {
+    const toolName = data.mcpServerName
+      ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
+      : data.toolName;
+    observer.runtime?.pulse({ kind: 'tool.finished', id: data.toolCallId, label: toolName });
+    observer.onComplete?.(data, toolName);
+  });
+}
+
 /**
  * Wire up Copilot session events to Agor's streaming callbacks
  *
@@ -193,31 +221,20 @@ export function mapCopilotEvents(
     }
   });
 
-  // Tool execution events — collect for message content
-  session.on('tool.execution_start', (event) => {
-    const data = event.data;
-    const toolName = data.mcpServerName
-      ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
-      : data.toolName;
-
-    console.log(`🔧 [Copilot] Tool started: ${toolName} (${data.toolCallId})`);
-  });
-
-  session.on('tool.execution_complete', (event) => {
-    const data = event.data;
-    const toolName = data.mcpServerName
-      ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
-      : data.toolName;
-
-    toolUses.push({
-      id: data.toolCallId,
-      name: toolName,
-      input: {}, // Copilot doesn't re-emit input on completion
-      output: data.output,
-      status: data.status,
-    });
-
-    console.log(`✅ [Copilot] Tool completed: ${toolName} (${data.status || 'success'})`);
+  observeCopilotToolEvents(session, {
+    onStart: (data, toolName) => {
+      console.log(`🔧 [Copilot] Tool started: ${toolName} (${data.toolCallId})`);
+    },
+    onComplete: (data, toolName) => {
+      toolUses.push({
+        id: data.toolCallId,
+        name: toolName,
+        input: {}, // Copilot doesn't re-emit input on completion
+        output: data.output,
+        status: data.status,
+      });
+      console.log(`✅ [Copilot] Tool completed: ${toolName} (${data.status || 'success'})`);
+    },
   });
 
   // Usage tracking

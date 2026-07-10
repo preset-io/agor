@@ -52,8 +52,6 @@ export class AgorExecutor {
   private client: AgorClient | null = null;
   private abortController: AbortController;
   private isRunning = false;
-  private runtime: RuntimeOverseer | null = null;
-
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
   }
@@ -166,7 +164,6 @@ export class AgorExecutor {
       enabled: heartbeatConfig?.enabled ?? true,
       heartbeatIntervalMs: heartbeatConfig?.interval_ms,
     });
-    this.runtime = runtime;
     runtime.start();
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);
@@ -193,9 +190,6 @@ export class AgorExecutor {
     } finally {
       await runtime.flush();
       runtime.stop();
-      if (this.runtime === runtime) {
-        this.runtime = null;
-      }
       this.isRunning = false;
     }
   }
@@ -207,18 +201,19 @@ export class AgorExecutor {
     const shutdown = async (signal: string) => {
       console.log(`[executor] Received ${signal}, shutting down...`);
 
-      // Abort any running task
-      if (this.isRunning) {
+      const wasRunning = this.isRunning;
+      if (wasRunning) {
         this.abortController.abort();
       }
-      await this.runtime?.flush();
-      this.runtime?.stop();
-      this.runtime = null;
 
       // The daemon's stop route already patches the task to STOPPED before
       // sending the signal — this fallback only fires if we received an
       // out-of-band signal and the task is still active.
       await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
+
+      // Normal execution owns runtime finalization. If a provider does not
+      // unwind after abort, the daemon's SIGKILL escalation remains the bound.
+      if (wasRunning) return;
 
       process.exit(0);
     };

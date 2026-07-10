@@ -34,7 +34,7 @@ import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
-import type { CopilotSessionEvents } from './event-mapper.js';
+import { type CopilotSessionEvents, observeCopilotToolEvents } from './event-mapper.js';
 import { DEFAULT_COPILOT_MODEL } from './models.js';
 import { createPermissionHandler, type PermissionDeps } from './permission-mapper.js';
 
@@ -395,44 +395,22 @@ export class CopilotPromptService {
         }
       });
 
-      sessionEvents.on('tool.execution_start', (event) => {
-        const data = event.data;
-        const toolName = data.mcpServerName
-          ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
-          : data.toolName;
-
-        this.runtime?.pulse({
-          kind: 'tool.started',
-          id: data.toolCallId,
-          label: toolName,
-        });
-
-        // Yield tool_start event (collected below in event loop)
-        toolUses.push({
-          id: data.toolCallId,
-          name: toolName,
-          input: data.input || {},
-        });
-      });
-
-      sessionEvents.on('tool.execution_complete', (event) => {
-        const data = event.data;
-        const _toolName = data.mcpServerName
-          ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
-          : data.toolName;
-
-        this.runtime?.pulse({
-          kind: 'tool.finished',
-          id: data.toolCallId,
-          label: _toolName,
-        });
-
-        // Update existing tool use entry with output/status
-        const existing = toolUses.find((t) => t.id === data.toolCallId);
-        if (existing) {
-          existing.output = data.output;
-          existing.status = data.status;
-        }
+      observeCopilotToolEvents(sessionEvents, {
+        runtime: this.runtime,
+        onStart: (data, toolName) => {
+          toolUses.push({
+            id: data.toolCallId,
+            name: toolName,
+            input: data.input || {},
+          });
+        },
+        onComplete: (data) => {
+          const existing = toolUses.find((tool) => tool.id === data.toolCallId);
+          if (existing) {
+            existing.output = data.output;
+            existing.status = data.status;
+          }
+        },
       });
 
       sessionEvents.on('assistant.usage', (event) => {

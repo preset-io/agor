@@ -43,6 +43,7 @@ import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { convertConversationToHistory } from './conversation-converter.js';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models.js';
 import { mapPermissionMode } from './permission-mapper.js';
+import { scheduleGeminiTools } from './tool-runtime.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
 /**
@@ -415,25 +416,13 @@ export class GeminiPromptService {
           `[Gemini Loop] Executing ${toolCallRequests.length} tool calls via Scheduler...`
         );
 
-        for (const toolCall of toolCallRequests) {
-          this.runtime?.pulse({
-            kind: 'tool.started',
-            id: toolCall.callId,
-            label: toolCall.name,
-          });
-        }
-
         // Execute all tool calls via Scheduler (handles validation, confirmation, execution)
-        const completedCalls = await scheduler.schedule(toolCallRequests, abortController.signal);
+        const completedCalls = await scheduleGeminiTools(
+          toolCallRequests,
+          () => scheduler.schedule(toolCallRequests, abortController.signal),
+          this.runtime
+        );
         console.debug(`[Gemini Loop] Scheduler completed ${completedCalls.length} tool calls`);
-
-        for (const completedCall of completedCalls) {
-          this.runtime?.pulse({
-            kind: 'tool.finished',
-            id: completedCall.request.callId,
-            label: completedCall.request.name,
-          });
-        }
 
         // Convert completed calls to function response parts for Gemini
         const functionResponseParts: Part[] = [];
