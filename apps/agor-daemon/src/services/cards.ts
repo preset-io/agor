@@ -14,6 +14,7 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type {
+  AuthenticatedParams,
   BoardEntityObject,
   BoardID,
   Card,
@@ -30,7 +31,8 @@ export type CardParams = QueryParams<{
   card_type_id?: CardTypeID;
   archived?: boolean;
   search?: string;
-}>;
+}> &
+  AuthenticatedParams;
 
 export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams> {
   private cardRepo: CardRepository;

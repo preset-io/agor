@@ -69,7 +69,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
             zoneId,
             zoneData,
           } as never,
-          ctx.baseServiceParams as never
+          ctx.baseServiceParams
         )
       );
 
@@ -240,7 +240,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const archivedCard = await runWithMcpTenantScope(ctx, () =>
-        cardsService.archive(args.cardId, ctx.baseServiceParams as never)
+        cardsService.archive(args.cardId, ctx.baseServiceParams)
       );
       emitServiceEvent(ctx.app, {
         path: 'cards',
@@ -265,7 +265,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const unarchivedCard = await runWithMcpTenantScope(ctx, () =>
-        cardsService.unarchive(args.cardId, ctx.baseServiceParams as never)
+        cardsService.unarchive(args.cardId, ctx.baseServiceParams)
       );
       emitServiceEvent(ctx.app, {
         path: 'cards',
@@ -307,7 +307,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const boardObject = await runWithMcpTenantScope(ctx, () =>
-        cardsService.moveToZone(cardId as never, zoneId, zoneData, ctx.baseServiceParams as never)
+        cardsService.moveToZone(cardId as never, zoneId, zoneData, ctx.baseServiceParams)
       );
       emitServiceEvent(ctx.app, {
         path: 'board-objects',
@@ -406,7 +406,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
               zoneId,
               zoneData,
             },
-            ctx.baseServiceParams as never
+            ctx.baseServiceParams
           )
         );
         results.push(card);
@@ -527,7 +527,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
           if (zone?.type === 'zone') zoneData = zone;
         }
         const boardObject = await runWithMcpTenantScope(ctx, () =>
-          cardsService.moveToZone(cardId as never, zoneId, zoneData, ctx.baseServiceParams as never)
+          cardsService.moveToZone(cardId as never, zoneId, zoneData, ctx.baseServiceParams)
         );
         emitServiceEvent(ctx.app, {
           path: 'board-objects',

@@ -43,6 +43,7 @@ import type {
   ArtifactPayload,
   ArtifactStatus,
   ArtifactTrustScopeType,
+  AuthenticatedParams,
   BoardID,
   BranchID,
   QueryParams,
@@ -209,10 +210,11 @@ export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
   branch_id?: BranchID;
   archived?: boolean;
-}> & {
-  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
-  _agorSqlBranchAccessUserId?: UUID;
-};
+}> &
+  AuthenticatedParams & {
+    /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+    _agorSqlBranchAccessUserId?: UUID;
+  };
 
 const MAX_CONSOLE_ENTRIES = 100;
 
@@ -410,7 +412,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   // Direct Feathers create is intentionally rejected — artifacts require
   // the publishArtifact() lifecycle (folder → DB).
-  async create(_data: Partial<Artifact>, _params?: unknown): Promise<Artifact> {
+  async create(_data: Partial<Artifact>, _params?: ArtifactParams): Promise<Artifact> {
     throw new Error(
       'Direct artifact creation not supported. Use publishArtifact() or agor_artifacts_publish MCP tool.'
     );
@@ -427,12 +429,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return safeData;
   }
 
-  async update(id: string | number, data: Partial<Artifact>, params?: unknown): Promise<Artifact> {
-    return (await super.update(
-      id,
-      this.stripClientControlledProvenance(data),
-      params as never
-    )) as Artifact;
+  async update(
+    id: string | number,
+    data: Partial<Artifact>,
+    params?: ArtifactParams
+  ): Promise<Artifact> {
+    return (await super.update(id, this.stripClientControlledProvenance(data), params)) as Artifact;
   }
 
   /**
@@ -441,7 +443,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * row update. Plain metadata patches fall through to the default
    * DrizzleService patch.
    */
-  async patch(id: string | number, data: Partial<Artifact>, params?: unknown): Promise<Artifact> {
+  async patch(
+    id: string | number,
+    data: Partial<Artifact>,
+    params?: ArtifactParams
+  ): Promise<Artifact> {
     const d = data as Partial<Artifact> & {
       x?: number;
       y?: number;
@@ -481,7 +487,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return (await super.patch(
       id,
       this.stripClientControlledProvenance(data) as Partial<Artifact>,
-      params as never
+      params
     )) as Artifact;
   }
 
@@ -495,7 +501,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return artifact.created_by === userId;
   }
 
-  async remove(id: string | number, params?: unknown): Promise<Artifact> {
+  async remove(id: string | number, params?: ArtifactParams): Promise<Artifact> {
     const artifactId = String(id);
     const callerParams = params as { user?: { user_id?: string; role?: UserRole } } | undefined;
     // Thread the authenticated caller through so deleteArtifact() can run
@@ -514,7 +520,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       path: 'artifacts',
       event: 'removed',
       data: artifact,
-      params: params as never,
+      params,
       id: artifactId,
     });
     return artifact;
@@ -555,7 +561,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     },
     userId?: string,
     userRole?: UserRole,
-    params?: unknown
+    params?: ArtifactParams
   ): Promise<Artifact> {
     const { folderPath, matchedBranchId } = await this.resolveArtifactSource(
       {
@@ -667,7 +673,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         path: 'artifacts',
         event: 'patched',
         data: updated,
-        params: params as never,
+        params,
         id: updated.artifact_id,
       });
       return updated;
@@ -718,7 +724,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           path: 'boards',
           event: 'patched',
           data: updatedBoard,
-          params: params as never,
+          params,
           id: resolvedBoardId,
         });
       }
@@ -739,7 +745,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       path: 'artifacts',
       event: 'created',
       data: artifact,
-      params: params as never,
+      params,
       id: artifact.artifact_id,
     });
     return artifact;
@@ -768,7 +774,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     },
     userId?: string,
     userRole?: UserRole,
-    params?: unknown
+    params?: ArtifactParams
   ): Promise<Artifact> {
     const existing = await this.artifactRepo.findById(artifactId);
     if (!existing) throw new Error(`Artifact ${artifactId} not found`);
@@ -857,7 +863,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           path: 'boards',
           event: 'patched',
           data: targetBoard,
-          params: params as never,
+          params,
           id: newBoardId,
         });
       } catch (upsertError) {
@@ -892,7 +898,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
             path: 'boards',
             event: 'patched',
             data: cleaned,
-            params: params as never,
+            params,
             id: oldBoardId,
           });
         } catch {
@@ -914,7 +920,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       path: 'artifacts',
       event: 'patched',
       data: updated,
-      params: params as never,
+      params,
       id: updated.artifact_id,
     });
     return updated;
@@ -2171,7 +2177,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     artifactId: string,
     userId?: string,
     userRole?: UserRole,
-    params?: unknown
+    params?: ArtifactParams
   ): Promise<Artifact> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
@@ -2190,7 +2196,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           path: 'boards',
           event: 'patched',
           data: updatedBoard,
-          params: params as never,
+          params,
           id: artifact.board_id,
         });
       }

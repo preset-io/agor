@@ -59,10 +59,22 @@ const checks = [
     name: 'raw CRUD service emits',
     roots: ['apps/agor-daemon/src'],
     excludeTests: true,
-    patterns: [/\.service\([^\n]+\)\.emit\s*\(\s*['"](?:created|patched|updated|removed)['"]/g],
+    patterns: [
+      /\.service\([^\n]+\)\.emit\s*\(\s*['"](?:created|patched|updated|removed)['"]/g,
+      /\bthis\.emit\?\.\(\s*['"](?:created|patched|updated|removed)['"]/gs,
+    ],
     // Manual CRUD events must use emitServiceEvent() so realtime publishing
     // receives the service path, original params, and tenant-aware context.
-    baseline: {},
+    // Service-local CRUD emits predate emitServiceEvent(). Keep them explicit
+    // so new call sites cannot silently expand this legacy surface.
+    baseline: {
+      'apps/agor-daemon/src/adapters/drizzle.ts': 7,
+      'apps/agor-daemon/src/services/board-objects.ts': 6,
+      'apps/agor-daemon/src/services/knowledge-documents.ts': 6,
+      'apps/agor-daemon/src/services/knowledge-namespaces.ts': 6,
+      'apps/agor-daemon/src/services/repos.ts': 1,
+      'apps/agor-daemon/src/services/sessions.ts': 1,
+    },
   },
 
   {
