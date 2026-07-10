@@ -794,6 +794,19 @@ describe('TaskRepository.connectExecutor', () => {
 // ============================================================================
 
 describe('TaskRepository.update', () => {
+  dbTest('does not let generic updates claim a dispatching task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+
+    await expect(taskRepo.update(created.task_id, { status: TaskStatus.RUNNING })).rejects.toThrow(
+      'dispatching tasks must be claimed through connectExecutor'
+    );
+    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.DISPATCHING);
+  });
+
   dbTest('should update task by full UUID and short ID', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -808,6 +821,24 @@ describe('TaskRepository.update', () => {
     const idPrefix = toShortId(data.task_id!, 8);
     const updated2 = await taskRepo.update(idPrefix, { status: TaskStatus.COMPLETED });
     expect(updated2.status).toBe(TaskStatus.COMPLETED);
+  });
+
+  dbTest('allows a running executor task to complete normally', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    const updated = await taskRepo.update(created.task_id, {
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-07-10T20:00:00.000Z',
+    });
+
+    expect(updated).toMatchObject({
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-07-10T20:00:00.000Z',
+    });
   });
 
   dbTest('should update multiple fields and preserve unchanged ones', async ({ db }) => {

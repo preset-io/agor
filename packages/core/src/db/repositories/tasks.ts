@@ -425,6 +425,13 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
         const current = this.rowToTask(currentRow);
 
+        // The authenticated executor claim is the only path allowed to cross
+        // this boundary. connectExecutor performs its own guarded SQL update
+        // above; generic service update/patch calls flow through this method.
+        if (current.status === TaskStatus.DISPATCHING && updates.status === TaskStatus.RUNNING) {
+          throw new RepositoryError('dispatching tasks must be claimed through connectExecutor');
+        }
+
         // STEP 2: Deep merge updates into current task (in memory)
         // Preserves nested objects like message_range when doing partial updates.
         // The latest pulse is a complete snapshot; replacing it avoids stale

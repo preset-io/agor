@@ -24,6 +24,7 @@ import {
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  protectServerManagedTaskWrites,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
@@ -47,6 +48,50 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('protectServerManagedTaskWrites', () => {
+  const externalContext = (
+    method: 'create' | 'update' | 'patch',
+    data: unknown
+  ): import('@agor/core/types').HookContext =>
+    ({
+      method,
+      data,
+      params: { provider: 'rest' },
+    }) as import('@agor/core/types').HookContext;
+
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('rejects executor_connected_at on external %s', (method) => {
+    expect(() =>
+      protectServerManagedTaskWrites(
+        externalContext(method, { executor_connected_at: '2026-07-10T20:00:00.000Z' })
+      )
+    ).toThrow('executor_connected_at is server-managed');
+  });
+
+  it('rejects executor_connected_at in bulk create data', () => {
+    expect(() =>
+      protectServerManagedTaskWrites(
+        externalContext('create', [
+          { full_prompt: 'safe' },
+          { executor_connected_at: '2026-07-10T20:00:00.000Z' },
+        ])
+      )
+    ).toThrow('executor_connected_at is server-managed');
+  });
+
+  it('preserves internal task writes', () => {
+    const context = externalContext('patch', {
+      executor_connected_at: '2026-07-10T20:00:00.000Z',
+    });
+    context.params.provider = undefined;
+
+    expect(protectServerManagedTaskWrites(context)).toBe(context);
+  });
+});
 
 describe('tenant-owned service registration', () => {
   it('wraps gateway inbound routing in tenant database scope', () => {

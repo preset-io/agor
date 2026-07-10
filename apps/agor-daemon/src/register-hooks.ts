@@ -445,6 +445,23 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'leaderboard',
 ];
 
+/** Prevent callers on a Feathers transport from forging executor-owned task fields. */
+export function protectServerManagedTaskWrites(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+
+  const writes = Array.isArray(context.data) ? context.data : [context.data];
+  if (
+    writes.some(
+      (write) =>
+        write !== null && typeof write === 'object' && Object.hasOwn(write, 'executor_connected_at')
+    )
+  ) {
+    throw new Forbidden('executor_connected_at is server-managed');
+  }
+
+  return context;
+}
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -2873,6 +2890,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       create: [
+        protectServerManagedTaskWrites,
         requireMinimumRole(ROLES.MEMBER, 'create tasks'),
         ...(branchRbacEnabled
           ? [
@@ -2885,16 +2903,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
         injectCreatedBy(),
       ],
+      update: [protectServerManagedTaskWrites],
       patch: [
-        (context: HookContext) => {
-          if (
-            context.params.provider &&
-            Object.hasOwn(context.data ?? {}, 'executor_connected_at')
-          ) {
-            throw new Forbidden('executor_connected_at is server-managed');
-          }
-          return context;
-        },
+        protectServerManagedTaskWrites,
         ...(branchRbacEnabled
           ? [
               resolveSessionContext(),
