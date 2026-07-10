@@ -237,6 +237,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/session-streams').publish(() => []);
 
   app.use('/tasks', createTasksService(db, app), {
+    methods: ['find', 'get', 'create', 'update', 'patch', 'remove', 'connectExecutor'],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
     // clients. Keep this in sync with every `app.service('tasks').emit(...)`

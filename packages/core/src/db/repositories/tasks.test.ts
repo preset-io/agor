@@ -246,6 +246,7 @@ describe('TaskRepository.create', () => {
 
     const statuses = [
       TaskStatus.CREATED,
+      TaskStatus.DISPATCHING,
       TaskStatus.RUNNING,
       TaskStatus.STOPPING,
       TaskStatus.AWAITING_PERMISSION,
@@ -680,6 +681,7 @@ describe('TaskRepository.findByStatus', () => {
 
     const statuses = [
       TaskStatus.CREATED,
+      TaskStatus.DISPATCHING,
       TaskStatus.RUNNING,
       TaskStatus.STOPPING,
       TaskStatus.AWAITING_PERMISSION,
@@ -698,6 +700,93 @@ describe('TaskRepository.findByStatus', () => {
       expect(found[0].status).toBe(status);
     }
   });
+});
+
+// ============================================================================
+// Executor connection
+// ============================================================================
+
+describe('TaskRepository.connectExecutor', () => {
+  dbTest(
+    'atomically transitions dispatching to running with a server timestamp',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const startedAt = '2026-01-01T00:00:00.000Z';
+      const created = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.DISPATCHING,
+          started_at: startedAt,
+        })
+      );
+
+      const connection = await taskRepo.connectExecutor(created.task_id);
+      const found = await taskRepo.findById(created.task_id);
+
+      expect(connection?.transitioned).toBe(true);
+      expect(connection?.task.status).toBe(TaskStatus.RUNNING);
+      expect(connection?.task.started_at).toBe(startedAt);
+      expect(connection?.task.executor_connected_at).toBeDefined();
+      expect(found).toMatchObject({
+        status: TaskStatus.RUNNING,
+        started_at: startedAt,
+        executor_connected_at: connection?.task.executor_connected_at,
+      });
+    }
+  );
+
+  dbTest(
+    'is idempotent once running and does not rewrite the connection timestamp',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const created = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+      );
+
+      const first = await taskRepo.connectExecutor(created.task_id);
+      const second = await taskRepo.connectExecutor(created.task_id);
+
+      expect(second).toEqual({ task: first?.task, transitioned: false });
+    }
+  );
+
+  dbTest('does not revive stopping, stopped, or terminal tasks', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    for (const status of [
+      TaskStatus.STOPPING,
+      TaskStatus.STOPPED,
+      TaskStatus.COMPLETED,
+      TaskStatus.FAILED,
+      TaskStatus.TIMED_OUT,
+    ]) {
+      const task = await taskRepo.create(createTaskData({ session_id: sessionId, status }));
+      expect(await taskRepo.connectExecutor(task.task_id)).toBeNull();
+      expect((await taskRepo.findById(task.task_id))?.status).toBe(status);
+    }
+  });
+
+  dbTest(
+    'includes dispatching in orphan cleanup but not connected-heartbeat supervision',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.DISPATCHING,
+          last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
+        })
+      );
+
+      expect((await taskRepo.findOrphaned()).map((item) => item.task_id)).toContain(task.task_id);
+      expect(
+        (await taskRepo.findActiveWithExecutorHeartbeat()).map((item) => item.task_id)
+      ).not.toContain(task.task_id);
+    }
+  );
 });
 
 // ============================================================================

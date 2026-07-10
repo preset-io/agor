@@ -1,6 +1,6 @@
 /**
- * Helpers for finding "active" tasks for a session — RUNNING / STOPPING / AWAITING_PERMISSION /
- * AWAITING_INPUT — sorted by recency.
+ * Helpers for finding "active" tasks for a session — DISPATCHING / RUNNING / STOPPING /
+ * AWAITING_PERMISSION / AWAITING_INPUT — sorted by recency.
  *
  * Background: `TasksService.find()` short-circuits on `session_id: string`
  * (see `services/tasks.ts:65-110`) and returns ALL session tasks in

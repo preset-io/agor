@@ -146,7 +146,8 @@ export interface TasksClientHelpers {
   /**
    * Trigger executor pickup for an already-created task. Pure-REST harnesses
    * use this after `POST /tasks` to avoid needing an MCP client. Returns the
-   * Task with `status: 'running'`. Only `'created'` tasks on idle sessions
+   * Task with `status: 'dispatching'` for non-CLI executors (or `'running'`
+   * for `claude-code-cli`). Only `'created'` tasks on idle sessions
    * are accepted — `'queued'` tasks drain automatically in queue-position
    * order via the queue processor, and busy sessions should be prompted via
    * `client.sessions.prompt()` (which creates and queues the task atomically).
@@ -272,6 +273,8 @@ export interface SessionsService extends AgorService<Session> {
  * Tasks service with bulk creation support
  */
 export interface TasksService extends AgorService<Task> {
+  /** Claim a daemon-dispatched task after executor authentication. */
+  connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
   /**
    * Create multiple tasks in a single request
    * Returns array of created tasks with IDs

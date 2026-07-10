@@ -1010,7 +1010,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   /**
    * spawnTaskExecutor — sole transition point for `tasks.status` going from
-   * `created` / `queued` → `running`.
+   * `created` / `queued` → `dispatching` (or directly to `running` for CLI).
    *
    * Both the IDLE branch of POST /sessions/:id/prompt and the queued-task
    * drainer call this helper. Centralising the transition guarantees that:
@@ -1050,18 +1050,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const messageStartIndex = await sessionsRepository.countMessages(task.session_id);
     const startTimestamp = new Date().toISOString();
 
-    // The daemon transitions the task to RUNNING and writes required sentinel
-    // git fields before executor spawn. The executor overwrites these with the
-    // authoritative task-start git state from inside the managed checkout.
+    // The daemon persists launch intent and writes required sentinel git fields
+    // before executor spawn. Non-CLI executors claim DISPATCHING → RUNNING after
+    // authenticating; claude-code-cli has no executor connection and stays direct.
     const gitStateAtStart = 'unknown';
     const refAtStart = 'unknown';
 
-    // Patch task: queued/created → running, with real ranges. queue_position
+    const launchStatus =
+      session.agentic_tool === 'claude-code-cli' ? TaskStatus.RUNNING : TaskStatus.DISPATCHING;
+
+    // Patch task: queued/created → launch status, with real ranges. queue_position
     // is cleared here so a draining task is no longer considered queued.
     const updatedTask = (await app.service('tasks').patch(
       task.task_id,
       {
-        status: TaskStatus.RUNNING,
+        status: launchStatus,
         started_at: startTimestamp,
         queue_position: undefined,
         message_range: {
@@ -1123,7 +1126,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     //
     // The session-status flip used to fall out of `TasksService.create` when
     // the IDLE path created a task with `status: RUNNING` directly. Now the
-    // IDLE path creates `status: CREATED` and we patch to RUNNING here, which
+    // IDLE path creates `status: CREATED` and we patch the task here, which
     // `TasksService.patch` does NOT mirror onto the session. Without this
     // explicit patch, `session.status` stays IDLE while a task is RUNNING,
     // causing the queue gate in the prompt route to wave subsequent prompts

@@ -72,7 +72,10 @@ import {
   hasMinimumRole,
   ROLES,
 } from '@agor/core/types';
-import { executorRuntimeScopeGuard } from './auth/executor-runtime-scope.js';
+import {
+  executorRuntimeScopeGuard,
+  requireExecutorRuntimeToken,
+} from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -2883,6 +2886,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         injectCreatedBy(),
       ],
       patch: [
+        (context: HookContext) => {
+          if (
+            context.params.provider &&
+            Object.hasOwn(context.data ?? {}, 'executor_connected_at')
+          ) {
+            throw new Forbidden('executor_connected_at is server-managed');
+          }
+          return context;
+        },
         ...(branchRbacEnabled
           ? [
               resolveSessionContext(),
@@ -2892,6 +2904,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
       ],
+      connectExecutor: [requireExecutorRuntimeToken()],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete tasks'),
         // RBAC: deleting a task requires 'all' permission on the branch
@@ -2906,7 +2919,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
       ],
-    },
+    } as never,
   });
 
   // ============================================================================

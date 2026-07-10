@@ -32,6 +32,7 @@ interface TimerPillProps {
 }
 
 const ACTIVE_STATUSES: TimerStatus[] = [
+  TaskStatus.DISPATCHING,
   TaskStatus.RUNNING,
   TaskStatus.STOPPING,
   TaskStatus.AWAITING_PERMISSION,
@@ -46,6 +47,11 @@ const statusConfig: Record<
     label?: string;
   }
 > = {
+  [TaskStatus.DISPATCHING]: {
+    icon: <HourglassOutlined />,
+    color: PILL_COLORS.processing,
+    label: 'Starting executor…',
+  },
   [TaskStatus.RUNNING]: {
     icon: <HourglassOutlined />,
     color: PILL_COLORS.processing,

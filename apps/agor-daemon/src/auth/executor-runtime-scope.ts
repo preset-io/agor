@@ -173,6 +173,16 @@ export function scopeExecutorRuntimeAuth(requireAuth: AuthHook): AuthHook {
   };
 }
 
+/** Require this transport call to carry a task-scoped executor session token. */
+export function requireExecutorRuntimeToken() {
+  return async (context: HookContext): Promise<HookContext> => {
+    if (!scopedPayload(context)) {
+      throw new Forbidden('A task-scoped executor token is required for this request');
+    }
+    return context;
+  };
+}
+
 /**
  * Restrict executor-session JWTs to the resource claims minted for the
  * executor turn. Normal user/API-key/service auth is intentionally ignored.

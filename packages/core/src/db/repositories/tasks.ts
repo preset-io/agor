@@ -38,6 +38,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       status: row.status,
       queue_position: row.queue_position ?? undefined,
       created_at: new Date(row.created_at).toISOString(),
+      started_at: row.started_at ? new Date(row.started_at).toISOString() : undefined,
+      executor_connected_at: row.executor_connected_at
+        ? new Date(row.executor_connected_at).toISOString()
+        : undefined,
       completed_at: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
       last_executor_heartbeat_at: row.last_executor_heartbeat_at
         ? new Date(row.last_executor_heartbeat_at).toISOString()
@@ -72,6 +76,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       task_id: taskId,
       session_id: task.session_id,
       created_at: new Date(now), // Always use server timestamp, ignore client-provided value
+      started_at: task.started_at ? new Date(task.started_at) : undefined,
+      executor_connected_at: task.executor_connected_at
+        ? new Date(task.executor_connected_at)
+        : undefined,
       completed_at: task.completed_at ? new Date(task.completed_at) : undefined,
       last_executor_heartbeat_at: task.last_executor_heartbeat_at
         ? new Date(task.last_executor_heartbeat_at)
@@ -275,7 +283,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
-   * Find orphaned tasks (running, stopping, awaiting permission, or awaiting input)
+   * Find orphaned tasks (dispatching, running, stopping, awaiting permission, or awaiting input)
    * These are tasks that were interrupted when daemon stopped.
    *
    * NOTE: QUEUED tasks are intentionally NOT considered orphans — they were
@@ -288,7 +296,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const rows = await select(this.db)
         .from(tasks)
         .where(
-          sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission', 'awaiting_input')`
+          sql`${tasks.status} IN ('dispatching', 'running', 'stopping', 'awaiting_permission', 'awaiting_input')`
         )
         .all();
 
@@ -343,6 +351,49 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
+   * Atomically claim a daemon-dispatched task for its authenticated executor.
+   * Repeated claims after the first successful transition are idempotent.
+   */
+  async connectExecutor(id: string): Promise<{ task: Task; transitioned: boolean } | null> {
+    try {
+      const fullId = await this.resolveId(id);
+      return await this.db.transaction(async (tx) => {
+        const txDb = txAsDb(tx);
+        await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, fullId));
+
+        const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        if (!row) throw new EntityNotFoundError('Task', id);
+
+        if (row.status === TaskStatus.RUNNING) {
+          return { task: this.rowToTask(row), transitioned: false };
+        }
+        if (row.status !== TaskStatus.DISPATCHING) return null;
+
+        const connectedAt = new Date();
+        await update(txDb, tasks)
+          .set({ status: TaskStatus.RUNNING, executor_connected_at: connectedAt })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+
+        return {
+          task: this.rowToTask({
+            ...row,
+            status: TaskStatus.RUNNING,
+            executor_connected_at: connectedAt,
+          }),
+          transitioned: true,
+        };
+      });
+    } catch (error) {
+      if (error instanceof RepositoryError || error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to connect executor: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Update task by ID (atomic with database-level transaction)
    *
    * Uses a transaction to ensure read-merge-write is atomic, preventing race conditions
@@ -389,6 +440,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           .set({
             status: insertData.status,
             queue_position: insertData.queue_position,
+            started_at: insertData.started_at,
+            executor_connected_at: insertData.executor_connected_at,
             completed_at: insertData.completed_at,
             last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
             session_md5: insertData.session_md5,

@@ -165,7 +165,7 @@ async function cleanupOrphanStatusesInTenantScope(
   // Determine restart type before touching anything — sentinel is consumed here
   const wasGraceful = await readAndClearSentinel();
 
-  // Find all orphaned executor-owned tasks (running, stopping, awaiting_permission, awaiting_input)
+  // Find all orphaned executor-owned tasks (dispatching, running, stopping, awaiting_permission, awaiting_input)
   const orphanedTasks = await tasksService.getOrphaned(startupParams as never);
 
   if (orphanedTasks.length > 0) {
