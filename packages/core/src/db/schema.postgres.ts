@@ -25,6 +25,7 @@ import {
   type AnyPgColumn,
   bigint,
   boolean,
+  check,
   customType,
   index,
   integer,
@@ -501,8 +502,8 @@ export const messages = pgTable(
 /**
  * Links table - Branch/session-owned links and uploaded attachments.
  *
- * Ownership is app-enforced as branch_id XOR session_id. PostgreSQL mirrors
- * SQLite by avoiding CHECK constraints; app/types validate enum and ownership.
+ * Stable row-shape invariants are enforced in both the database and repository.
+ * Extensible kind/source compatibility remains application-owned.
  */
 export const links = pgTable(
   'links',
@@ -542,6 +543,18 @@ export const links = pgTable(
     updated_at: t.timestamp('updated_at').notNull(),
   },
   (table) => ({
+    ownerXorCheck: check(
+      'links_owner_xor_check',
+      sql`((${table.branch_id} is not null) and (${table.session_id} is null)) or ((${table.branch_id} is null) and (${table.session_id} is not null))`
+    ),
+    targetXorCheck: check(
+      'links_target_xor_check',
+      sql`(case when ${table.url} is not null and ${table.url} <> '' then 1 else 0 end + case when ${table.ref_uri} is not null and ${table.ref_uri} <> '' then 1 else 0 end + case when ${table.file_path} is not null and ${table.file_path} <> '' then 1 else 0 end) = 1`
+    ),
+    targetObjectPairCheck: check(
+      'links_target_object_pair_check',
+      sql`((${table.target_object_type} is null) and (${table.target_object_id} is null)) or ((${table.target_object_type} is not null) and (${table.target_object_id} is not null))`
+    ),
     tenantIdx: index('links_tenant_id_idx').on(table.tenant_id),
     branchIdx: index('links_branch_id_idx').on(table.branch_id),
     sessionIdx: index('links_session_id_idx').on(table.session_id),

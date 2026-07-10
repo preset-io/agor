@@ -14,6 +14,55 @@ import {
 } from './links.test-helpers';
 
 describe('LinksRepository', () => {
+  dbTest('enforces durable link row structure in the database', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const now = new Date();
+    const base = {
+      branch_id: null,
+      session_id: session.session_id,
+      source_message_id: null,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com',
+      ref_uri: null,
+      file_path: null,
+      target_object_type: null,
+      target_object_id: null,
+      target_key: 'url:https://example.com/',
+      is_pinned: false,
+      title: null,
+      mime_type: null,
+      metadata: null,
+      created_by: null,
+      created_at: now,
+      updated_at: now,
+    } satisfies Omit<LinkInsert, 'link_id'>;
+    const expectConstraint = async (
+      patch: Partial<LinkInsert>,
+      constraint: string
+    ): Promise<void> => {
+      try {
+        await insert(db, links)
+          .values({ ...base, ...patch, link_id: generateId() })
+          .returning()
+          .one();
+        expect.fail(`Expected ${constraint} to reject the row`);
+      } catch (error) {
+        const cause = error instanceof Error ? error.cause : null;
+        const details = [error, cause]
+          .map((item) => (item instanceof Error ? item.message : String(item ?? '')))
+          .join('\n');
+        expect(details).toContain(constraint);
+      }
+    };
+
+    await expectConstraint({ branch_id: branch.branch_id }, 'links_owner_xor_check');
+    await expectConstraint({ url: null }, 'links_target_xor_check');
+    await expectConstraint({ ref_uri: 'agor://kb/team/runbook.md' }, 'links_target_xor_check');
+    await expectConstraint({ target_object_type: 'session' }, 'links_target_object_pair_check');
+  });
+
   dbTest('preserves hidden tenant metadata on mapped link DTOs', async ({ db }) => {
     const repo = new LinksRepository(db);
     const rowToLink = (
