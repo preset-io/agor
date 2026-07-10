@@ -113,7 +113,7 @@ describe('ingestInboundImageAttachments', () => {
     expect(result.failed).toBe(0);
     expect(result.paths).toHaveLength(1);
     expect(result.paths[0].startsWith(uploadDir)).toBe(true);
-    expect(path.basename(result.paths[0])).toMatch(/^screenshot_\d+\.png$/);
+    expect(path.basename(result.paths[0])).toMatch(/^F123_screenshot_\d+\.png$/);
     expect(new Uint8Array(await fs.readFile(result.paths[0]))).toEqual(bytes);
   });
 
@@ -249,6 +249,43 @@ describe('ingestInboundImageAttachments', () => {
     expect(await fs.readdir(uploadDir)).toEqual([]);
   });
 
+  it('rejects image/svg+xml response bodies (excluded from the upload allowlist)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('<svg onload="alert(1)"/>', {
+          status: 200,
+          headers: { 'content-type': 'image/svg+xml' },
+        })
+    );
+
+    const result = await ingestInboundImageAttachments({
+      files: [makeFile()],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      uploadDir,
+    });
+
+    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(await fs.readdir(uploadDir)).toEqual([]);
+  });
+
+  it('stores same-named files with distinct Slack IDs at distinct paths', async () => {
+    const fetchImpl = vi.fn(async () => makeImageResponse(new Uint8Array([1])));
+
+    const result = await ingestInboundImageAttachments({
+      files: [makeFile({ id: 'F1', name: 'image.png' }), makeFile({ id: 'F2', name: 'image.png' })],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      uploadDir,
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.paths).toHaveLength(2);
+    expect(result.paths[0]).not.toBe(result.paths[1]);
+    expect(await fs.readdir(uploadDir)).toHaveLength(2);
+  });
+
   it('rejects non-image response bodies (Slack HTML error pages)', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const fetchImpl = vi.fn(
@@ -289,7 +326,7 @@ describe('ingestInboundImageAttachments', () => {
 
     expect(result.failed).toBe(1);
     expect(result.paths).toHaveLength(1);
-    expect(path.basename(result.paths[0])).toMatch(/^second_\d+\.png$/);
+    expect(path.basename(result.paths[0])).toMatch(/^F2_second_\d+\.png$/);
   });
 
   it('counts images beyond the per-message cap as failed without fetching them', async () => {

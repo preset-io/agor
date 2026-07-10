@@ -48,10 +48,19 @@ export function isAllowedSlackFileUrl(rawUrl: string): boolean {
   return host === 'slack.com' || host.endsWith('.slack.com');
 }
 
+/**
+ * Image MIME types the upload pipeline accepts — membership in the upload
+ * route's allowlist, which deliberately excludes script-bearing image types
+ * like image/svg+xml.
+ */
+function isAllowedImageMime(rawMime: string): boolean {
+  const mime = rawMime.split(';')[0].trim().toLowerCase();
+  return mime.startsWith('image/') && ALLOWED_UPLOAD_MIME_TYPES.has(mime);
+}
+
 /** Image attachments the upload pipeline accepts (same allowlist as the upload route). */
 export function isIngestableImageFile(file: InboundFile): boolean {
-  const mime = file.mimetype.split(';')[0].trim().toLowerCase();
-  return mime.startsWith('image/') && ALLOWED_UPLOAD_MIME_TYPES.has(mime);
+  return isAllowedImageMime(file.mimetype);
 }
 
 /**
@@ -181,13 +190,14 @@ export async function ingestInboundImageAttachments(args: {
         throw new Error(`HTTP ${response.status}`);
       }
       // Slack answers with an HTML login/error page (status 200) when the
-      // token lacks files:read or cannot see the file — only accept images.
-      const contentType = (response.headers.get('content-type') ?? '')
-        .split(';')[0]
-        .trim()
-        .toLowerCase();
-      if (!contentType.startsWith('image/')) {
-        throw new Error(`unexpected content-type ${contentType || 'unknown'}`);
+      // token lacks files:read or cannot see the file — only accept images
+      // from the same allowlist the upload route enforces (which excludes
+      // script-bearing types like image/svg+xml).
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!isAllowedImageMime(contentType)) {
+        throw new Error(
+          `unexpected content-type ${contentType.split(';')[0].trim().toLowerCase() || 'unknown'}`
+        );
       }
       const declaredLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
       if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_FILE_SIZE) {
@@ -196,7 +206,10 @@ export async function ingestInboundImageAttachments(args: {
       const body = await readBodyWithLimit(response, MAX_UPLOAD_FILE_SIZE);
 
       await fs.mkdir(uploadDir, { recursive: true });
-      const filePath = path.join(uploadDir, buildUploadFilename(file.name));
+      // Slack names every pasted screenshot "image.png"; prefix the unique
+      // Slack file ID so same-millisecond downloads can never overwrite each
+      // other (the timestamp in buildUploadFilename is not unique enough).
+      const filePath = path.join(uploadDir, buildUploadFilename(`${file.id}_${file.name}`));
       await fs.writeFile(filePath, body);
       paths.push(filePath);
     } catch (error) {
