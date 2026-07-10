@@ -160,6 +160,13 @@ describe('link target semantics', () => {
     ).toBeNull();
     expect(
       getLinkTargetCompatibilityError({
+        kind: 'kb_ref',
+        source: 'manual',
+        ref_uri: 'agor://session/01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+      })
+    ).toBe('Knowledge links require an agor://kb/ ref_uri');
+    expect(
+      getLinkTargetCompatibilityError({
         kind: 'internal',
         source: 'manual',
         ref_uri: 'agor://session/01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',

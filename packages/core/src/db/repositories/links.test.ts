@@ -294,6 +294,14 @@ describe('LinksRepository', () => {
           file_path: '/uploads/runbook.md',
         } as never)
       ).rejects.toThrow(/requires target ref_uri/);
+      await expect(
+        repo.create({
+          session_id: session.session_id,
+          kind: 'kb_ref',
+          source: 'manual',
+          ref_uri: `agor://session/${session.session_id}`,
+        })
+      ).rejects.toThrow(/agor:\/\/kb\//);
       await expect(repo.update(urlLink.link_id, { kind: 'document' })).rejects.toThrow(
         /requires target file_path/
       );

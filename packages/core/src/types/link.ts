@@ -239,6 +239,10 @@ export function getLinkTargetCompatibilityError(data: {
     return 'Internal object references require an agor:// ref_uri';
   }
 
+  if (data.kind === 'kb_ref' && !data.ref_uri?.trim().toLowerCase().startsWith('agor://kb/')) {
+    return 'Knowledge links require an agor://kb/ ref_uri';
+  }
+
   if (data.kind === 'internal' && (!hasObjectType || !hasObjectId)) {
     return 'Internal links require target_object_type and target_object_id';
   }
