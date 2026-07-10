@@ -42,7 +42,7 @@ const LIGHT_BG_TOOLS = new Set(['claude-code-cli']);
 export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className = '' }) => {
   const { token } = useToken();
   const logoSrc = toolLogos[tool];
-  const bg = LIGHT_BG_TOOLS.has(tool) ? '#fff' : '#000';
+  const bg = LIGHT_BG_TOOLS.has(tool) ? token.colorWhite : token.colorTextBase;
 
   // Fallback to emoji if no logo available
   const fallbackEmoji: Record<string, string> = {

@@ -77,7 +77,7 @@ export function LoginPage({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 50%, #0f1f1e 100%)',
+        background: token.colorBgLayout,
         padding: '16px',
         position: 'relative',
         overflow: 'auto',
@@ -96,16 +96,10 @@ export function LoginPage({
           bottom: 16,
           right: 16,
           fontSize: 10,
-          color: 'rgba(46, 154, 146, 0.3)',
+          color: token.colorTextQuaternary,
           textDecoration: 'none',
           zIndex: 0,
           transition: 'color 0.3s',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.color = 'rgba(46, 154, 146, 0.6)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.color = 'rgba(46, 154, 146, 0.3)';
         }}
       >
         🤍 tsparticles
@@ -115,8 +109,8 @@ export function LoginPage({
         style={{
           width: '100%',
           maxWidth: 420,
-          borderRadius: 12,
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+          borderRadius: token.borderRadiusLG,
+          boxShadow: token.boxShadowSecondary,
           position: 'relative',
           zIndex: 1,
           margin: 'auto',

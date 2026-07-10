@@ -1,0 +1,26 @@
+engine biome(1.0)
+language js(typescript, jsx)
+
+// Catch color literals where their object-property context makes the intent
+// unambiguous. This covers inline React styles, component style maps, and
+// semantic color maps without matching issue numbers or arbitrary hashes.
+or {
+  `color: $value`,
+  `background: $value`,
+  `backgroundColor: $value`,
+  `border: $value`,
+  `borderColor: $value`,
+  `borderTop: $value`,
+  `borderRight: $value`,
+  `borderBottom: $value`,
+  `borderLeft: $value`,
+  `outline: $value`,
+  `boxShadow: $value`,
+  `textShadow: $value`,
+  `fill: $value`,
+  `stroke: $value`
+} as $property where {
+  $value <: r"(?i)^[\"'`].*(?:#[0-9a-f]{3,8}|rgba?\(|hsla?\(|oklch\(|oklab\().*[\"'`]$",
+  not $value <: r"(?i)^[\"'](?:#(?:[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})|(?:rgba?|hsla?|oklch|oklab|color)\([^\"']*\))[\"']$",
+  register_diagnostic(span=$property, message="Use an Ant Design component or theme token instead of a hard-coded UI color. Exact-color domains require a documented plugin suppression.", severity="error")
+}

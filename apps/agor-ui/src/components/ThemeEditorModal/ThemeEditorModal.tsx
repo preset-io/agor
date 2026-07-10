@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: editable theme seed fields require concrete color defaults
 import type { ThemeConfig } from 'antd';
 import { Alert, Button, Form, Modal, Typography } from 'antd';
 import type React from 'react';

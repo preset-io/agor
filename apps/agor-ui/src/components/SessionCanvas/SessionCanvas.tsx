@@ -2112,7 +2112,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           const objectId = `zone-${Date.now()}`;
 
           // Default colors for new zones
+          // biome-ignore lint/plugin/noHardcodedColorLiteral: persisted neutral default for user-editable zone palettes
           const defaultBorderColor = '#d9d9d9';
+          // biome-ignore lint/plugin/noHardcodedColorLiteral: persisted translucent default for user-editable zone palettes
           const defaultBackgroundColor = '#d9d9d91a'; // 10% opacity
 
           // Optimistic update
@@ -2489,8 +2491,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               top: Math.min(drawingZone.start.y, drawingZone.end.y),
               width: Math.abs(drawingZone.end.x - drawingZone.start.x),
               height: Math.abs(drawingZone.end.y - drawingZone.start.y),
-              border: '2px dashed #1677ff',
-              background: 'rgba(22, 119, 255, 0.1)',
+              border: `2px dashed ${token.colorPrimary}`,
+              background: token.colorPrimaryBg,
               pointerEvents: 'none',
               zIndex: 1000,
             }}

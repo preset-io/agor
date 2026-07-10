@@ -38,7 +38,7 @@ export const HighlightMatch: React.FC<HighlightMatchProps> = ({
             key={index}
             style={{
               backgroundColor: token.colorWarning,
-              color: 'rgba(0, 0, 0, 0.88)',
+              color: token.colorTextLightSolid,
             }}
           >
             {part}

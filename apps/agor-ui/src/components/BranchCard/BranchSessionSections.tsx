@@ -610,7 +610,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         ? `1px solid ${token.colorPrimary}`
         : isRemoteSurrogate
           ? `1px dashed ${token.colorBorderSecondary}`
-          : `1px solid ${isPanel ? token.colorBorderSecondary : 'rgba(255, 255, 255, 0.1)'}`,
+          : `1px solid ${token.colorBorderSecondary}`,
       borderRadius: isPanel ? 6 : 4,
       padding: isPanel ? 10 : 8,
       background: isRemoteSurrogate

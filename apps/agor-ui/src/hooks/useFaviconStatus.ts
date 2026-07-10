@@ -45,12 +45,21 @@ export function useFaviconStatus(currentBoardId: string | null) {
     // Update favicon with appropriate dots (both false with no board —
     // the selector reports no activity — restoring the default favicon).
     // White dot (lower-left) for running, green dot (lower-right) for ready
-    createFaviconWithDot(baseFaviconUrl, hasRunning, hasReady, token.colorSuccessText).then(
-      applyFavicon
-    );
+    createFaviconWithDot(baseFaviconUrl, hasRunning, hasReady, {
+      running: token.colorTextLightSolid,
+      ready: token.colorSuccessText,
+      border: token.colorTextBase,
+    }).then(applyFavicon);
 
     return () => {
       cancelled = true;
     };
-  }, [hasRunning, hasReady, baseFaviconUrl, token.colorSuccessText]);
+  }, [
+    hasRunning,
+    hasReady,
+    baseFaviconUrl,
+    token.colorSuccessText,
+    token.colorTextLightSolid,
+    token.colorTextBase,
+  ]);
 }

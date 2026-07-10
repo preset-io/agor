@@ -147,10 +147,10 @@ export const TaskNestedBlock: React.FC<TaskNestedBlockProps> = ({
     <div
       style={{
         margin: `${token.marginSM}px 0`,
-        border: '1px solid rgba(114, 46, 209, 0.3)',
+        border: `1px solid ${token.colorPrimaryBorder}`,
         borderRadius: token.borderRadiusLG,
         borderLeftWidth: 3,
-        background: 'rgba(114, 46, 209, 0.02)',
+        background: token.colorPrimaryBg,
       }}
     >
       <Collapse

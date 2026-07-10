@@ -4,14 +4,14 @@
  * @param baseFaviconUrl - Path to base favicon image
  * @param runningDot - If true, show white dot on lower-left (agent working)
  * @param readyDot - If true, show green dot on lower-right (ready for prompt)
- * @param greenColor - Hex color for the green dot (from theme)
+ * @param dotColors - Theme-derived running, ready, and contrast-border colors
  * @returns Promise resolving to data URL for the modified favicon
  */
 export function createFaviconWithDot(
   baseFaviconUrl: string,
   runningDot: boolean,
   readyDot: boolean,
-  greenColor: string
+  dotColors: { running: string; ready: string; border: string }
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const canvas = document.createElement('canvas');
@@ -34,13 +34,13 @@ export function createFaviconWithDot(
         // Dark border for contrast against light backgrounds
         ctx.beginPath();
         ctx.arc(dotX, dotY, dotSize / 2 + 1, 0, 2 * Math.PI);
-        ctx.fillStyle = '#000000';
+        ctx.fillStyle = dotColors.border;
         ctx.fill();
 
         // White dot
         ctx.beginPath();
         ctx.arc(dotX, dotY, dotSize / 2, 0, 2 * Math.PI);
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = dotColors.running;
         ctx.fill();
       }
 
@@ -52,13 +52,13 @@ export function createFaviconWithDot(
         // Dark border for contrast
         ctx.beginPath();
         ctx.arc(dotX, dotY, dotSize / 2 + 1, 0, 2 * Math.PI);
-        ctx.fillStyle = '#000000';
+        ctx.fillStyle = dotColors.border;
         ctx.fill();
 
         // Green dot (theme color)
         ctx.beginPath();
         ctx.arc(dotX, dotY, dotSize / 2, 0, 2 * Math.PI);
-        ctx.fillStyle = greenColor;
+        ctx.fillStyle = dotColors.ready;
         ctx.fill();
       }
 

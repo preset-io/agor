@@ -148,9 +148,9 @@ export const AboutTab: React.FC<AboutTabProps> = ({
             <Descriptions column={1} bordered size="small">
               <Descriptions.Item label="Status">
                 {connected ? (
-                  <span style={{ color: '#52c41a' }}>✓ Connected</span>
+                  <Typography.Text type="success">✓ Connected</Typography.Text>
                 ) : (
-                  <span style={{ color: '#ff4d4f' }}>✗ Disconnected</span>
+                  <Typography.Text type="danger">✗ Disconnected</Typography.Text>
                 )}
               </Descriptions.Item>
               {connectionError && (
@@ -184,11 +184,11 @@ export const AboutTab: React.FC<AboutTabProps> = ({
               {healthInfo?.encryption && (
                 <Descriptions.Item label="Encryption">
                   {healthInfo.encryption.enabled ? (
-                    <span style={{ color: '#52c41a' }}>
+                    <Typography.Text type="success">
                       🔐 Enabled ({healthInfo.encryption.method})
-                    </span>
+                    </Typography.Text>
                   ) : (
-                    <span style={{ color: '#faad14' }}>🔓 Disabled</span>
+                    <Typography.Text type="warning">🔓 Disabled</Typography.Text>
                   )}
                 </Descriptions.Item>
               )}
@@ -243,9 +243,9 @@ export const AboutTab: React.FC<AboutTabProps> = ({
                     <>
                       <Descriptions.Item label="Branch RBAC">
                         {healthInfo.execution.branchRbac ? (
-                          <span style={{ color: '#52c41a' }}>🛡️ Enabled</span>
+                          <Typography.Text type="success">🛡️ Enabled</Typography.Text>
                         ) : (
-                          <span style={{ color: '#faad14' }}>⚠️ Disabled (open access)</span>
+                          <Typography.Text type="warning">⚠️ Disabled (open access)</Typography.Text>
                         )}
                       </Descriptions.Item>
                       <Descriptions.Item label="Unix User Mode">

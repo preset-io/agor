@@ -438,7 +438,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } = useSessionSearch(conversationRef, {
     highlight: token.colorWarning,
     current: token.colorWarning,
-    currentText: 'rgba(0,0,0,0.88)',
+    currentText: token.colorTextLightSolid,
   });
   const composerSessionIdentityRef = React.useRef<{
     sessionId: SessionID | null;
@@ -608,9 +608,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return getContextWindowGradient(
       latestContextWindow.used,
       latestContextWindow.limit,
-      latestContextWindow.taskMetadata.normalized_sdk_response?.contextUsageSnapshot
+      latestContextWindow.taskMetadata.normalized_sdk_response?.contextUsageSnapshot,
+      {
+        normal: token.colorSuccessBg,
+        warning: token.colorWarningBg,
+        critical: token.colorErrorBg,
+      }
     );
-  }, [latestContextWindow]);
+  }, [latestContextWindow, token.colorSuccessBg, token.colorWarningBg, token.colorErrorBg]);
 
   const footerTimerTask = React.useMemo(() => {
     if (tasks.length === 0) return null;

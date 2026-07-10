@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorProperty: explicit Agor wordmark gradient brand asset
 import type { CSSProperties } from 'react';
 
 export interface BrandLogoProps {

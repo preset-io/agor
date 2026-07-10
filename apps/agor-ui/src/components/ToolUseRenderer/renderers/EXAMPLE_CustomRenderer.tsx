@@ -64,7 +64,7 @@ export const ExampleCustomRenderer: React.FC<ToolRendererProps> = ({
         style={{
           padding: token.sizeUnit * 1.5,
           borderRadius: token.borderRadius,
-          background: isError ? 'rgba(255, 77, 79, 0.05)' : token.colorBgContainer,
+          background: isError ? token.colorErrorBg : token.colorBgContainer,
           border: `1px solid ${isError ? token.colorErrorBorder : token.colorBorder}`,
         }}
       >

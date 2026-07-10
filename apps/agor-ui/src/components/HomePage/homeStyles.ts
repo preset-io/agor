@@ -38,7 +38,7 @@ export const glassCardStyle = (
   alpha = 0.3
 ): React.CSSProperties => ({
   ...glassSurfaceStyle(token, alpha),
-  boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  boxShadow: `inset 0 1px 0 ${withAlpha(token.colorWhite, 0.12)}`,
 });
 
 /**

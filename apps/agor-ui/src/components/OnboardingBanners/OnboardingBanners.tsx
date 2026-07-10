@@ -2,16 +2,16 @@
  * OnboardingBanners — persistent banners shown after onboarding if steps were skipped.
  *
  * Priority order (only one shows at a time):
- * 1. AI banner (amber)  — the check-auth probe found no working LLM credential.
- * 2. Connection invalid banner (amber) — a DB key exists but the probe rejected it.
- * 3. Integrations banner (teal) — AI ok, no MCP servers and no gateway channels.
+ * 1. AI warning — the check-auth probe found no working LLM credential.
+ * 2. Connection warning — a DB key exists but the probe rejected it.
+ * 3. Integrations info — AI ok, no MCP servers and no gateway channels.
  *
- * Both amber banners require POSITIVE proof (probe Unauthenticated); the
+ * Both warning banners require POSITIVE proof (probe Unauthenticated); the
  * decision logic lives in `bannerLogic.ts`.
  */
 
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
-import { Button } from 'antd';
+import { Alert, Button, Space } from 'antd';
 import { useEffect, useState } from 'react';
 import {
   BannerDecision,
@@ -42,27 +42,6 @@ export interface OnboardingBannersProps {
   credentialVersion: number;
 }
 
-const AMBER_BANNER_STYLE = {
-  background: '#78350f',
-  borderBottom: '1px solid #92400e',
-  height: 48,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  paddingLeft: 20,
-  paddingRight: 20,
-  flexShrink: 0,
-  zIndex: 10,
-} as const;
-
-const AMBER_BUTTON_STYLE = {
-  background: '#d97706',
-  borderColor: '#d97706',
-  color: '#fff',
-  fontWeight: 600,
-  fontSize: 12,
-} as const;
-
 function AmberBanner({
   message,
   buttonLabel,
@@ -75,26 +54,30 @@ function AmberBanner({
   docsHref?: string;
 }) {
   return (
-    <div style={AMBER_BANNER_STYLE}>
-      <span style={{ color: '#fde68a', fontSize: 13, fontWeight: 500 }}>{message}</span>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        {docsHref && (
-          <Button
-            type="text"
-            size="small"
-            href={docsHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: '#fde68a', borderColor: 'rgba(253,230,138,0.4)', fontSize: 12 }}
-          >
-            Documentation
+    <Alert
+      banner
+      showIcon
+      type="warning"
+      title={message}
+      action={
+        <Space size="small">
+          {docsHref && (
+            <Button
+              type="link"
+              size="small"
+              href={docsHref}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Documentation
+            </Button>
+          )}
+          <Button type="primary" size="small" onClick={onClick}>
+            {buttonLabel}
           </Button>
-        )}
-        <Button size="small" onClick={onClick} style={AMBER_BUTTON_STYLE}>
-          {buttonLabel}
-        </Button>
-      </div>
-    </div>
+        </Space>
+      }
+    />
   );
 }
 
@@ -180,48 +163,22 @@ export function OnboardingBanners({
       );
     case BannerDecision.Integrations:
       return (
-        <div
-          style={{
-            background: 'rgba(46,154,146,0.1)',
-            borderBottom: '1px solid rgba(46,154,146,0.35)',
-            height: 44,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingLeft: 20,
-            paddingRight: 20,
-            flexShrink: 0,
-            zIndex: 10,
-          }}
-        >
-          <span style={{ color: '#7dd3ce', fontSize: 13, fontWeight: 500 }}>
-            Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track
-            issues.
-          </span>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <Button
-              type="text"
-              size="small"
-              onClick={() => setIntegrationsBannerDismissed(true)}
-              style={{ color: '#94a3b8', fontSize: 12 }}
-            >
-              Maybe later
-            </Button>
-            <Button
-              size="small"
-              onClick={() => onOpenWorkspaceSettings('mcp')}
-              style={{
-                background: '#2e9a92',
-                borderColor: '#2e9a92',
-                color: '#fff',
-                fontWeight: 600,
-                fontSize: 12,
-              }}
-            >
-              Connect tools
-            </Button>
-          </div>
-        </div>
+        <Alert
+          banner
+          showIcon
+          type="info"
+          title="Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues."
+          action={
+            <Space size="small">
+              <Button type="text" size="small" onClick={() => setIntegrationsBannerDismissed(true)}>
+                Maybe later
+              </Button>
+              <Button type="primary" size="small" onClick={() => onOpenWorkspaceSettings('mcp')}>
+                Connect tools
+              </Button>
+            </Space>
+          }
+        />
       );
     default: {
       const exhaustive: never = decision;

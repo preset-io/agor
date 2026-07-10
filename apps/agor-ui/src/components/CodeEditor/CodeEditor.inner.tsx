@@ -118,7 +118,7 @@ const CodeEditorInner: React.FC<CodeEditorInnerProps> = ({
         style={{
           height,
           fontSize: 12,
-          border: '1px solid var(--ant-color-border, #424242)',
+          border: '1px solid var(--ant-color-border)',
           borderRadius: 6,
           overflow: 'hidden',
         }}

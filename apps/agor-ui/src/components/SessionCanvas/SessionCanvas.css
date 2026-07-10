@@ -3,24 +3,24 @@
   margin-bottom: 75px;
 }
 
-/* Dark mode styling for Controls */
+/* Theme-aware React Flow controls */
 .react-flow__controls {
-  background: rgba(20, 20, 20, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--ant-color-bg-elevated);
+  border: 1px solid var(--ant-color-border-secondary);
 }
 
 .react-flow__controls-button {
   background: transparent;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+  color: var(--ant-color-text);
 }
 
 .react-flow__controls-button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--ant-color-fill-secondary);
 }
 
 .react-flow__controls-button svg {
-  fill: rgba(255, 255, 255, 0.85);
+  fill: currentColor;
 }
 
 /* Tool mode cursors - override React Flow defaults */

@@ -235,7 +235,7 @@ const ReplyItem: React.FC<{
               backgroundColor: token.colorBgContainer,
               borderRadius: 4,
               padding: '2px',
-              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+              boxShadow: token.boxShadowTertiary,
             }}
           >
             <Space size="small">
@@ -379,7 +379,7 @@ const CommentThread: React.FC<{
               backgroundColor: token.colorBgContainer,
               borderRadius: 4,
               padding: '2px',
-              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+              boxShadow: token.boxShadowTertiary,
             }}
           >
             <Space size="small">

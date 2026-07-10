@@ -1,6 +1,27 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: color-parser inputs and expected transformations are the test contract
 import { AggregationColor } from 'antd/es/color-picker/color';
 import { describe, expect, it } from 'vitest';
-import { ensureColorVisible, isDarkTheme } from './theme';
+import { ensureColorVisible, getContrastingTextColor, isDarkTheme } from './theme';
+
+const contrastTokens = {
+  colorText: '#777777',
+  colorTextBase: '#111111',
+  colorWhite: '#fefefe',
+};
+
+describe('getContrastingTextColor', () => {
+  it('uses theme endpoints for light and dark opaque backgrounds', () => {
+    expect(getContrastingTextColor('#ffffff', contrastTokens)).toBe(contrastTokens.colorTextBase);
+    expect(getContrastingTextColor('#000000', contrastTokens)).toBe(contrastTokens.colorWhite);
+  });
+
+  it('uses normal theme text for transparent or invalid backgrounds', () => {
+    expect(getContrastingTextColor('rgba(0, 0, 0, 0.1)', contrastTokens)).toBe(
+      contrastTokens.colorText
+    );
+    expect(getContrastingTextColor('invalid', contrastTokens)).toBe(contrastTokens.colorText);
+  });
+});
 
 describe('isDarkTheme', () => {
   it('detects dark theme from #0 prefix', () => {

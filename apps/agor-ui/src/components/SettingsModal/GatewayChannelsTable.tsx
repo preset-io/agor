@@ -222,6 +222,7 @@ const GatewayEnvVarsEditor: React.FC<{
   value?: GatewayEnvVar[];
   onChange?: (vars: GatewayEnvVar[]) => void;
 }> = ({ value = [], onChange }) => {
+  const { token } = theme.useToken();
   // Stable row IDs so React doesn't remount inputs on every keystroke.
   // Each row gets a monotonically increasing ID that persists across re-renders.
   const nextId = useRef(0);
@@ -278,7 +279,7 @@ const GatewayEnvVarsEditor: React.FC<{
                 fontFamily: 'monospace',
                 fontSize: 12,
                 color: 'transparent',
-                textShadow: '0 0 6px rgba(255,255,255,0.5)',
+                textShadow: `0 0 6px ${token.colorTextDisabled}`,
               }}
             />
           ) : (

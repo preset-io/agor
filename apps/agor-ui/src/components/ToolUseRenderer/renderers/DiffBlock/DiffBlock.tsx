@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: syntax diff palette encodes added and removed lines
 /**
  * DiffBlock — Renders a syntax-highlighted diff view for file edits.
  *

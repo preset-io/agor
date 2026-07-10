@@ -5,6 +5,8 @@ import {
   resolveContextWindowPercentage,
 } from './contextWindow';
 
+const colors = { normal: 'normal', warning: 'warning', critical: 'critical' };
+
 describe('contextWindow utils', () => {
   it('clamps percentage to 100 when usage exceeds limit', () => {
     expect(getContextWindowPercentage(600_000, 100_000)).toBe(100);
@@ -16,15 +18,13 @@ describe('contextWindow utils', () => {
   });
 
   it('builds a bounded gradient for over-limit usage', () => {
-    const gradient = getContextWindowGradient(600_000, 100_000);
-    expect(gradient).toBe(
-      'linear-gradient(to right, rgba(255, 77, 79, 0.12) 100%, transparent 100%)'
-    );
+    const gradient = getContextWindowGradient(600_000, 100_000, undefined, colors);
+    expect(gradient).toBe('linear-gradient(to right, critical 100%, transparent 100%)');
   });
 
   it('does not build a gradient when context usage is unavailable despite a known limit', () => {
-    expect(getContextWindowGradient(undefined, 1_000_000)).toBeUndefined();
-    expect(getContextWindowGradient(0, 1_000_000)).toBeUndefined();
+    expect(getContextWindowGradient(undefined, 1_000_000, undefined, colors)).toBeUndefined();
+    expect(getContextWindowGradient(0, 1_000_000, undefined, colors)).toBeUndefined();
   });
 
   it('prefers the snapshot percentage over raw used/limit when provided', () => {
@@ -40,12 +40,13 @@ describe('contextWindow utils', () => {
   });
 
   it('keeps the gradient in lockstep with the snapshot percentage', () => {
-    const gradient = getContextWindowGradient(50_000, 100_000, {
-      totalTokens: 50_000,
-      maxTokens: 100_000,
-      percentage: 0,
-    });
+    const gradient = getContextWindowGradient(
+      50_000,
+      100_000,
+      { totalTokens: 50_000, maxTokens: 100_000, percentage: 0 },
+      colors
+    );
     // Green (0% bucket), 0% fill
-    expect(gradient).toBe('linear-gradient(to right, rgba(82, 196, 26, 0.12) 0%, transparent 0%)');
+    expect(gradient).toBe('linear-gradient(to right, normal 0%, transparent 0%)');
   });
 });

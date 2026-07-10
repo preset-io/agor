@@ -6,20 +6,27 @@
 
 import type { ContextUsageSnapshot } from '@agor/core/types';
 
+export interface ContextWindowColors {
+  normal: string;
+  warning: string;
+  critical: string;
+}
+
 /**
  * Get color for context window usage based on percentage
  *
  * @param percentage - Usage percentage (0-100)
- * @returns rgba color string
+ * @param colors - Theme-derived semantic surface colors
+ * @returns the semantic color for the usage band
  */
-export function getContextWindowColor(percentage: number): string {
+export function getContextWindowColor(percentage: number, colors: ContextWindowColors): string {
   if (percentage < 50) {
-    return 'rgba(82, 196, 26, 0.12)'; // Green
+    return colors.normal;
   }
   if (percentage < 80) {
-    return 'rgba(250, 173, 20, 0.12)'; // Orange
+    return colors.warning;
   }
-  return 'rgba(255, 77, 79, 0.12)'; // Red
+  return colors.critical;
 }
 
 function clampPercentage(value: number): number {
@@ -58,12 +65,13 @@ export function resolveContextWindowPercentage(
 export function getContextWindowGradient(
   used: number | undefined,
   limit: number | undefined,
-  snapshot?: ContextUsageSnapshot | null
+  snapshot: ContextUsageSnapshot | null | undefined,
+  colors: ContextWindowColors
 ): string | undefined {
   if (!snapshot && (!used || !limit)) return undefined;
 
   const percentage = resolveContextWindowPercentage(used, limit, snapshot);
-  const color = getContextWindowColor(percentage);
+  const color = getContextWindowColor(percentage, colors);
 
   return `linear-gradient(to right, ${color} ${percentage}%, transparent ${percentage}%)`;
 }

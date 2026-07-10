@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: defensive parser fallbacks require absolute contrast endpoints
 import { AggregationColor } from 'antd/es/color-picker/color';
 
 /**
@@ -11,6 +12,21 @@ export const isDarkTheme = (token: { colorBgLayout?: string | undefined }): bool
   token.colorBgLayout?.startsWith?.('rgb(0') ||
   token.colorBgLayout?.startsWith?.('rgba(0') ||
   false;
+
+/** Pick a theme-aware foreground for an arbitrary user/data color. */
+export const getContrastingTextColor = (
+  background: string,
+  token: { colorText: string; colorTextBase: string; colorWhite: string }
+): string => {
+  try {
+    const { r, g, b, a } = new AggregationColor(background).toRgb();
+    if (a < 0.3) return token.colorText;
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.5 ? token.colorTextBase : token.colorWhite;
+  } catch {
+    return token.colorText;
+  }
+};
 
 /**
  * Ensures a color has sufficient visibility by adjusting brightness while preserving hue.

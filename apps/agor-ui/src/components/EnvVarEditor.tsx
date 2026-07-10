@@ -1,6 +1,6 @@
 import { ENV_VAR_SCOPES_V05, type EnvVarMetadata, type EnvVarScope } from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Input, Select, Space, Table, Tooltip, Typography } from 'antd';
+import { Alert, Button, Input, Select, Space, Table, Tooltip, Typography } from 'antd';
 import { useMemo, useState } from 'react';
 import { Tag } from './Tag';
 
@@ -255,13 +255,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
         select them (configure per-session under Session → Settings → Env vars).
       </Text>
 
-      {error && (
-        <div
-          style={{ color: '#ff4d4f', padding: '8px', borderRadius: '4px', background: '#fff1f0' }}
-        >
-          <Text type="danger">{error}</Text>
-        </div>
-      )}
+      {error && <Alert type="error" showIcon title={error} />}
 
       {/* Existing Variables Table */}
       <Table

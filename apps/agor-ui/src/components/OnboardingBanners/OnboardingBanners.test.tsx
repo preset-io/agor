@@ -1,5 +1,5 @@
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
 
@@ -76,5 +76,35 @@ describe('OnboardingBanners probe effect', () => {
     );
     await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code'));
     expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument();
+  });
+
+  it('uses the standard alert action to open AI settings', async () => {
+    const onOpenUserSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          onCheckAuth: async () => result('unauthenticated'),
+          onOpenUserSettings,
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect AI' }));
+    expect(onOpenUserSettings).toHaveBeenCalledWith('claude-code');
+  });
+
+  it('dismisses the integrations alert', async () => {
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          mcpServerCount: 0,
+          canManageMcp: true,
+          onCheckAuth: async () => result('authenticated'),
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
+    expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
   });
 });

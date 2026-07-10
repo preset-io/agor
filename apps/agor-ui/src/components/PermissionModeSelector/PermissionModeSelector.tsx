@@ -7,6 +7,7 @@ import {
   SafetyOutlined,
   UnlockOutlined,
 } from '@ant-design/icons';
+import type { GlobalToken } from 'antd';
 import { Radio, Select, Space, Tooltip, Typography, theme } from 'antd';
 
 interface ModeOption {
@@ -14,7 +15,7 @@ interface ModeOption {
   label: string;
   description: string;
   icon: React.ReactNode;
-  color: string;
+  tone: 'danger' | 'success' | 'info' | 'warning';
 }
 
 export interface PermissionModeSelectorProps {
@@ -58,35 +59,35 @@ const CLAUDE_CODE_MODES: ModeOption[] = [
     label: 'default',
     description: 'Prompt for each tool use (most restrictive)',
     icon: <LockOutlined />,
-    color: '#f5222d', // Red
+    tone: 'danger',
   },
   {
     mode: 'acceptEdits',
     label: 'acceptEdits',
     description: 'Auto-accept file edits, ask for other tools (recommended)',
     icon: <EditOutlined />,
-    color: '#52c41a', // Green
+    tone: 'success',
   },
   {
     mode: 'auto',
     label: 'auto',
     description: 'Model classifier approves/denies prompts, asks only when unsure',
     icon: <SafetyOutlined />,
-    color: '#13c2c2', // Teal
+    tone: 'info',
   },
   {
     mode: 'bypassPermissions',
     label: 'bypassPermissions',
     description: 'Allow all operations without prompting',
     icon: <UnlockOutlined />,
-    color: '#faad14', // Orange/yellow
+    tone: 'warning',
   },
   {
     mode: 'plan',
     label: 'plan',
     description: 'Generate plan without executing',
     icon: <ExperimentOutlined />,
-    color: '#1890ff', // Blue
+    tone: 'info',
   },
 ];
 
@@ -97,28 +98,28 @@ const CODEX_MODES: ModeOption[] = [
     label: 'untrusted',
     description: 'Only run trusted commands (ls, cat, sed) without approval',
     icon: <LockOutlined />,
-    color: '#f5222d', // Red
+    tone: 'danger',
   },
   {
     mode: 'auto',
     label: 'on-request',
     description: 'Model decides when to ask for approval',
     icon: <SafetyOutlined />,
-    color: '#52c41a', // Green
+    tone: 'success',
   },
   {
     mode: 'on-failure',
     label: 'on-failure',
     description: 'Run all commands, ask only when they fail',
     icon: <EditOutlined />,
-    color: '#faad14', // Orange/yellow
+    tone: 'warning',
   },
   {
     mode: 'allow-all',
     label: 'never',
     description: 'Never ask for approval, failures returned to model',
     icon: <UnlockOutlined />,
-    color: '#722ed1', // Purple
+    tone: 'warning',
   },
 ];
 
@@ -129,21 +130,21 @@ const GEMINI_MODES: ModeOption[] = [
     label: 'default',
     description: 'Prompt for each tool use (most restrictive)',
     icon: <LockOutlined />,
-    color: '#f5222d', // Red
+    tone: 'danger',
   },
   {
     mode: 'autoEdit',
     label: 'autoEdit',
     description: 'Auto-approve file edits, ask for shell/web tools',
     icon: <EditOutlined />,
-    color: '#52c41a', // Green
+    tone: 'success',
   },
   {
     mode: 'yolo',
     label: 'yolo',
     description: 'Allow all operations without prompting',
     icon: <UnlockOutlined />,
-    color: '#faad14', // Orange/yellow
+    tone: 'warning',
   },
 ];
 
@@ -154,21 +155,21 @@ const COPILOT_MODES: ModeOption[] = [
     label: 'default',
     description: 'Proxy all permission requests to Agor UI for approval',
     icon: <LockOutlined />,
-    color: '#f5222d', // Red
+    tone: 'danger',
   },
   {
     mode: 'acceptEdits',
     label: 'acceptEdits',
     description: 'Auto-approve read/write operations, ask for shell/MCP (recommended)',
     icon: <EditOutlined />,
-    color: '#52c41a', // Green
+    tone: 'success',
   },
   {
     mode: 'bypassPermissions',
     label: 'bypassPermissions',
     description: 'Auto-approve all operations without prompting',
     icon: <UnlockOutlined />,
-    color: '#faad14', // Orange/yellow
+    tone: 'warning',
   },
 ];
 
@@ -181,7 +182,7 @@ const CURSOR_MODES: ModeOption[] = [
     label: 'Autonomous',
     description: 'Cursor SDK runs autonomously; Agor cannot intercept permission requests yet',
     icon: <UnlockOutlined />,
-    color: '#faad14',
+    tone: 'warning',
   },
 ];
 
@@ -192,21 +193,21 @@ const OPENCODE_MODES: ModeOption[] = [
     label: 'default',
     description: 'Prompt for approval before each operation',
     icon: <LockOutlined />,
-    color: '#f5222d', // Red
+    tone: 'danger',
   },
   {
     mode: 'autoEdit',
     label: 'autoEdit',
     description: 'Auto-approve all operations (recommended)',
     icon: <EditOutlined />,
-    color: '#52c41a', // Green
+    tone: 'success',
   },
   {
     mode: 'yolo',
     label: 'yolo',
     description: 'Fully bypass all permission checks',
     icon: <UnlockOutlined />,
-    color: '#faad14', // Orange/yellow
+    tone: 'warning',
   },
 ];
 
@@ -268,6 +269,19 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
       return CURSOR_MODES;
     default:
       return CLAUDE_CODE_MODES;
+  }
+};
+
+const getModeColor = (tone: ModeOption['tone'], token: GlobalToken): string => {
+  switch (tone) {
+    case 'danger':
+      return token.colorError;
+    case 'success':
+      return token.colorSuccess;
+    case 'info':
+      return token.colorInfo;
+    case 'warning':
+      return token.colorWarning;
   }
 };
 
@@ -376,27 +390,32 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
           size={size}
           popupMatchSelectWidth={false}
           optionLabelProp="label"
-          options={modes.map(({ mode, label, description, icon, color }) => ({
-            label: plain ? (
-              label
-            ) : iconOnly ? (
-              <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>
-            ) : (
-              <Space size={4} style={{ fontSize: token.fontSizeSM }}>
-                <span style={{ color }}>{icon}</span>
-                <span>{label}</span>
-              </Space>
-            ),
-            value: mode,
-            title: description,
-            icon,
-            color,
-          }))}
+          options={modes.map(({ mode, label, description, icon, tone }) => {
+            const color = getModeColor(tone, token);
+            return {
+              label: plain ? (
+                label
+              ) : iconOnly ? (
+                <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>
+              ) : (
+                <Space size={token.marginXXS} style={{ fontSize: token.fontSizeSM }}>
+                  <span style={{ color }}>{icon}</span>
+                  <span>{label}</span>
+                </Space>
+              ),
+              value: mode,
+              title: description,
+              icon,
+              color,
+            };
+          })}
           optionRender={(option) => {
             const modeData = modes.find((m) => m.mode === option.value);
             return (
               <Space size={6} align="start">
-                {modeData && <span style={{ color: modeData.color }}>{modeData.icon}</span>}
+                {modeData && (
+                  <span style={{ color: getModeColor(modeData.tone, token) }}>{modeData.icon}</span>
+                )}
                 <div style={{ lineHeight: 1.3 }}>
                   <div>{modeData?.label}</div>
                   <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -415,10 +434,10 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   return (
     <Radio.Group value={effectiveValue} onChange={(e) => onChange?.(e.target.value)}>
       <Space orientation="vertical" style={{ width: '100%' }}>
-        {modes.map(({ mode, label, description, icon, color }) => (
+        {modes.map(({ mode, label, description, icon, tone }) => (
           <Radio key={mode} value={mode}>
             <Space>
-              <span style={{ color }}>{icon}</span>
+              <span style={{ color: getModeColor(tone, token) }}>{icon}</span>
               <div>
                 <Typography.Text strong>{label}</Typography.Text>
                 <br />

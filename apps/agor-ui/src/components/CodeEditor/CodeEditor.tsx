@@ -42,7 +42,7 @@ const PlainTextEditor: React.FC<CodeEditorProps> = ({
       maxHeight,
       padding: 8,
       margin: 0,
-      border: '1px solid var(--ant-color-border, #424242)',
+      border: '1px solid var(--ant-color-border)',
       borderRadius: 6,
       background: 'var(--ant-color-fill-alter, transparent)',
       color: 'var(--ant-color-text)',

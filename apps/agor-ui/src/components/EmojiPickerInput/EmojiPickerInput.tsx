@@ -20,7 +20,7 @@ const EmojiPickerFallback: React.FC = () => (
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      color: 'var(--ant-color-text-secondary, #888)',
+      color: 'var(--ant-color-text-secondary)',
       fontSize: 12,
     }}
   >
