@@ -27,6 +27,7 @@ import type { Application } from '@agor/core/feathers';
 import type {
   GatewayConnector,
   GatewayContext,
+  InboundFile,
   InboundMessage,
   SlackThreadHistoryRequest,
   SlackThreadHistoryResult,
@@ -62,6 +63,10 @@ import type {
 import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
+import {
+  buildPromptWithAttachments,
+  ingestInboundImageAttachments,
+} from '../utils/gateway-attachments.js';
 import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
 
 /**
@@ -72,6 +77,7 @@ interface PostMessageData {
   thread_id: string;
   text: string;
   user_name?: string;
+  files?: InboundFile[];
   metadata?: Record<string, unknown>;
 }
 
@@ -2187,6 +2193,43 @@ export class GatewayService {
         promptText = buildGitHubInitialPrompt(data.thread_id, data.text, data.metadata);
       }
 
+      // Download Slack image attachments server-side and fold their stored
+      // paths into the prompt so the agent can Read them. Gated on the
+      // channel's ingest_files flag — channels without the files:read scope
+      // never attempt downloads. Any failure degrades to a short note; the
+      // prompt is always delivered.
+      if (
+        channel.channel_type === 'slack' &&
+        channelConfig.ingest_files === true &&
+        data.files &&
+        data.files.length > 0
+      ) {
+        const botToken =
+          typeof channelConfig.bot_token === 'string' ? channelConfig.bot_token : undefined;
+        let failedAttachments = 0;
+        if (botToken) {
+          const { paths, failed } = await ingestInboundImageAttachments({
+            files: data.files,
+            botToken,
+          });
+          failedAttachments = failed;
+          if (paths.length > 0) {
+            promptText = buildPromptWithAttachments(promptText, paths);
+            console.log(
+              `[gateway] Ingested ${paths.length} Slack attachment(s) for session ${shortId(sessionId)}`
+            );
+          }
+        } else {
+          failedAttachments = data.files.length;
+          console.warn(
+            `[gateway] Cannot ingest Slack attachments for channel ${shortId(channel.id)}: no bot_token in config`
+          );
+        }
+        if (failedAttachments > 0) {
+          promptText = `${promptText}\n\n(an attachment could not be fetched)`;
+        }
+      }
+
       // Prepend gateway context block so the agent knows the message source.
       // Applied to ALL messages (initial + follow-up) since each message may
       // come from a different user in a shared channel.
@@ -2616,6 +2659,7 @@ export class GatewayService {
         thread_id: msg.threadId,
         text: msg.text,
         user_name: msg.userId,
+        ...(msg.files ? { files: msg.files } : {}),
         metadata: msg.metadata,
       });
     });

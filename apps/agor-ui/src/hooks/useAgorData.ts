@@ -360,11 +360,13 @@ export function useAgorData(
           ['mcpServers'],
           () =>
             client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) =>
+          (list) => {
             agorStore.getState().applyMaps((prev) => ({
               ...prev,
               mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
-            }))
+            }));
+            agorStore.getState().markHydrated('mcpServersHydrated');
+          }
         );
         void runHydration(
           'session-mcp-servers',
@@ -385,11 +387,13 @@ export function useAgorData(
             client
               .service('gateway-channels')
               .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) =>
+          (list) => {
             agorStore.getState().applyMaps((prev) => ({
               ...prev,
               gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
-            }))
+            }));
+            agorStore.getState().markHydrated('gatewayChannelsHydrated');
+          }
         );
         void runHydration(
           'artifacts',

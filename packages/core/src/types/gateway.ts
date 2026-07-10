@@ -87,6 +87,62 @@ export function getRequiredSecretFields(
 }
 
 // ============================================================================
+// Agent Tool Capabilities
+// ============================================================================
+
+/**
+ * Per-channel toggles for agent-callable gateway MCP tools, stored at
+ * `config.agent_tools` on Slack gateway channels.
+ *
+ * Each key is one capability that maps 1:1 to an MCP tool: the toggle gates
+ * the tool at call time AND drives the Slack OAuth scopes the manifest
+ * requests (see `SLACK_AGENT_TOOL_SCOPES` in the manifest generator), so
+ * tool-gating and scopes can never drift. Extending the model is one seam:
+ * add a key here, a default below, and its scope list in the manifest map.
+ *
+ * Browser-safe and dependency-free so both the UI and the daemon can import it.
+ */
+export interface SlackAgentToolsConfig {
+  /** Read mapped Slack thread history (agor_gateway_slack_thread_history_get). */
+  thread_history?: boolean;
+  /** Read whole-channel Slack history (agor_gateway_slack_channel_history_get). */
+  channel_history?: boolean;
+}
+
+export type SlackAgentToolCapability = keyof SlackAgentToolsConfig;
+
+/**
+ * Defaults applied when a capability is absent from `config.agent_tools`
+ * (including channels created before the capability model existed):
+ *
+ * - `thread_history` defaults ON — the thread-history tool shipped ungated,
+ *   so absent config must keep it working on existing channels.
+ * - `channel_history` defaults OFF — reading arbitrary channel history is a
+ *   broader data surface than the mapped thread and needs Slack scopes the
+ *   installed app may not hold, so it requires explicit opt-in.
+ */
+export const SLACK_AGENT_TOOL_DEFAULTS: Record<SlackAgentToolCapability, boolean> = {
+  thread_history: true,
+  channel_history: false,
+};
+
+/**
+ * Resolve a channel's `config.agent_tools` value (possibly absent or
+ * malformed) into a fully-populated capability map with defaults applied.
+ */
+export function resolveSlackAgentTools(raw: unknown): Record<SlackAgentToolCapability, boolean> {
+  const config =
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const resolved = { ...SLACK_AGENT_TOOL_DEFAULTS };
+  for (const capability of Object.keys(resolved) as SlackAgentToolCapability[]) {
+    if (typeof config[capability] === 'boolean') {
+      resolved[capability] = config[capability] as boolean;
+    }
+  }
+  return resolved;
+}
+
+// ============================================================================
 // Connection Probe Results
 // ============================================================================
 

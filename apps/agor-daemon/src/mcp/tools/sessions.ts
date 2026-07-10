@@ -32,6 +32,7 @@ import type { SessionsServiceImpl } from '../../declarations.js';
 import type { SessionParams } from '../../services/sessions.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
 import { inspectBranchViaExecutor } from '../../utils/branch-inspect.js';
+import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../../utils/executor-read-impersonation.js';
 import { serviceTokenScopeForParams } from '../../utils/spawn-executor.js';
 import {
@@ -1150,7 +1151,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const sourceSession = await ctx.app
           .service('sessions')
           .get(remoteRelationshipSourceSessionId, ctx.baseServiceParams);
-        ctx.app.service('sessions').emit?.('patched', sourceSession, ctx.baseServiceParams);
+        emitServiceEvent(ctx.app, {
+          path: 'sessions',
+          event: 'patched',
+          data: sourceSession,
+          params: ctx.baseServiceParams,
+          id: sourceSession.session_id,
+        });
       }
 
       // Update the parent session's children list to include the new session.

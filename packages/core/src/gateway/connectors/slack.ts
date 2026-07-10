@@ -14,7 +14,9 @@
  *     enable_mpim?: boolean,                        // Listen in group DMs
  *     require_mention?: boolean,                    // Legacy; Slack channel-like prompts now always require @mention
  *     allow_thread_replies_without_mention?: boolean, // Legacy; ignored for Slack channel-like prompts
- *     allowed_channel_ids?: string[]                // Channel ID whitelist
+ *     allowed_channel_ids?: string[],               // Channel ID whitelist
+ *     ingest_files?: boolean,                       // Forward message attachments (requires files:read)
+ *     agent_tools?: SlackAgentToolsConfig           // Agent-callable MCP tool toggles (gated in the daemon tool layer)
  *   }
  *
  * Thread ID format: "{channel_id}-{thread_ts}"
@@ -26,8 +28,13 @@ import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slac
 import { WebClient } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
 
-import type { ChannelType, SlackTestFailure, SlackTestResult } from '../../types/gateway';
-import type { GatewayConnector, InboundMessage, OutboundPayload } from '../connector';
+import type {
+  ChannelType,
+  SlackAgentToolsConfig,
+  SlackTestFailure,
+  SlackTestResult,
+} from '../../types/gateway';
+import type { GatewayConnector, InboundFile, InboundMessage, OutboundPayload } from '../connector';
 
 // Block Kit table block limits (Slack docs, native block introduced Aug 2025).
 const TABLE_MAX_ROWS = 100;
@@ -82,6 +89,12 @@ interface SlackConfig {
 
   // User alignment: resolve Slack user email → Agor user
   align_slack_users?: boolean;
+
+  // Ingest files attached to inbound messages (requires files:read scope)
+  ingest_files?: boolean;
+
+  // Agent-callable MCP tool toggles (gated in the daemon tool layer)
+  agent_tools?: SlackAgentToolsConfig;
 }
 
 export interface SlackUserAvatarProfile {
@@ -117,6 +130,21 @@ export interface SlackThreadHistoryResult {
   threadId: string;
   channel: string;
   thread_ts: string;
+  messages: SlackThreadHistoryMessage[];
+  has_more?: boolean;
+}
+
+export interface SlackChannelHistoryRequest {
+  channelId: string;
+  oldestTs?: string;
+  latestTs?: string;
+  inclusive?: boolean;
+  limit?: number;
+  includeBotMessages?: boolean;
+}
+
+export interface SlackChannelHistoryResult {
+  channel: string;
   messages: SlackThreadHistoryMessage[];
   has_more?: boolean;
 }
@@ -635,6 +663,37 @@ const SLACK_NOT_VERIFIABLE = [
  * direct messages the moment any whitelist is configured. The whitelist only
  * governs channel-like surfaces (`channel`/`group`/`mpim`).
  */
+/**
+ * Normalize a Slack event's `files` array into provider-neutral
+ * {@link InboundFile} entries, dropping malformed items. Slack file objects
+ * carry many more fields; only the ones the gateway needs survive — notably
+ * `url_private_download`, which requires the bot token to fetch.
+ */
+export function extractSlackInboundFiles(raw: unknown): InboundFile[] {
+  if (!Array.isArray(raw)) return [];
+  const files: InboundFile[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const candidate = item as Record<string, unknown>;
+    if (
+      typeof candidate.id === 'string' &&
+      typeof candidate.name === 'string' &&
+      typeof candidate.mimetype === 'string' &&
+      typeof candidate.size === 'number' &&
+      typeof candidate.url_private_download === 'string'
+    ) {
+      files.push({
+        id: candidate.id,
+        name: candidate.name,
+        mimetype: candidate.mimetype,
+        size: candidate.size,
+        url_private_download: candidate.url_private_download,
+      });
+    }
+  }
+  return files;
+}
+
 export function isChannelAllowedByWhitelist(
   channelType: string,
   channelId: string | undefined,
@@ -1350,8 +1409,23 @@ export class SlackConnector implements GatewayConnector {
     return { channel: dmResult.channel.id, user_id: userResult.user.id };
   }
 
-  async fetchThreadHistory(req: SlackThreadHistoryRequest): Promise<SlackThreadHistoryResult> {
-    const { channel, thread_ts } = parseThreadId(req.threadId);
+  /**
+   * Shared pagination + normalization loop behind {@link fetchThreadHistory}
+   * and {@link fetchChannelHistory}. Collects up to `req.limit` normalized
+   * messages in the order the Slack API returns pages, over-fetching raw pages
+   * when bot messages are filtered out.
+   */
+  private async collectHistoryMessages(
+    fetchPage: (page: { limit: number; cursor?: string }) => Promise<{
+      ok?: boolean;
+      error?: string;
+      messages?: unknown[];
+      has_more?: boolean;
+      response_metadata?: { next_cursor?: string };
+    }>,
+    req: Pick<SlackThreadHistoryRequest, 'limit' | 'includeBotMessages' | 'triggerTs'>,
+    errorLabel: string
+  ): Promise<{ messages: SlackThreadHistoryMessage[]; hasMore: boolean }> {
     const requestedLimit = Math.min(Math.max(req.limit ?? 50, 1), 200);
     const messages: SlackThreadHistoryMessage[] = [];
     let cursor: string | undefined;
@@ -1361,18 +1435,10 @@ export class SlackConnector implements GatewayConnector {
       const rawLimit = req.includeBotMessages
         ? requestedLimit
         : Math.min(Math.max(requestedLimit * 4, requestedLimit), 200);
-      const result = await this.web.conversations.replies({
-        channel,
-        ts: thread_ts,
-        limit: rawLimit,
-        ...(cursor ? { cursor } : {}),
-        ...(req.oldestTs ? { oldest: req.oldestTs } : {}),
-        ...(req.latestTs ? { latest: req.latestTs } : {}),
-        ...(req.inclusive !== undefined ? { inclusive: req.inclusive } : {}),
-      });
+      const result = await fetchPage({ limit: rawLimit, ...(cursor ? { cursor } : {}) });
 
       if (!result.ok) {
-        throw new Error(`Slack thread history error: ${result.error ?? 'unknown error'}`);
+        throw new Error(`${errorLabel}: ${result.error ?? 'unknown error'}`);
       }
 
       const rawMessages = (result.messages ?? []) as Array<Record<string, unknown>>;
@@ -1423,11 +1489,68 @@ export class SlackConnector implements GatewayConnector {
       hasMore = result.has_more === true || !!cursor || stoppedAtRequestedLimitWithMoreRaw;
     } while (!req.includeBotMessages && messages.length < requestedLimit && cursor);
 
+    return { messages: messages.slice(0, requestedLimit), hasMore };
+  }
+
+  async fetchThreadHistory(req: SlackThreadHistoryRequest): Promise<SlackThreadHistoryResult> {
+    const { channel, thread_ts } = parseThreadId(req.threadId);
+    const { messages, hasMore } = await this.collectHistoryMessages(
+      (page) =>
+        this.web.conversations.replies({
+          channel,
+          ts: thread_ts,
+          limit: page.limit,
+          ...(page.cursor ? { cursor: page.cursor } : {}),
+          ...(req.oldestTs ? { oldest: req.oldestTs } : {}),
+          ...(req.latestTs ? { latest: req.latestTs } : {}),
+          ...(req.inclusive !== undefined ? { inclusive: req.inclusive } : {}),
+        }),
+      req,
+      'Slack thread history error'
+    );
+
     return {
       threadId: req.threadId,
       channel,
       thread_ts,
-      messages: messages.slice(0, requestedLimit),
+      messages,
+      has_more: hasMore,
+    };
+  }
+
+  /**
+   * Fetch recent messages from a whole Slack conversation (not just one
+   * thread). Enforces the channel's `allowed_channel_ids` whitelist when one
+   * is configured. Slack returns newest-first pages, so `limit` selects the
+   * most recent matching messages; the result is reversed into chronological
+   * order for transcript-style consumption.
+   */
+  async fetchChannelHistory(req: SlackChannelHistoryRequest): Promise<SlackChannelHistoryResult> {
+    const allowedChannelIds = normalizeAllowedChannelIds(this.config.allowed_channel_ids);
+    if (allowedChannelIds.length > 0 && !allowedChannelIds.includes(req.channelId)) {
+      throw new Error(
+        `Slack channel ${req.channelId} is not in this gateway channel's allowed_channel_ids whitelist.`
+      );
+    }
+
+    const { messages, hasMore } = await this.collectHistoryMessages(
+      (page) =>
+        this.web.conversations.history({
+          channel: req.channelId,
+          limit: page.limit,
+          ...(page.cursor ? { cursor: page.cursor } : {}),
+          ...(req.oldestTs ? { oldest: req.oldestTs } : {}),
+          ...(req.latestTs ? { latest: req.latestTs } : {}),
+          ...(req.inclusive !== undefined ? { inclusive: req.inclusive } : {}),
+        }),
+      req,
+      'Slack channel history error'
+    );
+    messages.reverse();
+
+    return {
+      channel: req.channelId,
+      messages,
       has_more: hasMore,
     };
   }
@@ -1650,6 +1773,11 @@ export class SlackConnector implements GatewayConnector {
           console.log(
             `[slack] Resolved message_replied event to latest reply thread_ts=${event.thread_ts ?? '(none)'} ts=${event.ts ?? '(none)'}`
           );
+        } else if (event.subtype === 'file_share' && this.config.ingest_files === true) {
+          // Messages with uploaded files arrive as subtype `file_share` rather
+          // than a plain message. When file ingestion is enabled, treat them
+          // as normal new messages so the attachments (and any accompanying
+          // text) reach the gateway.
         } else {
           console.debug(
             `[slack] Skipping message subtype=${event.subtype} user=${event.user ?? '(none)'} thread_ts=${event.thread_ts ?? '(none)'} ts=${event.ts ?? '(none)'}`
@@ -1810,11 +1938,15 @@ export class SlackConnector implements GatewayConnector {
         slackChannelName = await this.lookupChannelName(event.channel);
       }
 
+      const inboundFiles =
+        this.config.ingest_files === true ? extractSlackInboundFiles(event.files) : [];
+
       callback({
         threadId,
         text: messageText,
         userId: event.user ?? 'unknown',
         timestamp: event.ts ?? new Date().toISOString(),
+        ...(inboundFiles.length > 0 ? { files: inboundFiles } : {}),
         metadata: {
           channel: event.channel,
           channel_type: channelType,
