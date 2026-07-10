@@ -337,7 +337,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         ],
       }
     );
-    app.use('/board-objects', createBoardObjectsService(db));
+    app.use('/board-objects', createBoardObjectsService(db, app));
   }
 
   const boardsService = safeService('boards') as unknown as BoardsServiceImpl | undefined;
@@ -428,7 +428,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Knowledge (backend/data foundations)
   // ============================================================================
 
-  app.use('/kb/namespaces', createKnowledgeNamespacesService(db), {
+  app.use('/kb/namespaces', createKnowledgeNamespacesService(db, app), {
     methods: [
       'find',
       'get',

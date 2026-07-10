@@ -55,9 +55,11 @@ export const CardsTable: React.FC<CardsTableProps> = ({
   // State
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
   const [createTypeModalOpen, setCreateTypeModalOpen] = useState(false);
+  const [createTypeModalMounted, setCreateTypeModalMounted] = useState(false);
   const [editTypeModalOpen, setEditTypeModalOpen] = useState(false);
   const [editingType, setEditingType] = useState<CardType | null>(null);
   const [cardModalCard, setCardModalCard] = useState<CardWithType | null>(null);
+  const [cardModalOpen, setCardModalOpen] = useState(false);
   const [typeSearchTerm, setTypeSearchTerm] = useState('');
   const [cardSearchTerm, setCardSearchTerm] = useState('');
   const [form] = Form.useForm();
@@ -132,7 +134,6 @@ export const CardsTable: React.FC<CardsTableProps> = ({
         color: colorValue || undefined,
         json_schema: values.json_schema ? JSON.parse(values.json_schema) : undefined,
       });
-      form.resetFields();
       setCreateTypeModalOpen(false);
       showSuccess('Card type created');
     } catch (err: unknown) {
@@ -156,9 +157,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
         color: colorValue || undefined,
         json_schema: values.json_schema ? JSON.parse(values.json_schema) : undefined,
       });
-      form.resetFields();
       setEditTypeModalOpen(false);
-      setEditingType(null);
       showSuccess('Card type updated');
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return;
@@ -253,7 +252,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
   };
 
   const handleCardDeleted = (_cardId: string) => {
-    setCardModalCard(null);
+    setCardModalOpen(false);
   };
 
   // Type form content (shared between create and edit modals)
@@ -350,6 +349,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
               icon={<PlusOutlined />}
               onClick={() => {
                 form.resetFields();
+                setCreateTypeModalMounted(true);
                 setCreateTypeModalOpen(true);
               }}
             >
@@ -467,7 +467,10 @@ export const CardsTable: React.FC<CardsTableProps> = ({
                 size="small"
                 pagination={{ pageSize: 20, hideOnSinglePage: true }}
                 onRow={(record) => ({
-                  onClick: () => setCardModalCard(record),
+                  onClick: () => {
+                    setCardModalCard(record);
+                    setCardModalOpen(true);
+                  },
                   style: { cursor: 'pointer' },
                 })}
                 locale={{
@@ -504,44 +507,56 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       </Layout>
 
       {/* Create CardType Modal */}
-      <Modal
-        title="Create Card Type"
-        open={createTypeModalOpen}
-        onOk={handleCreateType}
-        onCancel={() => {
-          form.resetFields();
-          setCreateTypeModalOpen(false);
-        }}
-        okText="Create"
-      >
-        {typeFormContent}
-      </Modal>
+      {createTypeModalMounted && (
+        <Modal
+          title="Create Card Type"
+          open={createTypeModalOpen}
+          onOk={handleCreateType}
+          onCancel={() => {
+            setCreateTypeModalOpen(false);
+          }}
+          afterClose={() => {
+            form.resetFields();
+            setCreateTypeModalMounted(false);
+          }}
+          okText="Create"
+        >
+          {typeFormContent}
+        </Modal>
+      )}
 
       {/* Edit CardType Modal */}
-      <Modal
-        title="Edit Card Type"
-        open={editTypeModalOpen}
-        onOk={handleUpdateType}
-        onCancel={() => {
-          form.resetFields();
-          setEditTypeModalOpen(false);
-          setEditingType(null);
-        }}
-        okText="Save"
-      >
-        {typeFormContent}
-      </Modal>
+      {editingType && (
+        <Modal
+          title="Edit Card Type"
+          open={editTypeModalOpen}
+          onOk={handleUpdateType}
+          onCancel={() => {
+            setEditTypeModalOpen(false);
+          }}
+          afterClose={() => {
+            form.resetFields();
+            setEditingType(null);
+          }}
+          okText="Save"
+        >
+          {typeFormContent}
+        </Modal>
+      )}
 
       {/* Card Detail Modal (reuse Phase 2 component) */}
-      <CardModal
-        open={!!cardModalCard}
-        card={cardModalCard}
-        board={cardModalBoard}
-        client={client}
-        onClose={() => setCardModalCard(null)}
-        onCardUpdated={handleCardUpdated}
-        onCardDeleted={handleCardDeleted}
-      />
+      {cardModalCard && (
+        <CardModal
+          open={cardModalOpen}
+          card={cardModalCard}
+          board={cardModalBoard}
+          client={client}
+          onClose={() => setCardModalOpen(false)}
+          afterClose={() => setCardModalCard(null)}
+          onCardUpdated={handleCardUpdated}
+          onCardDeleted={handleCardDeleted}
+        />
+      )}
     </div>
   );
 };

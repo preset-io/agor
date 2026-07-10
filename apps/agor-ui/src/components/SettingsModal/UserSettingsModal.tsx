@@ -388,8 +388,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     await saveAgenticConfigs(getAgenticConfigToolsToSave());
   };
 
-  const handleUpdate = async () => {
-    if (!user) return;
+  const handleUpdate = async (): Promise<boolean> => {
+    if (!user) return false;
 
     try {
       await form.validateFields(['email', 'name', 'emoji', 'role', 'unix_username']);
@@ -425,8 +425,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       form.setFieldValue('password', '');
       await syncUserGroups(values.groupIds || []);
       await saveDirtyAgenticConfigs();
+      return true;
     } catch (err) {
       console.error('Validation failed:', err);
+      return false;
     }
   };
 
@@ -578,8 +580,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     markAgenticConfigDirty(tool);
   };
 
-  const handleAudioSave = async () => {
-    if (!user || !onUpdate) return;
+  const handleAudioSave = async (): Promise<boolean> => {
+    if (!user || !onUpdate) return false;
 
     try {
       const values = audioForm.getFieldsValue();
@@ -598,8 +600,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       });
 
       await saveDirtyAgenticConfigs();
+      return true;
     } catch (error) {
       console.error('Failed to save audio settings:', error);
+      return false;
     }
   };
 
@@ -609,7 +613,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     switch (activeTab) {
       case 'general':
-        await handleUpdate();
+        if (!(await handleUpdate())) return;
         break;
       case 'env-vars':
       case 'personal-api-keys':
@@ -621,7 +625,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         await saveDirtyAgenticConfigs();
         break;
       case 'audio':
-        await handleAudioSave();
+        if (!(await handleAudioSave())) return;
         break;
       case 'claude-code':
       case 'claude-code-cli':
@@ -633,6 +637,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         await handleAgenticConfigSave(activeTab as AgenticToolName);
         break;
     }
+
+    // The footer action is Save-and-close. Tab-specific controls (credentials,
+    // environment variables, and API tokens) save inline and intentionally do
+    // not come through this handler, so those flows remain on the current tab.
+    handleClose();
   };
 
   const { token } = theme.useToken();

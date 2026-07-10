@@ -1032,6 +1032,249 @@ describe('gateway session branch binding (MCP)', () => {
   });
 });
 
+describe('gateway agent-tool capability gating (MCP)', () => {
+  const gatewaySource = {
+    channel_id: 'chan-1',
+    channel_name: 'Eng Slack',
+    channel_type: 'slack',
+    thread_id: 'C123-171234.000100',
+    slack_channel_id: 'C123',
+  };
+
+  /** Caller session spawned from a gateway channel, carrying gateway_source. */
+  function spyCallerGatewaySession(branchId: string, source: Record<string, unknown>) {
+    return vi.spyOn(SessionRepository.prototype, 'findById').mockResolvedValue({
+      session_id: 'sess-1',
+      branch_id: branchId,
+      custom_context: { gateway_source: source },
+    } as any);
+  }
+
+  const channelHistoryEnabled = {
+    ...slackChannel,
+    config: { ...slackChannel.config, agent_tools: { channel_history: true } },
+  };
+
+  const channelHistoryResult = {
+    channel: 'C123',
+    has_more: false,
+    messages: [
+      {
+        ts: '171234.000100',
+        iso_time: '2026-06-22T00:00:00.000Z',
+        user_id: 'U1',
+        user_name: 'alice',
+        actor_label: 'Alice',
+        text: 'shipping update',
+        is_bot: false,
+        is_trigger: false,
+        is_mention: false,
+      },
+    ],
+  };
+
+  it('fetches Slack channel history defaulting to the gateway session own channel', async () => {
+    const fetchChannelHistory = vi.fn(async () => channelHistoryResult);
+    vi.mocked(getConnector).mockReturnValue({ fetchChannelHistory } as any);
+    spyCallerGatewaySession('branch-1', gatewaySource);
+    const channelFindById = vi
+      .spyOn(GatewayChannelRepository.prototype, 'findById')
+      .mockResolvedValue(channelHistoryEnabled as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('member');
+    const result = await tools.agor_gateway_slack_channel_history_get.handler({
+      oldestTs: '171233.000099',
+      limit: 999,
+      includeBotMessages: true,
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(channelFindById).toHaveBeenCalledWith('chan-1');
+    expect(fetchChannelHistory).toHaveBeenCalledWith({
+      channelId: 'C123',
+      oldestTs: '171233.000099',
+      limit: 200,
+      includeBotMessages: true,
+    });
+    expect(payload.warning).toContain('untrusted external content');
+    expect(payload.gateway_channel).toMatchObject({
+      id: 'chan-1',
+      channel_type: 'slack',
+      target_branch_id: 'branch-1',
+      target_branch_name: 'slack-work',
+    });
+    expect(payload.channel).toEqual({ slack_channel_id: 'C123' });
+    expect(payload.messages[0]).toMatchObject({ actor_label: 'Alice', text: 'shipping update' });
+    expect(JSON.stringify(payload)).not.toContain('xoxb-secret');
+    expect(JSON.stringify(payload)).not.toContain('xapp-secret');
+  });
+
+  it('renders channel history markdown on request', async () => {
+    vi.mocked(getConnector).mockReturnValue({
+      fetchChannelHistory: vi.fn(async () => channelHistoryResult),
+    } as any);
+    spyCallerGatewaySession('branch-1', gatewaySource);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      channelHistoryEnabled as any
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('member');
+    const result = await tools.agor_gateway_slack_channel_history_get.handler({
+      format: 'markdown',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.markdown).toContain('# Slack channel C123 history');
+    expect(payload.markdown).toContain('shipping update');
+    expect(payload.messages).toBeUndefined();
+  });
+
+  it('denies channel history when the capability is disabled, with an actionable error', async () => {
+    spyCallerGatewaySession('branch-1', gatewaySource);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('admin');
+    const error = await tools.agor_gateway_slack_channel_history_get
+      .handler({})
+      .then(() => null)
+      .catch((err: Error) => err);
+
+    expect(error).toBeTruthy();
+    expect(error!.message).toContain("capability 'channel_history' is disabled");
+    expect(error!.message).toContain('agor_gateway_channels_update');
+    expect(error!.message).toContain('config.agent_tools.channel_history');
+    expect(error!.message).toContain('scope');
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('denies channel history across branches even for admins', async () => {
+    spyCallerSessionBranch('branch-2');
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      channelHistoryEnabled as any
+    );
+
+    const tools = await captureTools('admin');
+    await expect(
+      tools.agor_gateway_slack_channel_history_get.handler({
+        gatewayChannelId: 'chan-1',
+        slackChannelId: 'C123',
+      })
+    ).rejects.toThrow('targets a different branch');
+
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('requires explicit identifiers for callers without gateway session context', async () => {
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      channelHistoryEnabled as any
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('admin', makeFakeApp({}), null);
+    await expect(tools.agor_gateway_slack_channel_history_get.handler({})).rejects.toThrow(
+      'gatewayChannelId is required'
+    );
+    await expect(
+      tools.agor_gateway_slack_channel_history_get.handler({ gatewayChannelId: 'chan-1' })
+    ).rejects.toThrow('slackChannelId is required');
+  });
+
+  it('denies unauthorized no-session callers before leaking channel type/name/capability details', async () => {
+    // Capability intentionally OFF and channel name distinctive: with wrong
+    // check ordering the caller would get the capability error naming the
+    // channel instead of the bare permission error.
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+    vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
+    vi.spyOn(BranchRepository.prototype, 'resolveUserPermission').mockResolvedValue('view' as any);
+
+    const tools = await captureTools('member', makeFakeApp({}), null);
+    const error = await tools.agor_gateway_slack_channel_history_get
+      .handler({ gatewayChannelId: 'chan-1', slackChannelId: 'C123' })
+      .then(() => null)
+      .catch((err: Error) => err);
+
+    expect(error).toBeTruthy();
+    expect(error!.message).toContain("admin role or 'all' branch permission");
+    expect(error!.message).not.toContain('Eng Slack');
+    expect(error!.message).not.toContain('channel_history');
+    expect(error!.message).not.toContain('slack');
+    expect(error!.message).not.toContain('disabled');
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('caps the channel-history limit at the schema layer without touching the thread tool', async () => {
+    const tools = await captureTools('member');
+
+    const channelSchema = tools.agor_gateway_slack_channel_history_get.cfg.inputSchema;
+    expect(channelSchema.safeParse({ limit: 200 }).success).toBe(true);
+    const overLimit = channelSchema.safeParse({ limit: 500 });
+    expect(overLimit.success).toBe(false);
+    expect(String(overLimit.error)).toContain('limit must be at most 200');
+
+    // The thread tool keeps its permissive schema + runtime clamp.
+    expect(
+      tools.agor_gateway_slack_thread_history_get.cfg.inputSchema.safeParse({
+        sessionId: 'sess-42',
+        limit: 500,
+      }).success
+    ).toBe(true);
+  });
+
+  it("keeps the no-session path gated on admin or branch 'all' permission", async () => {
+    vi.mocked(getConnector).mockReturnValue({
+      fetchChannelHistory: vi.fn(async () => channelHistoryResult),
+    } as any);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      channelHistoryEnabled as any
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+    vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
+    const permission = vi
+      .spyOn(BranchRepository.prototype, 'resolveUserPermission')
+      .mockResolvedValue('view' as any);
+
+    const tools = await captureTools('member', makeFakeApp({}), null);
+    await expect(
+      tools.agor_gateway_slack_channel_history_get.handler({
+        gatewayChannelId: 'chan-1',
+        slackChannelId: 'C123',
+      })
+    ).rejects.toThrow("'all' branch permission");
+
+    permission.mockResolvedValue('all' as any);
+    const result = await tools.agor_gateway_slack_channel_history_get.handler({
+      gatewayChannelId: 'chan-1',
+      slackChannelId: 'C123',
+    });
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.channel).toEqual({ slack_channel_id: 'C123' });
+  });
+
+  it('denies thread history when the thread_history capability is disabled', async () => {
+    spyCallerSessionBranch('branch-1');
+    vi.spyOn(ThreadSessionMapRepository.prototype, 'findBySession').mockResolvedValue(
+      threadMapping as any
+    );
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue({
+      ...slackChannel,
+      config: { ...slackChannel.config, agent_tools: { thread_history: false } },
+    } as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const sessionsGet = vi.fn(async () => ({ session_id: 'sess-42', branch_id: 'branch-1' }));
+    const tools = await captureTools('member', makeFakeApp({ sessions: { get: sessionsGet } }));
+    await expect(
+      tools.agor_gateway_slack_thread_history_get.handler({ sessionId: 'sess-42' })
+    ).rejects.toThrow("capability 'thread_history' is disabled");
+
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+});
+
 describe('getRequiredSecretFields — Slack app_token required unless explicitly outbound-only', () => {
   it('requires bot_token AND app_token when no config is set (default inbound)', () => {
     expect(getRequiredSecretFields('slack', {})).toEqual(['bot_token', 'app_token']);
@@ -1063,7 +1306,22 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     groupDms: false,
     alignUsers: false,
     outbound: false,
+    ingestFiles: false,
+    threadHistory: true,
+    channelHistory: false,
   };
+
+  /** Tool args → SlackWizardOptions, mirroring the tool's own mapping. */
+  function wizardOptionsFor({
+    threadHistory,
+    channelHistory,
+    ...rest
+  }: typeof dmOnly & { botDisplayName?: string }) {
+    return {
+      ...rest,
+      agentTools: { thread_history: threadHistory, channel_history: channelHistory },
+    };
+  }
 
   it('marks the manifest generator read-only', async () => {
     const tools = await captureTools('admin');
@@ -1077,10 +1335,11 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     const result = await tools.agor_gateway_slack_manifest_generate.handler(dmOnly);
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.manifest).toEqual(buildSlackManifest(dmOnly));
-    expect(payload.bot_scopes).toEqual(requiredBotScopes(dmOnly));
-    expect(payload.bot_events).toEqual(requiredBotEvents(dmOnly));
+    expect(payload.manifest).toEqual(buildSlackManifest(wizardOptionsFor(dmOnly)));
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(wizardOptionsFor(dmOnly)));
+    expect(payload.bot_events).toEqual(requiredBotEvents(wizardOptionsFor(dmOnly)));
     expect(payload.bot_scopes).not.toContain('app_mentions:read');
+    expect(payload.bot_scopes).not.toContain('channels:history');
     expect(payload.bot_events).toEqual(['message.im']);
     expect(payload.create_channel_config_hint).toEqual({
       channelType: 'slack',
@@ -1091,6 +1350,8 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
         enable_mpim: false,
         align_slack_users: false,
         outbound_enabled: false,
+        ingest_files: false,
+        agent_tools: { thread_history: true, channel_history: false },
       },
     });
     expect(Array.isArray(payload.setup_steps)).toBe(true);
@@ -1158,10 +1419,26 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     const result = await tools.agor_gateway_slack_manifest_generate.handler(opts);
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.manifest).toEqual(buildSlackManifest(opts));
-    expect(payload.bot_scopes).toEqual(requiredBotScopes(opts));
+    expect(payload.manifest).toEqual(buildSlackManifest(wizardOptionsFor(opts)));
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(wizardOptionsFor(opts)));
     expect(payload.bot_scopes).toEqual(expect.arrayContaining(['chat:write.public', 'im:write']));
     expect(payload.create_channel_config_hint.config.outbound_enabled).toBe(true);
+  });
+
+  it('adds history scopes and agent_tools config when channelHistory is enabled', async () => {
+    const opts = { ...dmOnly, channelHistory: true };
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler(opts);
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(wizardOptionsFor(opts)));
+    expect(payload.bot_scopes).toEqual(
+      expect.arrayContaining(['channels:history', 'groups:history', 'mpim:history'])
+    );
+    expect(payload.create_channel_config_hint.config.agent_tools).toEqual({
+      thread_history: true,
+      channel_history: true,
+    });
   });
 
   it('generates an all-on manifest and maps restrictToChannelIds to allowed_channel_ids', async () => {
@@ -1173,6 +1450,9 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       groupDms: true,
       alignUsers: true,
       outbound: true,
+      ingestFiles: true,
+      threadHistory: true,
+      channelHistory: true,
     };
     const tools = await captureTools('admin');
     const result = await tools.agor_gateway_slack_manifest_generate.handler({
@@ -1181,10 +1461,10 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     });
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.manifest).toEqual(buildSlackManifest(opts));
+    expect(payload.manifest).toEqual(buildSlackManifest(wizardOptionsFor(opts)));
     expect(payload.manifest.features.bot_user.display_name).toBe('Agor Bot');
-    expect(payload.bot_scopes).toEqual(requiredBotScopes(opts));
-    expect(payload.bot_events).toEqual(requiredBotEvents(opts));
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(wizardOptionsFor(opts)));
+    expect(payload.bot_events).toEqual(requiredBotEvents(wizardOptionsFor(opts)));
     expect(payload.bot_events).toEqual(expect.arrayContaining(['app_mention', 'message.im']));
     expect(payload.create_channel_config_hint.config).toMatchObject({
       enable_channels: true,
@@ -1192,8 +1472,11 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       enable_mpim: true,
       align_slack_users: true,
       outbound_enabled: true,
+      ingest_files: true,
+      agent_tools: { thread_history: true, channel_history: true },
       allowed_channel_ids: ['C123', 'C456'],
     });
+    expect(payload.bot_scopes).toEqual(expect.arrayContaining(['files:read']));
     expect(payload.caveats).toEqual(
       expect.arrayContaining([
         expect.stringContaining('restrictToChannelIds maps to config.allowed_channel_ids'),
@@ -1216,11 +1499,15 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       appName: 'Agor',
     });
     expect(parsed.alignUsers).toBe(true);
+    // Schema defaults mirror the capability defaults: thread history stays on,
+    // channel history requires explicit opt-in.
+    expect(parsed.threadHistory).toBe(true);
+    expect(parsed.channelHistory).toBe(false);
 
     const result = await tools.agor_gateway_slack_manifest_generate.handler(parsed);
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.manifest).toEqual(buildSlackManifest(dmAligned));
+    expect(payload.manifest).toEqual(buildSlackManifest(wizardOptionsFor(dmAligned)));
     expect(payload.create_channel_config_hint.config.align_slack_users).toBe(true);
     expect(payload.bot_scopes).toEqual(expect.arrayContaining(['users:read.email']));
     expect(payload.create_channel_config_hint.config).not.toHaveProperty('allowed_channel_ids');
