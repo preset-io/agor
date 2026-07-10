@@ -60,20 +60,20 @@ import {
   selectSessionById,
 } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
-import { buildAssistantBootstrapPrompt } from '../../utils/assistantBootstrapPrompt';
-import { createAssistantBranch } from '../../utils/assistantCreation';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
-import { startAssistantBootstrapSession } from '../../utils/startAssistantBootstrapSession';
+import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
+import { buildTeammateBootstrapPrompt } from '../../utils/teammateBootstrapPrompt';
+import { createTeammateBranch } from '../../utils/teammateCreation';
 import { AppHeader } from '../AppHeader';
-import type { BoardAssistantPanelTab } from '../BoardAssistantPanel';
-import { AssistantPanelRail, BoardAssistantPanel } from '../BoardAssistantPanel';
+import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
+import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
-import type { AssistantTabResult } from '../CreateDialog/tabs/AssistantTab';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
+import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
@@ -86,7 +86,7 @@ import { SettingsModal, UserSettingsModal } from '../SettingsModal';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import {
-  getSelectAssistantPanelTabState,
+  getSelectTeammatePanelTabState,
   getShowCommentsPanelState,
   getToggleBoardPanelState,
 } from './boardPanelActions';
@@ -156,7 +156,7 @@ export interface AppProps {
   onRestartOnboarding?: () => void | Promise<void>;
   openNewBranchModal?: boolean; // Open new branch modal
   onNewBranchModalClose?: () => void; // Called when new branch modal closes
-  suppressLeftPanel?: boolean; // Temporarily hide the assistant/comments panel behind modal-first flows
+  suppressLeftPanel?: boolean; // Temporarily hide the teammate/comments panel behind modal-first flows
   /** Rendered between AppHeader and main content (used for onboarding banners). */
   topBanner?: React.ReactNode;
   onCreateSession?: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
@@ -246,7 +246,7 @@ const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
 const EMPTY_BOARDS: Board[] = Object.freeze([] as Board[]) as Board[];
 const EMPTY_SESSIONS: Session[] = Object.freeze([] as Session[]) as Session[];
 
-// 320px keeps the three left-panel tabs (Assistant / All sessions / Comments)
+// 320px keeps the three left-panel tabs (Teammate / All sessions / Comments)
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.
 const LEFT_PANEL_MIN_WIDTH_PX = 320;
 const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
@@ -256,7 +256,7 @@ const SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT = 15;
 // Matches the canvas panel's own `minSize` below — kept as one constant so
 // the two cannot drift apart.
 const CANVAS_MIN_SIZE_PERCENT = 20;
-// Width of the persistent icon rail (AssistantPanelRail) shown in place of
+// Width of the persistent icon rail (TeammatePanelRail) shown in place of
 // the panel when collapsed. Replaces the old 0px-collapse + floating
 // reopen-knob pattern (see issue agor-cloud#123).
 const LEFT_PANEL_RAIL_WIDTH_PX = 56;
@@ -366,8 +366,8 @@ export const App: React.FC<AppProps> = ({
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<
-    'branch' | 'assistant' | 'board' | 'repository'
-  >('assistant');
+    'branch' | 'teammate' | 'board' | 'repository'
+  >('teammate');
   const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
     x: number;
     y: number;
@@ -401,7 +401,7 @@ export const App: React.FC<AppProps> = ({
       ? selectedSessionId
       : null;
 
-  const [leftPanelTab, setLeftPanelTab] = useState<BoardAssistantPanelTab>('assistant');
+  const [leftPanelTab, setLeftPanelTab] = useState<BoardTeammatePanelTab>('teammate');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === 'undefined' ? 1440 : window.innerWidth
@@ -560,7 +560,7 @@ export const App: React.FC<AppProps> = ({
 
   // Width of the middle content panel (canvas + session panel), as a
   // percentage of the full viewport — whatever's left once the left
-  // assistant/comments panel (rail or fully expanded) takes its share. The
+  // teammate/comments panel (rail or fully expanded) takes its share. The
   // session panel's own size is persisted relative to the viewport (below),
   // so this is the conversion factor used to translate that into the
   // content-relative percentage react-resizable-panels expects — keeping the
@@ -697,10 +697,10 @@ export const App: React.FC<AppProps> = ({
   );
 
   const handleHomeOpenCreateDialog = useCallback(
-    (tab?: 'branch' | 'assistant' | 'board' | 'repository', boardId?: string) => {
+    (tab?: 'branch' | 'teammate' | 'board' | 'repository', boardId?: string) => {
       if (boardId) navigation.goToBoard(boardId);
       setNewBranchDefaultPosition(null);
-      setCreateDialogDefaultTab(tab || 'assistant');
+      setCreateDialogDefaultTab(tab || 'teammate');
       setCreateDialogOpen(true);
     },
     [navigation]
@@ -769,7 +769,7 @@ export const App: React.FC<AppProps> = ({
   }, []);
 
   const applyLeftPanelState = useCallback(
-    (state: { collapsed: boolean; activeTab: BoardAssistantPanelTab }) => {
+    (state: { collapsed: boolean; activeTab: BoardTeammatePanelTab }) => {
       setLeftPanelTab(state.activeTab);
       setCommentsPanelCollapsed(state.collapsed);
     },
@@ -790,14 +790,14 @@ export const App: React.FC<AppProps> = ({
   // render — that propagated into the canvas's `initialNodes` useMemo deps
   // and triggered a full node-list recompute on every socket event.
   const handleOpenCommentsPanel = useCallback(() => {
-    applyLeftPanelState(getShowCommentsPanelState({ collapsed: true, activeTab: 'assistant' }));
+    applyLeftPanelState(getShowCommentsPanelState({ collapsed: true, activeTab: 'teammate' }));
   }, [applyLeftPanelState]);
 
-  // Shared by every AssistantPanelRail button: expand the panel onto
+  // Shared by every TeammatePanelRail button: expand the panel onto
   // whichever tab was clicked.
-  const handleSelectAssistantPanelTab = useCallback(
-    (tab: BoardAssistantPanelTab) => {
-      applyLeftPanelState(getSelectAssistantPanelTabState(tab));
+  const handleSelectTeammatePanelTab = useCallback(
+    (tab: BoardTeammatePanelTab) => {
+      applyLeftPanelState(getSelectTeammatePanelTabState(tab));
     },
     [applyLeftPanelState]
   );
@@ -881,18 +881,18 @@ export const App: React.FC<AppProps> = ({
     }
   };
 
-  const handleCreateAssistant = async (
-    result: AssistantTabResult,
+  const handleCreateTeammate = async (
+    result: TeammateTabResult,
     progress?: CreateDialogProgress
   ) => {
     const repoId = result.repoId;
     if (!repoId || !onCreateBranch || !onUpdateBranch) {
-      throw new Error('Missing repository or branch creation handler for assistant creation.');
+      throw new Error('Missing repository or branch creation handler for AI teammate creation.');
     }
 
-    progress?.onStatusChange?.('Creating assistant branch…');
+    progress?.onStatusChange?.('Creating AI teammate branch…');
 
-    const branch = await createAssistantBranch(
+    const branch = await createTeammateBranch(
       {
         displayName: result.displayName,
         description: result.description,
@@ -906,7 +906,7 @@ export const App: React.FC<AppProps> = ({
 
     if (!branch) {
       throw new Error(
-        'Assistant branch could not be created. Please check the branch details and try again.'
+        'AI teammate branch could not be created. Please check the branch details and try again.'
       );
     }
 
@@ -914,7 +914,7 @@ export const App: React.FC<AppProps> = ({
       branch_id: branch.branch_id,
       agent: result.agent,
       title: `${result.emoji ? `${result.emoji} ` : ''}${result.displayName} bootstrap`,
-      initialPrompt: buildAssistantBootstrapPrompt({
+      initialPrompt: buildTeammateBootstrapPrompt({
         displayName: result.displayName,
         emoji: result.emoji,
         description: result.description,
@@ -934,7 +934,7 @@ export const App: React.FC<AppProps> = ({
       if (!onCreateSession) {
         throw new Error('Missing session creation handler.');
       }
-      const sessionId = await startAssistantBootstrapSession({
+      const sessionId = await startTeammateBootstrapSession({
         client,
         branchId: branch.branch_id,
         boardId: branch.board_id || currentBoardId,
@@ -945,19 +945,19 @@ export const App: React.FC<AppProps> = ({
       navigation.goToSession(sessionId);
       return;
     } catch (error) {
-      console.error('Assistant session bootstrap failed:', error);
+      console.error('AI teammate session bootstrap failed:', error);
       showWarning(
-        `Assistant branch was created, but the first session could not start: ${
+        `AI teammate branch was created, but the first session could not start: ${
           error instanceof Error ? error.message : String(error)
         }. Opening the branch instead.`,
-        { key: 'assistant-bootstrap-session', duration: 8 }
+        { key: 'teammate-bootstrap-session', duration: 8 }
       );
     }
 
     // If the branch was created but the session failed, still take the user
-    // to the assistant branch so the created assistant is not lost. The
+    // to the teammate branch so the created AI teammate is not lost. The
     // top-level create-session handler surfaces the failure toast.
-    progress?.onStatusChange?.('Opening assistant branch…');
+    progress?.onStatusChange?.('Opening AI teammate branch…');
     navigation.goToBranch(branch.branch_id);
   };
 
@@ -1071,22 +1071,22 @@ export const App: React.FC<AppProps> = ({
   const sessionSettingsSession =
     useAgorStore(useMemo(() => makeSessionSelector(sessionSettingsId), [sessionSettingsId])) ??
     null;
-  const primaryAssistantId = currentBoard?.primary_assistant_id ?? null;
-  const primaryAssistantBranch = useAgorStore(
-    useMemo(() => makeBranchSelector(primaryAssistantId), [primaryAssistantId])
+  const primaryTeammateId = currentBoard?.primary_teammate_id ?? null;
+  const primaryTeammateBranch = useAgorStore(
+    useMemo(() => makeBranchSelector(primaryTeammateId), [primaryTeammateId])
   );
-  const primaryAssistantRepoId = primaryAssistantBranch?.repo_id;
-  const primaryAssistantRepo = useAgorStore(
-    useMemo(() => makeRepoSelector(primaryAssistantRepoId), [primaryAssistantRepoId])
+  const primaryTeammateRepoId = primaryTeammateBranch?.repo_id;
+  const primaryTeammateRepo = useAgorStore(
+    useMemo(() => makeRepoSelector(primaryTeammateRepoId), [primaryTeammateRepoId])
   );
-  const primaryAssistantInaccessible = Boolean(primaryAssistantId && !primaryAssistantBranch);
+  const primaryTeammateInaccessible = Boolean(primaryTeammateId && !primaryTeammateBranch);
 
   // Preserve the historical board-switch behavior now that the panel itself
   // no longer pushes a default tab into controlled parent state on mount.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset the tab when switching boards, even if the default tab string is unchanged.
   useEffect(() => {
-    setLeftPanelTab(primaryAssistantInaccessible ? 'all-sessions' : 'assistant');
-  }, [currentBoard?.board_id, primaryAssistantInaccessible]);
+    setLeftPanelTab(primaryTeammateInaccessible ? 'all-sessions' : 'teammate');
+  }, [currentBoard?.board_id, primaryTeammateInaccessible]);
 
   // Update browser tab title based on current board
   useBoardTitle(currentBoard);
@@ -1217,7 +1217,7 @@ export const App: React.FC<AppProps> = ({
   );
 
   // Stabilize the remaining passthrough props (schedule + comment actions) and
-  // the panel's inline-arrow handlers so the memoized BoardAssistantPanel's
+  // the panel's inline-arrow handlers so the memoized BoardTeammatePanel's
   // React.memo bailout holds — every prop it receives stays referentially stable
   // across store-driven re-renders that don't change what it draws.
   const stableOnExecuteScheduleNow = useStableCallback(onExecuteScheduleNow);
@@ -1225,10 +1225,10 @@ export const App: React.FC<AppProps> = ({
   const stableOnResolveComment = useStableCallback(onResolveComment);
   const stableOnToggleReaction = useStableCallback(onToggleReaction);
   const stableOnDeleteComment = useStableCallback(onDeleteComment);
-  const handleAssistantSendComment = useStableCallback((content: string) =>
+  const handleTeammateSendComment = useStableCallback((content: string) =>
     onSendComment?.(currentBoardId || '', content)
   );
-  const handleAssistantCollapse = useStableCallback(() => setCommentsPanelCollapsed(true));
+  const handleTeammateCollapse = useStableCallback(() => setCommentsPanelCollapsed(true));
 
   // Identity-stable branch actions for EventStreamPanel (previously an inline
   // object literal whose identity flipped on every shell render).
@@ -1330,7 +1330,7 @@ export const App: React.FC<AppProps> = ({
             }}
           >
             <Panel
-              id="assistant-panel"
+              id="teammate-panel"
               order={1}
               ref={commentsPanelRef}
               collapsible
@@ -1348,21 +1348,21 @@ export const App: React.FC<AppProps> = ({
             >
               {leftPanelCollapsed ? (
                 leftPanelRailVisible && (
-                  <AssistantPanelRail
-                    onSelectTab={handleSelectAssistantPanelTab}
+                  <TeammatePanelRail
+                    onSelectTab={handleSelectTeammatePanelTab}
                     unreadCommentsCount={unreadCommentsCount}
                     hasUserMentions={hasUserMentions}
                   />
                 )
               ) : (
-                <BoardAssistantPanel
+                <BoardTeammatePanel
                   client={client}
                   board={currentBoard || null}
                   activeTab={leftPanelTab}
                   onTabChange={setLeftPanelTab}
-                  primaryAssistantBranch={primaryAssistantBranch}
-                  primaryAssistantRepo={primaryAssistantRepo}
-                  primaryAssistantInaccessible={primaryAssistantInaccessible}
+                  primaryTeammateBranch={primaryTeammateBranch}
+                  primaryTeammateRepo={primaryTeammateRepo}
+                  primaryTeammateInaccessible={primaryTeammateInaccessible}
                   currentUserId={user?.user_id}
                   selectedSessionId={effectiveSelectedSessionId}
                   onSessionClick={handleSessionClick}
@@ -1378,14 +1378,14 @@ export const App: React.FC<AppProps> = ({
                   onViewLogs={setLogsModalBranchId}
                   onNukeEnvironment={stableOnNukeEnvironment}
                   onExecuteScheduleNow={stableOnExecuteScheduleNow}
-                  onSendComment={handleAssistantSendComment}
+                  onSendComment={handleTeammateSendComment}
                   onReplyComment={stableOnReplyComment}
                   onResolveComment={stableOnResolveComment}
                   onToggleReaction={stableOnToggleReaction}
                   onDeleteComment={stableOnDeleteComment}
                   hoveredCommentId={hoveredCommentId}
                   selectedCommentId={selectedCommentId}
-                  onCollapse={handleAssistantCollapse}
+                  onCollapse={handleTeammateCollapse}
                   deferSessionDetails={homeExitPanelDetailsDeferred}
                   onDeferredDetailsHydrated={handleDeferredDetailsHydrated}
                 />
@@ -1476,7 +1476,7 @@ export const App: React.FC<AppProps> = ({
                         board={currentBoard || null}
                         client={client}
                         branches={boardBranches}
-                        primaryAssistantId={primaryAssistantId}
+                        primaryTeammateId={primaryTeammateId}
                         currentUserId={user?.user_id}
                         selectedSessionId={effectiveSelectedSessionId}
                         activeUrlTargetBranchId={activeUrlTargetBranchId}
@@ -1507,7 +1507,7 @@ export const App: React.FC<AppProps> = ({
                         onClick={() => {
                           const center = sessionCanvasRef.current?.getViewportCenter();
                           setNewBranchDefaultPosition(center || null);
-                          setCreateDialogDefaultTab('assistant');
+                          setCreateDialogDefaultTab('teammate');
                           setCreateDialogOpen(true);
                         }}
                       />
@@ -1631,11 +1631,11 @@ export const App: React.FC<AppProps> = ({
           onDeleteGatewayChannel={onDeleteGatewayChannel}
           onUpdateArtifact={onUpdateArtifact}
           onDeleteArtifact={onDeleteArtifact}
-          onCreateAssistant={() => {
+          onCreateTeammate={() => {
             closeSettings();
             onSettingsClose?.();
             setNewBranchDefaultPosition(null);
-            setCreateDialogDefaultTab('assistant');
+            setCreateDialogDefaultTab('teammate');
             setCreateDialogOpen(true);
           }}
           branchStorageConfig={branchStorageConfig}
@@ -1686,7 +1686,7 @@ export const App: React.FC<AppProps> = ({
           open={createDialogOpen}
           onClose={() => {
             setCreateDialogOpen(false);
-            setCreateDialogDefaultTab('assistant');
+            setCreateDialogDefaultTab('teammate');
             setNewBranchDefaultPosition(null);
           }}
           defaultTab={createDialogDefaultTab}
@@ -1696,7 +1696,7 @@ export const App: React.FC<AppProps> = ({
           onCreateBoard={handleCreateBoardFromDialog}
           onCreateRepo={(data) => onCreateRepo?.(data)}
           onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
-          onCreateAssistant={handleCreateAssistant}
+          onCreateTeammate={handleCreateTeammate}
           availableAgents={availableAgents}
           currentUser={user}
           client={client}

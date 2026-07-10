@@ -3,8 +3,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
 
-const onboardedUser = (userId: string): User =>
-  ({ user_id: userId, onboarding_completed: true }) as User;
+const onboardedUser = (userId: string, overrides: Partial<User> = {}): User =>
+  ({ user_id: userId, onboarding_completed: true, ...overrides }) as User;
 
 const result = (status: AuthCheckResult['status']): AuthCheckResult => ({
   status,
@@ -58,5 +58,23 @@ describe('OnboardingBanners probe effect', () => {
     onCheckAuth.mockImplementation(async () => result('unauthenticated'));
     rerender(<OnboardingBanners {...baseProps({ user: onboardedUser('user-2'), onCheckAuth })} />);
     await waitFor(() => expect(screen.getByText(/No AI connected/)).toBeInTheDocument());
+  });
+
+  it('treats CLAUDE_CODE_OAUTH_TOKEN in user env vars as Claude auth (probes claude-code, no banner)', async () => {
+    const onCheckAuth = vi.fn(async () => result('authenticated'));
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('user-1', {
+            env_vars: {
+              CLAUDE_CODE_OAUTH_TOKEN: { set: true, scope: 'global', resource_id: null },
+            },
+          } as Partial<User>),
+          onCheckAuth,
+        })}
+      />
+    );
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code'));
+    expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument();
   });
 });

@@ -2963,6 +2963,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const ensureCanViewBoard = (action: string) => ensureBoardAccess('view', action);
   const ensureCanMutateBoard = (action: string) => ensureBoardAccess('mutate', action);
 
+  const emitBoardPatched = (board?: Board) => {
+    if (board) app.service('boards').emit('patched', board);
+  };
+
   safeService('boards')?.hooks({
     before: {
       all: [typedValidateQuery(boardQueryValidator), requireAuth],
@@ -3087,17 +3091,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       fromBlob: [requireMinimumRole(ROLES.MEMBER, 'import boards')],
       fromYaml: [requireMinimumRole(ROLES.MEMBER, 'import boards')],
       clone: [requireMinimumRole(ROLES.MEMBER, 'clone boards'), ensureCanViewBoard('clone boards')],
-      setPrimaryAssistant: [
-        requireMinimumRole(ROLES.MEMBER, 'set primary assistant'),
-        ensureCanMutateBoard('set primary assistant'),
+      setPrimaryTeammate: [
+        requireMinimumRole(ROLES.MEMBER, 'set primary teammate'),
+        ensureCanMutateBoard('set primary teammate'),
       ],
-      clearPrimaryAssistant: [
-        requireMinimumRole(ROLES.MEMBER, 'clear primary assistant'),
-        ensureCanMutateBoard('clear primary assistant'),
+      clearPrimaryTeammate: [
+        requireMinimumRole(ROLES.MEMBER, 'clear primary teammate'),
+        ensureCanMutateBoard('clear primary teammate'),
       ],
-      ensureAssistantWelcomeNote: [
-        requireMinimumRole(ROLES.MEMBER, 'create assistant welcome note'),
-        ensureCanMutateBoard('create assistant welcome note'),
+      ensureTeammateWelcomeNote: [
+        requireMinimumRole(ROLES.MEMBER, 'create teammate welcome note'),
+        ensureCanMutateBoard('create teammate welcome note'),
       ],
     },
     after: {
@@ -3200,34 +3204,28 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      setPrimaryAssistant: [
+      setPrimaryTeammate: [
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
-          if (context.result) {
-            app.service('boards').emit('patched', context.result);
-          }
+          emitBoardPatched(context.result);
           return context;
         },
       ],
-      clearPrimaryAssistant: [
+      clearPrimaryTeammate: [
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
-          if (context.result) {
-            app.service('boards').emit('patched', context.result);
-          }
+          emitBoardPatched(context.result);
           return context;
         },
       ],
-      ensureAssistantWelcomeNote: [
+      ensureTeammateWelcomeNote: [
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
-          const assistantWelcomeNoteMutated = (
-            context.params as typeof context.params & {
-              assistantWelcomeNoteMutated?: boolean;
-            }
-          ).assistantWelcomeNoteMutated;
-          if (context.result && assistantWelcomeNoteMutated) {
-            app.service('boards').emit('patched', context.result);
+          const teammateWelcomeNoteMutated = context.params as typeof context.params & {
+            teammateWelcomeNoteMutated?: boolean;
+          };
+          if (context.result && teammateWelcomeNoteMutated.teammateWelcomeNoteMutated) {
+            emitBoardPatched(context.result);
           }
           return context;
         },

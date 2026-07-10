@@ -142,7 +142,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
           navigation.goToBoard(result.item.board_id);
           break;
         case 'branch':
-        case 'assistant':
+        case 'teammate':
           navigation.goToBranch(result.item.branch_id);
           break;
         case 'session':

@@ -814,6 +814,38 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/archive',
+    {
+      async create(data: { includeChildren?: boolean } | undefined, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Session ID required');
+        return sessionsService.archive(id, data, params);
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'archive sessions' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/unarchive',
+    {
+      async create(data: { includeChildren?: boolean } | undefined, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Session ID required');
+        return sessionsService.unarchive(id, data, params);
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'unarchive sessions' },
+    },
+    requireAuth
+  );
+
   /**
    * Restart the Zellij pane for a Claude Code CLI session.
    *
@@ -3618,7 +3650,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           description: config.daemon?.instanceDescription,
         },
         onboarding: {
-          assistantPending:
+          teammatePending:
+            config.onboarding?.teammatePending ??
             config.onboarding?.assistantPending ??
             config.onboarding?.persistedAgentPending ??
             false,

@@ -5,10 +5,10 @@
  */
 
 /** Default Codex model */
-export const DEFAULT_CODEX_MODEL = 'gpt-5.5';
+export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol';
 
 /** Codex Mini model for cost-effective usage */
-export const CODEX_MINI_MODEL = 'gpt-5.4-mini';
+export const CODEX_MINI_MODEL = 'gpt-5.6-terra';
 
 export type CodexModelStatus = 'current' | 'known';
 export type CodexModelAvailability = 'supported' | 'not-selectable' | 'unsupported';
@@ -30,14 +30,45 @@ export type CodexModelLifecycleMetadata = {
  * Uses `as const satisfies` to preserve literal key types for CodexModel.
  */
 const _CODEX_MODEL_REGISTRY = {
-  // GPT-5.5 models (newest frontier model)
-  'gpt-5.5': {
-    name: 'GPT-5.5 (Recommended)',
-    description:
-      "OpenAI's newest frontier model for complex coding, computer use, knowledge work, and research workflows in Codex.",
+  // GPT-5.6 models
+  'gpt-5.6-sol': {
+    name: 'GPT-5.6 Sol (Recommended)',
+    description: 'Flagship GPT-5.6 model for complex, open-ended work',
     status: 'current',
     selectable: true,
     availability: 'supported',
+  },
+  'gpt-5.6-terra': {
+    name: 'GPT-5.6 Terra',
+    description: 'Balanced GPT-5.6 model for everyday reasoning and tool use',
+    status: 'current',
+    selectable: true,
+    availability: 'supported',
+  },
+  'gpt-5.6-luna': {
+    name: 'GPT-5.6 Luna',
+    description: 'Fast GPT-5.6 model for clear, repeatable, high-volume tasks',
+    status: 'current',
+    selectable: true,
+    availability: 'supported',
+  },
+  'gpt-5.6': {
+    name: 'GPT-5.6',
+    description: 'Alias that routes to GPT-5.6 Sol',
+    status: 'current',
+    selectable: false,
+    availability: 'not-selectable',
+    replacement: DEFAULT_CODEX_MODEL,
+  },
+  // GPT-5.5 models
+  'gpt-5.5': {
+    name: 'GPT-5.5',
+    description:
+      'Previous frontier model for complex coding, computer use, knowledge work, and research workflows in Codex.',
+    status: 'known',
+    selectable: false,
+    availability: 'not-selectable',
+    replacement: DEFAULT_CODEX_MODEL,
   },
   'gpt-5.5-pro': {
     name: 'GPT-5.5 Pro',
@@ -67,9 +98,10 @@ const _CODEX_MODEL_REGISTRY = {
   'gpt-5.4-mini': {
     name: 'GPT-5.4 Mini',
     description: 'Fast, efficient model for responsive coding tasks and subagents',
-    status: 'current',
-    selectable: true,
-    availability: 'supported',
+    status: 'known',
+    selectable: false,
+    availability: 'not-selectable',
+    replacement: CODEX_MINI_MODEL,
   },
   'gpt-5.4-nano': {
     name: 'GPT-5.4 Nano',
@@ -266,6 +298,11 @@ const DEFAULT_CODEX_CONTEXT_LIMIT = 200_000;
  * Unknown models fall back to 200k.
  */
 export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
+  // GPT-5.6 models
+  'gpt-5.6-sol': 1_050_000,
+  'gpt-5.6-terra': 1_050_000,
+  'gpt-5.6-luna': 1_050_000,
+  'gpt-5.6': 1_050_000,
   // GPT-5.5 models
   'gpt-5.5': 1_050_000,
   'gpt-5.5-pro': 1_050_000,

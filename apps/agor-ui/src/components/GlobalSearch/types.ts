@@ -1,6 +1,6 @@
 import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
 
-export type SearchEntityType = 'session' | 'branch' | 'assistant' | 'artifact' | 'board' | 'mcp';
+export type SearchEntityType = 'session' | 'branch' | 'teammate' | 'artifact' | 'board' | 'mcp';
 
 export type ChipFilter = 'all' | SearchEntityType;
 
@@ -13,7 +13,7 @@ export type ChipFilter = 'all' | SearchEntityType;
 export const SECTION_ORDER: SearchEntityType[] = [
   'session',
   'branch',
-  'assistant',
+  'teammate',
   'artifact',
   'board',
   'mcp',
@@ -23,7 +23,7 @@ export const TYPE_CHIP_ORDER: ChipFilter[] = [
   'all',
   'session',
   'branch',
-  'assistant',
+  'teammate',
   'artifact',
   'board',
   'mcp',
@@ -38,7 +38,7 @@ export const TYPE_CHIP_LABELS: Record<ChipFilter, string> = {
   all: 'All',
   session: 'Session',
   branch: 'Branch',
-  assistant: 'Assistant',
+  teammate: 'Teammate',
   artifact: 'Artifact',
   board: 'Board',
   mcp: 'MCP',
@@ -49,7 +49,7 @@ export const TYPE_CHIP_LABELS: Record<ChipFilter, string> = {
 export const SECTION_LABELS: Record<SearchEntityType, string> = {
   session: 'Sessions',
   branch: 'Branches',
-  assistant: 'Assistants',
+  teammate: 'Teammates',
   artifact: 'Artifacts',
   board: 'Boards',
   mcp: 'MCP',
@@ -58,7 +58,7 @@ export const SECTION_LABELS: Record<SearchEntityType, string> = {
 export type SearchResultItem =
   | { type: 'session'; item: Session; parentBranch?: Branch }
   | { type: 'branch'; item: Branch }
-  | { type: 'assistant'; item: Branch }
+  | { type: 'teammate'; item: Branch }
   | { type: 'artifact'; item: Artifact; parentBranch?: Branch }
   | { type: 'board'; item: Board }
   | { type: 'mcp'; item: MCPServer };
@@ -80,7 +80,7 @@ export type ResultsByType = {
 export const EMPTY_RESULTS: ResultsByType = {
   session: [],
   branch: [],
-  assistant: [],
+  teammate: [],
   artifact: [],
   board: [],
   mcp: [],
@@ -97,7 +97,7 @@ export type SearchCounts = EntityRecord<number>;
 export const EMPTY_COUNTS: SearchCounts = {
   session: 0,
   branch: 0,
-  assistant: 0,
+  teammate: 0,
   artifact: 0,
   board: 0,
   mcp: 0,

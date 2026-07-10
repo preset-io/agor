@@ -1,8 +1,8 @@
-import type { BoardAssistantPanelTab } from '../BoardAssistantPanel';
+import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 
 export interface BoardLeftPanelState {
   collapsed: boolean;
-  activeTab: BoardAssistantPanelTab;
+  activeTab: BoardTeammatePanelTab;
 }
 
 export const getShowCommentsPanelState = (state: BoardLeftPanelState): BoardLeftPanelState => ({
@@ -15,7 +15,7 @@ export const getToggleBoardPanelState = (state: BoardLeftPanelState): BoardLeftP
   if (state.collapsed) {
     return {
       collapsed: false,
-      activeTab: 'assistant',
+      activeTab: 'teammate',
     };
   }
 
@@ -25,10 +25,10 @@ export const getToggleBoardPanelState = (state: BoardLeftPanelState): BoardLeftP
   };
 };
 
-// Used by every AssistantPanelRail button when the panel is collapsed:
+// Used by every TeammatePanelRail button when the panel is collapsed:
 // expand onto whichever tab was clicked.
-export const getSelectAssistantPanelTabState = (
-  tab: BoardAssistantPanelTab
+export const getSelectTeammatePanelTabState = (
+  tab: BoardTeammatePanelTab
 ): BoardLeftPanelState => ({
   collapsed: false,
   activeTab: tab,

@@ -2303,6 +2303,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
   const [channelType, setChannelType] = useState<ChannelType>('slack');
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
+  // One-shot flag consumed by the "pre-populate agentic config" effect below —
+  // set whenever handleEdit hydrates the edit form from a channel's persisted
+  // config, so that hydration is never immediately overwritten by the user's
+  // global defaults. Value-based guards (e.g. comparing selectedAgent to the
+  // channel's persisted agent) can't distinguish "just opened" from "switched
+  // away and back", so a one-shot ref is used instead.
+  const skipAgentDefaultsAfterEditHydrationRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
@@ -2510,8 +2517,19 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
   }, [client, editingChannel, showError]);
 
-  // Pre-populate agentic config form with user defaults when agent changes
+  // Pre-populate agentic config form with user defaults when agent changes.
+  // The initial edit-form hydration also flows through selectedAgent/editModalOpen,
+  // so skip exactly that one run (consuming the one-shot ref set by handleEdit) —
+  // otherwise applying the user's *global* defaults would stomp the channel's own
+  // saved config (e.g. silently wiping mcpServerIds that were just hydrated from
+  // channel.agentic_config). Every subsequent agent change — including switching
+  // back to the channel's original agent — legitimately re-applies that agent's
+  // defaults, so the form never holds a silent mix of stale fields.
   useEffect(() => {
+    if (skipAgentDefaultsAfterEditHydrationRef.current) {
+      skipAgentDefaultsAfterEditHydrationRef.current = false;
+      return;
+    }
     const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
     if (agentDefaults) {
       const activeForm = editModalOpen ? editForm : createForm;
@@ -2720,6 +2738,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setEditingChannel(channel);
     setChannelType(channel.channel_type);
     const agent = channel.agentic_config?.agent || 'claude-code';
+    skipAgentDefaultsAfterEditHydrationRef.current = true;
     setSelectedAgent(agent);
     resetSlackState();
     editForm.resetFields();

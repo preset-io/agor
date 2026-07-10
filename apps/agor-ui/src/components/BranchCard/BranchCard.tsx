@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
-import { getAssistantConfig, isAssistant, isSessionExecuting } from '@agor-live/client';
+import { getTeammateConfig, isSessionExecuting, isTeammate } from '@agor-live/client';
 import {
   BranchesOutlined,
   CodeOutlined,
@@ -127,6 +127,7 @@ const BranchCardComponent = ({
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [archiveDeleteModalMounted, setArchiveDeleteModalMounted] = useState(false);
 
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
@@ -209,8 +210,8 @@ const BranchCardComponent = ({
   const isFailed = branch.filesystem_status === 'failed';
 
   // Check if this branch is a persisted agent
-  const assistantConfig = useMemo(() => getAssistantConfig(branch), [branch]);
-  const isAgent = isAssistant(branch);
+  const teammateConfig = useMemo(() => getTeammateConfig(branch), [branch]);
+  const isAgent = isTeammate(branch);
 
   // True when one of this branch's sessions is the currently opened
   // conversation. Drives the "focused" highlight on the canvas card and
@@ -265,7 +266,7 @@ const BranchCardComponent = ({
   // The two are deliberately unified: from the user's perspective both
   // answer "what am I looking at right now?". Rendered as a dashed
   // outline in `colorTextBase` so it reads as neutral against any zone /
-  // assistant accent and works in both dark and light modes. Dashed
+  // teammate accent and works in both dark and light modes. Dashed
   // because (per design discussion) it visually screams "selection"
   // without leaning on a colored ring that would compete with the white
   // attention halo. Dash length is the browser default — CSS doesn't
@@ -298,7 +299,7 @@ const BranchCardComponent = ({
   // states can stack cleanly:
   //   • `boxShadow` — attention halo for needs_attention / awaiting prompt
   //   • `outline`   — dashed selected state (focused OR active URL target)
-  //   • `borderLeft` — thick accent stripe for assistant branches
+  //   • `borderLeft` — thick accent stripe for teammate branches
   //   • `borderColor` — zone color when pinned (no other states use it)
   // outline + box-shadow are paint-only, so they don't disturb layout
   // and don't fight with each other or with `borderLeft`.
@@ -318,13 +319,13 @@ const BranchCardComponent = ({
       style.borderWidth = 1;
     }
     if (isAgent) {
-      // Assistant accent stripe: thick left border in `colorInfo`. Drops
+      // Teammate accent stripe: thick left border in `colorInfo`. Drops
       // the previous full `colorInfo` border (which collided with the
       // primary-color selected ring in the default theme where
       // colorInfo === colorPrimary). The stripe lives only on the left
       // edge so it doesn't compete with the dashed selected outline,
       // and composes with the zone-color border on the other three
-      // edges when an assistant is also pinned.
+      // edges when a teammate is also pinned.
       style.borderLeft = `4px solid ${token.colorInfo}`;
     }
     return style;
@@ -388,8 +389,8 @@ const BranchCardComponent = ({
             >
               {isCreating || hasRunningSession ? (
                 <Spin size="large" />
-              ) : isAgent && assistantConfig?.emoji ? (
-                <span style={{ fontSize: 32 }}>{assistantConfig.emoji}</span>
+              ) : isAgent && teammateConfig?.emoji ? (
+                <span style={{ fontSize: 32 }}>{teammateConfig.emoji}</span>
               ) : isAgent ? (
                 <RobotOutlined
                   style={{
@@ -409,16 +410,16 @@ const BranchCardComponent = ({
           )}
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
             {isAgent ? (
-              // Assistants are identified by their persona, not their git
+              // Teammates are identified by their persona, not their git
               // location — render the agent name in the prominent slot
               // and drop the repo/branch subtitle. Repo + branch are still
               // available in the branch settings modal for power users.
               <Typography.Title
                 level={4}
                 style={{ margin: 0, fontWeight: 600 }}
-                ellipsis={{ tooltip: assistantConfig?.displayName ?? branch.name }}
+                ellipsis={{ tooltip: teammateConfig?.displayName ?? branch.name }}
               >
-                {assistantConfig?.displayName ?? branch.name}
+                {teammateConfig?.displayName ?? branch.name}
               </Typography.Title>
             ) : (
               <>
@@ -504,7 +505,10 @@ const BranchCardComponent = ({
               <ArchiveActionButton
                 tooltip="Archive or delete branch"
                 disabled={connectionDisabled}
-                onClick={() => setArchiveDeleteModalOpen(true)}
+                onClick={() => {
+                  setArchiveDeleteModalMounted(true);
+                  setArchiveDeleteModalOpen(true);
+                }}
               />
             )}
           </div>
@@ -579,7 +583,7 @@ const BranchCardComponent = ({
         </div>
       )}
 
-      {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
+      {/* Sessions & Scheduled Runs - composable content shared with the teammate panel */}
       <div
         className={REACT_FLOW_NO_DRAG_CLASS}
         style={sectionsReady ? undefined : { minHeight: sessionShellMinHeight }}
@@ -625,18 +629,21 @@ const BranchCardComponent = ({
         />
       )}
 
-      {/* Archive/Delete Modal */}
-      <ArchiveDeleteBranchModal
-        open={archiveDeleteModalOpen}
-        branch={branch}
-        sessionCount={sessions.length}
-        environmentRunning={branch.environment_instance?.status === 'running'}
-        onConfirm={(options) => {
-          onArchiveOrDelete?.(branch.branch_id, options);
-          setArchiveDeleteModalOpen(false);
-        }}
-        onCancel={() => setArchiveDeleteModalOpen(false)}
-      />
+      {/* Branch cards are repeated across the canvas, so mount this only on demand. */}
+      {archiveDeleteModalMounted && (
+        <ArchiveDeleteBranchModal
+          open={archiveDeleteModalOpen}
+          branch={branch}
+          sessionCount={sessions.length}
+          environmentRunning={branch.environment_instance?.status === 'running'}
+          onConfirm={(options) => {
+            onArchiveOrDelete?.(branch.branch_id, options);
+            setArchiveDeleteModalOpen(false);
+          }}
+          onCancel={() => setArchiveDeleteModalOpen(false)}
+          afterClose={() => setArchiveDeleteModalMounted(false)}
+        />
+      )}
     </Card>
   );
 };

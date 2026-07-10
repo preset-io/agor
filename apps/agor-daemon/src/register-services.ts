@@ -325,9 +325,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           'toYaml',
           'fromYaml',
           'clone',
-          'setPrimaryAssistant',
-          'clearPrimaryAssistant',
-          'ensureAssistantWelcomeNote',
+          'setPrimaryTeammate',
+          'clearPrimaryTeammate',
+          'ensureTeammateWelcomeNote',
         ],
       }
     );
@@ -368,7 +368,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'remove',
       'updateEnvironment',
       'initializeUnixGroup',
-      'ensureAssistantKnowledgeNamespace',
+      'ensureTeammateKnowledgeNamespace',
     ],
   });
 

@@ -62,6 +62,30 @@ describe('BranchCard drag handle', () => {
     expect(onOpenTerminal).toHaveBeenCalledWith([], 'branch-1');
   });
 
+  it('mounts the archive modal on demand and removes it after close', async () => {
+    render(
+      <ConnectionProvider value={connected}>
+        <BranchCard
+          branch={branch}
+          repo={repo}
+          sessions={[]}
+          userById={new Map()}
+          client={null}
+          onArchiveOrDelete={vi.fn()}
+        />
+      </ConnectionProvider>
+    );
+
+    expect(screen.queryByText('Archive or Delete Branch')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Archive or delete branch'));
+    expect(await screen.findByText('Archive or Delete Branch')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.queryByText('Archive or Delete Branch')).not.toBeInTheDocument()
+    );
+  });
+
   it('uses a darker primary background surface while a branch session is executing', async () => {
     const runningSession = {
       session_id: 'session-running',

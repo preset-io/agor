@@ -13,9 +13,10 @@
  *   credential class with no server-probeable path (gemini Google-login, cursor,
  *   copilot native). Callers must FAIL SAFE and treat this as "possibly connected".
  *
- * Credential resolution mirrors what the executor sees at session-start: the full
- * per-tool credential set (DB `agentic_tools` + DB `env_vars` + config.yaml + OS
- * env), plus the native filesystem path (claude via the SDK's `accountInfo()`
+ * Credential resolution mirrors what the executor sees at session-start: the
+ * primary per-tool credential (DB `agentic_tools` > config.yaml > OS env, via
+ * `resolveApiKey`), then the tool's user `env_vars` and a Claude subscription
+ * token, then the native filesystem path (claude via the SDK's `accountInfo()`
  * reading `~/.claude/.credentials.json`; codex reading `~/.codex/auth.json`).
  *
  * Residual: in insulated/strict Unix modes the probe runs as the DAEMON Unix user,
@@ -27,19 +28,21 @@
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { resolveApiKeySync, resolveUserEnvironment } from '@agor/core/config';
+import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
 import { Claude } from '@agor/core/sdk';
 import type {
   AgenticToolName,
-  ApiKeyName,
   AuthCheckResult,
   AuthCheckStatus,
   AuthenticatedParams,
   UserID,
 } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
+
+/** Tools where no API key is required — native CLI/OAuth auth is a real, usable path. */
+const NATIVE_AUTH_TOOLS = new Set<string>(['claude-code', 'codex']);
 
 const FETCH_TIMEOUT_MS = 8_000;
 const SDK_AUTH_PROBE_TIMEOUT_MS = 10_000;
@@ -67,20 +70,12 @@ const unknown = (hint?: string): AuthCheckResult => ({
   hint,
 });
 
-/** Fold a set of probe outcomes into a single fail-safe verdict. */
-function concludeFromEvidence(evidence: AuthCheckStatus[]): AuthCheckResult {
-  if (evidence.length === 0 || evidence.includes('unknown')) {
-    return unknown('Could not verify any credential for this tool.');
-  }
-  return unauthenticated('none');
-}
-
 /**
  * Verify Claude Code auth by spawning the SDK in streaming-input mode and reading
  * `accountInfo()` from its init handshake. When `env` is supplied it REPLACES the
- * subprocess environment (per the SDK contract), so callers must spread
- * `process.env` and layer the credential on top — used to inject a resolved
- * subscription/OAuth token so the probe sees it exactly as a real session would.
+ * subprocess environment (per the SDK contract), so callers must layer the
+ * credential on a minimal safe env — used to inject a resolved subscription/OAuth
+ * token so the probe sees it exactly as a real session would.
  *
  * `ok: false` means the probe itself failed (CLI missing, timeout, exception) —
  * an inconclusive `unknown`, NOT proof of missing auth. `ok: true` with an empty
@@ -145,6 +140,50 @@ function classifyClaudeProbe(probe: {
     return authed(method, hintParts.length > 0 ? hintParts.join(' • ') : undefined);
   }
   return unauthenticated('none', 'No Claude Code authentication detected.');
+}
+
+/** Claude subscription tokens from `claude setup-token` carry an `sk-ant-oat` prefix. */
+function isClaudeSubscriptionToken(token: string): boolean {
+  return token.trim().startsWith('sk-ant-oat');
+}
+
+/**
+ * Build a MINIMAL probe env carrying only the subscription token (plus PATH and
+ * proxy vars) so the SDK validates in isolation without leaking all daemon env.
+ */
+function buildClaudeProbeEnv(token: string): Record<string, string> {
+  const env: Record<string, string> = {
+    CLAUDE_CODE_OAUTH_TOKEN: token.trim(),
+  };
+
+  // The SDK uses an explicit bundled Claude binary path, but preserving PATH
+  // keeps child-process basics working without exposing all daemon env vars.
+  if (process.env.PATH) env.PATH = process.env.PATH;
+
+  // Preserve common proxy settings so validation works in proxied installs.
+  for (const key of [
+    'HTTPS_PROXY',
+    'HTTP_PROXY',
+    'NO_PROXY',
+    'https_proxy',
+    'http_proxy',
+    'no_proxy',
+  ]) {
+    const value = process.env[key];
+    if (value) env[key] = value;
+  }
+
+  return env;
+}
+
+/**
+ * Validate a Claude subscription token by injecting it into an isolated probe env.
+ * A probe failure (timeout/exception) is `unknown`, not proof of an invalid token.
+ */
+async function validateClaudeSubscriptionToken(token: string): Promise<AuthCheckStatus> {
+  const probe = await probeClaudeCodeAuth(buildClaudeProbeEnv(token));
+  if (!probe.ok) return 'unknown';
+  return probe.account?.tokenSource ? 'authenticated' : 'unauthenticated';
 }
 
 /**
@@ -267,46 +306,11 @@ async function validateApiKey(tool: string, key: string): Promise<AuthCheckStatu
   }
 }
 
-/** Map a raw-key validation status into a full result (settings "Test Connection"). */
-function resultFromKeyStatus(status: AuthCheckStatus, tool: string): AuthCheckResult {
+/** Map a validated API-key status into a full result, preserving the caller's rejection hint. */
+function resultFromKeyStatus(status: AuthCheckStatus, rejectedHint: string): AuthCheckResult {
   if (status === 'authenticated') return authed('api-key');
-  if (status === 'unauthenticated') {
-    return unauthenticated(
-      'api-key',
-      tool === 'copilot'
-        ? 'GitHub token rejected — check the token has not expired or been revoked.'
-        : 'Key rejected by provider — double-check and try again.'
-    );
-  }
+  if (status === 'unauthenticated') return unauthenticated('api-key', rejectedHint);
   return unknown('Could not reach the provider to verify this key.');
-}
-
-interface ResolvedToolCredentials {
-  apiKey?: string;
-  /** claude-code only: a subscription/OAuth token to inject into the SDK probe env. */
-  oauthToken?: string;
-}
-
-/**
- * Resolve the tool's full credential set: DB `agentic_tools[tool]` + DB `env_vars`
- * (via `resolveUserEnvironment`), then config.yaml + OS env (via `resolveApiKeySync`).
- * DB wins over config/env, matching spawn-time precedence.
- */
-async function resolveToolCredentials(
-  tool: AgenticToolName,
-  keyName: ApiKeyName,
-  userId: UserID | undefined,
-  db: TenantScopeAwareDatabase
-): Promise<ResolvedToolCredentials> {
-  const userEnv = userId ? await resolveUserEnvironment(userId, db, { tool }) : {};
-  const pick = (name: ApiKeyName): string | undefined =>
-    userEnv[name] || resolveApiKeySync(name).apiKey;
-
-  const creds: ResolvedToolCredentials = { apiKey: pick(keyName) };
-  if (tool === 'claude-code') {
-    creds.oauthToken = pick('CLAUDE_CODE_OAUTH_TOKEN') || pick('ANTHROPIC_AUTH_TOKEN');
-  }
-  return creds;
 }
 
 export function createCheckAuthService(db: TenantScopeAwareDatabase) {
@@ -329,47 +333,112 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       }
 
       // Caller provided a raw key (wizard / settings "Test Connection") — validate directly.
+      // Claude subscription tokens from `claude setup-token` are not Anthropic Console
+      // API keys; the Claude SDK/CLI reads them from CLAUDE_CODE_OAUTH_TOKEN.
       if (rawKey?.trim()) {
-        return resultFromKeyStatus(await validateApiKey(tool, rawKey.trim()), tool);
+        if (tool === 'claude-code' && isClaudeSubscriptionToken(rawKey)) {
+          const status = await validateClaudeSubscriptionToken(rawKey);
+          if (status === 'authenticated') return authed('oauth');
+          if (status === 'unauthenticated') {
+            return unauthenticated(
+              'none',
+              'Claude subscription token rejected — run `claude setup-token` again and paste the fresh token.'
+            );
+          }
+          return unknown('Could not verify the Claude subscription token — try again.');
+        }
+
+        return resultFromKeyStatus(
+          await validateApiKey(tool, rawKey.trim()),
+          tool === 'copilot'
+            ? 'GitHub token rejected — check the token has not expired or been revoked.'
+            : 'Key rejected by provider — double-check and try again.'
+        );
       }
 
+      // Otherwise resolve from stored credentials (user > config.yaml > env > native).
       const toolName = tool as AgenticToolName;
-      const creds = await resolveToolCredentials(toolName, keyName, userId, db);
+      const { apiKey, useNativeAuth, decryptionFailed } = await resolveApiKey(keyName, {
+        userId,
+        db,
+        tool: toolName,
+      });
 
-      if (toolName === 'claude-code') {
-        const evidence: AuthCheckStatus[] = [];
-        if (creds.apiKey) {
-          const status = await validateApiKey('claude-code', creds.apiKey);
-          if (status === 'authenticated') return authed('api-key');
-          evidence.push(status);
-        }
-        if (creds.oauthToken) {
-          const result = classifyClaudeProbe(
-            await probeClaudeCodeAuth({ ...process.env, CLAUDE_CODE_OAUTH_TOKEN: creds.oauthToken })
+      if (decryptionFailed) {
+        return unauthenticated(
+          'none',
+          'Stored key could not be decrypted (master-secret mismatch). Re-enter it in Settings → Agent Setup.'
+        );
+      }
+
+      let effectiveUserEnv: Record<string, string> | undefined;
+      const getEffectiveUserEnv = async () => {
+        if (!userId) return {};
+        effectiveUserEnv ??= await resolveUserEnvironment(userId, db, { tool: toolName });
+        return effectiveUserEnv;
+      };
+
+      if (apiKey) {
+        return resultFromKeyStatus(
+          await validateApiKey(tool, apiKey),
+          'Stored key was rejected by provider — update it in Settings → Agent Setup.'
+        );
+      }
+
+      // User Settings → Env Vars is not the recommended credential home, but executors
+      // do receive those values. Validate that setup through the same user/tool env
+      // resolver used to spawn sessions.
+      const userEnv = await getEffectiveUserEnv();
+      const userEnvApiKey = userEnv[keyName];
+      if (userEnvApiKey) {
+        return resultFromKeyStatus(
+          await validateApiKey(tool, userEnvApiKey),
+          'Stored env var key was rejected by provider — update it in Settings → Env Vars.'
+        );
+      }
+
+      if (tool === 'claude-code') {
+        const subscriptionResolution = await resolveApiKey('CLAUDE_CODE_OAUTH_TOKEN', {
+          userId,
+          db,
+          tool: 'claude-code',
+        });
+
+        if (subscriptionResolution.decryptionFailed) {
+          return unauthenticated(
+            'none',
+            'Stored Claude subscription token could not be decrypted (master-secret mismatch). Re-enter it in Settings → Agent Setup.'
           );
-          if (result.status === 'authenticated') return result;
-          evidence.push(result.status);
         }
-        if (!creds.apiKey && !creds.oauthToken) {
-          const result = classifyClaudeProbe(await probeClaudeCodeAuth());
-          if (result.status !== 'unauthenticated') return result;
-          evidence.push(result.status);
+
+        const subscriptionToken = subscriptionResolution.apiKey || userEnv.CLAUDE_CODE_OAUTH_TOKEN;
+        if (subscriptionToken) {
+          const status = await validateClaudeSubscriptionToken(subscriptionToken);
+          if (status === 'authenticated') return authed('oauth');
+          if (status === 'unauthenticated') {
+            return unauthenticated(
+              'none',
+              subscriptionResolution.apiKey
+                ? 'Stored Claude subscription token was rejected — update it in Settings → Agent Setup.'
+                : 'Claude subscription token env var was rejected — update CLAUDE_CODE_OAUTH_TOKEN in Settings → Env Vars.'
+            );
+          }
+          return unknown('Could not verify the Claude subscription token — try again.');
         }
-        return concludeFromEvidence(evidence);
       }
 
-      if (toolName === 'codex') {
-        if (creds.apiKey) {
-          return resultFromKeyStatus(await validateApiKey('codex', creds.apiKey), 'codex');
+      // Native filesystem auth for the tools that have a server-probeable path.
+      if (useNativeAuth && NATIVE_AUTH_TOOLS.has(tool)) {
+        if (tool === 'claude-code') {
+          return classifyClaudeProbe(await probeClaudeCodeAuth());
         }
-        return probeCodexAuth();
+        if (tool === 'codex') {
+          return probeCodexAuth();
+        }
       }
 
-      // gemini / copilot / cursor: an API key is verifiable; their native login
+      // gemini / copilot / cursor: an API key is verifiable, but their native login
       // (Google account, Cursor, Copilot) is NOT server-probeable — no key ⇒ unknown.
-      if (creds.apiKey) {
-        return resultFromKeyStatus(await validateApiKey(toolName, creds.apiKey), toolName);
-      }
       return unknown(
         `No ${keyName} configured and ${toolName} native login can't be verified from the server.`
       );

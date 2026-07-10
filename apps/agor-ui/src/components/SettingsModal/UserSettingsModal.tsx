@@ -1,4 +1,5 @@
 import type {
+  AgenticToolConfigField,
   AgenticToolName,
   AgorClient,
   EnvVarMetadata,
@@ -41,6 +42,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById } from '../../store/selectors';
+import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import {
@@ -386,8 +388,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     await saveAgenticConfigs(getAgenticConfigToolsToSave());
   };
 
-  const handleUpdate = async () => {
-    if (!user) return;
+  const handleUpdate = async (): Promise<boolean> => {
+    if (!user) return false;
 
     try {
       await form.validateFields(['email', 'name', 'emoji', 'role', 'unix_username']);
@@ -423,8 +425,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       form.setFieldValue('password', '');
       await syncUserGroups(values.groupIds || []);
       await saveDirtyAgenticConfigs();
+      return true;
     } catch (err) {
       console.error('Validation failed:', err);
+      return false;
     }
   };
 
@@ -433,7 +437,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // service merges only the touched fields and encrypts at rest.
   const handleToolFieldSave = async (
     tool: AgenticToolName,
-    field: string,
+    field: AgenticToolConfigField,
     value: string
   ): Promise<void> => {
     if (!user) return;
@@ -441,11 +445,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, {
-        agentic_tools: {
-          [tool]: { [field]: value },
-        } as UpdateUserInput['agentic_tools'],
-      });
+      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, value));
       setAgenticToolStatus((prev) => ({
         ...prev,
         [tool]: { ...(prev[tool] ?? {}), [field]: true },
@@ -459,17 +459,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   // Clear a per-tool credential field by sending `null` in the patch.
-  const handleToolFieldClear = async (tool: AgenticToolName, field: string): Promise<void> => {
+  const handleToolFieldClear = async (
+    tool: AgenticToolName,
+    field: AgenticToolConfigField
+  ): Promise<void> => {
     if (!user) return;
     const spinnerKey = `${tool}.${field}`;
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, {
-        agentic_tools: {
-          [tool]: { [field]: null },
-        } as UpdateUserInput['agentic_tools'],
-      });
+      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, null));
       setAgenticToolStatus((prev) => {
         const nextToolFields = { ...(prev[tool] ?? {}) };
         delete nextToolFields[field];
@@ -581,8 +580,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     markAgenticConfigDirty(tool);
   };
 
-  const handleAudioSave = async () => {
-    if (!user || !onUpdate) return;
+  const handleAudioSave = async (): Promise<boolean> => {
+    if (!user || !onUpdate) return false;
 
     try {
       const values = audioForm.getFieldsValue();
@@ -601,8 +600,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       });
 
       await saveDirtyAgenticConfigs();
+      return true;
     } catch (error) {
       console.error('Failed to save audio settings:', error);
+      return false;
     }
   };
 
@@ -612,7 +613,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     switch (activeTab) {
       case 'general':
-        await handleUpdate();
+        if (!(await handleUpdate())) return;
         break;
       case 'env-vars':
       case 'personal-api-keys':
@@ -624,7 +625,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         await saveDirtyAgenticConfigs();
         break;
       case 'audio':
-        await handleAudioSave();
+        if (!(await handleAudioSave())) return;
         break;
       case 'claude-code':
       case 'claude-code-cli':
@@ -636,6 +637,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         await handleAgenticConfigSave(activeTab as AgenticToolName);
         break;
     }
+
+    // The footer action is Save-and-close. Tab-specific controls (credentials,
+    // environment variables, and API tokens) save inline and intentionally do
+    // not come through this handler, so those flows remain on the current tab.
+    handleClose();
   };
 
   const { token } = theme.useToken();
@@ -861,7 +867,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   Onboarding
                 </Typography.Title>
                 <Typography.Paragraph type="secondary">
-                  Reopen the assistant setup wizard from the beginning. Existing repos, boards,
+                  Reopen the AI teammate setup wizard from the beginning. Existing repos, boards,
                   branches, and credentials stay in place.
                 </Typography.Paragraph>
                 <Popconfirm
@@ -957,7 +963,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         // saving spinners are tracked in `savingToolField` keyed by `${tool}.${field}`.
         const toolFields = TOOL_FIELD_CONFIGS[toolName] ?? [];
         const fieldStatus: FieldStatus = agenticToolStatus[toolName] ?? {};
-        const savingForTool: Record<string, boolean> = Object.fromEntries(
+        const savingForTool: Partial<Record<AgenticToolConfigField, boolean>> = Object.fromEntries(
           toolFields.map((c) => [c.field, !!savingToolField[`${toolName}.${c.field}`]])
         );
         const defaultsPane = (
@@ -1006,7 +1012,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               onClear={(field) => handleToolFieldClear(toolName, field)}
               saving={savingForTool}
               publicValues={
-                user?.agentic_tools_public_values?.[toolName] as Record<string, string> | undefined
+                user?.agentic_tools_public_values?.[toolName] as
+                  | Partial<Record<AgenticToolConfigField, string>>
+                  | undefined
               }
             />
           </>

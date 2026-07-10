@@ -90,7 +90,7 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
           value={sessionMcpServerIds}
           onChange={handleChange}
           loading={saving}
-          disabled={!client}
+          disabled={!client || saving}
           style={{ width: '100%' }}
         />
 

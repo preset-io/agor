@@ -1,4 +1,4 @@
-import type { AgenticToolName } from '@agor-live/client';
+import type { AgenticToolConfigField, AgenticToolName } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -17,7 +17,7 @@ const { Text, Link } = Typography;
  */
 export interface AgenticToolFieldConfig {
   /** Env var name. Matches the key under `agentic_tools[tool][field]` on disk. */
-  field: string;
+  field: AgenticToolConfigField;
   /** Human-readable label shown above the input. */
   label: string;
   /** Short qualifier shown next to the label (e.g. "Pro / Max plan"). */
@@ -159,7 +159,7 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
 };
 
 /** Map field name → presence flag (true if the user has a value stored). */
-export type FieldStatus = Record<string, boolean>;
+export type FieldStatus = Partial<Record<AgenticToolConfigField, boolean>>;
 
 export interface ApiKeyFieldsProps {
   /**
@@ -170,11 +170,11 @@ export interface ApiKeyFieldsProps {
   /** Per-field set/unset flags from `user.agentic_tools[tool]`. */
   fieldStatus: FieldStatus;
   /** Persist a new value for one field (encrypts at rest). */
-  onSave: (field: string, value: string) => Promise<void>;
+  onSave: (field: AgenticToolConfigField, value: string) => Promise<void>;
   /** Clear the stored value for one field. */
-  onClear: (field: string) => Promise<void>;
+  onClear: (field: AgenticToolConfigField) => Promise<void>;
   /** Per-field saving spinner state. */
-  saving?: Record<string, boolean>;
+  saving?: Partial<Record<AgenticToolConfigField, boolean>>;
   /** Disable all inputs (e.g. while RBAC is loading). */
   disabled?: boolean;
   /**
@@ -192,7 +192,7 @@ export interface ApiKeyFieldsProps {
    * back to the user instead of just a "Set" tag — useful for base URLs
    * where the exact path matters.
    */
-  publicValues?: Record<string, string>;
+  publicValues?: Partial<Record<AgenticToolConfigField, string>>;
 }
 
 export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
@@ -206,11 +206,13 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
   publicValues,
 }) => {
   const { token } = theme.useToken();
-  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [inputValues, setInputValues] = useState<Partial<Record<AgenticToolConfigField, string>>>(
+    {}
+  );
 
   const configs = fields ?? TOOL_FIELD_CONFIGS[tool] ?? [];
 
-  const handleSave = async (field: string) => {
+  const handleSave = async (field: AgenticToolConfigField) => {
     const value = inputValues[field]?.trim();
     if (!value) return;
 
@@ -309,12 +311,15 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
           {/* Built-in per-field helpers retained from the legacy component. */}
           {field === 'CLAUDE_CODE_OAUTH_TOKEN' && !isSet && (
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              On the machine Agor runs sessions on, run{' '}
+              In any terminal with Claude Code installed, run{' '}
               <Text code style={{ fontSize: token.fontSizeSM }}>
                 claude setup-token
               </Text>{' '}
-              and paste the printed token here. This uses Claude subscription auth instead of a raw
-              API key.
+              and paste the printed token here. Need Claude Code?{' '}
+              <Link href="https://docs.claude.com/en/docs/claude-code/setup" target="_blank">
+                Install docs
+              </Link>
+              .
             </Text>
           )}
           {field === 'ANTHROPIC_AUTH_TOKEN' && (

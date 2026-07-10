@@ -113,7 +113,7 @@ interface SessionCanvasProps {
   // subscriptions rather than props — the canvas re-renders only for the slices
   // it actually consumes.
   branches: Branch[];
-  primaryAssistantId?: string | null;
+  primaryTeammateId?: string | null;
   currentUserId?: string;
   selectedSessionId?: string | null;
   /** Branch currently targeted by a `/w/<…>/` deep link — folds into
@@ -435,7 +435,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       board,
       client,
       branches,
-      primaryAssistantId,
+      primaryTeammateId,
       currentUserId,
       selectedSessionId,
       activeUrlTargetBranchId,
@@ -767,7 +767,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       const nodes: Node[] = [];
 
       branches.forEach((branch, index) => {
-        if (primaryAssistantId && branch.branch_id === primaryAssistantId) {
+        if (primaryTeammateId && branch.branch_id === primaryTeammateId) {
           return;
         }
 
@@ -853,7 +853,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       board?.objects,
       board?.board_id,
       branches,
-      primaryAssistantId,
+      primaryTeammateId,
       boardObjectByBranch,
       repoById,
       currentUserId,
@@ -2990,43 +2990,44 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         )}
 
         {/* Card Detail Modal */}
-        <CardModal
-          open={cardModalOpen}
-          card={selectedCard}
-          board={board}
-          zoneName={
-            selectedCard
-              ? (() => {
-                  const bo = boardObjectByCard.get(selectedCard.card_id);
-                  return bo?.zone_id ? zoneLabels[bo.zone_id] || undefined : undefined;
-                })()
-              : undefined
-          }
-          zoneColor={
-            selectedCard
-              ? (() => {
-                  const bo = boardObjectByCard.get(selectedCard.card_id);
-                  if (!bo?.zone_id) return undefined;
-                  const zoneObj = board?.objects?.[bo.zone_id];
-                  return zoneObj && zoneObj.type === 'zone'
-                    ? zoneObj.borderColor || zoneObj.color
-                    : undefined;
-                })()
-              : undefined
-          }
-          client={client}
-          onClose={() => {
-            setCardModalOpen(false);
-            setSelectedCard(null);
-          }}
-          onCardUpdated={(updatedCard) => {
-            setSelectedCard(updatedCard);
-          }}
-          onCardDeleted={() => {
-            setCardModalOpen(false);
-            setSelectedCard(null);
-          }}
-        />
+        {selectedCard && (
+          <CardModal
+            open={cardModalOpen}
+            card={selectedCard}
+            board={board}
+            zoneName={
+              selectedCard
+                ? (() => {
+                    const bo = boardObjectByCard.get(selectedCard.card_id);
+                    return bo?.zone_id ? zoneLabels[bo.zone_id] || undefined : undefined;
+                  })()
+                : undefined
+            }
+            zoneColor={
+              selectedCard
+                ? (() => {
+                    const bo = boardObjectByCard.get(selectedCard.card_id);
+                    if (!bo?.zone_id) return undefined;
+                    const zoneObj = board?.objects?.[bo.zone_id];
+                    return zoneObj && zoneObj.type === 'zone'
+                      ? zoneObj.borderColor || zoneObj.color
+                      : undefined;
+                  })()
+                : undefined
+            }
+            client={client}
+            onClose={() => {
+              setCardModalOpen(false);
+            }}
+            afterClose={() => setSelectedCard(null)}
+            onCardUpdated={(updatedCard) => {
+              setSelectedCard(updatedCard);
+            }}
+            onCardDeleted={() => {
+              setCardModalOpen(false);
+            }}
+          />
+        )}
       </div>
     );
   }
