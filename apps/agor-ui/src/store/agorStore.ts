@@ -60,8 +60,8 @@ interface AgorActions {
   /** Accepts a value or a functional updater (mirrors `useState`). */
   setItemCounts: (value: ItemCounts | ((prev: ItemCounts) => ItemCounts)) => void;
   /**
-   * Replace a single data map. Mirrors `useAgorData`'s `setMapSlice`: accepts a
-   * value or a functional updater, and short-circuits on `Object.is` equality so
+   * Replace a single data map: accepts a value or a functional updater, and
+   * short-circuits on `Object.is` equality so
    * a no-op write preserves the outer state reference (no subscriber notify).
    */
   setMap: <K extends keyof DataMaps>(

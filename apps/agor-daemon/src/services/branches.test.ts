@@ -159,6 +159,10 @@ function createServiceHarness() {
     get: vi.fn(async () => ({ repo_id: 'repo-1', local_path: '/tmp/repo', unix_group: null })),
   };
 
+  // The `branches` self-reference is used by updateEnvironment to manually
+  // emit the `patched` event (this.patch bypasses Feathers auto-dispatch).
+  const branchesService = { find: vi.fn(async () => []), emit: vi.fn() };
+
   const app = {
     sessionTokenService: {
       generateToken: vi.fn(async () => 'executor-token'),
@@ -167,14 +171,14 @@ function createServiceHarness() {
       if (path === 'board-objects') return boardObjectsService;
       if (path === 'sessions') return sessionsService;
       if (path === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
-      if (path === 'branches') return { find: vi.fn(async () => []) };
+      if (path === 'branches') return branchesService;
       if (path === 'repos') return reposService;
       throw new Error(`Unknown service: ${path}`);
     },
   } as unknown as Application;
 
   const service = new BranchesService(createTenantScopeTestDb() as never, app);
-  return { service, boardObjectsService, sessionsService };
+  return { service, boardObjectsService, sessionsService, branchesService };
 }
 
 async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
@@ -582,6 +586,53 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
+  it('emits patched with a hook-shaped publish context carrying tenant params (regression #1750)', async () => {
+    const { service, branchesService } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-emit' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-emit',
+      path: '/tmp/wt-env-emit',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_instance: { status: 'starting' },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+      return { ...branch, ...(data as object) } as never;
+    });
+
+    // Background transitions (health-monitor start→running, executor
+    // stop/nuke→stopped) call updateEnvironment with the tenant params. The
+    // manual emit MUST forward a HookContext-shaped third arg — Feathers passes
+    // it through UNCHANGED as the publish `hook`, so raw params (or nothing)
+    // leaves the publish handler without `context.path`/`context.params.tenant`
+    // and it suppresses the event to service-only sockets under
+    // `mode: required_from_auth`, leaving the env card spinner stuck.
+    const params = { tenant: { tenant_id: 'tenant-1', source: 'auth_claim' } };
+    await service.updateEnvironment(branch.branch_id, { status: 'running' }, params as never);
+
+    expect(branchesService.emit).toHaveBeenCalledTimes(1);
+    const [event, payload, hook] = branchesService.emit.mock.calls[0];
+    expect(event).toBe('patched');
+    expect(payload).toEqual(
+      expect.objectContaining({
+        branch_id: branch.branch_id,
+        environment_instance: expect.objectContaining({ status: 'running' }),
+      })
+    );
+    // Load-bearing: publish context needs path (branch RBAC scoping) and
+    // params.tenant (tenant channel resolution), not raw params.
+    expect(hook).toEqual(
+      expect.objectContaining({
+        path: 'branches',
+        event: 'patched',
+        id: branch.branch_id,
+        params,
+      })
+    );
+  });
+
   it('clears explicit undefined environment fields for in-process callers', async () => {
     const { service } = createServiceHarness();
     const branch = {
@@ -756,6 +807,66 @@ describe('BranchesService.patch primary assistant invariants', () => {
       /cannot be converted/i
     );
     expect(repository.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('BranchesService one-shot assistant creation wiring', () => {
+  // A branch created with assistant metadata on the initial row (the MCP create
+  // path and the UI path) must designate the board's primary assistant. This is
+  // the promotion that IS supported — as opposed to flipping an existing branch
+  // via patch, which the assertAssistantKindIsStable guard (deliberately) blocks.
+  function createAssistantWiringHarness() {
+    const boardsEmit = vi.fn();
+    const app = {
+      service(path: string) {
+        if (path === 'boards') return { emit: boardsEmit };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const boardRepo = {
+      setPrimaryAssistantIfUnset: vi.fn(async (boardId: string) => ({
+        board_id: boardId,
+        primary_assistant_id: 'assistant-new',
+      })),
+    };
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    (service as unknown as { boardRepo: typeof boardRepo }).boardRepo = boardRepo;
+    const invoke = (branch: Record<string, unknown>) =>
+      (
+        service as unknown as {
+          maybeSetBoardPrimaryAssistant: (b: unknown) => Promise<void>;
+        }
+      ).maybeSetBoardPrimaryAssistant(branch);
+    return { boardRepo, boardsEmit, invoke };
+  }
+
+  it('sets the board primary assistant pointer for a newly created assistant branch', async () => {
+    const { boardRepo, boardsEmit, invoke } = createAssistantWiringHarness();
+
+    await invoke({
+      branch_id: 'assistant-new' as BranchID,
+      board_id: 'board-a' as BoardID,
+      custom_context: assistantContext,
+    });
+
+    expect(boardRepo.setPrimaryAssistantIfUnset).toHaveBeenCalledWith('board-a', 'assistant-new');
+    expect(boardsEmit).toHaveBeenCalledWith(
+      'patched',
+      expect.objectContaining({ board_id: 'board-a' })
+    );
+  });
+
+  it('leaves the board primary pointer untouched for a non-assistant branch', async () => {
+    const { boardRepo, boardsEmit, invoke } = createAssistantWiringHarness();
+
+    await invoke({
+      branch_id: 'plain-new' as BranchID,
+      board_id: 'board-a' as BoardID,
+      custom_context: {},
+    });
+
+    expect(boardRepo.setPrimaryAssistantIfUnset).not.toHaveBeenCalled();
+    expect(boardsEmit).not.toHaveBeenCalled();
   });
 });
 

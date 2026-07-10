@@ -24,6 +24,9 @@ import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
+// Default-param `= new Map()` would mint a fresh Map on every render and
+// defeat every TaskBlock's React.memo whenever the prop is omitted.
+const EMPTY_USER_MAP = new Map<string, User>();
 // Shared empty-array sentinel so TaskBlock's `taskMessages` prop keeps a stable
 // reference for tasks whose messages haven't been loaded — otherwise `|| []`
 // would mint a fresh array on every render and thrash TaskBlock's React.memo.
@@ -117,6 +120,11 @@ export interface ConversationViewProps {
    * Emoji override for assistant avatar in message bubbles
    */
   assistantEmoji?: string;
+
+  /**
+   * When true, all task blocks are force-expanded (used by in-session search)
+   */
+  forceExpandAll?: boolean;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -125,7 +133,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     sessionId,
     agentic_tool,
     sessionModel,
-    userById = new Map(),
+    userById = EMPTY_USER_MAP,
     currentUserId,
     onScrollRef,
     onPermissionDecision,
@@ -136,6 +144,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     isActive = true,
     genealogy,
     assistantEmoji,
+    forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -479,7 +488,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               sessionModel={sessionModel}
               userById={userById}
               currentUserId={currentUserId}
-              isExpanded={expandedTaskIds.has(task.task_id)}
+              isExpanded={forceExpandAll || expandedTaskIds.has(task.task_id)}
               onExpandChange={handleTaskExpandChange}
               sessionId={sessionId}
               onPermissionDecision={onPermissionDecision}

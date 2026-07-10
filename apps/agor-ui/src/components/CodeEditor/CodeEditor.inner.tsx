@@ -7,13 +7,19 @@
  *
  * Split out into its own module so Vite can code-split the ~150KB of CM6
  * into its own chunk that only loads when an editor is actually rendered.
+ *
+ * All language packages are imported statically so they land in the same
+ * async chunk as @codemirror/state. A nested dynamic import() would create a
+ * second async chunk boundary that causes Rollup to duplicate @codemirror/state
+ * across chunks, breaking its instanceof checks at runtime.
  */
 import { json } from '@codemirror/lang-json';
+import { markdown } from '@codemirror/lang-markdown';
 import { yaml } from '@codemirror/lang-yaml';
 import { oneDark } from '@codemirror/theme-one-dark';
 import CodeMirror from '@uiw/react-codemirror';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
 
 export type CodeEditorLanguage = 'json' | 'yaml' | 'markdown';
@@ -36,9 +42,24 @@ export interface CodeEditorInnerProps {
 // avoids taking a direct dep on `@codemirror/state` (which is transitive).
 type LanguageExtensionFactory = typeof json;
 
+// Markdown is configured with codeLanguages so fenced code blocks get
+// syntax highlighting for yaml/json. Wrapped in a factory to match the
+// shape of the other entries and to defer the extension object creation
+// until the editor first renders.
+const markdownWithCodeLanguages: LanguageExtensionFactory = () =>
+  markdown({
+    codeLanguages: (info) => {
+      const languageName = info.trim().split(/\s+/, 1)[0]?.toLowerCase();
+      if (languageName === 'yaml' || languageName === 'yml') return yaml().language;
+      if (languageName === 'json') return json().language;
+      return null;
+    },
+  });
+
 const LANGUAGE_EXTENSIONS: Partial<Record<CodeEditorLanguage, LanguageExtensionFactory>> = {
   json,
   yaml,
+  markdown: markdownWithCodeLanguages,
 };
 
 const CodeEditorInner: React.FC<CodeEditorInnerProps> = ({
@@ -55,44 +76,11 @@ const CodeEditorInner: React.FC<CodeEditorInnerProps> = ({
   // `isDark` is the canonical dark/light signal from ThemeContext — already
   // accounts for `themeMode === 'custom'` rendering dark.
   const { isDark } = useTheme();
-  const [markdownExtensionFactory, setMarkdownExtensionFactory] =
-    useState<LanguageExtensionFactory | null>(null);
-
-  useEffect(() => {
-    if (language !== 'markdown' || markdownExtensionFactory) return;
-
-    let cancelled = false;
-    import('@codemirror/lang-markdown')
-      .then(({ markdown }) => {
-        const createMarkdownWithCodeLanguages = () =>
-          markdown({
-            codeLanguages: (info) => {
-              const languageName = info.trim().split(/\s+/, 1)[0]?.toLowerCase();
-              if (languageName === 'yaml' || languageName === 'yml') return yaml().language;
-              if (languageName === 'json') return json().language;
-              return null;
-            },
-          });
-        if (!cancelled) {
-          setMarkdownExtensionFactory(
-            () => createMarkdownWithCodeLanguages as LanguageExtensionFactory
-          );
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to load CodeMirror markdown highlighting.', error);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [language, markdownExtensionFactory]);
 
   const extensions = useMemo(() => {
-    const extensionFactory =
-      language === 'markdown' ? markdownExtensionFactory : LANGUAGE_EXTENSIONS[language];
+    const extensionFactory = LANGUAGE_EXTENSIONS[language];
     return extensionFactory ? [extensionFactory()] : [];
-  }, [language, markdownExtensionFactory]);
+  }, [language]);
 
   // ~20px per row is a close-enough match to Ant's TextArea sizing so editors
   // don't jump visibly when call sites migrate from `rows={14}` textareas.

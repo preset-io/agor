@@ -1,16 +1,18 @@
-import type {
-  AgorClient,
-  Board,
-  BoardComment,
-  Branch,
-  Repo,
-  Session,
-  User,
-} from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import { Drawer, Layout, Typography } from 'antd';
 import { useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { BRAND, brandMarkHref } from '../../branding/brand';
+import { useAgorStore } from '../../store/agorStore';
+import {
+  selectBoardById,
+  selectBranchById,
+  selectCommentById,
+  selectRepoById,
+  selectSessionById,
+  selectSessionsByBranch,
+  selectUserById,
+} from '../../store/selectors';
 import { MobileCommentsPage } from './MobileCommentsPage';
 import { MobileHeader } from './MobileHeader';
 import { MobileNavTree } from './MobileNavTree';
@@ -22,14 +24,10 @@ const { Text } = Typography;
 interface MobileAppProps {
   client: AgorClient | null;
   user?: User | null;
-  sessionById: Map<string, Session>; // O(1) ID lookups
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
-  boardById: Map<string, Board>;
-  commentById: Map<string, BoardComment>;
-  repoById: Map<string, Repo>;
-  branchById: Map<string, Branch>;
-  userById: Map<string, User>;
-  onSendPrompt?: (sessionId: string, prompt: string) => void;
+  onSendPrompt?: (
+    sessionId: string,
+    prompt: string
+  ) => boolean | undefined | Promise<boolean | undefined>;
   onSendComment: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -43,13 +41,6 @@ interface MobileAppProps {
 export const MobileApp: React.FC<MobileAppProps> = ({
   client,
   user,
-  sessionById,
-  sessionsByBranch,
-  boardById,
-  commentById,
-  repoById,
-  branchById,
-  userById,
   onSendPrompt,
   onSendComment,
   onReplyComment,
@@ -60,6 +51,16 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   promptDrafts,
   onUpdateDraft,
 }) => {
+  // Self-subscribe to the entity maps this surface drills into. The subscription
+  // used to live in the outer App shell; relocating it here makes MobileApp the
+  // subscription boundary so the shell re-renders only on load-state.
+  const sessionById = useAgorStore(selectSessionById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const boardById = useAgorStore(selectBoardById);
+  const commentById = useAgorStore(selectCommentById);
+  const repoById = useAgorStore(selectRepoById);
+  const branchById = useAgorStore(selectBranchById);
+  const userById = useAgorStore(selectUserById);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (

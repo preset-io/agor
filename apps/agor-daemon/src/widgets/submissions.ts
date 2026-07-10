@@ -198,6 +198,17 @@ async function doResolveWidget(
   let resultMeta: unknown | undefined;
   let autoResumePrompt: string | undefined;
 
+  // Context for the registry hooks, built for BOTH paths so a widget can gate
+  // who may dismiss it (authorizeDismiss), not just who may submit.
+  const ctx: WidgetSubmitCtx = {
+    // biome-ignore lint/suspicious/noExplicitAny: Pass-through Feathers Application
+    app: deps.app as any,
+    sessionId: message.session_id as SessionID,
+    submitterUserId: caller.user_id,
+    submitterRole: caller.role,
+    sessionCreatorUserId: session.created_by as UserID,
+  };
+
   if (action.kind === 'submit') {
     if (!entry) {
       throw new NotFound(
@@ -211,19 +222,15 @@ async function doResolveWidget(
     }
     const submit = parsed.data;
 
-    const submitCtx: WidgetSubmitCtx = {
-      // biome-ignore lint/suspicious/noExplicitAny: Pass-through Feathers Application
-      app: deps.app as any,
-      sessionId: message.session_id as SessionID,
-      submitterUserId: caller.user_id,
-      submitterRole: caller.role,
-      sessionCreatorUserId: session.created_by as UserID,
-    };
-    await entry.applySubmit(submitCtx, submit, widget.params);
+    await entry.applySubmit(ctx, submit, widget.params);
     resultMeta = entry.buildResultMeta(submit);
     autoResumePrompt = entry.buildAutoResumePrompt(resultMeta, widget.params);
   } else {
-    // dismiss
+    // dismiss — an admin-only widget gates this so a member-level dismissal
+    // can't terminally decline a flow its submit path would have rejected.
+    if (entry?.authorizeDismiss) {
+      await entry.authorizeDismiss(ctx, widget.params);
+    }
     autoResumePrompt = entry
       ? entry.buildDismissedPrompt(widget.params)
       : `[Agor] User dismissed a widget request. Do not re-request immediately — ask whether to proceed without, or move on to other work.`;

@@ -517,6 +517,57 @@ describe('POST /mcp with personal API keys', () => {
     );
   });
 
+  it('carries authenticated user tenant into service params for MCP tool calls and session validation', async () => {
+    await mockPersonalApiKeyUser();
+    const getUser = vi.fn(async () => ({
+      user_id: 'user-1',
+      email: 'alice@example.com',
+      role: 'member',
+      tenant_id: 'tenant-a',
+    }));
+    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
+
+    await withMcpServer(
+      { users: { get: getUser }, sessions: { get: getSession } },
+      async (baseUrl) => {
+        const resp = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            'Content-Type': 'application/json',
+            'X-API-Key': 'agor_sk_valid',
+            'X-Agor-Session-Id': 'session-short',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 22,
+            method: 'tools/call',
+            params: { name: 'agor_users_get_current', arguments: {} },
+          }),
+        });
+
+        expect(resp.status).toBe(200);
+        expect(parseMcpResponse(await resp.text()).error).toBeUndefined();
+        expect(getSession).toHaveBeenCalledWith(
+          'session-short',
+          expect.objectContaining({
+            authenticated: true,
+            provider: 'mcp',
+            tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+          })
+        );
+        expect(getUser).toHaveBeenCalledWith(
+          'user-1',
+          expect.objectContaining({
+            authenticated: true,
+            provider: 'mcp',
+            tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+          })
+        );
+      }
+    );
+  });
+
   it('accepts a valid personal API key session context from ?sessionId=', async () => {
     await mockPersonalApiKeyUser();
     const getUser = vi.fn(async () => ({

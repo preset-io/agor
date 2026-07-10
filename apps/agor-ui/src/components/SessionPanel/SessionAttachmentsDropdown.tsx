@@ -51,7 +51,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({ items }) => {
 
   return (
     <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomRight">
-      <Tooltip title="Attachments">
+      <Tooltip title="Links">
         <Badge count={items.length} color={token.colorPrimary} size="small" offset={[-4, 4]}>
           <Button type="text" icon={<LinkOutlined style={{ color: token.colorPrimary }} />} />
         </Badge>

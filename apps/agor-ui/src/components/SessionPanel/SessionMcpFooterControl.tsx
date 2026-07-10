@@ -1,5 +1,5 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
-import { ApiOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import { ApiOutlined, SettingOutlined } from '@ant-design/icons';
 import { Tag as AntTag, Button, Divider, Popover, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
@@ -148,7 +148,6 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
         >
           {summary.attachedCount}
         </AntTag>
-        <PlusOutlined style={{ marginLeft: token.sizeUnit * 1.5 }} />
       </Tag>
     </Popover>
   );

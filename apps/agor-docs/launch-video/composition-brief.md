@@ -1,16 +1,19 @@
 # Hyperframes Composition Brief: agor
 
 ## Objective
+
 Create a short (~20s) launch-style brag video for **agor** — a premium product film
 that breaks out of the terminal into Agor's signature warm-orange multiplayer canvas.
 
 ## Output
+
 - Composition directory: `brag-output/composition/`
 - Rendered video: `brag-output/brag.mp4`
 - Format: landscape — 1920x1080
 - Duration: ~20 seconds (scene plan sums to 20.0s)
 
 ## Source Material
+
 - Project root: `/var/lib/agor/home/agorpg/.agor/worktrees/preset-io/agor/stage-marketing-screenshots`
 - Primary files read: `apps/agor-docs/components/LandingPage.tsx`,
   `apps/agor-docs/components/LandingPage.module.css`, the live site agor.live
@@ -18,8 +21,8 @@ that breaks out of the terminal into Agor's signature warm-orange multiplayer ca
   screenshots in `apps/agor-docs/public/screenshots/`.
 - Product name: agor
 - Tagline / strongest claim: **Team command center for all things agentic.**
-- The positioning one-liner (the hook): *One agent in a terminal is fine. Five agents
-  across a team is chaos.*
+- The positioning one-liner (the hook): _One agent in a terminal is fine. Five agents
+  across a team is chaos._
 - Key UI / visual moment to recreate: the **warm-orange Agor board** (`board-hero.png`)
   emerging from a cold dark-teal terminal — the cool→warm contrast IS the visual hook.
 - Real product screenshots to show (all under `apps/agor-docs/public/screenshots/`):
@@ -44,6 +47,7 @@ that breaks out of the terminal into Agor's signature warm-orange multiplayer ca
   - `open source · agor.live`
 
 ## Creative Direction
+
 - Tone preset: app-store
 - Creative direction: a premium product film — "break out of the terminal into a living,
   multiplayer canvas," with one warm cinematic swell on the board reveal.
@@ -63,8 +67,10 @@ that breaks out of the terminal into Agor's signature warm-orange multiplayer ca
   - Unrelated visual redesign — match agor.live exactly (see Visual Identity + design.md)
 
 ## Visual Identity
+
 **A `design.md` is provided in `brag-output/composition/` — it is the source of truth.
 Use its exact values.** Summary:
+
 - Background: dark teal-navy gradient `#05070b → #09111d → #070b12`, with faint teal radial
   glows (top-left `rgba(46,154,146,0.22)`, top-right `rgba(35,136,242,0.16)`).
 - Signature motif: thin teal **constellation/network lines** connecting small dots,
@@ -80,7 +86,9 @@ Use its exact values.** Summary:
   `linear-gradient(135deg, #2e9a92, #7fe8df)`, dark text `#031311`.
 
 ## Storyboard
+
 Use the storyboard in `brag-output/brag-plan.md` as the creative contract. Scene summary:
+
 1. **Terminal hook** — 3.5s — type "one agent in a terminal is fine.", then snap
    "five across a team? chaos." on the dark-teal + constellation bg. Cold, cramped.
 2. **The reveal** — 4.5s — terminal cracks; `board-hero.png` sweeps in with a slight 3D
@@ -92,9 +100,10 @@ Use the storyboard in `brag-output/brag-plan.md` as the creative contract. Scene
    OpenCode) arrive one by one → caption "Pick the best harness per session."; then the
    Slack thread card slides in → caption "Reach them from Slack, GitHub, anywhere."
 5. **Outro / logo** — 3.0s — dark-teal canvas + constellation; agor wordmark + tagline
-   + "open source · agor.live". One clean logo hit.
+   - "open source · agor.live". One clean logo hit.
 
 ## Audio
+
 - Audio role: warm, clean business-product bed with one cinematic swell on the reveal.
 - Audio arc: quiet/filtered under the terminal hook → swell into the board reveal →
   steady & confident through multiplayer / harness / Slack → soft resolve + gentle fade
@@ -135,11 +144,13 @@ Use the storyboard in `brag-output/brag-plan.md` as the creative contract. Scene
   into `brag-output/composition/assets/sfx/<family>/`.
 
 ## Hyperframes Instructions
+
 Use the installed HyperFrames skills under `.agents/skills/` (hyperframes, hyperframes-core,
 hyperframes-animation, hyperframes-media, hyperframes-creative, hyperframes-cli) and the
 `npx hyperframes` CLI. Prefer native HyperFrames conventions over anything in `/brag`.
 
 Requirements:
+
 - Read `design.md` first — it is the brand source of truth. Use its exact colors/fonts.
 - Always-read references before authoring: `references/video-composition.md`,
   `references/beat-direction.md`, `references/typography.md`, `references/motion-principles.md`,

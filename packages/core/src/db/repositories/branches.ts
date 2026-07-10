@@ -11,6 +11,7 @@ import type {
   BranchFsAccessLevel,
   BranchID,
   EffectiveBranchAccess,
+  GroupID,
   SessionStatus,
   UUID,
 } from '@agor/core/types';
@@ -23,6 +24,7 @@ import type { Database } from '../client';
 import {
   deleteFrom,
   insert,
+  isPostgresDatabase,
   jsonExtract,
   lockRowForUpdate,
   select,
@@ -95,6 +97,11 @@ export interface BranchWithZone extends Branch {
  */
 export interface BranchWithZoneAndSessions extends BranchWithZone {
   sessions?: BranchSessionActivity[];
+}
+
+export interface ActiveEnvironmentBranchRef {
+  branch_id: BranchID;
+  tenant_id?: string;
 }
 
 /**
@@ -415,6 +422,32 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
     const baseUrl = await getBaseUrl();
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
+  }
+
+  /**
+   * Health-monitor discovery query. Returns only routing metadata so the
+   * background monitor can enter the correct tenant DB scope before loading
+   * branch contents or patching health state.
+   */
+  async findActiveEnvironmentRefs(): Promise<ActiveEnvironmentBranchRef[]> {
+    const tenantColumn = (branches as unknown as { tenant_id?: unknown }).tenant_id;
+    const columns =
+      isPostgresDatabase(this.db) && tenantColumn
+        ? { branch_id: branches.branch_id, tenant_id: tenantColumn }
+        : { branch_id: branches.branch_id };
+
+    const statusExpr = sql`${jsonExtract(this.db, branches.data, 'environment_instance.status')}`;
+    const rows = await select(this.db, columns)
+      .from(branches)
+      .where(or(eq(statusExpr, 'running'), eq(statusExpr, 'starting')))
+      .all();
+
+    return (rows as Array<{ branch_id: string; tenant_id?: unknown }>).map((row) => ({
+      branch_id: row.branch_id as BranchID,
+      ...(typeof row.tenant_id === 'string' && row.tenant_id.length > 0
+        ? { tenant_id: row.tenant_id }
+        : {}),
+    }));
   }
 
   /**
@@ -965,6 +998,77 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       userIds.add(row.user_id as UUID);
     }
     return Array.from(userIds);
+  }
+
+  /**
+   * Find non-archived branches whose explicit filesystem access set can change
+   * when membership in the given group changes.
+   *
+   * Keep this inverse lookup in lockstep with findExplicitFsAccessUserIds():
+   * both encode which group grants materialize into branch-folder access.
+   * App-only grants (`fs_access = 'none'`) are intentionally excluded because
+   * membership changes for those grants do not require branch-folder mutation.
+   */
+  async findExplicitFsAccessBranchIdsForGroup(groupId: GroupID): Promise<BranchID[]> {
+    const directRows = await select(this.db, { branch_id: branchGroupGrants.branch_id })
+      .from(branchGroupGrants)
+      .innerJoin(branches, eq(branches.branch_id, branchGroupGrants.branch_id))
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .where(
+        and(
+          eq(branchGroupGrants.group_id, groupId),
+          eq(branches.archived, false),
+          inArray(
+            sql`coalesce(${branchGroupGrants.fs_access}, 'read')`,
+            FS_ACCESS_BRANCH_PERMISSIONS
+          )
+        )
+      )
+      .all();
+
+    const boardRows = await select(this.db, { branch_id: branches.branch_id })
+      .from(boardGroupGrants)
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
+      )
+      .innerJoin(
+        boards,
+        and(
+          eq(boards.board_id, boardGroupGrants.board_id),
+          eq(sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared')`, 'shared')
+        )
+      )
+      .innerJoin(
+        branches,
+        and(
+          eq(branches.board_id, boardGroupGrants.board_id),
+          eq(branches.permission_source, 'board'),
+          eq(branches.archived, false)
+        )
+      )
+      .where(
+        and(
+          eq(boardGroupGrants.group_id, groupId),
+          inArray(
+            sql`coalesce(${boardGroupGrants.fs_access}, 'read')`,
+            FS_ACCESS_BRANCH_PERMISSIONS
+          )
+        )
+      )
+      .all();
+
+    const branchIds = new Set<BranchID>();
+    for (const row of directRows as Array<{ branch_id: string }>) {
+      branchIds.add(row.branch_id as BranchID);
+    }
+    for (const row of boardRows as Array<{ branch_id: string }>) {
+      branchIds.add(row.branch_id as BranchID);
+    }
+    return Array.from(branchIds);
   }
 
   async findBoardAlignedBranches(boardId: BoardID): Promise<Branch[]> {

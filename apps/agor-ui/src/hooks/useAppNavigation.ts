@@ -29,22 +29,19 @@ import { artifactPath, branchPath, sessionPath } from '@agor-live/client';
 import { useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
+import { agorStore } from '../store/agorStore';
 import { buildBoardPath } from './useUrlState';
 
 interface UseAppNavigationOptions {
-  /** App.tsx passes its local `boardById` so URL building can prefer slugs. */
-  boardById: Map<string, { board_id: string; slug?: string }>;
-  /** Sessions, branches, and artifacts are passed in as args (rather than
-   *  read from the store) to keep this navigation hook decoupled from store
-   *  wiring and to mirror `useUrlState`'s arg-passing pattern.
-   *
-   *  Each map is optional: callers only pass what their methods need
-   *  (e.g. a Settings table that only uses `goToBranch` can omit
-   *  `sessionById` and `artifactById`). The unused maps fall back to
-   *  empty Maps. URL pushes work from the ID alone — the lookups are
-   *  only needed for the same-URL recenter fallback (re-click on the
-   *  entity that's already focused), which silently no-ops when the
-   *  map is empty. */
+  /** Callers MAY pass their own maps (a caller with fresher or filtered
+   *  data can override); any omitted map is read from `agorStore.getState()`
+   *  at call time instead. The call-time read matters: the maps are only
+   *  consulted inside the returned callbacks (URL pushes work from the ID
+   *  alone; lookups drive the same-URL recenter fallback and slug-aware
+   *  board paths), and a subscription-free consumer like the App shell
+   *  never re-renders on entity patches — so any render-time snapshot it
+   *  passed would go stale. */
+  boardById?: Map<string, { board_id: string; slug?: string }>;
   sessionById?: Map<string, Session>;
   branchById?: Map<string, Branch>;
   artifactById?: Map<string, Artifact>;
@@ -78,14 +75,12 @@ function canonical(path: string): string {
   return `${path.replace(/\/$/, '')}/`;
 }
 
-const EMPTY_MAP = new Map<string, never>();
-
 export function useAppNavigation({
   boardById,
   sessionById,
   branchById,
   artifactById,
-}: UseAppNavigationOptions): AppNavigation {
+}: UseAppNavigationOptions = {}): AppNavigation {
   const navigate = useNavigate();
   const location = useLocation();
   const recenterMap = useRecenterMap();
@@ -97,15 +92,15 @@ export function useAppNavigation({
   // created from `useRef(...)` directly) doesn't falsely flag the
   // useCallback deps below.
   //
-  // Missing optional maps fall back to a shared empty map. URL pushes
-  // work from the ID alone; the lookups are only consulted for the
-  // same-URL recenter fallback, which silently no-ops on miss.
-  const sessionByIdRef = useRef(sessionById ?? (EMPTY_MAP as Map<string, Session>));
-  sessionByIdRef.current = sessionById ?? (EMPTY_MAP as Map<string, Session>);
-  const branchByIdRef = useRef(branchById ?? (EMPTY_MAP as Map<string, Branch>));
-  branchByIdRef.current = branchById ?? (EMPTY_MAP as Map<string, Branch>);
-  const artifactByIdRef = useRef(artifactById ?? (EMPTY_MAP as Map<string, Artifact>));
-  artifactByIdRef.current = artifactById ?? (EMPTY_MAP as Map<string, Artifact>);
+  // Missing optional maps read from the store at call time (see
+  // `UseAppNavigationOptions`) — the callbacks below resolve
+  // `ref.current ?? agorStore.getState().<map>` when invoked.
+  const sessionByIdRef = useRef(sessionById);
+  sessionByIdRef.current = sessionById;
+  const branchByIdRef = useRef(branchById);
+  branchByIdRef.current = branchById;
+  const artifactByIdRef = useRef(artifactById);
+  artifactByIdRef.current = artifactById;
   const boardByIdRef = useRef(boardById);
   boardByIdRef.current = boardById;
   const locationPathnameRef = useRef(location.pathname);
@@ -124,7 +119,10 @@ export function useAppNavigation({
 
   const goToBoard = useCallback(
     (boardId: string, opts?: NavigationOpts) => {
-      pushPath(buildBoardPath(boardId, boardByIdRef.current), opts);
+      pushPath(
+        buildBoardPath(boardId, boardByIdRef.current ?? agorStore.getState().boardById),
+        opts
+      );
     },
     [pushPath]
   );
@@ -147,9 +145,9 @@ export function useAppNavigation({
         // Same-URL click on the already-open session — no history
         // transition, so the URL→state recenter effect won't run. Fall
         // back to a direct recenter via the branch when we have it.
-        const session = sessionByIdRef.current.get(sessionId);
+        const session = (sessionByIdRef.current ?? agorStore.getState().sessionById).get(sessionId);
         const branch = session?.branch_id
-          ? branchByIdRef.current.get(session.branch_id)
+          ? (branchByIdRef.current ?? agorStore.getState().branchById).get(session.branch_id)
           : undefined;
         if (branch?.board_id) {
           recenterMap(branch.branch_id, { boardId: branch.board_id });
@@ -170,7 +168,7 @@ export function useAppNavigation({
         // Same-URL fallback: no history transition, so the URL→state
         // recenter effect won't run — recenter directly when we know
         // the board.
-        const branch = branchByIdRef.current.get(branchId);
+        const branch = (branchByIdRef.current ?? agorStore.getState().branchById).get(branchId);
         if (branch?.board_id) {
           recenterMap(branchId, { boardId: branch.board_id });
         }
@@ -185,7 +183,9 @@ export function useAppNavigation({
       // impl handles the artifact-id-vs-board-object-id mismatch via
       // a data.artifactId fallback scan, so callers stay logical-id-only.
       if (!pushPath(artifactPath(artifactId as ArtifactID), opts)) {
-        const artifact = artifactByIdRef.current.get(artifactId);
+        const artifact = (artifactByIdRef.current ?? agorStore.getState().artifactById).get(
+          artifactId
+        );
         if (artifact?.board_id) {
           recenterMap(artifactId, { boardId: artifact.board_id });
         }

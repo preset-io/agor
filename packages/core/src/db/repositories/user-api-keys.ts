@@ -12,6 +12,7 @@ import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { userApiKeys } from '../schema';
+import { enqueueTenantDatabasePostCommitCallback } from '../tenant-context';
 
 const KEY_PREFIX = 'agor_sk_';
 const KEY_PREFIX_LENGTH = 12;
@@ -106,8 +107,24 @@ export class UserApiKeysRepository {
     return null;
   }
 
-  /** Update last_used_at timestamp */
+  /** Update last_used_at timestamp.
+   *
+   * In Postgres tenant-scoped requests, the ambient database handle points at the
+   * request transaction. Updating the API-key row inside that transaction can
+   * hold a row lock for the full duration of slow downstream work (for example
+   * leaderboard analytics scans). If a transaction is active, defer this
+   * best-effort write until after commit and perform the actual UPDATE directly
+   * so it cannot re-enqueue itself.
+   */
   async updateLastUsed(id: string): Promise<void> {
+    if (enqueueTenantDatabasePostCommitCallback(() => this.updateLastUsedNow(id))) {
+      return;
+    }
+
+    await this.updateLastUsedNow(id);
+  }
+
+  private async updateLastUsedNow(id: string): Promise<void> {
     await update(this.db, userApiKeys)
       .set({ last_used_at: new Date() })
       .where(eq(userApiKeys.id, id))
