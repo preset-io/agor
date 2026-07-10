@@ -1,4 +1,4 @@
-import type { MCPServer } from '@agor-live/client';
+import { type MCPServer, shortId } from '@agor-live/client';
 import { Select, type SelectProps } from 'antd';
 
 export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {
@@ -11,15 +11,13 @@ export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {
 
 export function buildMcpServerOptions(mcpServers: MCPServer[], selectedIds: string[] = []) {
   const selected = new Set(selectedIds);
-  const compactId = (id: string) => id.slice(0, 8);
-
-  const options = mcpServers
+  const options: Array<{ label: string; value: string; disabled: boolean }> = mcpServers
     // Disabled servers cannot be newly attached, but must remain an option when
     // already selected. Otherwise Ant Select falls back to rendering the UUID.
     .filter((server) => server.enabled || selected.has(server.mcp_server_id))
     .map((server) => {
       const name =
-        server.display_name || server.name || `MCP server ${compactId(server.mcp_server_id)}`;
+        server.display_name || server.name || `MCP server ${shortId(server.mcp_server_id)}`;
       const authSuffix =
         server.auth?.type === 'oauth'
           ? ` · OAuth ${server.auth.oauth_mode === 'shared' ? '(shared)' : '(per-user)'}`
@@ -33,11 +31,11 @@ export function buildMcpServerOptions(mcpServers: MCPServer[], selectedIds: stri
       };
     });
 
-  const knownIds = new Set(mcpServers.map((server) => server.mcp_server_id));
+  const knownIds = new Set<string>(mcpServers.map((server) => server.mcp_server_id));
   for (const id of selectedIds) {
     if (!knownIds.has(id)) {
       options.push({
-        label: `Unavailable MCP server (${compactId(id)})`,
+        label: `Unavailable MCP server (${shortId(id)})`,
         value: id,
         disabled: true,
       });
