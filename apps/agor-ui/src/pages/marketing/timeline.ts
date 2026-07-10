@@ -192,5 +192,8 @@ export interface SceneDefinition {
   /** Free-form scalar tracks for scene-specific UI (overlay reveal progress,
    * modal visibility, screen-space pointer position, ...). */
   uiFlags: Record<string, Track<number>>;
+  /** Free-form string tracks for scene-specific staged text (composer
+   * contents, typewritten replies, ...). */
+  textTracks?: Record<string, Track<string>>;
   actions: ActionKeyframe[];
 }

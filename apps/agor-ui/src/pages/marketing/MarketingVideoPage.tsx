@@ -15,6 +15,7 @@ import type { StaticRemoteCursor } from '../../components/SessionCanvas/canvas/R
 import { SessionSettingsModal } from '../../components/SessionSettingsModal';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
+import { DemoSessionStage } from './DemoSessionStage';
 import {
   buildDemoStoreMaps,
   demoActiveUsers,
@@ -26,12 +27,14 @@ import {
 } from './fixtureData';
 import { artifactScene } from './scenes/artifact';
 import { multiplayerScene } from './scenes/multiplayer';
+import { sessionScene } from './scenes/session';
 import { settingsScene } from './scenes/settings';
 import { ActionRunner, type SceneDefinition, type Track } from './timeline';
 import './MarketingVideoPage.css';
 
 const SCENES: Record<string, SceneDefinition> = {
   multiplayer: multiplayerScene,
+  session: sessionScene,
   artifact: artifactScene,
   settings: settingsScene,
 };
@@ -389,6 +392,8 @@ export const MarketingVideoPage = () => {
                 />
                 <ArtifactRevealOverlay scene={scene} t={t} />
               </ReactFlowProvider>
+              {/* Scene "session": staged session panel docked to the right */}
+              {scene.uiFlags.sessionPhase && <DemoSessionStage scene={scene} t={t} />}
             </main>
             {settingsSession && scene.uiFlags.settingsOpen && (
               <SessionSettingsModal

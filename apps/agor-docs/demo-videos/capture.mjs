@@ -31,6 +31,8 @@ const DEVICE_SCALE_FACTOR = 2;
 // shorter, but every scene shows the board, so keep a generous floor.
 const SCENES = {
   multiplayer: { floorMs: 10_000 },
+  // Session panel covers the Sandpack nodes; short floor is enough.
+  session: { floorMs: 4_000 },
   artifact: { floorMs: 10_000 },
   settings: { floorMs: 6_000 },
 };

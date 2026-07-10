@@ -17,7 +17,7 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
   exit 1
 fi
 
-SCENES=(multiplayer artifact settings)
+SCENES=(multiplayer session artifact settings)
 FPS=30
 FADE=0.25
 PUBLISH=false
