@@ -48,6 +48,7 @@ import {
   knowledgeChunkerOptionsFromConfig,
   knowledgeUnitsForMarkdown,
 } from '../knowledge/units.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
   canReadKnowledgeDocument,
   canWriteKnowledgeDocument,
@@ -510,7 +511,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       );
       await this.replaceSearchUnitsForContent(result, data.content_text);
       await this.syncGraphReferences(result, data.content_text, userId);
-      this.emit?.('patched', result, params);
+      this.emitDocumentEvent('patched', result, params);
       return result;
     }
 
@@ -556,7 +557,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     );
     await this.replaceSearchUnitsForContent(result, data.content_text);
     await this.syncGraphReferences(result, data.content_text, userId);
-    this.emit?.('created', result, params);
+    this.emitDocumentEvent('created', result, params);
     return result;
   }
 
@@ -587,7 +588,6 @@ export class KnowledgeDocumentsService extends DrizzleService<
     });
     await this.replaceSearchUnitsForContent(result, data.content_text);
     await this.syncGraphReferences(result, data.content_text, userId);
-    this.emit?.('created', result, params);
     return result;
   }
 
@@ -631,7 +631,6 @@ export class KnowledgeDocumentsService extends DrizzleService<
       (data as KnowledgeDocumentWriteData).content_text,
       this.attributionUserId(params, data.updated_by)
     );
-    this.emit?.('patched', result, params);
     return result;
   }
 
@@ -661,7 +660,6 @@ export class KnowledgeDocumentsService extends DrizzleService<
       (data as KnowledgeDocumentWriteData).content_text,
       this.attributionUserId(params, data.updated_by)
     );
-    this.emit?.('updated', result, params);
     return result;
   }
 
@@ -675,8 +673,22 @@ export class KnowledgeDocumentsService extends DrizzleService<
       throw new Forbidden('You do not have permission to delete this knowledge document');
     }
     await this.repo.delete(String(id));
-    this.emit?.('removed', existing, params);
     return existing;
+  }
+
+  private emitDocumentEvent(
+    event: 'created' | 'patched',
+    document: KnowledgeDocument,
+    params?: KnowledgeDocumentParams
+  ): void {
+    if (!this.app) return;
+    emitServiceEvent(this.app, {
+      path: 'kb/documents',
+      event,
+      data: document,
+      params,
+      id: document.document_id,
+    });
   }
 }
 

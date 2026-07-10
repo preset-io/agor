@@ -11,6 +11,7 @@ import {
   BoardObjectRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
 import type {
   BoardEntityObject,
   BoardEntityType,
@@ -20,6 +21,7 @@ import type {
   QueryParams,
   UUID,
 } from '@agor/core/types';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 
 export type BoardObjectPatchedEventPayload = Omit<BoardEntityObject, 'zone_id'> & {
   zone_id?: string | null;
@@ -85,7 +87,10 @@ export class BoardObjectsService {
   private boardObjectRepo: BoardObjectRepository;
   public emit?: (event: string, data: BoardEntityObject, params?: BoardObjectParams) => void;
 
-  constructor(db: TenantScopeAwareDatabase) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    private app?: Application
+  ) {
     this.boardObjectRepo = new BoardObjectRepository(db);
   }
 
@@ -118,9 +123,6 @@ export class BoardObjectsService {
       position: data.position,
       zone_id: data.zone_id,
     });
-
-    // Emit WebSocket event
-    this.emit?.('created', boardObject, params);
 
     return boardObject;
   }
@@ -172,7 +174,7 @@ export class BoardObjectsService {
   async patch(
     id: string,
     data: Partial<BoardEntityObject>,
-    params?: BoardObjectParams
+    _params?: BoardObjectParams
   ): Promise<BoardEntityObject> {
     // Handle simultaneous position + zone_id update
     if (data.position && 'zone_id' in data) {
@@ -180,23 +182,16 @@ export class BoardObjectsService {
       await this.boardObjectRepo.updatePosition(id, data.position);
       const boardObject = await this.boardObjectRepo.updateZone(id, data.zone_id);
 
-      // Emit single WebSocket event with both updates
-      // Explicitly include zone_id field (even if undefined) to signal zone changes to clients
-      this.emit?.(
-        'patched',
-        toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject,
-        params
-      );
-
-      return boardObject;
+      return toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject;
     }
 
     if (data.position) {
-      return this.updatePosition(id, data.position, params);
+      return this.boardObjectRepo.updatePosition(id, data.position);
     }
 
     if ('zone_id' in data) {
-      return this.updateZone(id, data.zone_id, params);
+      const boardObject = await this.boardObjectRepo.updateZone(id, data.zone_id);
+      return toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject;
     }
 
     throw new Error('Only position and zone_id updates are supported via patch');
@@ -208,9 +203,6 @@ export class BoardObjectsService {
   async remove(id: string, params?: BoardObjectParams): Promise<BoardEntityObject> {
     const object = await this.get(id, params);
     await this.boardObjectRepo.remove(id);
-
-    // Emit WebSocket event
-    this.emit?.('removed', object, params);
 
     return object;
   }
@@ -225,8 +217,7 @@ export class BoardObjectsService {
   ): Promise<BoardEntityObject> {
     const boardObject = await this.boardObjectRepo.updatePosition(objectId, position);
 
-    // Emit WebSocket event
-    this.emit?.('patched', boardObject, params);
+    this.emitPatched(boardObject, params);
 
     return boardObject;
   }
@@ -241,12 +232,7 @@ export class BoardObjectsService {
   ): Promise<BoardEntityObject> {
     const boardObject = await this.boardObjectRepo.updateZone(objectId, zoneId);
 
-    // Emit WebSocket event with explicit null for undefined zone_id.
-    this.emit?.(
-      'patched',
-      toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject,
-      params
-    );
+    this.emitPatched(toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject, params);
 
     return boardObject;
   }
@@ -263,14 +249,21 @@ export class BoardObjectsService {
     const cleared = await this.boardObjectRepo.clearZoneReferences(boardId, zoneId, zonePosition);
 
     for (const boardObject of cleared) {
-      this.emit?.(
-        'patched',
-        toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject,
-        params
-      );
+      this.emitPatched(toBoardObjectPatchedEventPayload(boardObject) as BoardEntityObject, params);
     }
 
     return cleared;
+  }
+
+  private emitPatched(boardObject: BoardEntityObject, params?: BoardObjectParams): void {
+    if (!this.app) return;
+    emitServiceEvent(this.app, {
+      path: 'board-objects',
+      event: 'patched',
+      data: boardObject,
+      params,
+      id: boardObject.object_id,
+    });
   }
 
   /**
@@ -287,6 +280,9 @@ export class BoardObjectsService {
 /**
  * Service factory function
  */
-export function createBoardObjectsService(db: TenantScopeAwareDatabase): BoardObjectsService {
-  return new BoardObjectsService(db);
+export function createBoardObjectsService(
+  db: TenantScopeAwareDatabase,
+  app?: Application
+): BoardObjectsService {
+  return new BoardObjectsService(db, app);
 }
