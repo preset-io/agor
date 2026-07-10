@@ -3,20 +3,22 @@ import { normalizeRefTargetKey, normalizeUrlTargetKey } from '@agor-live/client'
 import { describe, expect, it } from 'vitest';
 import {
   buildLinkDisplayItems,
-  compareLinkDisplayItemsBySort,
   getCompactLinkDisplayName,
-  getLinkCategoryCounts,
-  getLinkCategorySummary,
   getLinkDisplayCategory,
   getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
   type LinkDisplayItem,
   linkToDisplayItem,
-  matchesLinkCategoryTab,
   routeForKnowledgeRefUri,
   sortLinkDisplayItems,
   targetForLinkDisplay,
 } from './linkDisplay';
+import {
+  compareLinkDisplayItemsBySort,
+  getLinkCategoryCounts,
+  getLinkCategorySummary,
+  matchesLinkCategoryTab,
+} from './linkOrganizer';
 
 const now = '2026-07-01T00:00:00.000Z';
 
