@@ -45,28 +45,28 @@ const featureCards: Array<{
   {
     title: 'Shared memory',
     icon: Brain,
-    body: 'Each assistant gets a namespace in the knowledge base: semantically searchable, durable, and shared with the team.',
+    body: 'Each teammate gets a namespace in the knowledge base: semantically searchable, durable, and shared with the team.',
     href: '/guide/knowledge',
     linkLabel: 'Explore Knowledge',
   },
   {
     title: 'Skills + MCP',
     icon: Blocks,
-    body: 'Package repeatable workflows as skills and connect assistants to the MCP servers your team already trusts.',
+    body: 'Package repeatable workflows as skills and connect teammates to the MCP servers your team already trusts.',
     href: '/guide/internal-mcp',
     linkLabel: 'See MCP control',
   },
   {
     title: 'Conversational onboarding',
     icon: MessagesSquare,
-    body: 'Teach an assistant by talking to it. The programming language is conversation, and the useful parts become reusable context.',
-    href: '/guide/assistants',
-    linkLabel: 'Read about Assistants',
+    body: 'Teach a teammate by talking to it. The programming language is conversation, and the useful parts become reusable context.',
+    href: '/guide/teammates',
+    linkLabel: 'Read about Teammates',
   },
   {
     title: 'Where your team works',
     icon: Hash,
-    body: 'Reach assistants from Slack, GitHub, or wherever work already happens through gateway channels.',
+    body: 'Reach teammates from Slack, GitHub, or wherever work already happens through gateway channels.',
     href: '/guide/message-gateway',
     linkLabel: 'Open Message Gateway',
   },
@@ -80,7 +80,7 @@ const featureCards: Array<{
   {
     title: 'Personality + boundaries',
     icon: SlidersHorizontal,
-    body: 'Tune voice, style, and level of agency so every assistant knows how bold to be and when to ask first.',
+    body: 'Tune voice, style, and level of agency so every teammate knows how bold to be and when to ask first.',
     href: '/blog/agent-modeling-101',
     linkLabel: 'Agent modeling 101',
   },
@@ -99,10 +99,10 @@ const productPreviews = [
     href: '/guide/rich-chat-ux',
   },
   {
-    title: 'Persistent assistants',
+    title: 'Persistent teammates',
     body: 'Give long-lived helpers memory, skills, schedules, and team-wide reach beyond one-off prompts.',
-    image: '/screenshots/assistants-list.png',
-    href: '/guide/assistants',
+    image: '/screenshots/teammates-list.png',
+    href: '/guide/teammates',
   },
   {
     title: 'Message gateway',
@@ -112,7 +112,7 @@ const productPreviews = [
   },
   {
     title: 'Scheduler',
-    body: 'Run standups, audits, digests, reports, and assistant heartbeats without waiting to be asked.',
+    body: 'Run standups, audits, digests, reports, and teammate heartbeats without waiting to be asked.',
     image: '/screenshots/scheduler-modal.png',
     href: '/guide/scheduler',
   },
@@ -220,7 +220,7 @@ const showcaseSlides = [
   },
 ];
 
-// Meet the roster — real assistants from our own Agor instance (names and
+// Meet the roster — real teammates from our own Agor instance (names and
 // jobs are the genuine article), rendered as blips on the Roster Radar.
 // `r`/`a` are polar coordinates (radius in radar units, angle in degrees)
 // around the scope's center; `status`/`mem` feed the hover tooltip.
@@ -624,13 +624,13 @@ export function LandingPage() {
         <div className={styles.workspaceCopy}>
           <span className={styles.eyebrow}>Agents that learn with you</span>
           <h2>
-            Raise <span className={styles.headingAccent}>team assistants</span> with memory, skills,
+            Raise <span className={styles.headingAccent}>AI teammates</span> with memory, skills,
             and a place to <span className={styles.headingStrong}>work</span>
           </h2>
           <p>
-            One-off prompts don’t compound. In Agor, assistants have durable identities your team
-            can teach conversationally, then equip with memory, tools, channels, and schedules as
-            they grow — so your{' '}
+            One-off prompts don’t compound. In Agor, teammates have durable identities your team can
+            teach conversationally, then equip with memory, tools, channels, and schedules as they
+            grow — so your{' '}
             <Link href={AI_ENABLEMENT_POST_URL} target="_blank" rel="noopener noreferrer">
               most AI-enabled teammates
             </Link>{' '}
@@ -907,7 +907,7 @@ export function LandingPage() {
             <h4>Product</h4>
             <Link href="/guide/boards">Boards</Link>
             <Link href="/guide/sessions">Sessions</Link>
-            <Link href="/guide/assistants">Assistants</Link>
+            <Link href="/guide/teammates">Teammates</Link>
             <Link href="/guide/internal-mcp">MCP control</Link>
           </div>
           <div>
