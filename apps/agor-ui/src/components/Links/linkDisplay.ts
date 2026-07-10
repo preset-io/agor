@@ -28,7 +28,6 @@ export type LinkDisplayCategory =
 export type LinkDisplayNavigation = 'external' | 'spa';
 export type LinkDisplaySource = LinkSource | 'branch';
 export type LinkCategoryTabKey = 'all' | 'files' | 'links' | 'knowledge' | 'issues';
-export type LinkOwnerFilterKey = 'all' | 'branch' | 'session';
 export type LinkSortKey = 'az' | 'za' | 'recent' | 'oldest';
 
 export interface LinkDisplayTarget {
@@ -480,12 +479,6 @@ export const LINK_CATEGORY_TAB_LABELS: Record<LinkCategoryTabKey, string> = {
   issues: 'Issues/PRs',
 };
 
-export const LINK_OWNER_FILTER_LABELS: Record<LinkOwnerFilterKey, string> = {
-  all: 'All locations',
-  branch: 'Branch',
-  session: 'This session',
-};
-
 export const LINK_SORT_LABELS: Record<LinkSortKey, string> = {
   az: 'A-Z',
   za: 'Z-A',
@@ -529,13 +522,6 @@ export function matchesLinkCategoryTab(
     default:
       return true;
   }
-}
-
-export function matchesLinkOwnerFilter(
-  item: LinkDisplayItem,
-  ownerFilter: LinkOwnerFilterKey
-): boolean {
-  return ownerFilter === 'all' || item.ownerScope === ownerFilter;
 }
 
 function compareLinkNames(a: LinkDisplayItem, b: LinkDisplayItem): number {

@@ -59,7 +59,7 @@ function AssistantPinnedLinksBlock({
   onOpenMore?: () => void;
 }) {
   const { token } = theme.useToken();
-  const { busyLinkId, preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
+  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
   const pinnedItems = useMemo(() => items.filter((item) => item.isPinned), [items]);
   const inlineItems = useMemo(
     () => pinnedItems.slice(0, ASSISTANT_PINNED_LINK_INLINE_LIMIT),
@@ -112,7 +112,6 @@ function AssistantPinnedLinksBlock({
                 onPreview={openPreview}
                 onDownload={downloadItem}
                 onTogglePinned={onTogglePinned}
-                busy={item.linkId === busyLinkId}
                 pinning={item.linkId === pinningLinkId}
               />
             ))}

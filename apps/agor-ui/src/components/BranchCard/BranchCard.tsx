@@ -49,7 +49,7 @@ function BranchCardPinnedLinksBlock({
   pinningLinkId?: string | null;
 }) {
   const { token } = theme.useToken();
-  const { busyLinkId, preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
+  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
   const inlineItems = useMemo(() => items.slice(0, BRANCH_CARD_PINNED_LINK_INLINE_LIMIT), [items]);
 
   if (items.length === 0) return null;
@@ -93,7 +93,6 @@ function BranchCardPinnedLinksBlock({
               onPreview={openPreview}
               onDownload={downloadItem}
               onTogglePinned={onTogglePinned}
-              busy={item.linkId === busyLinkId}
               pinning={item.linkId === pinningLinkId}
             />
           ))}

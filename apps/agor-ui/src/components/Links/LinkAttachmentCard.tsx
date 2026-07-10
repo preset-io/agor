@@ -32,8 +32,6 @@ export interface LinkAttachmentCardProps {
   refUri?: string | null;
   filePath?: string | null;
   mimeType?: string | null;
-  ownerLabel?: string | null;
-  stateLabel?: string | null;
   disabledReason?: string | null;
   compact?: boolean;
   onDark?: boolean;
@@ -41,7 +39,6 @@ export interface LinkAttachmentCardProps {
   onOpenImage?: (target: LinkImagePreviewTarget) => void;
   onOpenMarkdown?: (target: LinkImagePreviewTarget) => void;
   onOpenTarget?: (target: LinkAttachmentTarget) => void;
-  actions?: React.ReactNode;
 }
 
 type AttachmentCategory =
@@ -300,8 +297,6 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
   refUri,
   filePath,
   mimeType,
-  ownerLabel,
-  stateLabel,
   disabledReason,
   compact = false,
   onDark = false,
@@ -309,7 +304,6 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
   onOpenImage,
   onOpenMarkdown,
   onOpenTarget,
-  actions,
 }) => {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
@@ -331,7 +325,6 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
       ? 'Preview/download unavailable'
       : null);
   const description = getSafeLinkContentLabel(subtitle ?? refUri ?? url ?? filePath);
-  const metaParts = [ownerLabel, stateLabel, reason].filter(Boolean).join(' · ');
 
   if (imageThumbnail && canPreviewImage && linkId && onOpenImage) {
     return (
@@ -364,11 +357,6 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
     }
   };
 
-  const onKeyDown: React.KeyboardEventHandler<HTMLButtonElement> = (event) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    open(event);
-  };
-
   return (
     <Tooltip title={reason ?? description ?? title} mouseEnterDelay={0.6}>
       <button
@@ -376,7 +364,6 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
         disabled={disabled}
         aria-label={disabled ? `${title}: ${reason}` : `Open ${title}`}
         onClick={open}
-        onKeyDown={onKeyDown}
         style={{
           width: compact ? '100%' : 'min(100%, 360px)',
           maxWidth: '100%',
@@ -443,7 +430,7 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
               {description}
             </Typography.Text>
           )}
-          {metaParts && (
+          {reason && (
             <Typography.Text
               ellipsis
               style={{
@@ -453,33 +440,30 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
                 fontSize: 11,
               }}
             >
-              {metaParts}
+              {reason}
             </Typography.Text>
           )}
         </span>
-        {(canDownload || actions) && (
+        {canDownload && linkId && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: token.sizeXXS }}>
-            {canDownload && linkId && (
-              <Tooltip title="Download file">
-                <span
-                  aria-hidden
-                  style={{
-                    width: 24,
-                    height: 24,
-                    borderRadius: 999,
-                    color: onDark ? 'rgba(255, 255, 255, 0.78)' : token.colorTextSecondary,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    cursor: 'pointer',
-                    flex: '0 0 auto',
-                  }}
-                >
-                  <DownloadOutlined />
-                </span>
-              </Tooltip>
-            )}
-            {actions && <span onClick={(event) => event.stopPropagation()}>{actions}</span>}
+            <Tooltip title="Download file">
+              <span
+                aria-hidden
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 999,
+                  color: onDark ? 'rgba(255, 255, 255, 0.78)' : token.colorTextSecondary,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flex: '0 0 auto',
+                }}
+              >
+                <DownloadOutlined />
+              </span>
+            </Tooltip>
           </span>
         )}
       </button>
