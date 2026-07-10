@@ -102,7 +102,6 @@ interface MessageBlockProps {
     allow: boolean,
     scope: PermissionScope
   ) => void;
-  /** Opens Settings deep-linked to a provider's Agentic Tools tab (Connect-AI CTA). */
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 
@@ -497,8 +496,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     );
   }
 
-  // Task failed for lack of a resolved credential — render the actionable
-  // Connect-AI panel instead of the raw provider error.
+  // Missing-credential failure — show the Connect-AI panel, not the raw error.
   if (isSystem && message.metadata?.error_kind === 'missing_credential' && message.metadata?.tool) {
     return (
       <MissingCredentialPanel

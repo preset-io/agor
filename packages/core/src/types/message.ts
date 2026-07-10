@@ -283,8 +283,7 @@ export interface Message {
      * `classifyMissingCredentialFailure` can find it without type/role guessing. */
     is_task_failure?: boolean;
 
-    /** Marks the synthesized message from a zero-turn success (no real model
-     * call), the only signal safe to gate missing-credential detection on. */
+    /** Marks the synthesized message from a zero-turn success (no real model call). */
     is_zero_turn_result?: boolean;
 
     /**

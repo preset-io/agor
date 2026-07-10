@@ -1,23 +1,9 @@
 /**
- * Before-create hook on the `messages` service that reclassifies a task
- * failure as "missing credential" by re-running `resolveApiKey` — the same
- * resolution chain (per-user key -> config.yaml -> env var -> native
- * CLI/OAuth) that check-auth.ts uses. Detection is structural: it never
- * matches the provider's raw stderr, which is a fragile passthrough of
- * upstream wording.
- *
- * Two pathways report "no credential" and both are caught:
- * 1. Thrown error — base-executor.ts patches the task to `failed` and emits a
- *    `system` message marked `metadata.is_task_failure`.
- * 2. Zero-token "success" — the claude CLI can return `subtype: 'success'`
- *    whose text IS the auth-failure message, synthesized into a plain
- *    `assistant` message with zero tokens.
- *
- * The zero-token condition only gates WHETHER to run the resolveApiKey check;
- * the resolve result alone decides the outcome. Zero tokens is not unique to
- * auth failures (local slash-command output like `/cost` is zero-token too),
- * so an authenticated user's key still resolves and the message is left
- * untouched.
+ * Before-create hook that reclassifies a task failure as "missing credential"
+ * via `resolveApiKey`, never by matching the provider's raw stderr. Fires on
+ * two failure shapes — a thrown error (`is_task_failure`) and a zero-turn
+ * "success" whose text is the auth error (`is_zero_turn_result`) — then lets
+ * the resolve result (plus a native-auth probe) decide the outcome.
  */
 
 import { resolveApiKey } from '@agor/core/config';
@@ -58,8 +44,7 @@ export function classifyMissingCredentialFailure(
 
       const tool = session.agentic_tool;
       const keyName = TOOL_API_KEY_NAMES[tool];
-      // Tools with no mapped key (opencode, or anything future/unmapped) fall
-      // through untouched to the existing generic failure handling.
+      // Tools with no mapped key (e.g. opencode) aren't credential-gated.
       if (!keyName) return context;
 
       const { apiKey, useNativeAuth } = await resolveApiKey(keyName, {
@@ -69,16 +54,13 @@ export function classifyMissingCredentialFailure(
       });
       if (apiKey) return context; // A credential DID resolve — some other failure.
 
-      // Native-auth tools (claude-code/codex logged in via CLI/OAuth) always
-      // resolve to no key — that's normal, not missing. Probe the live CLI/OAuth
-      // state before concluding the credential is absent.
+      // Native-auth tools resolve to no key even when logged in via CLI/OAuth;
+      // probe the live auth state before concluding it's actually missing.
       if (useNativeAuth && probeNativeAuth && (await probeNativeAuth(tool))) return context;
 
       context.data = {
         ...data,
-        // Normalize both pathways onto `system`/SYSTEM so the UI needs one
-        // render branch. The zero-token message was typed `assistant` (it was
-        // synthesized from the SDK result text), but was never a real reply.
+        // Normalize both pathways onto system/SYSTEM so the UI has one render branch.
         type: 'system',
         role: MessageRole.SYSTEM,
         content: fallbackContent(toolDisplayNames[tool] ?? tool),

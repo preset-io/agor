@@ -1,8 +1,5 @@
-/**
- * Tests for `isRealAuthSource`. Regression coverage for the `tokenSource:
- * 'none'` sentinel: a plain truthy check on that field reported
- * "authenticated" for a credential-less session, hiding the Connect-AI CTA.
- */
+/** Regression coverage for the `'none'` sentinel that a plain truthy check
+ * would misread as authenticated. */
 
 import { describe, expect, it } from 'vitest';
 import { isRealAuthSource } from './check-auth-helpers';

@@ -97,7 +97,6 @@ interface TaskBlockProps {
   onLoadTaskMessages: (taskId: string) => Promise<void> | void;
   onUnloadTaskMessages: (taskId: string) => void;
   teammateEmoji?: string;
-  /** Opens Settings deep-linked to a provider's Agentic Tools tab (Connect-AI empty state CTA). */
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
   client?: AgorClient | null;

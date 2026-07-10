@@ -420,6 +420,8 @@ export const App: React.FC<AppProps> = ({
 
   const [leftPanelTab, setLeftPanelTab] = useState<BoardTeammatePanelTab>('teammate');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
+  // Deep-links the settings modal to a tool tab; cleared on close so a later
+  // plain settings click doesn't re-land on a stale tab.
   const [userSettingsInitialTool, setUserSettingsInitialTool] = useState<
     AgenticToolName | undefined
   >(undefined);

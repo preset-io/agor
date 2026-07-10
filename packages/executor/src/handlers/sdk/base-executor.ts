@@ -659,8 +659,7 @@ export async function executeToolTask(params: {
         timestamp: new Date().toISOString(),
         content: err.message,
         content_preview: err.message.substring(0, 200),
-        // Flags this as the task-failure notice so classifyMissingCredentialFailure
-        // can find it without guessing from type/role (shared by other system messages).
+        // Marks the failure notice for classifyMissingCredentialFailure.
         metadata: { is_task_failure: true },
       });
     } catch (msgErr) {

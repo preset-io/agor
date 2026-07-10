@@ -133,10 +133,6 @@ export interface ConversationViewProps {
    */
   forceExpandAll?: boolean;
 
-  /**
-   * Opens Settings deep-linked to a provider's Agentic Tools tab, powering the
-   * Connect-AI empty state's primary CTA.
-   */
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 

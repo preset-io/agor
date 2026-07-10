@@ -1,7 +1,6 @@
 /**
- * Tests for `classifyMissingCredentialFailure`: classification is driven by
- * `resolveApiKey`'s result, never by the error text, and must not touch
- * messages the executor didn't flag as a failure notice.
+ * Classification is driven by `resolveApiKey` (plus a native-auth probe), never
+ * by error text, and only fires on messages flagged as a failure or zero-turn.
  */
 
 import { resolveApiKey } from '@agor/core/config';

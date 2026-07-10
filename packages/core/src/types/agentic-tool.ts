@@ -233,10 +233,7 @@ export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> = 
   cursor: 'CURSOR_API_KEY',
 };
 
-/**
- * Human-readable display name for each agentic tool. Single source of truth
- * for user-facing copy (Settings tabs, onboarding, Connect-AI empty state).
- */
+/** Human-readable display name for each agentic tool (user-facing copy). */
 export const AGENTIC_TOOL_DISPLAY_NAMES: Record<AgenticToolName, string> = {
   'claude-code': 'Claude Code',
   'claude-code-cli': 'Claude Code CLI',
@@ -247,11 +244,7 @@ export const AGENTIC_TOOL_DISPLAY_NAMES: Record<AgenticToolName, string> = {
   cursor: 'Cursor SDK',
 };
 
-/**
- * Where a user creates a fresh API key for each tool, so non-Settings surfaces
- * (e.g. the Connect-AI empty state) can link out without importing UI field
- * config. Tools with no key concept (opencode) are absent.
- */
+/** Where a user creates a fresh API key for each tool. Keyless tools (opencode) are absent. */
 export const AGENTIC_TOOL_KEY_CREATION_URL: Partial<Record<AgenticToolName, string>> = {
   'claude-code': 'https://platform.claude.com/settings/keys',
   'claude-code-cli': 'https://platform.claude.com/settings/keys',

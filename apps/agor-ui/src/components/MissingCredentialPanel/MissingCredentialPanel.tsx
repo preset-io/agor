@@ -1,13 +1,7 @@
 /**
- * MissingCredentialPanel - Connect-AI empty state.
- *
- * Replaces the raw provider error ("Not logged in · Please run /login") with
- * an actionable panel when a task failed for lack of a resolved credential.
- *
- * The stored classification only records that *some* user's run had no
- * credential, so two viewers of the same session can differ (one connected,
- * one not). The panel re-checks auth live for the current viewer via the
- * `check-auth` service rather than trusting the task-run-time snapshot.
+ * Connect-AI empty state shown in place of a raw provider auth error. Because
+ * the stored classification reflects whoever ran the failed prompt, the panel
+ * re-checks auth live for the current viewer via the `check-auth` service.
  */
 
 import type { AgenticToolName, AgorClient, AuthCheckResult } from '@agor-live/client';
@@ -29,10 +23,9 @@ const NATIVE_AUTH_HINT: Partial<Record<AgenticToolName, string>> = {
 };
 
 export interface MissingCredentialPanelProps {
-  /** The provider this session is configured to use and needs a credential for. */
   tool: AgenticToolName;
   client?: AgorClient | null;
-  /** Opens Settings deep-linked to this tool's Agentic Tools tab (primary CTA). */
+  /** Opens Settings deep-linked to this tool's Agentic Tools tab. */
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 }
 
@@ -68,8 +61,6 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
     return () => {
       cancelled = true;
     };
-    // Re-check when the viewer or tool changes; `client` identity is stable
-    // per authenticated session.
   }, [client, tool]);
 
   const displayName = AGENTIC_TOOL_DISPLAY_NAMES[tool] ?? tool;
@@ -93,8 +84,7 @@ export const MissingCredentialPanel: React.FC<MissingCredentialPanelProps> = ({
     );
   }
 
-  // The current viewer already has a working credential (a different user ran
-  // the failed prompt), so no CTA is needed.
+  // Current viewer already has a working credential — no CTA needed.
   if (authResult?.authenticated) {
     return (
       <SystemMessage
