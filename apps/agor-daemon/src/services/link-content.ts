@@ -186,6 +186,16 @@ async function authenticateBearerRequest(
   } as AuthenticatedParams;
 }
 
+function httpStatusForError(error: unknown): number {
+  if (error instanceof LinkContentError) return error.status;
+  if (!error || typeof error !== 'object') return 500;
+  const candidate = error as { code?: unknown; status?: unknown; statusCode?: unknown };
+  for (const value of [candidate.code, candidate.status, candidate.statusCode]) {
+    if (typeof value === 'number') return value;
+  }
+  return 500;
+}
+
 export function registerLinkContentRoute(app: Application): void {
   // biome-ignore lint/suspicious/noExplicitAny: Express route method is not represented on Feathers Application.
   (app as any).get('/link-content/:linkId', async (req: Request, res: Response) => {
@@ -206,16 +216,7 @@ export function registerLinkContentRoute(app: Application): void {
       res.setHeader('Content-Disposition', contentDispositionHeader(disposition, file.filename));
       res.sendFile(file.path);
     } catch (error) {
-      const status =
-        error instanceof LinkContentError
-          ? error.status
-          : typeof (error as { code?: unknown }).code === 'number'
-            ? ((error as { code: number }).code ?? 500)
-            : typeof (error as { status?: unknown }).status === 'number'
-              ? ((error as { status: number }).status ?? 500)
-              : typeof (error as { statusCode?: unknown }).statusCode === 'number'
-                ? ((error as { statusCode: number }).statusCode ?? 500)
-                : 500;
+      const status = httpStatusForError(error);
       const message = error instanceof Error ? error.message : 'Failed to load file content';
       res.status(status).json({ error: status >= 500 ? 'Failed to load file content' : message });
     }

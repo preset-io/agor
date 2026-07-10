@@ -17,9 +17,7 @@ import { useThemedMessage } from '../../../utils/message';
 import {
   buildLinkDisplayItems,
   compareLinkDisplayItemsBySort,
-  getCompactLinkDisplayName,
   getLinkCategoryCounts,
-  getLinkDisplaySecondaryLabel,
   LINK_CATEGORY_TAB_LABELS,
   LINK_SORT_LABELS,
   type LinkCategoryTabKey,
@@ -29,19 +27,8 @@ import {
   matchesLinkDisplaySearch,
   promoteLinkToTeammate,
 } from '../../Links';
-import {
-  LinkImagePreviewModal,
-  type LinkImagePreviewTarget,
-} from '../../Links/LinkImagePreviewModal';
-import {
-  LinkMarkdownPreviewModal,
-  type LinkMarkdownPreviewTarget,
-} from '../../Links/LinkMarkdownPreviewModal';
-import {
-  downloadLinkContent,
-  getLinkContentAction,
-  getLinkPreviewKind,
-} from '../../Links/linkContent';
+import { getLinkContentAction } from '../../Links/linkContent';
+import { LinkPreviewModal, useLinkFileActions } from '../../Links/SessionLinksControl';
 import { BranchLinkListItem } from './BranchLinkListItem';
 
 interface LinksTabProps {
@@ -102,9 +89,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   const [error, setError] = useState<string | null>(null);
   const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
   const [teammatePromotionBusyKey, setTeammatePromotionBusyKey] = useState<string | null>(null);
-  const [busyLinkId, setBusyLinkId] = useState<string | null>(null);
-  const [previewTarget, setPreviewTarget] = useState<LinkImagePreviewTarget | null>(null);
-  const [markdownTarget, setMarkdownTarget] = useState<LinkMarkdownPreviewTarget | null>(null);
+  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
   const [activeCategory, setActiveCategory] = useState<LinkCategoryTabKey>('all');
   const [sortOrder, setSortOrder] = useState<LinkSortKey>('az');
   const [searchQuery, setSearchQuery] = useState('');
@@ -149,36 +134,6 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
         .filter((item) => itemMatchesSearch(item, searchQuery, sessionById))
         .sort((a, b) => compareLinkDisplayItemsBySort(a, b, sortOrder)),
     [activeCategory, items, searchQuery, sessionById, sortOrder]
-  );
-
-  const openPreview = useCallback((item: LinkDisplayItem) => {
-    if (!item.linkId) return;
-    const previewKind = getLinkPreviewKind(item);
-    const target = {
-      linkId: item.linkId,
-      title: getCompactLinkDisplayName(item),
-      subtitle: getLinkDisplaySecondaryLabel(item),
-    };
-    if (previewKind === 'image') {
-      setPreviewTarget(target);
-    } else if (previewKind === 'markdown' || previewKind === 'text') {
-      setMarkdownTarget(target);
-    }
-  }, []);
-
-  const downloadItem = useCallback(
-    async (item: LinkDisplayItem) => {
-      if (!item.linkId || busyLinkId) return;
-      setBusyLinkId(item.linkId);
-      try {
-        await downloadLinkContent(item.linkId, getCompactLinkDisplayName(item));
-      } catch (err) {
-        showError(err instanceof Error ? err.message : 'Download failed');
-      } finally {
-        setBusyLinkId(null);
-      }
-    },
-    [busyLinkId, showError]
   );
 
   const openItem = useCallback(
@@ -270,8 +225,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
 
   return (
     <>
-      <LinkImagePreviewModal target={previewTarget} onClose={() => setPreviewTarget(null)} />
-      <LinkMarkdownPreviewModal target={markdownTarget} onClose={() => setMarkdownTarget(null)} />
+      <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
       <div
         style={{ width: '100%', height: '70vh', overflowY: 'auto' }}
         data-testid="branch-links-tab"

@@ -15,7 +15,6 @@ import {
 } from 'antd';
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useThemedMessage } from '../../utils/message';
 import {
   isFileLinkDisplayItem,
   LINK_CATEGORY_TAB_LABELS,
@@ -23,12 +22,7 @@ import {
   type LinkCategoryTabKey,
   type LinkSortKey,
 } from '../Links';
-import { LinkImagePreviewModal, type LinkImagePreviewTarget } from '../Links/LinkImagePreviewModal';
-import {
-  LinkMarkdownPreviewModal,
-  type LinkMarkdownPreviewTarget,
-} from '../Links/LinkMarkdownPreviewModal';
-import { downloadLinkContent } from '../Links/linkContent';
+import { LinkPreviewModal, useLinkFileActions } from '../Links/SessionLinksControl';
 import {
   SessionAttachmentDrawerRow,
   SessionAttachmentQuickRow,
@@ -41,7 +35,6 @@ import {
   compareSessionAttachments as compareDrawerItems,
   sessionAttachmentDisabledReason as disabledReasonForItem,
   getSessionAttachmentCategoryCounts as getCategoryCounts,
-  getSessionAttachmentTargetDisplay as getTargetDisplay,
   matchesSessionAttachmentSearch as itemMatchesSearch,
   matchesSessionAttachmentCategory as matchesCategory,
   type SessionAttachmentItem,
@@ -86,16 +79,12 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
-  const { showError } = useThemedMessage();
+  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
   const [popoverOpen, setPopoverOpen] = React.useState(false);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [activeCategory, setActiveCategory] = React.useState<LinksCategoryTab>('all');
   const [sortOrder, setSortOrder] = React.useState<LinksSort>('az');
   const [searchQuery, setSearchQuery] = React.useState('');
-  const [previewTarget, setPreviewTarget] = React.useState<LinkImagePreviewTarget | null>(null);
-  const [markdownTarget, setMarkdownTarget] = React.useState<LinkMarkdownPreviewTarget | null>(
-    null
-  );
 
   const visibleItems = items;
   const hasItems = visibleItems.length > 0;
@@ -140,23 +129,17 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     if (disabledReasonForItem(item)) return;
     if (canPreviewImage(item) && item.linkId) {
       setPopoverOpen(false);
-      setPreviewTarget({ linkId: item.linkId, title: item.name, subtitle: getTargetDisplay(item) });
+      openPreview(item);
       return;
     }
     if (canPreviewMarkdown(item) && item.linkId) {
       setPopoverOpen(false);
-      setMarkdownTarget({
-        linkId: item.linkId,
-        title: item.name,
-        subtitle: getTargetDisplay(item),
-      });
+      openPreview(item);
       return;
     }
     if (canDownloadFile(item) && item.linkId) {
       setPopoverOpen(false);
-      downloadLinkContent(item.linkId, item.name).catch((err) => {
-        showError(err instanceof Error ? err.message : 'Download failed');
-      });
+      void downloadItem(item);
       return;
     }
     const target = targetForItem(item);
@@ -277,8 +260,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
         </Popover>
       </Space>
 
-      <LinkImagePreviewModal target={previewTarget} onClose={() => setPreviewTarget(null)} />
-      <LinkMarkdownPreviewModal target={markdownTarget} onClose={() => setMarkdownTarget(null)} />
+      <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
 
       <Drawer
         title="Manage links"

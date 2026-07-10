@@ -74,10 +74,8 @@ import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import {
   buildLinkDisplayItems,
-  getCompactLinkDisplayName,
   getTeammatePromotionState,
   type LinkDisplayItem,
-  type PromotedPinnedLinkItem,
   promoteLinkToTeammate,
 } from '../Links';
 import type { ModelConfig } from '../ModelSelector';
@@ -677,21 +675,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const pinnedSessionLinkItems = React.useMemo(
     () => linkDisplayItems.filter((item) => item.ownerScope === 'session' && item.isPinned),
     [linkDisplayItems]
-  );
-  const promotedPinnedSessionItems = React.useMemo<PromotedPinnedLinkItem[]>(
-    () =>
-      pinnedSessionLinkItems.map((item) => ({
-        key: item.key,
-        name: getCompactLinkDisplayName(item),
-        url: item.url,
-        refUri: item.refUri,
-        filePath: item.filePath,
-        mimeType: item.mimeType,
-        linkId: item.linkId,
-        kind: item.kind,
-        source: item.source,
-      })),
-    [pinnedSessionLinkItems]
   );
   const attachmentLinksByMessageId = React.useMemo(() => {
     const byMessageId = new Map<string, Link[]>();
@@ -1715,7 +1698,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             cliViewMode={cliViewMode}
             setCliViewMode={setCliViewMode}
             attachmentLinksByMessageId={attachmentLinksByMessageId}
-            pinnedSessionLinks={promotedPinnedSessionItems}
+            pinnedSessionLinks={pinnedSessionLinkItems}
             onPinnedOverflow={handleOpenPinnedManager}
             forceExpandAll={searchOpen && query.trim().length > 0}
           />

@@ -215,9 +215,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             </Typography.Text>
             <PromotedPinnedLinks
               items={pinnedSessionLinks}
-              max={3}
-              variant="session-header"
-              overflowLabel="Manage pinned session links"
               onOverflow={onPinnedOverflow}
               data-testid="session-pinned-preconversation-links"
             />

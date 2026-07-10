@@ -9,181 +9,79 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import { Button, Tooltip, Typography, theme } from 'antd';
-import React from 'react';
+import type React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useThemedMessage } from '../../utils/message';
+import { getLinkContentAction } from './linkContent';
 import {
-  canDownloadLinkAttachment,
-  canPreviewMarkdownLinkAttachment,
-  type LinkAttachmentTarget,
-  targetForLinkAttachment,
-} from './LinkAttachmentCard';
-import { LinkImagePreviewModal, type LinkImagePreviewTarget } from './LinkImagePreviewModal';
-import {
-  LinkMarkdownPreviewModal,
-  type LinkMarkdownPreviewTarget,
-} from './LinkMarkdownPreviewModal';
-import { downloadLinkContent, getSafeLinkContentLabel } from './linkContent';
+  getCompactLinkDisplayName,
+  getLinkDisplaySecondaryLabel,
+  type LinkDisplayItem,
+} from './linkDisplay';
+import { LinkPreviewModal, useLinkFileActions } from './SessionLinksControl';
 
-export interface PromotedPinnedLinkItem {
-  key: string;
-  name: string;
-  url?: string | null;
-  refUri?: string | null;
-  filePath?: string | null;
-  mimeType?: string | null;
-  linkId?: string | null;
-  kind?: string | null;
-  source?: string | null;
-  disabled?: boolean;
-  note?: string | null;
-}
+export type PromotedPinnedLinkItem = LinkDisplayItem;
 
 interface PromotedPinnedLinksProps {
   items: PromotedPinnedLinkItem[];
-  max?: number;
-  variant?: 'session-header' | 'branch-card';
-  overflowLabel?: string;
   onOverflow?: () => void;
-  onOpenTarget?: (target: LinkAttachmentTarget) => void;
-  empty?: React.ReactNode;
   'data-testid'?: string;
 }
 
-function canPreviewImage(item: PromotedPinnedLinkItem): boolean {
-  return (
-    item.kind === 'image' && item.source === 'upload' && Boolean(item.linkId) && !item.disabled
-  );
-}
-
-function canPreviewMarkdown(item: PromotedPinnedLinkItem): boolean {
-  return canPreviewMarkdownLinkAttachment({
-    source: item.source,
-    linkId: item.linkId,
-    kind: item.kind,
-    mimeType: item.mimeType,
-    title: item.name,
-    filePath: item.filePath,
-    refUri: item.refUri,
-  });
-}
-
-function canDownloadFile(item: PromotedPinnedLinkItem): boolean {
-  return (
-    canDownloadLinkAttachment({
-      source: item.source,
-      linkId: item.linkId,
-      filePath: item.filePath,
-    }) &&
-    !canPreviewImage(item) &&
-    !canPreviewMarkdown(item)
-  );
-}
-
 function disabledReasonForItem(item: PromotedPinnedLinkItem): string | null {
-  if (item.disabled) return item.note || 'Preview/download unavailable';
-  if (canPreviewImage(item)) return null;
-  if (canPreviewMarkdown(item) || canDownloadFile(item)) return null;
+  if (getLinkContentAction(item) || item.href) return null;
   if (item.source === 'upload' || item.filePath || item.kind === 'image') {
-    return item.note || 'Preview/download unavailable';
+    return 'Preview/download unavailable';
   }
-  if (!targetForLinkAttachment({ url: item.url, refUri: item.refUri })) {
-    return 'No safe route is available for this item yet.';
-  }
-  return null;
+  return 'No safe route is available for this item yet.';
 }
 
 function getTargetDisplay(item: PromotedPinnedLinkItem): string {
-  if (item.url) {
-    try {
-      const parsed = new URL(item.url);
-      return `${parsed.hostname}${parsed.pathname}`;
-    } catch {
-      return item.url;
-    }
-  }
-  if (item.refUri) return item.refUri;
-  if (item.filePath) return getSafeLinkContentLabel(item.filePath) || item.name;
-  return item.name;
+  return getLinkDisplaySecondaryLabel(item) || getCompactLinkDisplayName(item);
 }
 
 function getIcon(item: PromotedPinnedLinkItem, disabled: boolean): React.ReactNode {
   if (disabled) return <StopOutlined />;
-  if (item.kind === 'kb_ref' || item.refUri?.startsWith('agor://kb/')) return <BookOutlined />;
-  if (item.kind === 'image') return <FileImageOutlined />;
-  if (item.kind === 'document' || item.filePath) return <FileTextOutlined />;
-  const target = item.url ?? item.refUri ?? '';
-  try {
-    const { hostname } = new URL(target);
-    if (hostname === 'github.com' || hostname.endsWith('.github.com')) return <GithubOutlined />;
-  } catch {
-    // ignore non-URL targets
-  }
-  return item.kind === 'url' ? <GlobalOutlined /> : <LinkOutlined />;
+  if (item.category === 'knowledge') return <BookOutlined />;
+  if (item.category === 'image') return <FileImageOutlined />;
+  if (['issue', 'pr'].includes(item.category)) return <GithubOutlined />;
+  if (item.category === 'url') return <GlobalOutlined />;
+  if (item.filePath) return <FileTextOutlined />;
+  return <LinkOutlined />;
 }
 
 export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
   items,
-  max = 3,
-  variant = 'session-header',
-  overflowLabel,
   onOverflow,
-  onOpenTarget,
-  empty = null,
   'data-testid': dataTestId,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
-  const { showError } = useThemedMessage();
-  const [previewTarget, setPreviewTarget] = React.useState<LinkImagePreviewTarget | null>(null);
-  const [markdownTarget, setMarkdownTarget] = React.useState<LinkMarkdownPreviewTarget | null>(
-    null
-  );
+  const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
 
-  if (items.length === 0) return <>{empty}</>;
+  if (items.length === 0) return null;
 
-  const visibleItems = items.slice(0, max);
+  const visibleItems = items.slice(0, 3);
   const hiddenCount = Math.max(0, items.length - visibleItems.length);
-  const isBranchCard = variant === 'branch-card';
-
-  const openAttachmentTarget = (target: LinkAttachmentTarget) => {
-    if (onOpenTarget) {
-      onOpenTarget(target);
-      return;
-    }
-    if (target.navigation === 'spa') {
-      navigate(target.href);
-      return;
-    }
-    window.open(target.href, '_blank', 'noopener,noreferrer');
-  };
 
   const openItem = (item: PromotedPinnedLinkItem) => {
-    if (canPreviewImage(item) && item.linkId) {
-      setPreviewTarget({ linkId: item.linkId, title: item.name, subtitle: getTargetDisplay(item) });
+    const contentAction = getLinkContentAction(item);
+    if (contentAction === 'preview') {
+      openPreview(item);
       return;
     }
-    if (canPreviewMarkdown(item) && item.linkId) {
-      setMarkdownTarget({
-        linkId: item.linkId,
-        title: item.name,
-        subtitle: getTargetDisplay(item),
-      });
+    if (contentAction === 'download') {
+      void downloadItem(item);
       return;
     }
-    if (canDownloadFile(item) && item.linkId) {
-      downloadLinkContent(item.linkId, item.name).catch((err) => {
-        showError(err instanceof Error ? err.message : 'Download failed');
-      });
+    if (item.href && item.navigation === 'spa') {
+      navigate(item.href);
       return;
     }
-    const target = targetForLinkAttachment({ url: item.url, refUri: item.refUri });
-    if (!target || disabledReasonForItem(item)) return;
-    openAttachmentTarget(target);
+    if (item.href) window.open(item.href, '_blank', 'noopener,noreferrer');
   };
 
-  const chipHeight = isBranchCard ? 22 : 26;
-  const chipMaxWidth = isBranchCard ? 118 : 156;
+  const chipHeight = 26;
+  const chipMaxWidth = 156;
 
   return (
     <>
@@ -196,7 +94,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
           minWidth: 0,
           flexWrap: 'nowrap',
           overflow: 'hidden',
-          maxWidth: isBranchCard ? '100%' : 500,
+          maxWidth: 500,
         }}
       >
         {visibleItems.map((item) => {
@@ -205,7 +103,9 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
           return (
             <Tooltip
               key={item.key}
-              title={disabledReason ?? `${item.name} · ${getTargetDisplay(item)}`}
+              title={
+                disabledReason ?? `${getCompactLinkDisplayName(item)} · ${getTargetDisplay(item)}`
+              }
               mouseEnterDelay={0.45}
             >
               <button
@@ -227,11 +127,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                     '--agor-link-chip-border': disabled
                       ? token.colorBorderSecondary
                       : token.colorPrimaryBorder,
-                    '--agor-link-chip-color': disabled
-                      ? token.colorTextDisabled
-                      : isBranchCard
-                        ? token.colorTextSecondary
-                        : token.colorText,
+                    '--agor-link-chip-color': disabled ? token.colorTextDisabled : token.colorText,
                     '--agor-link-chip-accent-color': disabled
                       ? token.colorTextDisabled
                       : token.colorTextTertiary,
@@ -244,11 +140,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                     maxWidth: chipMaxWidth,
                     border: '1px solid var(--agor-link-chip-border)',
                     borderRadius: 999,
-                    cursor: disabled
-                      ? 'not-allowed'
-                      : canPreviewImage(item)
-                        ? 'zoom-in'
-                        : 'pointer',
+                    cursor: disabled ? 'not-allowed' : 'pointer',
                     padding: `0 ${token.paddingXS}px`,
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -263,7 +155,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                   className="agor-action-link-affordance"
                   style={{
                     color: 'var(--agor-link-chip-accent-color)',
-                    fontSize: isBranchCard ? 10 : 11,
+                    fontSize: 11,
                   }}
                 />
                 <span
@@ -283,23 +175,19 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                   className={disabled ? undefined : 'agor-action-link-title'}
                   ellipsis
                   style={{
-                    fontSize: isBranchCard ? 11 : 12,
+                    fontSize: 12,
                     maxWidth: chipMaxWidth - 50,
                     color: 'var(--agor-link-chip-color)',
                   }}
                 >
-                  {item.name.replace(/^(Issue|PR|Knowledge|Link|URL|Saved URL):\s*/i, '')}
+                  {getCompactLinkDisplayName(item)}
                 </Typography.Text>
               </button>
             </Tooltip>
           );
         })}
         {hiddenCount > 0 && (
-          <Tooltip
-            title={
-              overflowLabel ?? `${hiddenCount} more pinned link${hiddenCount === 1 ? '' : 's'}`
-            }
-          >
+          <Tooltip title={`${hiddenCount} more pinned link${hiddenCount === 1 ? '' : 's'}`}>
             <Button
               size="small"
               type="text"
@@ -309,7 +197,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
               }}
               style={{
                 height: chipHeight,
-                minWidth: isBranchCard ? 30 : 34,
+                minWidth: 34,
                 padding: `0 ${token.paddingXXS}px`,
                 borderRadius: 999,
                 color: token.colorPrimary,
@@ -321,8 +209,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
           </Tooltip>
         )}
       </div>
-      <LinkImagePreviewModal target={previewTarget} onClose={() => setPreviewTarget(null)} />
-      <LinkMarkdownPreviewModal target={markdownTarget} onClose={() => setMarkdownTarget(null)} />
+      <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
     </>
   );
 };

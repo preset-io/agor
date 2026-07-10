@@ -1,13 +1,14 @@
 import { GithubOutlined, PushpinFilled, PushpinOutlined } from '@ant-design/icons';
-import { Button, Modal, Spin, Tooltip, Typography, theme } from 'antd';
+import { Button, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
-import { getAuthHeaders } from '../../utils/authHeaders';
-import { MarkdownRenderer } from '../MarkdownRenderer';
+import { useThemedMessage } from '../../utils/message';
+import { LinkImagePreviewModal } from './LinkImagePreviewModal';
+import { LinkMarkdownPreviewModal } from './LinkMarkdownPreviewModal';
 import {
+  downloadLinkContent,
   getLinkContentAction,
-  getLinkContentUrl,
   getLinkPreviewKind,
   type LinkPreviewKind,
 } from './linkContent';
@@ -21,10 +22,6 @@ import {
 type PreviewState = {
   item: LinkDisplayItem;
   kind: LinkPreviewKind;
-  loading: boolean;
-  error?: string | null;
-  text?: string;
-  objectUrl?: string;
 };
 
 export function LinkGlyph({ item }: { item: LinkDisplayItem }) {
@@ -209,76 +206,22 @@ export function LinkRow({
   );
 }
 
-async function fetchLinkContent(item: LinkDisplayItem, disposition: 'inline' | 'attachment') {
-  if (!item.linkId) throw new Error('Missing link id');
-  const response = await fetch(getLinkContentUrl(item.linkId, disposition), {
-    headers: getAuthHeaders(),
-  });
-  if (!response.ok) {
-    let message = `Failed to load file (${response.status})`;
-    try {
-      const body = await response.json();
-      if (typeof body.error === 'string') message = body.error;
-    } catch {
-      // Keep the status fallback for non-JSON intermediary responses.
-    }
-    throw new Error(message);
-  }
-  return response;
-}
-
-function triggerBlobDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 export function useLinkFileActions() {
+  const { showError } = useThemedMessage();
   const [preview, setPreview] = useState<PreviewState | null>(null);
-  useEffect(
-    () => () => {
-      if (preview?.objectUrl) URL.revokeObjectURL(preview.objectUrl);
-    },
-    [preview?.objectUrl]
-  );
 
-  const openPreview = async (item: LinkDisplayItem) => {
+  const openPreview = (item: LinkDisplayItem) => {
     const kind = getLinkPreviewKind(item);
     if (!kind) return;
-    setPreview({ item, kind, loading: true });
-    try {
-      const response = await fetchLinkContent(item, 'inline');
-      setPreview(
-        kind === 'image'
-          ? { item, kind, loading: false, objectUrl: URL.createObjectURL(await response.blob()) }
-          : { item, kind, loading: false, text: await response.text() }
-      );
-    } catch (error) {
-      setPreview({
-        item,
-        kind,
-        loading: false,
-        error: error instanceof Error ? error.message : 'Failed to load preview',
-      });
-    }
+    setPreview({ item, kind });
   };
 
   const downloadItem = async (item: LinkDisplayItem) => {
+    if (!item.linkId) return;
     try {
-      const response = await fetchLinkContent(item, 'attachment');
-      triggerBlobDownload(await response.blob(), getCompactLinkDisplayName(item));
+      await downloadLinkContent(item.linkId, getCompactLinkDisplayName(item));
     } catch (error) {
-      setPreview({
-        item,
-        kind: 'text',
-        loading: false,
-        error: error instanceof Error ? error.message : 'Failed to download file',
-      });
+      showError(error instanceof Error ? error.message : 'Failed to download file');
     }
   };
 
@@ -292,45 +235,15 @@ export function LinkPreviewModal({
   preview: PreviewState | null;
   onClose: () => void;
 }) {
-  const { token } = theme.useToken();
-  return (
-    <Modal
-      title={preview ? getCompactLinkDisplayName(preview.item) : 'Preview'}
-      open={!!preview}
-      onCancel={onClose}
-      footer={<Button onClick={onClose}>Close</Button>}
-      width={preview?.kind === 'image' ? 840 : 900}
-    >
-      {preview?.loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: token.paddingXL }}>
-          <Spin />
-        </div>
-      ) : preview?.error ? (
-        <Typography.Text type="danger">{preview.error}</Typography.Text>
-      ) : preview?.kind === 'image' && preview.objectUrl ? (
-        <img
-          src={preview.objectUrl}
-          alt={getCompactLinkDisplayName(preview.item)}
-          style={{ maxWidth: '100%', maxHeight: '70vh', display: 'block', margin: '0 auto' }}
-        />
-      ) : preview?.kind === 'markdown' ? (
-        <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
-          <MarkdownRenderer content={preview.text ?? ''} />
-        </div>
-      ) : preview?.kind === 'text' ? (
-        <pre
-          style={{
-            maxHeight: '70vh',
-            overflow: 'auto',
-            margin: 0,
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            color: token.colorText,
-          }}
-        >
-          {preview.text ?? ''}
-        </pre>
-      ) : null}
-    </Modal>
+  if (!preview?.item.linkId) return null;
+  const target = {
+    linkId: preview.item.linkId,
+    title: getCompactLinkDisplayName(preview.item),
+    subtitle: getLinkDisplaySecondaryLabel(preview.item),
+  };
+  return preview.kind === 'image' ? (
+    <LinkImagePreviewModal target={target} onClose={onClose} />
+  ) : (
+    <LinkMarkdownPreviewModal target={target} onClose={onClose} />
   );
 }
