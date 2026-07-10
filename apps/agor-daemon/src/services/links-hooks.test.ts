@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { isExternalFileBackedLinkMutation } from './links-hooks';
+import {
+  getExternalLinkProvenanceMutationError,
+  isExternalFileBackedLinkMutation,
+} from './links-hooks';
 
 describe('isExternalFileBackedLinkMutation', () => {
   it('rejects external upload/file-backed link payloads', () => {
@@ -35,5 +38,29 @@ describe('isExternalFileBackedLinkMutation', () => {
     ).toBe(false);
     expect(isExternalFileBackedLinkMutation({ title: 'Renamed upload' })).toBe(false);
     expect(isExternalFileBackedLinkMutation({ is_pinned: true })).toBe(false);
+  });
+});
+
+describe('getExternalLinkProvenanceMutationError', () => {
+  it('allows only manual provenance on externally created links', () => {
+    expect(getExternalLinkProvenanceMutationError({ source: 'manual' }, 'create')).toBeNull();
+    expect(getExternalLinkProvenanceMutationError({ source: 'parsed' }, 'create')).toMatch(
+      /source 'manual'/
+    );
+  });
+
+  it('keeps parsed/upload attribution server-managed', () => {
+    expect(
+      getExternalLinkProvenanceMutationError(
+        { source_message_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' },
+        'create'
+      )
+    ).toMatch(/server-managed/);
+    expect(getExternalLinkProvenanceMutationError({ source: 'parsed' }, 'patch')).toMatch(
+      /immutable/
+    );
+    expect(getExternalLinkProvenanceMutationError({ source_message_id: null }, 'patch')).toMatch(
+      /server-managed/
+    );
   });
 });
