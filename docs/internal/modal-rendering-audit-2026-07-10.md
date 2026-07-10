@@ -35,8 +35,9 @@
 
 ## Recommended convention
 
-For rare or heavy dialogs, especially within lists/canvas nodes, render the custom modal component
-only when open (`open && <FeatureModal open ... />`). This naturally removes wrapper hooks and form
-state on close. If the wrapper must remain mounted, use Ant Design's `destroyOnHidden` when state
-retention is not desired. Keep a modal mounted only when preserving a draft or expensive live
-resource is an intentional, documented behavior.
+For rare or heavy dialogs, especially within lists/canvas nodes, keep separate mounted-entity and
+visibility state. Mount the custom modal on demand, pass its controlled `open` prop, set `open=false`
+to begin closing, and clear the mounted entity from `afterClose`. This avoids eager wrapper hooks and
+form state without bypassing Ant Design's exit motion or close lifecycle. If the wrapper must remain
+mounted, use Ant Design's `destroyOnHidden` when state retention is not desired. Keep a closed modal
+mounted only when preserving a draft or expensive live resource is intentional and documented.
