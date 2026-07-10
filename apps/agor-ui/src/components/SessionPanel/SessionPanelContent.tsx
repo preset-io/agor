@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Session, SpawnConfig, Task } from '@agor-live/client';
-import { getAssistantConfig, isAssistant, sessionPath, shortId } from '@agor-live/client';
+import { getTeammateConfig, isTeammate, sessionPath, shortId } from '@agor-live/client';
 import {
   CodeOutlined,
   CommentOutlined,
@@ -325,8 +325,8 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             // listeners stay live underneath.
             isActive={isOpen}
             genealogy={session.genealogy}
-            assistantEmoji={
-              branch && isAssistant(branch) ? getAssistantConfig(branch)?.emoji : undefined
+            teammateEmoji={
+              branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
             }
             forceExpandAll={forceExpandAll}
           />

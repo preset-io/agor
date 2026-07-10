@@ -1,7 +1,7 @@
 # Agor launch video
 
 The 40-second cinematic product tour for Agor — "Break out of the terminal" → the
-warm board reveal → harnesses → multiplayer → a feature flash → team assistants → outro.
+warm board reveal → harnesses → multiplayer → a feature flash → AI teammates → outro.
 
 **▶ Watch:** https://www.youtube.com/watch?v=rNTp54zz5IE
 
@@ -66,6 +66,6 @@ skill.
 ## Copy
 
 Hook line and headlines are pulled **verbatim from agor.live**
-("Break out of the terminal.", "Meet your team of AI assistants.",
+("Break out of the terminal.", "Meet your AI teammates.",
 "Team command center for all things agentic."). See `share-copy.txt` for the social
 caption.

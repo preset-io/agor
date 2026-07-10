@@ -12,25 +12,25 @@ const LANDING_PRIVATE_BETA_URL = 'https://agor.live/blog/agor-cloud#lets-get-coo
 const featureCards = [
   {
     title: 'Shared memory',
-    body: 'Each assistant gets a namespace in the knowledge base: semantically searchable, durable, and shared with the team.',
+    body: 'Each AI teammate gets a namespace in the knowledge base: semantically searchable, durable, and shared with the team.',
     href: '/guide/knowledge',
     linkLabel: 'Explore Knowledge',
   },
   {
     title: 'Skills + MCP',
-    body: 'Package repeatable workflows as skills and connect assistants to the MCP servers your team already trusts.',
+    body: 'Package repeatable workflows as skills and connect teammates to the MCP servers your team already trusts.',
     href: '/guide/internal-mcp',
     linkLabel: 'See MCP control',
   },
   {
     title: 'Conversational onboarding',
-    body: 'Teach an assistant by talking to it. The programming language is conversation, and the useful parts become reusable context.',
-    href: '/guide/assistants',
-    linkLabel: 'Read about Assistants',
+    body: 'Teach an AI teammate by talking to it. The programming language is conversation, and the useful parts become reusable context.',
+    href: '/guide/teammates',
+    linkLabel: 'Read about Teammates',
   },
   {
     title: 'Where your team works',
-    body: 'Reach assistants from Slack, GitHub, or wherever work already happens through gateway channels.',
+    body: 'Reach teammates from Slack, GitHub, or wherever work already happens through gateway channels.',
     href: '/guide/message-gateway',
     linkLabel: 'Open Message Gateway',
   },
@@ -42,7 +42,7 @@ const featureCards = [
   },
   {
     title: 'Personality + boundaries',
-    body: 'Tune voice, style, and level of agency so every assistant knows how bold to be and when to ask first.',
+    body: 'Tune voice, style, and level of agency so every teammate knows how bold to be and when to ask first.',
     href: '/blog/agent-modeling-101',
     linkLabel: 'Agent modeling 101',
   },
@@ -61,10 +61,10 @@ const productPreviews = [
     href: '/guide/rich-chat-ux',
   },
   {
-    title: 'Persistent assistants',
+    title: 'Persistent AI teammates',
     body: 'Give long-lived helpers memory, skills, schedules, and team-wide reach beyond one-off prompts.',
-    image: '/screenshots/assistants-list.png',
-    href: '/guide/assistants',
+    image: '/screenshots/teammates-list.png',
+    href: '/guide/teammates',
   },
   {
     title: 'Message gateway',
@@ -74,7 +74,7 @@ const productPreviews = [
   },
   {
     title: 'Scheduler',
-    body: 'Run standups, audits, digests, reports, and assistant heartbeats without waiting to be asked.',
+    body: 'Run standups, audits, digests, reports, and teammate heartbeats without waiting to be asked.',
     image: '/screenshots/scheduler-modal.png',
     href: '/guide/scheduler',
   },
@@ -245,7 +245,7 @@ export function LandingPage() {
         <div className={styles.heroGrid}>
           <div className={styles.heroCopy} data-reveal>
             <p className={styles.kicker}>Team command center for all things agentic.</p>
-            <h1>Meet your team of AI assistants.</h1>
+            <h1>Meet your AI teammates.</h1>
             <p className={styles.heroProvocation}>
               Break out of the terminal.
               <br />
@@ -375,9 +375,9 @@ export function LandingPage() {
       <section className={styles.workspaceSection} data-reveal>
         <div className={styles.workspaceCopy}>
           <span className={styles.eyebrow}>The shared workspace</span>
-          <h2>Raise team assistants with memory, skills, and a place to work.</h2>
+          <h2>Raise AI teammates with memory, skills, and a place to work.</h2>
           <p>
-            One-off prompts don’t compound. In Agor, assistants have durable identities your team
+            One-off prompts don’t compound. In Agor, AI teammates have durable identities your team
             can teach conversationally, then equip with memory, tools, channels, and schedules as
             they grow, so what works for one person finally reaches the whole team.
           </p>
@@ -468,7 +468,7 @@ export function LandingPage() {
             <h4>Product</h4>
             <Link href="/guide/boards">Boards</Link>
             <Link href="/guide/sessions">Sessions</Link>
-            <Link href="/guide/assistants">Assistants</Link>
+            <Link href="/guide/teammates">Teammates</Link>
             <Link href="/guide/internal-mcp">MCP control</Link>
           </div>
           <div>

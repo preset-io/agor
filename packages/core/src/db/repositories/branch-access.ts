@@ -152,7 +152,7 @@ export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
  * Board visibility predicate correlated against the `boards` table in scope.
  *
  * A board is visible if the user owns it, is an explicit board owner, the board
- * is shared, or at least one of its branches / primary assistant branch is
+ * is shared, or at least one of its branches / primary teammate branch is
  * visible through the branch RBAC predicate. All branch-derived checks are
  * EXISTS-based so the outer row is never multiplied and no DISTINCT is needed.
  */
@@ -168,7 +168,7 @@ export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
       )
       .where(and(eq(branches.board_id, boards.board_id), visibleBranchAccessCondition(db, userId)))
   );
-  const accessiblePrimaryAssistantExists = exists(
+  const accessiblePrimaryTeammateExists = exists(
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
     (db as any)
       .select({ _: sql`1` })
@@ -179,7 +179,7 @@ export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
       )
       .where(
         and(
-          eq(branches.branch_id, boards.primary_assistant_id),
+          eq(branches.branch_id, boards.primary_teammate_id),
           visibleBranchAccessCondition(db, userId)
         )
       )
@@ -197,7 +197,7 @@ export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
       ),
       eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared'),
       accessibleBranchExists,
-      accessiblePrimaryAssistantExists
+      accessiblePrimaryTeammateExists
     ) ?? sql`false`
   );
 }

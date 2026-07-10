@@ -1,13 +1,13 @@
 # Knowledge Namespace RBAC V1
 
 **Date:** 2026-06-07  
-**Scope:** Directed V1 design/implementation plan for Knowledge namespace RBAC and Assistant home namespaces.
+**Scope:** Directed V1 design/implementation plan for Knowledge namespace RBAC and Teammate home namespaces.
 
 ## Recommendation
 
 Build V1 around **Knowledge namespaces as the RBAC boundary**.
 
-Do **not** make assistants first-class KB ACL subjects in V1. Do **not** add per-document ACLs in V1. Do **not** implement assistant-vs-user permission intersections in V1 beyond the existing fact that every session already runs as a concrete user.
+Do **not** make teammates first-class KB ACL subjects in V1. Do **not** add per-document ACLs in V1. Do **not** implement teammate-vs-user permission intersections in V1 beyond the existing fact that every session already runs as a concrete user.
 
 Instead:
 
@@ -15,8 +15,8 @@ Instead:
 2. Give each namespace an `others_can` fallback for everyone else in the workspace: `none | read | write`.
 3. Keep document-level `visibility` / `edit_policy` as a narrower document-level overlay for now.
 4. Add **Knowledge -> Settings -> Namespaces** CRUD and permission UI.
-5. Add **BranchModal -> Knowledge** for assistant branches, with a configurable **home namespace**.
-6. Treat assistant-specific namespace access restrictions as future work.
+5. Add **BranchModal -> Knowledge** for teammate branches, with a configurable **home namespace**.
+6. Treat teammate-specific namespace access restrictions as future work.
 
 This keeps the V1 mental model simple:
 
@@ -26,22 +26,22 @@ Can this user access this namespace?
   no  -> no KB access
 ```
 
-For assistant sessions, the operating user already exists. In V1, assistants borrow that user's KB permissions, and the assistant's home namespace is a default operating location, not a separate security principal.
+For teammate sessions, the operating user already exists. In V1, teammates borrow that user's KB permissions, and the teammate's home namespace is a default operating location, not a separate security principal.
 
 ## Goals
 
 - Make KB namespace ownership and sharing explicit.
 - Support private/team/shared KB spaces without relying on doc-level `public/private` alone.
 - Make namespace management visible in the product UI.
-- Give every assistant a clear home namespace for memory/docs/skills.
-- Avoid a complex dual-principal user+assistant RBAC model in V1.
+- Give every teammate a clear home namespace for memory/docs/skills.
+- Avoid a complex dual-principal user+teammate RBAC model in V1.
 - Avoid “RBAC on RBAC” and nested authority debates.
 
 ## Non-goals for V1
 
-- Assistants as namespace ACL subjects.
-- Mixed groups containing assistants.
-- Assistant-specific read/write restrictions outside home namespace.
+- Teammates as namespace ACL subjects.
+- Mixed groups containing teammates.
+- Teammate-specific read/write restrictions outside home namespace.
 - Per-document ACL overrides beyond the existing document fields.
 - Branch/worktree RBAC changes.
 - Namespace permission inheritance from arbitrary org structures.
@@ -137,7 +137,7 @@ Admins/superadmins retain manage access.
 
 V1 should reuse or extend existing user groups only if they are already a workspace-level user collection. Groups remain **user groups** in V1.
 
-Do not add assistants to groups in V1. If future KB-specific mixed groups are needed, add them intentionally rather than expanding every product's group semantics implicitly.
+Do not add teammates to groups in V1. If future KB-specific mixed groups are needed, add them intentionally rather than expanding every product's group semantics implicitly.
 
 ## Document permissions under namespace RBAC
 
@@ -230,9 +230,9 @@ Validation:
 - Cannot remove your own last `own` path unless admin.
 - `write` and `own` imply read in UI.
 
-## UI: Assistant BranchModal -> Knowledge tab
+## UI: Teammate BranchModal -> Knowledge tab
 
-For assistant branches, add a new `Knowledge` tab.
+For teammate branches, add a new `Knowledge` tab.
 
 V1 fields:
 
@@ -241,33 +241,33 @@ V1 fields:
 - Link to open namespace in Knowledge.
 - Link to edit namespace permissions if user has `own`.
 - Explanatory note:
-  > This assistant uses its home namespace as the default place for memory, docs, skills, and prompts. In V1, assistant sessions use the operating user's Knowledge permissions. Future versions may allow assistant-specific namespace restrictions.
+  > This teammate uses its home namespace as the default place for memory, docs, skills, and prompts. In V1, teammate sessions use the operating user's Knowledge permissions. Future versions may allow teammate-specific namespace restrictions.
 
 Behavior:
 
-- On assistant creation, create a home namespace by default.
-- Store home namespace on `branch.custom_context.assistant.kb`.
-- Assistant-aware tools use home namespace as default destination.
+- On teammate creation, create a home namespace by default.
+- Store home namespace on `branch.custom_context.teammate.kb`.
+- Teammate-aware tools use home namespace as default destination.
 - Generic KB tools remain namespace-explicit.
 
-### Assistant home namespace defaults
+### Teammate home namespace defaults
 
 Default slug:
 
 ```text
-assistant-<branch-short-id>
+teammate-<branch-short-id>
 ```
 
 Default display name:
 
 ```text
-<Assistant display name> Knowledge
+<Teammate display name> Knowledge
 ```
 
 Default permissions should be conservative:
 
 - `others_can = none`
-- assistant branch creator/owner gets namespace `own`
+- teammate branch creator/owner gets namespace `own`
 - optionally seed branch owners as namespace `own` when branch RBAC is enabled
 
 Do not attempt to mirror branch `others_can` automatically in V1. Provide explicit UI to change namespace permissions.
@@ -287,11 +287,11 @@ Update `packages/core/src/types/knowledge.ts`:
 
 Add migrations for sqlite/postgres:
 
-- `kb_namespaces.others_can` defaulting to `read` or `write` for existing global-like namespaces, but `none` for newly created assistant namespaces.
+- `kb_namespaces.others_can` defaulting to `read` or `write` for existing global-like namespaces, but `none` for newly created teammate namespaces.
 - `kb_namespace_acl` table.
 - Indexes on `(namespace_id)`, `(subject_type, subject_id)`, and unique `(namespace_id, subject_type, subject_id)`.
 
-Migration question: what should existing namespaces default to? To preserve current open-ish behavior, `global` may need `others_can = read` or `write` depending on how much public-edit behavior exists. New assistant namespaces should default to `none`.
+Migration question: what should existing namespaces default to? To preserve current open-ish behavior, `global` may need `others_can = read` or `write` depending on how much public-edit behavior exists. New teammate namespaces should default to `none`.
 
 ### Repositories
 
@@ -351,7 +351,7 @@ Filters:
 
 Search must apply namespace permissions before document visibility.
 
-For assistant sessions in V1, search is still user-scoped because assistant-specific restrictions are future work. Assistant-aware search tools can default to the assistant's home namespace first, but they should not introduce a separate security model yet.
+For teammate sessions in V1, search is still user-scoped because teammate-specific restrictions are future work. Teammate-aware search tools can default to the teammate's home namespace first, but they should not introduce a separate security model yet.
 
 ## Implementation phases
 
@@ -375,38 +375,38 @@ For assistant sessions in V1, search is still user-scoped because assistant-spec
 - Add users/groups accumulator with read/write/own.
 - Add effective permission display.
 
-### Phase 4: Assistant home namespace
+### Phase 4: Teammate home namespace
 
-- Extend `AssistantConfig` with optional KB home namespace metadata.
-- Create default home namespace on assistant creation.
-- Add BranchModal Assistant `Knowledge` tab.
-- Make assistant-aware prompts/tools use home namespace as default.
+- Extend `TeammateConfig` with optional KB home namespace metadata.
+- Create default home namespace on teammate creation.
+- Add BranchModal Teammate `Knowledge` tab.
+- Make teammate-aware prompts/tools use home namespace as default.
 
 ### Phase 5: docs and migration polish
 
-- Update user-facing docs for Knowledge namespaces and assistant home namespaces.
+- Update user-facing docs for Knowledge namespaces and teammate home namespaces.
 - Add migration notes for existing public/private docs.
 - Add admin guidance for choosing `others_can` defaults.
 
 ## Future work
 
-- Assistant principals in namespace ACLs.
-- Mixed groups containing users and assistants.
-- Assistant-specific namespace access restrictions.
+- Teammate principals in namespace ACLs.
+- Mixed groups containing users and teammates.
+- Teammate-specific namespace access restrictions.
 - Per-document ACL overrides or deviations from namespace inheritance.
 - Better terminology for document `visibility = public` inside restricted namespaces.
-- Namespace templates/presets: personal, team, assistant-private, docs-public.
+- Namespace templates/presets: personal, team, teammate-private, docs-public.
 
 ## Open questions
 
 1. Should existing `global` default to `others_can = read` or `write` during migration?
 2. Should namespace `write` bypass document `created_by` for non-public-edit docs, or should document edit policy stay as a second gate? Recommendation: keep second gate in V1.
 3. Should group management remain global Settings -> Groups, or should KB namespace permissions have an inline lightweight group creation flow?
-4. Should assistant home namespace be mandatory for assistant branches, or lazily created on first KB use?
+4. Should teammate home namespace be mandatory for teammate branches, or lazily created on first KB use?
 5. Should namespace owners be separate ACL entries, or should `owner_user_id` continue to have special meaning? Recommendation: use ACL entries for actual authority; keep `owner_user_id` as metadata/back-compat.
 6. Should namespaces have markdown descriptions rendered in the Knowledge UI home view?
 7. What is the best UI location for Knowledge Settings: top-level Settings tab, Knowledge page settings drawer, or both?
 
 ## Bottom line
 
-V1 should make **Knowledge namespace RBAC** real and visible. Users and groups get read/write/own on namespaces; everyone else gets a simple `none/read/write` fallback. Assistants get a home namespace in BranchModal, but assistant-specific access constraints stay future work. This is enough to make KB sharing understandable without introducing a dual user+assistant RBAC model too early.
+V1 should make **Knowledge namespace RBAC** real and visible. Users and groups get read/write/own on namespaces; everyone else gets a simple `none/read/write` fallback. Teammates get a home namespace in BranchModal, but teammate-specific access constraints stay future work. This is enough to make KB sharing understandable without introducing a dual user+teammate RBAC model too early.

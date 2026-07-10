@@ -41,8 +41,8 @@ function createBoardData(overrides?: Partial<Board>): Partial<Board> {
     default_others_fs_access: overrides?.default_others_fs_access,
     default_dangerously_allow_session_sharing: overrides?.default_dangerously_allow_session_sharing,
   };
-  if (Object.hasOwn(overrides ?? {}, 'primary_assistant_id')) {
-    data.primary_assistant_id = overrides?.primary_assistant_id;
+  if (overrides && Object.hasOwn(overrides, 'primary_teammate_id')) {
+    data.primary_teammate_id = overrides.primary_teammate_id;
   }
   return data;
 }
@@ -67,7 +67,7 @@ async function createBranchForBoard(
   boardId: UUID,
   overrides: {
     name?: string;
-    assistant?: boolean;
+    teammate?: boolean;
     archived?: boolean;
     custom_context?: Record<string, unknown>;
   } = {}
@@ -89,10 +89,10 @@ async function createBranchForBoard(
     created_by: generateId(),
     custom_context:
       overrides.custom_context ??
-      (overrides.assistant
+      (overrides.teammate
         ? {
-            assistant: {
-              kind: 'assistant',
+            teammate: {
+              kind: 'teammate',
               displayName: name,
             },
           }
@@ -157,13 +157,13 @@ describe('BoardRepository.create', () => {
     await expect(repo.create(data)).rejects.toThrow(/created_by/);
   });
 
-  dbTest('should reject primary_assistant_id in generic create input', async ({ db }) => {
+  dbTest('should reject primary_teammate_id in generic create input', async ({ db }) => {
     const repo = new BoardRepository(db);
     const data = createBoardData({
-      primary_assistant_id: generateId(),
+      primary_teammate_id: generateId(),
     } as Partial<Board>);
 
-    await expect(repo.create(data)).rejects.toThrow(/setPrimaryAssistant/);
+    await expect(repo.create(data)).rejects.toThrow(/setPrimaryTeammate/);
   });
 
   dbTest('should store all optional fields correctly', async ({ db }) => {
@@ -708,15 +708,15 @@ describe('BoardRepository.update', () => {
     await expect(repo.update('99999999', { name: 'Updated' })).rejects.toThrow(EntityNotFoundError);
   });
 
-  dbTest('should reject primary_assistant_id in generic update input', async ({ db }) => {
+  dbTest('should reject primary_teammate_id in generic update input', async ({ db }) => {
     const repo = new BoardRepository(db);
     const board = await repo.create(createBoardData());
 
     await expect(
       repo.update(board.board_id, {
-        primary_assistant_id: generateId(),
+        primary_teammate_id: generateId(),
       } as Partial<Board>)
-    ).rejects.toThrow(/setPrimaryAssistant/);
+    ).rejects.toThrow(/setPrimaryTeammate/);
   });
 
   dbTest('should preserve unchanged fields', async ({ db }) => {
@@ -753,18 +753,18 @@ describe('BoardRepository.update', () => {
 });
 
 // ============================================================================
-// Primary assistant
+// Primary teammate
 // ============================================================================
 
-describe('BoardRepository primary assistant', () => {
+describe('BoardRepository primary teammate', () => {
   dbTest(
-    'keeps private boards visible through an accessible primary assistant even after assistant moves',
+    'keeps private boards visible through an accessible primary teammate even after teammate moves',
     async ({ db }) => {
       const users = new UsersRepository(db);
       const boardRepo = new BoardRepository(db);
       const branchRepo = new BranchRepository(db);
       const viewer = await users.create({
-        email: 'primary-assistant-viewer@example.com',
+        email: 'primary-teammate-viewer@example.com',
         role: 'member',
       });
       const oldBoard = await boardRepo.create(
@@ -773,13 +773,13 @@ describe('BoardRepository primary assistant', () => {
       const newBoard = await boardRepo.create(
         createBoardData({ name: 'QBR Prep', access_mode: 'private' })
       );
-      const assistant = await createBranchForBoard(db, oldBoard.board_id, {
-        assistant: true,
-        name: 'kelly-assistant',
+      const teammate = await createBranchForBoard(db, oldBoard.board_id, {
+        teammate: true,
+        name: 'kelly-teammate',
       });
 
-      await boardRepo.setPrimaryAssistant(oldBoard.board_id, assistant.branch_id);
-      await branchRepo.update(assistant.branch_id, {
+      await boardRepo.setPrimaryTeammate(oldBoard.board_id, teammate.branch_id);
+      await branchRepo.update(teammate.branch_id, {
         board_id: newBoard.board_id,
         permission_source: 'override',
         others_can: 'none',
@@ -789,7 +789,7 @@ describe('BoardRepository primary assistant', () => {
         oldBoard.board_id
       );
 
-      await branchRepo.addOwner(assistant.branch_id, viewer.user_id as UUID);
+      await branchRepo.addOwner(teammate.branch_id, viewer.user_id as UUID);
 
       await expect(boardRepo.findVisibleBoardIds(viewer.user_id as UUID)).resolves.toContain(
         oldBoard.board_id
@@ -797,128 +797,128 @@ describe('BoardRepository primary assistant', () => {
     }
   );
 
-  dbTest('should set and fetch a valid primary assistant', async ({ db }) => {
+  dbTest('should set and fetch a valid primary teammate', async ({ db }) => {
     const boardRepo = new BoardRepository(db);
     const board = await boardRepo.create(createBoardData());
-    const assistant = await createBranchForBoard(db, board.board_id, {
-      assistant: true,
-      name: 'assistant-branch',
+    const teammate = await createBranchForBoard(db, board.board_id, {
+      teammate: true,
+      name: 'teammate-branch',
     });
 
-    const updated = await boardRepo.setPrimaryAssistant(board.board_id, assistant.branch_id);
+    const updated = await boardRepo.setPrimaryTeammate(board.board_id, teammate.branch_id);
 
-    expect(updated.primary_assistant_id).toBe(assistant.branch_id);
-    await expect(boardRepo.getPrimaryAssistant(board.board_id)).resolves.toMatchObject({
-      branch_id: assistant.branch_id,
-      name: 'assistant-branch',
+    expect(updated.primary_teammate_id).toBe(teammate.branch_id);
+    await expect(boardRepo.getPrimaryTeammate(board.board_id)).resolves.toMatchObject({
+      branch_id: teammate.branch_id,
+      name: 'teammate-branch',
       url: expect.any(String),
     });
   });
 
   dbTest(
-    'should accept short branch IDs when setting and clearing primary assistant',
+    'should accept short branch IDs when setting and clearing primary teammate',
     async ({ db }) => {
       const boardRepo = new BoardRepository(db);
       const board = await boardRepo.create(createBoardData());
-      const assistant = await createBranchForBoard(db, board.board_id, { assistant: true });
-      const assistantShortId = toShortId(assistant.branch_id, 8);
+      const teammate = await createBranchForBoard(db, board.board_id, { teammate: true });
+      const teammateShortId = toShortId(teammate.branch_id, 8);
 
-      const updated = await boardRepo.setPrimaryAssistant(board.board_id, assistantShortId);
+      const updated = await boardRepo.setPrimaryTeammate(board.board_id, teammateShortId);
 
-      expect(updated.primary_assistant_id).toBe(assistant.branch_id);
+      expect(updated.primary_teammate_id).toBe(teammate.branch_id);
 
-      const cleared = await boardRepo.clearPrimaryAssistantIfMatches(
+      const cleared = await boardRepo.clearPrimaryTeammateIfMatches(
         board.board_id,
-        assistantShortId
+        teammateShortId
       );
-      expect(cleared?.primary_assistant_id).toBeUndefined();
+      expect(cleared?.primary_teammate_id).toBeUndefined();
     }
   );
 
-  dbTest('should reject non-assistant primary branches', async ({ db }) => {
+  dbTest('should reject non-teammate primary branches', async ({ db }) => {
     const boardRepo = new BoardRepository(db);
     const board = await boardRepo.create(createBoardData());
     const branch = await createBranchForBoard(db, board.board_id);
 
-    await expect(boardRepo.setPrimaryAssistant(board.board_id, branch.branch_id)).rejects.toThrow(
-      /assistant branch/
+    await expect(boardRepo.setPrimaryTeammate(board.board_id, branch.branch_id)).rejects.toThrow(
+      /teammate branch/
     );
   });
 
-  dbTest('should reject archived assistant primary branches', async ({ db }) => {
+  dbTest('should reject archived teammate primary branches', async ({ db }) => {
     const boardRepo = new BoardRepository(db);
     const board = await boardRepo.create(createBoardData());
-    const assistant = await createBranchForBoard(db, board.board_id, {
-      assistant: true,
+    const teammate = await createBranchForBoard(db, board.board_id, {
+      teammate: true,
       archived: true,
     });
 
-    await expect(
-      boardRepo.setPrimaryAssistant(board.board_id, assistant.branch_id)
-    ).rejects.toThrow(/active/);
+    await expect(boardRepo.setPrimaryTeammate(board.board_id, teammate.branch_id)).rejects.toThrow(
+      /active/
+    );
   });
 
-  dbTest('should reject assistant branches from another board', async ({ db }) => {
+  dbTest('should reject teammate branches from another board', async ({ db }) => {
     const boardRepo = new BoardRepository(db);
     const boardA = await boardRepo.create(createBoardData({ name: 'Board A' }));
     const boardB = await boardRepo.create(createBoardData({ name: 'Board B' }));
-    const assistant = await createBranchForBoard(db, boardB.board_id, { assistant: true });
+    const teammate = await createBranchForBoard(db, boardB.board_id, { teammate: true });
 
-    await expect(
-      boardRepo.setPrimaryAssistant(boardA.board_id, assistant.branch_id)
-    ).rejects.toThrow(/belong to the board/);
+    await expect(boardRepo.setPrimaryTeammate(boardA.board_id, teammate.branch_id)).rejects.toThrow(
+      /belong to the board/
+    );
   });
 
-  dbTest('should conditionally set primary assistant only when unset', async ({ db }) => {
+  dbTest('should conditionally set primary teammate only when unset', async ({ db }) => {
     const boardRepo = new BoardRepository(db);
     const board = await boardRepo.create(createBoardData());
-    const firstAssistant = await createBranchForBoard(db, board.board_id, {
-      assistant: true,
-      name: 'first-assistant',
+    const firstTeammate = await createBranchForBoard(db, board.board_id, {
+      teammate: true,
+      name: 'first-teammate',
     });
-    const secondAssistant = await createBranchForBoard(db, board.board_id, {
-      assistant: true,
-      name: 'second-assistant',
+    const secondTeammate = await createBranchForBoard(db, board.board_id, {
+      teammate: true,
+      name: 'second-teammate',
     });
 
-    const firstUpdate = await boardRepo.setPrimaryAssistantIfUnset(
+    const firstUpdate = await boardRepo.setPrimaryTeammateIfUnset(
       board.board_id,
-      firstAssistant.branch_id
+      firstTeammate.branch_id
     );
-    const secondUpdate = await boardRepo.setPrimaryAssistantIfUnset(
+    const secondUpdate = await boardRepo.setPrimaryTeammateIfUnset(
       board.board_id,
-      secondAssistant.branch_id
+      secondTeammate.branch_id
     );
 
-    expect(firstUpdate?.primary_assistant_id).toBe(firstAssistant.branch_id);
+    expect(firstUpdate?.primary_teammate_id).toBe(firstTeammate.branch_id);
     expect(secondUpdate).toBeNull();
     await expect(boardRepo.findById(board.board_id)).resolves.toMatchObject({
-      primary_assistant_id: firstAssistant.branch_id,
+      primary_teammate_id: firstTeammate.branch_id,
     });
   });
 
-  dbTest('should clear primary assistant only when it matches', async ({ db }) => {
+  dbTest('should clear primary teammate only when it matches', async ({ db }) => {
     const boardRepo = new BoardRepository(db);
     const board = await boardRepo.create(createBoardData());
-    const assistant = await createBranchForBoard(db, board.board_id, { assistant: true });
-    const otherAssistant = await createBranchForBoard(db, board.board_id, { assistant: true });
+    const teammate = await createBranchForBoard(db, board.board_id, { teammate: true });
+    const otherTeammate = await createBranchForBoard(db, board.board_id, { teammate: true });
 
-    await boardRepo.setPrimaryAssistant(board.board_id, assistant.branch_id);
+    await boardRepo.setPrimaryTeammate(board.board_id, teammate.branch_id);
 
-    const skipped = await boardRepo.clearPrimaryAssistantIfMatches(
+    const skipped = await boardRepo.clearPrimaryTeammateIfMatches(
       board.board_id,
-      otherAssistant.branch_id
+      otherTeammate.branch_id
     );
     expect(skipped).toBeNull();
     await expect(boardRepo.findById(board.board_id)).resolves.toMatchObject({
-      primary_assistant_id: assistant.branch_id,
+      primary_teammate_id: teammate.branch_id,
     });
 
-    const cleared = await boardRepo.clearPrimaryAssistantIfMatches(
+    const cleared = await boardRepo.clearPrimaryTeammateIfMatches(
       board.board_id,
-      assistant.branch_id
+      teammate.branch_id
     );
-    expect(cleared?.primary_assistant_id).toBeUndefined();
+    expect(cleared?.primary_teammate_id).toBeUndefined();
   });
 });
 

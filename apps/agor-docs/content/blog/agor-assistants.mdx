@@ -1,13 +1,15 @@
 ---
-title: 'Introducing Agor Assistants: Persistent AI Companions for Developer Teams'
-description: 'What started as an OpenClaw experiment is now a first-class Agor feature. Meet Assistants — persistent AI entities with memory, skills, and team-wide reach through Slack.'
+title: 'Introducing Agor Teammates: Persistent AI Companions for Developer Teams'
+description: 'What started as an OpenClaw experiment is now a first-class Agor feature. Meet Teammates — persistent AI entities with memory, skills, and team-wide reach through Slack.'
 date: 2026-03-03
-image: '/images/blog/agor-assistants.png'
+image: '/images/blog/agor-teammates.png'
 ---
 
-# Introducing Agor Assistants
+# Introducing Agor Teammates
 
-**tl;dr:** What started as [an experiment](/blog/agor-openclaw) porting OpenClaw's agent loop into Agor has become a first-class feature. Assistants are persistent AI companions with memory, identity, skills, and scheduled heartbeats — fully integrated into Agor's spatial canvas, multiplayer workflows, and now reachable directly from Slack.
+> **Terminology update:** Agor Assistants were renamed to **teammates**. This post has been updated to use the current product term; the original URL is preserved for existing links.
+
+**tl;dr:** What started as [an experiment](/blog/agor-openclaw) porting OpenClaw's agent loop into Agor has become a first-class feature. AI teammates are persistent AI companions with memory, identity, skills, and scheduled heartbeats — fully integrated into Agor's spatial canvas, multiplayer workflows, and now reachable directly from Slack.
 
 ---
 
@@ -17,35 +19,35 @@ A month ago, I wrote about [running OpenClaw patterns inside Agor](/blog/agor-op
 
 That experiment proved the concept: an agent that bootstrapped itself, spawned parallel work, created and merged 4 PRs on day one, maintained accurate memory, and even course-corrected on a task it had previously dismissed. All visible on a board.
 
-Since then, I've been running assistants daily at [Preset](https://preset.io), and the pattern has evolved from "cool experiment" to "how did we work without this?" This post covers what Assistants are, how they work in practice, and what I've learned from running four of them across my team.
+Since then, I've been running teammates daily at [Preset](https://preset.io), and the pattern has evolved from "cool experiment" to "how did we work without this?" This post covers what AI teammates are, how they work in practice, and what I've learned from running four of them across my team.
 
-For the full technical reference — BOOTSTRAP.md, BOARD.md, HEARTBEAT.md, memory layout, skills — see the [Assistants guide](/guide/assistants).
+For the full technical reference — BOOTSTRAP.md, BOARD.md, HEARTBEAT.md, memory layout, skills — see the [Teammates guide](/guide/teammates).
 
 ---
 
-## What is an Assistant?
+## What is an AI teammate?
 
-An Assistant is a persistent AI entity that lives in an Agor worktree. Unlike a regular worktree (which is _where_ code gets written for a specific issue), an Assistant is a _who_ — a long-lived companion with:
+An AI teammate is a persistent AI entity that lives in an Agor worktree. Unlike a regular worktree (which is _where_ code gets written for a specific issue), an AI teammate is a _who_ — a long-lived companion with:
 
 - **Memory** — Identity files (SOUL.md, USER.md) and daily journals (`memory/{YYYY-MM-DD}.md`) that persist across sessions
-- **Skills** — MCP servers, CLI tools, and integrations that extend what the assistant can do
-- **Heartbeats** — Scheduled ticks where the assistant proactively checks on work, triages issues, and updates its memory
+- **Skills** — MCP servers, CLI tools, and integrations that extend what the teammate can do
+- **Heartbeats** — Scheduled ticks where the teammate proactively checks on work, triages issues, and updates its memory
 - **Orchestration** — The ability to create worktrees, spawn sessions, manage boards, and coordinate multi-agent workflows through Agor's MCP tools
-- **Identity** — A name, personality, and accumulated knowledge that makes each assistant unique
+- **Identity** — A name, personality, and accumulated knowledge that makes each teammate unique
 
-The framework is inspired by [OpenClaw](https://openclaw.ai/), which proved that agents need infrastructure for continuity — not just API access. Agor adapts those patterns for team-based developer workflows: everything is visible on a spatial canvas, state lives in git, and multiple people can interact with the same assistant.
+The framework is inspired by [OpenClaw](https://openclaw.ai/), which proved that agents need infrastructure for continuity — not just API access. Agor adapts those patterns for team-based developer workflows: everything is visible on a spatial canvas, state lives in git, and multiple people can interact with the same teammate.
 
-**Framework repository:** [github.com/preset-io/agor-assistant](https://github.com/preset-io/agor-assistant)
+**Framework repository:** [github.com/preset-io/agor-teammate](https://github.com/preset-io/agor-teammate)
 
 ---
 
-## Real-world assistants at Preset
+## Real-world teammates at Preset
 
-I've been running four assistants at Preset, each serving a different role. Here's what they look like in practice.
+I've been running four teammates at Preset, each serving a different role. Here's what they look like in practice.
 
-### 1. Personal assistant
+### 1. Personal teammate
 
-The classic OpenClaw-on-Agor use case. This assistant runs on my home Mac Studio and has access to personal tools:
+The classic OpenClaw-on-Agor use case. This teammate runs on my home Mac Studio and has access to personal tools:
 
 - **Email and calendar** via MCP
 - **Notion** for notes and docs
@@ -56,20 +58,20 @@ It handles the kind of tasks that used to require context-switching between five
 
 This is closest to what OpenClaw does out of the box, but with Agor's spatial canvas for visibility and git-tracked memory for auditability.
 
-### 2. PM Assistant
+### 2. PM Teammate
 
-This is where things get interesting for teams. Our PM Assistant has access to:
+This is where things get interesting for teams. Our PM Teammate has access to:
 
 - **GitHub** — PRs, issues, code review
 - **Shortcut** (our Jira-equivalent) — tickets, epics, sprints
-- **PM and design guidelines** — loaded as context in the assistant's worktree
+- **PM and design guidelines** — loaded as context in the teammate's worktree
 - **Team workflow documentation** — how we run sprints, how we triage, what "done" means
 
-The PM Assistant can triage incoming tickets, organize sprints, comment on PRs with context from the relevant Shortcut ticket, and help new team members understand our workflow.
+The PM Teammate can triage incoming tickets, organize sprints, comment on PRs with context from the relevant Shortcut ticket, and help new team members understand our workflow.
 
-What makes this powerful is **user impersonation**. The PM Assistant is set up so that when different team members interact with it, it operates with _their_ credentials:
+What makes this powerful is **user impersonation**. The PM Teammate is set up so that when different team members interact with it, it operates with _their_ credentials:
 
-- **GitHub**: Each user configures their `GITHUB_TOKEN` in their Agor user settings. The assistant's sessions inherit the prompting user's token.
+- **GitHub**: Each user configures their `GITHUB_TOKEN` in their Agor user settings. The teammate's sessions inherit the prompting user's token.
 - **Shortcut MCP**: The MCP server configuration uses templated environment variables:
   ```json
   {
@@ -77,45 +79,45 @@ What makes this powerful is **user impersonation**. The PM Assistant is set up s
   }
   ```
 
-This means the MCP connection is shared (one channel, one assistant), but authentication is per-user. When Alice asks the PM Assistant to comment on a Shortcut ticket, it logs in as Alice. When Bob does the same, it logs in as Bob.
+This means the MCP connection is shared (one channel, one teammate), but authentication is per-user. When Alice asks the PM Teammate to comment on a Shortcut ticket, it logs in as Alice. When Bob does the same, it logs in as Bob.
 
 ### 3. DatAgor — Data engineering specialist
 
-DatAgor is our data engineering assistant, equipped with:
+DatAgor is our data engineering teammate, equipped with:
 
 - **[`sup`](https://github.com/preset-io/superset-sup)** — Preset's CLI for Apache Superset (run SQL, manage dashboards, sync assets)
-- **`dataeng` submodule** — Our internal data engineering repo is submoduled into the assistant's branch, giving it direct access to dbt models, Airflow DAGs, and pipeline definitions
+- **`dataeng` submodule** — Our internal data engineering repo is submoduled into the teammate's branch, giving it direct access to dbt models, Airflow DAGs, and pipeline definitions
 - **Data warehouse docs** — Proactively referenced and indexed
 - **Self-authored resources** — DatAgor has created its own documentation, workflows, and skills over time
 
-The submodule pattern is worth highlighting: by git-submoduling a repo into the assistant's worktree, the assistant can browse and search the codebase directly. No need for separate API calls or MCP servers — it's just files on disk.
+The submodule pattern is worth highlighting: by git-submoduling a repo into the teammate's worktree, the teammate can browse and search the codebase directly. No need for separate API calls or MCP servers — it's just files on disk.
 
 DatAgor handles questions like "What dbt model feeds the revenue dashboard?" or "Run `sup sql` to check if yesterday's pipeline loaded correctly" — and because it has memory, it learns your data model over time.
 
 ### 4. Agor supervisor
 
-Meta, but useful: an assistant that operates on Agor itself. It can:
+Meta, but useful: a teammate that operates on Agor itself. It can:
 
 - Create and manage worktrees
 - Spawn agents and monitor their progress
 - Organize boards and zones
 - Track what's happening across the workspace
 
-This is the "manager" pattern — an assistant that doesn't write code itself but coordinates others.
+This is the "manager" pattern — a teammate that doesn't write code itself but coordinates others.
 
 ---
 
-## Gateway channels: Assistants on Slack
+## Gateway channels: Teammates on Slack
 
-All of the above assistants (except the personal one) are connected to our team's Slack via [Gateway channels](/guide/message-gateway). DM the bot, and it routes your message to the right assistant.
+All of the above teammates (except the personal one) are connected to our team's Slack via [Gateway channels](/guide/message-gateway). DM the bot, and it routes your message to the right teammate.
 
-The key feature: **user identity flows through the gateway**. When you DM an assistant from Slack, Agor maps your Slack identity to your Agor user. The session runs with _your_ credentials, _your_ MCP tokens, _your_ permissions. The assistant is shared, but the access is personal.
+The key feature: **user identity flows through the gateway**. When you DM a teammate from Slack, Agor maps your Slack identity to your Agor user. The session runs with _your_ credentials, _your_ MCP tokens, _your_ permissions. The teammate is shared, but the access is personal.
 
 This means:
-- Everyone on the team can reach the PM Assistant from Slack
+- Everyone on the team can reach the PM Teammate from Slack
 - Each person's interactions use their own GitHub token, Shortcut token, etc.
-- The assistant maintains a unified memory across all users (daily journals, learnings)
-- All sessions are visible on the assistant's board in Agor
+- The teammate maintains a unified memory across all users (daily journals, learnings)
+- All sessions are visible on the teammate's board in Agor
 
 It turns Slack from a place where you _talk about_ work into a portal where you _get work done_ through an AI that knows your codebase, your tools, and your team's workflows.
 
@@ -123,48 +125,48 @@ It turns Slack from a place where you _talk about_ work into a portal where you 
 
 ## What Agor adds beyond standalone agent loops
 
-Running assistants inside Agor gives you capabilities that standalone agent frameworks don't:
+Running teammates inside Agor gives you capabilities that standalone agent frameworks don't:
 
-**Visual boards.** Every assistant has a spatial canvas. You can see what it's working on, how tasks are organized, which sessions are active. No black boxes.
+**Visual boards.** Every teammate has a spatial canvas. You can see what it's working on, how tasks are organized, which sessions are active. No black boxes.
 
-**Team workflows.** Multiple people interact with the same assistant. User impersonation means shared access with personal credentials. Comments, cursors, and presence make collaboration visible.
+**Team workflows.** Multiple people interact with the same teammate. User impersonation means shared access with personal credentials. Comments, cursors, and presence make collaboration visible.
 
-**State in git.** The assistant's memory, skills, identity — it's all in a git repo. You can inspect the history, review changes, fork an assistant to create a variant, or roll back if something goes wrong.
+**State in git.** The teammate's memory, skills, identity — it's all in a git repo. You can inspect the history, review changes, fork a teammate to create a variant, or roll back if something goes wrong.
 
-**Agor MCP.** Assistants have full access to Agor's MCP tools — they can create worktrees, spawn sessions, manage boards, check on other agents. They're not just consumers of the platform; they're participants.
+**Agor MCP.** Teammates have full access to Agor's MCP tools — they can create worktrees, spawn sessions, manage boards, check on other agents. They're not just consumers of the platform; they're participants.
 
-**Heartbeat scheduling.** Configure an assistant to wake up every 30 minutes (or any interval) and run through a checklist: check PR status, triage new issues, update its board, summarize progress. Proactive, not just reactive.
+**Heartbeat scheduling.** Configure a teammate to wake up every 30 minutes (or any interval) and run through a checklist: check PR status, triage new issues, update its board, summarize progress. Proactive, not just reactive.
 
-**Session genealogy.** When an assistant spawns work, you see the full tree — parent sessions, child sessions, forks. Click any node to see what happened.
+**Session genealogy.** When a teammate spawns work, you see the full tree — parent sessions, child sessions, forks. Click any node to see what happened.
 
 ---
 
 ## Getting started
 
-1. **From the onboarding wizard** — Choose "Set up your assistant" on first login
-2. **From Settings** — Go to Settings > Assistants > Create Assistant
+1. **From the onboarding wizard** — Choose "Set up your AI teammate" on first login
+2. **From Settings** — Go to Settings > Teammates > Create AI teammate
 3. **From the CLI** — Run `agor init` and follow the prompts
 
-The assistant framework repo ([preset-io/agor-assistant](https://github.com/preset-io/agor-assistant)) provides the scaffolding: BOOTSTRAP.md for first-boot setup, memory structure, identity files. Say "hello" and the bootstrap takes it from there.
+The teammate framework repo ([preset-io/agor-teammate](https://github.com/preset-io/agor-teammate)) provides the scaffolding: BOOTSTRAP.md for first-boot setup, memory structure, identity files. Say "hello" and the bootstrap takes it from there.
 
-For the full reference, see the [Assistants guide](/guide/assistants).
+For the full reference, see the [Teammates guide](/guide/teammates).
 
 ---
 
 ## What's next
 
-Assistants are still early. Here's where I see them going:
+Teammates are still early. Here's where I see them going:
 
 - **Richer skills ecosystem** — More MCP server integrations, community-contributed skill templates
-- **Cross-assistant coordination** — Assistants that delegate to each other (the supervisor pattern, but with proper handoff protocols)
+- **Cross-teammate coordination** — Teammates that delegate to each other (the supervisor pattern, but with proper handoff protocols)
 - **Better memory architecture** — Smarter summarization, vector search over daily journals, automatic pruning
 - **More gateway platforms** — Discord, WhatsApp, Telegram connectors for the message gateway
 
-If you're running assistants in Agor, I'd love to hear what you're building. The patterns are still forming, and real-world usage is the best guide.
+If you're running teammates in Agor, I'd love to hear what you're building. The patterns are still forming, and real-world usage is the best guide.
 
 ---
 
-**[Try Agor](https://agor.live)** | **[Assistant Framework](https://github.com/preset-io/agor-assistant)** | **[Agor GitHub](https://github.com/preset-io/agor)**
+**[Try Agor](https://agor.live)** | **[Teammate Framework](https://github.com/preset-io/agor-teammate)** | **[Agor GitHub](https://github.com/preset-io/agor)**
 
 ---
 

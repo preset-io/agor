@@ -1,15 +1,15 @@
 import type { Repo } from '@agor-live/client';
 import { useMemo } from 'react';
 
-export const FRAMEWORK_REPO_SLUG = 'preset-io/agor-assistant';
-export const FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-assistant.git';
+export const FRAMEWORK_REPO_SLUG = 'preset-io/agor-teammate';
+export const FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-teammate.git';
 
 /**
  * Match predicate with priority ordering:
- * 1. agor-assistant-private (any org) — private fork takes precedence
- * 2. preset-io/agor-assistant (exact slug)
- * 3. Any repo whose remote_url contains "agor-assistant"
- * 4. Any repo whose remote_url contains "agor-openclaw" (legacy)
+ * 1. agor-teammate-private/agor-assistant-private (any org) — private fork takes precedence
+ * 2. preset-io/agor-teammate (exact slug)
+ * 3. Legacy preset-io/agor-assistant (exact slug)
+ * 4. Any repo whose remote_url contains "agor-teammate", "agor-assistant", or "agor-openclaw"
  */
 function findBestFrameworkRepo(repos: Repo[]): Repo | undefined {
   let publicMatch: Repo | undefined;
@@ -19,18 +19,22 @@ function findBestFrameworkRepo(repos: Repo[]): Repo | undefined {
     // Highest priority: private fork
     if (
       r.slug?.includes('agor-assistant-private') ||
+      r.slug?.includes('agor-teammate-private') ||
+      r.remote_url?.includes('agor-teammate-private') ||
       r.remote_url?.includes('agor-assistant-private')
     ) {
       return r;
     }
     // Exact public slug
-    if (!publicMatch && r.slug === FRAMEWORK_REPO_SLUG) {
+    if (!publicMatch && (r.slug === FRAMEWORK_REPO_SLUG || r.slug === 'preset-io/agor-assistant')) {
       publicMatch = r;
     }
     // URL-based fallback
     if (
       !urlMatch &&
-      (r.remote_url?.includes('agor-assistant') || r.remote_url?.includes('agor-openclaw'))
+      (r.remote_url?.includes('agor-teammate') ||
+        r.remote_url?.includes('agor-assistant') ||
+        r.remote_url?.includes('agor-openclaw'))
     ) {
       urlMatch = r;
     }
@@ -41,8 +45,8 @@ function findBestFrameworkRepo(repos: Repo[]): Repo | undefined {
 
 /**
  * Detects the framework repository from a list of repos.
- * Prefers agor-assistant-private over the public repo.
- * Used by AssistantTab and OnboardingWizard.
+ * Prefers private forks over the public repo.
+ * Used by the teammate create flow and OnboardingWizard.
  */
 export function useFrameworkRepo(repos: Repo[]): Repo | undefined {
   return useMemo(() => findBestFrameworkRepo(repos), [repos]);
