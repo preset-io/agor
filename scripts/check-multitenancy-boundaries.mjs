@@ -64,10 +64,7 @@ const checks = [
     name: 'raw tenant database scope imports',
     roots: ['apps/agor-daemon/src'],
     patterns: [/import\s*{[^}]*\btenantDatabaseScope\b[^}]*}\s*from\s*['"]@agor\/core\/db['"]/gs],
-    baseline: {
-      // Test-only assertion of tenant propagation behavior.
-      'apps/agor-daemon/src/services/health-monitor.test.ts': 1,
-    },
+    baseline: {},
   },
   {
     name: 'raw tenant database scope exits',
