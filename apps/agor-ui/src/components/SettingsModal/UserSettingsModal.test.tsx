@@ -229,6 +229,68 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the modal open when saving General settings fails', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn(async () => {
+      throw new Error('save failed');
+    });
+    const onClose = vi.fn();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+      expect(consoleError).toHaveBeenCalled();
+    }, ASYNC);
+    expect(onClose).not.toHaveBeenCalled();
+
+    consoleError.mockRestore();
+  });
+
+  it('keeps the modal open when saving Audio settings fails', async () => {
+    const user = makeUser();
+    const onUpdate = vi.fn(async () => {
+      throw new Error('save failed');
+    });
+    const onClose = vi.fn();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /audio/i }));
+    await screen.findByRole('heading', { name: 'Audio' });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+      expect(consoleError).toHaveBeenCalled();
+    }, ASYNC);
+    expect(onClose).not.toHaveBeenCalled();
+
+    consoleError.mockRestore();
+  });
+
   it('keeps the Env Vars section selected after saving and receiving updated user props', async () => {
     const initialUser = makeUser({
       env_vars: {
