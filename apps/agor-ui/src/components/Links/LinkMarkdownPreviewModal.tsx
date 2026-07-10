@@ -12,11 +12,13 @@ export type LinkMarkdownPreviewTarget = LinkContentTarget;
 interface LinkMarkdownPreviewModalProps {
   target: LinkMarkdownPreviewTarget | null;
   onClose: () => void;
+  plainText?: boolean;
 }
 
 export const LinkMarkdownPreviewModal: React.FC<LinkMarkdownPreviewModalProps> = ({
   target,
   onClose,
+  plainText = false,
 }) => {
   const [content, setContent] = React.useState<string>('');
   const [error, setError] = React.useState<string | null>(null);
@@ -80,7 +82,16 @@ export const LinkMarkdownPreviewModal: React.FC<LinkMarkdownPreviewModalProps> =
           </div>
         )}
         {error && <Alert type="warning" showIcon message={error} />}
-        {!loading && !error && content && <MarkdownRenderer content={content} />}
+        {!loading &&
+          !error &&
+          content &&
+          (plainText ? (
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {content}
+            </pre>
+          ) : (
+            <MarkdownRenderer content={content} />
+          ))}
       </div>
     </Modal>
   );

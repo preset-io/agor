@@ -244,6 +244,10 @@ export function LinkPreviewModal({
   return preview.kind === 'image' ? (
     <LinkImagePreviewModal target={target} onClose={onClose} />
   ) : (
-    <LinkMarkdownPreviewModal target={target} onClose={onClose} />
+    <LinkMarkdownPreviewModal
+      target={target}
+      plainText={preview.kind === 'text'}
+      onClose={onClose}
+    />
   );
 }
