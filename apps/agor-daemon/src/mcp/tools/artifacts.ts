@@ -40,7 +40,6 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
-import { runWithMcpTenantScope } from '../tenant-scope.js';
 
 const SANDPACK_TEMPLATES = [
   'react',
@@ -224,31 +223,28 @@ IMPORTANT:
           'Provide either legacy folderPath or branchId + subpath to publish artifacts.'
         );
       }
-      const artifact = await runWithMcpTenantScope(ctx, () =>
-        service.publishArtifact(
-          {
-            folderPath,
-            branch_id: resolvedBranchId,
-            source_session_id: ctx.sessionId,
-            subpath,
-            board_id: resolvedBoardId,
-            name: coerceString(args.name),
-            artifact_id: resolvedArtifactId,
-            template: args.template,
-            public: args.public,
-            sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
-            required_env_vars: args.requiredEnvVars,
-            agor_grants: args.agorGrants as AgorGrants | undefined,
-            agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
-            x: args.x,
-            y: args.y,
-            width: args.width,
-            height: args.height,
-          },
-          ctx.userId,
-          ctx.authenticatedUser.role as UserRole,
-          ctx.baseServiceParams
-        )
+      const artifact = await service.publishArtifact(
+        {
+          folderPath,
+          branch_id: resolvedBranchId,
+          source_session_id: ctx.sessionId,
+          subpath,
+          board_id: resolvedBoardId,
+          name: coerceString(args.name),
+          artifact_id: resolvedArtifactId,
+          template: args.template,
+          public: args.public,
+          sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
+          required_env_vars: args.requiredEnvVars,
+          agor_grants: args.agorGrants as AgorGrants | undefined,
+          agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
+          x: args.x,
+          y: args.y,
+          width: args.width,
+          height: args.height,
+        },
+        ctx.userId,
+        ctx.authenticatedUser.role as UserRole
       );
 
       const publishValidation = args.waitForStatus
@@ -450,19 +446,15 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
       // without a redundant pre-delete fetch. role on AuthenticatedUser is
       // loosely typed as `string`; auth strategies enforce a valid value
       // upstream so the cast to UserRole is honest.
-      const artifact = await runWithMcpTenantScope(ctx, () =>
-        service.deleteArtifact(
-          artifactId,
-          ctx.userId,
-          ctx.authenticatedUser.role as UserRole,
-          ctx.baseServiceParams
-        )
+      const artifact = await service.deleteArtifact(
+        artifactId,
+        ctx.userId,
+        ctx.authenticatedUser.role as UserRole
       );
       emitServiceEvent(ctx.app, {
         path: 'artifacts',
         event: 'removed',
         data: artifact,
-        params: ctx.baseServiceParams,
         id: artifact.artifact_id,
       });
 
@@ -570,28 +562,25 @@ Caller must own the artifact (or be an admin).`,
       const boardIdInput = coerceString(args.boardId);
       const resolvedBoardId = boardIdInput ? await resolveBoardId(ctx, boardIdInput) : undefined;
 
-      const updated = await runWithMcpTenantScope(ctx, () =>
-        service.updateMetadata(
-          artifactId,
-          {
-            name: coerceString(args.name),
-            description: coerceString(args.description),
-            public: args.public,
-            archived: args.archived,
-            board_id: resolvedBoardId as BoardID | undefined,
-            x: args.x,
-            y: args.y,
-            width: args.width,
-            height: args.height,
-            sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
-            required_env_vars: args.requiredEnvVars,
-            agor_grants: args.agorGrants as AgorGrants | undefined,
-            agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
-          },
-          ctx.userId,
-          ctx.authenticatedUser.role as UserRole,
-          ctx.baseServiceParams
-        )
+      const updated = await service.updateMetadata(
+        artifactId,
+        {
+          name: coerceString(args.name),
+          description: coerceString(args.description),
+          public: args.public,
+          archived: args.archived,
+          board_id: resolvedBoardId as BoardID | undefined,
+          x: args.x,
+          y: args.y,
+          width: args.width,
+          height: args.height,
+          sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
+          required_env_vars: args.requiredEnvVars,
+          agor_grants: args.agorGrants as AgorGrants | undefined,
+          agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
+        },
+        ctx.userId,
+        ctx.authenticatedUser.role as UserRole
       );
 
       const updateValidation = args.waitForStatus

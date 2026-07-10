@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/db', () => ({
   BoardObjectRepository: class BoardObjectRepository {},
+  getCurrentTenantId: () => undefined,
   runWithTenantDatabaseScope: vi.fn((_db, _tenantId, work) => work()),
 }));
 
@@ -116,7 +117,7 @@ describe('card MCP tool input schemas', () => {
 });
 
 describe('card MCP realtime events', () => {
-  it('threads tenant params through create, move, and archive custom methods and emits', async () => {
+  it('passes actor params only where needed and emits correctly-shaped events', async () => {
     const params = {
       authenticated: true,
       provider: 'mcp',
@@ -160,22 +161,22 @@ describe('card MCP realtime events', () => {
     await captureHandler('agor_cards_archive', ctx)({ cardId: 'card-1' });
 
     expect(createWithPlacement).toHaveBeenCalledWith(expect.any(Object), params);
-    expect(moveToZone).toHaveBeenCalledWith('card-1', null, undefined, params);
-    expect(archive).toHaveBeenCalledWith('card-1', params);
+    expect(moveToZone).toHaveBeenCalledWith('card-1', null, undefined);
+    expect(archive).toHaveBeenCalledWith('card-1');
     expect(cardsEmit).toHaveBeenCalledWith(
       'created',
       card,
-      expect.objectContaining({ path: 'cards', method: 'create', params, result: card })
+      expect.objectContaining({ path: 'cards', method: 'create', params: {}, result: card })
     );
     expect(cardsEmit).toHaveBeenCalledWith(
       'patched',
       expect.objectContaining({ archived: true }),
-      expect.objectContaining({ path: 'cards', method: 'patch', params })
+      expect.objectContaining({ path: 'cards', method: 'patch', params: {} })
     );
     expect(boardObjectsEmit).toHaveBeenCalledWith(
       'patched',
       boardObject,
-      expect.objectContaining({ path: 'board-objects', method: 'patch', params })
+      expect.objectContaining({ path: 'board-objects', method: 'patch', params: {} })
     );
   });
 });

@@ -1,5 +1,6 @@
+import { getCurrentTenantId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { HookContext } from '@agor/core/types';
+import type { HookContext, TenantContext } from '@agor/core/types';
 
 const DEFAULT_EVENT_METHOD: Record<string, string> = {
   created: 'create',
@@ -62,6 +63,24 @@ export type ManualServiceEvent = {
  * Build the hook shape once, here, so call sites can't drift on it.
  */
 export function emitServiceEvent(app: Application, event: ManualServiceEvent): void {
+  const ambientTenantId = getCurrentTenantId();
+  const explicitTenantId = event.params?.tenant?.tenant_id;
+  if (ambientTenantId && explicitTenantId && ambientTenantId !== explicitTenantId) {
+    throw new Error(
+      `Refusing to emit ${event.path}.${event.event}: explicit tenant does not match ambient tenant scope`
+    );
+  }
+
+  // Realtime publication happens asynchronously, after the operation's ALS
+  // scope may have ended. Snapshot tenant identity into the HookContext now.
+  const params: HookContext['params'] = { ...(event.params ?? {}) };
+  if (ambientTenantId && !explicitTenantId) {
+    params.tenant = {
+      tenant_id: ambientTenantId as TenantContext['tenant_id'],
+      source: 'explicit',
+    };
+  }
+
   const service = app.service(event.path as never) as unknown as {
     emit?: (name: string, data: unknown, hook: Partial<HookContext>) => void;
   };
@@ -73,6 +92,6 @@ export function emitServiceEvent(app: Application, event: ManualServiceEvent): v
     event: event.event,
     id: event.id,
     result: event.data,
-    params: event.params ?? {},
+    params,
   } as Partial<HookContext>);
 }

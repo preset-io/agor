@@ -1,4 +1,6 @@
 import { runWithTenantDatabaseScope } from '@agor/core/db';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { wrapRegisterTool } from './register-tool-proxy.js';
 import type { McpContext } from './server.js';
 
 /**
@@ -13,4 +15,19 @@ export async function runWithMcpTenantScope<T>(
   const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
   if (!tenantId) return work();
   return runWithTenantDatabaseScope(ctx.db, tenantId, work);
+}
+
+/**
+ * Enter the authenticated tenant scope once at the MCP tool invocation boundary.
+ *
+ * Tool implementations can then use repositories and custom service methods just
+ * like normal Feathers requests: tenant identity is ambient for the complete
+ * synchronous/async operation rather than manually threaded through each call.
+ */
+export function tenantScopedToolProxy(server: McpServer, ctx: McpContext): McpServer {
+  return wrapRegisterTool(server, (register, name, config, handler) =>
+    register(name, config, (args, extra) =>
+      runWithMcpTenantScope(ctx, () => Promise.resolve(handler(args, extra)))
+    )
+  );
 }

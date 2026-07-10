@@ -33,6 +33,7 @@ import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
 import { wrapRegisterTool } from './register-tool-proxy.js';
+import { tenantScopedToolProxy } from './tenant-scope.js';
 import { validateSessionToken } from './tokens.js';
 import { formatDomainDescriptionsForInstructions, ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
@@ -394,7 +395,10 @@ function createMcpServer(
   // 'off' / 'internal': no MCP tools
   // 'readonly': only tools with readOnlyHint: true
   // 'on': all tools
-  registerDomainTools(server, ctx, servicesConfig);
+  // MCP custom methods bypass Feathers around hooks. Scope every tool at this
+  // execution boundary so tenant-aware repositories and manual events share one
+  // consistent ambient context.
+  registerDomainTools(tenantScopedToolProxy(server, ctx), ctx, servicesConfig);
 
   if (toolSearchEnabled) {
     const { registry, toolsList } = getRegistry(servicesConfig);

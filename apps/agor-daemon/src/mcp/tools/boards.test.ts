@@ -1,4 +1,3 @@
-import { runWithTenantDatabaseScope } from '@agor/core/db';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 import { registerBoardTools } from './boards.js';
@@ -471,7 +470,7 @@ describe('agor_boards_create schema', () => {
 });
 
 describe('agor_boards_update realtime events', () => {
-  it('emits custom object mutations with the MCP tenant params in a HookContext', async () => {
+  it('emits custom object mutations with a correctly-shaped HookContext', async () => {
     const params = {
       authenticated: true,
       provider: 'mcp',
@@ -500,11 +499,6 @@ describe('agor_boards_update realtime events', () => {
     });
 
     expect(batchUpsertBoardObjects).toHaveBeenCalledWith('board-1', expect.any(Object), params);
-    expect(runWithTenantDatabaseScope).toHaveBeenCalledWith(
-      expect.anything(),
-      'tenant-a',
-      expect.any(Function)
-    );
     expect(emit).toHaveBeenCalledWith(
       'patched',
       updatedBoard,
@@ -512,7 +506,7 @@ describe('agor_boards_update realtime events', () => {
         path: 'boards',
         method: 'patch',
         id: 'board-1',
-        params,
+        params: {},
         result: updatedBoard,
       })
     );

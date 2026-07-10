@@ -479,8 +479,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           height: d.height,
         },
         callerUserId,
-        callerRole,
-        params
+        callerRole
       );
     }
 
@@ -513,8 +512,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const artifact = await this.deleteArtifact(
       artifactId,
       callerParams?.user?.user_id,
-      callerParams?.user?.role,
-      params
+      callerParams?.user?.role
     );
     emitServiceEvent(this.app, {
       path: 'artifacts',
@@ -560,8 +558,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       height?: number;
     },
     userId?: string,
-    userRole?: UserRole,
-    params?: ArtifactParams
+    userRole?: UserRole
   ): Promise<Artifact> {
     const { folderPath, matchedBranchId } = await this.resolveArtifactSource(
       {
@@ -673,7 +670,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         path: 'artifacts',
         event: 'patched',
         data: updated,
-        params,
         id: updated.artifact_id,
       });
       return updated;
@@ -724,7 +720,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           path: 'boards',
           event: 'patched',
           data: updatedBoard,
-          params,
           id: resolvedBoardId,
         });
       }
@@ -745,7 +740,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       path: 'artifacts',
       event: 'created',
       data: artifact,
-      params,
       id: artifact.artifact_id,
     });
     return artifact;
@@ -773,8 +767,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       sandpack_config?: SandpackConfig;
     },
     userId?: string,
-    userRole?: UserRole,
-    params?: ArtifactParams
+    userRole?: UserRole
   ): Promise<Artifact> {
     const existing = await this.artifactRepo.findById(artifactId);
     if (!existing) throw new Error(`Artifact ${artifactId} not found`);
@@ -863,7 +856,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           path: 'boards',
           event: 'patched',
           data: targetBoard,
-          params,
           id: newBoardId,
         });
       } catch (upsertError) {
@@ -898,7 +890,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
             path: 'boards',
             event: 'patched',
             data: cleaned,
-            params,
             id: oldBoardId,
           });
         } catch {
@@ -920,7 +911,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       path: 'artifacts',
       event: 'patched',
       data: updated,
-      params,
       id: updated.artifact_id,
     });
     return updated;
@@ -2176,8 +2166,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   async deleteArtifact(
     artifactId: string,
     userId?: string,
-    userRole?: UserRole,
-    params?: ArtifactParams
+    userRole?: UserRole
   ): Promise<Artifact> {
     const artifact = await this.artifactRepo.findById(artifactId);
     if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
@@ -2196,7 +2185,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           path: 'boards',
           event: 'patched',
           data: updatedBoard,
-          params,
           id: artifact.board_id,
         });
       }
