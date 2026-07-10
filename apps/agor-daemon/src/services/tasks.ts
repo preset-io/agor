@@ -1183,7 +1183,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       this.trackTaskStarted(connection.task);
       // The guarded repository transition bypasses the standard patch method,
       // so publish the canonical patched event explicitly for reactive clients.
-      this.emit('patched', connection.task);
+      this.emit?.('patched', connection.task);
     }
     return connection.task;
   }

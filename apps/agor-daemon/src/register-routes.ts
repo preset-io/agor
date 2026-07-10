@@ -143,6 +143,7 @@ import {
   shouldReconcileSessionPromptState,
 } from './utils/session-task-state.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
   createTenantDatabaseScopeAroundHook,
@@ -1056,16 +1057,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const gitStateAtStart = 'unknown';
     const refAtStart = 'unknown';
 
-    const launchStatus =
-      session.agentic_tool === 'claude-code-cli' ? TaskStatus.RUNNING : TaskStatus.DISPATCHING;
+    const launchState = buildTaskLaunchState(session.agentic_tool, startTimestamp);
 
     // Patch task: queued/created → launch status, with real ranges. queue_position
     // is cleared here so a draining task is no longer considered queued.
     const updatedTask = (await app.service('tasks').patch(
       task.task_id,
       {
-        status: launchStatus,
-        started_at: startTimestamp,
+        ...launchState,
         queue_position: undefined,
         message_range: {
           start_index: messageStartIndex,
