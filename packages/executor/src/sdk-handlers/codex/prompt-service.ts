@@ -46,6 +46,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -91,6 +92,23 @@ type CodexConfigValue = CodexConfigObject[string];
  */
 const MCP_AUTO_APPROVE: CodexConfigObject = { default_tools_approval_mode: 'approve' };
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
+const CODEX_RUNTIME_EVENT_TYPES = new Set([
+  'error',
+  'item.completed',
+  'item.started',
+  'item.updated',
+  'turn.completed',
+  'turn.failed',
+  'turn.started',
+]);
+const CODEX_RUNTIME_EVENT_MSG_TYPES = new Set([
+  'agent_message',
+  'task_complete',
+  'task_started',
+  'token_count',
+  'turn_complete',
+  'turn_context',
+]);
 
 const DEBUG_CODEX = process.env.AGOR_DEBUG_CODEX === '1' || process.env.DEBUG?.includes('codex');
 
@@ -98,6 +116,24 @@ function codexDebug(...args: unknown[]): void {
   if (DEBUG_CODEX) {
     console.debug(...args);
   }
+}
+
+function describeCodexRuntimeEvent(event: unknown): string {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return 'unknown';
+
+  const eventRecord = event as Record<string, unknown>;
+  const eventType = typeof eventRecord.type === 'string' ? eventRecord.type : undefined;
+  if (eventType !== 'event_msg') {
+    return eventType && CODEX_RUNTIME_EVENT_TYPES.has(eventType) ? eventType : 'unknown';
+  }
+
+  const payload = eventRecord.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return 'event_msg';
+
+  const payloadType = (payload as Record<string, unknown>).type;
+  return typeof payloadType === 'string' && CODEX_RUNTIME_EVENT_MSG_TYPES.has(payloadType)
+    ? `event_msg.${payloadType}`
+    : 'event_msg';
 }
 
 function applyGatewayMcpStartupGuard(config: CodexConfigObject, requireMcpServers: boolean): void {
@@ -286,7 +322,8 @@ export class CodexPromptService {
     _usersRepo?: UsersRepository,
     useNativeAuth: boolean = false,
     private tasksService?: TasksService,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private runtime?: AgenticToolRuntime
   ) {
     // Store API key from base-executor (already resolved with proper precedence)
     this.apiKey = apiKey || '';
@@ -1221,6 +1258,11 @@ export class CodexPromptService {
       for await (const event of events) {
         eventCount++;
         codexDebug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
+        this.runtime?.pulse({
+          kind: eventCount === 1 ? 'sdk.first_event' : 'sdk.progress',
+          label: 'codex',
+          metadata: { event: describeCodexRuntimeEvent(event) },
+        });
 
         // Check if stop was requested
         if (this.stopRequested.get(sessionId)) {

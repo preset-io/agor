@@ -10,30 +10,19 @@
  */
 
 import { generateId, shortId } from '@agor/core';
-import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type { MessageID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
-import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
-import type { AgorClient } from '../../services/feathers-client.js';
 import { createRuntimeAwareStreamingCallbacks, createStreamingCallbacks } from './base-executor.js';
+import type { ToolRunnerParams } from './tool-registry.js';
 
 /**
  * Execute OpenCode task (Feathers/WebSocket architecture)
  *
  * Used by ephemeral executor - direct Feathers client passed in
  */
-export async function executeOpenCodeTask(params: {
-  client: AgorClient;
-  sessionId: SessionID;
-  taskId: TaskID;
-  prompt: string;
-  permissionMode?: PermissionMode;
-  abortController: AbortController;
-  resolvedConfig?: ResolvedConfigSlice;
-  runtime?: AgenticToolRuntime;
-}): Promise<void> {
+export async function executeOpenCodeTask(params: ToolRunnerParams): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
 
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);

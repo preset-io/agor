@@ -19,7 +19,7 @@ export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' |
 /**
  * Tool runner function - executes via Feathers WebSocket
  */
-export type ToolRunner = (params: {
+export interface ToolRunnerParams {
   client: AgorClient;
   sessionId: SessionID;
   taskId: TaskID;
@@ -31,7 +31,9 @@ export type ToolRunner = (params: {
   resolvedConfig?: ResolvedConfigSlice;
   /** Observe-only runtime pulse API owned by the executor process. */
   runtime?: AgenticToolRuntime;
-}) => Promise<void>;
+}
+
+export type ToolRunner = (params: ToolRunnerParams) => Promise<void>;
 
 /**
  * Tool configuration
@@ -96,20 +98,7 @@ export class ToolRegistry {
   /**
    * Execute tool
    */
-  static async execute(
-    tool: Tool,
-    params: {
-      client: AgorClient;
-      sessionId: SessionID;
-      taskId: TaskID;
-      prompt: string;
-      permissionMode?: PermissionMode;
-      abortController: AbortController;
-      messageSource?: MessageSource;
-      resolvedConfig?: ResolvedConfigSlice;
-      runtime?: AgenticToolRuntime;
-    }
-  ): Promise<void> {
+  static async execute(tool: Tool, params: ToolRunnerParams): Promise<void> {
     const config = ToolRegistry.get(tool);
     if (!config) {
       throw new Error(`Unknown tool: ${tool}`);

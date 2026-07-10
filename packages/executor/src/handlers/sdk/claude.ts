@@ -4,29 +4,18 @@
  * Executes prompts using Claude Code SDK with Feathers/WebSocket architecture
  */
 
-import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { ClaudeTool } from '../../sdk-handlers/claude/claude-tool.js';
-import type { AgorClient } from '../../services/feathers-client.js';
+import type { ToolRunnerParams } from './tool-registry.js';
 
 /**
  * Execute Claude Code task (Feathers/WebSocket architecture)
  *
  * Used by ephemeral executor - no IPC, direct Feathers client passed in
  */
-export async function executeClaudeCodeTask(params: {
-  client: AgorClient;
-  sessionId: SessionID;
-  taskId: TaskID;
-  prompt: string;
-  permissionMode?: PermissionMode;
-  abortController: AbortController;
-  messageSource?: MessageSource;
-  resolvedConfig?: ResolvedConfigSlice;
-}): Promise<void> {
+export async function executeClaudeCodeTask(params: ToolRunnerParams): Promise<void> {
   const { client, sessionId } = params;
 
   // Import base executor helper

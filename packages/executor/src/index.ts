@@ -165,7 +165,6 @@ export class AgorExecutor {
       taskId: this.config.taskId,
       enabled: heartbeatConfig?.enabled ?? true,
       heartbeatIntervalMs: heartbeatConfig?.interval_ms,
-      abortController: this.abortController,
     });
     this.runtime.start();
 

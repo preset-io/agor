@@ -17,7 +17,6 @@ import type {
   Message,
   MessageID,
   MessageSource,
-  PermissionMode,
   SessionID,
   Task,
   TaskID,
@@ -26,7 +25,6 @@ import { MessageRole } from '@agor/core/types';
 import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
 import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
@@ -38,6 +36,7 @@ import {
   stampGitStateAtTaskStart,
 } from './base-executor.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
+import type { ToolRunnerParams } from './tool-registry.js';
 
 type CursorKeyResolution = {
   apiKey?: string;
@@ -442,17 +441,7 @@ async function createSystemErrorMessage(args: {
 /**
  * Execute Cursor task (Feathers/WebSocket architecture).
  */
-export async function executeCursorTask(params: {
-  client: AgorClient;
-  sessionId: SessionID;
-  taskId: TaskID;
-  prompt: string;
-  permissionMode?: PermissionMode;
-  abortController: AbortController;
-  messageSource?: MessageSource;
-  resolvedConfig?: ResolvedConfigSlice;
-  runtime?: AgenticToolRuntime;
-}): Promise<void> {
+export async function executeCursorTask(params: ToolRunnerParams): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
 
   console.log(`[cursor] Executing task ${shortId(taskId)}...`);

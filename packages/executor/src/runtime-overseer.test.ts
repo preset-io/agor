@@ -87,25 +87,6 @@ describe('RuntimeOverseer', () => {
     }
   });
 
-  it('caps the recent pulse ring', () => {
-    let tick = 0;
-    const runtime = new RuntimeOverseer({
-      client: createClient(),
-      taskId: 'task-1',
-      maxRecentPulses: 2,
-      now: () => new Date(`2026-01-01T00:00:0${tick++}.000Z`),
-    });
-
-    runtime.pulse({ kind: 'sdk.started' });
-    runtime.pulse({ kind: 'assistant.stream' });
-    runtime.pulse({ kind: 'tool.started', label: 'Bash' });
-
-    expect(runtime.recentPulseSnapshots()).toEqual([
-      { kind: 'assistant.stream', at: '2026-01-01T00:00:01.000Z' },
-      { kind: 'tool.started', label: 'Bash', at: '2026-01-01T00:00:02.000Z' },
-    ]);
-  });
-
   it('warns and keeps running when a heartbeat patch fails', async () => {
     const warn = vi.fn();
     const patch = vi.fn().mockRejectedValueOnce(new Error('daemon down')).mockResolvedValueOnce({});
@@ -209,14 +190,22 @@ describe('RuntimeOverseer', () => {
 });
 
 describe('sanitizePulse', () => {
-  it('keeps only bounded privacy-safe metadata', () => {
+  it('keeps only allowlisted bounded metadata', () => {
     const pulse = sanitizePulse({
       kind: 'sdk.progress',
       id: ` ${'x'.repeat(200)} `,
       label: ` ${'B'.repeat(140)} `,
       metadata: {
-        event: 'turn_context',
+        event: 'e'.repeat(300),
+        type: 'event_msg',
+        status: 'running',
         token: 'secret',
+        prompt: 'private prompt',
+        command: 'cat ~/.agor/config.yaml',
+        input: 'raw input',
+        output: 'raw output',
+        cwd: '/private/worktree',
+        url: 'https://user:password@example.com',
         object: { raw: true } as unknown as string,
         count: 3,
         ok: true,
@@ -228,11 +217,9 @@ describe('sanitizePulse', () => {
     expect(pulse.id).toHaveLength(160);
     expect(pulse.label).toHaveLength(120);
     expect(pulse.metadata).toEqual({
-      event: 'turn_context',
-      count: 3,
-      ok: true,
-      nil: null,
-      long: 'y'.repeat(200),
+      event: 'e'.repeat(200),
+      type: 'event_msg',
+      status: 'running',
     });
   });
 });

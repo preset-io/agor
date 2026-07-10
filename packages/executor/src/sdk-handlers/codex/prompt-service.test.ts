@@ -1172,7 +1172,7 @@ describe('CodexPromptService - tool payload mapping', () => {
 // running until the daemon safety-net (~15 min later) marked it failed.
 // ─────────────────────────────────────────────────────────────────────────────
 describe('CodexPromptService - event_msg terminal handling (issue #1749)', () => {
-  function makeStreamingService() {
+  function makeStreamingService(runtime?: { pulse: ReturnType<typeof vi.fn> }) {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -1180,7 +1180,12 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       mockBranchesRepo,
       undefined,
       'test-api-key',
-      mockDb
+      mockDb,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      runtime
     );
 
     const serviceWithPrivates = service as any;
@@ -1218,6 +1223,55 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     delete process.env.OPENAI_BASE_URL;
     vi.clearAllMocks();
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
+  });
+
+  it('records safe raw runtime pulses through turn_context before a silent stream ends', async () => {
+    const runtime = { pulse: vi.fn() };
+    const service = makeStreamingService(runtime);
+    const serviceWithPrivates = service as any;
+    await serviceWithPrivates.ensureCodexClient({
+      model_instructions_file: '/tmp/agor-codex-instructions-mock.md',
+    });
+    serviceWithPrivates.ensureCodexClient = vi.fn();
+    serviceWithPrivates.refreshClient = vi.fn();
+
+    mockStreamEvents = [
+      { type: 'turn.started' },
+      {
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: 'turn-private' },
+      },
+      {
+        type: 'event_msg',
+        payload: {
+          type: 'turn_context',
+          cwd: '/private/worktree',
+          model: 'private-model-name',
+        },
+      },
+    ];
+
+    await expect(async () => {
+      for await (const _event of service.promptSessionStreaming('session-1' as any, 'go')) {
+        // no-op
+      }
+    }).rejects.toThrow('Codex stream ended without a terminal completion event');
+
+    expect(runtime.pulse).toHaveBeenNthCalledWith(1, {
+      kind: 'sdk.first_event',
+      label: 'codex',
+      metadata: { event: 'turn.started' },
+    });
+    expect(runtime.pulse).toHaveBeenNthCalledWith(2, {
+      kind: 'sdk.progress',
+      label: 'codex',
+      metadata: { event: 'event_msg.task_started' },
+    });
+    expect(runtime.pulse).toHaveBeenNthCalledWith(3, {
+      kind: 'sdk.progress',
+      label: 'codex',
+      metadata: { event: 'event_msg.turn_context' },
+    });
   });
 
   it('surfaces event_msg agent_message via the actual "message" field (real rollout shape)', async () => {

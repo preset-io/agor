@@ -2,27 +2,12 @@ import type { Pulse, PulseSnapshot, Task, TaskID } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
-const DEFAULT_MAX_RECENT_PULSES = 10;
+const MAX_KIND_LENGTH = 120;
 const MAX_ID_LENGTH = 160;
 const MAX_LABEL_LENGTH = 120;
-const MAX_METADATA_KEYS = 20;
-const MAX_METADATA_KEY_LENGTH = 64;
 const MAX_METADATA_STRING_LENGTH = 200;
-const SENSITIVE_METADATA_KEY =
-  /(?:api[_-]?key|authorization|bearer|credential|password|secret|token)/i;
+const SAFE_METADATA_KEYS = new Set(['event', 'status', 'type']);
 const DEFAULT_FLUSH_TIMEOUT_MS = 3_000;
-
-type InternalPulseSnapshot = PulseSnapshot & {
-  atMs: number;
-};
-
-export interface RuntimeTimeout {
-  rule: 'no_runtime_pulse';
-  message: string;
-  elapsed_ms: number;
-  latest_pulse?: PulseSnapshot;
-  recent_pulses: PulseSnapshot[];
-}
 
 export interface AgenticToolRuntime {
   pulse(pulse: Pulse): void;
@@ -33,16 +18,8 @@ export interface RuntimeOverseerOptions {
   taskId: TaskID | string;
   enabled?: boolean;
   heartbeatIntervalMs?: number;
-  noPulseTimeoutMs?: number;
-  maxRecentPulses?: number;
-  abortController?: AbortController;
-  onTimeout?: (timeout: RuntimeTimeout) => Promise<void>;
   now?: () => Date;
   warn?: (...args: unknown[]) => void;
-}
-
-export interface RuntimeOverseerHandle {
-  stop(): void;
 }
 
 export interface RuntimeOverseerFlushOptions {
@@ -52,10 +29,8 @@ export interface RuntimeOverseerFlushOptions {
 
 export class RuntimeOverseer implements AgenticToolRuntime {
   private timer?: ReturnType<typeof setInterval>;
-  private latestPulse?: InternalPulseSnapshot;
-  private recentPulses: InternalPulseSnapshot[] = [];
+  private latestPulse?: PulseSnapshot;
   private stopped = false;
-  private timedOut = false;
   private inFlight?: Promise<void>;
 
   constructor(private readonly options: RuntimeOverseerOptions) {}
@@ -80,22 +55,13 @@ export class RuntimeOverseer implements AgenticToolRuntime {
   }
 
   pulse(pulse: Pulse): void {
-    if (this.stopped || this.timedOut) return;
+    if (this.stopped) return;
 
     const now = this.now();
-    const snapshot: InternalPulseSnapshot = {
+    this.latestPulse = {
       ...sanitizePulse(pulse),
       at: now.toISOString(),
-      atMs: now.getTime(),
     };
-
-    this.latestPulse = snapshot;
-    this.recentPulses.push(snapshot);
-
-    const max = this.maxRecentPulses();
-    while (this.recentPulses.length > max) {
-      this.recentPulses.shift();
-    }
   }
 
   async heartbeat(): Promise<void> {
@@ -109,8 +75,6 @@ export class RuntimeOverseer implements AgenticToolRuntime {
         last_executor_heartbeat_at: heartbeatAt,
         executor_runtime: this.snapshotForHeartbeat(heartbeatAt),
       } satisfies Partial<Task>);
-
-      await this.checkTimeouts(now);
     })();
 
     try {
@@ -201,44 +165,13 @@ export class RuntimeOverseer implements AgenticToolRuntime {
       : DEFAULT_FLUSH_TIMEOUT_MS;
   }
 
-  async checkTimeouts(now = this.now()): Promise<void> {
-    if (!this.options.noPulseTimeoutMs || this.timedOut) return;
-
-    const latest = this.latestPulse;
-    if (!latest) return;
-
-    const elapsedMs = now.getTime() - latest.atMs;
-    if (elapsedMs <= this.options.noPulseTimeoutMs) return;
-
-    await this.timeout({
-      rule: 'no_runtime_pulse',
-      message: `No runtime pulse for ${formatDuration(elapsedMs)}. Last pulse: ${latest.kind}${latest.label ? ` (${latest.label})` : ''}.`,
-      elapsed_ms: elapsedMs,
-      latest_pulse: stripInternalPulse(latest),
-      recent_pulses: this.recentPulses.map(stripInternalPulse),
-    });
-  }
-
   snapshotForHeartbeat(
     heartbeatAt = this.now().toISOString()
   ): NonNullable<Task['executor_runtime']> {
     return {
       heartbeat_at: heartbeatAt,
-      latest_pulse: this.latestPulse ? stripInternalPulse(this.latestPulse) : undefined,
+      latest_pulse: this.latestPulse,
     };
-  }
-
-  recentPulseSnapshots(): PulseSnapshot[] {
-    return this.recentPulses.map(stripInternalPulse);
-  }
-
-  private async timeout(timeout: RuntimeTimeout): Promise<void> {
-    if (this.timedOut) return;
-    this.timedOut = true;
-
-    this.warn('[runtime-overseer] Timeout:', timeout.message);
-    this.options.abortController?.abort(timeout.message);
-    await this.options.onTimeout?.(timeout);
   }
 
   private enabled(): boolean {
@@ -252,13 +185,6 @@ export class RuntimeOverseer implements AgenticToolRuntime {
       : DEFAULT_HEARTBEAT_INTERVAL_MS;
   }
 
-  private maxRecentPulses(): number {
-    const max = this.options.maxRecentPulses;
-    return typeof max === 'number' && Number.isFinite(max) && max > 0
-      ? Math.floor(max)
-      : DEFAULT_MAX_RECENT_PULSES;
-  }
-
   private now(): Date {
     return this.options.now?.() ?? new Date();
   }
@@ -269,28 +195,25 @@ export class RuntimeOverseer implements AgenticToolRuntime {
 }
 
 export function sanitizePulse(pulse: Pulse): Pulse {
-  return {
-    kind: typeof pulse.kind === 'string' && pulse.kind.length > 0 ? pulse.kind : 'sdk.unknown',
-    ...(trimString(pulse.id, MAX_ID_LENGTH) ? { id: trimString(pulse.id, MAX_ID_LENGTH) } : {}),
-    ...(trimString(pulse.label, MAX_LABEL_LENGTH)
-      ? { label: trimString(pulse.label, MAX_LABEL_LENGTH) }
-      : {}),
-    ...(pulse.metadata ? { metadata: sanitizeMetadata(pulse.metadata) } : {}),
-  };
-}
+  const kind = (trimString(pulse.kind, MAX_KIND_LENGTH) ?? 'sdk.unknown') as Pulse['kind'];
+  const id = trimString(pulse.id, MAX_ID_LENGTH);
+  const label = trimString(pulse.label, MAX_LABEL_LENGTH);
+  const metadata = pulse.metadata ? sanitizeMetadata(pulse.metadata) : undefined;
 
-export function stripInternalPulse(snapshot: InternalPulseSnapshot): PulseSnapshot {
-  const { atMs: _atMs, ...pulse } = snapshot;
-  return pulse;
+  return {
+    kind,
+    ...(id ? { id } : {}),
+    ...(label ? { label } : {}),
+    ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
 }
 
 function sanitizeMetadata(metadata: Pulse['metadata']): NonNullable<Pulse['metadata']> {
   if (!metadata) return {};
 
   const sanitized: NonNullable<Pulse['metadata']> = {};
-  for (const [rawKey, value] of Object.entries(metadata).slice(0, MAX_METADATA_KEYS)) {
-    const key = trimString(rawKey, MAX_METADATA_KEY_LENGTH);
-    if (!key || SENSITIVE_METADATA_KEY.test(key)) continue;
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!SAFE_METADATA_KEYS.has(key)) continue;
 
     if (typeof value === 'string') {
       sanitized[key] =
@@ -311,13 +234,4 @@ function trimString(value: unknown, maxLength: number): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
-}
-
-function formatDuration(ms: number): string {
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  return `${hours}h`;
 }
