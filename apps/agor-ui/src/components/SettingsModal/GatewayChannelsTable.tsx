@@ -944,11 +944,11 @@ const SlackSetupWizard: React.FC<{
         )}
 
         <Form.Item
-          label="Ingest attached images"
+          label="Ingest attached files"
           name="ingest_files"
           valuePropName="checked"
           initialValue={false}
-          tooltip="Download images attached to inbound messages (screenshots) so session agents can view them. Adds the files:read scope."
+          tooltip="Download images and text files (screenshots, logs, CSV, JSON) attached to inbound messages so session agents can read them. Adds the files:read scope."
         >
           <Switch />
         </Form.Item>
@@ -2195,11 +2195,11 @@ const ChannelFormFields: React.FC<{
                     </Form.Item>
 
                     <Form.Item
-                      label="Ingest attached images"
+                      label="Ingest attached files"
                       name="ingest_files"
                       valuePropName="checked"
                       initialValue={false}
-                      tooltip="Download images attached to inbound messages (screenshots) so session agents can view them. Requires the files:read scope."
+                      tooltip="Download images and text files (screenshots, logs, CSV, JSON) attached to inbound messages so session agents can read them. Requires the files:read scope."
                     >
                       <Switch />
                     </Form.Item>

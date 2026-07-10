@@ -65,7 +65,7 @@ import { getSessionUrl } from '@agor/core/utils/url';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import {
   buildPromptWithAttachments,
-  ingestInboundImageAttachments,
+  ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
 import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
 
@@ -2196,8 +2196,8 @@ export class GatewayService {
         promptText = buildGitHubInitialPrompt(data.thread_id, data.text, data.metadata);
       }
 
-      // Download Slack image attachments server-side and fold their stored
-      // paths into the prompt so the agent can Read them. Gated on the
+      // Download Slack image and text attachments server-side and fold their
+      // stored paths into the prompt so the agent can Read them. Gated on the
       // channel's ingest_files flag — channels without the files:read scope
       // never attempt downloads. Any failure degrades to a short note; the
       // prompt is always delivered.
@@ -2211,7 +2211,7 @@ export class GatewayService {
           typeof channelConfig.bot_token === 'string' ? channelConfig.bot_token : undefined;
         let failedAttachments = 0;
         if (botToken) {
-          const { paths, failed } = await ingestInboundImageAttachments({
+          const { paths, failed } = await ingestInboundAttachments({
             files: data.files,
             botToken,
           });

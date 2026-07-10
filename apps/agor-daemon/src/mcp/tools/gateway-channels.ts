@@ -768,7 +768,7 @@ const slackManifestGenerateSchema = z.strictObject({
     .boolean()
     .default(false)
     .describe(
-      'Ingest images attached to inbound messages (adds the files:read scope). The gateway downloads them server-side and hands the stored paths to the session agent.'
+      'Ingest images and text files attached to inbound messages (adds the files:read scope). The gateway downloads them server-side and hands the stored paths to the session agent.'
     ),
   threadHistory: z
     .boolean()

@@ -1,14 +1,16 @@
 /**
  * Server-side ingestion of inbound gateway message attachments.
  *
- * Downloads image files attached to inbound Slack messages using the
- * channel's bot token and stores them in the daemon upload directory — the
- * same destination the session composer's `/sessions/:sessionId/upload`
- * route writes to — so the session's agent can Read them by absolute path.
+ * Downloads image and text-like files attached to inbound Slack messages
+ * using the channel's bot token and stores them in the daemon upload
+ * directory — the same destination the session composer's
+ * `/sessions/:sessionId/upload` route writes to — so the session's agent can
+ * Read them by absolute path.
  *
- * Non-image attachments are out of scope and never downloaded. Downloads are
- * restricted to Slack-owned hosts and to the same per-file size / per-message
- * count ceilings the upload route enforces.
+ * Other attachment types (PDFs, office documents, archives, media) are out of
+ * scope and never downloaded. Downloads are restricted to Slack-owned hosts
+ * and to the same per-file size / per-message count ceilings the upload route
+ * enforces.
  */
 
 import fs from 'node:fs/promises';
@@ -25,7 +27,7 @@ import {
 export interface AttachmentIngestResult {
   /** Absolute paths of stored files, in the order the attachments arrived. */
   paths: string[];
-  /** Image attachments that could not be fetched or stored. */
+  /** Ingestable attachments that could not be fetched or stored. */
   failed: number;
 }
 
@@ -49,18 +51,22 @@ export function isAllowedSlackFileUrl(rawUrl: string): boolean {
 }
 
 /**
- * Image MIME types the upload pipeline accepts — membership in the upload
- * route's allowlist, which deliberately excludes script-bearing image types
- * like image/svg+xml.
+ * MIME types the ingestion pipeline accepts: images and text-like files
+ * (logs, plain text, CSV, JSON, markdown) agents use as context. Constrained
+ * to the upload route's allowlist, which deliberately excludes script-bearing
+ * types like image/svg+xml; the image/text prefix check additionally keeps
+ * allowlisted-but-unsupported types (PDFs, office documents, archives) out of
+ * ingestion.
  */
-function isAllowedImageMime(rawMime: string): boolean {
+function isAllowedIngestMime(rawMime: string): boolean {
   const mime = rawMime.split(';')[0].trim().toLowerCase();
-  return mime.startsWith('image/') && ALLOWED_UPLOAD_MIME_TYPES.has(mime);
+  if (!ALLOWED_UPLOAD_MIME_TYPES.has(mime)) return false;
+  return mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/json';
 }
 
-/** Image attachments the upload pipeline accepts (same allowlist as the upload route). */
-export function isIngestableImageFile(file: InboundFile): boolean {
-  return isAllowedImageMime(file.mimetype);
+/** Image and text-like attachments the ingestion pipeline accepts. */
+export function isIngestableFile(file: InboundFile): boolean {
+  return isAllowedIngestMime(file.mimetype);
 }
 
 /**
@@ -141,12 +147,12 @@ async function readBodyWithLimit(response: Response, maxBytes: number): Promise<
 }
 
 /**
- * Download the image attachments of one inbound message and store them in the
- * upload directory. Never throws: every attachment that cannot be fetched,
- * validated, or written is counted in `failed` so the caller can still
- * deliver the prompt with a degradation note.
+ * Download the ingestable attachments of one inbound message and store them
+ * in the upload directory. Never throws: every attachment that cannot be
+ * fetched, validated, or written is counted in `failed` so the caller can
+ * still deliver the prompt with a degradation note.
  */
-export async function ingestInboundImageAttachments(args: {
+export async function ingestInboundAttachments(args: {
   files: InboundFile[];
   botToken: string;
   fetchImpl?: typeof fetch;
@@ -155,15 +161,15 @@ export async function ingestInboundImageAttachments(args: {
   const fetchImpl = args.fetchImpl ?? fetch;
   const uploadDir = args.uploadDir ?? getUploadDirectory();
 
-  const images = args.files.filter(isIngestableImageFile);
+  const ingestable = args.files.filter(isIngestableFile);
   const paths: string[] = [];
   let failed = 0;
 
-  for (const [index, file] of images.entries()) {
+  for (const [index, file] of ingestable.entries()) {
     if (index >= MAX_UPLOAD_FILES_PER_REQUEST) {
       failed++;
       console.warn(
-        `[gateway] Skipping attachment "${file.name}": message exceeds ${MAX_UPLOAD_FILES_PER_REQUEST}-image limit`
+        `[gateway] Skipping attachment "${file.name}": message exceeds ${MAX_UPLOAD_FILES_PER_REQUEST}-file limit`
       );
       continue;
     }
@@ -190,11 +196,11 @@ export async function ingestInboundImageAttachments(args: {
         throw new Error(`HTTP ${response.status}`);
       }
       // Slack answers with an HTML login/error page (status 200) when the
-      // token lacks files:read or cannot see the file — only accept images
-      // from the same allowlist the upload route enforces (which excludes
-      // script-bearing types like image/svg+xml).
+      // token lacks files:read or cannot see the file — only accept response
+      // bodies whose type the ingestion pipeline allows (which excludes
+      // text/html and script-bearing types like image/svg+xml).
       const contentType = response.headers.get('content-type') ?? '';
-      if (!isAllowedImageMime(contentType)) {
+      if (!isAllowedIngestMime(contentType)) {
         throw new Error(
           `unexpected content-type ${contentType.split(';')[0].trim().toLowerCase() || 'unknown'}`
         );
