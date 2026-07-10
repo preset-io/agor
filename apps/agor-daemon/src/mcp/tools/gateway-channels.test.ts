@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import {
   BranchRepository,
   GatewayChannelRepository,
@@ -13,12 +16,30 @@ import {
 import { getRequiredSecretFields } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resolveBranchWorkspacePath } from '../../utils/branch-workspace-path.js';
+import { getUploadDirectory, MAX_UPLOAD_FILE_SIZE } from '../../utils/upload.js';
 
 vi.mock('@agor/core/gateway', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/gateway')>();
   return {
     ...actual,
     getConnector: vi.fn(),
+  };
+});
+
+vi.mock('../../utils/branch-workspace-path.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/branch-workspace-path.js')>();
+  return {
+    ...actual,
+    resolveBranchWorkspacePath: vi.fn(),
+  };
+});
+
+vi.mock('../../utils/upload.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/upload.js')>();
+  return {
+    ...actual,
+    getUploadDirectory: vi.fn(actual.getUploadDirectory),
   };
 });
 
@@ -114,6 +135,8 @@ const threadMapping = {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(getConnector).mockReset();
+  vi.mocked(resolveBranchWorkspacePath).mockReset();
+  vi.mocked(getUploadDirectory).mockReset();
 });
 
 describe('agor_gateway_channels MCP tools', () => {
@@ -795,6 +818,75 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(JSON.stringify(payload)).not.toContain('channel_key');
   });
 
+  it('plumbs threadTs through to the gateway service for thread replies', async () => {
+    const emitMessage = vi.fn(async () => ({
+      success: true,
+      gateway_outbound_message_id: 'out-2',
+      gateway_channel_id: 'chan-1',
+      channel_type: 'slack',
+      platform_channel_id: 'C123',
+      platform_message_id: '171235.000200',
+      platform_thread_id: 'C123-171234.000100',
+    }));
+    const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage } }));
+
+    await tools.agor_gateway_emit_message.handler({
+      gatewayChannelId: 'chan-1',
+      message: 'Reply in thread',
+      target: 'channel:C123',
+      threadTs: '171234.000100',
+    });
+
+    expect(emitMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ threadTs: '171234.000100' })
+    );
+  });
+
+  it('omits threadTs from the gateway service call when not provided', async () => {
+    const emitMessage = vi.fn(async () => ({
+      success: true,
+      gateway_outbound_message_id: 'out-3',
+      gateway_channel_id: 'chan-1',
+      channel_type: 'slack',
+      platform_channel_id: 'C123',
+      platform_message_id: '171236.000300',
+      platform_thread_id: 'C123-171236.000300',
+    }));
+    const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage } }));
+
+    await tools.agor_gateway_emit_message.handler({
+      gatewayChannelId: 'chan-1',
+      message: 'New thread',
+      target: 'channel:C123',
+    });
+
+    expect(emitMessage).toHaveBeenCalledWith(
+      expect.not.objectContaining({ threadTs: expect.anything() })
+    );
+  });
+
+  it('rejects a malformed threadTs before any gateway service call', async () => {
+    const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage: vi.fn() } }));
+    const schema = tools.agor_gateway_emit_message.cfg.inputSchema;
+
+    expect(
+      schema.safeParse({
+        gatewayChannelId: 'chan-1',
+        message: 'hi',
+        target: 'channel:C123',
+        threadTs: 'not-a-timestamp',
+      }).success
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        gatewayChannelId: 'chan-1',
+        message: 'hi',
+        target: 'channel:C123',
+        threadTs: '171234.000100',
+      }).success
+    ).toBe(true);
+  });
+
   it('validates outbound target grammar', async () => {
     const tools = await captureTools('member', makeFakeApp({ gateway: { emitMessage: vi.fn() } }));
 
@@ -1273,6 +1365,533 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
     expect(getConnector).not.toHaveBeenCalled();
   });
+
+  const reactionsEnabled = {
+    ...slackChannel,
+    config: { ...slackChannel.config, agent_tools: { reactions: true } },
+  };
+
+  const fileUploadEnabled = {
+    ...slackChannel,
+    config: { ...slackChannel.config, agent_tools: { file_upload: true } },
+  };
+
+  it('adds a reaction defaulting to the gateway session own channel', async () => {
+    const addReaction = vi.fn(async () => undefined);
+    const removeReaction = vi.fn(async () => undefined);
+    vi.mocked(getConnector).mockReturnValue({ addReaction, removeReaction } as any);
+    spyCallerGatewaySession('branch-1', gatewaySource);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      reactionsEnabled as any
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('member');
+    const result = await tools.agor_gateway_slack_reaction_add.handler({
+      ts: '171234.000100',
+      emoji: 'thumbsup',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(addReaction).toHaveBeenCalledWith({
+      channel: 'C123',
+      timestamp: '171234.000100',
+      name: 'thumbsup',
+    });
+    expect(payload).toMatchObject({ added: true, slack_channel_id: 'C123', emoji: 'thumbsup' });
+  });
+
+  it('removes a reaction defaulting to the gateway session own channel', async () => {
+    const addReaction = vi.fn(async () => undefined);
+    const removeReaction = vi.fn(async () => undefined);
+    vi.mocked(getConnector).mockReturnValue({ addReaction, removeReaction } as any);
+    spyCallerGatewaySession('branch-1', gatewaySource);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      reactionsEnabled as any
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('member');
+    const result = await tools.agor_gateway_slack_reaction_remove.handler({
+      ts: '171234.000100',
+      emoji: 'thumbsup',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(removeReaction).toHaveBeenCalledWith({
+      channel: 'C123',
+      timestamp: '171234.000100',
+      name: 'thumbsup',
+    });
+    expect(payload).toMatchObject({ removed: true, slack_channel_id: 'C123', emoji: 'thumbsup' });
+  });
+
+  it('denies reaction add/remove when the reactions capability is disabled, with an actionable error', async () => {
+    spyCallerGatewaySession('branch-1', gatewaySource);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('member');
+    await expect(
+      tools.agor_gateway_slack_reaction_add.handler({ ts: '171234.000100', emoji: 'thumbsup' })
+    ).rejects.toThrow("capability 'reactions' is disabled");
+    await expect(
+      tools.agor_gateway_slack_reaction_remove.handler({ ts: '171234.000100', emoji: 'thumbsup' })
+    ).rejects.toThrow("capability 'reactions' is disabled");
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('denies reactions across branches even for admins', async () => {
+    spyCallerSessionBranch('branch-2');
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      reactionsEnabled as any
+    );
+
+    const tools = await captureTools('admin');
+    await expect(
+      tools.agor_gateway_slack_reaction_add.handler({
+        gatewayChannelId: 'chan-1',
+        slackChannelId: 'C123',
+        ts: '171234.000100',
+        emoji: 'thumbsup',
+      })
+    ).rejects.toThrow('targets a different branch');
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed slackChannelId/ts/emoji before any Slack call', async () => {
+    const tools = await captureTools('member');
+    const schema = tools.agor_gateway_slack_reaction_add.cfg.inputSchema;
+
+    expect(
+      schema.safeParse({ slackChannelId: 'not-a-channel', ts: '171234.000100', emoji: 'eyes' })
+        .success
+    ).toBe(false);
+    expect(
+      schema.safeParse({ slackChannelId: 'C123', ts: 'not-a-timestamp', emoji: 'eyes' }).success
+    ).toBe(false);
+    expect(
+      schema.safeParse({ slackChannelId: 'C123', ts: '171234.000100', emoji: ':eyes:' }).success
+    ).toBe(false);
+    expect(
+      schema.safeParse({ slackChannelId: 'C123', ts: '171234.000100', emoji: 'eyes' }).success
+    ).toBe(true);
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  describe('allowed_channel_ids whitelist on reaction writes', () => {
+    const restrictedReactionsEnabled = {
+      ...slackChannel,
+      config: {
+        ...slackChannel.config,
+        agent_tools: { reactions: true },
+        allowed_channel_ids: ['C123'],
+      },
+    };
+
+    it('denies reacting to a channel-like slackChannelId outside the allowlist', async () => {
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        restrictedReactionsEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_reaction_add.handler({
+          slackChannelId: 'C999',
+          ts: '171234.000100',
+          emoji: 'thumbsup',
+        })
+      ).rejects.toThrow("not in this gateway channel's allowed_channel_ids whitelist");
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('allows reacting to a DM slackChannelId even with an allowlist configured', async () => {
+      const addReaction = vi.fn(async () => undefined);
+      const removeReaction = vi.fn(async () => undefined);
+      vi.mocked(getConnector).mockReturnValue({ addReaction, removeReaction } as any);
+      spyCallerGatewaySession('branch-1', {
+        ...gatewaySource,
+        slack_channel_id: 'D123',
+      });
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        restrictedReactionsEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      const result = await tools.agor_gateway_slack_reaction_add.handler({
+        ts: '171234.000100',
+        emoji: 'thumbsup',
+      });
+      const payload = JSON.parse(result.content[0].text);
+
+      expect(addReaction).toHaveBeenCalledWith({
+        channel: 'D123',
+        timestamp: '171234.000100',
+        name: 'thumbsup',
+      });
+      expect(payload).toMatchObject({ added: true, slack_channel_id: 'D123' });
+    });
+
+    it('allows any channel-like slackChannelId when no allowlist is configured', async () => {
+      const addReaction = vi.fn(async () => undefined);
+      const removeReaction = vi.fn(async () => undefined);
+      vi.mocked(getConnector).mockReturnValue({ addReaction, removeReaction } as any);
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        reactionsEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      const result = await tools.agor_gateway_slack_reaction_add.handler({
+        slackChannelId: 'C999',
+        ts: '171234.000100',
+        emoji: 'thumbsup',
+      });
+      const payload = JSON.parse(result.content[0].text);
+
+      expect(addReaction).toHaveBeenCalledWith({
+        channel: 'C999',
+        timestamp: '171234.000100',
+        name: 'thumbsup',
+      });
+      expect(payload).toMatchObject({ added: true, slack_channel_id: 'C999' });
+    });
+  });
+
+  describe('allowed_channel_ids whitelist on file_upload', () => {
+    const restrictedFileUploadEnabled = {
+      ...slackChannel,
+      config: {
+        ...slackChannel.config,
+        agent_tools: { file_upload: true },
+        allowed_channel_ids: ['C123'],
+      },
+    };
+
+    it('denies uploading to a channel-like slackChannelId outside the allowlist', async () => {
+      const uploadDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-upload-allowlist-'));
+      const filePath = path.join(uploadDir, 'screenshot.png');
+      fs.writeFileSync(filePath, Buffer.from('bytes'));
+      vi.mocked(getUploadDirectory).mockReturnValue(uploadDir);
+      try {
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          restrictedFileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+        const tools = await captureTools('member');
+        await expect(
+          tools.agor_gateway_slack_file_upload.handler({ slackChannelId: 'C999', path: filePath })
+        ).rejects.toThrow("not in this gateway channel's allowed_channel_ids whitelist");
+        expect(getConnector).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(uploadDir, { recursive: true, force: true });
+      }
+    });
+
+    it('allows uploading to a DM slackChannelId even with an allowlist configured', async () => {
+      const uploadDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-upload-allowlist-dm-'));
+      const filePath = path.join(uploadDir, 'screenshot.png');
+      fs.writeFileSync(filePath, Buffer.from('bytes'));
+      vi.mocked(getUploadDirectory).mockReturnValue(uploadDir);
+      try {
+        const uploadFile = vi.fn(async () => ({
+          id: 'F999',
+          permalink: null,
+          name: 'screenshot.png',
+        }));
+        vi.mocked(getConnector).mockReturnValue({ uploadFile } as any);
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          restrictedFileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+        const tools = await captureTools('member');
+        const result = await tools.agor_gateway_slack_file_upload.handler({
+          slackChannelId: 'D123',
+          path: filePath,
+        });
+        const payload = JSON.parse(result.content[0].text);
+
+        expect(uploadFile).toHaveBeenCalledWith(expect.objectContaining({ channel: 'D123' }));
+        expect(payload).toMatchObject({ uploaded: true, slack_channel_id: 'D123' });
+      } finally {
+        fs.rmSync(uploadDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('agor_gateway_slack_file_upload', () => {
+    let uploadDir: string;
+
+    function withUploadDir(): string {
+      uploadDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-upload-'));
+      vi.mocked(getUploadDirectory).mockReturnValue(uploadDir);
+      return uploadDir;
+    }
+
+    afterEach(() => {
+      if (uploadDir) fs.rmSync(uploadDir, { recursive: true, force: true });
+    });
+
+    it('uploads a file from inside the daemon upload directory', async () => {
+      const dir = withUploadDir();
+      const filePath = path.join(dir, 'screenshot.png');
+      fs.writeFileSync(filePath, Buffer.from('fake-image-bytes'));
+
+      const uploadFile = vi.fn(async () => ({
+        id: 'F123',
+        permalink: 'https://slack.example/files/F123',
+        name: 'screenshot.png',
+      }));
+      vi.mocked(getConnector).mockReturnValue({ uploadFile } as any);
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileUploadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      const result = await tools.agor_gateway_slack_file_upload.handler({ path: filePath });
+      const payload = JSON.parse(result.content[0].text);
+
+      expect(uploadFile).toHaveBeenCalledWith({
+        channel: 'C123',
+        file: Buffer.from('fake-image-bytes'),
+        filename: 'screenshot.png',
+      });
+      expect(payload).toMatchObject({
+        uploaded: true,
+        slack_channel_id: 'C123',
+        file: { id: 'F123', name: 'screenshot.png' },
+      });
+    });
+
+    it('uploads a file from a path relative to the branch workspace', async () => {
+      const dir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-workspace-'));
+      const filePath = path.join(dir, 'chart.png');
+      fs.writeFileSync(filePath, Buffer.from('fake-chart-bytes'));
+      try {
+        vi.mocked(resolveBranchWorkspacePath).mockResolvedValue({
+          branch: branch as any,
+          branchId: 'branch-1' as any,
+          branchRoot: dir,
+          relative: 'chart.png',
+          absolute: filePath,
+          canonical: filePath,
+        });
+
+        const uploadFile = vi.fn(async () => ({
+          id: 'F456',
+          permalink: null,
+          name: 'chart.png',
+        }));
+        vi.mocked(getConnector).mockReturnValue({ uploadFile } as any);
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          fileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+        const tools = await captureTools('member');
+        const result = await tools.agor_gateway_slack_file_upload.handler({
+          path: 'chart.png',
+          threadTs: '171234.000100',
+        });
+        const payload = JSON.parse(result.content[0].text);
+
+        expect(uploadFile).toHaveBeenCalledWith({
+          channel: 'C123',
+          threadTs: '171234.000100',
+          file: Buffer.from('fake-chart-bytes'),
+          filename: 'chart.png',
+        });
+        expect(payload).toMatchObject({ uploaded: true, thread_ts: '171234.000100' });
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects an absolute path outside the daemon upload directory', async () => {
+      withUploadDir();
+      const outsideDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-outside-'));
+      const outsideFile = path.join(outsideDir, 'secret.txt');
+      fs.writeFileSync(outsideFile, 'nope');
+      try {
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          fileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+        const tools = await captureTools('member');
+        await expect(
+          tools.agor_gateway_slack_file_upload.handler({ path: outsideFile })
+        ).rejects.toThrow('escapes the daemon upload directory');
+        expect(getConnector).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(outsideDir, { recursive: true, force: true });
+      }
+    });
+
+    // The three tests below deliberately do NOT mock resolveBranchWorkspacePath
+    // (or leave canonicalizeExistingPrefix/isPathInsideRoot real, which they
+    // already are) so the escape rejections are proven end-to-end through the
+    // tool, not just asserted against a mock's return value.
+
+    it('rejects relative path traversal via the real branch workspace resolver', async () => {
+      const actualWorkspacePath = await vi.importActual<
+        typeof import('../../utils/branch-workspace-path.js')
+      >('../../utils/branch-workspace-path.js');
+      vi.mocked(resolveBranchWorkspacePath).mockImplementation(
+        actualWorkspacePath.resolveBranchWorkspacePath
+      );
+
+      const workspaceDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-real-workspace-'));
+      try {
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          fileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue({
+          ...branch,
+          path: workspaceDir,
+        } as any);
+        vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(true);
+
+        const tools = await captureTools('member');
+        await expect(
+          tools.agor_gateway_slack_file_upload.handler({ path: '../secret.txt' })
+        ).rejects.toThrow('".." segments');
+        expect(getConnector).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects an absolute path that is a symlink escaping the upload directory', async () => {
+      const dir = withUploadDir();
+      const outsideDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-symlink-outside-'));
+      const outsideFile = path.join(outsideDir, 'secret.txt');
+      fs.writeFileSync(outsideFile, 'nope');
+      const symlinkPath = path.join(dir, 'innocuous.png');
+      fs.symlinkSync(outsideFile, symlinkPath);
+      try {
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          fileUploadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+        const tools = await captureTools('member');
+        await expect(
+          tools.agor_gateway_slack_file_upload.handler({ path: symlinkPath })
+        ).rejects.toThrow('escapes the daemon upload directory');
+        expect(getConnector).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(outsideDir, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects an absolute path containing a null byte', async () => {
+      const dir = withUploadDir();
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileUploadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_file_upload.handler({ path: path.join(dir, 'evil\0.png') })
+      ).rejects.toThrow();
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('rejects a file exceeding the upload size limit', async () => {
+      const dir = withUploadDir();
+      const filePath = path.join(dir, 'huge.bin');
+      fs.writeFileSync(filePath, Buffer.alloc(0));
+      fs.truncateSync(filePath, MAX_UPLOAD_FILE_SIZE + 1);
+
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileUploadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_file_upload.handler({ path: filePath })
+      ).rejects.toThrow('exceeds the');
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('denies file upload when the file_upload capability is disabled, with an actionable error', async () => {
+      const dir = withUploadDir();
+      const filePath = path.join(dir, 'screenshot.png');
+      fs.writeFileSync(filePath, Buffer.from('x'));
+
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        slackChannel as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_file_upload.handler({ path: filePath })
+      ).rejects.toThrow("capability 'file_upload' is disabled");
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('denies file upload across branches even for admins', async () => {
+      spyCallerSessionBranch('branch-2');
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileUploadEnabled as any
+      );
+
+      const tools = await captureTools('admin');
+      await expect(
+        tools.agor_gateway_slack_file_upload.handler({
+          gatewayChannelId: 'chan-1',
+          slackChannelId: 'C123',
+          path: '/tmp/whatever.png',
+        })
+      ).rejects.toThrow('targets a different branch');
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed slackChannelId/threadTs before any Slack call', async () => {
+      const tools = await captureTools('member');
+      const schema = tools.agor_gateway_slack_file_upload.cfg.inputSchema;
+
+      expect(
+        schema.safeParse({ slackChannelId: 'not-a-channel', path: '/tmp/x.png' }).success
+      ).toBe(false);
+      expect(
+        schema.safeParse({
+          slackChannelId: 'C123',
+          threadTs: 'not-a-timestamp',
+          path: '/tmp/x.png',
+        }).success
+      ).toBe(false);
+      expect(
+        schema.safeParse({
+          slackChannelId: 'C123',
+          threadTs: '171234.000100',
+          path: '/tmp/x.png',
+        }).success
+      ).toBe(true);
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('getRequiredSecretFields — Slack app_token required unless explicitly outbound-only', () => {
@@ -1315,11 +1934,22 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
   function wizardOptionsFor({
     threadHistory,
     channelHistory,
+    reactions,
+    fileUpload,
     ...rest
-  }: typeof dmOnly & { botDisplayName?: string }) {
+  }: typeof dmOnly & {
+    botDisplayName?: string;
+    reactions?: boolean;
+    fileUpload?: boolean;
+  }) {
     return {
       ...rest,
-      agentTools: { thread_history: threadHistory, channel_history: channelHistory },
+      agentTools: {
+        thread_history: threadHistory,
+        channel_history: channelHistory,
+        reactions,
+        file_upload: fileUpload,
+      },
     };
   }
 
@@ -1441,6 +2071,36 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     });
   });
 
+  it('adds reactions:write scope and agent_tools config when reactions is enabled', async () => {
+    const opts = { ...dmOnly, reactions: true };
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler(opts);
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(wizardOptionsFor(opts)));
+    expect(payload.bot_scopes).toEqual(expect.arrayContaining(['reactions:write']));
+    expect(payload.create_channel_config_hint.config.agent_tools).toEqual({
+      thread_history: true,
+      channel_history: false,
+      reactions: true,
+    });
+  });
+
+  it('adds files:write scope and agent_tools config when fileUpload is enabled', async () => {
+    const opts = { ...dmOnly, fileUpload: true };
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler(opts);
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(wizardOptionsFor(opts)));
+    expect(payload.bot_scopes).toEqual(expect.arrayContaining(['files:write']));
+    expect(payload.create_channel_config_hint.config.agent_tools).toEqual({
+      thread_history: true,
+      channel_history: false,
+      file_upload: true,
+    });
+  });
+
   it('generates an all-on manifest and maps restrictToChannelIds to allowed_channel_ids', async () => {
     const opts = {
       appName: 'Agor',
@@ -1500,9 +2160,11 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     });
     expect(parsed.alignUsers).toBe(true);
     // Schema defaults mirror the capability defaults: thread history stays on,
-    // channel history requires explicit opt-in.
+    // channel history/reactions/fileUpload require explicit opt-in.
     expect(parsed.threadHistory).toBe(true);
     expect(parsed.channelHistory).toBe(false);
+    expect(parsed.reactions).toBe(false);
+    expect(parsed.fileUpload).toBe(false);
 
     const result = await tools.agor_gateway_slack_manifest_generate.handler(parsed);
     const payload = JSON.parse(result.content[0].text);

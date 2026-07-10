@@ -107,6 +107,10 @@ export interface SlackAgentToolsConfig {
   thread_history?: boolean;
   /** Read whole-channel Slack history (agor_gateway_slack_channel_history_get). */
   channel_history?: boolean;
+  /** Add/remove emoji reactions (agor_gateway_slack_reaction_add / _remove). */
+  reactions?: boolean;
+  /** Upload a file/image to a channel or thread (agor_gateway_slack_file_upload). */
+  file_upload?: boolean;
 }
 
 export type SlackAgentToolCapability = keyof SlackAgentToolsConfig;
@@ -120,10 +124,15 @@ export type SlackAgentToolCapability = keyof SlackAgentToolsConfig;
  * - `channel_history` defaults OFF — reading arbitrary channel history is a
  *   broader data surface than the mapped thread and needs Slack scopes the
  *   installed app may not hold, so it requires explicit opt-in.
+ * - `reactions` and `file_upload` default OFF — both add write scopes
+ *   (`reactions:write`, `files:write`) the installed app may not hold, so
+ *   they require explicit opt-in.
  */
 export const SLACK_AGENT_TOOL_DEFAULTS: Record<SlackAgentToolCapability, boolean> = {
   thread_history: true,
   channel_history: false,
+  reactions: false,
+  file_upload: false,
 };
 
 /**

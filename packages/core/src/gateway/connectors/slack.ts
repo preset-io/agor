@@ -704,6 +704,40 @@ export function isChannelAllowedByWhitelist(
   return !!channelId && allowedChannelIds.includes(channelId);
 }
 
+/**
+ * Whether a Slack conversation ID is a direct message (IM).
+ *
+ * DM conversation IDs reliably start with "D" — unlike the "C" prefix (which
+ * is ambiguous between public and private channels, see the prefix-inference
+ * notes in {@link SlackConnector.startListening}), "D" is never used for a
+ * channel-like surface, so this is safe to use without an API round trip.
+ */
+export function isSlackDirectMessageId(channelId: string): boolean {
+  return channelId.startsWith('D');
+}
+
+/**
+ * Whether an agent-callable Slack WRITE tool (reactions, file upload) may
+ * target `channelId` given this gateway channel's `allowed_channel_ids`
+ * config.
+ *
+ * Mirrors the inbound listening whitelist ({@link isChannelAllowedByWhitelist}):
+ * `allowed_channel_ids` is a channel-like-surface concept, so DMs are always
+ * allowed regardless of the configured whitelist. These write tools default
+ * to the calling session's own conversation (via `gateway_source`), which is
+ * frequently a DM — applying the whitelist there would silently block the
+ * agent from reacting to/uploading into the very conversation that summoned
+ * it, the primary use case.
+ */
+export function isSlackWriteTargetAllowed(
+  config: Record<string, unknown>,
+  channelId: string
+): boolean {
+  const allowedChannelIds = normalizeAllowedChannelIds(config.allowed_channel_ids);
+  const channelType = isSlackDirectMessageId(channelId) ? 'im' : 'channel';
+  return isChannelAllowedByWhitelist(channelType, channelId, allowedChannelIds);
+}
+
 export class SlackConnector implements GatewayConnector {
   readonly channelType: ChannelType = 'slack';
 
@@ -1351,6 +1385,73 @@ export class SlackConnector implements GatewayConnector {
       channel: req.channel,
       thread_ts: req.thread_ts ?? sentTs,
       permalink,
+    };
+  }
+
+  /** Add an emoji reaction to a Slack message. */
+  async addReaction(req: { channel: string; timestamp: string; name: string }): Promise<void> {
+    const result = await this.web.reactions.add({
+      channel: req.channel,
+      timestamp: req.timestamp,
+      name: req.name,
+    });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+  }
+
+  /** Remove an emoji reaction from a Slack message. */
+  async removeReaction(req: { channel: string; timestamp: string; name: string }): Promise<void> {
+    const result = await this.web.reactions.remove({
+      channel: req.channel,
+      timestamp: req.timestamp,
+      name: req.name,
+    });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+  }
+
+  /**
+   * Upload a file to a Slack channel or thread via `files.uploadV2`.
+   *
+   * Cast to a minimal local shape because `@slack/web-api`'s `uploadV2`
+   * argument type is a discriminated union that doesn't narrow cleanly over
+   * a conditionally-spread object; the runtime response carries `files[0]`
+   * with the uploaded file's id/permalink/name.
+   */
+  async uploadFile(req: {
+    channel: string;
+    threadTs?: string;
+    file: Buffer;
+    filename: string;
+    comment?: string;
+  }): Promise<{ id: string; permalink: string | null; name: string }> {
+    const files = this.web.files as unknown as {
+      uploadV2: (args: Record<string, unknown>) => Promise<{
+        ok?: boolean;
+        error?: string;
+        files?: Array<{ id?: string; permalink?: string; name?: string }>;
+      }>;
+    };
+    const result = await files.uploadV2({
+      channel_id: req.channel,
+      file: req.file,
+      filename: req.filename,
+      ...(req.threadTs ? { thread_ts: req.threadTs } : {}),
+      ...(req.comment ? { initial_comment: req.comment } : {}),
+    });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+    const uploaded = result.files?.[0];
+    if (!uploaded?.id) {
+      throw new Error('Slack API error: upload response missing file id');
+    }
+    return {
+      id: uploaded.id,
+      permalink: uploaded.permalink ?? null,
+      name: uploaded.name ?? req.filename,
     };
   }
 
