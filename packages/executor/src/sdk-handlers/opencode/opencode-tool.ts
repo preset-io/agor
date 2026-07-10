@@ -100,6 +100,37 @@ function pulseOpenCodeEvent(event: unknown, runtime?: AgenticToolRuntime): void 
   });
 }
 
+function isOpenCodeEventForSession(
+  event: unknown,
+  sessionId: string,
+  assistantMessageId?: string
+): boolean {
+  const eventRecord = asRecord(event);
+  const eventType = eventRecord?.type;
+  const properties = asRecord(eventRecord?.properties);
+
+  if (eventType === 'message.updated') {
+    const info = asRecord(properties?.info);
+    return info?.sessionID === sessionId;
+  }
+
+  if (eventType === 'message.part.updated') {
+    const part = asRecord(properties?.part);
+    return assistantMessageId !== undefined && part?.messageID === assistantMessageId;
+  }
+
+  if (
+    eventType === 'permission.asked' ||
+    eventType === 'permission.updated' ||
+    eventType === 'session.error' ||
+    eventType === 'session.status'
+  ) {
+    return properties?.sessionID === sessionId;
+  }
+
+  return false;
+}
+
 /**
  * Session context for an Agor session mapped to OpenCode
  */
@@ -627,6 +658,9 @@ export class OpenCodeTool implements ITool {
           if (eventType !== 'server.heartbeat') {
             console.log('[OpenCodeTool] Event:', eventType);
           }
+          if (isOpenCodeEventForSession(event, context.opencodeSessionId, assistantMessageId)) {
+            pulseOpenCodeEvent(event, this.runtime);
+          }
 
           // Check if this event is for our session
           if ('properties' in event) {
@@ -639,7 +673,6 @@ export class OpenCodeTool implements ITool {
               'sessionID' in event.properties &&
               event.properties.sessionID === context.opencodeSessionId
             ) {
-              pulseOpenCodeEvent(event, this.runtime);
               const permId = event.properties.id as string;
               const permType = (
                 'type' in event.properties ? event.properties.type : 'unknown'
@@ -670,7 +703,6 @@ export class OpenCodeTool implements ITool {
               event.properties.info.sessionID === context.opencodeSessionId &&
               event.properties.info.role === 'assistant'
             ) {
-              pulseOpenCodeEvent(event, this.runtime);
               if (!assistantMessageId) {
                 assistantMessageId = event.properties.info.id;
                 console.log('[OpenCodeTool] Assistant message identified:', assistantMessageId);
@@ -696,7 +728,6 @@ export class OpenCodeTool implements ITool {
                 );
                 continue;
               }
-              pulseOpenCodeEvent(event, this.runtime);
 
               // Store this part for later processing (building final message)
               const existingPartIndex = allParts.findIndex((p) => p.id === part.id);
@@ -784,7 +815,6 @@ export class OpenCodeTool implements ITool {
               event.properties.sessionID === context.opencodeSessionId &&
               event.properties.status.type === 'idle'
             ) {
-              pulseOpenCodeEvent(event, this.runtime);
               console.log('[OpenCodeTool] Session became idle, response complete');
               _responseCompleted = true;
               break; // Exit event loop

@@ -581,6 +581,25 @@ describe('OpenCodeTool', () => {
         toolPart('running'),
         toolPart('completed'),
         {
+          type: 'session.error',
+          properties: { sessionID: 'other-session', error: { name: 'foreign error' } },
+        },
+        {
+          type: 'session.error',
+          properties: { sessionID: 'oc-session-tool', error: { name: 'owned error' } },
+        },
+        {
+          type: 'session.status',
+          properties: { sessionID: 'oc-session-tool', status: { type: 'busy' } },
+        },
+        {
+          type: 'session.status',
+          properties: {
+            sessionID: 'oc-session-tool',
+            status: { type: 'retry', attempt: 1, message: 'retrying', next: 0 },
+          },
+        },
+        {
           type: 'session.status',
           properties: { sessionID: 'other-session', status: { type: 'idle' } },
         },
@@ -626,6 +645,11 @@ describe('OpenCodeTool', () => {
       expect(
         runtime.pulse.mock.calls.filter(
           ([pulse]) => pulse.kind === 'sdk.opencode_event' && pulse.label === 'session.status'
+        )
+      ).toHaveLength(3);
+      expect(
+        runtime.pulse.mock.calls.filter(
+          ([pulse]) => pulse.kind === 'sdk.opencode_event' && pulse.label === 'session.error'
         )
       ).toHaveLength(1);
     });
