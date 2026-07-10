@@ -30,7 +30,7 @@ export interface ToolRunnerParams {
   /** Daemon-resolved config slice. Undefined in legacy CLI mode. */
   resolvedConfig?: ResolvedConfigSlice;
   /** Observe-only runtime pulse API owned by the executor process. */
-  runtime?: AgenticToolRuntime;
+  runtime: AgenticToolRuntime;
 }
 
 export type ToolRunner = (params: ToolRunnerParams) => Promise<void>;

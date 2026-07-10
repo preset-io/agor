@@ -24,12 +24,9 @@ describe('RuntimeOverseer', () => {
 
       expect(patch).toHaveBeenCalledWith('task-1', {
         last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
-        executor_runtime: {
-          heartbeat_at: '2026-01-01T00:00:00.000Z',
-          latest_pulse: {
-            kind: 'executor.connected',
-            at: '2026-01-01T00:00:00.000Z',
-          },
+        latest_executor_pulse: {
+          kind: 'executor.connected',
+          at: '2026-01-01T00:00:00.000Z',
         },
       });
 
@@ -78,7 +75,7 @@ describe('RuntimeOverseer', () => {
 
     expect(patch).toHaveBeenCalledTimes(2);
     for (const call of patch.mock.calls) {
-      expect(call[1].executor_runtime.latest_pulse).toEqual({
+      expect(call[1].latest_executor_pulse).toEqual({
         kind: 'tool.started',
         id: 'tool-1',
         label: 'Bash',
@@ -146,7 +143,7 @@ describe('RuntimeOverseer', () => {
     });
 
     const first = runtime.heartbeat();
-    runtime.pulse({ kind: 'terminal.failed', label: 'opencode' });
+    runtime.pulse({ kind: 'tool.finished', label: 'Bash' });
 
     const flush = runtime.flush();
     expect(patch).toHaveBeenCalledTimes(1);
@@ -156,11 +153,14 @@ describe('RuntimeOverseer', () => {
     await flush;
 
     expect(patch).toHaveBeenCalledTimes(2);
-    expect(patch.mock.calls[1][1].executor_runtime.latest_pulse).toEqual({
-      kind: 'terminal.failed',
-      label: 'opencode',
-      at: '2026-01-01T00:00:01.000Z',
+    expect(patch.mock.calls[1][1]).toEqual({
+      latest_executor_pulse: {
+        kind: 'tool.finished',
+        label: 'Bash',
+        at: '2026-01-01T00:00:01.000Z',
+      },
     });
+    expect(patch.mock.calls[1][1]).not.toHaveProperty('last_executor_heartbeat_at');
   });
 
   it('times out flush when an in-flight heartbeat never settles', async () => {
@@ -175,7 +175,7 @@ describe('RuntimeOverseer', () => {
       });
 
       void runtime.heartbeat();
-      const flush = runtime.flush({ timeoutMs: 100 });
+      const flush = runtime.flush(100);
 
       await vi.advanceTimersByTimeAsync(100);
 

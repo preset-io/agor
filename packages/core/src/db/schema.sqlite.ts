@@ -359,7 +359,7 @@ export const tasks = sqliteTable(
 
         report?: Task['report'];
         permission_request?: Task['permission_request'];
-        executor_runtime?: Task['executor_runtime'];
+        latest_executor_pulse?: Task['latest_executor_pulse'];
 
         // Generic metadata (e.g., is_agor_callback, source, child_session_id)
         metadata?: Task['metadata'];

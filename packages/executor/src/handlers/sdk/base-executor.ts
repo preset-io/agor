@@ -217,10 +217,8 @@ export function createStreamingCallbacks(
 
 export function createRuntimeAwareStreamingCallbacks(
   callbacks: StreamingCallbacks,
-  runtime?: AgenticToolRuntime
+  runtime: AgenticToolRuntime
 ): StreamingCallbacks {
-  if (!runtime) return callbacks;
-
   return {
     ...callbacks,
     onStreamStart: async (messageId, metadata) => {
@@ -242,10 +240,8 @@ export function createRuntimeAwareStreamingCallbacks(
 
 export function createRuntimeAwareTasksService<T extends TasksService>(
   service: T,
-  runtime?: AgenticToolRuntime
+  runtime: AgenticToolRuntime
 ): T {
-  if (!runtime) return service;
-
   return new Proxy(service, {
     get(target, property, receiver) {
       if (property !== 'patch') {
@@ -267,10 +263,8 @@ export function createRuntimeAwareTasksService<T extends TasksService>(
 
 export function createRuntimeAwareTasksStreamingService<T extends TasksStreamingService>(
   service: T,
-  runtime?: AgenticToolRuntime
+  runtime: AgenticToolRuntime
 ): T {
-  if (!runtime) return service;
-
   const toolLabelsById = new Map<string, string>();
 
   return new Proxy(service, {
@@ -296,7 +290,7 @@ export function createRuntimeAwareTasksStreamingService<T extends TasksStreaming
           const label =
             asString(event.data.tool_name) ?? (toolUseId && toolLabelsById.get(toolUseId));
           runtime.pulse({
-            kind: 'tool.completed',
+            kind: 'tool.finished',
             id: toolUseId,
             label,
           });
@@ -500,7 +494,7 @@ export async function executeToolTask(params: {
   apiKeyEnvVar: ApiKeyName;
   toolName: AgenticToolName;
   messageSource?: MessageSource;
-  runtime?: AgenticToolRuntime;
+  runtime: AgenticToolRuntime;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,
@@ -551,7 +545,7 @@ export async function executeToolTask(params: {
   // Create execution context
   const ctx = createExecutionContext(client, toolName, sessionId);
   const runtime = params.runtime;
-  runtime?.pulse({ kind: 'sdk.started', label: toolName });
+  runtime.pulse({ kind: 'sdk.started', label: toolName });
   const callbacks = createRuntimeAwareStreamingCallbacks(ctx.callbacks, runtime);
   const repos = {
     ...ctx.repos,
@@ -711,15 +705,6 @@ export async function executeToolTask(params: {
       }
     }
 
-    runtime?.pulse({
-      kind: result.wasStopped
-        ? 'terminal.stopped'
-        : result.hadError
-          ? 'terminal.failed'
-          : 'terminal.completed',
-      label: toolName,
-    });
-
     // Update task status to completed/stopped with git SHA and SDK responses
     // Note: The stop endpoint may have already patched task to STOPPED via process kill.
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
@@ -748,8 +733,6 @@ export async function executeToolTask(params: {
         sha_at_end: gitStateAtEnd.sha,
       };
     }
-
-    params.runtime?.pulse({ kind: 'terminal.failed', label: toolName });
 
     // Update task status to failed with git SHA
     await client.service('tasks').patch(taskId, patchData);

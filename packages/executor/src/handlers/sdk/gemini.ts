@@ -36,7 +36,8 @@ export async function executeGeminiTask(params: ToolRunnerParams): Promise<void>
         true, // mcpEnabled
         useNativeAuth, // Flag to use OAuth when no API key
         repos.users,
-        repos.mcpOAuthAuthHeaders
+        repos.mcpOAuthAuthHeaders,
+        params.runtime
       ),
   });
 }

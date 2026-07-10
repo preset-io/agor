@@ -247,14 +247,14 @@ async function buildCursorMcpServers(args: {
   return count > 0 ? mcpServers : undefined;
 }
 
-function pulseCursorEvent(event: SDKMessage, runtime?: AgenticToolRuntime): void {
-  runtime?.pulse({ kind: 'sdk.cursor_event', label: event.type });
+function pulseCursorEvent(event: SDKMessage, runtime: AgenticToolRuntime): void {
+  runtime.pulse({ kind: 'sdk.progress', label: event.type });
 
-  if (!runtime || event.type !== 'tool_call') return;
+  if (event.type !== 'tool_call') return;
 
   const label = normalizeCursorToolName(event.name);
   if (event.status === 'completed' || event.status === 'error') {
-    runtime.pulse({ kind: 'tool.completed', id: event.call_id, label });
+    runtime.pulse({ kind: 'tool.finished', id: event.call_id, label });
   } else if (event.status === 'running') {
     runtime.pulse({ kind: 'tool.started', id: event.call_id, label });
   } else {
@@ -445,7 +445,7 @@ export async function executeCursorTask(params: ToolRunnerParams): Promise<void>
   const { client, sessionId, taskId, prompt } = params;
 
   console.log(`[cursor] Executing task ${shortId(taskId)}...`);
-  params.runtime?.pulse({ kind: 'sdk.started', label: 'cursor' });
+  params.runtime.pulse({ kind: 'sdk.started', label: 'cursor' });
   if (params.permissionMode && params.permissionMode !== 'bypassPermissions') {
     console.warn(
       `[cursor] Ignoring permission mode "${params.permissionMode}"; @cursor/sdk currently runs autonomously in Agor.`
@@ -626,10 +626,6 @@ export async function executeCursorTask(params: ToolRunnerParams): Promise<void>
           toolCallMessageIds,
         },
       };
-      params.runtime?.pulse({
-        kind: stopped ? 'terminal.stopped' : failed ? 'terminal.failed' : 'terminal.completed',
-        label: 'cursor',
-      });
       if (shaAtEnd) {
         // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
         taskPatch.git_state = { sha_at_end: shaAtEnd };
@@ -647,7 +643,6 @@ export async function executeCursorTask(params: ToolRunnerParams): Promise<void>
       completed_at: new Date().toISOString(),
       error_message: err.message,
     };
-    params.runtime?.pulse({ kind: 'terminal.failed', label: 'cursor' });
     if (shaAtEnd) {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       taskPatch.git_state = { sha_at_end: shaAtEnd };

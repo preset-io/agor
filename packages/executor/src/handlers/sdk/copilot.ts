@@ -55,7 +55,8 @@ export async function executeCopilotTask(params: ToolRunnerParams): Promise<void
           repos.users,
           permissionService,
           repos.sessionsService,
-          repos.mcpOAuthAuthHeaders
+          repos.mcpOAuthAuthHeaders,
+          params.runtime
         ),
     });
   } finally {

@@ -34,6 +34,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -116,7 +117,8 @@ export class GeminiPromptService {
     useNativeAuth?: boolean, // Flag from base-executor indicating OAuth should be used
     _usersRepo?: UsersRepository,
     private tasksService?: TasksService,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private runtime?: AgenticToolRuntime
   ) {
     this.apiKey = apiKey;
     this.useNativeAuth = useNativeAuth ?? false; // Default to false if not provided
@@ -413,9 +415,25 @@ export class GeminiPromptService {
           `[Gemini Loop] Executing ${toolCallRequests.length} tool calls via Scheduler...`
         );
 
+        for (const toolCall of toolCallRequests) {
+          this.runtime?.pulse({
+            kind: 'tool.started',
+            id: toolCall.callId,
+            label: toolCall.name,
+          });
+        }
+
         // Execute all tool calls via Scheduler (handles validation, confirmation, execution)
         const completedCalls = await scheduler.schedule(toolCallRequests, abortController.signal);
         console.debug(`[Gemini Loop] Scheduler completed ${completedCalls.length} tool calls`);
+
+        for (const completedCall of completedCalls) {
+          this.runtime?.pulse({
+            kind: 'tool.finished',
+            id: completedCall.request.callId,
+            label: completedCall.request.name,
+          });
+        }
 
         // Convert completed calls to function response parts for Gemini
         const functionResponseParts: Part[] = [];

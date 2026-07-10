@@ -781,7 +781,7 @@ describe('TaskRepository.update', () => {
     expect(found?.last_executor_heartbeat_at).toBe(heartbeatAt);
   });
 
-  dbTest('should round-trip executor_runtime on update', async ({ db }) => {
+  dbTest('should round-trip latest_executor_pulse on update', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
     const created = await taskRepo.create(
@@ -789,32 +789,26 @@ describe('TaskRepository.update', () => {
     );
 
     const updated = await taskRepo.update(created.task_id, {
-      executor_runtime: {
-        heartbeat_at: '2026-01-01T00:00:10.000Z',
-        latest_pulse: {
-          kind: 'tool.started',
-          id: 'tool-123',
-          label: 'Bash',
-          at: '2026-01-01T00:00:07.000Z',
-        },
-      },
-    });
-    const found = await taskRepo.findById(created.task_id);
-
-    expect(updated.executor_runtime).toEqual({
-      heartbeat_at: '2026-01-01T00:00:10.000Z',
-      latest_pulse: {
+      latest_executor_pulse: {
         kind: 'tool.started',
         id: 'tool-123',
         label: 'Bash',
         at: '2026-01-01T00:00:07.000Z',
       },
     });
-    expect(found?.executor_runtime).toEqual(updated.executor_runtime);
+    const found = await taskRepo.findById(created.task_id);
+
+    expect(updated.latest_executor_pulse).toEqual({
+      kind: 'tool.started',
+      id: 'tool-123',
+      label: 'Bash',
+      at: '2026-01-01T00:00:07.000Z',
+    });
+    expect(found?.latest_executor_pulse).toEqual(updated.latest_executor_pulse);
   });
 
   dbTest(
-    'should replace executor_runtime snapshots instead of deep-merging stale pulse fields',
+    'should replace latest_executor_pulse instead of deep-merging stale fields',
     async ({ db }) => {
       const taskRepo = new TaskRepository(db);
       const sessionId = await createSessionWithDeps(db);
@@ -822,35 +816,29 @@ describe('TaskRepository.update', () => {
         createTaskData({
           session_id: sessionId,
           status: TaskStatus.RUNNING,
-          executor_runtime: {
-            heartbeat_at: '2026-01-01T00:00:10.000Z',
-            latest_pulse: {
-              kind: 'tool.started',
-              id: 'tool-123',
-              label: 'Bash',
-              at: '2026-01-01T00:00:07.000Z',
-            },
+          latest_executor_pulse: {
+            kind: 'tool.started',
+            id: 'tool-123',
+            label: 'Bash',
+            at: '2026-01-01T00:00:07.000Z',
           },
         })
       );
 
       const updated = await taskRepo.update(created.task_id, {
-        executor_runtime: {
-          heartbeat_at: '2026-01-01T00:00:20.000Z',
-          latest_pulse: {
-            kind: 'assistant.stream',
-            at: '2026-01-01T00:00:19.000Z',
-          },
+        latest_executor_pulse: {
+          kind: 'assistant.stream',
+          at: '2026-01-01T00:00:19.000Z',
         },
       });
       await taskRepo.update(created.task_id, { tool_use_count: 2 });
       const found = await taskRepo.findById(created.task_id);
 
-      expect(updated.executor_runtime?.latest_pulse).toEqual({
+      expect(updated.latest_executor_pulse).toEqual({
         kind: 'assistant.stream',
         at: '2026-01-01T00:00:19.000Z',
       });
-      expect(found?.executor_runtime?.latest_pulse).toEqual(updated.executor_runtime?.latest_pulse);
+      expect(found?.latest_executor_pulse).toEqual(updated.latest_executor_pulse);
       expect(found?.tool_use_count).toBe(2);
     }
   );

@@ -160,13 +160,14 @@ export class AgorExecutor {
     this.isRunning = true;
 
     const heartbeatConfig = this.config.resolvedConfig?.execution?.executor_heartbeat;
-    this.runtime = new RuntimeOverseer({
+    const runtime = new RuntimeOverseer({
       client: this.client,
       taskId: this.config.taskId,
       enabled: heartbeatConfig?.enabled ?? true,
       heartbeatIntervalMs: heartbeatConfig?.interval_ms,
     });
-    this.runtime.start();
+    this.runtime = runtime;
+    runtime.start();
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);
 
@@ -187,18 +188,14 @@ export class AgorExecutor {
         abortController: this.abortController,
         messageSource: this.config.messageSource,
         resolvedConfig: this.config.resolvedConfig,
-        runtime: this.runtime ?? undefined,
+        runtime,
       });
-    } catch (error) {
-      this.runtime?.pulse({
-        kind: this.abortController.signal.aborted ? 'terminal.stopped' : 'terminal.failed',
-        label: this.config.tool,
-      });
-      throw error;
     } finally {
-      await this.runtime?.flush({ stopTimer: true });
-      this.runtime?.stop();
-      this.runtime = null;
+      await runtime.flush();
+      runtime.stop();
+      if (this.runtime === runtime) {
+        this.runtime = null;
+      }
       this.isRunning = false;
     }
   }
@@ -214,8 +211,7 @@ export class AgorExecutor {
       if (this.isRunning) {
         this.abortController.abort();
       }
-      this.runtime?.pulse({ kind: 'terminal.stopped', label: this.config.tool });
-      await this.runtime?.flush({ stopTimer: true });
+      await this.runtime?.flush();
       this.runtime?.stop();
       this.runtime = null;
 

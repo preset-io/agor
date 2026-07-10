@@ -136,14 +136,9 @@ export type PulseKind =
   | 'thinking.progress'
   | 'tool.started'
   | 'tool.progress'
-  | 'tool.completed'
+  | 'tool.finished'
   | 'permission.wait_started'
-  | 'permission.wait_ended'
-  | 'terminal.completed'
-  | 'terminal.failed'
-  | 'terminal.stopped'
-  | 'terminal.timed_out'
-  | `sdk.${string}`;
+  | 'permission.wait_ended';
 
 export interface Pulse {
   kind: PulseKind;
@@ -156,13 +151,6 @@ export interface Pulse {
 export interface PulseSnapshot extends Pulse {
   /** Added by the executor RuntimeOverseer. */
   at: string;
-}
-
-export interface TaskExecutorRuntime {
-  /** Latest heartbeat emitted by the executor runtime overseer. */
-  heartbeat_at: string;
-  /** Latest sanitized SDK/tool pulse observed before this heartbeat. */
-  latest_pulse?: PulseSnapshot;
 }
 
 export interface Task {
@@ -279,8 +267,8 @@ export interface Task {
     generated_at: string;
   };
 
-  /** Latest executor runtime heartbeat and SDK/tool pulse snapshot. */
-  executor_runtime?: TaskExecutorRuntime;
+  /** Latest sanitized SDK/tool pulse observed by the executor. */
+  latest_executor_pulse?: PulseSnapshot;
 
   // Permission request (when task is awaiting user approval)
   permission_request?: {

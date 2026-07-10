@@ -26,7 +26,7 @@ export async function executeOpenCodeTask(params: ToolRunnerParams): Promise<voi
   const { client, sessionId, taskId, prompt } = params;
 
   console.log(`[opencode] Executing task ${shortId(taskId)}...`);
-  params.runtime?.pulse({ kind: 'sdk.started', label: 'opencode' });
+  params.runtime.pulse({ kind: 'sdk.started', label: 'opencode' });
 
   try {
     // Get session to extract model config
@@ -161,11 +161,6 @@ export async function executeOpenCodeTask(params: ToolRunnerParams): Promise<voi
 
     console.log('[opencode] Setting task model:', modelIdentifier);
 
-    params.runtime?.pulse({
-      kind: result?.status === 'completed' ? 'terminal.completed' : 'terminal.failed',
-      label: 'opencode',
-    });
-
     // Update task status to completed and set model
     await client.service('tasks').patch(taskId, {
       status: result?.status === 'completed' ? 'completed' : 'failed',
@@ -175,8 +170,6 @@ export async function executeOpenCodeTask(params: ToolRunnerParams): Promise<voi
   } catch (error) {
     const err = error as Error;
     console.error('[opencode] Execution failed:', err);
-
-    params.runtime?.pulse({ kind: 'terminal.failed', label: 'opencode' });
 
     // Update task status to failed
     await client.service('tasks').patch(taskId, {

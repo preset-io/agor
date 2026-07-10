@@ -99,7 +99,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         computed_context_window: task.computed_context_window, // Cumulative context window (computed by tool.computeContextWindow())
         report: task.report,
         permission_request: task.permission_request, // Permission state for UI approval flow
-        executor_runtime: task.executor_runtime, // Latest executor heartbeat/runtime pulse snapshot
+        latest_executor_pulse: task.latest_executor_pulse,
         metadata: task.metadata, // Generic metadata bag (e.g., is_agor_callback, source)
       },
     };
@@ -376,11 +376,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
         // STEP 2: Deep merge updates into current task (in memory)
         // Preserves nested objects like message_range when doing partial updates.
-        // Executor runtime is a complete heartbeat snapshot; replacing it avoids
-        // stale latest_pulse fields surviving across pulse changes that omit them.
+        // The latest pulse is a complete snapshot; replacing it avoids stale
+        // id/label fields surviving when a newer pulse omits them.
         const merged = deepMerge(current, updates);
-        if (updates.executor_runtime !== undefined) {
-          merged.executor_runtime = updates.executor_runtime;
+        if (updates.latest_executor_pulse !== undefined) {
+          merged.latest_executor_pulse = updates.latest_executor_pulse;
         }
         const insertData = this.taskToInsert(merged);
 

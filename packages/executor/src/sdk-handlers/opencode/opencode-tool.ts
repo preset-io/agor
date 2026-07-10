@@ -84,7 +84,7 @@ function pulseOpenCodeEvent(event: unknown, runtime?: AgenticToolRuntime): void 
     const label = typeof part.tool === 'string' ? part.tool : undefined;
     runtime.pulse({
       kind: OPENCODE_TOOL_TERMINAL_STATUSES.has(status)
-        ? 'tool.completed'
+        ? 'tool.finished'
         : status === 'pending'
           ? 'tool.started'
           : 'tool.progress',
@@ -95,7 +95,7 @@ function pulseOpenCodeEvent(event: unknown, runtime?: AgenticToolRuntime): void 
   }
 
   runtime.pulse({
-    kind: 'sdk.opencode_event',
+    kind: 'sdk.progress',
     label: OPENCODE_RUNTIME_EVENT_TYPES.has(eventType) ? eventType : 'unknown',
   });
 }

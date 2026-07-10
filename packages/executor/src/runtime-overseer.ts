@@ -20,11 +20,6 @@ export interface RuntimeOverseerOptions {
   warn?: (...args: unknown[]) => void;
 }
 
-export interface RuntimeOverseerFlushOptions {
-  timeoutMs?: number;
-  stopTimer?: boolean;
-}
-
 export class RuntimeOverseer implements AgenticToolRuntime {
   private timer?: ReturnType<typeof setInterval>;
   private latestPulse?: PulseSnapshot;
@@ -71,7 +66,7 @@ export class RuntimeOverseer implements AgenticToolRuntime {
     this.inFlight = (async () => {
       await this.options.client.service('tasks').patch(this.options.taskId, {
         last_executor_heartbeat_at: heartbeatAt,
-        executor_runtime: this.snapshotForHeartbeat(heartbeatAt),
+        latest_executor_pulse: this.latestPulse,
       } satisfies Partial<Task>);
     })();
 
@@ -87,19 +82,19 @@ export class RuntimeOverseer implements AgenticToolRuntime {
     }
   }
 
-  async flush(options: RuntimeOverseerFlushOptions = {}): Promise<boolean> {
-    if (options.stopTimer) {
-      this.clearTimer();
-    }
+  async flush(timeoutMs?: number): Promise<boolean> {
+    this.clearTimer();
 
-    const timeoutMs = this.flushTimeoutMs(options.timeoutMs);
+    if (this.stopped || this.enabled() === false) return true;
+
+    const resolvedTimeoutMs = this.flushTimeoutMs(timeoutMs);
     const inFlight = this.inFlight;
     if (inFlight) {
       const completed = await this.waitFor(
         inFlight.catch(() => {
           // heartbeat() owns warning; flush should not make shutdown fail.
         }),
-        timeoutMs
+        resolvedTimeoutMs
       );
       if (!completed) {
         this.warn('[runtime-overseer] Timed out flushing in-flight heartbeat');
@@ -110,11 +105,27 @@ export class RuntimeOverseer implements AgenticToolRuntime {
       }
     }
 
-    const completed = await this.waitFor(this.heartbeat(), timeoutMs);
+    const pulse = this.latestPulse;
+    if (!pulse) return true;
+
+    const completed = await this.waitFor(this.flushPulse(pulse), resolvedTimeoutMs);
     if (!completed) {
-      this.warn('[runtime-overseer] Timed out flushing heartbeat');
+      this.warn('[runtime-overseer] Timed out flushing runtime pulse');
     }
     return completed;
+  }
+
+  private async flushPulse(pulse: PulseSnapshot): Promise<void> {
+    try {
+      await this.options.client.service('tasks').patch(this.options.taskId, {
+        latest_executor_pulse: pulse,
+      } satisfies Partial<Task>);
+    } catch (error) {
+      this.warn(
+        '[runtime-overseer] Failed to flush runtime pulse:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   }
 
   private waitFor(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
@@ -132,7 +143,6 @@ export class RuntimeOverseer implements AgenticToolRuntime {
         settled = true;
         resolve(false);
       }, timeoutMs);
-      timer.unref?.();
 
       promise.then(
         () => {
@@ -161,15 +171,6 @@ export class RuntimeOverseer implements AgenticToolRuntime {
     return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs >= 0
       ? Math.floor(timeoutMs)
       : DEFAULT_FLUSH_TIMEOUT_MS;
-  }
-
-  snapshotForHeartbeat(
-    heartbeatAt = this.now().toISOString()
-  ): NonNullable<Task['executor_runtime']> {
-    return {
-      heartbeat_at: heartbeatAt,
-      latest_pulse: this.latestPulse,
-    };
   }
 
   private enabled(): boolean {

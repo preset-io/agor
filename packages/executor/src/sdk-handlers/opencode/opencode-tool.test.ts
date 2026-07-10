@@ -638,18 +638,18 @@ describe('OpenCodeTool', () => {
         label: 'Bash',
       });
       expect(runtime.pulse).toHaveBeenCalledWith({
-        kind: 'tool.completed',
+        kind: 'tool.finished',
         id: 'call-1',
         label: 'Bash',
       });
       expect(
         runtime.pulse.mock.calls.filter(
-          ([pulse]) => pulse.kind === 'sdk.opencode_event' && pulse.label === 'session.status'
+          ([pulse]) => pulse.kind === 'sdk.progress' && pulse.label === 'session.status'
         )
       ).toHaveLength(3);
       expect(
         runtime.pulse.mock.calls.filter(
-          ([pulse]) => pulse.kind === 'sdk.opencode_event' && pulse.label === 'session.error'
+          ([pulse]) => pulse.kind === 'sdk.progress' && pulse.label === 'session.error'
         )
       ).toHaveLength(1);
     });

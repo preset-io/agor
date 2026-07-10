@@ -24,6 +24,7 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import {
@@ -82,7 +83,8 @@ export class CopilotTool implements ITool {
     usersRepo?: UsersRepository,
     permissionService?: PermissionService,
     sessionsService?: SessionsPatchClient,
-    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    runtime?: AgenticToolRuntime
   ) {
     this.messagesRepo = messagesRepo;
     this.sessionsRepo = sessionsRepo;
@@ -103,7 +105,8 @@ export class CopilotTool implements ITool {
         messagesService,
         tasksService,
         sessionsService,
-        mcpOAuthAuthHeadersRepo
+        mcpOAuthAuthHeadersRepo,
+        runtime
       );
     }
   }

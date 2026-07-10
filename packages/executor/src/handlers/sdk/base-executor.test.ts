@@ -134,7 +134,7 @@ describe('runtime-aware service wrappers', () => {
       label: 'Bash',
     });
     expect(pulse).toHaveBeenNthCalledWith(2, {
-      kind: 'tool.completed',
+      kind: 'tool.finished',
       id: 'tool-1',
       label: 'Bash',
     });

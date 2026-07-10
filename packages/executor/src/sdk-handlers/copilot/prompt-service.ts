@@ -29,6 +29,7 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
@@ -130,7 +131,8 @@ export class CopilotPromptService {
     messagesService?: MessagesService,
     tasksService?: TasksService,
     sessionsService?: SessionsPatchClient,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private runtime?: AgenticToolRuntime
   ) {
     this.apiKey = apiKey;
     this.messagesRepo = messagesRepo;
@@ -399,6 +401,12 @@ export class CopilotPromptService {
           ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
           : data.toolName;
 
+        this.runtime?.pulse({
+          kind: 'tool.started',
+          id: data.toolCallId,
+          label: toolName,
+        });
+
         // Yield tool_start event (collected below in event loop)
         toolUses.push({
           id: data.toolCallId,
@@ -412,6 +420,12 @@ export class CopilotPromptService {
         const _toolName = data.mcpServerName
           ? `${data.mcpServerName}.${data.mcpToolName || data.toolName}`
           : data.toolName;
+
+        this.runtime?.pulse({
+          kind: 'tool.finished',
+          id: data.toolCallId,
+          label: _toolName,
+        });
 
         // Update existing tool use entry with output/status
         const existing = toolUses.find((t) => t.id === data.toolCallId);
