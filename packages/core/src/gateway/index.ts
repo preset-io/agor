@@ -19,6 +19,8 @@ export type {
 export {
   extractSlackInboundFiles,
   isChannelAllowedByWhitelist,
+  isSlackDirectMessageId,
+  isSlackWriteTargetAllowed,
   markdownToMrkdwn,
   SlackConnector,
 } from './connectors/slack';
