@@ -10,6 +10,7 @@ import {
 import type {
   BoardID,
   BranchID,
+  HookContext,
   Link,
   Message,
   MessageID,
@@ -21,6 +22,7 @@ import type { Database } from '../../../../packages/core/src/db/client';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
 import { ingestParsedLinksAfterMessageCreate, LINKS_SERVICE_METHODS, LinksService } from './links';
+import { linksHooks } from './links-hooks';
 
 async function seedUser(db: Database, userId: UUID, email: string) {
   await new UsersRepository(db).create({ user_id: userId, email, name: email });
@@ -185,6 +187,73 @@ describe('LinksService', () => {
     const rows = Array.isArray(result) ? result : result.data;
     expect(rows.map((link) => link.link_id)).toEqual([visible.link_id]);
   });
+
+  dbTest('hides internal links from external find requests', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id);
+    const repo = new LinksRepository(db);
+    const publicLink = await repo.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/public',
+    });
+    await repo.create({
+      session_id: session.session_id,
+      kind: 'internal',
+      source: 'manual',
+      ref_uri: `agor://session/${session.session_id}`,
+      target_object_type: 'session',
+      target_object_id: session.session_id,
+    });
+
+    const service = new LinksService(db);
+    const result = await service.find({ query: {}, _agorHideInternalLinks: true });
+    const rows = Array.isArray(result) ? result : result.data;
+
+    expect(rows.map((link) => link.link_id)).toEqual([publicLink.link_id]);
+    const unfiltered = await service.find({ query: {} });
+    expect(Array.isArray(unfiltered) ? unfiltered : unfiltered.data).toHaveLength(2);
+  });
+
+  dbTest(
+    'hides internal links in external hooks even when branch RBAC is disabled',
+    async ({ db }) => {
+      const branch = await seedBranch(db);
+      const session = await seedSession(db, branch.branch_id);
+      const internalLink = await new LinksRepository(db).create({
+        session_id: session.session_id,
+        kind: 'internal',
+        source: 'manual',
+        ref_uri: `agor://session/${session.session_id}`,
+        target_object_type: 'session',
+        target_object_id: session.session_id,
+      });
+      const hooks = linksHooks({
+        db,
+        branchRepository: new BranchRepository(db),
+        branchRbacEnabled: false,
+        requireAuth: async (context) => context,
+        sessionsService: {} as never,
+        superadminOpts: { allowSuperadmin: false },
+      });
+      const findHook = hooks.before.find[0] as (context: HookContext) => HookContext;
+      const getHook = hooks.before.get[0] as (context: HookContext) => Promise<HookContext>;
+      const findContext = {
+        method: 'find',
+        params: { provider: 'rest', user: { user_id: generateId(), role: 'member' } },
+      } as HookContext;
+
+      expect(findHook(findContext).params).toMatchObject({ _agorHideInternalLinks: true });
+      await expect(
+        getHook({
+          method: 'get',
+          id: internalLink.link_id,
+          params: { provider: 'rest', user: findContext.params.user },
+        } as HookContext)
+      ).rejects.toMatchObject({ code: 404 });
+    }
+  );
 
   dbTest(
     'maps board_id and owner_scope query params into board-scoped link filters',

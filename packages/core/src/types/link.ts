@@ -168,6 +168,14 @@ export function isLinkTargetObjectType(value: unknown): value is LinkTargetObjec
   );
 }
 
+export function isInternalLinkData(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const data = value as Record<string, unknown>;
+  return (
+    data.kind === 'internal' || data.target_object_type != null || data.target_object_id != null
+  );
+}
+
 export function getLinkTargetField(data: {
   url?: string | null;
   ref_uri?: string | null;

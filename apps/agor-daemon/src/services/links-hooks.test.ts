@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getExternalLinkProvenanceMutationError,
   isExternalFileBackedLinkMutation,
+  isExternalInternalLinkMutation,
 } from './links-hooks';
 
 describe('isExternalFileBackedLinkMutation', () => {
@@ -38,6 +39,22 @@ describe('isExternalFileBackedLinkMutation', () => {
     ).toBe(false);
     expect(isExternalFileBackedLinkMutation({ title: 'Renamed upload' })).toBe(false);
     expect(isExternalFileBackedLinkMutation({ is_pinned: true })).toBe(false);
+  });
+});
+
+describe('isExternalInternalLinkMutation', () => {
+  it('rejects internal kinds and explicit object target fields', () => {
+    expect(isExternalInternalLinkMutation({ kind: 'internal' })).toBe(true);
+    expect(isExternalInternalLinkMutation({ target_object_type: 'session' })).toBe(true);
+    expect(isExternalInternalLinkMutation({ target_object_id: null })).toBe(true);
+  });
+
+  it('allows public and metadata-only payloads', () => {
+    expect(isExternalInternalLinkMutation({ kind: 'url', url: 'https://example.com' })).toBe(false);
+    expect(
+      isExternalInternalLinkMutation({ kind: 'kb_ref', ref_uri: 'agor://kb/team/runbook.md' })
+    ).toBe(false);
+    expect(isExternalInternalLinkMutation({ title: 'Updated title' })).toBe(false);
   });
 });
 

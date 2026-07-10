@@ -575,6 +575,32 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }]);
   });
 
+  it('keeps internal link events on trusted service connections', async () => {
+    const viewer = { user: user('viewer') };
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([viewer, service]);
+    const r = repos({ branch: branch('b1', 'view'), permissions: {} });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const channel = await app.runPublish(
+      { link_id: 'l1', session_id: 's1', kind: 'internal' },
+      { path: 'links', method: 'create', event: 'created' }
+    );
+    const publicChannel = await app.runPublish(
+      {
+        link_id: 'l2',
+        session_id: 's1',
+        kind: 'url',
+        target_object_type: null,
+        target_object_id: null,
+      },
+      { path: 'links', method: 'create', event: 'created' }
+    );
+
+    expect(channel.connections).toEqual([service]);
+    expect(publicChannel.connections).toEqual([viewer, service]);
+  });
+
   it('resolves board comment events through task_id when branch_id is absent', async () => {
     const allowed = user('allowed');
     const denied = user('denied');

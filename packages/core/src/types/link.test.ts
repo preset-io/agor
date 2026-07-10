@@ -4,6 +4,7 @@ import {
   extractLinksFromMessage,
   getLinkTargetCompatibilityError,
   getLinkTargetField,
+  isInternalLinkData,
   LINK_KIND_TARGET_FIELD,
   LINK_SOURCE_TARGET_FIELDS,
   normalizeLinkTargetKey,
@@ -99,6 +100,20 @@ describe('link target semantics', () => {
     expect(countLinkTargets({ url: 'https://example.com', ref_uri: 'agor://kb/team/a.md' })).toBe(
       2
     );
+  });
+
+  it('recognizes internal link payloads without classifying public or metadata-only payloads', () => {
+    expect(isInternalLinkData({ kind: 'internal' })).toBe(true);
+    expect(isInternalLinkData({ target_object_type: 'session' })).toBe(true);
+    expect(isInternalLinkData({ target_object_id: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' })).toBe(
+      true
+    );
+    expect(isInternalLinkData({ target_object_type: null, target_object_id: null })).toBe(false);
+    expect(isInternalLinkData({ kind: 'url', url: 'https://example.com' })).toBe(false);
+    expect(isInternalLinkData({ kind: 'kb_ref', ref_uri: 'agor://kb/team/runbook.md' })).toBe(
+      false
+    );
+    expect(isInternalLinkData({ title: 'Updated title' })).toBe(false);
   });
 
   it('normalizes the populated target key', () => {

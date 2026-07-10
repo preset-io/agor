@@ -7,7 +7,7 @@ import type { BranchRepository, SessionRepository } from '@agor/core/db';
 import { getCurrentTenantId, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, HookContext, User, UserID } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { hasMinimumRole, isInternalLinkData, ROLES } from '@agor/core/types';
 import { isSuperAdmin } from './branch-authorization.js';
 import {
   type RealtimeAccessBranchRepository,
@@ -580,6 +580,11 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         }
         throw error;
       }
+    }
+    // Internal links do not leave trusted service connections until target-level
+    // authorization exists. Owner visibility alone cannot authorize the target.
+    if (context.path === 'links' && isInternalLinkData(data)) {
+      return filterToServiceConnections(tenantScoped);
     }
     // Streaming events are routed to session subscribers (plus service and
     // owner connections) regardless of branch RBAC — this is the always-on

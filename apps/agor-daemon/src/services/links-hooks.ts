@@ -3,10 +3,10 @@ import {
   LinksRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import { linkQueryValidator, typedValidateQuery } from '@agor/core/lib/feathers-validation';
 import type { HookContext, Link, Session, UserID } from '@agor/core/types';
-import { ROLES } from '@agor/core/types';
+import { isInternalLinkData, ROLES } from '@agor/core/types';
 import { executorRuntimeScopeGuard } from '../auth/executor-runtime-scope.js';
 import type { SessionsServiceImpl } from '../declarations.js';
 import { requireMinimumRole } from '../utils/authorization.js';
@@ -26,6 +26,16 @@ export function isExternalFileBackedLinkMutation(data: unknown): boolean {
     record.source === 'upload' ||
     record.kind === 'image' ||
     record.kind === 'document'
+  );
+}
+
+export function isExternalInternalLinkMutation(data: unknown): boolean {
+  if (isInternalLinkData(data)) return true;
+  return (
+    data != null &&
+    typeof data === 'object' &&
+    !Array.isArray(data) &&
+    ('target_object_type' in data || 'target_object_id' in data)
   );
 }
 
@@ -66,6 +76,13 @@ export function linksHooks({
 }: LinksHooksContext) {
   const linksRepository = new LinksRepository(db);
 
+  const hideExternalInternalLinks = (context: HookContext) => {
+    if (context.params.provider) {
+      (context.params as { _agorHideInternalLinks?: boolean })._agorHideInternalLinks = true;
+    }
+    return context;
+  };
+
   const scopeFindToAccessibleLinksSql = () => (context: HookContext) => {
     if (!branchRbacEnabled || !context.params.provider) return context;
     if (context.params.user?._isServiceAccount) return context;
@@ -78,11 +95,23 @@ export function linksHooks({
   };
 
   const ensureLinkOwnerAccess = (mode: 'view' | 'mutate') => async (context: HookContext) => {
-    if (!branchRbacEnabled || !context.params.provider) return context;
-    if (context.params.user?._isServiceAccount) return context;
+    if (!context.params.provider) return context;
 
     const user = context.params.user;
     if (!user) throw new NotAuthenticated('Authentication required');
+
+    let link: Link | null = null;
+    if (context.method !== 'create' && context.id) {
+      link = await linksRepository.findById(String(context.id));
+      if (!link || link.kind === 'internal') throw new NotFound(`Link not found: ${context.id}`);
+      (context.params as { _agorPrefetchedRecord?: unknown })._agorPrefetchedRecord = {
+        id: String(context.id),
+        idField: 'link_id',
+        record: link,
+      };
+    }
+
+    if (!branchRbacEnabled || user._isServiceAccount) return context;
 
     const checkAccess = async (branchId: string | null | undefined, session: Session | null) => {
       if (!branchId) throw new Forbidden('Link owner branch not found');
@@ -138,9 +167,7 @@ export function linksHooks({
       return context;
     }
 
-    if (!context.id) return context;
-    const link = await linksRepository.findById(String(context.id));
-    if (!link) throw new Forbidden(`Link not found: ${context.id}`);
+    if (!link) return context;
     let branchId: string | null | undefined;
     let session: Session | null = null;
     if (link.session_id) {
@@ -149,11 +176,6 @@ export function linksHooks({
     } else {
       branchId = link.branch_id;
     }
-    (context.params as { _agorPrefetchedRecord?: unknown })._agorPrefetchedRecord = {
-      id: String(context.id),
-      idField: 'link_id',
-      record: link,
-    };
     await checkAccess(branchId, session);
 
     return context;
@@ -197,6 +219,19 @@ export function linksHooks({
     return context;
   };
 
+  const rejectExternalInternalLinkMutations = (context: HookContext) => {
+    if (!context.params.provider) return context;
+    const records = Array.isArray(context.data) ? context.data : [context.data];
+    for (const record of records) {
+      if (isExternalInternalLinkMutation(record)) {
+        throw new Forbidden(
+          'Internal links require target authorization and are not externally available'
+        );
+      }
+    }
+    return context;
+  };
+
   const rejectExternalLinkProvenanceMutations = (context: HookContext) => {
     if (!context.params.provider) return context;
     const records = Array.isArray(context.data) ? context.data : [context.data];
@@ -211,13 +246,14 @@ export function linksHooks({
   return {
     before: {
       all: [typedValidateQuery(linkQueryValidator), requireAuth, executorRuntimeScopeGuard()],
-      find: [scopeFindToAccessibleLinksSql()],
+      find: [hideExternalInternalLinks, scopeFindToAccessibleLinksSql()],
       get: [ensureLinkOwnerAccess('view')],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create links'),
         rejectLinkDerivedFields,
         rejectExternalLinkProvenanceMutations,
         rejectExternalFileBackedLinkMutations,
+        rejectExternalInternalLinkMutations,
         injectCreatedBy(),
         ensureLinkOwnerAccess('mutate'),
       ],
@@ -226,6 +262,7 @@ export function linksHooks({
         rejectLinkDerivedFields,
         rejectExternalLinkProvenanceMutations,
         rejectExternalFileBackedLinkMutations,
+        rejectExternalInternalLinkMutations,
         rejectLinkOwnerPatch,
         ensureLinkOwnerAccess('mutate'),
       ],

@@ -44,6 +44,7 @@ type LinkParams = QueryParams<{
   target_object_id?: UUID;
 }> & {
   _agorSqlLinkAccessUserId?: UUID;
+  _agorHideInternalLinks?: boolean;
 };
 
 export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams> {
@@ -88,6 +89,7 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
       filter.targetObjectId = query.target_object_id as UUID;
     }
     if (params?._agorSqlLinkAccessUserId) filter.visibleToUserId = params._agorSqlLinkAccessUserId;
+    if (params?._agorHideInternalLinks) filter.hideInternal = true;
     return this.linksRepo.findAll(filter);
   }
 

@@ -12,7 +12,7 @@ import type {
   SessionID,
   UUID,
 } from '@agor/core/types';
-import { and, eq, exists, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, exists, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import {
   countLinkTargets,
@@ -45,6 +45,7 @@ export interface LinkFindFilter {
   targetObjectType?: LinkTargetObjectType;
   targetObjectId?: UUID;
   visibleToUserId?: UUID;
+  hideInternal?: boolean;
 }
 
 function countPresent(values: unknown[]): number {
@@ -352,6 +353,7 @@ export class LinksRepository {
     if (filter?.sourceMessageId)
       conditions.push(eq(links.source_message_id, filter.sourceMessageId));
     if (filter?.kind) conditions.push(eq(links.kind, filter.kind));
+    if (filter?.hideInternal) conditions.push(ne(links.kind, 'internal'));
     if (filter?.source) conditions.push(eq(links.source, filter.source));
     if (filter?.isPinned !== undefined) conditions.push(eq(links.is_pinned, filter.isPinned));
     if (filter?.targetObjectType)
