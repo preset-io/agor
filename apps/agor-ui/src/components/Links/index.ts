@@ -1,3 +1,5 @@
+export * from './ActionLinkRow';
+export * from './LinkActions';
 export * from './LinkAttachmentCard';
 export * from './LinkImagePreviewModal';
 export * from './LinkImageThumbnail';
@@ -6,5 +8,6 @@ export * from './linkContent';
 export * from './linkDisplay';
 export * from './linkOrganizer';
 export * from './linkPromotion';
+export * from './PinnedLinkButton';
 export * from './PromotedPinnedLinks';
 export * from './SessionLinksControl';

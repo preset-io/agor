@@ -4,11 +4,12 @@ import {
   Button,
   Drawer,
   Empty,
+  Flex,
   Input,
   Popover,
+  Segmented,
   Select,
   Space,
-  Tabs,
   Tooltip,
   Typography,
   theme,
@@ -96,7 +97,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   const categoryTabs = React.useMemo(
     () =>
       (['all', 'files', 'links', 'knowledge', 'issues'] as const).map((key) => ({
-        key,
+        value: key,
         label: `${LINK_CATEGORY_TAB_LABELS[key]} ${categoryCounts[key]}`,
       })),
     [categoryCounts]
@@ -157,14 +158,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
   const quickContent = (
     <div style={{ width: 312 }} data-testid="links-organizer-popover">
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
-          gap: 8,
-        }}
-      >
+      <Flex align="flex-start" justify="space-between" gap="small">
         <div style={{ minWidth: 0 }}>
           <Typography.Text strong>Links</Typography.Text>
         </div>
@@ -181,7 +175,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             style={{ color: token.colorTextTertiary }}
           />
         </Tooltip>
-      </div>
+      </Flex>
 
       {error && (
         <div style={{ marginTop: token.sizeSM }}>
@@ -268,21 +262,13 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
       >
         <div data-testid="links-organizer-manage">
           <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
-            <Tabs
-              className="agor-link-category-tabs"
-              activeKey={activeCategory}
-              items={categoryTabs}
-              onChange={(key) => setActiveCategory(key as LinksCategoryTab)}
+            <Segmented<LinksCategoryTab>
+              block
+              value={activeCategory}
+              options={categoryTabs}
+              onChange={setActiveCategory}
             />
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: token.sizeSM,
-                width: '100%',
-                flexWrap: 'wrap',
-              }}
-            >
+            <Flex align="center" gap="small" wrap style={{ width: '100%' }}>
               <Input.Search
                 allowClear
                 value={searchQuery}
@@ -306,7 +292,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
                   style={{ width: 128 }}
                 />
               </Space>
-            </div>
+            </Flex>
             {drawerItems.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links in this view." />
             ) : (

@@ -1,9 +1,10 @@
-import { GithubOutlined, PushpinFilled, PushpinOutlined } from '@ant-design/icons';
-import { Button, Tooltip, Typography, theme } from 'antd';
+import { GithubOutlined, PushpinFilled } from '@ant-design/icons';
+import { Flex, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import { useThemedMessage } from '../../utils/message';
+import { LinkPinAction } from './LinkActions';
 import { LinkImagePreviewModal } from './LinkImagePreviewModal';
 import { LinkMarkdownPreviewModal } from './LinkMarkdownPreviewModal';
 import {
@@ -29,14 +30,13 @@ function LinkGlyph({ item }: { item: LinkDisplayItem }) {
   const isGitHubLink = item.category === 'issue' || item.category === 'pr';
   return (
     <span
-      className="agor-action-link-icon"
       aria-hidden="true"
       style={{
         width: 34,
         height: 24,
         borderRadius: token.borderRadiusSM,
         background: token.colorFillTertiary,
-        color: `var(--agor-link-icon-color, ${token.colorTextSecondary})`,
+        color: token.colorTextSecondary,
         border: `1px solid ${token.colorBorderSecondary}`,
         display: 'inline-flex',
         alignItems: 'center',
@@ -97,14 +97,17 @@ export function LinkRow({
     maxWidth: inline ? '100%' : undefined,
   };
   const linkBody = (
-    <span style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit * 2, minWidth: 0 }}>
+    <Flex align="center" gap="small" style={{ minWidth: 0 }}>
       <LinkGlyph item={item} />
-      <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit, minWidth: 0 }}>
+      <Flex vertical style={{ minWidth: 0, flex: 1 }}>
+        <Flex align="center" gap="small" style={{ minWidth: 0 }}>
           <Typography.Text
-            className={isActionable ? 'agor-action-link-title' : undefined}
             ellipsis
-            style={{ color: 'var(--agor-link-title-color)', lineHeight: 1.25, flex: 1 }}
+            style={{
+              color: isActionable ? token.colorText : token.colorTextSecondary,
+              lineHeight: 1.25,
+              flex: 1,
+            }}
           >
             {title}
           </Typography.Text>
@@ -113,14 +116,14 @@ export function LinkRow({
               <PushpinFilled style={{ color: token.colorWarning, fontSize: 11 }} />
             </Tooltip>
           )}
-        </span>
+        </Flex>
         {!compact && targetLabel && (
           <Typography.Text type="secondary" ellipsis style={{ fontSize: 12, lineHeight: 1.2 }}>
             {targetLabel}
           </Typography.Text>
         )}
-      </span>
-    </span>
+      </Flex>
+    </Flex>
   );
   const nonNavigableStyle: React.CSSProperties = {
     ...commonStyle,
@@ -162,47 +165,29 @@ export function LinkRow({
     );
 
   return (
-    <span
-      className="agor-action-link-row"
+    <Flex
+      align="center"
+      gap="small"
       aria-disabled={isActionable ? undefined : true}
-      style={
-        {
-          '--agor-link-title-color': isActionable ? token.colorText : token.colorTextSecondary,
-          '--agor-link-icon-color': token.colorTextTertiary,
-          '--agor-link-row-hover-bg': token.colorFillTertiary,
-          '--agor-link-row-hover-color': token.colorPrimary,
-          display: 'flex',
-          alignItems: 'center',
-          gap: token.sizeUnit * 2,
-          minWidth: 0,
-          width: inline ? 'auto' : '100%',
-          borderRadius: token.borderRadiusSM,
-          padding: compact
-            ? `${token.sizeUnit}px ${token.sizeUnit * 1.5}px`
-            : `${token.sizeUnit}px 0`,
-        } as React.CSSProperties
-      }
+      style={{
+        minWidth: 0,
+        width: inline ? 'auto' : '100%',
+        borderRadius: token.borderRadiusSM,
+        padding: compact
+          ? `${token.sizeUnit}px ${token.sizeUnit * 1.5}px`
+          : `${token.sizeUnit}px 0`,
+      }}
     >
       {mainTarget}
       {canTogglePin && (
-        <Tooltip title={getPinActionLabel(item)}>
-          <Button
-            className="agor-action-link-affordance"
-            type="text"
-            size="small"
-            loading={pinning}
-            aria-label={`${getPinActionLabel(item)} ${title}`}
-            icon={item.isPinned ? <PushpinFilled /> : <PushpinOutlined />}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onTogglePinned?.(item);
-            }}
-            style={{ color: item.isPinned ? token.colorWarning : token.colorTextTertiary }}
-          />
-        </Tooltip>
+        <LinkPinAction
+          pinned={item.isPinned}
+          label={`${getPinActionLabel(item)} ${title}`}
+          loading={pinning}
+          onToggle={() => onTogglePinned?.(item)}
+        />
       )}
-    </span>
+    </Flex>
   );
 }
 

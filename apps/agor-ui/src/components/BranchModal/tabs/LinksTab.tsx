@@ -1,5 +1,17 @@
 import type { AgorClient, Branch, Link, Session } from '@agor-live/client';
-import { Alert, Empty, Input, List, Select, Space, Spin, Tabs, Typography, theme } from 'antd';
+import {
+  Alert,
+  Empty,
+  Flex,
+  Input,
+  List,
+  Segmented,
+  Select,
+  Space,
+  Spin,
+  Typography,
+  theme,
+} from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -122,7 +134,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   const categoryTabs = useMemo(
     () =>
       (['all', 'files', 'links', 'knowledge', 'issues'] as const).map((key) => ({
-        key,
+        value: key,
         label: `${LINK_CATEGORY_TAB_LABELS[key]} ${categoryCounts[key]}`,
       })),
     [categoryCounts]
@@ -238,32 +250,24 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
           )}
 
           {loading ? (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                minHeight: 180,
-              }}
-            >
+            <Flex align="center" justify="center" style={{ minHeight: 180 }}>
               <Spin />
-            </div>
+            </Flex>
           ) : items.length > 0 ? (
             <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
               <div style={{ padding: `0 ${token.paddingLG}px` }}>
-                <Tabs
-                  className="agor-link-category-tabs"
-                  activeKey={activeCategory}
-                  items={categoryTabs}
-                  onChange={(key) => setActiveCategory(key as LinkCategoryTabKey)}
+                <Segmented<LinkCategoryTabKey>
+                  block
+                  value={activeCategory}
+                  options={categoryTabs}
+                  onChange={setActiveCategory}
                 />
-                <div
+                <Flex
+                  align="center"
+                  gap="small"
+                  wrap
                   style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: token.sizeSM,
                     width: '100%',
-                    flexWrap: 'wrap',
                     marginTop: token.sizeMD,
                   }}
                 >
@@ -290,7 +294,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       style={{ width: 128 }}
                     />
                   </Space>
-                </div>
+                </Flex>
               </div>
               {visibleItems.length > 0 ? (
                 <List
@@ -307,8 +311,6 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       teammateBusyKey={teammatePromotionBusyKey}
                       pinning={item.linkId === pinningLinkId}
                       onOpen={openItem}
-                      onPreview={openPreview}
-                      onDownload={downloadItem}
                       onTogglePinned={handleTogglePinned}
                       onPromote={handlePromoteToTeammate}
                       onRemove={handleRemoveFromTeammate}

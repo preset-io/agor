@@ -5,10 +5,9 @@ import {
   GithubOutlined,
   GlobalOutlined,
   LinkOutlined,
-  PushpinFilled,
   StopOutlined,
 } from '@ant-design/icons';
-import { Button, Tooltip, Typography, theme } from 'antd';
+import { Button, Flex, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getLinkContentAction, getLinkUnavailableReason } from './linkContent';
@@ -17,6 +16,7 @@ import {
   getLinkDisplaySecondaryLabel,
   type LinkDisplayItem,
 } from './linkDisplay';
+import { PinnedLinkButton } from './PinnedLinkButton';
 import { LinkPreviewModal, useLinkFileActions } from './SessionLinksControl';
 
 export type PromotedPinnedLinkItem = LinkDisplayItem;
@@ -73,16 +73,13 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
   };
 
   const chipHeight = 26;
-  const chipMaxWidth = 156;
-
   return (
     <>
-      <div
+      <Flex
+        align="center"
+        gap={token.sizeXXS}
         data-testid={dataTestId}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: token.sizeXXS,
           minWidth: 0,
           flexWrap: 'nowrap',
           overflow: 'hidden',
@@ -100,81 +97,13 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
               }
               mouseEnterDelay={0.45}
             >
-              <button
-                className="agor-action-link-chip"
-                type="button"
+              <PinnedLinkButton
                 disabled={disabled}
-                aria-label={
-                  disabled ? `${item.name}: ${disabledReason}` : `Open pinned ${item.name}`
-                }
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openItem(item);
-                }}
-                style={
-                  {
-                    '--agor-link-chip-bg': disabled
-                      ? token.colorFillQuaternary
-                      : token.colorPrimaryBg,
-                    '--agor-link-chip-border': disabled
-                      ? token.colorBorderSecondary
-                      : token.colorPrimaryBorder,
-                    '--agor-link-chip-color': disabled ? token.colorTextDisabled : token.colorText,
-                    '--agor-link-chip-accent-color': disabled
-                      ? token.colorTextDisabled
-                      : token.colorTextTertiary,
-                    '--agor-link-chip-hover-bg': token.colorPrimaryBgHover,
-                    '--agor-link-chip-hover-border': token.colorPrimaryBorderHover,
-                    '--agor-link-chip-hover-color': token.colorPrimary,
-                    '--agor-link-chip-hover-accent-color': token.colorTextTertiary,
-                    height: chipHeight,
-                    minWidth: 0,
-                    maxWidth: chipMaxWidth,
-                    border: '1px solid var(--agor-link-chip-border)',
-                    borderRadius: 999,
-                    cursor: disabled ? 'not-allowed' : 'pointer',
-                    padding: `0 ${token.paddingXS}px`,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    font: 'inherit',
-                    lineHeight: 1,
-                    flex: '0 1 auto',
-                  } as React.CSSProperties
-                }
-              >
-                <PushpinFilled
-                  className="agor-action-link-affordance"
-                  style={{
-                    color: 'var(--agor-link-chip-accent-color)',
-                    fontSize: 11,
-                  }}
-                />
-                <span
-                  className="agor-action-link-icon"
-                  style={{
-                    width: 14,
-                    color: 'var(--agor-link-chip-accent-color)',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flex: '0 0 auto',
-                  }}
-                >
-                  {getIcon(item, disabled)}
-                </span>
-                <Typography.Text
-                  className={disabled ? undefined : 'agor-action-link-title'}
-                  ellipsis
-                  style={{
-                    fontSize: 12,
-                    maxWidth: chipMaxWidth - 50,
-                    color: 'var(--agor-link-chip-color)',
-                  }}
-                >
-                  {getCompactLinkDisplayName(item)}
-                </Typography.Text>
-              </button>
+                disabledReason={disabledReason}
+                label={getCompactLinkDisplayName(item)}
+                icon={getIcon(item, disabled)}
+                onOpen={() => openItem(item)}
+              />
             </Tooltip>
           );
         })}
@@ -200,7 +129,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
             </Button>
           </Tooltip>
         )}
-      </div>
+      </Flex>
       <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
     </>
   );

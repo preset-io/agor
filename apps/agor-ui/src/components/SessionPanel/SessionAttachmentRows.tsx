@@ -1,16 +1,13 @@
-import {
-  EllipsisOutlined,
-  GithubOutlined,
-  GlobalOutlined,
-  LinkOutlined,
-  PushpinFilled,
-  PushpinOutlined,
-  StopOutlined,
-} from '@ant-design/icons';
-import type { MenuProps } from 'antd';
-import { Button, Dropdown, Tooltip, Typography, theme } from 'antd';
+import { GithubOutlined, GlobalOutlined, LinkOutlined, StopOutlined } from '@ant-design/icons';
+import { Flex, Tooltip, Typography } from 'antd';
 import type React from 'react';
-import { isFileLinkDisplayItem, isKnowledgeLinkDisplayItem } from '../Links';
+import {
+  ActionLinkRow,
+  isFileLinkDisplayItem,
+  isKnowledgeLinkDisplayItem,
+  LinkOverflowAction,
+  LinkPinAction,
+} from '../Links';
 import { LinkAttachmentGlyph } from '../Links/LinkAttachmentCard';
 import {
   canDownloadSessionFile,
@@ -70,22 +67,6 @@ function attachmentIcon(item: SessionAttachmentItem, disabled: boolean): React.R
   return item.category === 'url' ? <GlobalOutlined /> : <LinkOutlined />;
 }
 
-function stopNavigation(event: React.MouseEvent<HTMLElement>): void {
-  event.preventDefault();
-  event.stopPropagation();
-}
-
-function handleRowKeyDown(
-  item: SessionAttachmentItem,
-  onOpen: (item: SessionAttachmentItem) => void
-): React.KeyboardEventHandler<HTMLElement> {
-  return (event) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    onOpen(item);
-  };
-}
-
 function canTogglePinned(
   item: SessionAttachmentItem,
   onTogglePinned?: SharedProps['onTogglePinned']
@@ -93,216 +74,123 @@ function canTogglePinned(
   return item.ownerScope === 'session' && Boolean(item.linkId) && Boolean(onTogglePinned);
 }
 
-function PinAction({ item, pinningLinkId, onTogglePinned }: SharedProps) {
-  const { token } = theme.useToken();
-  const toggleable = canTogglePinned(item, onTogglePinned);
-  const isPinning = Boolean(item.linkId && pinningLinkId === item.linkId);
+function pinAction(props: SharedProps) {
+  const toggleable = canTogglePinned(props.item, props.onTogglePinned);
+  const isPinning = Boolean(props.item.linkId && props.pinningLinkId === props.item.linkId);
   const label = toggleable
-    ? item.isPinned
+    ? props.item.isPinned
       ? 'Unpin from session header'
       : 'Pin in session'
-    : item.ownerScope === 'branch'
+    : props.item.ownerScope === 'branch'
       ? 'Pin is read-only here'
       : 'Pin unavailable';
+
   return (
-    <Tooltip title={label}>
-      <button
-        type="button"
-        aria-label={label}
-        aria-disabled={!toggleable || isPinning || undefined}
-        onClick={(event) => {
-          stopNavigation(event);
-          if (toggleable && !isPinning) void onTogglePinned?.(item);
-        }}
-        style={{
-          border: 0,
-          background: 'transparent',
-          padding: 0,
-          color: item.isPinned ? token.colorWarning : token.colorTextQuaternary,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 18,
-          cursor: toggleable && !isPinning ? 'pointer' : 'default',
-          opacity: isPinning ? 0.6 : 1,
-        }}
-      >
-        {item.isPinned ? <PushpinFilled /> : <PushpinOutlined />}
-      </button>
-    </Tooltip>
+    <LinkPinAction
+      pinned={props.item.isPinned}
+      label={label}
+      disabled={!toggleable}
+      loading={isPinning}
+      onToggle={() => props.onTogglePinned?.(props.item)}
+    />
   );
 }
 
-function PromotionAction(props: DrawerProps) {
-  const { token } = theme.useToken();
+function promotionAction(props: DrawerProps) {
   const state = props.getTeammateActionState?.(props.item);
-  if (!state) return <span aria-hidden />;
+  if (!state) return null;
   const busyKey = state.teammateLinkId ?? props.item.linkId ?? props.item.key;
   const busy = state.loading || props.teammatePromotionBusyKey === busyKey;
   const disabled = state.disabled || busy || (state.isPromoted && !state.teammateLinkId);
   const label = state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
-  const items: MenuProps['items'] = [
-    {
-      key: state.isPromoted ? 'remove-teammate' : 'promote-teammate',
-      label,
-      disabled,
-      title: state.unavailableReason ?? undefined,
-    },
-  ];
+
   return (
-    <Tooltip title={state.unavailableReason ?? 'Teammate link actions'}>
-      <Dropdown
-        trigger={['click']}
-        menu={{
-          items,
-          onClick: ({ domEvent }) => {
-            domEvent.preventDefault();
-            domEvent.stopPropagation();
-            if (disabled) return;
-            if (state.isPromoted && state.teammateLinkId) {
-              void props.onRemoveFromTeammate?.(props.item, state.teammateLinkId);
-            } else {
-              void props.onPromoteToTeammate?.(props.item);
-            }
-          },
-        }}
-      >
-        <Button
-          type="text"
-          size="small"
-          aria-label={`Teammate actions for ${props.item.name}`}
-          loading={busy}
-          icon={<EllipsisOutlined />}
-          onClick={stopNavigation}
-          style={{
-            width: 24,
-            minWidth: 24,
-            height: 24,
-            padding: 0,
-            color: token.colorTextTertiary,
-          }}
-        />
-      </Dropdown>
-    </Tooltip>
+    <LinkOverflowAction
+      ariaLabel={`Teammate actions for ${props.item.name}`}
+      actionLabel={label}
+      tooltip={state.unavailableReason ?? 'Teammate link actions'}
+      disabled={disabled}
+      loading={busy}
+      onAction={() => {
+        if (state.isPromoted && state.teammateLinkId) {
+          return props.onRemoveFromTeammate?.(props.item, state.teammateLinkId);
+        }
+        return props.onPromoteToTeammate?.(props.item);
+      }}
+    />
   );
 }
 
 export function SessionAttachmentQuickRow(props: SharedProps) {
-  const { token } = theme.useToken();
   const disabledReason = sessionAttachmentDisabledReason(props.item);
   const disabled = Boolean(disabledReason);
-  const tooltip =
+  const actionLabel =
     disabledReason ??
     (canPreviewSessionImage(props.item)
-      ? 'Preview image'
+      ? `Preview image ${props.item.name}`
       : canDownloadSessionFile(props.item)
-        ? 'Download file'
-        : 'Open link');
+        ? `Download file ${props.item.name}`
+        : `Open link ${props.item.name}`);
+
   return (
-    <Tooltip title={tooltip} placement="left">
-      <div
-        className="agor-action-link-row"
-        role={disabled ? undefined : 'link'}
-        tabIndex={disabled ? -1 : 0}
-        aria-disabled={disabled || undefined}
-        onClick={() => props.onOpen(props.item)}
-        onKeyDown={handleRowKeyDown(props.item, props.onOpen)}
-        style={
-          {
-            '--agor-link-title-color': disabled ? token.colorTextDisabled : token.colorText,
-            '--agor-link-icon-color': disabled ? token.colorTextDisabled : token.colorTextTertiary,
-            '--agor-link-row-hover-bg': token.colorFillTertiary,
-            '--agor-link-row-hover-color': token.colorPrimary,
-            width: '100%',
-            boxSizing: 'border-box',
-            border: 0,
-            borderRadius: token.borderRadius,
-            cursor: disabled ? 'not-allowed' : 'pointer',
-            padding: `${token.sizeXXS}px ${token.sizeXS}px`,
-          } as React.CSSProperties
-        }
-      >
-        <span
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '34px minmax(0, 1fr) 24px',
-            columnGap: token.sizeXS,
-            alignItems: 'center',
-          }}
+    <Tooltip title={actionLabel} placement="left">
+      <div>
+        <ActionLinkRow
+          compact
+          disabled={disabled}
+          ariaLabel={actionLabel}
+          onActivate={() => props.onOpen(props.item)}
+          actions={pinAction(props)}
         >
-          <span className="agor-action-link-icon" style={{ textAlign: 'center' }}>
-            {attachmentIcon(props.item, disabled)}
-          </span>
-          <Typography.Text ellipsis style={{ display: 'block', fontSize: 13 }}>
-            {props.item.name}
-          </Typography.Text>
-          <PinAction {...props} />
-        </span>
+          <Flex align="center" gap="small" style={{ minWidth: 0 }}>
+            <Flex align="center" justify="center" style={{ width: 26, flex: '0 0 auto' }}>
+              {attachmentIcon(props.item, disabled)}
+            </Flex>
+            <Typography.Text ellipsis disabled={disabled} style={{ fontSize: 13, minWidth: 0 }}>
+              {props.item.name}
+            </Typography.Text>
+          </Flex>
+        </ActionLinkRow>
       </div>
     </Tooltip>
   );
 }
 
 export function SessionAttachmentDrawerRow(props: DrawerProps) {
-  const { token } = theme.useToken();
   const disabledReason = sessionAttachmentDisabledReason(props.item);
   const disabled = Boolean(disabledReason);
+
   return (
-    <div
-      className="agor-action-link-row"
-      role={disabled ? undefined : 'link'}
-      tabIndex={disabled ? -1 : 0}
-      aria-disabled={disabled || undefined}
-      onClick={() => props.onOpen(props.item)}
-      onKeyDown={handleRowKeyDown(props.item, props.onOpen)}
-      style={
-        {
-          '--agor-link-title-color': disabled ? token.colorTextDisabled : token.colorText,
-          '--agor-link-icon-color': disabled ? token.colorTextDisabled : token.colorTextTertiary,
-          '--agor-link-row-hover-bg': token.colorFillTertiary,
-          '--agor-link-row-hover-color': token.colorPrimary,
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) 32px 32px',
-          gap: token.sizeSM,
-          alignItems: 'center',
-          padding: `${token.sizeSM}px ${token.sizeXS}px`,
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: token.borderRadius,
-          cursor: disabled ? 'not-allowed' : 'pointer',
-        } as React.CSSProperties
+    <ActionLinkRow
+      bordered
+      disabled={disabled}
+      ariaLabel={
+        disabledReason ? `${props.item.name}: ${disabledReason}` : `Open ${props.item.name}`
+      }
+      onActivate={() => props.onOpen(props.item)}
+      actions={
+        <>
+          {pinAction(props)}
+          {promotionAction(props)}
+        </>
       }
     >
-      <div style={{ display: 'flex', gap: token.sizeSM, minWidth: 0, alignItems: 'flex-start' }}>
-        <span className="agor-action-link-icon">{attachmentIcon(props.item, disabled)}</span>
-        <span style={{ minWidth: 0 }}>
-          <Typography.Link
-            className={disabled ? undefined : 'agor-action-link-title'}
-            strong
-            ellipsis
-            disabled={disabled}
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onOpen(props.item);
-            }}
-            style={{ display: 'block' }}
-          >
+      <Flex align="flex-start" gap="small" style={{ minWidth: 0 }}>
+        <span aria-hidden="true">{attachmentIcon(props.item, disabled)}</span>
+        <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
+          <Typography.Text strong ellipsis disabled={disabled}>
             {props.item.name}
-          </Typography.Link>
-          <Typography.Text type="secondary" ellipsis style={{ display: 'block', fontSize: 12 }}>
+          </Typography.Text>
+          <Typography.Text type="secondary" ellipsis style={{ fontSize: 12 }}>
             {getSessionAttachmentTargetDisplay(props.item)}
           </Typography.Text>
           {disabledReason && (
-            <Typography.Text
-              type="warning"
-              style={{ display: 'block', fontSize: 12, marginTop: 2 }}
-            >
+            <Typography.Text type="warning" style={{ fontSize: 12 }}>
               {disabledReason}
             </Typography.Text>
           )}
-        </span>
-      </div>
-      <PinAction {...props} />
-      <PromotionAction {...props} />
-    </div>
+        </Flex>
+      </Flex>
+    </ActionLinkRow>
   );
 }
