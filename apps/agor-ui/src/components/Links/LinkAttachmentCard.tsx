@@ -214,7 +214,7 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
           padding: compact ? `${token.paddingXXS + 2}px ${token.paddingXS}px` : token.paddingSM,
         }}
       >
-        <Flex className={styles.fullWidth} align="center" gap="small">
+        <Flex component="span" className={styles.fullWidth} align="center" gap="small">
           <LinkAttachmentGlyph
             kind={kind}
             mimeType={mimeType}

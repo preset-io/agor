@@ -136,8 +136,8 @@ export function SessionAttachmentQuickRow(props: SharedProps) {
           onActivate={() => props.onOpen(props.item)}
           actions={pinAction(props)}
         >
-          <Flex align="center" gap="small" className={styles.minWidthZero}>
-            <Flex className={styles.quickGlyph} align="center" justify="center">
+          <Flex component="span" align="center" gap="small" className={styles.minWidthZero}>
+            <Flex component="span" className={styles.quickGlyph} align="center" justify="center">
               {attachmentIcon(props.item, disabled)}
             </Flex>
             <Typography.Text
@@ -175,9 +175,9 @@ export function SessionAttachmentDrawerRow(props: DrawerProps) {
         </>
       }
     >
-      <Flex align="flex-start" gap="small" className={styles.minWidthZero}>
+      <Flex component="span" align="flex-start" gap="small" className={styles.minWidthZero}>
         <span aria-hidden="true">{attachmentIcon(props.item, disabled)}</span>
-        <Flex vertical gap={token.sizeXXS} className={styles.rowContent}>
+        <Flex component="span" vertical gap={token.sizeXXS} className={styles.rowContent}>
           <Typography.Text strong ellipsis disabled={disabled}>
             {props.item.name}
           </Typography.Text>

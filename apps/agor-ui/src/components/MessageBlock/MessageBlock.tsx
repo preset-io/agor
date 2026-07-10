@@ -23,7 +23,7 @@ import {
 } from '@agor-live/client';
 import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Button, Tooltip, theme } from 'antd';
+import { Button, Flex, Tooltip, theme } from 'antd';
 
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -826,14 +826,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                         );
                       })}
                       {isUser && attachmentLinks.length > 0 && (
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: token.sizeUnit,
-                            alignItems: 'flex-start',
-                          }}
-                        >
+                        <Flex vertical align="flex-start" gap={token.sizeUnit}>
                           {attachmentLinks.map((link) => (
                             <LinkAttachmentCard
                               key={link.link_id}
@@ -854,7 +847,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                               onOpenTarget={openAttachmentTarget}
                             />
                           ))}
-                        </div>
+                        </Flex>
                       )}
                     </div>
                   </CopyableContent>

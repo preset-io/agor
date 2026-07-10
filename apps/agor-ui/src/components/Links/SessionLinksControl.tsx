@@ -107,10 +107,10 @@ export function LinkRow({
         ) : undefined
       }
     >
-      <Flex align="center" gap="small" className={styles.rowContent}>
+      <Flex component="span" align="center" gap="small" className={styles.rowContent}>
         <LinkGlyph item={item} />
-        <Flex vertical className={styles.rowContent}>
-          <Flex align="center" gap="small" className={styles.minWidthZero}>
+        <Flex component="span" vertical className={styles.rowContent}>
+          <Flex component="span" align="center" gap="small" className={styles.minWidthZero}>
             <Typography.Text
               className={styles.rowTitle}
               ellipsis

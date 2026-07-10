@@ -187,6 +187,13 @@
   object-fit: contain;
 }
 
+.previewSurface {
+  display: grid;
+  max-height: 72vh;
+  overflow: auto;
+  place-items: center;
+}
+
 .plainTextPreview {
   margin: 0;
   white-space: pre-wrap;

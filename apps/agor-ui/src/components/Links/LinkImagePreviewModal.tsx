@@ -86,14 +86,11 @@ export const LinkImagePreviewModal: React.FC<LinkImagePreviewModalProps> = ({
         {error && <Alert type="warning" showIcon message={error} />}
         {objectUrl && !error && (
           <div
+            className={styles.previewSurface}
             style={{
-              display: 'grid',
-              placeItems: 'center',
               background: token.colorFillQuaternary,
               borderRadius: token.borderRadiusLG,
               padding: token.paddingSM,
-              maxHeight: '72vh',
-              overflow: 'auto',
             }}
           >
             <img

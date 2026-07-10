@@ -104,9 +104,9 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
           </>
         }
       >
-        <Flex align="flex-start" gap="small" className={styles.minWidthZero}>
+        <Flex component="span" align="flex-start" gap="small" className={styles.minWidthZero}>
           <BranchGlyph item={props.item} disabled={disabled} />
-          <Flex vertical gap={token.sizeXXS} className={styles.rowContent}>
+          <Flex component="span" vertical gap={token.sizeXXS} className={styles.rowContent}>
             <Typography.Text strong ellipsis disabled={disabled} style={{ lineHeight: 1.25 }}>
               {title}
             </Typography.Text>

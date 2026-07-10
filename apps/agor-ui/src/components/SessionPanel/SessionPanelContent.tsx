@@ -9,7 +9,7 @@ import {
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Divider, Flex, Space, Tabs, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAgorStore } from '../../store/agorStore';
@@ -191,12 +191,11 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
         </div>
 
         {pinnedSessionLinks.length > 0 && (
-          <div
+          <Flex
             data-testid="session-pinned-preconversation"
+            align="center"
+            gap={token.sizeSM}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: token.sizeSM,
               minWidth: 0,
               marginBottom: 0,
               padding: `${token.paddingXXS + 2}px ${token.paddingXS}px`,
@@ -218,7 +217,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               onOverflow={onPinnedOverflow}
               data-testid="session-pinned-preconversation-links"
             />
-          </div>
+          </Flex>
         )}
 
         {/* CLI session: proper Tabs bar (CLI terminal / Agor conversation)

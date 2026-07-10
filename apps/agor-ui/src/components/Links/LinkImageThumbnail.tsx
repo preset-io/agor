@@ -104,7 +104,7 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
           color: token.colorText,
         }}
       >
-        <div className={styles.thumbnailCanvas} style={{ background: token.colorFillQuaternary }}>
+        <span className={styles.thumbnailCanvas} style={{ background: token.colorFillQuaternary }}>
           {objectUrl && !failed ? (
             <img
               className={styles.thumbnailImage}
@@ -114,7 +114,13 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
               onError={() => setFailed(true)}
             />
           ) : (
-            <Flex vertical align="center" gap="small" style={{ color: token.colorTextTertiary }}>
+            <Flex
+              component="span"
+              vertical
+              align="center"
+              gap="small"
+              style={{ color: token.colorTextTertiary }}
+            >
               {loading ? (
                 <Spin size="small" />
               ) : (
@@ -125,9 +131,10 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
               </Typography.Text>
             </Flex>
           )}
-        </div>
+        </span>
         <Tooltip title={safeSubtitle || title} mouseEnterDelay={0.6}>
           <Flex
+            component="span"
             className={styles.thumbnailFooter}
             align="center"
             gap="small"
