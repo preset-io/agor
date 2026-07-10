@@ -176,8 +176,8 @@ type LinkCreatePayload = ClientInput<LinkCreate>;
 type LinkPatchPayload = Partial<ClientInput<LinkPatch>>;
 
 export interface LinkPromoteRequest {
-  target: 'assistant';
-  assistant_branch_id: string;
+  target: 'teammate';
+  teammate_branch_id: string;
 }
 
 /**
