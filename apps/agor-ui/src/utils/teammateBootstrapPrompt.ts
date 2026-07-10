@@ -1,9 +1,13 @@
+import { findOnboardingPersona } from './onboardingPersonas';
+
 export interface TeammateBootstrapPromptInput {
   displayName: string;
   emoji?: string | null;
   description?: string | null;
   userName?: string | null;
   userEmail?: string | null;
+  /** Onboarding persona id (see ONBOARDING_PERSONAS); shapes how the teammate introduces itself. */
+  persona?: string | null;
 }
 
 export interface TeammateBootstrapPromptContext {
@@ -16,6 +20,7 @@ export interface TeammateBootstrapPromptContext {
     name?: string;
     email?: string;
   };
+  persona?: { id: string; title?: string };
   firstSession: true;
 }
 
@@ -39,6 +44,11 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
     lines.push(`- User email: ${context.user.email}`);
   }
 
+  if (context.persona) {
+    const suffix = context.persona.title ? ` (${context.persona.title})` : '';
+    lines.push(`- User persona: ${context.persona.id}${suffix}`);
+  }
+
   lines.push('');
   lines.push(
     'Read BOOTSTRAP.md, then say hello and ask only the next useful questions to shape this AI teammate.'
@@ -53,9 +63,12 @@ export function buildTeammateBootstrapPromptContext({
   description,
   userName,
   userEmail,
+  persona,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
+  const personaId = persona?.trim();
+  const personaProfile = findOnboardingPersona(personaId);
 
   return {
     teammate: {
@@ -70,6 +83,9 @@ export function buildTeammateBootstrapPromptContext({
             ...(normalizedUserEmail ? { email: normalizedUserEmail } : {}),
           },
         }
+      : {}),
+    ...(personaId
+      ? { persona: { id: personaId, ...(personaProfile ? { title: personaProfile.title } : {}) } }
       : {}),
     firstSession: true,
   };

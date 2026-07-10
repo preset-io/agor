@@ -43,6 +43,20 @@ describe('buildTeammateBootstrapPrompt', () => {
     expect(prompt).not.toContain('AI teammate description:');
     expect(prompt).not.toContain('- User:');
     expect(prompt).not.toContain('- User email:');
+    expect(prompt).not.toContain('- User persona:');
     expect(prompt).not.toMatch(/\{\{\s*#?\/?\s*(assistant|user)\b/);
+  });
+
+  it('adds a persona line with the id (plus title when known) and dumps unknown ids raw', () => {
+    const known = buildTeammateBootstrapPrompt({ displayName: 'Board Bot', persona: 'developer' });
+    expect(known).toContain('- User persona: developer (I write code)');
+
+    // an id not in ONBOARDING_PERSONAS still flows through, without a title suffix
+    const unknown = buildTeammateBootstrapPrompt({
+      displayName: 'Board Bot',
+      persona: 'architect',
+    });
+    expect(unknown).toContain('- User persona: architect');
+    expect(unknown).not.toContain('architect (');
   });
 });

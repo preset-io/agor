@@ -360,6 +360,8 @@ export interface EventStreamPreferences {
  * Per-user onboarding state (stored in user.preferences)
  */
 export interface OnboardingState {
+  /** Onboarding persona id the user selected (see ONBOARDING_PERSONAS in agor-ui). */
+  persona?: string;
   /** Which path the user took */
   path?: 'teammate' | 'own-repo';
   /** The repo ID associated with this onboarding (framework repo or user's repo) */

@@ -27,6 +27,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById } from '../../store/selectors';
 import type { CreateRepoOptions } from '../../types';
+import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 
@@ -50,32 +51,7 @@ const STEP_META: Record<WizardStep, { number: number; label: string; skippable: 
   done: { number: 5, label: "You're ready", skippable: false },
 };
 
-const PERSONAS = [
-  {
-    id: 'developer',
-    emoji: '🔨',
-    title: 'I write code',
-    desc: 'AI does the repetitive parts - I focus on what is actually hard.',
-  },
-  {
-    id: 'pm',
-    emoji: '📋',
-    title: 'I manage projects',
-    desc: "AI drafts, summarizes, and chases status so I don't have to.",
-  },
-  {
-    id: 'lead',
-    emoji: '🎯',
-    title: 'I lead a team',
-    desc: 'AI multiplies what my team can do. I set direction, it handles the rest.',
-  },
-  {
-    id: 'solo',
-    emoji: '⚡',
-    title: 'Building solo',
-    desc: 'AI is the rest of the team - research, writing, execution, all of it.',
-  },
-];
+const PERSONAS = ONBOARDING_PERSONAS;
 
 interface LlmOption {
   id: string;

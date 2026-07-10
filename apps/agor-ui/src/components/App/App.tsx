@@ -920,6 +920,7 @@ export const App: React.FC<AppProps> = ({
         description: result.description,
         userName: user?.name,
         userEmail: user?.email,
+        persona: user?.preferences?.onboarding?.persona,
       }),
       modelConfig: result.modelConfig,
       effort: result.effort,
