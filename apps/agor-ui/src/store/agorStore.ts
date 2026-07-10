@@ -147,40 +147,37 @@ const makeInitialMeta = (): AgorMeta => ({
 });
 
 let fullLinkRequestSequence = 0;
-const branchFullLinkRequestGeneration = new Map<string, number>();
-const sessionFullLinkRequestGeneration = new Map<string, number>();
+const fullLinkRequestGeneration = new Map<string, number>();
+type FullLinkOwnerScope = 'branch' | 'session';
+
+function fullLinkOwnerKey(scope: FullLinkOwnerScope, ownerId: string): string {
+  return `${scope}:${ownerId}`;
+}
 
 function resetFullLinkRequestGenerations(): void {
   fullLinkRequestSequence = 0;
-  branchFullLinkRequestGeneration.clear();
-  sessionFullLinkRequestGeneration.clear();
+  fullLinkRequestGeneration.clear();
 }
 
-function invalidateBranchFullLinkRequests(branchId: string): number {
+function invalidateFullLinkRequest(scope: FullLinkOwnerScope, ownerId: string): number {
   const generation = ++fullLinkRequestSequence;
-  branchFullLinkRequestGeneration.set(branchId, generation);
-  return generation;
-}
-
-function invalidateSessionFullLinkRequests(sessionId: string): number {
-  const generation = ++fullLinkRequestSequence;
-  sessionFullLinkRequestGeneration.set(sessionId, generation);
+  fullLinkRequestGeneration.set(fullLinkOwnerKey(scope, ownerId), generation);
   return generation;
 }
 
 /** Cancel in-flight owner-scoped full-link requests touched by realtime link churn. */
 export function invalidateFullLinkRequestsForLink(link: Link | null | undefined): void {
   if (!link) return;
-  if (link.branch_id && !link.session_id) invalidateBranchFullLinkRequests(link.branch_id);
-  if (link.session_id && !link.branch_id) invalidateSessionFullLinkRequests(link.session_id);
+  if (link.branch_id && !link.session_id) invalidateFullLinkRequest('branch', link.branch_id);
+  if (link.session_id && !link.branch_id) invalidateFullLinkRequest('session', link.session_id);
 }
 
-function isLatestBranchFullLinkRequest(branchId: string, generation: number): boolean {
-  return branchFullLinkRequestGeneration.get(branchId) === generation;
-}
-
-function isLatestSessionFullLinkRequest(sessionId: string, generation: number): boolean {
-  return sessionFullLinkRequestGeneration.get(sessionId) === generation;
+function isLatestFullLinkRequest(
+  scope: FullLinkOwnerScope,
+  ownerId: string,
+  generation: number
+): boolean {
+  return fullLinkRequestGeneration.get(fullLinkOwnerKey(scope, ownerId)) === generation;
 }
 
 function linkOwnerSignature(links: readonly Link[] | undefined): string {
@@ -191,12 +188,48 @@ function linkOwnerSignature(links: readonly Link[] | undefined): string {
     .join('|')}`;
 }
 
-function branchLinkOwnerSignature(state: AgorState, branchId: string): string {
-  return linkOwnerSignature(state.linksByBranch.get(branchId));
+function fullLinkOwnerSignature(
+  state: AgorState,
+  scope: FullLinkOwnerScope,
+  ownerId: string
+): string {
+  return linkOwnerSignature(
+    scope === 'branch' ? state.linksByBranch.get(ownerId) : state.linksBySession.get(ownerId)
+  );
 }
 
-function sessionLinkOwnerSignature(state: AgorState, sessionId: string): string {
-  return linkOwnerSignature(state.linksBySession.get(sessionId));
+async function fetchAndReplaceFullOwnerLinks(
+  get: () => AgorState,
+  client: AgorClient,
+  scope: FullLinkOwnerScope,
+  ownerId: string
+): Promise<Link[]> {
+  const requestGeneration = invalidateFullLinkRequest(scope, ownerId);
+  const beforeSignature = fullLinkOwnerSignature(get(), scope, ownerId);
+  const query =
+    scope === 'branch'
+      ? {
+          owner_scope: 'branch' as const,
+          branch_id: ownerId,
+          $limit: PAGINATION.DEFAULT_LIMIT,
+        }
+      : {
+          owner_scope: 'session' as const,
+          session_id: ownerId,
+          $limit: PAGINATION.DEFAULT_LIMIT,
+        };
+  const links = await client.service('links').findAll({ query });
+
+  if (
+    !isLatestFullLinkRequest(scope, ownerId, requestGeneration) ||
+    fullLinkOwnerSignature(get(), scope, ownerId) !== beforeSignature
+  ) {
+    return [];
+  }
+
+  if (scope === 'branch') get().replaceFullBranchLinks(ownerId, links);
+  else get().replaceFullSessionLinks(ownerId, links);
+  return links;
 }
 
 function linkUpdatedAtMillis(link: Link): number | null {
@@ -303,8 +336,8 @@ export const agorStore = createStore<AgorState>()(
         if (session.branch_id === branchId) orphanIds.push(sessionId);
       }
 
-      invalidateBranchFullLinkRequests(branchId);
-      for (const sessionId of orphanIds) invalidateSessionFullLinkRequests(sessionId);
+      invalidateFullLinkRequest('branch', branchId);
+      for (const sessionId of orphanIds) invalidateFullLinkRequest('session', sessionId);
 
       set((draft) => {
         if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
@@ -329,7 +362,7 @@ export const agorStore = createStore<AgorState>()(
     },
 
     evictSessionLinks: (sessionId) => {
-      invalidateSessionFullLinkRequests(sessionId);
+      invalidateFullLinkRequest('session', sessionId);
       const state = get();
       if (!state.linksBySession.has(sessionId) && !state.fullSessionLinkOwnerIds.has(sessionId)) {
         return;
@@ -345,7 +378,7 @@ export const agorStore = createStore<AgorState>()(
     },
 
     replaceFullSessionLinks: (sessionId, links) => {
-      invalidateSessionFullLinkRequests(sessionId);
+      invalidateFullLinkRequest('session', sessionId);
       let mapsChanged = false;
       get().applyMaps((prev) => {
         const next = replaceFullSessionLinksInMaps(prev, sessionId, links);
@@ -359,7 +392,7 @@ export const agorStore = createStore<AgorState>()(
     },
 
     replaceFullBranchLinks: (branchId, links) => {
-      invalidateBranchFullLinkRequests(branchId);
+      invalidateFullLinkRequest('branch', branchId);
       const isDirectOutsideActiveBranchMap = !get().branchById.has(branchId);
       let mapsChanged = false;
       get().applyMaps((prev) => {
@@ -375,51 +408,16 @@ export const agorStore = createStore<AgorState>()(
       });
     },
 
-    fetchAndReplaceFullSessionLinks: async (client, sessionId) => {
-      const requestGeneration = invalidateSessionFullLinkRequests(sessionId);
-      const beforeSignature = sessionLinkOwnerSignature(get(), sessionId);
-      const links = await client.service('links').findAll({
-        query: {
-          owner_scope: 'session',
-          session_id: sessionId,
-          $limit: PAGINATION.DEFAULT_LIMIT,
-        },
-      });
+    fetchAndReplaceFullSessionLinks: (client, sessionId) =>
+      fetchAndReplaceFullOwnerLinks(get, client, 'session', sessionId),
 
-      if (
-        !isLatestSessionFullLinkRequest(sessionId, requestGeneration) ||
-        sessionLinkOwnerSignature(get(), sessionId) !== beforeSignature
-      ) {
-        return [];
-      }
-
-      get().replaceFullSessionLinks(sessionId, links);
-      return links;
-    },
-
-    fetchAndReplaceFullBranchLinks: async (client, branchId) => {
-      const requestGeneration = invalidateBranchFullLinkRequests(branchId);
-      const beforeSignature = branchLinkOwnerSignature(get(), branchId);
-      const links = await client.service('links').findAll({
-        query: {
-          owner_scope: 'branch',
-          branch_id: branchId,
-          $limit: PAGINATION.DEFAULT_LIMIT,
-        },
-      });
-
-      if (
-        !isLatestBranchFullLinkRequest(branchId, requestGeneration) ||
-        branchLinkOwnerSignature(get(), branchId) !== beforeSignature
-      ) {
-        return [];
-      }
-
-      get().replaceFullBranchLinks(branchId, links);
-      return links;
-    },
+    fetchAndReplaceFullBranchLinks: (client, branchId) =>
+      fetchAndReplaceFullOwnerLinks(get, client, 'branch', branchId),
 
     applyKnownLinkCreatedResult: (link) => {
+      const existing = get().linkById.get(link.link_id);
+      if (existing && isStaleLinkMutationResult(existing, link)) return;
+
       let mapsChanged = false;
       get().applyMaps((prev) => {
         const next = upsertLinkInMaps(prev, link);

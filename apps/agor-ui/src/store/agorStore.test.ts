@@ -177,7 +177,7 @@ describe('agorStore scaffold', () => {
     expect(agorStore.getState().linksByBranch.has('b1')).toBe(false);
   });
 
-  it('applies known link create and remove results without stale mutation guards', () => {
+  it('applies known create/remove results without overwriting newer realtime state', () => {
     const existing = {
       link_id: 'l-known',
       branch_id: 'b1',
@@ -193,12 +193,15 @@ describe('agorStore scaffold', () => {
 
     agorStore.getState().applyMaps((prev) => mergeLinksIntoMaps(prev, [existing]));
     agorStore.getState().applyKnownLinkCreatedResult(olderKnownCreate);
-    expect(agorStore.getState().linkById.get('l-known')).toEqual(olderKnownCreate);
-    expect(agorStore.getState().linksByBranch.get('b1')).toEqual([olderKnownCreate]);
+    expect(agorStore.getState().linkById.get('l-known')).toEqual(existing);
+    expect(agorStore.getState().linksByBranch.get('b1')).toEqual([existing]);
 
     agorStore.getState().applyKnownLinkRemovedResult(olderKnownCreate);
     expect(agorStore.getState().linkById.has('l-known')).toBe(false);
     expect(agorStore.getState().linksByBranch.has('b1')).toBe(false);
+
+    agorStore.getState().applyKnownLinkCreatedResult(olderKnownCreate);
+    expect(agorStore.getState().linkById.get('l-known')).toEqual(olderKnownCreate);
   });
 
   it('reconciles only the fetched pinned branch link domain', () => {

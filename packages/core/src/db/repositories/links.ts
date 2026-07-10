@@ -231,13 +231,12 @@ export class LinksRepository {
     }
   }
 
-  private createToInsert(data: Partial<LinkCreate>, existing?: Link): LinkInsert {
-    this.validateCreate(data);
+  private createToInsert(data: LinkCreate): LinkInsert {
     const now = new Date();
     const tenantId = (data as Partial<LinkCreate> & { tenant_id?: string }).tenant_id;
     return {
       ...(tenantId ? { tenant_id: tenantId } : {}),
-      link_id: data.link_id ?? existing?.link_id ?? generateId(),
+      link_id: data.link_id ?? generateId(),
       branch_id: data.branch_id ?? null,
       session_id: data.session_id ?? null,
       source_message_id: data.source_message_id ?? null,
@@ -249,35 +248,48 @@ export class LinksRepository {
       target_object_type: data.target_object_type ?? null,
       target_object_id: data.target_object_id ?? null,
       target_key: normalizeTargetKey(data),
-      is_pinned: data.is_pinned ?? existing?.is_pinned ?? false,
+      is_pinned: data.is_pinned ?? false,
       title: data.title ?? null,
       mime_type: data.mime_type ?? null,
       metadata: data.metadata ?? null,
       created_by: data.created_by ?? null,
-      created_at: existing?.created_at ? new Date(existing.created_at) : now,
+      created_at: now,
       updated_at: now,
     } as LinkInsert;
   }
 
   async create(data: Partial<LinkCreate>): Promise<Link> {
+    return (await this.upsertWithStatus(data)).link;
+  }
+
+  async upsertWithStatus(data: Partial<LinkCreate>): Promise<{ link: Link; created: boolean }> {
     this.validateCreate(data);
     const existing = await this.findByOwnerAndTarget(data);
     if (existing) {
-      return this.update(existing.link_id, preserveExistingSourceMessageOnDedupe(existing, data));
+      return {
+        link: await this.update(
+          existing.link_id,
+          preserveExistingSourceMessageOnDedupe(existing, data)
+        ),
+        created: false,
+      };
     }
 
     const row = this.createToInsert(data);
     try {
       const inserted = await insert(this.db, links).values(row).returning().one();
-      return this.rowToLink(inserted as LinkRow);
+      return { link: this.rowToLink(inserted as LinkRow), created: true };
     } catch (err) {
       if (!isUniqueConstraintError(err)) throw err;
       const racedExisting = await this.findByOwnerAndTarget(data);
       if (!racedExisting) throw err;
-      return this.update(
-        racedExisting.link_id,
-        preserveExistingSourceMessageOnDedupe(racedExisting, data)
-      );
+      return {
+        link: await this.update(
+          racedExisting.link_id,
+          preserveExistingSourceMessageOnDedupe(racedExisting, data)
+        ),
+        created: false,
+      };
     }
   }
 

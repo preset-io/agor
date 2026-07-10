@@ -105,10 +105,9 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
       return results;
     }
 
-    const existing = await this.linksRepo.findByOwnerAndTarget(data as Partial<LinkCreate>);
-    const result = await this.linksRepo.upsert(data as Partial<LinkCreate>);
-    this.emit?.(existing ? 'patched' : 'created', result, params);
-    return result;
+    const { link, created } = await this.linksRepo.upsertWithStatus(data as Partial<LinkCreate>);
+    this.emit?.(created ? 'created' : 'patched', link, params);
+    return link;
   }
 
   async update(_id: Id, _data: Partial<Link>, _params?: LinkParams): Promise<Link> {

@@ -105,6 +105,25 @@ describe('LinksService', () => {
     await expect(service.remove(null, { query: {} })).rejects.toThrow(/does not support multi/);
   });
 
+  dbTest('emits the repository upsert outcome without a duplicate lookup', async ({ db }) => {
+    const branch = await seedBranch(db, 'view');
+    const session = await seedSession(db, branch.branch_id);
+    const service = new LinksService(db);
+    const emit = vi.fn();
+    (service as unknown as { emit: typeof emit }).emit = emit;
+    const data = {
+      session_id: session.session_id,
+      kind: 'url' as const,
+      source: 'manual' as const,
+      url: 'https://example.com/upsert-event',
+    };
+
+    await service.create(data);
+    await service.create({ ...data, title: 'updated' });
+
+    expect(emit.mock.calls.map(([event]) => event)).toEqual(['created', 'patched']);
+  });
+
   dbTest('rejects full update while preserving single patch/remove', async ({ db }) => {
     const branch = await seedBranch(db, 'view');
     const session = await seedSession(db, branch.branch_id);

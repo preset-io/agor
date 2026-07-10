@@ -93,13 +93,13 @@ describe('LinksRepository', () => {
     const sessionA = await seedSession(db, branch.branch_id, 'owner' as UUID);
     const sessionB = await seedSession(db, branch.branch_id, 'owner' as UUID);
 
-    await repo.upsert({
+    const first = await repo.upsertWithStatus({
       session_id: sessionA.session_id,
       kind: 'url',
       source: 'parsed',
       url: 'https://example.com/repeat',
     });
-    const second = await repo.upsert({
+    const second = await repo.upsertWithStatus({
       session_id: sessionA.session_id,
       kind: 'url',
       source: 'parsed',
@@ -113,7 +113,9 @@ describe('LinksRepository', () => {
       url: 'https://example.com/repeat',
     });
 
-    expect(second.title).toBe('updated');
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.link.title).toBe('updated');
     expect(await repo.findAll({ sessionId: sessionA.session_id })).toHaveLength(1);
     expect(await repo.findAll({ sessionId: sessionB.session_id })).toHaveLength(1);
   });
