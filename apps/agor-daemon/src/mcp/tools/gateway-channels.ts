@@ -95,7 +95,7 @@ function requireGatewayCapability(
 ): void {
   if (resolveSlackAgentTools(channel.config?.agent_tools)[capability]) return;
   throw new Error(
-    `Gateway capability '${capability}' is disabled on gateway channel ${channel.id} (${channel.name}). ` +
+    `Gateway capability '${capability}' is disabled on this gateway channel. ` +
       `An admin can enable it on the channel in Settings > Gateway Channels (Agent tools), or via agor_gateway_channels_update with config.agent_tools.${capability}: true. ` +
       `Enabling a capability can add Slack OAuth scopes to the app manifest, so the Slack app may need a manifest update and reinstall before the tool works.`
   );
@@ -388,9 +388,15 @@ const slackChannelHistorySchema = z.strictObject({
     .boolean()
     .optional()
     .describe('Whether Slack should include messages exactly at oldest/latest bounds.'),
-  limit: mcpLimit(50).describe(
-    'Maximum Slack messages to return; selects the most recent matches, returned in chronological order (default: 50, max: 200).'
-  ),
+  limit: z
+    .number({ error: 'limit must be a positive integer when provided.' })
+    .int('limit must be an integer.')
+    .positive('limit must be greater than 0.')
+    .max(200, 'limit must be at most 200.')
+    .optional()
+    .describe(
+      'Maximum Slack messages to return; selects the most recent matches, returned in chronological order (default: 50, max: 200).'
+    ),
   includeBotMessages: z
     .boolean()
     .optional()
@@ -1160,14 +1166,10 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       if (callerSessionBranchId && channel.target_branch_id !== callerSessionBranchId) {
         throw sessionBranchChannelReadDeniedError();
       }
-      if (channel.channel_type !== 'slack') {
-        throw new Error(`Gateway channel ${channel.id} is ${channel.channel_type}, not slack.`);
-      }
-      if (!channel.enabled) {
-        throw new Error(`Gateway channel ${channel.id} is disabled.`);
-      }
-      requireGatewayCapability(channel, 'channel_history');
 
+      // Privilege check first for callers without session context, so an
+      // unauthorized prober learns nothing about the channel's type, enabled
+      // state, name, or capability configuration from the error sequence.
       const branch = await branchRepo.findById(channel.target_branch_id);
       if (!callerSessionBranchId) {
         if (!branch) {
@@ -1179,6 +1181,14 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           );
         }
       }
+
+      if (channel.channel_type !== 'slack') {
+        throw new Error(`Gateway channel ${channel.id} is ${channel.channel_type}, not slack.`);
+      }
+      if (!channel.enabled) {
+        throw new Error(`Gateway channel ${channel.id} is disabled.`);
+      }
+      requireGatewayCapability(channel, 'channel_history');
 
       const slackChannelId = args.slackChannelId ?? slackChannelIdFromGatewaySource(gatewaySource);
       if (!slackChannelId) {

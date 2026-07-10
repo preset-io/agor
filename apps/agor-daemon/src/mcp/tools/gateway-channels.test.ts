@@ -1182,6 +1182,48 @@ describe('gateway agent-tool capability gating (MCP)', () => {
     ).rejects.toThrow('slackChannelId is required');
   });
 
+  it('denies unauthorized no-session callers before leaking channel type/name/capability details', async () => {
+    // Capability intentionally OFF and channel name distinctive: with wrong
+    // check ordering the caller would get the capability error naming the
+    // channel instead of the bare permission error.
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(slackChannel as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+    vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
+    vi.spyOn(BranchRepository.prototype, 'resolveUserPermission').mockResolvedValue('view' as any);
+
+    const tools = await captureTools('member', makeFakeApp({}), null);
+    const error = await tools.agor_gateway_slack_channel_history_get
+      .handler({ gatewayChannelId: 'chan-1', slackChannelId: 'C123' })
+      .then(() => null)
+      .catch((err: Error) => err);
+
+    expect(error).toBeTruthy();
+    expect(error!.message).toContain("admin role or 'all' branch permission");
+    expect(error!.message).not.toContain('Eng Slack');
+    expect(error!.message).not.toContain('channel_history');
+    expect(error!.message).not.toContain('slack');
+    expect(error!.message).not.toContain('disabled');
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('caps the channel-history limit at the schema layer without touching the thread tool', async () => {
+    const tools = await captureTools('member');
+
+    const channelSchema = tools.agor_gateway_slack_channel_history_get.cfg.inputSchema;
+    expect(channelSchema.safeParse({ limit: 200 }).success).toBe(true);
+    const overLimit = channelSchema.safeParse({ limit: 500 });
+    expect(overLimit.success).toBe(false);
+    expect(String(overLimit.error)).toContain('limit must be at most 200');
+
+    // The thread tool keeps its permissive schema + runtime clamp.
+    expect(
+      tools.agor_gateway_slack_thread_history_get.cfg.inputSchema.safeParse({
+        sessionId: 'sess-42',
+        limit: 500,
+      }).success
+    ).toBe(true);
+  });
+
   it("keeps the no-session path gated on admin or branch 'all' permission", async () => {
     vi.mocked(getConnector).mockReturnValue({
       fetchChannelHistory: vi.fn(async () => channelHistoryResult),

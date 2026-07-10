@@ -21,7 +21,11 @@ import type {
   User,
   UUID,
 } from '@agor-live/client';
-import { GATEWAY_REDACTED_SENTINEL, resolveSlackAgentTools } from '@agor-live/client';
+import {
+  GATEWAY_REDACTED_SENTINEL,
+  resolveSlackAgentTools,
+  SLACK_AGENT_TOOL_DEFAULTS,
+} from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -708,8 +712,10 @@ const SlackSetupWizard: React.FC<{
   const alignUsers = Form.useWatch('align_slack_users', form) ?? true;
   const outbound = Form.useWatch('outbound_enabled', form) ?? false;
   const ingestFiles = Form.useWatch('ingest_files', form) ?? false;
-  const agentThreadHistory = Form.useWatch('agent_thread_history', form) ?? true;
-  const agentChannelHistory = Form.useWatch('agent_channel_history', form) ?? false;
+  const agentThreadHistory =
+    Form.useWatch('agent_thread_history', form) ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history;
+  const agentChannelHistory =
+    Form.useWatch('agent_channel_history', form) ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history;
   const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
 
   const wizardOptions: SlackWizardOptions = useMemo(
@@ -941,7 +947,7 @@ const SlackSetupWizard: React.FC<{
           label="Agents can read thread history"
           name="agent_thread_history"
           valuePropName="checked"
-          initialValue={true}
+          initialValue={SLACK_AGENT_TOOL_DEFAULTS.thread_history}
           tooltip="Let session agents fetch their own Slack thread's history through the gateway MCP tool. No extra scopes."
         >
           <Switch />
@@ -951,7 +957,7 @@ const SlackSetupWizard: React.FC<{
           label="Agents can read channel history"
           name="agent_channel_history"
           valuePropName="checked"
-          initialValue={false}
+          initialValue={SLACK_AGENT_TOOL_DEFAULTS.channel_history}
           tooltip="Let session agents fetch recent whole-channel history through the gateway MCP tool. Adds the channels:history, groups:history, and mpim:history scopes."
         >
           <Switch />
@@ -2162,7 +2168,7 @@ const ChannelFormFields: React.FC<{
                       label="Agents can read thread history"
                       name="agent_thread_history"
                       valuePropName="checked"
-                      initialValue={true}
+                      initialValue={SLACK_AGENT_TOOL_DEFAULTS.thread_history}
                       tooltip="Let session agents fetch their own Slack thread's history through the gateway MCP tool. No extra scopes."
                     >
                       <Switch />
@@ -2172,7 +2178,7 @@ const ChannelFormFields: React.FC<{
                       label="Agents can read channel history"
                       name="agent_channel_history"
                       valuePropName="checked"
-                      initialValue={false}
+                      initialValue={SLACK_AGENT_TOOL_DEFAULTS.channel_history}
                       tooltip="Let session agents fetch recent whole-channel history through the gateway MCP tool. Requires the channels:history, groups:history, and mpim:history scopes."
                     >
                       <Switch />
@@ -2570,8 +2576,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       outbound_enabled: values.outbound_enabled ?? false,
       ingest_files: values.ingest_files ?? false,
       agent_tools: {
-        thread_history: values.agent_thread_history ?? true,
-        channel_history: values.agent_channel_history ?? false,
+        thread_history: values.agent_thread_history ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history,
+        channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
       },
     };
     setSlackTestLoading(true);
@@ -2729,8 +2735,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.default_outbound_target = values.default_outbound_target || null;
       config.ingest_files = values.ingest_files ?? false;
       config.agent_tools = {
-        thread_history: values.agent_thread_history ?? true,
-        channel_history: values.agent_channel_history ?? false,
+        thread_history: values.agent_thread_history ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history,
+        channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
       };
     }
 
