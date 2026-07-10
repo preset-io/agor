@@ -2,7 +2,7 @@ import type { Link, Message } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
-import { MessageBlock } from './MessageBlock';
+import { MessageBlock, stripAttachmentFilePaths } from './MessageBlock';
 
 const now = '2026-07-06T00:00:00.000Z';
 
@@ -136,6 +136,31 @@ describe('MessageBlock attachments', () => {
     expect(document.body.textContent).toContain(
       'Please inspect /home/agor/.agor/uploads/session/spec.pdf'
     );
+  });
+
+  it('redacts absolute prompt paths for relative upload rows without reformatting the message', () => {
+    const content = [
+      'Uploaded: /home/agor/.agor/uploads/019-file.pdf',
+      '',
+      '  const value  =  1;',
+      'Notes: keep, deliberate, spacing',
+    ].join('\n');
+
+    expect(
+      stripAttachmentFilePaths(content, [
+        makeLink({ file_path: '019-file.pdf', target_key: 'file:019-file.pdf' }),
+      ])
+    ).toBe(
+      ['Uploaded:', '', '  const value  =  1;', 'Notes: keep, deliberate, spacing'].join('\n')
+    );
+  });
+
+  it('does not redact a relative upload filename mentioned as normal prose', () => {
+    expect(
+      stripAttachmentFilePaths('Please review 019-file.pdf carefully.', [
+        makeLink({ file_path: '019-file.pdf', target_key: 'file:019-file.pdf' }),
+      ])
+    ).toBe('Please review 019-file.pdf carefully.');
   });
 
   it('keeps blank messages without attachments hidden', () => {

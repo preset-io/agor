@@ -248,6 +248,10 @@ function assistantPromotionLabel(state: ReturnType<typeof getAssistantPromotionS
     if (state.reason === 'no-assistant') return 'No assistant configured';
     if (state.reason === 'same-owner') return 'Already on assistant branch';
     if (state.reason === 'missing-source-link') return 'Cannot add generated branch metadata';
+    if (state.reason === 'file-lifetime') return 'File promotion awaits upload retention support';
+    if (state.reason === 'internal-target-access') {
+      return 'Internal promotion awaits target access checks';
+    }
     return 'Cannot add this link';
   }
   return state.isPromoted ? 'Remove from assistant' : 'Promote to assistant';

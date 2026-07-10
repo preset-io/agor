@@ -104,6 +104,9 @@ export interface SessionAttachmentItem {
 
 interface Props {
   items: SessionAttachmentItem[];
+  loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
   pinningLinkId?: string | null;
   onTogglePinned?: (item: SessionAttachmentItem) => void | Promise<void>;
   onRegisterOpenPinnedManager?: (openPinnedManager: (() => void) | null) => void;
@@ -270,22 +273,6 @@ function renderAttachmentGlyph(
   return disabled ? <StopOutlined /> : getIcon(item);
 }
 
-function uniqueByTarget(items: SessionAttachmentItem[]): SessionAttachmentItem[] {
-  const seen = new Set<string>();
-  const result: SessionAttachmentItem[] = [];
-  for (const item of items) {
-    const target = item.targetKey ?? item.url ?? item.refUri ?? item.filePath ?? item.key;
-    const key =
-      item.targetKey?.startsWith('file:') || (item.filePath && !item.url && !item.refUri)
-        ? `${item.kind ?? 'link'}:${target}`
-        : `${item.kind ?? 'link'}:${target}`.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(item);
-  }
-  return result;
-}
-
 function getCategoryCounts(items: SessionAttachmentItem[]): Record<LinksCategoryTab, number> {
   return {
     all: items.length,
@@ -350,6 +337,9 @@ function itemMatchesSearch(item: SessionAttachmentItem, query: string): boolean 
 
 export const SessionAttachmentsDropdown: React.FC<Props> = ({
   items,
+  loading = false,
+  error = null,
+  onRetry,
   pinningLinkId = null,
   onTogglePinned,
   onRegisterOpenPinnedManager,
@@ -371,7 +361,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     null
   );
 
-  const visibleItems = React.useMemo(() => uniqueByTarget(items), [items]);
+  const visibleItems = items;
   const hasItems = visibleItems.length > 0;
   const pinnedItems = visibleItems.filter((item) => item.isPinned);
   const files = visibleItems.filter(isFileItem);
@@ -396,7 +386,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     return () => onRegisterOpenPinnedManager?.(null);
   }, [onRegisterOpenPinnedManager, openPinnedManager]);
 
-  if (!hasItems) return null;
+  if (!hasItems && !loading && !error) return null;
 
   const fileReserve = files.length > 0 ? Math.min(2, files.length) : 0;
   const quickPinned = pinnedItems.slice(0, Math.min(3, pinnedItems.length));
@@ -409,6 +399,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   const quickItems = [...quickPinned, ...quickRecent, ...quickFiles];
 
   const openTarget = (item: SessionAttachmentItem) => {
+    if (disabledReasonForItem(item)) return;
     if (canPreviewImage(item) && item.linkId) {
       setPopoverOpen(false);
       setPreviewTarget({ linkId: item.linkId, title: item.name, subtitle: getTargetDisplay(item) });
@@ -431,7 +422,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
       return;
     }
     const target = targetForItem(item);
-    if (!target || disabledReasonForItem(item)) return;
+    if (!target) return;
     setPopoverOpen(false);
     if (target.navigation === 'spa') {
       navigate(target.href);
@@ -756,10 +747,23 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
         </Tooltip>
       </div>
 
+      {error && (
+        <div style={{ marginTop: token.sizeSM }}>
+          <Typography.Text type="danger" style={{ display: 'block', fontSize: 12 }}>
+            {error}
+          </Typography.Text>
+          {onRetry && (
+            <Button type="link" size="small" onClick={onRetry} style={{ paddingInline: 0 }}>
+              Retry
+            </Button>
+          )}
+        </div>
+      )}
+
       {!hasItems ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="No links collected yet."
+          description={loading ? 'Loading links…' : 'No links collected yet.'}
           style={{ margin: `${token.sizeSM}px 0` }}
         />
       ) : (
@@ -802,6 +806,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               <Button
                 type="text"
                 aria-label="Open links organizer"
+                loading={loading}
                 icon={<LinkOutlined style={{ color: token.colorTextSecondary }} />}
               />
             </Badge>

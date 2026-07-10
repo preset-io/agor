@@ -162,19 +162,27 @@ async function authenticateBearerRequest(
   if (!token) throw new LinkContentError(401, 'Authentication required');
 
   const authService = app.service('authentication') as unknown as {
-    create(data: {
-      strategy: 'jwt';
-      accessToken: string;
-    }): Promise<{ user?: unknown; authentication?: unknown }>;
+    create(
+      data: {
+        strategy: 'jwt';
+        accessToken: string;
+      },
+      params?: Params
+    ): Promise<{ user?: unknown; authentication?: unknown }>;
   };
-  const result = await authService.create({ strategy: 'jwt', accessToken: token }).catch(() => {
-    throw new LinkContentError(401, 'Authentication required');
-  });
+  const result = await authService
+    .create({ strategy: 'jwt', accessToken: token }, { headers: req.headers } as Params)
+    .catch(() => {
+      throw new LinkContentError(401, 'Authentication required');
+    });
 
   return {
     user: result.user,
     provider: 'rest',
     authentication: result.authentication,
+    // Preserve trusted-header tenancy and other request-scoped auth inputs
+    // that Feathers normally copies into params before service hooks run.
+    headers: req.headers,
   } as AuthenticatedParams;
 }
 

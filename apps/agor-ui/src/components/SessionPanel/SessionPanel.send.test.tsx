@@ -20,6 +20,11 @@ vi.mock('./SessionPanelContent', () => ({
   SessionPanelContent: () => null,
 }));
 
+vi.mock('./SessionAttachmentsDropdown', () => ({
+  displayItemToSessionAttachmentItem: (item: unknown) => item,
+  SessionAttachmentsDropdown: () => null,
+}));
+
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
   useSharedReactiveSession: () => ({ handle: null, state: { tasks: [] } }),
 }));

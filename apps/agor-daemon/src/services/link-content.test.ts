@@ -48,7 +48,7 @@ describe('link content route helpers', () => {
       await fs.writeFile(filePath, 'hello');
 
       const resolved = await resolveUploadedLinkContentFile(
-        link({ file_path: filePath, title: 'note.txt', mime_type: 'text/plain' }),
+        link({ file_path: 'note.txt', title: 'note.txt', mime_type: 'text/plain' }),
         root
       );
 
@@ -146,18 +146,17 @@ describe('link content route helpers', () => {
     const linksGet = vi.fn(async () => {
       throw new Forbidden('Link not visible');
     });
+    const authCreate = vi.fn(async () => ({
+      user: { user_id: 'user-1' },
+      authentication: { strategy: 'jwt' },
+    }));
     const app = {
       get: vi.fn((_path: string, routeHandler: typeof handler) => {
         handler = routeHandler;
       }),
       service: vi.fn((pathName: string) => {
         if (pathName === 'authentication') {
-          return {
-            create: vi.fn(async () => ({
-              user: { user_id: 'user-1' },
-              authentication: { strategy: 'jwt' },
-            })),
-          };
+          return { create: authCreate };
         }
         if (pathName === 'links') return { get: linksGet };
         throw new Error(`Unexpected service: ${pathName}`);
@@ -169,7 +168,7 @@ describe('link content route helpers', () => {
 
     await handler(
       {
-        headers: { authorization: 'Bearer token' },
+        headers: { authorization: 'Bearer token', 'x-agor-tenant-id': 'tenant-1' },
         params: { linkId: 'link-1' },
         query: {},
       } as unknown as Request,
@@ -178,7 +177,17 @@ describe('link content route helpers', () => {
 
     expect(linksGet).toHaveBeenCalledWith(
       'link-1',
-      expect.objectContaining({ provider: 'rest', user: { user_id: 'user-1' } })
+      expect.objectContaining({
+        provider: 'rest',
+        user: { user_id: 'user-1' },
+        headers: expect.objectContaining({ 'x-agor-tenant-id': 'tenant-1' }),
+      })
+    );
+    expect(authCreate).toHaveBeenCalledWith(
+      { strategy: 'jwt', accessToken: 'token' },
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'x-agor-tenant-id': 'tenant-1' }),
+      })
     );
     expect(status).toHaveBeenCalledWith(403);
     expect(json).toHaveBeenCalledWith({ error: 'Link not visible' });

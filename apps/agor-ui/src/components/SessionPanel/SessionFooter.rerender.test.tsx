@@ -60,6 +60,7 @@ vi.mock('./SessionPanelContent', () => ({
 }));
 vi.mock('./SessionAttachmentsDropdown', () => ({
   __esModule: true,
+  displayItemToSessionAttachmentItem: (item: unknown) => item,
   SessionAttachmentsDropdown: () => null,
 }));
 vi.mock('../AutocompleteTextarea', () => ({

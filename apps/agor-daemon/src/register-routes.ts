@@ -2035,7 +2035,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         branch_id: null,
         source: 'upload',
         kind: file.mimeType.toLowerCase().startsWith('image/') ? 'image' : 'document',
-        file_path: file.path,
+        // Persist only the upload-root-relative storage name. Absolute daemon
+        // paths are runtime details and must not cross the API boundary.
+        file_path: file.filename,
         title: file.originalName || file.filename,
         mime_type: file.mimeType,
         metadata: {

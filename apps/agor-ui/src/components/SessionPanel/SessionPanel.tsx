@@ -351,6 +351,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
   const applyKnownLinkCreatedResult = useAgorStore(selectApplyKnownLinkCreatedResult);
   const applyKnownLinkRemovedResult = useAgorStore(selectApplyKnownLinkRemovedResult);
+  const [sessionLinksLoading, setSessionLinksLoading] = React.useState(false);
+  const [sessionLinksError, setSessionLinksError] = React.useState<string | null>(null);
+  const linksLoadRequestRef = React.useRef(0);
 
   // Get actions from context
   const { onSendPrompt, onFork, onBtwFork, onOpenSettings, onUpdateSession, onOpenTerminal } =
@@ -513,15 +516,26 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   });
   const composerSendInFlightRef = React.useRef(false);
 
-  React.useEffect(() => {
+  const loadSessionLinks = React.useCallback(async () => {
     if (!open || !client || !session?.session_id) return;
+    const requestId = ++linksLoadRequestRef.current;
+    setSessionLinksLoading(true);
+    setSessionLinksError(null);
     const requests = [fetchAndReplaceFullSessionLinks(client, session.session_id)];
     if (assistantBranchId && assistantBranchId !== branch?.branch_id) {
       requests.push(fetchAndReplaceFullBranchLinks(client, assistantBranchId));
     }
-    Promise.all(requests).catch((error: unknown) => {
-      console.error('[SessionPanel] Failed to fetch session/assistant links:', error);
-    });
+    const results = await Promise.allSettled(requests);
+    if (requestId !== linksLoadRequestRef.current) return;
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected'
+    );
+    if (failure) {
+      const detail =
+        failure.reason instanceof Error ? failure.reason.message : String(failure.reason);
+      setSessionLinksError(`Failed to load links: ${detail}`);
+    }
+    setSessionLinksLoading(false);
   }, [
     assistantBranchId,
     branch?.branch_id,
@@ -531,6 +545,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     open,
     session?.session_id,
   ]);
+
+  React.useEffect(() => {
+    void loadSessionLinks();
+    return () => {
+      linksLoadRequestRef.current += 1;
+    };
+  }, [loadSessionLinks]);
 
   // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
@@ -1143,7 +1164,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             ? 'Cannot promote generated branch metadata'
             : state.reason === 'missing-target'
               ? 'Cannot promote a link without a target'
-              : null;
+              : state.reason === 'file-lifetime'
+                ? 'File promotion awaits upload retention support'
+                : state.reason === 'internal-target-access'
+                  ? 'Internal promotion awaits target access checks'
+                  : null;
     const actionKey = state.isPromoted ? state.assistantLink.link_id : item.linkId;
     return {
       isPromoted: state.isPromoted,
@@ -1504,6 +1529,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           <Space size={4}>
             <SessionAttachmentsDropdown
               items={attachmentItems}
+              loading={sessionLinksLoading}
+              error={sessionLinksError}
+              onRetry={() => void loadSessionLinks()}
               pinningLinkId={pinningLinkId}
               onTogglePinned={(item) =>
                 handleToggleSessionLinkPinned({
