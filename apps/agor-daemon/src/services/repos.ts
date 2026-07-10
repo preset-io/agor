@@ -57,6 +57,7 @@ import type {
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from '../utils/executor-read-impersonation.js';
 import { resolveGitImpersonationForUser } from '../utils/git-impersonation.js';
 import {
@@ -1092,9 +1093,13 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // setEnvironment() for the single-field replace semantics.
     const updated = await this.repoRepo.setEnvironment(id, replacement);
 
-    // DrizzleService.patch would normally fire this; emit manually since we
-    // bypassed it to get replace semantics.
-    this.emit?.('patched', updated, params);
+    emitServiceEvent(this.app, {
+      path: 'repos',
+      event: 'patched',
+      data: updated,
+      params,
+      id,
+    });
     return updated;
   }
 
