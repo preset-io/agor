@@ -2990,43 +2990,44 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         )}
 
         {/* Card Detail Modal */}
-        <CardModal
-          open={cardModalOpen}
-          card={selectedCard}
-          board={board}
-          zoneName={
-            selectedCard
-              ? (() => {
-                  const bo = boardObjectByCard.get(selectedCard.card_id);
-                  return bo?.zone_id ? zoneLabels[bo.zone_id] || undefined : undefined;
-                })()
-              : undefined
-          }
-          zoneColor={
-            selectedCard
-              ? (() => {
-                  const bo = boardObjectByCard.get(selectedCard.card_id);
-                  if (!bo?.zone_id) return undefined;
-                  const zoneObj = board?.objects?.[bo.zone_id];
-                  return zoneObj && zoneObj.type === 'zone'
-                    ? zoneObj.borderColor || zoneObj.color
-                    : undefined;
-                })()
-              : undefined
-          }
-          client={client}
-          onClose={() => {
-            setCardModalOpen(false);
-            setSelectedCard(null);
-          }}
-          onCardUpdated={(updatedCard) => {
-            setSelectedCard(updatedCard);
-          }}
-          onCardDeleted={() => {
-            setCardModalOpen(false);
-            setSelectedCard(null);
-          }}
-        />
+        {selectedCard && (
+          <CardModal
+            open={cardModalOpen}
+            card={selectedCard}
+            board={board}
+            zoneName={
+              selectedCard
+                ? (() => {
+                    const bo = boardObjectByCard.get(selectedCard.card_id);
+                    return bo?.zone_id ? zoneLabels[bo.zone_id] || undefined : undefined;
+                  })()
+                : undefined
+            }
+            zoneColor={
+              selectedCard
+                ? (() => {
+                    const bo = boardObjectByCard.get(selectedCard.card_id);
+                    if (!bo?.zone_id) return undefined;
+                    const zoneObj = board?.objects?.[bo.zone_id];
+                    return zoneObj && zoneObj.type === 'zone'
+                      ? zoneObj.borderColor || zoneObj.color
+                      : undefined;
+                  })()
+                : undefined
+            }
+            client={client}
+            onClose={() => {
+              setCardModalOpen(false);
+            }}
+            afterClose={() => setSelectedCard(null)}
+            onCardUpdated={(updatedCard) => {
+              setSelectedCard(updatedCard);
+            }}
+            onCardDeleted={() => {
+              setCardModalOpen(false);
+            }}
+          />
+        )}
       </div>
     );
   }

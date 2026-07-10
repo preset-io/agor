@@ -24,45 +24,91 @@
   min-width: 0;
 }
 
-/* Status dot pulse animations for homepage session indicators */
-@keyframes pulseGreen {
-  0% {
-    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5);
-  }
-  70% {
-    box-shadow: 0 0 0 5px rgba(34, 197, 94, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
-  }
-}
-@keyframes pulseOrange {
-  0% {
-    box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.5);
-  }
-  70% {
-    box-shadow: 0 0 0 5px rgba(249, 115, 22, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(249, 115, 22, 0);
-  }
-}
-.status-dot-run {
-  animation: pulseGreen 1.8s infinite;
-}
+/* Status dot pulse for homepage session indicators. The halo is a pseudo
+   element animated with transform/opacity only, so the loop runs entirely on
+   the compositor. Animating box-shadow instead (the previous approach) forces
+   a main-thread style recalc + paint every frame, which kept the idle home
+   page ~50% busy. `background: inherit` picks up the dot's inline status
+   color, so the halo always matches the dot. */
+.status-dot-run,
 .status-dot-wait {
-  animation: pulseOrange 1.8s infinite;
+  position: relative;
+}
+.status-dot-run::after,
+.status-dot-wait::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: inherit;
+  pointer-events: none;
+  will-change: transform, opacity;
+  animation: statusDotPulse 1.8s infinite;
+}
+@keyframes statusDotPulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  70%,
+  100% {
+    transform: scale(2.43);
+    opacity: 0;
+  }
 }
 
-/* Blinking cursor animation for streaming messages */
-@keyframes blink {
-  0%,
-  49% {
-    opacity: 1;
+/* Ant Spin runs five infinite animations per spinner (a rotate plus four
+   per-dot opacity fades), all with implicit `from` keyframes, which Chrome
+   refuses to composite — every mounted <Spin> repaints on the main thread
+   every frame. Boards mount one per active session. Replace them with a
+   single explicit-keyframe rotate (compositor-friendly) and a static opacity
+   tail on the dots; at spinner sizes the rotating tail reads the same as the
+   original pulsing dots. */
+.ant-spin .ant-spin-dot-item {
+  animation-name: none;
+}
+.ant-spin .ant-spin-dot-item:nth-child(1) {
+  opacity: 1;
+}
+.ant-spin .ant-spin-dot-item:nth-child(2) {
+  opacity: 0.65;
+}
+.ant-spin .ant-spin-dot-item:nth-child(3) {
+  opacity: 0.45;
+}
+.ant-spin .ant-spin-dot-item:nth-child(4) {
+  opacity: 0.3;
+}
+.ant-spin .ant-spin-dot-spin {
+  animation: spinRotate 1.2s linear infinite;
+  will-change: transform;
+}
+/* Same implicit-keyframe problem for `<LoadingOutlined spin />` icons
+   (antd's loadingCircle keyframes) — retarget them at the composited rotate. */
+.anticon.anticon-spin {
+  animation: spinRotate 1s linear infinite;
+}
+/* 45deg start preserves antd's original spinner phase (its keyframes ran
+   45deg -> 405deg), so the first painted frame matches the stock Spin. */
+@keyframes spinRotate {
+  from {
+    transform: rotate(45deg);
   }
-  50%,
-  100% {
-    opacity: 0;
+  to {
+    transform: rotate(405deg);
+  }
+}
+
+/* At reduced-motion the pulse halo is purely decorative and a static spinner
+   still reads as "loading", so drop both loops. */
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-run::after,
+  .status-dot-wait::after {
+    animation: none;
+  }
+  .ant-spin .ant-spin-dot-spin,
+  .anticon.anticon-spin {
+    animation: none;
   }
 }
 

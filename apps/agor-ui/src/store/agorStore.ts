@@ -29,7 +29,7 @@ import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createStore } from 'zustand/vanilla';
 import type { InitialLoadItemKey, InitialLoadingStage } from '../hooks/useAgorData';
-import { bumpRevision, getHydrationRevision } from './agorHydration';
+import { bumpRevision } from './agorHydration';
 import {
   type DataMaps,
   EMPTY_MAPS,
@@ -47,6 +47,9 @@ enableMapSet();
 /** Per-item counts captured at fetch-resolution time. Mirrors `useAgorData`. */
 export type ItemCounts = Partial<Record<InitialLoadItemKey, number>>;
 
+/** Background-hydrated collections that gate UI reads on their first apply. */
+export type GatedHydrationFlag = 'mcpServersHydrated' | 'gatewayChannelsHydrated';
+
 /** Load/meta fields that ride alongside the data maps. */
 interface AgorMeta {
   loading: boolean;
@@ -59,6 +62,10 @@ interface AgorMeta {
   directFullBranchLinkOwnerIds: Set<string>;
   /** Session owners whose `linksBySession` bucket has been hydrated as a full owner snapshot. */
   fullSessionLinkOwnerIds: Set<string>;
+  /** Set once the background mcp-servers hydration first applies (empty result included). */
+  mcpServersHydrated: boolean;
+  /** Set once the background gateway-channels hydration first applies (empty result included). */
+  gatewayChannelsHydrated: boolean;
 }
 
 /** Store actions: foundational primitives + the one immer cascade. */
@@ -77,6 +84,8 @@ interface AgorActions {
   setError: (error: string | null) => void;
   /** Accepts a value or a functional updater (mirrors `useState`). */
   setItemCounts: (value: ItemCounts | ((prev: ItemCounts) => ItemCounts)) => void;
+  /** Mark a gated background collection as first-hydrated (idempotent). */
+  markHydrated: (flag: GatedHydrationFlag) => void;
   /**
    * Replace a single data map: accepts a value or a functional updater, and
    * short-circuits on `Object.is` equality so
@@ -128,6 +137,8 @@ const makeInitialMeta = (): AgorMeta => ({
   fullBranchLinkOwnerIds: new Set(),
   directFullBranchLinkOwnerIds: new Set(),
   fullSessionLinkOwnerIds: new Set(),
+  mcpServersHydrated: false,
+  gatewayChannelsHydrated: false,
 });
 
 let fullLinkRequestSequence = 0;
@@ -204,19 +215,6 @@ function isStaleLinkMutationResult(existing: Link, incoming: Link): boolean {
   return incomingUpdatedAt < existingUpdatedAt;
 }
 
-function shouldSuppressFullOwnerLinksResult(
-  beforeRevision: number,
-  beforeSignature: string,
-  currentSignature: string
-): boolean {
-  const revisionChanged = getHydrationRevision('links') !== beforeRevision;
-  if (!revisionChanged && currentSignature === beforeSignature) return false;
-  // Suppress only when this owner changed while the request was in flight.
-  // Unrelated link writes may bump the global links revision, but they should
-  // not cancel this owner-scoped replacement.
-  return currentSignature !== beforeSignature;
-}
-
 export const agorStore = createStore<AgorState>()(
   immer((set, get) => ({
     ...EMPTY_MAPS,
@@ -255,6 +253,9 @@ export const agorStore = createStore<AgorState>()(
           : value;
       if (Object.is(next, get().itemCounts)) return;
       set({ itemCounts: next });
+    },
+    markHydrated: (flag) => {
+      if (!get()[flag]) set({ [flag]: true } as Partial<AgorState>);
     },
 
     setMap: (key, value) => {
@@ -380,7 +381,6 @@ export const agorStore = createStore<AgorState>()(
 
     fetchAndReplaceFullSessionLinks: async (client, sessionId) => {
       const requestGeneration = invalidateSessionFullLinkRequests(sessionId);
-      const beforeRevision = getHydrationRevision('links');
       const beforeSignature = sessionLinkOwnerSignature(get(), sessionId);
       const links = await client.service('links').findAll({
         query: {
@@ -392,11 +392,7 @@ export const agorStore = createStore<AgorState>()(
 
       if (
         !isLatestSessionFullLinkRequest(sessionId, requestGeneration) ||
-        shouldSuppressFullOwnerLinksResult(
-          beforeRevision,
-          beforeSignature,
-          sessionLinkOwnerSignature(get(), sessionId)
-        )
+        sessionLinkOwnerSignature(get(), sessionId) !== beforeSignature
       ) {
         return [];
       }
@@ -407,7 +403,6 @@ export const agorStore = createStore<AgorState>()(
 
     fetchAndReplaceFullBranchLinks: async (client, branchId) => {
       const requestGeneration = invalidateBranchFullLinkRequests(branchId);
-      const beforeRevision = getHydrationRevision('links');
       const beforeSignature = branchLinkOwnerSignature(get(), branchId);
       const links = await client.service('links').findAll({
         query: {
@@ -419,11 +414,7 @@ export const agorStore = createStore<AgorState>()(
 
       if (
         !isLatestBranchFullLinkRequest(branchId, requestGeneration) ||
-        shouldSuppressFullOwnerLinksResult(
-          beforeRevision,
-          beforeSignature,
-          branchLinkOwnerSignature(get(), branchId)
-        )
+        branchLinkOwnerSignature(get(), branchId) !== beforeSignature
       ) {
         return [];
       }

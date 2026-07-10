@@ -43,6 +43,7 @@ interface CardModalProps {
   zoneColor?: string;
   client: AgorClient | null;
   onClose: () => void;
+  afterClose?: () => void;
   onCardUpdated?: (card: CardWithType) => void;
   onCardDeleted?: (cardId: string) => void;
 }
@@ -55,6 +56,7 @@ const CardModalComponent = ({
   zoneColor,
   client,
   onClose,
+  afterClose,
   onCardUpdated,
   onCardDeleted,
 }: CardModalProps) => {
@@ -153,6 +155,7 @@ const CardModalComponent = ({
     <Modal
       open={open}
       onCancel={onClose}
+      afterClose={afterClose}
       width={560}
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
