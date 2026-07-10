@@ -334,45 +334,47 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         />
       )}
 
-      <Modal
-        title="Edit Artifact"
-        open={editModalOpen}
-        onOk={handleUpdate}
-        onCancel={() => {
-          form.resetFields();
-          setEditModalOpen(false);
-          setEditingArtifact(null);
-        }}
-        okText="Save"
-      >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            label="Name"
-            name="name"
-            rules={[{ required: true, message: 'Please enter a name' }]}
-          >
-            <Input placeholder="My Artifact" />
-          </Form.Item>
-          <Form.Item label="Description" name="description">
-            <Input.TextArea rows={3} placeholder="Optional description" />
-          </Form.Item>
-          <Form.Item
-            label="Board"
-            name="board_id"
-            tooltip="Move this artifact to a different board. Its position on the board is preserved."
-            rules={[{ required: true, message: 'Please select a board' }]}
-          >
-            <Select
-              showSearch
-              placeholder="Select board..."
-              options={boardOptions}
-              filterOption={(input, option) =>
-                (option?.label?.toString() ?? '').toLowerCase().includes(input.toLowerCase())
-              }
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      {editModalOpen && (
+        <Modal
+          title="Edit Artifact"
+          open
+          onOk={handleUpdate}
+          onCancel={() => {
+            form.resetFields();
+            setEditModalOpen(false);
+            setEditingArtifact(null);
+          }}
+          okText="Save"
+        >
+          <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+            <Form.Item
+              label="Name"
+              name="name"
+              rules={[{ required: true, message: 'Please enter a name' }]}
+            >
+              <Input placeholder="My Artifact" />
+            </Form.Item>
+            <Form.Item label="Description" name="description">
+              <Input.TextArea rows={3} placeholder="Optional description" />
+            </Form.Item>
+            <Form.Item
+              label="Board"
+              name="board_id"
+              tooltip="Move this artifact to a different board. Its position on the board is preserved."
+              rules={[{ required: true, message: 'Please select a board' }]}
+            >
+              <Select
+                showSearch
+                placeholder="Select board..."
+                options={boardOptions}
+                filterOption={(input, option) =>
+                  (option?.label?.toString() ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+          </Form>
+        </Modal>
+      )}
     </div>
   );
 };

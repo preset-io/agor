@@ -625,18 +625,20 @@ const BranchCardComponent = ({
         />
       )}
 
-      {/* Archive/Delete Modal */}
-      <ArchiveDeleteBranchModal
-        open={archiveDeleteModalOpen}
-        branch={branch}
-        sessionCount={sessions.length}
-        environmentRunning={branch.environment_instance?.status === 'running'}
-        onConfirm={(options) => {
-          onArchiveOrDelete?.(branch.branch_id, options);
-          setArchiveDeleteModalOpen(false);
-        }}
-        onCancel={() => setArchiveDeleteModalOpen(false)}
-      />
+      {/* Branch cards are repeated across the canvas, so mount this only on demand. */}
+      {archiveDeleteModalOpen && (
+        <ArchiveDeleteBranchModal
+          open
+          branch={branch}
+          sessionCount={sessions.length}
+          environmentRunning={branch.environment_instance?.status === 'running'}
+          onConfirm={(options) => {
+            onArchiveOrDelete?.(branch.branch_id, options);
+            setArchiveDeleteModalOpen(false);
+          }}
+          onCancel={() => setArchiveDeleteModalOpen(false)}
+        />
+      )}
     </Card>
   );
 };

@@ -504,44 +504,50 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       </Layout>
 
       {/* Create CardType Modal */}
-      <Modal
-        title="Create Card Type"
-        open={createTypeModalOpen}
-        onOk={handleCreateType}
-        onCancel={() => {
-          form.resetFields();
-          setCreateTypeModalOpen(false);
-        }}
-        okText="Create"
-      >
-        {typeFormContent}
-      </Modal>
+      {createTypeModalOpen && (
+        <Modal
+          title="Create Card Type"
+          open
+          onOk={handleCreateType}
+          onCancel={() => {
+            form.resetFields();
+            setCreateTypeModalOpen(false);
+          }}
+          okText="Create"
+        >
+          {typeFormContent}
+        </Modal>
+      )}
 
       {/* Edit CardType Modal */}
-      <Modal
-        title="Edit Card Type"
-        open={editTypeModalOpen}
-        onOk={handleUpdateType}
-        onCancel={() => {
-          form.resetFields();
-          setEditTypeModalOpen(false);
-          setEditingType(null);
-        }}
-        okText="Save"
-      >
-        {typeFormContent}
-      </Modal>
+      {editTypeModalOpen && (
+        <Modal
+          title="Edit Card Type"
+          open
+          onOk={handleUpdateType}
+          onCancel={() => {
+            form.resetFields();
+            setEditTypeModalOpen(false);
+            setEditingType(null);
+          }}
+          okText="Save"
+        >
+          {typeFormContent}
+        </Modal>
+      )}
 
       {/* Card Detail Modal (reuse Phase 2 component) */}
-      <CardModal
-        open={!!cardModalCard}
-        card={cardModalCard}
-        board={cardModalBoard}
-        client={client}
-        onClose={() => setCardModalCard(null)}
-        onCardUpdated={handleCardUpdated}
-        onCardDeleted={handleCardDeleted}
-      />
+      {cardModalCard && (
+        <CardModal
+          open
+          card={cardModalCard}
+          board={cardModalBoard}
+          client={client}
+          onClose={() => setCardModalCard(null)}
+          onCardUpdated={handleCardUpdated}
+          onCardDeleted={handleCardDeleted}
+        />
+      )}
     </div>
   );
 };

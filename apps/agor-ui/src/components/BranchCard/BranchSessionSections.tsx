@@ -1137,16 +1137,18 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           </div>
         )}
 
-        <ForkSpawnModal
-          open={forkSpawnModal.open}
-          action={forkSpawnModal.action}
-          session={forkSpawnModal.session}
-          currentUser={currentUserId ? userById.get(currentUserId) : undefined}
-          onConfirm={handleForkSpawnConfirm}
-          onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
-          client={client}
-          userById={userById}
-        />
+        {forkSpawnModal.open && (
+          <ForkSpawnModal
+            open
+            action={forkSpawnModal.action}
+            session={forkSpawnModal.session}
+            currentUser={currentUserId ? userById.get(currentUserId) : undefined}
+            onConfirm={handleForkSpawnConfirm}
+            onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
+            client={client}
+            userById={userById}
+          />
+        )}
       </>
     );
   }
@@ -1272,16 +1274,18 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         </>
       )}
 
-      <ForkSpawnModal
-        open={forkSpawnModal.open}
-        action={forkSpawnModal.action}
-        session={forkSpawnModal.session}
-        currentUser={currentUserId ? userById.get(currentUserId) : undefined}
-        onConfirm={handleForkSpawnConfirm}
-        onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
-        client={client}
-        userById={userById}
-      />
+      {forkSpawnModal.open && (
+        <ForkSpawnModal
+          open
+          action={forkSpawnModal.action}
+          session={forkSpawnModal.session}
+          currentUser={currentUserId ? userById.get(currentUserId) : undefined}
+          onConfirm={handleForkSpawnConfirm}
+          onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
+          client={client}
+          userById={userById}
+        />
+      )}
     </ConfigProvider>
   );
 };
