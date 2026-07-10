@@ -353,7 +353,13 @@ export class LinksRepository {
     if (filter?.sourceMessageId)
       conditions.push(eq(links.source_message_id, filter.sourceMessageId));
     if (filter?.kind) conditions.push(eq(links.kind, filter.kind));
-    if (filter?.hideInternal) conditions.push(ne(links.kind, 'internal'));
+    if (filter?.hideInternal) {
+      conditions.push(
+        ne(links.kind, 'internal'),
+        isNull(links.target_object_type),
+        isNull(links.target_object_id)
+      );
+    }
     if (filter?.source) conditions.push(eq(links.source, filter.source));
     if (filter?.isPinned !== undefined) conditions.push(eq(links.is_pinned, filter.isPinned));
     if (filter?.targetObjectType)

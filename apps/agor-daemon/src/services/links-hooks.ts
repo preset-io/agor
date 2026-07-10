@@ -103,7 +103,7 @@ export function linksHooks({
     let link: Link | null = null;
     if (context.method !== 'create' && context.id) {
       link = await linksRepository.findById(String(context.id));
-      if (!link || link.kind === 'internal') throw new NotFound(`Link not found: ${context.id}`);
+      if (!link || isInternalLinkData(link)) throw new NotFound(`Link not found: ${context.id}`);
       (context.params as { _agorPrefetchedRecord?: unknown })._agorPrefetchedRecord = {
         id: String(context.id),
         idField: 'link_id',
