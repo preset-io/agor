@@ -37,7 +37,7 @@ const { useToken } = theme;
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export type WizardStep = 'persona' | 'llm' | 'workspace' | 'integrations' | 'done';
-type WizardPath = 'assistant';
+type WizardPath = 'teammate';
 type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth';
 type IntegrationId = 'slack' | 'github' | 'linear' | 'jira' | 'notion';
 
@@ -489,7 +489,7 @@ export interface OnboardingWizardProps {
 
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
-  assistantPending?: boolean;
+  teammatePending?: boolean;
   frameworkRepoUrl?: string;
 
   /** Re-open wizard starting at a specific step (used by persistent banners). */
@@ -535,11 +535,10 @@ export function OnboardingWizard({
   void _onCreateBranch;
   void _onCreateSession;
 
-  // Self-subscribe to the board entity map this wizard reads (only
-  // repoById/branchById existed pre-redesign; boardById is still needed to
-  // detect whether the user already has a board). Subscribing here — rather
-  // than receiving it as a prop from the outer App shell — keeps the shell
-  // from re-rendering on every board write (see App/App.tsx's perf refactor).
+  // Self-subscribe to the board entity map this wizard reads (needed to detect
+  // whether the user already has a board). Subscribing here — rather than
+  // receiving it as a prop from the outer App shell — keeps the shell from
+  // re-rendering on every board write.
   const boardById = useAgorStore(selectBoardById);
   const { token } = useToken();
 
@@ -948,7 +947,7 @@ export function OnboardingWizard({
           branchId: '',
           sessionId: '',
           boardId: boardIdToUse,
-          path: 'assistant',
+          path: 'teammate',
           integrationsToSetup: wantMcpSettings ? (['slack'] as IntegrationId[]) : [],
         });
         break;
@@ -1392,9 +1391,17 @@ export function OnboardingWizard({
                           style={{ marginBottom: 10, fontSize: 12 }}
                           message={
                             <span>
-                              For claude.ai Pro or Max subscribers. Run{' '}
-                              <code>claude setup-token</code> on the machine Agor runs sessions on,
-                              then paste the token below.
+                              For claude.ai Pro or Max subscribers. In any terminal with Claude Code
+                              installed, run <code>claude setup-token</code>, then paste the printed
+                              token below. Need Claude Code?{' '}
+                              <Typography.Link
+                                href="https://docs.claude.com/en/docs/claude-code/setup"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                Install docs
+                              </Typography.Link>
+                              .
                             </span>
                           }
                         />

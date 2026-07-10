@@ -400,6 +400,13 @@
       "when": 1782300000000,
       "tag": "0057_message_timestamp_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1782400000000,
+      "tag": "0058_primary_teammate_id",
+      "breakpoints": true
     }
   ]
 }

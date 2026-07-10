@@ -309,8 +309,8 @@ Agents running in Agor sessions can **introspect their own execution context**:
 **Manage User Profile:**
 
 ```typescript
-→ agor_users_update_current({ name: "AI Assistant", emoji: "🤖" })
-← { user_id: "019a5...", name: "AI Assistant", emoji: "🤖" }
+→ agor_users_update_current({ name: "Agent Helper", emoji: "🤖" })
+← { user_id: "019a5...", name: "Agent Helper", emoji: "🤖" }
 ```
 
 This enables **autonomous multi-agent workflows** where a parent agent can delegate subtasks to specialized child agents, monitor their progress, and coordinate work across multiple sessions.
@@ -510,6 +510,32 @@ On a fresh install with zero users, the daemon auto-creates an admin user on fir
 - Never exposed to untrusted execution contexts
 
 All strategies use FeathersJS authentication with configurable storage.
+
+## Health & Readiness Probes
+
+The daemon exposes three **unauthenticated** monitoring endpoints:
+
+| Endpoint  | Purpose                    | Touches DB? | Status codes                     |
+| --------- | -------------------------- | ----------- | -------------------------------- |
+| `/livez`  | Liveness — process alive   | **No**      | `200` (when responsive)          |
+| `/readyz` | Readiness — can serve      | **Yes**     | `200` healthy · `503` DB down    |
+| `/health` | Rich status for UI / admin | **Yes**     | `200` always (`status` reflects) |
+
+`/readyz` runs a time-bounded `SELECT 1` and returns `{ status, db: { ok, latencyMs } }`.
+`/health` stays `200` always (pre-login UI fetches must not throw) and carries the
+signal on `status` (`ok`/`degraded`); authenticated callers also get the DB error,
+masked DB URL, and a non-gating pending-migrations count.
+
+Wire k8s probes liveness→`/livez`, readiness→`/readyz` — **never** point liveness
+at a DB-checking endpoint, or a DB outage restarts every pod (fleet-wide crash
+loop) instead of just pulling them from rotation:
+
+```yaml
+livenessProbe:
+  httpGet: { path: /livez, port: 3030 }
+readinessProbe:
+  httpGet: { path: /readyz, port: 3030 }
+```
 
 ## Next Steps
 

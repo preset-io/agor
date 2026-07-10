@@ -13,7 +13,7 @@
  *
  * The same contract applies to `goToBranch` and `goToBoard` — used by the
  * post-create handlers in `App/App.tsx` (handleCreateBranch,
- * handleCreateAssistant, handleCreateBoardFromDialog) — so each helper
+ * handleCreateTeammate, handleCreateBoardFromDialog) — so each helper
  * has its own race-condition test below.
  */
 

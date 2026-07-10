@@ -1,9 +1,23 @@
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { attachHiddenTenant, getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
-import type { GatewayChannel, ThreadSessionMap, User } from '@agor/core/types';
+import {
+  attachHiddenTenant,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  shortId,
+} from '@agor/core/db';
+import { getConnector } from '@agor/core/gateway';
+import type { GatewayChannel, SessionID, ThreadSessionMap, User, UserID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
+
+vi.mock('@agor/core/gateway', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/gateway')>();
+  return {
+    ...actual,
+    getConnector: vi.fn(),
+  };
+});
 
 const user: User = {
   user_id: 'user-1',
@@ -121,6 +135,10 @@ function makeGatewayHarness(args: {
 
   return { service, promptCreate, sessionsCreate, channelRepo, threadMapRepo };
 }
+
+afterEach(() => {
+  vi.mocked(getConnector).mockReset();
+});
 
 describe('gateway tenant metadata helpers', () => {
   it('extracts non-enumerable tenant metadata from gateway channel DTOs', () => {
@@ -641,5 +659,138 @@ describe('GatewayService Slack streaming', () => {
       recipientTeamId: undefined,
     });
     expect(service.wasTaskStreamedToSlack?.('task-1')).toBe(true);
+  });
+});
+
+describe('GatewayService outbound emit session branch binding', () => {
+  const outboundChannel: GatewayChannel = {
+    ...slackChannel,
+    id: 'chan-outbound',
+    config: {
+      bot_token: 'xoxb-test',
+      outbound_enabled: true,
+      default_outbound_target: 'channel:C123',
+    },
+  } as unknown as GatewayChannel;
+
+  function makeEmitHarness(args: { session?: { session_id: string; branch_id: string } | null }) {
+    const { service } = makeGatewayHarness({ channel: outboundChannel });
+    const sendSlackMessage = vi.fn(async () => ({
+      ts: '200.000100',
+      channel: 'C123',
+      thread_ts: '200.000100',
+      permalink: null,
+    }));
+    vi.mocked(getConnector).mockReturnValue({ sendSlackMessage } as never);
+    const outboundRepo = {
+      create: vi.fn(async (data: Record<string, unknown>) => ({ id: 'out-1', ...data })),
+      findUnconsumedByChannelAndThread: vi.fn(async () => null),
+    };
+    const sessionRepo = { findById: vi.fn(async () => args.session ?? null) };
+    const branchRepo = {
+      findById: vi.fn(async () => ({
+        branch_id: outboundChannel.target_branch_id,
+        others_can: 'view',
+      })),
+      isOwner: vi.fn(async () => false),
+      resolveUserPermission: vi.fn(async () => 'view'),
+    };
+    (service as unknown as { outboundRepo: unknown }).outboundRepo = outboundRepo;
+    (service as unknown as { sessionRepo: unknown }).sessionRepo = sessionRepo;
+    (service as unknown as { branchRepo: unknown }).branchRepo = branchRepo;
+    return { service, sendSlackMessage, outboundRepo, sessionRepo, branchRepo };
+  }
+
+  type EmitData = Parameters<GatewayService['emitMessage']>[0];
+
+  function emitData(overrides: Partial<EmitData> = {}): EmitData {
+    return {
+      gatewayChannelId: 'chan-outbound',
+      message: 'ship update',
+      emittedByUserId: 'user-1' as UserID,
+      userRole: 'admin',
+      ...overrides,
+    };
+  }
+
+  it('allows a same-branch session emit and keeps session attribution on the audit row', async () => {
+    const { service, sendSlackMessage, outboundRepo } = makeEmitHarness({
+      session: { session_id: 'sess-1', branch_id: 'branch-1' },
+    });
+
+    const result = await service.emitMessage(
+      emitData({ emittedBySessionId: 'sess-1' as SessionID })
+    );
+
+    expect(result).toMatchObject({
+      success: true,
+      gateway_outbound_message_id: 'out-1',
+      gateway_channel_id: 'chan-outbound',
+    });
+    expect(sendSlackMessage).toHaveBeenCalledTimes(1);
+    expect(outboundRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ emitted_by_session_id: 'sess-1' })
+    );
+  });
+
+  it('denies a cross-branch session emit even with admin role, before any Slack send', async () => {
+    const { service, sendSlackMessage, outboundRepo, sessionRepo } = makeEmitHarness({
+      session: { session_id: 'sess-1', branch_id: 'branch-2' },
+    });
+
+    await expect(
+      service.emitMessage(emitData({ emittedBySessionId: 'sess-1' as SessionID }))
+    ).rejects.toThrow(/Gateway outbound denied/);
+    expect(sessionRepo.findById).toHaveBeenCalledWith('sess-1');
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+    expect(outboundRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('names the session branch but never the channel target branch in the denial', async () => {
+    const { service } = makeEmitHarness({
+      session: { session_id: 'sess-1', branch_id: 'branch-2' },
+    });
+
+    const error: Error = await service
+      .emitMessage(emitData({ emittedBySessionId: 'sess-1' as SessionID }))
+      .then(() => {
+        throw new Error('expected emit to be denied');
+      })
+      .catch((err: Error) => err);
+
+    expect(error.message).toContain(shortId('sess-1'));
+    expect(error.message).toContain(shortId('branch-2'));
+    expect(error.message).not.toContain(outboundChannel.target_branch_id);
+    expect(error.message).not.toContain(shortId(outboundChannel.target_branch_id));
+  });
+
+  it('fails closed when the emitting session cannot be found', async () => {
+    const { service, sendSlackMessage, outboundRepo } = makeEmitHarness({ session: null });
+
+    await expect(
+      service.emitMessage(emitData({ emittedBySessionId: 'sess-gone' as SessionID }))
+    ).rejects.toThrow('Gateway outbound denied: emitting session not found');
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+    expect(outboundRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps admin access for calls without session context', async () => {
+    const { service, sendSlackMessage, sessionRepo } = makeEmitHarness({});
+
+    const result = await service.emitMessage(emitData());
+
+    expect(result).toMatchObject({ success: true });
+    expect(sessionRepo.findById).not.toHaveBeenCalled();
+    expect(sendSlackMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('denies no-session members without branch all permission', async () => {
+    const { service, sendSlackMessage, branchRepo } = makeEmitHarness({});
+
+    await expect(service.emitMessage(emitData({ userRole: 'member' }))).rejects.toThrow(
+      'Insufficient branch permission'
+    );
+    expect(branchRepo.resolveUserPermission).toHaveBeenCalled();
+    expect(sendSlackMessage).not.toHaveBeenCalled();
   });
 });

@@ -25,8 +25,8 @@ There is a big difference between:
 
 - a one-off coding session that edits a branch,
 - a scheduled summarizer that posts a weekly report,
-- a personal assistant that borrows one user's tools,
-- a team assistant that participates in a shared channel,
+- a personal AI teammate that borrows one user's tools,
+- a team AI teammate that participates in a shared channel,
 - a domain agent that owns recurring workflows across several systems,
 - and a broad company agent that tries to answer everything.
 
@@ -46,7 +46,7 @@ A useful first pass is to answer five questions:
 
 Agent scoping is one of the hardest design problems.
 
-If an agent is too narrow, you end up with a swarm of hyper-targeted assistants that cannot see enough context to be useful. One agent can read tickets but cannot see the repo. Another can read dashboards but cannot see incidents. Another can write GitHub comments but does not understand the customer thread that triggered the work.
+If an agent is too narrow, you end up with a swarm of hyper-targeted teammates that cannot see enough context to be useful. One agent can read tickets but cannot see the repo. Another can read dashboards but cannot see incidents. Another can write GitHub comments but does not understand the customer thread that triggered the work.
 
 That creates agent sprawl: too many names, too many partial memories, too many places to ask, and too many missing permissions.
 
@@ -72,10 +72,10 @@ This is easy to dismiss as cosmetic. It is not. Long-lived agents interact with 
 
 Some agents should be calm and precise. Some should be warm and encouraging. Some should be a little annoying because the workflow needs pressure. Some should be funny because the team will interact with them every week, and a little bit of personality makes the agent feel less like plumbing. The personality can be reinforced in small ways: the Slack avatar, the name, the default greeting, the reminder style, and the agent's equivalent of a [`SOUL.md`](/blog/agor-openclaw) — a thought-through identity file that says how it should behave.
 
-At Preset, we have had fun giving assistants stronger identities:
+At Preset, we have had fun giving teammates stronger identities:
 
 - **Saul** is legal-oriented, loosely modeled on _Better Call Saul_: contracts, redlines, deal risk, and the kind of careful pushback you want around legal work.
-- **Jarvis** carries the obvious all-things-IT assistant reference.
+- **Jarvis** carries the obvious all-things-IT helper reference.
 - **Blake** helps with deal desk work, with a light nod toward the sales-room intensity people associate with _Glengarry Glen Ross_.
 - **Peggy** helps propose, optimize, and review ad campaigns, with a wink toward the classic advertising persona.
 - **Phoenix** is a debugging and remediation agent: ruthless about root cause and permanent fixes.
@@ -85,7 +85,7 @@ The references are not the point by themselves. They are handles. They help the 
 
 The deeper question is cultural: what behavior would help this team?
 
-Does the sales team need a hard-ass assistant that says, in effect, "stop whining and go close the deal"? Maybe. Does a code review bot need to counter a culture that is too lax about quality? Maybe. Does it need to soften a culture that is already too harsh? Also maybe.
+Does the sales team need a hard-ass teammate that says, in effect, "stop whining and go close the deal"? Maybe. Does a code review bot need to counter a culture that is too lax about quality? Maybe. Does it need to soften a culture that is already too harsh? Also maybe.
 
 Agents can reinforce culture, but they can also tune it. A reviewer agent can model the review culture you want: direct but kind, strict on correctness, generous on style preferences. A legal agent can be cautious without becoming a blocker. A support agent can be empathetic without hiding operational risk. A sales agent can create urgency without becoming cringe.
 
@@ -193,7 +193,7 @@ This is not just safety work. It is product work. If the oversight loop is too h
 
 Speed is the adoption wedge. Governance is what lets the workflow survive success.
 
-A single person trying one agent can get by with a chat window and vibes. A team running persistent assistants across Slack, GitHub, a ticketing system, a warehouse, and scheduled workflows needs more than that.
+A single person trying one agent can get by with a chat window and vibes. A team running persistent teammates across Slack, GitHub, a ticketing system, a warehouse, and scheduled workflows needs more than that.
 
 You need to know:
 
@@ -246,10 +246,10 @@ The point is not just to run agents. It is to give teams the primitives they nee
 
 Some of the pieces:
 
-- **Persisted assistants.** [Agor Assistants](/guide/assistants) are the long-lived agent primitive: durable identity, memory, schedules, skills, and a branch-backed home where the agent can accumulate context over time.
+- **Persisted teammates.** [Agor Teammates](/guide/teammates) are the long-lived agent primitive: durable identity, memory, schedules, skills, and a branch-backed home where the agent can accumulate context over time.
 - **Scoped work surfaces.** [Boards](/guide/boards) and [branches](/guide/branches) have their own access controls, so teams can decide who can see, prompt, manage, or own the places where agent work happens.
-- **Assistant ACLs.** Assistants can be scoped by who has access to the assistant and which [Knowledge](/guide/knowledge) namespaces it can use.
-- **Knowledge namespace ACLs.** Knowledge is segmented by namespace with read/write/owner-style access. The useful pattern is tandem authorization: the user and the assistant both need the right access to use a namespace in a workflow.
+- **Teammate ACLs.** Teammates can be scoped by who has access to the teammate and which [Knowledge](/guide/knowledge) namespaces it can use.
+- **Knowledge namespace ACLs.** Knowledge is segmented by namespace with read/write/owner-style access. The useful pattern is tandem authorization: the user and the teammate both need the right access to use a namespace in a workflow.
 - **MCP governance.** Agor has its own [MCP registry](/guide/internal-mcp). Registered MCP servers, auth methods, and tool availability are managed centrally rather than configured ad hoc on every laptop.
 - **Gateway identity choices.** The [Message Gateway](/guide/message-gateway) is where Slack, GitHub, and similar channels connect to agents. A channel can define whether the agent runs as itself, runs as a specific Agor user, or aligns the Slack/GitHub user to an Agor user by email so the session uses that user's credentials and permissions.
 - **Session-level observability.** [Sessions](/guide/sessions) persist the details: messages, tool calls, model, agentic runtime, permission mode, branch context, and the history of what happened.

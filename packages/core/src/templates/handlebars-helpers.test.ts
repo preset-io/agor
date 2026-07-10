@@ -1056,6 +1056,8 @@ NAME={{replace (uppercase branch.name) "-" "_"}}
         name: 'my-branch',
         path: '/path/to/branch',
         gid: undefined,
+        base_ref: '',
+        ref_type: 'branch',
       };
       expect(context).toEqual({
         branch: expectedBranchEntity,
@@ -1069,6 +1071,33 @@ NAME={{replace (uppercase branch.name) "-" "_"}}
         },
         custom: { foo: 'bar' },
       });
+    });
+
+    it('should expose base_ref/ref_type under branch.* and the worktree.* alias', () => {
+      const context = buildBranchContext({
+        branch_unique_id: 1,
+        name: 'feat-x',
+        path: '/test',
+        base_ref: 'main',
+        ref_type: 'branch',
+      });
+
+      const rendered = renderTemplate(
+        'git fetch origin {{branch.base_ref}} ({{worktree.ref_type}})',
+        context
+      );
+      expect(rendered).toBe('git fetch origin main (branch)');
+    });
+
+    it('should default base_ref to empty string and ref_type to "branch" when unset', () => {
+      const context = buildBranchContext({
+        branch_unique_id: 1,
+        name: 'test',
+        path: '/test',
+      });
+
+      const rendered = renderTemplate('[{{branch.base_ref}}][{{branch.ref_type}}]', context);
+      expect(rendered).toBe('[][branch]');
     });
 
     it('should expose host.ip_address when provided', () => {

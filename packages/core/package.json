@@ -118,12 +118,6 @@
       "import": "./dist/templates/spawn-subsession-template.js",
       "require": "./dist/templates/spawn-subsession-template.cjs"
     },
-    "./templates/assistant-welcome-note": {
-      "source": "./src/templates/assistant-welcome-note.ts",
-      "types": "./dist/templates/assistant-welcome-note.d.ts",
-      "import": "./dist/templates/assistant-welcome-note.js",
-      "require": "./dist/templates/assistant-welcome-note.cjs"
-    },
     "./templates/zone-trigger-context": {
       "source": "./src/templates/zone-trigger-context.ts",
       "types": "./dist/templates/zone-trigger-context.d.ts",
@@ -369,6 +363,12 @@
       "types": "./dist/local-actions/index.d.ts",
       "import": "./dist/local-actions/index.js",
       "require": "./dist/local-actions/index.cjs"
+    },
+    "./templates/teammate-welcome-note": {
+      "source": "./src/templates/teammate-welcome-note.ts",
+      "types": "./dist/templates/teammate-welcome-note.d.ts",
+      "import": "./dist/templates/teammate-welcome-note.js",
+      "require": "./dist/templates/teammate-welcome-note.cjs"
     }
   },
   "scripts": {
@@ -408,25 +408,25 @@
     "@libsql/client": "^0.17.4",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
-    "@openai/codex-sdk": "^0.141.0",
+    "@openai/codex-sdk": "^0.144.0",
     "@opencode-ai/sdk": "^1.2.20",
     "@slack/socket-mode": "^2.0.7",
-    "@slack/types": "^2.21.1",
-    "@slack/web-api": "^7.17.0",
+    "@slack/types": "^2.22.0",
+    "@slack/web-api": "^7.19.0",
     "analytics": "^0.8.19",
     "bcryptjs": "^2.4.3",
     "botbuilder": "^4.23.3",
-    "cron-parser": "^5.5.0",
-    "cronstrue": "^3.20.0",
+    "cron-parser": "^5.6.1",
+    "cronstrue": "^3.24.0",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
-    "js-yaml": "^5.2.0",
+    "js-yaml": "^5.2.1",
     "open": "^11.0.0",
     "postgres": "^3.4.9",
     "simple-git": "^3.36.0",
     "slackify-markdown": "^5.0.0",
     "socket.io-client": "^4.8.3",
-    "uuid": "^14.0.0",
+    "uuid": "^14.0.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

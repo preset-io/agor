@@ -1331,8 +1331,9 @@ describe('agor_models_list', () => {
     expect(parsed.codex.note).toContain('omit modelConfig');
 
     const codexIds = parsed.codex.models.map((m: { id: string }) => m.id);
-    expect(codexIds).toContain('gpt-5.5');
-    expect(codexIds).toContain('gpt-5.4-mini');
+    expect(codexIds).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+    expect(codexIds).not.toContain('gpt-5.5');
+    expect(codexIds).not.toContain('gpt-5.4-mini');
     expect(codexIds).not.toContain('gpt-5.4');
     expect(codexIds).not.toContain('gpt-5-codex');
   });
@@ -1451,5 +1452,47 @@ describe('attached_mcp_servers in session-info tools', () => {
     expect(payload.attached_mcp_servers).toEqual([
       expect.objectContaining({ mcp_server_id: 'srv-x', auth_type: 'none' }),
     ]);
+  });
+});
+
+describe('agor_sessions_archive tools', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('delegates archive and unarchive to the shared sessions service operations', async () => {
+    const archive = vi.fn(async () => ({ count: 3 }));
+    const unarchive = vi.fn(async () => ({ count: 2 }));
+    const app = makeFakeApp({
+      sessions: { archive, unarchive },
+    });
+
+    const tools = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-current', baseServiceParams: { provider: 'mcp' } },
+      ['agor_sessions_archive', 'agor_sessions_unarchive']
+    );
+
+    const archiveResult = await tools.agor_sessions_archive({
+      sessionId: 'sess-parent',
+      includeChildren: true,
+    });
+    const unarchiveResult = await tools.agor_sessions_unarchive({
+      sessionId: 'sess-parent',
+      includeChildren: false,
+    });
+
+    expect(archive).toHaveBeenCalledWith(
+      'sess-parent',
+      { includeChildren: true },
+      { provider: 'mcp' }
+    );
+    expect(unarchive).toHaveBeenCalledWith(
+      'sess-parent',
+      { includeChildren: false },
+      { provider: 'mcp' }
+    );
+    expect(JSON.parse(archiveResult.content[0].text)).toMatchObject({ archivedCount: 3 });
+    expect(JSON.parse(unarchiveResult.content[0].text)).toMatchObject({ unarchivedCount: 2 });
   });
 });

@@ -16,7 +16,7 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
+import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   formatModelToolMismatchWarning,
   formatUnsupportedAgorCodexModelMessage,
@@ -27,6 +27,7 @@ import { resolveChildSessionConfig } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
   Branch,
+  BranchPermissionLevel,
   MCPServerID,
   Paginated,
   QueryParams,
@@ -41,8 +42,10 @@ import {
   determineSpawnIdentity,
   isSuperAdmin,
   loadUnixUsernameForUser,
+  PERMISSION_RANK,
   resolveChildUnixUsername,
 } from '../utils/branch-authorization.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 
 /**
@@ -56,6 +59,16 @@ interface InheritableSessionConfig {
   permission_config?: Session['permission_config'];
   model_config?: Session['model_config'];
 }
+
+type SessionArchiveReason = NonNullable<Session['archived_reason']>;
+type SessionArchiveTarget = {
+  session: Session;
+  archived: boolean;
+  archivedReason: SessionArchiveReason | null;
+};
+
+const MANUAL_ARCHIVED_REASON = 'manual' satisfies SessionArchiveReason;
+const PARENT_ARCHIVED_REASON = 'parent_archived' satisfies SessionArchiveReason;
 
 /**
  * Extract the inheritable runtime configuration from a parent session.
@@ -149,6 +162,16 @@ export type ExecuteTaskData = {
   permissionMode?: import('@agor/core/types').PermissionMode;
   stream?: boolean;
   messageSource?: import('@agor/core/types').MessageSource;
+};
+
+export type SessionArchiveOptions = {
+  includeChildren?: boolean;
+};
+
+export type SessionArchiveResult = {
+  session: Session;
+  affectedSessions: Session[];
+  count: number;
 };
 
 /**
@@ -758,6 +781,202 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       ancestors,
       children,
     };
+  }
+
+  private async collectBranchLocalDescendants(root: Session): Promise<Session[]> {
+    // Session archive cascades follow the branch-local genealogy tree only.
+    // Remote relationships are modeled separately and must not be affected.
+    return this.sessionRepo.findBranchLocalDescendants(root.session_id, root.branch_id);
+  }
+
+  private getRuntimeExecutionConfig():
+    | {
+        execution?: {
+          branch_rbac?: boolean;
+          allow_superadmin?: boolean;
+        };
+      }
+    | undefined {
+    try {
+      return (
+        this.app as {
+          get?: (key: string) => unknown;
+        }
+      ).get?.('config') as
+        | {
+            execution?: {
+              branch_rbac?: boolean;
+              allow_superadmin?: boolean;
+            };
+          }
+        | undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private shouldEnforceBranchRbac(): boolean {
+    return this.getRuntimeExecutionConfig()?.execution?.branch_rbac === true;
+  }
+
+  private shouldAllowSuperadminBypass(): boolean {
+    return this.getRuntimeExecutionConfig()?.execution?.allow_superadmin === true;
+  }
+
+  private async assertCanArchiveSessions(
+    sessions: Session[],
+    archived: boolean,
+    params?: SessionParams
+  ): Promise<void> {
+    if (!params?.provider || !this.shouldEnforceBranchRbac()) return;
+
+    const user = params.user;
+    if (!user) {
+      throw new NotAuthenticated('Authentication required');
+    }
+
+    if (user._isServiceAccount) {
+      return;
+    }
+
+    const userId = user.user_id as UUID | undefined;
+    if (!userId) {
+      throw new NotAuthenticated('Authentication required');
+    }
+
+    const allowSuperadmin = this.shouldAllowSuperadminBypass();
+    const userRole = user.role;
+    const action = archived ? 'archive sessions' : 'unarchive sessions';
+    const branchCache = new Map<string, Branch>();
+
+    for (const session of sessions) {
+      let branch = branchCache.get(session.branch_id);
+      if (!branch) {
+        const loadedBranch = await this.branchRepo.findById(session.branch_id);
+        if (!loadedBranch) {
+          throw new Forbidden(`Branch not found for session: ${session.session_id}`);
+        }
+        branch = loadedBranch;
+        branchCache.set(session.branch_id, branch);
+      }
+
+      const access = await this.branchRepo.resolveUserAccess(branch, userId);
+      const effectiveLevel: BranchPermissionLevel = isSuperAdmin(userRole, allowSuperadmin)
+        ? 'all'
+        : access.can;
+
+      if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt) {
+        continue;
+      }
+
+      if (effectiveLevel === 'session' && session.created_by === userId) {
+        continue;
+      }
+
+      throw new Forbidden(
+        `You need 'prompt' permission to ${action} in this branch. You have '${effectiveLevel}' permission.`
+      );
+    }
+  }
+
+  private async setArchiveStateForTree(
+    id: string,
+    archived: boolean,
+    options: SessionArchiveOptions | undefined,
+    params?: SessionParams
+  ): Promise<SessionArchiveResult> {
+    const root = await this.get(id, params);
+    const includeChildren = options?.includeChildren !== false;
+    const descendants = includeChildren ? await this.collectBranchLocalDescendants(root) : [];
+    const targets: SessionArchiveTarget[] = [
+      {
+        session: root,
+        archived,
+        archivedReason: archived ? MANUAL_ARCHIVED_REASON : null,
+      },
+    ];
+
+    for (const session of descendants) {
+      if (archived) {
+        if (!session.archived) {
+          targets.push({
+            session,
+            archived: true,
+            archivedReason: PARENT_ARCHIVED_REASON,
+          });
+        }
+        continue;
+      }
+
+      if (session.archived_reason === PARENT_ARCHIVED_REASON) {
+        targets.push({
+          session,
+          archived: false,
+          archivedReason: null,
+        });
+      }
+    }
+
+    await this.assertCanArchiveSessions(
+      targets.map((target) => target.session),
+      archived,
+      params
+    );
+
+    const affectedSessions = await this.sessionRepo.updateArchiveStateForTargets(
+      targets.map((target) => ({
+        id: target.session.session_id,
+        archived: target.archived,
+        archivedReason: target.archivedReason,
+      }))
+    );
+
+    for (const affectedSession of affectedSessions) {
+      emitServiceEvent(this.app, {
+        path: 'sessions',
+        event: 'patched',
+        data: affectedSession,
+        params,
+        id: affectedSession.session_id,
+      });
+    }
+
+    const [session] = affectedSessions;
+    if (!session) {
+      throw new Error(`Session ${id} not found`);
+    }
+
+    return {
+      session,
+      affectedSessions,
+      count: affectedSessions.length,
+    };
+  }
+
+  /**
+   * Archive a session and, by default, its branch-local descendants.
+   *
+   * Generic `patch({ archived })` intentionally remains single-row so bulk
+   * archive, branch archive, and auto-cleanup paths keep their existing
+   * semantics.
+   */
+  async archive(
+    id: string,
+    options?: SessionArchiveOptions,
+    params?: SessionParams
+  ): Promise<SessionArchiveResult> {
+    return this.setArchiveStateForTree(id, true, options, params);
+  }
+
+  /**
+   * Restore a session and, by default, its branch-local descendants.
+   */
+  async unarchive(
+    id: string,
+    options?: SessionArchiveOptions,
+    params?: SessionParams
+  ): Promise<SessionArchiveResult> {
+    return this.setArchiveStateForTree(id, false, options, params);
   }
 
   /**

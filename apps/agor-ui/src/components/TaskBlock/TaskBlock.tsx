@@ -62,7 +62,7 @@ const EMPTY_USER_MAP = new Map<string, User>();
 /**
  * Block types for rendering
  */
-type Block =
+export type Block =
   | { type: 'message'; message: Message }
   | { type: 'agent-chain'; messages: Message[] }
   | { type: 'compaction'; messages: Message[] }; // System messages (start + optional complete)
@@ -96,7 +96,7 @@ interface TaskBlockProps {
   taskMessagesLoaded: boolean;
   onLoadTaskMessages: (taskId: string) => Promise<void> | void;
   onUnloadTaskMessages: (taskId: string) => void;
-  assistantEmoji?: string;
+  teammateEmoji?: string;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
   client?: AgorClient | null;
   /** Whether this is the most recent task in the session */
@@ -122,7 +122,7 @@ function isAgentChainMessage(message: Message): boolean {
     if (hasOnlyToolResults) return true; // Part of agent chain, don't break it
   }
 
-  // Only assistant messages beyond this point
+  // Only agent messages beyond this point
   if (message.role !== MessageRole.ASSISTANT) return false;
 
   // String content - this is user-facing response, NOT agent chain
@@ -167,13 +167,13 @@ function isAgentChainMessage(message: Message): boolean {
 
 /**
  * Group messages into blocks:
- * - Consecutive assistant messages with thoughts/tools → AgentChain
- * - User messages and assistant text responses → individual MessageBlocks
+ * - Consecutive agent messages with thoughts/tools → AgentChain
+ * - User messages and agent text responses → individual MessageBlocks
  * - Task tool nested operations → AgentChain (grouped by parent_tool_use_id)
  * - Compaction events (system_status + system_complete) → Compaction block
  * - Permission requests are now just messages, rendered inline naturally
  */
-function groupMessagesIntoBlocks(messages: Message[]): Block[] {
+export function groupMessagesIntoBlocks(messages: Message[]): Block[] {
   // Separate top-level messages from nested (parent_tool_use_id)
   const topLevel = messages.filter((m) => !m.parent_tool_use_id);
   const nested = messages.filter((m) => m.parent_tool_use_id);
@@ -346,6 +346,20 @@ function groupMessagesIntoBlocks(messages: Message[]): Block[] {
     blocks.splice(insertPosition, 0, block);
   }
 
+  // Display-order only: stable-move widget_request blocks to the END of the
+  // task's block list so an inline widget (e.g. the gateway token form) renders
+  // BELOW the agent's closing text for the same turn — making it the last thing
+  // the user sees. Widgets are stamped at tool-call time (mid-turn), so by
+  // message index they'd otherwise sort above the agent's closing explanation.
+  // Non-widget blocks keep their original order; widget blocks keep their
+  // relative order at the end. This touches render order ONLY — message.index /
+  // identity (genealogy markers, streaming, React keys) are untouched.
+  const isWidgetBlock = (b: Block): boolean =>
+    b.type === 'message' && b.message.type === 'widget_request';
+  if (blocks.some(isWidgetBlock)) {
+    return [...blocks.filter((b) => !isWidgetBlock(b)), ...blocks.filter(isWidgetBlock)];
+  }
+
   return blocks;
 }
 
@@ -402,7 +416,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     taskMessagesLoaded,
     onLoadTaskMessages,
     onUnloadTaskMessages,
-    assistantEmoji,
+    teammateEmoji,
     isLatestTask = false,
     client = null,
   }) => {
@@ -713,7 +727,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               isFirstPendingPermission={isFirstPending}
                               isLatestMessage={isLatestMessage}
                               taskId={task.task_id}
-                              assistantEmoji={assistantEmoji}
+                              teammateEmoji={teammateEmoji}
                               client={client}
                             />
                           </div>
@@ -759,8 +773,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       <Bubble
                         placement="start"
                         avatar={
-                          assistantEmoji ? (
-                            <AgorAvatar>{assistantEmoji}</AgorAvatar>
+                          teammateEmoji ? (
+                            <AgorAvatar>{teammateEmoji}</AgorAvatar>
                           ) : agentic_tool ? (
                             <ToolIcon tool={agentic_tool} size={32} />
                           ) : (

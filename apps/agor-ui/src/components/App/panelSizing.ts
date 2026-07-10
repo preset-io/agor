@@ -5,7 +5,7 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 
 // Width of the middle "content" panel (canvas + session panel) as a
 // percentage of the full viewport — whatever's left once the left
-// assistant/comments panel (rail or fully expanded) takes its share.
+// teammate/comments panel (rail or fully expanded) takes its share.
 export const getContentPanelWidthPercent = (
   leftPanelCollapsed: boolean,
   leftPanelCollapsedSize: number,

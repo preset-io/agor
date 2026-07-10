@@ -17,7 +17,13 @@ import { randomUUID } from 'node:crypto';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { shortId, UserApiKeysRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { DaemonServicesConfig, ServiceGroupName, SessionID, UserID } from '@agor/core/types';
+import type {
+  DaemonServicesConfig,
+  ServiceGroupName,
+  SessionID,
+  TenantContext,
+  UserID,
+} from '@agor/core/types';
 import { getServiceTier, SERVICE_GROUP_TO_MCP_DOMAINS, SERVICE_TIER_RANK } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -58,6 +64,13 @@ function mcpRequestDebug(...args: unknown[]): void {
   }
 }
 
+function tenantFromAuthenticatedUser(user: AuthenticatedUser): TenantContext | undefined {
+  const tenantId = typeof user.tenant_id === 'string' ? user.tenant_id.trim() : '';
+  return tenantId
+    ? { tenant_id: tenantId as TenantContext['tenant_id'], source: 'auth_claim' }
+    : undefined;
+}
+
 /**
  * Shared context passed to every tool handler.
  */
@@ -68,7 +81,7 @@ export interface McpContext {
   /** Current Agor session context, when the caller supplied or authenticated with one. */
   sessionId?: SessionID;
   authenticatedUser: AuthenticatedUser;
-  baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated' | 'provider'>;
+  baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated' | 'provider' | 'tenant'>;
 }
 
 /**
@@ -594,7 +607,11 @@ export function setupMCPRoutes(
         }
       }
 
-      const baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated' | 'provider'> = {
+      const tenant = tenantFromAuthenticatedUser(authenticatedUser);
+      const baseServiceParams: Pick<
+        AuthenticatedParams,
+        'user' | 'authenticated' | 'provider' | 'tenant'
+      > = {
         user: {
           user_id: authenticatedUser.user_id,
           email: authenticatedUser.email,
@@ -602,6 +619,7 @@ export function setupMCPRoutes(
         },
         authenticated: true,
         provider: 'mcp',
+        ...(tenant ? { tenant } : {}),
       };
 
       // Personal API key callers may optionally bind a current-session context

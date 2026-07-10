@@ -354,7 +354,7 @@ describe('OnboardingWizard', () => {
       branchId: '',
       sessionId: '',
       boardId: 'board-1',
-      path: 'assistant',
+      path: 'teammate',
       integrationsToSetup: ['slack'],
     });
     // Repo/branch/session provisioning is deferred to normal app flows now —
@@ -389,7 +389,7 @@ describe('OnboardingWizard', () => {
       branchId: '',
       sessionId: '',
       boardId: '',
-      path: 'assistant',
+      path: 'teammate',
       integrationsToSetup: [],
     });
   });

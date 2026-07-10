@@ -33,6 +33,7 @@ export interface ForkSpawnModalProps {
   mcpServerById?: Map<string, MCPServer>;
   initialPrompt?: string;
   onConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
+  afterClose?: () => void;
   onCancel: () => void;
   client: AgorClient | null;
   userById: Map<string, User>;
@@ -46,6 +47,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   mcpServerById = new Map(),
   initialPrompt = '',
   onConfirm,
+  afterClose,
   onCancel,
   client,
   userById,
@@ -203,6 +205,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
       open={open}
       onOk={handleOk}
       onCancel={handleCancel}
+      afterClose={afterClose}
       okText={`${actionLabel} Session`}
       confirmLoading={loading}
       width={700}

@@ -121,7 +121,7 @@ export const sessions = pgTable(
     // Archive state (cascaded from branch archive)
     archived: t.bool('archived').notNull().default(false),
     archived_reason: text('archived_reason', {
-      enum: ['branch_archived', 'manual', 'btw_completed'],
+      enum: ['branch_archived', 'manual', 'parent_archived', 'btw_completed'],
     }),
 
     // JSON blob for everything else (cross-DB via json() type)
@@ -514,7 +514,7 @@ export const boards = pgTable(
     // Materialized for lookups
     name: text('name').notNull(),
     slug: text('slug'),
-    primary_assistant_id: varchar('primary_assistant_id', { length: 36 }).references(
+    primary_teammate_id: varchar('primary_teammate_id', { length: 36 }).references(
       (): AnyPgColumn => branches.branch_id,
       {
         onDelete: 'set null',

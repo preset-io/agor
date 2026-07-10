@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "//": "This is the monorepo root. Published package version is in packages/agor-live/package.json",
-  "description": "Team command center for all things agentic — shared canvas for coding agents and long-lived assistants on isolated git branches, with real-time multiplayer and an MCP surface agents drive themselves.",
+  "description": "Team command center for all things agentic — shared canvas for coding agents and long-lived AI teammates on isolated git branches, with real-time multiplayer and an MCP surface agents drive themselves.",
   "keywords": [
     "ai",
     "agents",

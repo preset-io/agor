@@ -17,7 +17,11 @@
  * truly global and available to all sessions regardless of who created them.
  */
 
-import { buildMCPTemplateContextFromEnv, resolveMcpServerTemplates } from '@agor/core/mcp';
+import {
+  buildMCPTemplateContextFromEnv,
+  resolveMcpServerTemplates,
+  TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
+} from '@agor/core/mcp';
 import type { MCPServer, SessionID } from '@agor/core/types';
 import type {
   MCPOAuthAuthHeadersRepository,
@@ -176,6 +180,17 @@ export async function getMcpServersForSession(
 
     const containsTemplate = (v: string | undefined) => v?.includes('{{') && v?.includes('}}');
 
+    // Every auth field `resolveMcpServerTemplates` substitutes. Driven from the
+    // canonical secret set plus the non-secret auth templates the resolver also
+    // handles, so this trigger cannot drift from what resolution resolves.
+    const AUTH_TEMPLATE_FIELDS = [
+      ...TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
+      'api_url',
+      'oauth_token_url',
+      'oauth_client_id',
+      'oauth_scope',
+    ] as const;
+
     // Process servers in reverse to safely remove invalid ones
     for (let i = servers.length - 1; i >= 0; i--) {
       const original = servers[i].server;
@@ -186,11 +201,9 @@ export async function getMcpServersForSession(
       const hasEnvTemplates = envValues.some(containsTemplate);
       const hasHeaderTemplates = headerValues.some(containsTemplate);
       const hasUrlTemplate = containsTemplate(original.url);
-      const hasAuthTemplates =
-        containsTemplate(original.auth?.token) ||
-        containsTemplate(original.auth?.api_url) ||
-        containsTemplate(original.auth?.api_token) ||
-        containsTemplate(original.auth?.api_secret);
+      const hasAuthTemplates = AUTH_TEMPLATE_FIELDS.some((field) =>
+        containsTemplate(original.auth?.[field] as string | undefined)
+      );
 
       if (hasEnvTemplates || hasHeaderTemplates || hasUrlTemplate || hasAuthTemplates) {
         const result = resolveMcpServerTemplates(original, templateContext);

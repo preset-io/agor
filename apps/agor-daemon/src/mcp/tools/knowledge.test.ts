@@ -29,8 +29,10 @@ vi.mock('../server.js', () => ({
 
 vi.mock('@agor/core/types', () => ({
   buildKnowledgeDocumentUri: (id: string) => `agor://kb/document/${id}`,
-  getAssistantConfig: (branch: { assistant?: unknown }) => branch.assistant,
-  isAssistant: (branch: { assistant?: unknown }) => Boolean(branch.assistant),
+  getTeammateConfig: (branch: { teammate?: unknown; assistant?: unknown }) =>
+    branch.teammate ?? branch.assistant,
+  isTeammate: (branch: { teammate?: unknown; assistant?: unknown }) =>
+    Boolean(branch.teammate ?? branch.assistant),
   KNOWLEDGE_DOCUMENT_KINDS: ['doc', 'note'],
   KNOWLEDGE_DOCUMENT_STATUSES: ['draft', 'published'],
   KNOWLEDGE_DOCUMENT_URI_PREFIX: 'agor://kb/document/',
@@ -787,21 +789,21 @@ describe('Knowledge MCP input schemas', () => {
     );
   });
 
-  it('applies Knowledge search content shaping to assistant memory search', async () => {
+  it('applies Knowledge search content shaping to teammate memory search', async () => {
     const find = vi.fn().mockResolvedValue([
       {
         document: {
           document_id: 'doc-1',
           namespace_id: 'ns-1',
           path: 'memory/today.md',
-          uri: 'agor://kb/assistant/memory/today.md',
+          uri: 'agor://kb/teammate/memory/today.md',
           title: 'Today',
           kind: 'doc',
           visibility: 'private',
           status: 'published',
           edit_policy: 'namespace',
         },
-        namespace: { namespace_id: 'ns-1', slug: 'assistant', display_name: 'Assistant' },
+        namespace: { namespace_id: 'ns-1', slug: 'teammate', display_name: 'Teammate' },
         current_version: {
           version_id: 'ver-1',
           document_id: 'doc-1',
@@ -818,10 +820,10 @@ describe('Knowledge MCP input schemas', () => {
         branches: {
           get: vi.fn().mockResolvedValue({
             branch_id: 'branch-1',
-            assistant: {
+            teammate: {
               kb: {
                 primary_namespace_id: 'ns-1',
-                primary_namespace_slug: 'assistant',
+                primary_namespace_slug: 'teammate',
                 global_access: 'write',
               },
             },
@@ -830,7 +832,7 @@ describe('Knowledge MCP input schemas', () => {
         'kb/namespaces': {
           get: vi.fn().mockResolvedValue({
             namespace_id: 'ns-1',
-            slug: 'assistant',
+            slug: 'teammate',
             archived: false,
           }),
         },
@@ -840,14 +842,14 @@ describe('Knowledge MCP input schemas', () => {
     );
 
     const result = textResultJson(
-      await tools.agor_assistant_memory_search.handler?.({ query: 'memory' })
+      await tools.agor_teammate_memory_search.handler?.({ query: 'memory' })
     ) as Array<Record<string, any>>;
 
     expect(find).toHaveBeenCalledWith(
       expect.objectContaining({
         query: expect.objectContaining({
           q: 'memory',
-          namespace_slug: 'assistant',
+          namespace_slug: 'teammate',
           path_prefix: 'memory/',
         }),
       })
@@ -856,7 +858,7 @@ describe('Knowledge MCP input schemas', () => {
     expect(result[0].snippet).toBe('memory body');
   });
 
-  it('applies Knowledge search content shaping to assistant knowledge search', async () => {
+  it('applies Knowledge search content shaping to teammate knowledge search', async () => {
     const find = vi.fn().mockResolvedValue([
       {
         document: {
@@ -887,10 +889,10 @@ describe('Knowledge MCP input schemas', () => {
         branches: {
           get: vi.fn().mockResolvedValue({
             branch_id: 'branch-1',
-            assistant: {
+            teammate: {
               kb: {
                 primary_namespace_id: 'ns-1',
-                primary_namespace_slug: 'assistant',
+                primary_namespace_slug: 'teammate',
                 global_access: 'write',
               },
             },
@@ -899,7 +901,7 @@ describe('Knowledge MCP input schemas', () => {
         'kb/namespaces': {
           get: vi.fn().mockResolvedValue({
             namespace_id: 'ns-1',
-            slug: 'assistant',
+            slug: 'teammate',
             archived: false,
           }),
         },
@@ -909,7 +911,7 @@ describe('Knowledge MCP input schemas', () => {
     );
 
     const result = textResultJson(
-      await tools.agor_assistant_knowledge_search.handler?.({ query: 'knowledge' })
+      await tools.agor_teammate_knowledge_search.handler?.({ query: 'knowledge' })
     ) as Array<Record<string, any>>;
 
     expect(find).toHaveBeenCalledWith(

@@ -437,13 +437,17 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     }
   };
 
+  const closeForkSpawnModal = () => setForkSpawnModal((current) => ({ ...current, open: false }));
+  const unmountForkSpawnModal = () =>
+    setForkSpawnModal({ open: false, action: 'fork', session: null });
+
   const handleArchiveSession = useCallback(
     (sessionId: string, e: React.MouseEvent) => {
       e.stopPropagation();
 
       modal.confirm({
-        title: 'Archive session?',
-        content: 'Are you sure you want to archive this session?',
+        title: 'Archive session and child sessions?',
+        content: 'Are you sure you want to archive this session and its child sessions?',
         okText: 'Archive',
         cancelText: 'Cancel',
         onOk: async () => {
@@ -451,7 +455,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           try {
             const result = await archiveSession(sessionId as SessionID);
             if (result) {
-              showSuccess('Session archived');
+              showSuccess('Session and child sessions archived');
             } else {
               showError('Failed to archive session');
             }
@@ -1137,16 +1141,19 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           </div>
         )}
 
-        <ForkSpawnModal
-          open={forkSpawnModal.open}
-          action={forkSpawnModal.action}
-          session={forkSpawnModal.session}
-          currentUser={currentUserId ? userById.get(currentUserId) : undefined}
-          onConfirm={handleForkSpawnConfirm}
-          onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
-          client={client}
-          userById={userById}
-        />
+        {forkSpawnModal.session && (
+          <ForkSpawnModal
+            open={forkSpawnModal.open}
+            action={forkSpawnModal.action}
+            session={forkSpawnModal.session}
+            currentUser={currentUserId ? userById.get(currentUserId) : undefined}
+            onConfirm={handleForkSpawnConfirm}
+            onCancel={closeForkSpawnModal}
+            afterClose={unmountForkSpawnModal}
+            client={client}
+            userById={userById}
+          />
+        )}
       </>
     );
   }
@@ -1272,16 +1279,19 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         </>
       )}
 
-      <ForkSpawnModal
-        open={forkSpawnModal.open}
-        action={forkSpawnModal.action}
-        session={forkSpawnModal.session}
-        currentUser={currentUserId ? userById.get(currentUserId) : undefined}
-        onConfirm={handleForkSpawnConfirm}
-        onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
-        client={client}
-        userById={userById}
-      />
+      {forkSpawnModal.session && (
+        <ForkSpawnModal
+          open={forkSpawnModal.open}
+          action={forkSpawnModal.action}
+          session={forkSpawnModal.session}
+          currentUser={currentUserId ? userById.get(currentUserId) : undefined}
+          onConfirm={handleForkSpawnConfirm}
+          onCancel={closeForkSpawnModal}
+          afterClose={unmountForkSpawnModal}
+          client={client}
+          userById={userById}
+        />
+      )}
     </ConfigProvider>
   );
 };

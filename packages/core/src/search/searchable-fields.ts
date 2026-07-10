@@ -11,19 +11,19 @@
  *
  * Why functions, not column-name lists: V1 needs to extract live values from
  * in-memory entity objects (some fields live in JSON columns like
- * `data.custom_context.assistant.displayName`, which can't be expressed as a
+ * `data.custom_context.teammate.displayName`, which can't be expressed as a
  * column name alone). V2 can layer a parallel column-name list onto the same
  * shape when it lands.
  *
- * The `branch` entry covers both pure branches and assistants — they share
+ * The `branch` entry covers both pure branches and teammates — they share
  * the underlying table row, so the field set is unified. Render-time type
- * discrimination (branch vs. assistant) happens at the caller via
- * `isAssistant()`.
+ * discrimination (branch vs. teammate) happens at the caller via
+ * `isTeammate()`.
  */
 
 import type { Artifact } from '../types/artifact.js';
 import type { Board } from '../types/board.js';
-import { type Branch, getAssistantConfig } from '../types/branch.js';
+import { type Branch, getTeammateConfig } from '../types/branch.js';
 import type { MCPServer } from '../types/mcp.js';
 import type { Session } from '../types/session.js';
 
@@ -38,7 +38,7 @@ export const SEARCHABLE_FIELDS = {
     b.notes,
     b.issue_url,
     b.pull_request_url,
-    getAssistantConfig(b)?.displayName,
+    getTeammateConfig(b)?.displayName,
   ]) as SearchFieldExtractor<Branch>,
   artifact: ((a) => [a.name, a.description]) as SearchFieldExtractor<Artifact>,
   board: ((b) => [b.name, b.description]) as SearchFieldExtractor<Board>,

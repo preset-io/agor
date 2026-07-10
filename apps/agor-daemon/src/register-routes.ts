@@ -90,6 +90,14 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { killExecutorProcess } from './executor-tracking.js';
+import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
+import {
+  authenticatedHealthDb,
+  healthMigrations,
+  healthStatus,
+  publicHealthDb,
+} from './health/payload.js';
+import { registerHealthProbeRoutes } from './health/routes.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { GatewayService } from './services/gateway.js';
 import {
@@ -125,6 +133,10 @@ import {
 } from './utils/mcp-header-secrets.js';
 import { canControlCliSession } from './utils/mcp-token-authorization.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
+import {
+  deferWithSessionQueueTenantScope,
+  runWithSessionQueueTenantScope,
+} from './utils/session-queue-tenant-scope.js';
 import { stopSessionPreserveQueue } from './utils/session-stop.js';
 import {
   sessionCanStartTask,
@@ -722,6 +734,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  // These routes re-emit onto the `messages` / `tasks` services (which carry
+  // the real streaming payloads); their OWN default `created` event is just the
+  // `{ success: true }` ack and must never broadcast — one per chunk otherwise
+  // reaches every service-account socket. Publish it to no one.
+  app.service('/messages/streaming').publish(() => []);
+  app.service('/tasks/streaming').publish(() => []);
+
   // ============================================================================
   // Sessions custom routes (fork, spawn, genealogy, prompt, stop, queue)
   // ============================================================================
@@ -791,6 +810,38 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     } as any,
     {
       find: { role: ROLES.MEMBER, action: 'view session genealogy' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/archive',
+    {
+      async create(data: { includeChildren?: boolean } | undefined, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Session ID required');
+        return sessionsService.archive(id, data, params);
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'archive sessions' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/sessions/:id/unarchive',
+    {
+      async create(data: { includeChildren?: boolean } | undefined, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Session ID required');
+        return sessionsService.unarchive(id, data, params);
+      },
+    },
+    {
+      create: { role: ROLES.MEMBER, action: 'unarchive sessions' },
     },
     requireAuth
   );
@@ -2181,6 +2232,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const queueRetryScheduled = new Set<SessionID>();
 
   async function processNextQueuedTask(sessionId: SessionID, params: RouteParams): Promise<void> {
+    await runWithSessionQueueTenantScope(
+      {
+        db,
+        config,
+        sessionId,
+        params,
+        label: 'processNextQueuedTask',
+      },
+      async (scopedParams) => processNextQueuedTaskInTenantScope(sessionId, scopedParams)
+    );
+  }
+
+  async function processNextQueuedTaskInTenantScope(
+    sessionId: SessionID,
+    params: RouteParams
+  ): Promise<void> {
     const existingLock = sessionTurnLocks.get(sessionId);
     if (existingLock) {
       console.log(`⏳ [Queue] Session turn in progress for ${shortId(sessionId)}, waiting...`);
@@ -2208,14 +2275,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       if (!queueRetryScheduled.has(sessionId)) {
         queueRetryScheduled.add(sessionId);
-        deferInFreshTenantScope(params, async () => {
-          queueRetryScheduled.delete(sessionId);
-          try {
-            await processNextQueuedTask(sessionId, params);
-          } catch (error) {
+        deferWithSessionQueueTenantScope(
+          {
+            db,
+            config,
+            sessionId,
+            params,
+            label: 'processNextQueuedTask retry',
+          },
+          async (retryParams) => {
+            queueRetryScheduled.delete(sessionId);
+            try {
+              await processNextQueuedTask(sessionId, retryParams);
+            } catch (error) {
+              console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
+            }
+          },
+          (error) => {
+            queueRetryScheduled.delete(sessionId);
             console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
           }
-        });
+        );
       } else {
         console.log(
           `⏭️  [Queue] Retry already scheduled for session ${shortId(sessionId)}, not queueing another`
@@ -3546,8 +3626,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   app.use('/health', {
     async find(params?: AuthenticatedParams) {
       const publicLaunchAuth = resolvePublicLaunchAuthSettings(config);
+      // `/health` stays 200 always (pre-login UI fetches must not throw), so the
+      // DB signal rides on `status`: ok | degraded. /readyz is the one that 503s.
+      // Only { ok, latencyMs } is public; the raw error is authenticated-only below.
+      const dbProbe = await probeDatabase(db);
       const publicResponse = {
-        status: 'ok',
+        status: healthStatus(dbProbe),
+        db: publicHealthDb(dbProbe),
         timestamp: Date.now(),
         version: DAEMON_VERSION,
         // Build identity for the version-sync banner (apps/agor-ui ConnectionStatus).
@@ -3565,7 +3650,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           description: config.daemon?.instanceDescription,
         },
         onboarding: {
-          assistantPending:
+          teammatePending:
+            config.onboarding?.teammatePending ??
             config.onboarding?.assistantPending ??
             config.onboarding?.persistedAgentPending ??
             false,
@@ -3633,8 +3719,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           databaseInfo = { dialect, path: DB_PATH };
         }
 
+        // Diagnostic only; not in the public payload, doesn't gate readiness.
+        // Gated behind auth like the rest of this block (any authenticated
+        // user, matching the existing `database`/`execution` fields below —
+        // not admin-only).
+        const migrations = await probePendingMigrations(db);
+
         return {
           ...publicResponse,
+          // Full DB probe detail, including the raw error, is authenticated-only
+          // (never in the public payload).
+          db: authenticatedHealthDb(dbProbe),
+          migrations: healthMigrations(migrations),
           database: databaseInfo,
           auth: {
             ...publicResponse.auth,
@@ -3690,6 +3786,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     description: 'Health check endpoint (always public)',
     security: [],
   };
+
+  // Liveness (/livez) and readiness (/readyz) probes — see health/routes.ts.
+  registerHealthProbeRoutes(app, db);
 
   // ============================================================================
   // OpenCode models + health endpoints

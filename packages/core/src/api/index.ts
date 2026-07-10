@@ -6,7 +6,6 @@
 
 import type {
   Artifact,
-  AssistantWelcomeNoteRequest,
   AuthenticationResult,
   Board,
   BoardExportBlob,
@@ -36,6 +35,7 @@ import type {
   Schedule,
   Session,
   Task,
+  TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
   TemplateRenderResponse,
   User,
@@ -415,19 +415,19 @@ export interface BoardsService extends AgorService<Board> {
   ): Promise<Board>;
 
   /**
-   * Set or clear the board's primary assistant branch.
+   * Set or clear the board's primary teammate branch.
    */
-  setPrimaryAssistant(
+  setPrimaryTeammate(
     data: { id?: string; boardId?: string; branchId: string },
     params?: Params
   ): Promise<Board>;
-  clearPrimaryAssistant(boardId: string, params?: Params): Promise<Board>;
+  clearPrimaryTeammate(boardId: string, params?: Params): Promise<Board>;
 
   /**
-   * Create the bundled assistant welcome markdown note when missing. Rendering
+   * Create the bundled teammate welcome markdown note when missing. Rendering
    * happens server-side from a static template; callers only provide values.
    */
-  ensureAssistantWelcomeNote(data: AssistantWelcomeNoteRequest, params?: Params): Promise<Board>;
+  ensureTeammateWelcomeNote(data: TeammateWelcomeNoteRequest, params?: Params): Promise<Board>;
 }
 
 /**
@@ -462,14 +462,13 @@ export interface BranchesService extends AgorService<Branch> {
   ): Promise<{ unixGroup: string }>;
 
   /**
-   * Create or repair the primary Knowledge namespace for an assistant branch.
-   * API/UI-only; not exposed through assistant MCP config mutation tools.
+   * Create or repair the primary Knowledge namespace for a teammate branch.
+   * API/UI-only; not exposed through teammate MCP config mutation tools.
    */
-  ensureAssistantKnowledgeNamespace(
+  ensureTeammateKnowledgeNamespace(
     data: { branchId?: string; branch_id?: string } | string,
     params?: Params
   ): Promise<{ namespace: KnowledgeNamespace; branch: Branch }>;
-
   /**
    * Find branch by repo_id and name
    */
@@ -623,9 +622,9 @@ function extendBoardsService(client: AgorClient): void {
         'toYaml',
         'fromYaml',
         'clone',
-        'setPrimaryAssistant',
-        'clearPrimaryAssistant',
-        'ensureAssistantWelcomeNote'
+        'setPrimaryTeammate',
+        'clearPrimaryTeammate',
+        'ensureTeammateWelcomeNote'
       );
     }
   };
@@ -841,7 +840,7 @@ function extendBranchesService(client: AgorClient): void {
     branchesService.methods(
       'updateEnvironment',
       'initializeUnixGroup',
-      'ensureAssistantKnowledgeNamespace'
+      'ensureTeammateKnowledgeNamespace'
     );
   }
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 /**
@@ -9,7 +9,7 @@ export const SETTINGS_SECTIONS = [
   'boards',
   'repos',
   'branches',
-  'assistants',
+  'teammates',
   'cards',
   'artifacts',
   'mcp',
@@ -68,7 +68,8 @@ export function useSettingsRoute() {
       };
     }
 
-    const [, section, itemId] = settingsMatch;
+    const [, rawSection, itemId] = settingsMatch;
+    const section = rawSection === 'assistants' ? 'teammates' : rawSection;
 
     // Validate and normalize section
     const normalizedSection: SettingsSection = SETTINGS_SECTIONS.includes(
@@ -83,6 +84,19 @@ export function useSettingsRoute() {
       itemId: itemId || null,
     };
   }, [location.pathname]);
+
+  useEffect(() => {
+    const canonicalPath = location.pathname.replace(
+      /\/settings\/assistants(?=\/|$)/,
+      '/settings/teammates'
+    );
+    if (canonicalPath !== location.pathname) {
+      navigate(`${canonicalPath}${location.search}${location.hash}`, {
+        replace: true,
+        state: location.state,
+      });
+    }
+  }, [location.hash, location.pathname, location.search, location.state, navigate]);
 
   /**
    * Open the settings modal to a specific section

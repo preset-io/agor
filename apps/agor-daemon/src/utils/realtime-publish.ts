@@ -19,6 +19,78 @@ function tenantChannelName(tenantId: string): string {
   return `tenant:${tenantId}`;
 }
 
+/**
+ * Per-session channel that carries only the high-frequency streaming events
+ * (message text/thinking chunks, tool start/complete). Connections join this
+ * room via the `session-streams` service after passing a session-access check,
+ * so streaming traffic reaches only the tabs actively viewing a session
+ * instead of the whole tenant. Session ids are globally-unique UUIDv7, so the
+ * unprefixed name cannot collide across tenants; cross-tenant membership is
+ * additionally impossible because the subscribe path gates on a tenant-scoped
+ * `sessions.get`.
+ */
+const SESSION_STREAM_CHANNEL_PREFIX = 'session-stream:';
+
+export function sessionStreamChannelName(sessionId: string): string {
+  return `${SESSION_STREAM_CHANNEL_PREFIX}${sessionId}`;
+}
+
+/**
+ * Remove a connection from every session-stream room it has joined. Called on
+ * logout so a still-connected-but-deauthenticated socket stops receiving live
+ * session text — Feathers only auto-drops channel membership on socket
+ * disconnect, and streaming delivery would otherwise keep reaching a logged-out
+ * connection (which is no longer in the authenticated/tenant channels but may
+ * still sit in a session-stream room).
+ */
+export function leaveAllSessionStreamChannels(app: Application, connection: unknown): void {
+  for (const name of app.channels ?? []) {
+    if (name.startsWith(SESSION_STREAM_CHANNEL_PREFIX)) {
+      app.channel(name).leave(connection as never);
+    }
+  }
+}
+
+/**
+ * Return an existing channel by name, or null if it has never been created.
+ * Feathers' channel lookup MATERIALIZES the channel when absent — and a channel
+ * with no joined connection is never auto-cleaned (Feathers only prunes on the
+ * last leave) — so the publish path must not touch a room that has no
+ * subscribers. Only `session-streams.create` (a real join) should create the
+ * room; joined channels get Feathers' empty-cleanup on leave/disconnect.
+ */
+function existingChannel(app: Application, name: string): PublishChannel | null {
+  return (app.channels ?? []).includes(name) ? app.channel(name) : null;
+}
+
+/**
+ * Join a connection to a session's streaming room. Centralized here (the
+ * tenant-aware realtime facade) so subscribe/publish share one channel name
+ * and the raw `app.channel` surface stays in a single audited file.
+ */
+export function joinSessionStreamChannel(
+  app: Application,
+  sessionId: string,
+  connection: unknown
+): void {
+  app.channel(sessionStreamChannelName(sessionId)).join(connection as never);
+}
+
+/**
+ * Remove a connection from a session's streaming room, but only if the room
+ * already exists. A `remove` for a never-joined room (any authenticated caller
+ * can send one) or a dispose after logout/disconnect already pruned the room
+ * would otherwise re-materialize an empty, never-cleaned channel — the same
+ * leak class as the publish path. `.leave` on an absent room is a no-op anyway.
+ */
+export function leaveSessionStreamChannel(
+  app: Application,
+  sessionId: string,
+  connection: unknown
+): void {
+  existingChannel(app, sessionStreamChannelName(sessionId))?.leave(connection as never);
+}
+
 const DEBUG_REALTIME_PUBLISH =
   process.env.AGOR_DEBUG_REALTIME_PUBLISH === '1' ||
   process.env.DEBUG?.includes('realtime-publish');
@@ -64,11 +136,33 @@ const SESSION_ID_SCOPED_PATHS = new Set([
 ]);
 const OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS = new Set(['board-objects', 'board-comments']);
 
+// High-frequency per-chunk events emitted on the `messages` service during a
+// streaming turn (text + thinking deltas). These fan out once per token-batch,
+// so they must be scoped to session subscribers rather than the whole tenant.
+const MESSAGE_STREAMING_EVENTS = new Set([
+  'streaming:start',
+  'streaming:chunk',
+  'streaming:end',
+  'streaming:error',
+  'thinking:start',
+  'thinking:chunk',
+  'thinking:end',
+]);
+
+// Per-chunk / per-tool events emitted on the `tasks` service during a turn.
+const TASK_STREAMING_EVENTS = new Set(['thinking:chunk', 'tool:start', 'tool:complete']);
+
 function isStreamingEvent(context: PublishContext): boolean {
-  return (
-    context.path === 'messages/streaming' ||
-    (context.path === 'messages' && context.event?.startsWith('streaming:') === true)
-  );
+  if (context.path === 'messages/streaming') return true;
+  const event = context.event;
+  if (!event) return false;
+  if (context.path === 'messages') {
+    return event.startsWith('streaming:') || MESSAGE_STREAMING_EVENTS.has(event);
+  }
+  if (context.path === 'tasks') {
+    return TASK_STREAMING_EVENTS.has(event);
+  }
+  return false;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -276,6 +370,103 @@ function filterToServiceConnections(authenticated: PublishChannel): PublishChann
   return authenticated.filter((connection: unknown) => isServiceConnection(connection));
 }
 
+/**
+ * Delivery set for a streaming event. Streaming chunks are the dominant
+ * always-on realtime cost, so they bypass the tenant-wide broadcast and go to:
+ *
+ *   1. the per-session stream room — connections that explicitly subscribed
+ *      (session panels / transcripts that passed a session-access check),
+ *   2. service connections — gateway / Slack streaming and other service
+ *      consumers keep working exactly as before,
+ *   3. the session owner's own connections — a cheap fallback so a creator's
+ *      already-open tabs keep updating during deploy skew, before a
+ *      stale-cached client has re-subscribed after refresh.
+ *
+ * Authorization is enforced at PUBLISH time, not just at subscribe time: when
+ * branch RBAC is on, room members AND the owner fallback are filtered through
+ * the current cached branch visibility, so a viewer whose access is revoked
+ * mid-stream stops receiving chunks on the very next event (rather than waiting
+ * for unsubscribe / disconnect). The cache keeps this per-chunk cost cheap, and
+ * room membership is small. With RBAC off there is no visibility model, so
+ * subscription + owner + service delivery stands.
+ *
+ * Everything else (created/patched/removed, status transitions) keeps its
+ * existing tenant/branch scoping. Malformed events without a resolvable
+ * session id fail closed to service connections only.
+ */
+async function resolveStreamingDelivery(
+  app: Application,
+  data: unknown,
+  tenantScoped: PublishChannel,
+  accessCache: RealtimeAccessCache,
+  branchRbacEnabled: boolean,
+  allowSuperadmin: boolean
+): Promise<PublishChannel | PublishChannel[]> {
+  const serviceConnections = filterToServiceConnections(tenantScoped);
+  const sessionId = extractSessionId(data);
+  if (!sessionId) return serviceConnections;
+
+  // Intersect the room with the tenant/auth channel: a connection that logged
+  // out (removed from authenticated + tenant channels) or was tenant-evicted
+  // but is still socket-connected may linger in a session-stream room, so this
+  // structurally guarantees nothing outside the current tenant/auth set can
+  // receive — independent of the per-connection room cleanup on logout.
+  const tenantConnections = new Set<unknown>(
+    (tenantScoped as unknown as { connections: unknown[] }).connections
+  );
+  // Never materialize the room on the publish path — a session streaming with
+  // zero subscribers would otherwise accumulate an empty, never-cleaned channel
+  // per session. Only an actual subscribe (join) creates it.
+  const existingRoom = existingChannel(app, sessionStreamChannelName(sessionId));
+  const room = existingRoom
+    ? existingRoom.filter((connection: unknown) => tenantConnections.has(connection))
+    : null;
+
+  let ownerId: string | null = null;
+  try {
+    ownerId = await accessCache.getSessionOwnerId(sessionId);
+  } catch {
+    // Best-effort owner fallback; the session room + service connections still
+    // deliver even if the owner lookup fails.
+  }
+  const ownerChannel = (): PublishChannel =>
+    tenantScoped.filter(
+      (connection: unknown) => userFromConnection(connection)?.user_id === ownerId
+    );
+
+  // RBAC off: no visibility model — deliver to subscribers + owner + service.
+  if (!branchRbacEnabled) {
+    const channels: PublishChannel[] = [serviceConnections];
+    if (room) channels.push(room);
+    if (ownerId) channels.push(ownerChannel());
+    return channels;
+  }
+
+  // RBAC on: enforce CURRENT branch visibility at publish time. Resolving the
+  // branch/visibility fails closed to service connections if unknown.
+  const branchId = await accessCache.getBranchIdForSession(sessionId);
+  const visibility = branchId ? await accessCache.getBranchVisibility(branchId) : null;
+  if (!visibility) return serviceConnections;
+
+  if (visibility.mode === 'allAuthenticated') {
+    const channels: PublishChannel[] = [serviceConnections];
+    if (room) channels.push(room);
+    if (ownerId) channels.push(ownerChannel());
+    return channels;
+  }
+
+  // Explicit-users branch: room members and the owner fallback must currently
+  // hold view access (service accounts and superadmins always pass).
+  const channels: PublishChannel[] = [serviceConnections];
+  if (room) {
+    channels.push(filterToUserIdsOrSuperadmins(room, visibility.userIds, allowSuperadmin));
+  }
+  if (ownerId && visibility.userIds.has(ownerId as UserID)) {
+    channels.push(ownerChannel());
+  }
+  return channels;
+}
+
 function filterToUserIdsOrAdmins(
   authenticated: PublishChannel,
   userIds: Set<string> | Set<UserID>,
@@ -386,6 +577,20 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         throw error;
       }
     }
+    // Streaming events are routed to session subscribers (plus service and
+    // owner connections) regardless of branch RBAC — this is the always-on
+    // firehose the tenant broadcast must not carry.
+    if (isStreamingEvent(context)) {
+      return resolveStreamingDelivery(
+        app,
+        data,
+        tenantScoped,
+        accessCache,
+        branchRbacEnabled,
+        allowSuperadmin
+      );
+    }
+
     if (!branchRbacEnabled) return tenantScoped;
 
     const scope = await resolvePublishScope(data, context, accessCache);

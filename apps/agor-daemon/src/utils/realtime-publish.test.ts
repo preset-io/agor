@@ -6,7 +6,7 @@ import type {
   RealtimeAccessBranchRepository,
   RealtimeAccessSessionRepository,
 } from './realtime-access-cache';
-import { configureRealtimePublish } from './realtime-publish';
+import { configureRealtimePublish, leaveAllSessionStreamChannels } from './realtime-publish';
 
 class FakeChannel {
   constructor(public connections: unknown[]) {}
@@ -24,8 +24,19 @@ function makeApp(
   channels: Record<string, unknown[]> = {}
 ) {
   let publishFn: ((data: unknown, context: any) => unknown) | undefined;
+  // Names accessed via the channel factory — mirrors Feathers materializing a
+  // channel on lookup, so tests can assert the publish path did NOT create a
+  // room.
+  const created = new Set<string>();
   const app = {
-    channel: vi.fn((name: string) => new FakeChannel(channels[name] ?? connections)),
+    // Provided channels plus any materialized by a channel lookup.
+    get channels() {
+      return [...new Set([...Object.keys(channels), ...created])];
+    },
+    channel: vi.fn((name: string) => {
+      created.add(name);
+      return new FakeChannel(channels[name] ?? connections);
+    }),
     publish: vi.fn((fn) => {
       publishFn = fn;
     }),
@@ -60,6 +71,8 @@ function repos(options: {
   branch: Branch;
   session?: Session | null;
   permissions: Record<string, Branch['others_can']>;
+  /** Owning user id returned by findCreatedByBySessionId (owner-fallback tests). */
+  owner?: string | null;
 }) {
   const viewableUserIds = Object.entries(options.permissions)
     .filter(([, permission]) =>
@@ -75,6 +88,9 @@ function repos(options: {
   const sessionsRepository = {
     findBranchIdBySessionId: vi.fn(async (id: string) =>
       options.session?.session_id === id ? options.session.branch_id : null
+    ),
+    findCreatedByBySessionId: vi.fn(async (id: string) =>
+      options.session?.session_id === id ? (options.owner ?? null) : null
     ),
   } as unknown as RealtimeAccessSessionRepository;
   return { branchRepository, sessionsRepository };
@@ -463,31 +479,40 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }, service]);
   });
 
-  it('caches session branch and branch visibility across streaming events', async () => {
-    const allowed = user('allowed');
-    const denied = user('denied');
-    const app = makeApp([{ user: allowed }, { user: denied }]);
+  it('caches the session owner lookup across repeated streaming chunks', async () => {
+    // Streaming chunks are no longer branch-scoped — they route to the session
+    // room plus the owner fallback — so the per-chunk work is the owner lookup,
+    // which must be cached rather than hitting the DB on every chunk.
+    const owner = { user: user('owner-user') };
+    const other = { user: user('other') };
+    const app = makeApp(
+      [owner, other],
+      {},
+      {
+        authenticated: [owner, other],
+        'session-stream:s1': [],
+      }
+    );
     const r = repos({
-      branch: branch('b1', 'none'),
+      branch: branch('b1', 'view'),
       session: session('s1', 'b1'),
-      permissions: { allowed: 'view', denied: 'none' },
+      permissions: {},
+      owner: 'owner-user',
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
 
     const first = await app.runPublish(
       { message_id: 'm1', session_id: 's1', chunk: 'a' },
-      { path: 'messages', method: 'emit', event: 'streaming:chunk' }
+      { path: 'messages', method: 'emit', event: 'streaming:chunk', params: {} }
     );
     const second = await app.runPublish(
       { message_id: 'm1', session_id: 's1', chunk: 'b' },
-      { path: 'messages', method: 'emit', event: 'streaming:chunk' }
+      { path: 'messages', method: 'emit', event: 'streaming:chunk', params: {} }
     );
 
-    expect(first.connections).toEqual([{ user: allowed }]);
-    expect(second.connections).toEqual([{ user: allowed }]);
-    expect(r.sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(1);
-    expect(r.branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(r.branchRepository.findExplicitViewUserIds)).toHaveBeenCalledTimes(1);
+    expect(unionConnections(first)).toEqual([owner]);
+    expect(unionConnections(second)).toEqual([owner]);
+    expect(r.sessionsRepository.findCreatedByBySessionId).toHaveBeenCalledTimes(1);
   });
 
   it('resolves custom sessions events through camelCase sessionId', async () => {
@@ -662,5 +687,383 @@ describe('configureRealtimePublish', () => {
 
     expect(channel.connections).toEqual([service]);
     expect(tasksGet).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Streaming events (per-chunk message/thinking deltas and task tool events) are
+ * routed to the per-session stream room, service connections, and the session
+ * owner's connections — never the whole tenant. The publish handler returns an
+ * array of channels for these; Feathers unions them, so tests collapse the
+ * array to a unique connection set.
+ */
+function unionConnections(result: unknown): unknown[] {
+  const channels = Array.isArray(result) ? result : [result];
+  const seen = new Set<unknown>();
+  const out: unknown[] = [];
+  for (const channel of channels) {
+    for (const connection of (channel as FakeChannel).connections) {
+      if (!seen.has(connection)) {
+        seen.add(connection);
+        out.push(connection);
+      }
+    }
+  }
+  return out;
+}
+
+describe('configureRealtimePublish streaming scope', () => {
+  const streamingContext = {
+    path: 'messages',
+    method: 'create',
+    event: 'streaming:chunk',
+    params: {},
+  };
+
+  it('delivers a streaming chunk to subscribed connections, not other authenticated tabs', async () => {
+    const viewer = { user: user('viewer') };
+    const subscribed = { user: user('subscribed') };
+    const app = makeApp(
+      [viewer, subscribed],
+      {},
+      {
+        authenticated: [viewer, subscribed],
+        'session-stream:s1': [subscribed],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([subscribed]);
+  });
+
+  it('still delivers streaming chunks to service-account connections (gateway/Slack)', async () => {
+    const viewer = { user: user('viewer') };
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp(
+      [viewer, service],
+      {},
+      {
+        authenticated: [viewer, service],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hi' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([service]);
+  });
+
+  it('delivers to the session owner as a fallback even when they have not subscribed', async () => {
+    const owner = { user: user('owner-user') };
+    const other = { user: user('other-user') };
+    const app = makeApp(
+      [owner, other],
+      {},
+      {
+        authenticated: [owner, other],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hi' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([owner]);
+  });
+
+  it('routes tasks tool:start events through the same session scoping', async () => {
+    const subscribed = { user: user('subscribed') };
+    const other = { user: user('other') };
+    const app = makeApp(
+      [subscribed, other],
+      {},
+      {
+        authenticated: [subscribed, other],
+        'session-stream:s1': [subscribed],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', task_id: 't1', tool_use_id: 'x', tool_name: 'Bash' },
+      { path: 'tasks', method: 'create', event: 'tool:start', params: {} }
+    );
+
+    expect(unionConnections(result)).toEqual([subscribed]);
+  });
+
+  it('fails closed to service connections when a streaming event carries no session id', async () => {
+    const viewer = { user: user('viewer') };
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp(
+      [viewer, service],
+      {},
+      {
+        authenticated: [viewer, service],
+      }
+    );
+    const r = repos({ branch: branch('b1', 'view'), permissions: {} });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish({ message_id: 'm1', chunk: 'orphan' }, streamingContext);
+
+    expect(unionConnections(result)).toEqual([service]);
+  });
+
+  it('scopes streaming even when branch RBAC is enabled', async () => {
+    const subscribed = { user: user('subscribed') };
+    const other = { user: user('other') };
+    const app = makeApp(
+      [subscribed, other],
+      {},
+      {
+        authenticated: [subscribed, other],
+        'session-stream:s1': [subscribed],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: { subscribed: 'view', other: 'view' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([subscribed]);
+  });
+
+  it('drops a subscribed connection whose branch access was revoked (RBAC on)', async () => {
+    // Both are in the room, but only `allowed` currently holds view on the
+    // explicit-users branch. Publish-time filtering must exclude `revoked`
+    // rather than trust its stale room membership.
+    const allowed = { user: user('allowed') };
+    const revoked = { user: user('revoked') };
+    const app = makeApp(
+      [allowed, revoked],
+      {},
+      {
+        authenticated: [allowed, revoked],
+        'session-stream:s1': [allowed, revoked],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { allowed: 'view' },
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([allowed]);
+  });
+
+  it('drops the owner fallback when the owner lost branch access (RBAC on)', async () => {
+    // Nobody is subscribed; the owner is the only candidate, but their view was
+    // revoked, so the owner-fallback must NOT deliver.
+    const owner = { user: user('owner-user') };
+    const viewer = { user: user('viewer') };
+    const app = makeApp(
+      [owner, viewer],
+      {},
+      {
+        authenticated: [owner, viewer],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { viewer: 'view' },
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([]);
+  });
+
+  it('delivers to the owner fallback while they retain branch access (RBAC on)', async () => {
+    const owner = { user: user('owner-user') };
+    const other = { user: user('other') };
+    const app = makeApp(
+      [owner, other],
+      {},
+      {
+        authenticated: [owner, other],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { 'owner-user': 'view' },
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([owner]);
+  });
+
+  it('does not materialize a room for a session with no subscribers', async () => {
+    // No `session-stream:s1` channel provided → the session has no subscribers.
+    const viewer = { user: user('viewer') };
+    const app = makeApp([viewer], {}, { authenticated: [viewer] });
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    await app.runPublish({ session_id: 's1', message_id: 'm1', chunk: 'hello' }, streamingContext);
+
+    // The publish path must not have created the empty room.
+    expect(app.channels).not.toContain('session-stream:s1');
+  });
+
+  it('delivers to a subscribed session whose room already exists', async () => {
+    const subscribed = { user: user('subscribed') };
+    const app = makeApp(
+      [subscribed],
+      {},
+      {
+        authenticated: [subscribed],
+        'session-stream:s1': [subscribed],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(app.channels).toContain('session-stream:s1');
+    expect(unionConnections(result)).toEqual([subscribed]);
+  });
+
+  it('does not resurrect the room after the last subscriber has left', async () => {
+    // The room was pruned when its last subscriber left, so it is absent again.
+    const viewer = { user: user('viewer') };
+    const app = makeApp([viewer], {}, { authenticated: [viewer] });
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    await app.runPublish({ session_id: 's1', message_id: 'm1', chunk: 'a' }, streamingContext);
+    await app.runPublish({ session_id: 's1', message_id: 'm1', chunk: 'b' }, streamingContext);
+
+    expect(app.channels).not.toContain('session-stream:s1');
+  });
+
+  it('excludes a room member no longer in the tenant/auth channel (logout fail-open guard, RBAC off)', async () => {
+    // `loggedOut` still sits in the session-stream room (Feathers only drops
+    // room membership on socket disconnect) but has been removed from the
+    // authenticated channel. Intersecting the room with tenantScoped must keep
+    // streaming from reaching it — this is the RBAC-off path that would
+    // otherwise return the room unfiltered.
+    const active = { user: user('active') };
+    const loggedOut = { user: user('gone') };
+    const app = makeApp(
+      [active],
+      {},
+      {
+        authenticated: [active],
+        'session-stream:s1': [active, loggedOut],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hello' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([active]);
+  });
+});
+
+describe('leaveAllSessionStreamChannels', () => {
+  it('leaves only session-stream rooms for the connection', () => {
+    const leaves: Array<[string, unknown]> = [];
+    const app = {
+      channels: ['authenticated', 'tenant:default', 'session-stream:s1', 'session-stream:s2'],
+      channel: (name: string) => ({
+        leave: (connection: unknown) => {
+          leaves.push([name, connection]);
+        },
+      }),
+    } as unknown as Parameters<typeof leaveAllSessionStreamChannels>[0];
+    const connection = { id: 'c1' };
+
+    leaveAllSessionStreamChannels(app, connection);
+
+    expect(leaves).toEqual([
+      ['session-stream:s1', connection],
+      ['session-stream:s2', connection],
+    ]);
   });
 });

@@ -19,8 +19,8 @@ vi.mock('../AppHeader', () => ({
     return null;
   },
 }));
-vi.mock('../BoardAssistantPanel', () => ({
-  BoardAssistantPanel: () => null,
+vi.mock('../BoardTeammatePanel', () => ({
+  BoardTeammatePanel: () => null,
 }));
 vi.mock('../HomePage', () => ({
   HomePage: () => null,

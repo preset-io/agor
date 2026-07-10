@@ -6,16 +6,16 @@
  * admin/owner and partial-RBAC-data cases.
  */
 
-import type { AgorClient, AssistantConfig, Branch, User } from '@agor-live/client';
+import type { AgorClient, Branch, TeammateConfig, User } from '@agor-live/client';
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { BranchModal } from './BranchModal';
-import { buildAssistantKnowledgePatch } from './tabs/KnowledgeTab';
+import { buildTeammateKnowledgePatch } from './tabs/KnowledgeTab';
 import {
-  makeAssistantBranch,
   makeBranch,
   makeRepo,
   makeStubClient,
+  makeTeammateBranch,
   makeUser,
   renderWithApp,
 } from './testUtils';
@@ -79,21 +79,21 @@ describe('BranchModal — permissions tab visibility', () => {
     });
   });
 
-  it('shows Permissions for assistant/agent branch shapes when the admin owns the branch', async () => {
+  it('shows Permissions for teammate/legacy branch shapes when the admin owns the branch', async () => {
     const seb = makeUser({ user_id: 'seb', role: 'admin' });
 
     renderBranchModal({
-      branch: makeAssistantBranch(),
+      branch: makeTeammateBranch(),
       currentUser: seb,
       client: makeStubClient({ owners: [seb], users: [seb] }).client,
     });
 
-    expect(await screen.findByRole('tab', { name: /assistant/i })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: /^teammate$/i })).toBeInTheDocument();
     expect(await screen.findByRole('tab', { name: /permissions/i })).toBeInTheDocument();
   });
 
-  it('builds Knowledge patches against modern custom_context.assistant storage', () => {
-    const branch = makeAssistantBranch();
+  it('builds Knowledge patches against modern custom_context.teammate storage', () => {
+    const branch = makeTeammateBranch();
     const kb = {
       primary_namespace_id: 'ns-new',
       primary_namespace_slug: 'new-home',
@@ -103,9 +103,12 @@ describe('BranchModal — permissions tab visibility', () => {
       grants: [],
     };
 
-    expect(buildAssistantKnowledgePatch(branch, kb)).toEqual({
+    expect(buildTeammateKnowledgePatch(branch, kb)).toEqual({
       custom_context: {
-        assistant: {
+        teammate: {
+          kind: 'teammate',
+          displayName: 'My Teammate',
+          emoji: '🤖',
           kb,
         },
       },
@@ -117,9 +120,9 @@ describe('BranchModal — permissions tab visibility', () => {
       custom_context: {
         agent: {
           kind: 'assistant',
-          displayName: 'Legacy Assistant',
+          displayName: 'Legacy Teammate',
           emoji: '🤖',
-        } as AssistantConfig,
+        } as unknown as TeammateConfig,
       },
     });
     const kb = {
@@ -131,9 +134,12 @@ describe('BranchModal — permissions tab visibility', () => {
       grants: [],
     };
 
-    expect(buildAssistantKnowledgePatch(branch, kb)).toEqual({
+    expect(buildTeammateKnowledgePatch(branch, kb)).toEqual({
       custom_context: {
-        agent: {
+        teammate: {
+          kind: 'teammate',
+          displayName: 'Legacy Teammate',
+          emoji: '🤖',
           kb,
         },
       },

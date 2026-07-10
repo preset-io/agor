@@ -78,6 +78,40 @@ describe('getMcpServersForSession', () => {
     ]);
   });
 
+  it('resolves an OAuth server whose only template is oauth_client_secret', async () => {
+    const prevKeys = process.env.AGOR_USER_ENV_KEYS;
+    const prevSecret = process.env.OAUTH_CLIENT_SECRET;
+    process.env.AGOR_USER_ENV_KEYS = 'OAUTH_CLIENT_SECRET';
+    process.env.OAUTH_CLIENT_SECRET = 'resolved-client-secret';
+
+    try {
+      const oauthServer = {
+        ...makeServer('oauth-server', 'session', 'oauth'),
+        auth: {
+          type: 'oauth',
+          oauth_client_id: 'public-client',
+          oauth_client_secret: '{{ user.env.OAUTH_CLIENT_SECRET }}',
+        },
+      } as MCPServer;
+      const listEffectiveServers = vi.fn().mockResolvedValue([oauthServer]);
+
+      const servers = await getMcpServersForSession('session-a' as SessionID, {
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: { listEffectiveServers } as never,
+      });
+
+      const resolved = servers.find(
+        ({ server }) => server.mcp_server_id === 'oauth-server'
+      )?.server;
+      expect(resolved?.auth?.oauth_client_secret).toBe('resolved-client-secret');
+    } finally {
+      if (prevKeys === undefined) delete process.env.AGOR_USER_ENV_KEYS;
+      else process.env.AGOR_USER_ENV_KEYS = prevKeys;
+      if (prevSecret === undefined) delete process.env.OAUTH_CLIENT_SECRET;
+      else process.env.OAUTH_CLIENT_SECRET = prevSecret;
+    }
+  });
+
   it('hydrates OAuth access tokens through the trusted executor auth-header route', async () => {
     const oauthServer = {
       ...makeServer('oauth-server', 'session', 'oauth'),
