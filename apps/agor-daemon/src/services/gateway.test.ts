@@ -825,6 +825,111 @@ describe('GatewayService outbound emit session branch binding', () => {
   });
 });
 
+describe('GatewayService outbound emit allowed_channel_ids enforcement', () => {
+  function makeAllowlistHarness(
+    args: { config?: Record<string, unknown>; connectorExtras?: Record<string, unknown> } = {}
+  ) {
+    const channel = {
+      ...slackChannel,
+      id: 'chan-outbound',
+      config: {
+        bot_token: 'xoxb-test',
+        outbound_enabled: true,
+        ...args.config,
+      },
+    } as unknown as GatewayChannel;
+    const { service } = makeGatewayHarness({ channel });
+    const sendSlackMessage = vi.fn(async (req: { channel: string }) => ({
+      ts: '200.000100',
+      channel: req.channel,
+      thread_ts: '200.000100',
+      permalink: null,
+    }));
+    vi.mocked(getConnector).mockReturnValue({
+      sendSlackMessage,
+      ...args.connectorExtras,
+    } as never);
+    const outboundRepo = {
+      create: vi.fn(async (data: Record<string, unknown>) => ({ id: 'out-1', ...data })),
+      findUnconsumedByChannelAndThread: vi.fn(async () => null),
+    };
+    (service as unknown as { outboundRepo: unknown }).outboundRepo = outboundRepo;
+    return { service, sendSlackMessage, outboundRepo };
+  }
+
+  type EmitData = Parameters<GatewayService['emitMessage']>[0];
+
+  function emitData(overrides: Partial<EmitData> = {}): EmitData {
+    return {
+      gatewayChannelId: 'chan-outbound',
+      message: 'ship update',
+      emittedByUserId: 'user-1' as UserID,
+      userRole: 'admin',
+      ...overrides,
+    };
+  }
+
+  it('denies a channel-id target outside the allowlist before any Slack send', async () => {
+    const { service, sendSlackMessage, outboundRepo } = makeAllowlistHarness({
+      config: { allowed_channel_ids: ['C123'] },
+    });
+
+    await expect(service.emitMessage(emitData({ target: 'channel:C999' }))).rejects.toThrow(
+      /allowed_channel_ids/
+    );
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+    expect(outboundRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('denies a channel-name target that resolves to an id outside the allowlist', async () => {
+    const resolveChannelByName = vi.fn(async () => ({ channel: 'C999', name: 'general' }));
+    const { service, sendSlackMessage } = makeAllowlistHarness({
+      config: { allowed_channel_ids: ['C123'] },
+      connectorExtras: { resolveChannelByName },
+    });
+
+    await expect(service.emitMessage(emitData({ target: '#general' }))).rejects.toThrow(
+      /allowed_channel_ids/
+    );
+    expect(resolveChannelByName).toHaveBeenCalledWith('general');
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it('allows an email target resolved to a DM even with an allowlist configured', async () => {
+    const openDmByEmail = vi.fn(async () => ({ channel: 'D777', user_id: 'U42' }));
+    const { service, sendSlackMessage } = makeAllowlistHarness({
+      config: { allowed_channel_ids: ['C123'] },
+      connectorExtras: { openDmByEmail },
+    });
+
+    const result = await service.emitMessage(emitData({ target: 'user@example.com' }));
+
+    expect(result).toMatchObject({ success: true, platform_channel_id: 'D777' });
+    expect(openDmByEmail).toHaveBeenCalledWith('user@example.com');
+    expect(sendSlackMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'D777' }));
+  });
+
+  it('allows an allowlisted channel target', async () => {
+    const { service, sendSlackMessage } = makeAllowlistHarness({
+      config: { allowed_channel_ids: ['C123'] },
+    });
+
+    const result = await service.emitMessage(emitData({ target: 'channel:C123' }));
+
+    expect(result).toMatchObject({ success: true, platform_channel_id: 'C123' });
+    expect(sendSlackMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C123' }));
+  });
+
+  it('allows any channel target when no allowlist is configured', async () => {
+    const { service, sendSlackMessage } = makeAllowlistHarness();
+
+    const result = await service.emitMessage(emitData({ target: 'channel:C999' }));
+
+    expect(result).toMatchObject({ success: true, platform_channel_id: 'C999' });
+    expect(sendSlackMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C999' }));
+  });
+});
+
 describe('GatewayService Slack attachment ingestion', () => {
   const ingestChannel = {
     ...slackChannel,

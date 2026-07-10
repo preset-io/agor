@@ -39,6 +39,7 @@ import {
   formatGatewaySystemPayload,
   getConnector,
   hasConnector,
+  isSlackWriteTargetAllowed,
   normalizeOutbound,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
@@ -1471,6 +1472,16 @@ export class GatewayService {
       resolvedChannel = resolved.channel;
       resolvedTargetMetadata.resolved_channel_id = resolved.channel;
       resolvedTargetMetadata.resolved_user_id = resolved.user_id;
+    }
+
+    // The allowed_channel_ids whitelist works on concrete conversation ids,
+    // while `target` may be a channel name or user email — so enforcement
+    // happens only after resolution. isSlackWriteTargetAllowed exempts DMs,
+    // so email→DM and D-prefixed targets always pass.
+    if (!isSlackWriteTargetAllowed(config, resolvedChannel)) {
+      throw new Error(
+        `Gateway outbound denied: target ${target} resolves to Slack conversation ${resolvedChannel}, which is not in this gateway channel's allowed_channel_ids whitelist.`
+      );
     }
 
     let sent: Awaited<ReturnType<SlackDirectConnector['sendSlackMessage']>>;
