@@ -437,6 +437,10 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     }
   };
 
+  const closeForkSpawnModal = () => setForkSpawnModal((current) => ({ ...current, open: false }));
+  const unmountForkSpawnModal = () =>
+    setForkSpawnModal({ open: false, action: 'fork', session: null });
+
   const handleArchiveSession = useCallback(
     (sessionId: string, e: React.MouseEvent) => {
       e.stopPropagation();
@@ -1137,16 +1141,19 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
           </div>
         )}
 
-        <ForkSpawnModal
-          open={forkSpawnModal.open}
-          action={forkSpawnModal.action}
-          session={forkSpawnModal.session}
-          currentUser={currentUserId ? userById.get(currentUserId) : undefined}
-          onConfirm={handleForkSpawnConfirm}
-          onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
-          client={client}
-          userById={userById}
-        />
+        {forkSpawnModal.session && (
+          <ForkSpawnModal
+            open={forkSpawnModal.open}
+            action={forkSpawnModal.action}
+            session={forkSpawnModal.session}
+            currentUser={currentUserId ? userById.get(currentUserId) : undefined}
+            onConfirm={handleForkSpawnConfirm}
+            onCancel={closeForkSpawnModal}
+            afterClose={unmountForkSpawnModal}
+            client={client}
+            userById={userById}
+          />
+        )}
       </>
     );
   }
@@ -1272,16 +1279,19 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         </>
       )}
 
-      <ForkSpawnModal
-        open={forkSpawnModal.open}
-        action={forkSpawnModal.action}
-        session={forkSpawnModal.session}
-        currentUser={currentUserId ? userById.get(currentUserId) : undefined}
-        onConfirm={handleForkSpawnConfirm}
-        onCancel={() => setForkSpawnModal({ open: false, action: 'fork', session: null })}
-        client={client}
-        userById={userById}
-      />
+      {forkSpawnModal.session && (
+        <ForkSpawnModal
+          open={forkSpawnModal.open}
+          action={forkSpawnModal.action}
+          session={forkSpawnModal.session}
+          currentUser={currentUserId ? userById.get(currentUserId) : undefined}
+          onConfirm={handleForkSpawnConfirm}
+          onCancel={closeForkSpawnModal}
+          afterClose={unmountForkSpawnModal}
+          client={client}
+          userById={userById}
+        />
+      )}
     </ConfigProvider>
   );
 };

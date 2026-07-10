@@ -986,39 +986,44 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     id: import('@agor/core/types').NullableId,
     params?: SessionParams
   ): Promise<Session | Session[]> {
-    // Handle batch delete
     if (id === null) {
-      // For multi-delete, get all matching sessions and delete each one
       const sessions = (await super.find(params)) as Session[];
       const results: Session[] = [];
 
       for (const session of sessions) {
-        const deleted = (await this.remove(session.session_id, params)) as Session;
+        const deleted = await this.removeOne(session.session_id, params, false);
         results.push(deleted);
       }
 
       return results;
     }
 
-    // Single delete with cascade
-    // Get the session before deleting
-    const session = await this.get(String(id), params);
+    return this.removeOne(String(id), params, false);
+  }
 
-    // Find all children (forks and subsessions)
-    const children = await this.sessionRepo.findChildren(String(id));
+  private async removeOne(
+    id: string,
+    params: SessionParams | undefined,
+    emitRemoved: boolean
+  ): Promise<Session> {
+    const session = await this.get(id, params);
+    const children = await this.sessionRepo.findChildren(id);
 
-    // Recursively delete all children first
-    if (children.length > 0) {
-      for (const child of children) {
-        await this.remove(child.session_id, params);
-      }
+    for (const child of children) {
+      await this.removeOne(child.session_id, params, true);
     }
 
-    // Now delete the current session (messages and tasks are cascade-deleted by DB)
-    await this.sessionRepo.delete(id as string);
+    await this.sessionRepo.delete(id);
 
-    // Emit removed event for WebSocket broadcasting
-    this.emit?.('removed', session, params);
+    if (emitRemoved) {
+      emitServiceEvent(this.app, {
+        path: 'sessions',
+        event: 'removed',
+        data: session,
+        params,
+        id,
+      });
+    }
 
     return session;
   }

@@ -46,6 +46,9 @@ enableMapSet();
 /** Per-item counts captured at fetch-resolution time. Mirrors `useAgorData`. */
 export type ItemCounts = Partial<Record<InitialLoadItemKey, number>>;
 
+/** Background-hydrated collections that gate UI reads on their first apply. */
+export type GatedHydrationFlag = 'mcpServersHydrated' | 'gatewayChannelsHydrated';
+
 /** Load/meta fields that ride alongside the data maps. */
 interface AgorMeta {
   loading: boolean;
@@ -58,6 +61,10 @@ interface AgorMeta {
   directFullBranchLinkOwnerIds: Set<string>;
   /** Session owners whose `linksBySession` bucket has been hydrated as a full owner snapshot. */
   fullSessionLinkOwnerIds: Set<string>;
+  /** Set once the background mcp-servers hydration first applies (empty result included). */
+  mcpServersHydrated: boolean;
+  /** Set once the background gateway-channels hydration first applies (empty result included). */
+  gatewayChannelsHydrated: boolean;
 }
 
 /** Store actions: foundational primitives + the one immer cascade. */
@@ -76,6 +83,8 @@ interface AgorActions {
   setError: (error: string | null) => void;
   /** Accepts a value or a functional updater (mirrors `useState`). */
   setItemCounts: (value: ItemCounts | ((prev: ItemCounts) => ItemCounts)) => void;
+  /** Mark a gated background collection as first-hydrated (idempotent). */
+  markHydrated: (flag: GatedHydrationFlag) => void;
   /**
    * Replace a single data map: accepts a value or a functional updater, and
    * short-circuits on `Object.is` equality so
@@ -125,6 +134,8 @@ const makeInitialMeta = (): AgorMeta => ({
   fullBranchLinkOwnerIds: new Set(),
   directFullBranchLinkOwnerIds: new Set(),
   fullSessionLinkOwnerIds: new Set(),
+  mcpServersHydrated: false,
+  gatewayChannelsHydrated: false,
 });
 
 let fullLinkRequestSequence = 0;
@@ -227,6 +238,9 @@ export const agorStore = createStore<AgorState>()(
           : value;
       if (Object.is(next, get().itemCounts)) return;
       set({ itemCounts: next });
+    },
+    markHydrated: (flag) => {
+      if (!get()[flag]) set({ [flag]: true } as Partial<AgorState>);
     },
 
     setMap: (key, value) => {
