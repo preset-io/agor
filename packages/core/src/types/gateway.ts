@@ -111,6 +111,8 @@ export interface SlackAgentToolsConfig {
   reactions?: boolean;
   /** Upload a file/image to a channel or thread (agor_gateway_slack_file_upload). */
   file_upload?: boolean;
+  /** Download a Slack file into the upload area by id (agor_gateway_slack_file_download). */
+  file_download?: boolean;
 }
 
 export type SlackAgentToolCapability = keyof SlackAgentToolsConfig;
@@ -127,12 +129,16 @@ export type SlackAgentToolCapability = keyof SlackAgentToolsConfig;
  * - `reactions` and `file_upload` default OFF — both add write scopes
  *   (`reactions:write`, `files:write`) the installed app may not hold, so
  *   they require explicit opt-in.
+ * - `file_download` defaults OFF — it lets agents pull workspace file content
+ *   on demand and adds the `files:read` scope the installed app may not hold,
+ *   so it requires explicit opt-in.
  */
 export const SLACK_AGENT_TOOL_DEFAULTS: Record<SlackAgentToolCapability, boolean> = {
   thread_history: true,
   channel_history: false,
   reactions: false,
   file_upload: false,
+  file_download: false,
 };
 
 /**

@@ -407,6 +407,7 @@ const SLACK_PROBE_FIELDS = new Set<string>([
   'agent_channel_history',
   'agent_reactions',
   'agent_file_upload',
+  'agent_file_download',
   'slack_public_scope',
   'allowed_channel_ids',
 ]);
@@ -728,6 +729,8 @@ const SlackSetupWizard: React.FC<{
     Form.useWatch('agent_reactions', form) ?? SLACK_AGENT_TOOL_DEFAULTS.reactions;
   const agentFileUpload =
     Form.useWatch('agent_file_upload', form) ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload;
+  const agentFileDownload =
+    Form.useWatch('agent_file_download', form) ?? SLACK_AGENT_TOOL_DEFAULTS.file_download;
   const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
 
   const wizardOptions: SlackWizardOptions = useMemo(
@@ -744,6 +747,7 @@ const SlackSetupWizard: React.FC<{
         channel_history: agentChannelHistory,
         reactions: agentReactions,
         file_upload: agentFileUpload,
+        file_download: agentFileDownload,
       },
     }),
     [
@@ -758,6 +762,7 @@ const SlackSetupWizard: React.FC<{
       agentChannelHistory,
       agentReactions,
       agentFileUpload,
+      agentFileDownload,
     ]
   );
 
@@ -995,6 +1000,16 @@ const SlackSetupWizard: React.FC<{
           valuePropName="checked"
           initialValue={false}
           tooltip="Let session agents upload files/images to a channel or thread through the gateway MCP tool. Adds the files:write scope."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          label="Agents can download files"
+          name="agent_file_download"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Let session agents download image/text files referenced in Slack history through the gateway MCP tool. Adds the files:read scope."
         >
           <Switch />
         </Form.Item>
@@ -1266,6 +1281,9 @@ const ChannelFormFields: React.FC<{
   const agentFileUpload = Boolean(
     Form.useWatch('agent_file_upload', form) ?? storedAgentTools.file_upload
   );
+  const agentFileDownload = Boolean(
+    Form.useWatch('agent_file_download', form) ?? storedAgentTools.file_download
+  );
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
   // Track the live Name field so the manifest preview reflects in-progress edits,
   // falling back to the stored channel name.
@@ -1290,6 +1308,7 @@ const ChannelFormFields: React.FC<{
         channel_history: agentChannelHistory,
         reactions: agentReactions,
         file_upload: agentFileUpload,
+        file_download: agentFileDownload,
       },
     }),
     [
@@ -1304,6 +1323,7 @@ const ChannelFormFields: React.FC<{
       agentChannelHistory,
       agentReactions,
       agentFileUpload,
+      agentFileDownload,
     ]
   );
   const slackScopes = useMemo(() => requiredBotScopes(slackOptions), [slackOptions]);
@@ -2256,6 +2276,16 @@ const ChannelFormFields: React.FC<{
                       <Switch />
                     </Form.Item>
 
+                    <Form.Item
+                      label="Agents can download files"
+                      name="agent_file_download"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Let session agents download image/text files referenced in Slack history through the gateway MCP tool. Requires the files:read scope."
+                    >
+                      <Switch />
+                    </Form.Item>
+
                     {sourcesEnabled && (
                       <CompactAlert
                         type="info"
@@ -2653,6 +2683,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
         reactions: values.agent_reactions ?? SLACK_AGENT_TOOL_DEFAULTS.reactions,
         file_upload: values.agent_file_upload ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload,
+        file_download: values.agent_file_download ?? SLACK_AGENT_TOOL_DEFAULTS.file_download,
       },
     };
     setSlackTestLoading(true);
@@ -2813,6 +2844,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
         reactions: values.agent_reactions ?? SLACK_AGENT_TOOL_DEFAULTS.reactions,
         file_upload: values.agent_file_upload ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload,
+        file_download: values.agent_file_download ?? SLACK_AGENT_TOOL_DEFAULTS.file_download,
       };
     }
 
@@ -2986,6 +3018,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.agent_channel_history = agentTools.channel_history;
       formValues.agent_reactions = agentTools.reactions;
       formValues.agent_file_upload = agentTools.file_upload;
+      formValues.agent_file_download = agentTools.file_download;
     } else if (channel.channel_type === 'github') {
       formValues.github_app_id = config?.app_id;
       formValues.github_installation_id = config?.installation_id;

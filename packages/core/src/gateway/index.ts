@@ -12,6 +12,7 @@ export { GitHubConnector, parseThreadId as parseGitHubThreadId } from './connect
 export type {
   SlackChannelHistoryRequest,
   SlackChannelHistoryResult,
+  SlackHistoryFile,
   SlackThreadHistoryMessage,
   SlackThreadHistoryRequest,
   SlackThreadHistoryResult,

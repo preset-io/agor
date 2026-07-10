@@ -56,6 +56,7 @@ export const SLACK_AGENT_TOOL_SCOPES: Record<SlackAgentToolCapability, string[]>
   channel_history: ['channels:history', 'groups:history', 'mpim:history'],
   reactions: ['reactions:write'],
   file_upload: ['files:write'],
+  file_download: ['files:read'],
 };
 
 export interface SlackBotEventSubscriptions {

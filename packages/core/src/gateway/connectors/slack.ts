@@ -104,6 +104,20 @@ export interface SlackUserAvatarProfile {
   avatarUrl: string | null;
 }
 
+/**
+ * Agent-facing metadata for a file attached to a Slack history message.
+ * Deliberately excludes `url_private_download` (and every other Slack file
+ * URL): agents reference a file by `id` and fetch it on demand through the
+ * capability-gated download tool, so bot-token-authenticated URLs never
+ * appear in agent-visible output.
+ */
+export interface SlackHistoryFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  size: number;
+}
+
 export interface SlackThreadHistoryMessage {
   ts: string;
   iso_time: string;
@@ -114,6 +128,7 @@ export interface SlackThreadHistoryMessage {
   is_bot: boolean;
   is_trigger: boolean;
   is_mention: boolean;
+  files?: SlackHistoryFile[];
 }
 
 export interface SlackThreadHistoryRequest {
@@ -1455,6 +1470,24 @@ export class SlackConnector implements GatewayConnector {
     };
   }
 
+  /**
+   * Fetch a Slack file's metadata (including its bot-token-authenticated
+   * `url_private_download`) via `files.info`. The returned {@link InboundFile}
+   * is for server-side download plumbing only — callers exposing file data to
+   * agents must strip the URL (see {@link SlackHistoryFile}).
+   */
+  async getFileInfo(fileId: string): Promise<InboundFile> {
+    const result = await this.web.files.info({ file: fileId });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+    const [file] = extractSlackInboundFiles([result.file]);
+    if (!file) {
+      throw new Error(`Slack files.info returned no downloadable file for ${fileId}`);
+    }
+    return file;
+  }
+
   /** Resolve a Slack channel by its human name (with or without #). */
   async resolveChannelByName(name: string): Promise<{ channel: string; name: string }> {
     const normalized = name.replace(/^#/, '').trim().toLowerCase();
@@ -1569,6 +1602,12 @@ export class SlackConnector implements GatewayConnector {
               : undefined;
         const actorLabel = userName ?? botName ?? userId ?? botId ?? 'unknown';
         const text = typeof raw.text === 'string' ? raw.text : '';
+        const files = extractSlackInboundFiles(raw.files).map(({ id, name, mimetype, size }) => ({
+          id,
+          name,
+          mimetype,
+          size,
+        }));
         messages.push({
           ts,
           iso_time: slackTsToIso(ts),
@@ -1579,6 +1618,7 @@ export class SlackConnector implements GatewayConnector {
           is_bot: isBot,
           is_trigger: req.triggerTs === ts,
           is_mention: this.botUserId ? text.includes(`<@${this.botUserId}>`) : false,
+          ...(files.length > 0 ? { files } : {}),
         });
         if (messages.length >= requestedLimit) {
           stoppedAtRequestedLimitWithMoreRaw = i < rawMessages.length - 1;
