@@ -805,7 +805,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           db,
           taskRepository,
           sessionsRepository,
-          AGENTIC_TOOL_DISPLAY_NAMES
+          AGENTIC_TOOL_DISPLAY_NAMES,
+          // Lazy dynamic import keeps the Claude SDK out of this module's static graph.
+          (tool) => import('./services/native-auth-probe.js').then((m) => m.checkNativeAuth(tool))
         ),
       ],
       patch: [

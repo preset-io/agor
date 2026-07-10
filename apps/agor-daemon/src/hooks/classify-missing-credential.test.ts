@@ -32,11 +32,14 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 describe('classifyMissingCredentialFailure', () => {
   let taskRepository: Pick<TaskRepository, 'findById'>;
   let sessionsRepository: Pick<SessionRepository, 'findById'>;
+  let probeNativeAuth: (tool: string) => Promise<boolean>;
 
   beforeEach(() => {
     vi.mocked(resolveApiKey).mockReset();
     taskRepository = { findById: vi.fn().mockResolvedValue(makeTask()) };
     sessionsRepository = { findById: vi.fn().mockResolvedValue(makeSession()) };
+    // Default: native auth is NOT working, so no-key resolution stays classified.
+    probeNativeAuth = vi.fn().mockResolvedValue(false);
   });
 
   function runHook() {
@@ -44,7 +47,8 @@ describe('classifyMissingCredentialFailure', () => {
       {} as never,
       taskRepository,
       sessionsRepository,
-      TOOL_DISPLAY_NAMES
+      TOOL_DISPLAY_NAMES,
+      probeNativeAuth
     );
   }
 
@@ -68,6 +72,35 @@ describe('classifyMissingCredentialFailure', () => {
     expect((ctx.data as Message).metadata?.tool).toBe('claude-code');
     // Raw stderr text must not survive into the persisted content.
     expect((ctx.data as Message).content).not.toContain('/login');
+  });
+
+  describe('native-auth tools (no stored key, resolveApiKey returns useNativeAuth)', () => {
+    beforeEach(() => {
+      vi.mocked(resolveApiKey).mockResolvedValue({
+        apiKey: undefined,
+        source: 'none',
+        useNativeAuth: true,
+      });
+    });
+
+    it('does NOT classify when the native CLI/OAuth probe reports authenticated', async () => {
+      probeNativeAuth = vi.fn().mockResolvedValue(true);
+
+      const ctx = await runHook()(makeContext({ ...failureMessage }));
+
+      expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+      expect((ctx.data as Message).content).toBe(failureMessage.content);
+      expect(probeNativeAuth).toHaveBeenCalledWith('claude-code');
+    });
+
+    it('classifies when the native CLI/OAuth probe reports NOT authenticated', async () => {
+      probeNativeAuth = vi.fn().mockResolvedValue(false);
+
+      const ctx = await runHook()(makeContext({ ...failureMessage }));
+
+      expect((ctx.data as Message).metadata?.error_kind).toBe('missing_credential');
+      expect(probeNativeAuth).toHaveBeenCalledWith('claude-code');
+    });
   });
 
   describe('zero-turn "success" pathway (claude CLI reports success but never called the model)', () => {

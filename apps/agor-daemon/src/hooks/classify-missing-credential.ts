@@ -35,7 +35,10 @@ export function classifyMissingCredentialFailure(
   db: TenantScopeAwareDatabase,
   taskRepository: Pick<TaskRepository, 'findById'>,
   sessionsRepository: Pick<SessionRepository, 'findById'>,
-  toolDisplayNames: Record<string, string>
+  toolDisplayNames: Record<string, string>,
+  // Injected (not imported) so the hook stays free of the Claude SDK's import
+  // graph, which breaks under vitest's ESM resolution.
+  probeNativeAuth?: (tool: string) => Promise<boolean>
 ) {
   return async (context: HookContext): Promise<HookContext> => {
     const data = context.data as Partial<Message> | undefined;
@@ -59,12 +62,17 @@ export function classifyMissingCredentialFailure(
       // through untouched to the existing generic failure handling.
       if (!keyName) return context;
 
-      const { apiKey } = await resolveApiKey(keyName, {
+      const { apiKey, useNativeAuth } = await resolveApiKey(keyName, {
         userId: task.created_by as UserID,
         db,
         tool,
       });
       if (apiKey) return context; // A credential DID resolve — some other failure.
+
+      // Native-auth tools (claude-code/codex logged in via CLI/OAuth) always
+      // resolve to no key — that's normal, not missing. Probe the live CLI/OAuth
+      // state before concluding the credential is absent.
+      if (useNativeAuth && probeNativeAuth && (await probeNativeAuth(tool))) return context;
 
       context.data = {
         ...data,
