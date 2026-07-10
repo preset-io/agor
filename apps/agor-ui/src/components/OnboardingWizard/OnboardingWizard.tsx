@@ -430,6 +430,13 @@ const ONB_ANIM_CSS = `
     border-color: rgba(255,255,255,0.24) !important;
     box-shadow: 0 6px 28px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.18) !important;
   }
+
+  /* Skip link — plain text link; suppress antd text-button hover/active fill box */
+  button.onb-skip.ant-btn:hover,
+  button.onb-skip.ant-btn:active,
+  button.onb-skip.ant-btn:focus-visible {
+    background: transparent !important;
+  }
 `;
 
 // On-brand teal palette only
@@ -1849,6 +1856,7 @@ export function OnboardingWizard({
         {isSkippable && (
           <Button
             type="text"
+            className="onb-skip"
             onClick={handleSkip}
             style={{
               color: TEXT_MUTED,
