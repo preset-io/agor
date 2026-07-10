@@ -1,16 +1,16 @@
 import { Alert, Modal, Spin, Typography, theme } from 'antd';
 import React from 'react';
-import { fetchLinkObjectUrl, getSafeLinkContentLabel, type LinkContentTarget } from './linkContent';
+import {
+  fetchLinkImageObjectUrl,
+  getSafeLinkContentLabel,
+  type LinkContentTarget,
+} from './linkContent';
 
 export type LinkImagePreviewTarget = LinkContentTarget;
 
 interface LinkImagePreviewModalProps {
   target: LinkImagePreviewTarget | null;
   onClose: () => void;
-}
-
-export async function fetchLinkImageObjectUrl(linkId: string): Promise<string> {
-  return fetchLinkObjectUrl(linkId, { accept: 'image/png, image/jpeg, image/gif, image/webp' });
 }
 
 export const LinkImagePreviewModal: React.FC<LinkImagePreviewModalProps> = ({
@@ -37,7 +37,9 @@ export const LinkImagePreviewModal: React.FC<LinkImagePreviewModalProps> = ({
     setError(null);
     setObjectUrl(null);
 
-    fetchLinkImageObjectUrl(target.linkId)
+    const controller = new AbortController();
+
+    fetchLinkImageObjectUrl(target.linkId, controller.signal)
       .then((url) => {
         if (cancelled) {
           URL.revokeObjectURL(url);
@@ -55,6 +57,7 @@ export const LinkImagePreviewModal: React.FC<LinkImagePreviewModalProps> = ({
 
     return () => {
       cancelled = true;
+      controller.abort();
       if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
   }, [target]);

@@ -12,6 +12,9 @@ export type LinkContentDisposition = 'inline' | 'attachment';
 export type LinkContentAction = 'preview' | 'download';
 export type LinkPreviewKind = 'image' | 'markdown' | 'text';
 
+const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const INLINE_IMAGE_ACCEPT = [...INLINE_IMAGE_MIME_TYPES].join(', ');
+
 const PREVIEW_CATEGORIES: Partial<Record<LinkDisplayCategory, LinkPreviewKind>> = {
   image: 'image',
   markdown: 'markdown',
@@ -96,7 +99,12 @@ export function getSafeLinkContentLabel(value?: string | null): string | null {
 
 async function fetchLinkContent(
   linkId: string,
-  options?: { disposition?: LinkContentDisposition; download?: boolean; accept?: string }
+  options?: {
+    disposition?: LinkContentDisposition;
+    download?: boolean;
+    accept?: string;
+    signal?: AbortSignal;
+  }
 ): Promise<Response> {
   const token = getAgorAccessToken();
   const headers: Record<string, string> = {};
@@ -104,7 +112,10 @@ async function fetchLinkContent(
   if (options?.accept) headers.Accept = options.accept;
 
   const disposition = options?.download ? 'attachment' : (options?.disposition ?? 'inline');
-  const response = await fetch(getLinkContentUrl(linkId, disposition), { headers });
+  const response = await fetch(getLinkContentUrl(linkId, disposition), {
+    headers,
+    signal: options?.signal,
+  });
   if (!response.ok) {
     let message = `Link content request failed (${response.status})`;
     try {
@@ -120,11 +131,36 @@ async function fetchLinkContent(
 
 export async function fetchLinkObjectUrl(
   linkId: string,
-  options?: { download?: boolean; accept?: string }
+  options?: {
+    download?: boolean;
+    accept?: string;
+    signal?: AbortSignal;
+    allowedMimeTypes?: ReadonlySet<string>;
+  }
 ): Promise<string> {
   const response = await fetchLinkContent(linkId, options);
+  const responseMimeType = response.headers
+    .get('Content-Type')
+    ?.split(';')[0]
+    ?.trim()
+    .toLowerCase();
+  if (
+    options?.allowedMimeTypes &&
+    (!responseMimeType || !options.allowedMimeTypes.has(responseMimeType))
+  ) {
+    await response.body?.cancel();
+    throw new Error('Preview returned an unsupported image type');
+  }
   const blob = await response.blob();
   return URL.createObjectURL(blob);
+}
+
+export function fetchLinkImageObjectUrl(linkId: string, signal?: AbortSignal): Promise<string> {
+  return fetchLinkObjectUrl(linkId, {
+    accept: INLINE_IMAGE_ACCEPT,
+    allowedMimeTypes: INLINE_IMAGE_MIME_TYPES,
+    signal,
+  });
 }
 
 export async function fetchLinkMarkdownText(linkId: string): Promise<string> {
