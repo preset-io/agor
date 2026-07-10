@@ -25,8 +25,8 @@ export type LinkDisplayCategory =
   | 'internal'
   | 'unknown';
 
-export type LinkDisplayNavigation = 'external' | 'spa';
-export type LinkDisplaySource = LinkSource | 'branch';
+type LinkDisplayNavigation = 'external' | 'spa';
+type LinkDisplaySource = LinkSource | 'branch';
 
 export interface LinkDisplayTarget {
   href: string;

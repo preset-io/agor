@@ -21,7 +21,7 @@ interface LinkPromotionRouteParams extends AuthenticatedParams {
   route?: Record<string, string | undefined>;
 }
 
-export interface LinkPromotionData {
+interface LinkPromotionData {
   target?: 'teammate';
   teammate_branch_id?: BranchID | string;
 }

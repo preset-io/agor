@@ -5,17 +5,17 @@ import type { AuthenticatedParams, Link, Params } from '@agor/core/types';
 import type { Request, Response } from 'express';
 import { ALLOWED_UPLOAD_MIME_TYPES, getUploadDirectory } from '../utils/upload.js';
 
-export const INLINE_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
+const INLINE_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
   'image/png',
   'image/jpeg',
   'image/gif',
   'image/webp',
 ]);
 
-export const INLINE_TEXT_MIME_TYPES: ReadonlySet<string> = new Set(['text/plain', 'text/markdown']);
+const INLINE_TEXT_MIME_TYPES: ReadonlySet<string> = new Set(['text/plain', 'text/markdown']);
 
-export const MAX_INLINE_IMAGE_SIZE = 10 * 1024 * 1024;
-export const MAX_INLINE_TEXT_SIZE = 1024 * 1024;
+const MAX_INLINE_IMAGE_SIZE = 10 * 1024 * 1024;
+const MAX_INLINE_TEXT_SIZE = 1024 * 1024;
 
 export class LinkContentError extends Error {
   status: number;
@@ -26,7 +26,7 @@ export class LinkContentError extends Error {
   }
 }
 
-export interface ResolvedLinkContentFile {
+interface ResolvedLinkContentFile {
   path: string;
   size: number;
   mimeType: string;
@@ -48,7 +48,7 @@ function encodeContentDispositionValue(value: string): string {
     .replace(/\*/g, '%2A');
 }
 
-export function safeContentFilename(link: Pick<Link, 'title' | 'file_path' | 'metadata'>): string {
+function safeContentFilename(link: Pick<Link, 'title' | 'file_path' | 'metadata'>): string {
   const metadata = link.metadata && typeof link.metadata === 'object' ? link.metadata : {};
   const metadataName =
     typeof metadata.originalName === 'string'

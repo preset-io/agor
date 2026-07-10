@@ -177,29 +177,6 @@ export function buildSessionMcpMap(
   return map;
 }
 
-export function buildLinkMaps(list: readonly Link[]): {
-  linkById: Map<string, Link>;
-  linksByBranch: Map<string, Link[]>;
-  linksBySession: Map<string, Link[]>;
-} {
-  const linkById = new Map<string, Link>();
-  const linksByBranch = new Map<string, Link[]>();
-  const linksBySession = new Map<string, Link[]>();
-
-  for (const link of list) {
-    linkById.set(link.link_id, link);
-    if (link.branch_id && !link.session_id) {
-      const bucket = linksByBranch.get(link.branch_id) ?? [];
-      linksByBranch.set(link.branch_id, [...bucket, link]);
-    } else if (link.session_id && !link.branch_id) {
-      const bucket = linksBySession.get(link.session_id) ?? [];
-      linksBySession.set(link.session_id, [...bucket, link]);
-    }
-  }
-
-  return { linkById, linksByBranch, linksBySession };
-}
-
 function removeLinkFromBucket(
   buckets: Map<string, Link[]>,
   ownerId: string | null | undefined,
@@ -275,7 +252,7 @@ export function mergeLinksIntoMaps(prev: DataMaps, links: readonly Link[]): Data
   return next;
 }
 
-export type PinnedBranchLinkHydrationDomain = {
+type PinnedBranchLinkHydrationDomain = {
   /**
    * Optional owner branch scope for a partial pinned-branch snapshot (for
    * example, the displayed board's branch ids). Omit for the global

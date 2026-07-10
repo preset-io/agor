@@ -46,10 +46,10 @@ import {
 enableMapSet();
 
 /** Per-item counts captured at fetch-resolution time. Mirrors `useAgorData`. */
-export type ItemCounts = Partial<Record<InitialLoadItemKey, number>>;
+type ItemCounts = Partial<Record<InitialLoadItemKey, number>>;
 
 /** Background-hydrated collections that gate UI reads on their first apply. */
-export type GatedHydrationFlag = 'mcpServersHydrated' | 'gatewayChannelsHydrated';
+type GatedHydrationFlag = 'mcpServersHydrated' | 'gatewayChannelsHydrated';
 
 /** Load/meta fields that ride alongside the data maps. */
 interface AgorMeta {

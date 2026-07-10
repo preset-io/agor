@@ -31,7 +31,7 @@ import { DrizzleService, type Query } from '../adapters/drizzle';
 
 export const LINKS_SERVICE_METHODS = ['find', 'get', 'create', 'patch', 'remove'] as const;
 
-export type LinkParams = QueryParams<{
+type LinkParams = QueryParams<{
   board_id?: UUID;
   owner_scope?: LinkOwnerScope;
   branch_id?: BranchID;

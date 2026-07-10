@@ -24,7 +24,7 @@ type PreviewState = {
   kind: LinkPreviewKind;
 };
 
-export function LinkGlyph({ item }: { item: LinkDisplayItem }) {
+function LinkGlyph({ item }: { item: LinkDisplayItem }) {
   const { token } = theme.useToken();
   const isGitHubLink = item.category === 'issue' || item.category === 'pr';
   return (

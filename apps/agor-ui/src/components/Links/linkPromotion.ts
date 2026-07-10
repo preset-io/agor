@@ -2,7 +2,7 @@ import type { AgorClient, Link } from '@agor-live/client';
 import { normalizeRefTargetKey, normalizeUrlTargetKey } from '@agor-live/client';
 import type { LinkDisplayItem } from './linkDisplay';
 
-export type TeammatePromotionState =
+type TeammatePromotionState =
   | {
       canPromote: false;
       isPromoted: false;

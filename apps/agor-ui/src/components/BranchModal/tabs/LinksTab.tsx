@@ -345,5 +345,3 @@ export const LinksTab = memo(LinksTabInner, (prevProps, nextProps) => {
     prevProps.branch.pull_request_url === nextProps.branch.pull_request_url
   );
 });
-
-export default LinksTab;

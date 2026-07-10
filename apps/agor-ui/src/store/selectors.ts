@@ -31,12 +31,7 @@ export const selectGatewayChannelById = (s: AgorState) => s.gatewayChannelById;
 export const selectUserAuthenticatedMcpServerIds = (s: AgorState) =>
   s.userAuthenticatedMcpServerIds;
 export const selectArtifactById = (s: AgorState) => s.artifactById;
-export const selectLinkById = (s: AgorState) => s.linkById;
-export const selectLinksByBranch = (s: AgorState) => s.linksByBranch;
-export const selectLinksBySession = (s: AgorState) => s.linksBySession;
 export const selectSessionMcpServerIds = (s: AgorState) => s.sessionMcpServerIds;
-export const selectReplaceFullSessionLinks = (s: AgorState) => s.replaceFullSessionLinks;
-export const selectReplaceFullBranchLinks = (s: AgorState) => s.replaceFullBranchLinks;
 export const selectFetchAndReplaceFullSessionLinks = (s: AgorState) =>
   s.fetchAndReplaceFullSessionLinks;
 export const selectFetchAndReplaceFullBranchLinks = (s: AgorState) =>
