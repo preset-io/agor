@@ -21,6 +21,8 @@
 - Card-type create/edit, settings card details, and artifact edit forms now mount on demand and
   unmount on close. Their close handlers already reset the relevant form/selection state.
 - Added a focused branch-card regression test covering mount-on-open and removal-on-close.
+- Modal wrappers stay mounted through Ant Design's exit motion and unmount from `afterClose`, so
+  render-on-open does not bypass the component's close lifecycle.
 
 ## Deliberately unchanged
 

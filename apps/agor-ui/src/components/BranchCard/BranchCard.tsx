@@ -127,6 +127,7 @@ const BranchCardComponent = ({
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [archiveDeleteModalMounted, setArchiveDeleteModalMounted] = useState(false);
 
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
@@ -504,7 +505,10 @@ const BranchCardComponent = ({
               <ArchiveActionButton
                 tooltip="Archive or delete branch"
                 disabled={connectionDisabled}
-                onClick={() => setArchiveDeleteModalOpen(true)}
+                onClick={() => {
+                  setArchiveDeleteModalMounted(true);
+                  setArchiveDeleteModalOpen(true);
+                }}
               />
             )}
           </div>
@@ -626,9 +630,9 @@ const BranchCardComponent = ({
       )}
 
       {/* Branch cards are repeated across the canvas, so mount this only on demand. */}
-      {archiveDeleteModalOpen && (
+      {archiveDeleteModalMounted && (
         <ArchiveDeleteBranchModal
-          open
+          open={archiveDeleteModalOpen}
           branch={branch}
           sessionCount={sessions.length}
           environmentRunning={branch.environment_instance?.status === 'running'}
@@ -637,6 +641,7 @@ const BranchCardComponent = ({
             setArchiveDeleteModalOpen(false);
           }}
           onCancel={() => setArchiveDeleteModalOpen(false)}
+          afterClose={() => setArchiveDeleteModalMounted(false)}
         />
       )}
     </Card>

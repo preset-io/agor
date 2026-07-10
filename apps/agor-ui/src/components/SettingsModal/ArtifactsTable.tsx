@@ -106,9 +106,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       if (Object.keys(updates).length > 0) {
         onUpdate?.(editingArtifact.artifact_id, updates);
       }
-      form.resetFields();
       setEditModalOpen(false);
-      setEditingArtifact(null);
     });
   };
 
@@ -334,14 +332,16 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         />
       )}
 
-      {editModalOpen && (
+      {editingArtifact && (
         <Modal
           title="Edit Artifact"
-          open
+          open={editModalOpen}
           onOk={handleUpdate}
           onCancel={() => {
-            form.resetFields();
             setEditModalOpen(false);
+          }}
+          afterClose={() => {
+            form.resetFields();
             setEditingArtifact(null);
           }}
           okText="Save"

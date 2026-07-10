@@ -2990,9 +2990,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         )}
 
         {/* Card Detail Modal */}
-        {cardModalOpen && (
+        {selectedCard && (
           <CardModal
-            open
+            open={cardModalOpen}
             card={selectedCard}
             board={board}
             zoneName={
@@ -3018,14 +3018,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             client={client}
             onClose={() => {
               setCardModalOpen(false);
-              setSelectedCard(null);
             }}
+            afterClose={() => setSelectedCard(null)}
             onCardUpdated={(updatedCard) => {
               setSelectedCard(updatedCard);
             }}
             onCardDeleted={() => {
               setCardModalOpen(false);
-              setSelectedCard(null);
             }}
           />
         )}
