@@ -7,7 +7,7 @@ import type {
   SessionID,
   User,
 } from '@agor-live/client';
-import { getAssistantConfig, isAssistant, PermissionScope } from '@agor-live/client';
+import { getTeammateConfig, isTeammate, PermissionScope } from '@agor-live/client';
 import { Alert, Spin } from 'antd';
 import { useParams } from 'react-router-dom';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
@@ -130,8 +130,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           scheduledRunAt={session.scheduled_run_at}
           genealogy={session.genealogy}
           emptyStateMessage="Tap the menu icon to browse boards and sessions"
-          assistantEmoji={
-            branch && isAssistant(branch) ? getAssistantConfig(branch)?.emoji : undefined
+          teammateEmoji={
+            branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
           }
         />
       </div>

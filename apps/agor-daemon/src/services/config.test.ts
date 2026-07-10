@@ -313,3 +313,31 @@ describe('ConfigService.resolveApiKey', () => {
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
   });
 });
+
+describe('ConfigService.patch onboarding compatibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockResolvedValue({});
+  });
+
+  it('normalizes legacy assistantPending into teammatePending', async () => {
+    const service = new ConfigService({} as never);
+
+    const result = await service.patch(null, { onboarding: { assistantPending: true } } as never);
+
+    expect(configMocks.saveConfig).toHaveBeenCalledWith({
+      onboarding: { teammatePending: true },
+    });
+    expect(result.onboarding?.teammatePending).toBe(true);
+  });
+
+  it('normalizes legacy persistedAgentPending into teammatePending', async () => {
+    const service = new ConfigService({} as never);
+
+    await service.patch(null, { onboarding: { persistedAgentPending: true } } as never);
+
+    expect(configMocks.saveConfig).toHaveBeenCalledWith({
+      onboarding: { teammatePending: true },
+    });
+  });
+});

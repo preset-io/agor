@@ -1651,7 +1651,7 @@ export function scopeFindToAccessibleSessionsSql(options?: { allowSuperadmin?: b
  * can see.
  *
  * A board is visible if the caller owns it, it is shared, any branch on the
- * board is accessible to them, or the board's primary assistant branch is
+ * board is accessible to them, or the board's primary teammate branch is
  * accessible to them. Empty private boards stay visible to their owners;
  * superadmins bypass.
  *

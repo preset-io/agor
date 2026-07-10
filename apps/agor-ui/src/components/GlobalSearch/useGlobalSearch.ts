@@ -1,5 +1,5 @@
 import {
-  isAssistant,
+  isTeammate,
   matchSearchTokens,
   SEARCHABLE_FIELDS,
   tokenizeSearchQuery,
@@ -92,15 +92,15 @@ export function useGlobalSearch({
       .filter((s) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(s)))
       .sort(byTimestamp((s) => s.last_updated));
 
-    // Branches + Assistants share one registry entry: the field set covers
-    // both row variants (assistant displayName is included), and the type
-    // split below uses `isAssistant()` to bucket matched rows.
+    // Branches + Teammates share one registry entry: the field set covers
+    // both row variants (teammate displayName is included), and the type
+    // split below uses `isTeammate()` to bucket matched rows.
     const allBranches = Array.from(branchById.values())
       .filter((b) => !ownedByMe || b.created_by === currentUserId)
       .filter((b) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.branch(b)))
       .sort(byTimestamp((b) => b.updated_at));
-    const branches = allBranches.filter((b) => !isAssistant(b));
-    const assistants = allBranches.filter((b) => isAssistant(b));
+    const branches = allBranches.filter((b) => !isTeammate(b));
+    const teammates = allBranches.filter((b) => isTeammate(b));
 
     // Artifacts (filter archived — useAgorData keeps them in the map regardless)
     const arts = Array.from(artifactById.values())
@@ -125,7 +125,7 @@ export function useGlobalSearch({
     const counts: SearchCounts = {
       session: sessions.length,
       branch: branches.length,
-      assistant: assistants.length,
+      teammate: teammates.length,
       artifact: arts.length,
       board: bs.length,
       mcp: servers.length,
@@ -142,8 +142,8 @@ export function useGlobalSearch({
       branch: includeType('branch')
         ? branches.slice(0, limitFor('branch')).map((b) => ({ type: 'branch', item: b }))
         : [],
-      assistant: includeType('assistant')
-        ? assistants.slice(0, limitFor('assistant')).map((b) => ({ type: 'assistant', item: b }))
+      teammate: includeType('teammate')
+        ? teammates.slice(0, limitFor('teammate')).map((b) => ({ type: 'teammate', item: b }))
         : [],
       artifact: includeType('artifact')
         ? arts.slice(0, limitFor('artifact')).map((a) => ({

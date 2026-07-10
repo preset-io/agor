@@ -31,7 +31,7 @@ export const metadata = {
     'Gemini',
     'git branches',
     'MCP',
-    'persistent assistants',
+    'persistent AI teammates',
     'AI workflow',
     'developer tools',
   ],

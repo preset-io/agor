@@ -234,7 +234,7 @@ export interface Branch {
    * Custom context for Handlebars templates and agent metadata
    *
    * User-defined variables for zone triggers, reports, etc.
-   * Also stores persisted agent config under the 'agent' key.
+   * Also stores teammate config under the 'teammate' key.
    */
   custom_context?: Record<string, unknown>;
 
@@ -734,85 +734,89 @@ export interface RepoEnvironment {
  */
 export type RepoEnvironmentConfig = RepoEnvironmentConfigV1;
 
-// ===== Assistants =====
+// ===== Teammates =====
 
-export type AssistantKnowledgeGrantAccess = 'none' | 'read' | 'write';
-export interface AssistantKnowledgeGrant {
+export type TeammateKnowledgeGrantAccess = 'none' | 'read' | 'write';
+export interface TeammateKnowledgeGrant {
   namespace_id: KnowledgeNamespaceID;
   namespace_slug: string;
-  access: AssistantKnowledgeGrantAccess;
+  access: TeammateKnowledgeGrantAccess;
 }
 
-export interface AssistantKnowledgeConfig {
+export interface TeammateKnowledgeConfig {
   primary_namespace_id: KnowledgeNamespaceID;
   primary_namespace_slug: string;
   memory_path_template: 'memory/{{YYYY-MM-DD}}.md';
   default_visibility: KnowledgeVisibility;
   /**
-   * Assistant-tool policy for namespaces not listed in `grants`.
+   * Teammate-tool policy for namespaces not listed in `grants`.
    *
-   * This is an assistant-specific ceiling; effective access is still
+   * This is a teammate-specific ceiling; effective access is still
    * intersected with the calling user's Knowledge namespace permission.
    */
-  global_access?: AssistantKnowledgeGrantAccess;
-  grants?: AssistantKnowledgeGrant[];
+  global_access?: TeammateKnowledgeGrantAccess;
+  grants?: TeammateKnowledgeGrant[];
 }
 
 /**
- * Configuration for an assistant, stored in branch.custom_context.assistant
+ * Configuration for a teammate, stored in branch.custom_context.teammate.
  *
- * Marks a branch as a long-lived "assistant" — a persistent AI companion
+ * Marks a branch as a long-lived AI teammate — a persistent AI companion
  * that manages other branches, maintains memory, and orchestrates work.
  */
-export interface AssistantConfig {
+export interface TeammateConfig {
   /** Discriminator for type narrowing */
-  kind: 'assistant';
-  /** Human-friendly display name (e.g., "My Assistant") */
+  kind: 'teammate';
+  /** Human-friendly display name (e.g., "My Teammate") */
   displayName: string;
-  /** Emoji icon for this assistant (e.g., "🧑‍💻") */
+  /** Emoji icon for this teammate (e.g., "🧑‍💻") */
   emoji?: string;
-  /** Template repo slug this assistant was created from */
+  /** Template repo slug this teammate was created from */
   frameworkRepo?: string;
   /** Framework version at creation time, for upgrade detection */
   frameworkVersion?: string;
   /** Whether this was created via the onboarding wizard */
   createdViaOnboarding?: boolean;
-  /** Knowledge Base namespace and grant config for assistant memory/context. */
-  kb?: AssistantKnowledgeConfig;
+  /** Knowledge Base namespace and grant config for teammate memory/context. */
+  kb?: TeammateKnowledgeConfig;
 }
 
-/** @deprecated Use AssistantConfig instead */
-export type PersistedAgentConfig = AssistantConfig;
-
 /**
- * Type guard: checks if a branch is an assistant.
- * Supports both new (`custom_context.assistant`) and legacy (`custom_context.agent`) storage.
+ * Type guard: checks if a branch is a teammate.
+ * Supports canonical (`custom_context.teammate`) plus legacy
+ * (`custom_context.assistant` / `custom_context.agent`) storage.
  */
-export function isAssistant(branch: { custom_context?: Record<string, unknown> }): boolean {
-  const config = branch.custom_context?.assistant ?? branch.custom_context?.agent;
+export function isTeammate(branch: { custom_context?: Record<string, unknown> }): boolean {
+  const config =
+    branch.custom_context?.teammate ??
+    branch.custom_context?.assistant ??
+    branch.custom_context?.agent;
   return (
     config != null &&
     typeof config === 'object' &&
-    ((config as Record<string, unknown>).kind === 'assistant' ||
+    ((config as Record<string, unknown>).kind === 'teammate' ||
+      (config as Record<string, unknown>).kind === 'assistant' ||
       (config as Record<string, unknown>).kind === 'persisted-agent')
   );
 }
 
-/** @deprecated Use isAssistant instead */
-export const isPersistedAgent = isAssistant;
+export const isPersistedAgent = isTeammate;
 
 /**
- * Extract the assistant config from a branch, if present.
- * Supports both new (`custom_context.assistant`) and legacy (`custom_context.agent`) storage.
+ * Extract the teammate config from a branch, if present.
+ * Supports canonical (`custom_context.teammate`) plus legacy
+ * (`custom_context.assistant` / `custom_context.agent`) storage.
  */
-export function getAssistantConfig(branch: {
+export function getTeammateConfig(branch: {
   custom_context?: Record<string, unknown>;
-}): AssistantConfig | null {
-  if (!isAssistant(branch)) return null;
-  const config = (branch.custom_context!.assistant ??
-    branch.custom_context!.agent) as AssistantConfig;
-  return config;
+}): TeammateConfig | null {
+  if (!isTeammate(branch)) return null;
+  const config = (branch.custom_context!.teammate ??
+    branch.custom_context!.assistant ??
+    branch.custom_context!.agent) as Omit<TeammateConfig, 'kind'> & {
+    kind: 'teammate' | 'assistant' | 'persisted-agent';
+  };
+  return { ...config, kind: 'teammate' };
 }
 
-/** @deprecated Use getAssistantConfig instead */
-export const getPersistedAgentConfig = getAssistantConfig;
+export const getPersistedAgentConfig = getTeammateConfig;

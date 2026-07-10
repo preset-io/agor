@@ -5,7 +5,6 @@ import path from 'node:path';
 import { BranchRepository, KnowledgeNamespaceRepository } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
 import type {
-  AssistantKnowledgeGrantAccess,
   Branch,
   BranchID,
   KnowledgeDocumentKind,
@@ -16,13 +15,14 @@ import type {
   KnowledgeGraphNodeType,
   KnowledgeNamespace,
   KnowledgeVisibility,
+  TeammateKnowledgeGrantAccess,
   User,
   UserRole,
 } from '@agor/core/types';
 import {
   buildKnowledgeDocumentUri,
-  getAssistantConfig,
-  isAssistant,
+  getTeammateConfig,
+  isTeammate,
   KNOWLEDGE_DOCUMENT_KINDS,
   KNOWLEDGE_DOCUMENT_STATUSES,
   KNOWLEDGE_DOCUMENT_URI_PREFIX,
@@ -44,13 +44,13 @@ import {
   splitMarkdownLines,
 } from '../../knowledge/markdown-outline.js';
 import {
-  ASSISTANT_MEMORY_PATH_TEMPLATE,
-  ASSISTANT_NAMESPACE_MISSING_MESSAGE,
-} from '../../services/assistant-knowledge.js';
-import {
   hasKnowledgeNamespacePermission,
   resolveKnowledgeNamespacePermission,
 } from '../../services/knowledge-access.js';
+import {
+  TEAMMATE_MEMORY_PATH_TEMPLATE,
+  TEAMMATE_NAMESPACE_MISSING_MESSAGE,
+} from '../../services/teammate-knowledge.js';
 import { resolveBranchWorkspacePath } from '../../utils/branch-workspace-path.js';
 import { resolveBranchId } from '../resolve-ids.js';
 import {
@@ -709,8 +709,8 @@ async function writeKnowledgeMaterializationSidecar(
   );
 }
 
-function renderAssistantMemoryPath(template: string | undefined, date: string): string {
-  return (template || ASSISTANT_MEMORY_PATH_TEMPLATE).replace('{{YYYY-MM-DD}}', date);
+function renderTeammateMemoryPath(template: string | undefined, date: string): string {
+  return (template || TEAMMATE_MEMORY_PATH_TEMPLATE).replace('{{YYYY-MM-DD}}', date);
 }
 
 function normalizeMemoryBullets(input: string | string[]): string[] {
@@ -726,19 +726,19 @@ function escapeHtmlAttr(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
 
-const ASSISTANT_POLICY_RANK: Record<AssistantKnowledgeGrantAccess, number> = {
+const TEAMMATE_POLICY_RANK: Record<TeammateKnowledgeGrantAccess, number> = {
   none: 0,
   read: 1,
   write: 2,
 };
 
-function assistantPolicyAllows(
+function teammatePolicyAllows(
   branch: Branch,
   namespace: KnowledgeNamespace,
-  required: Exclude<AssistantKnowledgeGrantAccess, 'none'>
+  required: Exclude<TeammateKnowledgeGrantAccess, 'none'>
 ): boolean {
-  const assistant = getAssistantConfig(branch);
-  const kb = assistant?.kb;
+  const teammate = getTeammateConfig(branch);
+  const kb = teammate?.kb;
   if (!kb) return false;
   if (
     namespace.namespace_id === kb.primary_namespace_id ||
@@ -751,36 +751,36 @@ function assistantPolicyAllows(
       entry.namespace_id === namespace.namespace_id || entry.namespace_slug === namespace.slug
   );
   const access = grant?.access ?? kb.global_access ?? 'write';
-  return ASSISTANT_POLICY_RANK[access] >= ASSISTANT_POLICY_RANK[required];
+  return TEAMMATE_POLICY_RANK[access] >= TEAMMATE_POLICY_RANK[required];
 }
 
-async function resolveAssistantKnowledgeContext(ctx: McpContext): Promise<{
+async function resolveTeammateKnowledgeContext(ctx: McpContext): Promise<{
   branch: Branch;
   namespace: KnowledgeNamespace;
 }> {
-  if (!ctx.sessionId) throw new Error(ASSISTANT_NAMESPACE_MISSING_MESSAGE);
+  if (!ctx.sessionId) throw new Error(TEAMMATE_NAMESPACE_MISSING_MESSAGE);
   const session = (await ctx.app.service('sessions').get(ctx.sessionId, ctx.baseServiceParams)) as {
     branch_id?: string;
   };
   const branch = (await ctx.app
     .service('branches')
     .get(String(session.branch_id), ctx.baseServiceParams)) as Branch;
-  if (!isAssistant(branch)) {
-    throw new Error('This tool only works from an assistant branch/session');
+  if (!isTeammate(branch)) {
+    throw new Error('This tool only works from a teammate branch/session');
   }
-  const assistant = getAssistantConfig(branch);
-  const namespaceId = assistant?.kb?.primary_namespace_id;
-  if (!namespaceId) throw new Error(ASSISTANT_NAMESPACE_MISSING_MESSAGE);
+  const teammate = getTeammateConfig(branch);
+  const namespaceId = teammate?.kb?.primary_namespace_id;
+  if (!namespaceId) throw new Error(TEAMMATE_NAMESPACE_MISSING_MESSAGE);
   let namespace: KnowledgeNamespace;
   try {
     namespace = (await ctx.app
       .service('kb/namespaces')
       .get(namespaceId, ctx.baseServiceParams)) as KnowledgeNamespace;
   } catch (error) {
-    if (isNotFoundError(error)) throw new Error(ASSISTANT_NAMESPACE_MISSING_MESSAGE);
+    if (isNotFoundError(error)) throw new Error(TEAMMATE_NAMESPACE_MISSING_MESSAGE);
     throw error;
   }
-  if (!namespace || namespace.archived) throw new Error(ASSISTANT_NAMESPACE_MISSING_MESSAGE);
+  if (!namespace || namespace.archived) throw new Error(TEAMMATE_NAMESPACE_MISSING_MESSAGE);
   return { branch, namespace };
 }
 
@@ -800,257 +800,268 @@ async function resolveKnowledgeNamespaceBySlug(
 }
 
 export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void {
-  server.registerTool(
-    'agor_assistant_context',
-    {
-      description:
-        "Read the current assistant branch's Knowledge memory/context namespace and recent memory documents. Does not mutate assistant Knowledge config or grants.",
-      annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        includeMemory: z.boolean().optional().describe('Include memory documents (default: true)'),
-        limit: z.number().int().min(1).max(50).optional().describe('Maximum memory docs to list'),
-      }),
-    },
-    async (args) => {
-      if (!ctx.sessionId) return sessionContextRequiredResult();
-      const { branch, namespace } = await resolveAssistantKnowledgeContext(ctx);
-      const docsService = getOptionalService(ctx, 'kb/documents');
-      const memory =
-        args.includeMemory === false || !docsService?.find
-          ? []
-          : await docsService.find(
-              mcpParams(ctx, {
-                namespace_id: namespace.namespace_id,
-                kind: 'memory',
-                include_content: true,
-                include_my_drafts: true,
-                limit: args.limit ?? 10,
-              })
-            );
-      return textResult({
-        branch_id: branch.branch_id,
-        assistant: getAssistantConfig(branch),
-        namespace,
-        memory,
-      });
-    }
-  );
-
-  server.registerTool(
-    'agor_assistant_memory_search',
-    {
-      description:
-        "Search the current assistant branch's primary Knowledge memory namespace. Does not mutate assistant Knowledge config or grants.",
-      annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        query: z.string().describe('Search text. Use an empty string to browse memory.'),
-        limit: z.number().int().min(1).max(50).optional(),
-        mode: z.enum(['text', 'semantic', 'hybrid']).optional(),
-        ...KnowledgeSearchContentControlSchemaShape,
-      }),
-    },
-    async (args) => {
-      if (!ctx.sessionId) return sessionContextRequiredResult();
-      const { namespace } = await resolveAssistantKnowledgeContext(ctx);
-      const service = getOptionalService(ctx, 'kb/search');
-      if (!service?.find) {
-        return knowledgeNotImplementedResult('agor_assistant_memory_search', ['kb/search.find']);
-      }
-      const contentMode = resolveKnowledgeSearchContentMode(args);
-      const result = await service.find(
-        mcpParams(ctx, {
-          q: coerceString(args.query) ?? '',
-          namespace_slug: namespace.slug,
-          path_prefix: 'memory/',
-          limit: args.limit ?? 10,
-          mode: args.mode,
-          ...(contentMode === 'full' ? { include_chunks: true } : {}),
-        })
-      );
-      return textResult(shapeKnowledgeSearchResponse(result, args));
-    }
-  );
-
-  server.registerTool(
-    'agor_assistant_knowledge_search',
-    {
-      description:
-        'Search Knowledge through the current assistant branch policy. The assistant policy (whole-KB fallback plus namespace overrides) is checked before the normal user namespace permissions.',
-      annotations: { readOnlyHint: true },
-      inputSchema: z.object({
-        query: z.string().describe('Search text. Use an empty string to browse.'),
-        namespace: z
-          .string()
-          .optional()
-          .describe('Optional namespace slug. Required unless whole-KB fallback is read/write.'),
-        pathPrefix: z.string().optional().describe('Optional path prefix filter.'),
-        limit: z.number().int().min(1).max(50).optional(),
-        mode: z.enum(['text', 'semantic', 'hybrid']).optional(),
-        ...KnowledgeSearchContentControlSchemaShape,
-      }),
-    },
-    async (args) => {
-      if (!ctx.sessionId) return sessionContextRequiredResult();
-      const { branch } = await resolveAssistantKnowledgeContext(ctx);
-      const assistant = getAssistantConfig(branch);
-      const globalAccess = assistant?.kb?.global_access ?? 'write';
-      const service = getOptionalService(ctx, 'kb/search');
-      if (!service?.find) {
-        return knowledgeNotImplementedResult('agor_assistant_knowledge_search', ['kb/search.find']);
-      }
-
-      const namespaceSlug = coerceString(args.namespace);
-      if (namespaceSlug) {
-        const namespace = await resolveKnowledgeNamespaceBySlug(ctx, namespaceSlug);
-        if (!namespace || !assistantPolicyAllows(branch, namespace, 'read')) {
-          throw new Error(
-            `Assistant Knowledge policy does not grant read access to namespace ${namespaceSlug}`
+  const teammateContextSchema = z.object({
+    includeMemory: z.boolean().optional().describe('Include memory documents (default: true)'),
+    limit: z.number().int().min(1).max(50).optional().describe('Maximum memory docs to list'),
+  });
+  const teammateContextHandler = async (args: z.infer<typeof teammateContextSchema>) => {
+    if (!ctx.sessionId) return sessionContextRequiredResult();
+    const { branch, namespace } = await resolveTeammateKnowledgeContext(ctx);
+    const docsService = getOptionalService(ctx, 'kb/documents');
+    const memory =
+      args.includeMemory === false || !docsService?.find
+        ? []
+        : await docsService.find(
+            mcpParams(ctx, {
+              namespace_id: namespace.namespace_id,
+              kind: 'memory',
+              include_content: true,
+              include_my_drafts: true,
+              limit: args.limit ?? 10,
+            })
           );
-        }
-      } else if (ASSISTANT_POLICY_RANK[globalAccess] < ASSISTANT_POLICY_RANK.read) {
-        throw new Error(
-          'Assistant Knowledge policy does not grant whole-Knowledge-Base read access. Choose a namespace with an explicit read grant or update the assistant Knowledge policy.'
-        );
-      }
-
-      const contentMode = resolveKnowledgeSearchContentMode(args);
-      const result = await service.find(
-        mcpParams(ctx, {
-          q: coerceString(args.query) ?? '',
-          ...(namespaceSlug ? { namespace_slug: namespaceSlug } : {}),
-          ...(args.pathPrefix ? { path_prefix: coerceString(args.pathPrefix) } : {}),
-          limit: args.limit ?? 10,
-          mode: args.mode,
-          ...(contentMode === 'full' ? { include_chunks: true } : {}),
-        })
-      );
-      return textResult(shapeKnowledgeSearchResponse(result, args));
-    }
-  );
+    return textResult({
+      branch_id: branch.branch_id,
+      teammate: getTeammateConfig(branch),
+      namespace,
+      memory,
+    });
+  };
 
   server.registerTool(
-    'agor_assistant_memory_append',
+    'agor_teammate_context',
     {
       description:
-        "Append one or more memory bullets to the current assistant branch's daily Knowledge memory document.",
-      annotations: { idempotentHint: true },
-      inputSchema: z.object({
-        bullets: z.union([z.string(), z.array(z.string())]).describe('Memory bullet(s) to append'),
-        date: z
-          .string()
-          .regex(/^\d{4}-\d{2}-\d{2}$/)
-          .optional(),
-        category: z
-          .enum(['note', 'decision', 'preference', 'project', 'learning', 'task', 'other'])
-          .optional(),
-        tags: z.array(z.string()).optional(),
-        importance: z.enum(['low', 'normal', 'high']).optional(),
-        idempotencyKey: z.string().optional(),
-      }),
+        "Read the current teammate branch's Knowledge memory/context namespace and recent memory documents. Does not mutate teammate Knowledge config or grants.",
+      annotations: { readOnlyHint: true },
+      inputSchema: teammateContextSchema,
     },
-    async (args) => {
-      if (!ctx.sessionId) return sessionContextRequiredResult();
-      const { branch, namespace } = await resolveAssistantKnowledgeContext(ctx);
-      const namespaceRepo = new KnowledgeNamespaceRepository(ctx.db);
-      const permission = await resolveKnowledgeNamespacePermission(
-        namespaceRepo,
-        namespace.namespace_id,
-        ctx.authenticatedUser as unknown as User
-      );
-      if (!hasKnowledgeNamespacePermission(permission, 'write')) {
-        throw new Error(
-          `You don't have write access to namespace ${namespace.slug}. Ask a namespace owner to grant write access in Knowledge -> Settings -> Namespaces.`
-        );
-      }
+    teammateContextHandler
+  );
 
-      const bullets = normalizeMemoryBullets(args.bullets);
-      if (bullets.length === 0) throw new Error('No memory bullets provided');
-      const date = args.date ?? new Date().toISOString().slice(0, 10);
-      const assistant = getAssistantConfig(branch);
-      const docPath = renderAssistantMemoryPath(assistant?.kb?.memory_path_template, date);
-      const docsService = getOptionalService(ctx, 'kb/documents');
-      if (!docsService) throw new Error('Knowledge documents service is not registered');
-
-      let existingContent = `# ${date}\n`;
-      let expectedVersion: string | number | undefined;
-      try {
-        const existing = (await callCustomMethod(
-          docsService,
-          'getDocument',
-          {
-            namespace_slug: namespace.slug,
-            path: docPath,
-            include_content: true,
-          },
-          mcpParams(ctx)
-        )) as HydratedKnowledgeDocumentResult | undefined;
-        if (existing) {
-          existingContent =
-            typeof existing.content === 'string' ? existing.content : existingContent;
-          expectedVersion = existing.current_version?.version_id;
-        }
-      } catch (error) {
-        if (!isNotFoundError(error)) throw error;
-      }
-
-      const now = new Date().toISOString();
-      const category = args.category ?? 'note';
-      const tags = (args.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
-      const appended: Array<{ text: string; hash: string; deduped: boolean }> = [];
-      const blocks: string[] = [];
-      bullets.forEach((bullet, index) => {
-        const key = args.idempotencyKey
-          ? `${args.idempotencyKey}:${index}`
-          : `${category}:${bullet}`;
-        const hash = memoryEntryHash(key);
-        if (existingContent.includes(`hash="${hash}"`)) {
-          appended.push({ text: bullet, hash, deduped: true });
-          return;
-        }
-        const id = args.idempotencyKey
-          ? createHash('sha256').update(key).digest('hex').slice(0, 24)
-          : randomUUID();
-        const tagText = tags.map((tag) => ` #${tag.replace(/\s+/g, '-')}`).join('');
-        const importance =
-          args.importance && args.importance !== 'normal' ? ` (${args.importance})` : '';
-        blocks.push(
-          `<!-- agor-memory-entry id="${escapeHtmlAttr(id)}" hash="${hash}" -->\n` +
-            `- [${now}] ${category}${importance}: ${bullet}${tagText}\n` +
-            `  - source: agor://session/${ctx.sessionId}\n` +
-            '<!-- /agor-memory-entry -->'
-        );
-        appended.push({ text: bullet, hash, deduped: false });
-      });
-
-      const nextContent = blocks.length
-        ? `${existingContent.replace(/\s*$/, '\n\n')}${blocks.join('\n\n')}\n`
-        : existingContent;
-      if (blocks.length > 0) {
-        const result = await callCustomMethod(
-          docsService,
-          'putDocument',
-          {
-            namespace_slug: namespace.slug,
-            path: docPath,
-            title: date,
-            kind: 'memory',
-            visibility: assistant?.kb?.default_visibility ?? namespace.visibility_default,
-            edit_policy: 'public',
-            status: 'published',
-            content_text: nextContent,
-            expected_version: expectedVersion,
-            metadata: {
-              assistant_memory: true,
-              assistant_branch_id: branch.branch_id,
-              memory_date: date,
-            },
-          },
-          mcpParams(ctx)
-        );
-        return textResult({ namespace: namespace.slug, path: docPath, appended, document: result });
-      }
-      return textResult({ namespace: namespace.slug, path: docPath, appended });
+  const teammateMemorySearchSchema = z.object({
+    query: z.string().describe('Search text. Use an empty string to browse memory.'),
+    limit: z.number().int().min(1).max(50).optional(),
+    mode: z.enum(['text', 'semantic', 'hybrid']).optional(),
+    ...KnowledgeSearchContentControlSchemaShape,
+  });
+  const teammateMemorySearchHandler = async (args: z.infer<typeof teammateMemorySearchSchema>) => {
+    if (!ctx.sessionId) return sessionContextRequiredResult();
+    const { namespace } = await resolveTeammateKnowledgeContext(ctx);
+    const service = getOptionalService(ctx, 'kb/search');
+    if (!service?.find) {
+      return knowledgeNotImplementedResult('agor_teammate_memory_search', ['kb/search.find']);
     }
+    const contentMode = resolveKnowledgeSearchContentMode(args);
+    const result = await service.find(
+      mcpParams(ctx, {
+        q: coerceString(args.query) ?? '',
+        namespace_slug: namespace.slug,
+        path_prefix: 'memory/',
+        limit: args.limit ?? 10,
+        mode: args.mode,
+        ...(contentMode === 'full' ? { include_chunks: true } : {}),
+      })
+    );
+    return textResult(shapeKnowledgeSearchResponse(result, args));
+  };
+
+  server.registerTool(
+    'agor_teammate_memory_search',
+    {
+      description:
+        "Search the current teammate branch's primary Knowledge memory namespace. Does not mutate teammate Knowledge config or grants.",
+      annotations: { readOnlyHint: true },
+      inputSchema: teammateMemorySearchSchema,
+    },
+    teammateMemorySearchHandler
+  );
+
+  const teammateKnowledgeSearchSchema = z.object({
+    query: z.string().describe('Search text. Use an empty string to browse.'),
+    namespace: z
+      .string()
+      .optional()
+      .describe('Optional namespace slug. Required unless whole-KB fallback is read/write.'),
+    pathPrefix: z.string().optional().describe('Optional path prefix filter.'),
+    limit: z.number().int().min(1).max(50).optional(),
+    mode: z.enum(['text', 'semantic', 'hybrid']).optional(),
+    ...KnowledgeSearchContentControlSchemaShape,
+  });
+  const teammateKnowledgeSearchHandler = async (
+    args: z.infer<typeof teammateKnowledgeSearchSchema>
+  ) => {
+    if (!ctx.sessionId) return sessionContextRequiredResult();
+    const { branch } = await resolveTeammateKnowledgeContext(ctx);
+    const teammate = getTeammateConfig(branch);
+    const globalAccess = teammate?.kb?.global_access ?? 'write';
+    const service = getOptionalService(ctx, 'kb/search');
+    if (!service?.find) {
+      return knowledgeNotImplementedResult('agor_teammate_knowledge_search', ['kb/search.find']);
+    }
+
+    const namespaceSlug = coerceString(args.namespace);
+    if (namespaceSlug) {
+      const namespace = await resolveKnowledgeNamespaceBySlug(ctx, namespaceSlug);
+      if (!namespace || !teammatePolicyAllows(branch, namespace, 'read')) {
+        throw new Error(
+          `Teammate Knowledge policy does not grant read access to namespace ${namespaceSlug}`
+        );
+      }
+    } else if (TEAMMATE_POLICY_RANK[globalAccess] < TEAMMATE_POLICY_RANK.read) {
+      throw new Error(
+        'Teammate Knowledge policy does not grant whole-Knowledge-Base read access. Choose a namespace with an explicit read grant or update the teammate Knowledge policy.'
+      );
+    }
+
+    const contentMode = resolveKnowledgeSearchContentMode(args);
+    const result = await service.find(
+      mcpParams(ctx, {
+        q: coerceString(args.query) ?? '',
+        ...(namespaceSlug ? { namespace_slug: namespaceSlug } : {}),
+        ...(args.pathPrefix ? { path_prefix: coerceString(args.pathPrefix) } : {}),
+        limit: args.limit ?? 10,
+        mode: args.mode,
+        ...(contentMode === 'full' ? { include_chunks: true } : {}),
+      })
+    );
+    return textResult(shapeKnowledgeSearchResponse(result, args));
+  };
+
+  server.registerTool(
+    'agor_teammate_knowledge_search',
+    {
+      description:
+        'Search Knowledge through the current teammate branch policy. The teammate policy (whole-KB fallback plus namespace overrides) is checked before the normal user namespace permissions.',
+      annotations: { readOnlyHint: true },
+      inputSchema: teammateKnowledgeSearchSchema,
+    },
+    teammateKnowledgeSearchHandler
+  );
+
+  const teammateMemoryAppendSchema = z.object({
+    bullets: z.union([z.string(), z.array(z.string())]).describe('Memory bullet(s) to append'),
+    date: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    category: z
+      .enum(['note', 'decision', 'preference', 'project', 'learning', 'task', 'other'])
+      .optional(),
+    tags: z.array(z.string()).optional(),
+    importance: z.enum(['low', 'normal', 'high']).optional(),
+    idempotencyKey: z.string().optional(),
+  });
+  const teammateMemoryAppendHandler = async (args: z.infer<typeof teammateMemoryAppendSchema>) => {
+    if (!ctx.sessionId) return sessionContextRequiredResult();
+    const { branch, namespace } = await resolveTeammateKnowledgeContext(ctx);
+    const namespaceRepo = new KnowledgeNamespaceRepository(ctx.db);
+    const permission = await resolveKnowledgeNamespacePermission(
+      namespaceRepo,
+      namespace.namespace_id,
+      ctx.authenticatedUser as unknown as User
+    );
+    if (!hasKnowledgeNamespacePermission(permission, 'write')) {
+      throw new Error(
+        `You don't have write access to namespace ${namespace.slug}. Ask a namespace owner to grant write access in Knowledge -> Settings -> Namespaces.`
+      );
+    }
+
+    const bullets = normalizeMemoryBullets(args.bullets);
+    if (bullets.length === 0) throw new Error('No memory bullets provided');
+    const date = args.date ?? new Date().toISOString().slice(0, 10);
+    const teammate = getTeammateConfig(branch);
+    const docPath = renderTeammateMemoryPath(teammate?.kb?.memory_path_template, date);
+    const docsService = getOptionalService(ctx, 'kb/documents');
+    if (!docsService) throw new Error('Knowledge documents service is not registered');
+
+    let existingContent = `# ${date}\n`;
+    let expectedVersion: string | number | undefined;
+    try {
+      const existing = (await callCustomMethod(
+        docsService,
+        'getDocument',
+        {
+          namespace_slug: namespace.slug,
+          path: docPath,
+          include_content: true,
+        },
+        mcpParams(ctx)
+      )) as HydratedKnowledgeDocumentResult | undefined;
+      if (existing) {
+        existingContent = typeof existing.content === 'string' ? existing.content : existingContent;
+        expectedVersion = existing.current_version?.version_id;
+      }
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error;
+    }
+
+    const now = new Date().toISOString();
+    const category = args.category ?? 'note';
+    const tags = (args.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
+    const appended: Array<{ text: string; hash: string; deduped: boolean }> = [];
+    const blocks: string[] = [];
+    bullets.forEach((bullet, index) => {
+      const key = args.idempotencyKey ? `${args.idempotencyKey}:${index}` : `${category}:${bullet}`;
+      const hash = memoryEntryHash(key);
+      if (existingContent.includes(`hash="${hash}"`)) {
+        appended.push({ text: bullet, hash, deduped: true });
+        return;
+      }
+      const id = args.idempotencyKey
+        ? createHash('sha256').update(key).digest('hex').slice(0, 24)
+        : randomUUID();
+      const tagText = tags.map((tag) => ` #${tag.replace(/\s+/g, '-')}`).join('');
+      const importance =
+        args.importance && args.importance !== 'normal' ? ` (${args.importance})` : '';
+      blocks.push(
+        `<!-- agor-memory-entry id="${escapeHtmlAttr(id)}" hash="${hash}" -->\n` +
+          `- [${now}] ${category}${importance}: ${bullet}${tagText}\n` +
+          `  - source: agor://session/${ctx.sessionId}\n` +
+          '<!-- /agor-memory-entry -->'
+      );
+      appended.push({ text: bullet, hash, deduped: false });
+    });
+
+    const nextContent = blocks.length
+      ? `${existingContent.replace(/\s*$/, '\n\n')}${blocks.join('\n\n')}\n`
+      : existingContent;
+    if (blocks.length > 0) {
+      const result = await callCustomMethod(
+        docsService,
+        'putDocument',
+        {
+          namespace_slug: namespace.slug,
+          path: docPath,
+          title: date,
+          kind: 'memory',
+          visibility: teammate?.kb?.default_visibility ?? namespace.visibility_default,
+          edit_policy: 'public',
+          status: 'published',
+          content_text: nextContent,
+          expected_version: expectedVersion,
+          metadata: {
+            teammate_memory: true,
+            teammate_branch_id: branch.branch_id,
+            memory_date: date,
+          },
+        },
+        mcpParams(ctx)
+      );
+      return textResult({ namespace: namespace.slug, path: docPath, appended, document: result });
+    }
+    return textResult({ namespace: namespace.slug, path: docPath, appended });
+  };
+
+  server.registerTool(
+    'agor_teammate_memory_append',
+    {
+      description:
+        "Append one or more memory bullets to the current teammate branch's daily Knowledge memory document.",
+      annotations: { idempotentHint: true },
+      inputSchema: teammateMemoryAppendSchema,
+    },
+    teammateMemoryAppendHandler
   );
 
   server.registerTool(

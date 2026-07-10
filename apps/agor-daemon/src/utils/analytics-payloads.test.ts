@@ -15,7 +15,7 @@ describe('analytics payload builders', () => {
       ref: 'feature/customer-secret-incident-title',
       ref_type: 'branch',
       new_branch: true,
-      custom_context: { assistant: { kind: 'assistant' } },
+      custom_context: { teammate: { kind: 'teammate' } },
     } as unknown as Branch;
 
     const payload = buildBranchCreatedAnalyticsProperties(branch);
@@ -26,7 +26,7 @@ describe('analytics payload builders', () => {
       board_id: 'board-1',
       ref_type: 'branch',
       new_branch: true,
-      is_assistant: true,
+      is_teammate: true,
     });
     expect(payload).not.toHaveProperty('name');
     expect(payload).not.toHaveProperty('ref');

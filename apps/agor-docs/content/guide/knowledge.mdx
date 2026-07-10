@@ -19,7 +19,7 @@ heroImage: '/images/knowledge-hero.png'
 
 Agor **Knowledge** is the built-in context layer for your team command center: a central place where humans and agents can store, organize, connect, and find the context that makes work compound over time.
 
-It has everything required to become your team's main context hub: markdown documents, version history, rich rendering, search, graph links, permissions, and first-class MCP tools for agents. Use it as the source of truth for runbooks, decisions, prompts, assistant memory, and operational knowledge — or as a fast staging area before context moves to another destination. Either way, Knowledge is core to how Agor helps teams and agents accumulate shared understanding.
+It has everything required to become your team's main context hub: markdown documents, version history, rich rendering, search, graph links, permissions, and first-class MCP tools for agents. Use it as the source of truth for runbooks, decisions, prompts, teammate memory, and operational knowledge — or as a fast staging area before context moves to another destination. Either way, Knowledge is core to how Agor helps teams and agents accumulate shared understanding.
 
 Context is everywhere: GitHub, Notion, Linear, Slack, repo files, and other knowledge bases. Agor does not ask you to replace all of that on day one. It gives users and agents a durable default place to file the useful bits now, then search, link, reorganize, and reshuffle them later.
 
@@ -33,7 +33,7 @@ Agent work produces context constantly: why a branch exists, what a customer sai
 
 ### Shared memory for humans and agents
 
-Knowledge is designed for inter-agent and human/agent collaboration. A human can write a runbook; an agent can search it during a session. One agent can file a decision; another can link to it from a follow-up investigation. Assistants can use it as durable operational memory instead of keeping everything only in branch files or git history.
+Knowledge is designed for inter-agent and human/agent collaboration. A human can write a runbook; an agent can search it during a session. One agent can file a decision; another can link to it from a follow-up investigation. Teammates can use it as durable operational memory instead of keeping everything only in branch files or git history.
 
 ### Zero-config for in-Agor agents
 
@@ -50,7 +50,7 @@ Good fits include:
 - **Team runbooks** — deploy steps, incident notes, review checklists, escalation paths.
 - **Decisions and rationale** — the “why” behind architecture, product, and process choices.
 - **Reusable prompts and workflows** — instructions that agents should reuse instead of rediscovering.
-- **Assistant memory** — durable preferences, project context, operating principles, and daily learnings.
+- **Teammate memory** — durable preferences, project context, operating principles, and daily learnings.
 - **Scratch-to-structured notes** — context filed quickly now and organized more carefully later.
 
 ---
@@ -116,7 +116,7 @@ Common workflows:
 - **Inspect history** with `agor_kb_history`.
 - **Connect the graph** with `agor_kb_link` and `agor_kb_graph_neighbors`.
 
-This makes Knowledge a natural companion to [Assistants](/guide/assistants): assistants can still keep file-based identity and memory where that is useful, while using Agor Knowledge as shared, searchable operational memory for the whole workspace.
+This makes Knowledge a natural companion to [Teammates](/guide/teammates): teammates can still keep file-based identity and memory where that is useful, while using Agor Knowledge as shared, searchable operational memory for the whole workspace.
 
 ---
 
@@ -130,8 +130,8 @@ In practice, that means Knowledge follows the same posture as the rest of Agor: 
 
 ## When to use Knowledge vs. repo files
 
-Use **repo files** when the context is part of the product itself: source-adjacent docs, checked-in configuration, prompts that should review with code, or assistant framework files that belong to a branch.
+Use **repo files** when the context is part of the product itself: source-adjacent docs, checked-in configuration, prompts that should review with code, or teammate framework files that belong to a branch.
 
-Use **Knowledge** when the context should be easy for the whole Agor workspace to find, update, link, and reuse across branches, sessions, assistants, and people.
+Use **Knowledge** when the context should be easy for the whole Agor workspace to find, update, link, and reuse across branches, sessions, teammates, and people.
 
 Most teams will use both. The important thing is that useful context has somewhere durable to land.

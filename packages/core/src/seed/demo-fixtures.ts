@@ -374,7 +374,7 @@ export async function loadDemoFixtures(
         uniqueId: 9004,
       },
       {
-        name: 'demo-assistant',
+        name: 'demo-teammate',
         repoId: webappRepo.repo_id,
         creator: alice.user_id,
         zoneId: zoneIds.todo,

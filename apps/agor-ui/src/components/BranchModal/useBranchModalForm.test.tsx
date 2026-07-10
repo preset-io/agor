@@ -1,11 +1,11 @@
 /**
  * Tests for the BranchModal unified form hook.
  *
- * The Branch / Assistant modal used to ship two independent Save buttons —
+ * The Branch / Teammate modal used to ship two independent Save buttons —
  * one inside the General tab (board, notes, MCP servers) and a second inside
  * the Owners & Permissions section (owners, others_can, fs access). That was
  * confusing. The hook here consolidates everything so a single Save action
- * commits General + Assistant + Permissions in one shot.
+ * commits General + Teammate + Permissions in one shot.
  *
  * What we pin:
  *   1. A single PATCH with both general-tab fields AND permission-tab fields
@@ -14,14 +14,14 @@
  *   3. PATCH failures bubble back as { ok: false } (no silent success).
  *   4. External branch updates do NOT create phantom dirty state for
  *      untouched slices.
- *   5. Assistant emoji → board icon side effect only fires when the emoji
+ *   5. Teammate emoji → board icon side effect only fires when the emoji
  *      actually changed.
  *   6. RBAC-disabled instances don't trip permissionsChanged.
  */
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { makeAssistantBranch, makeBranch, makeStubClient, makeUser, wrapper } from './testUtils';
+import { makeBranch, makeStubClient, makeTeammateBranch, makeUser, wrapper } from './testUtils';
 import { useBranchModalForm } from './useBranchModalForm';
 
 describe('useBranchModalForm — unified save', () => {
@@ -209,9 +209,9 @@ describe('useBranchModalForm — unified save', () => {
     expect(result.current.generalChanged).toBe(true);
   });
 
-  it('updates board icon only when assistant emoji actually changed', async () => {
+  it('updates board icon only when teammate emoji actually changed', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
-    const branch = makeAssistantBranch({}, { emoji: '🤖' });
+    const branch = makeTeammateBranch({}, { emoji: '🤖' });
     const { client, calls } = makeStubClient({ owners: [alice], users: [alice] });
 
     const { result } = renderHook(
@@ -223,7 +223,7 @@ describe('useBranchModalForm — unified save', () => {
 
     // Change only the display name, leave emoji alone
     act(() => {
-      result.current.setAssistant('displayName', 'Renamed Assistant');
+      result.current.setTeammate('displayName', 'Renamed Teammate');
     });
 
     await act(async () => {
@@ -234,9 +234,9 @@ describe('useBranchModalForm — unified save', () => {
     expect(boardPatches).toHaveLength(0);
   });
 
-  it('does patch the board icon when assistant emoji actually changed', async () => {
+  it('does patch the board icon when teammate emoji actually changed', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
-    const branch = makeAssistantBranch({}, { emoji: '🤖' });
+    const branch = makeTeammateBranch({}, { emoji: '🤖' });
     const { client, calls } = makeStubClient({ owners: [alice], users: [alice] });
 
     const { result } = renderHook(
@@ -247,7 +247,7 @@ describe('useBranchModalForm — unified save', () => {
     await waitFor(() => expect(result.current.loadingOwners).toBe(false));
 
     act(() => {
-      result.current.setAssistant('emoji', '🎯');
+      result.current.setTeammate('emoji', '🎯');
     });
 
     await act(async () => {
@@ -471,9 +471,9 @@ describe('useBranchModalForm — unified save', () => {
     expect(result.current.canControlEnvironment).toBe(true);
   });
 
-  it('shows permissions for assistant branches when the current admin is an owner', async () => {
+  it('shows permissions for teammate branches when the current admin is an owner', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
-    const branch = makeAssistantBranch();
+    const branch = makeTeammateBranch();
     const { client } = makeStubClient({ owners: [alice], users: [alice] });
 
     const { result } = renderHook(
