@@ -1,3 +1,5 @@
+'use client';
+
 import Script from 'next/script';
 import { useEffect, useId, useState } from 'react';
 import { AGOR_CLOUD_DEMO_URL } from '../lib/links';
@@ -30,9 +32,9 @@ const HUBSPOT_SCRIPT_SRC = 'https://js.hsforms.net/forms/embed/v2.js';
 // whatever we pass via `css` as a <style> tag in the document head. We
 // scope everything under `.hs-form-private` (HubSpot's form class) so
 // we never touch page-level elements. Light-mode rules key off
-// `html:not(.dark)` to follow the docs site's theme class — today the
-// site is `forcedTheme: 'dark'`, so light rules are inert, but they
-// will Just Work the day forcedTheme is dropped.
+// `html:not(.dark)` to follow the docs site's theme class. The docs
+// site defaults to dark, but these light-mode tokens keep
+// the embedded form legible when readers switch themes.
 const HUBSPOT_FORM_CSS = `
   .hs-form-private { color: #e6f4f1; font-family: inherit; }
   .hs-form-private .hs-form-field { margin-bottom: 1rem; }
@@ -91,7 +93,7 @@ const HUBSPOT_FORM_CSS = `
     margin: 0.35rem 0 0;
   }
 
-  /* Inert today (site is forcedTheme: 'dark'); activates when light mode lands. */
+  /* Light mode keeps the embedded form legible for readers who switch themes. */
   html:not(.dark) .hs-form-private,
   html:not(.dark) .hs-form-private .hs-form-field > label { color: #1a1a1a; }
   html:not(.dark) .hs-form-private .hs-input {

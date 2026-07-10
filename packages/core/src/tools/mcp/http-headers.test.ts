@@ -56,6 +56,22 @@ describe('MCP HTTP header helpers', () => {
     });
   });
 
+  it('preserves bare {{ user.env.NAME }} header templates but redacts everything else', () => {
+    expect(
+      redactMCPCustomHeaders({
+        'X-API-Key': '{{ user.env.DATADOG_API_KEY }}',
+        'X-Raw-Secret': 'dummy-api-key',
+        'X-Partial': 'prefix-{{user.env.X}}',
+        'X-Helper': '{{default user.env.MISSING "sk-live-shouldnotleak"}}',
+      })
+    ).toEqual({
+      'X-API-Key': '{{ user.env.DATADOG_API_KEY }}',
+      'X-Raw-Secret': MCP_HEADER_REDACTED_SENTINEL,
+      'X-Partial': MCP_HEADER_REDACTED_SENTINEL,
+      'X-Helper': MCP_HEADER_REDACTED_SENTINEL,
+    });
+  });
+
   it('restores redacted values from existing headers and normalizes the result', () => {
     expect(
       restoreRedactedMCPCustomHeaders({

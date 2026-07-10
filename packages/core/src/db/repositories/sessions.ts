@@ -22,6 +22,7 @@ import {
 } from '../schema';
 import {
   AmbiguousIdError,
+  attachHiddenTenant,
   type BaseRepository,
   EntityNotFoundError,
   RESOLVE_SHORT_ID_FETCH_LIMIT,
@@ -37,6 +38,14 @@ import { deepMerge } from './merge-utils';
 export interface SessionWithLastMessage extends Session {
   last_message?: string;
 }
+
+type SessionArchiveReason = NonNullable<Session['archived_reason']>;
+
+export type SessionArchiveStateUpdate = {
+  id: string;
+  archived: boolean;
+  archivedReason: SessionArchiveReason | null;
+};
 
 /**
  * Patches that only acknowledge UI attention state should not make a session
@@ -77,41 +86,44 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     // resolve the session but have nowhere to switch the canvas to.
     const url = baseUrl && boardId ? getSessionUrl(sessionId, baseUrl) : null;
 
-    return {
-      session_id: sessionId,
-      status: row.status,
-      agentic_tool: row.agentic_tool,
-      created_at: new Date(row.created_at).toISOString(),
-      last_updated: row.updated_at
-        ? new Date(row.updated_at).toISOString()
-        : new Date(row.created_at).toISOString(),
-      created_by: row.created_by,
-      unix_username: row.unix_username || null,
-      branch_id: row.branch_id as UUID,
-      branch_board_id: boardId,
-      url,
-      ...row.data,
-      tasks: row.data.tasks.map((id) => id as UUID),
-      genealogy: {
-        parent_session_id: row.parent_session_id as UUID | undefined,
-        forked_from_session_id: row.forked_from_session_id as UUID | undefined,
-        fork_point_task_id: genealogyData.fork_point_task_id as UUID | undefined,
-        fork_point_message_index: genealogyData.fork_point_message_index,
-        spawn_point_task_id: genealogyData.spawn_point_task_id as UUID | undefined,
-        spawn_point_message_index: genealogyData.spawn_point_message_index,
-        children: genealogyData.children.map((id) => id as UUID),
+    return attachHiddenTenant(
+      {
+        session_id: sessionId,
+        status: row.status,
+        agentic_tool: row.agentic_tool,
+        created_at: new Date(row.created_at).toISOString(),
+        last_updated: row.updated_at
+          ? new Date(row.updated_at).toISOString()
+          : new Date(row.created_at).toISOString(),
+        created_by: row.created_by,
+        unix_username: row.unix_username || null,
+        branch_id: row.branch_id as UUID,
+        branch_board_id: boardId,
+        url,
+        ...row.data,
+        tasks: row.data.tasks.map((id) => id as UUID),
+        genealogy: {
+          parent_session_id: row.parent_session_id as UUID | undefined,
+          forked_from_session_id: row.forked_from_session_id as UUID | undefined,
+          fork_point_task_id: genealogyData.fork_point_task_id as UUID | undefined,
+          fork_point_message_index: genealogyData.fork_point_message_index,
+          spawn_point_task_id: genealogyData.spawn_point_task_id as UUID | undefined,
+          spawn_point_message_index: genealogyData.spawn_point_message_index,
+          children: genealogyData.children.map((id) => id as UUID),
+        },
+        permission_config: row.data.permission_config,
+        scheduled_run_at: row.scheduled_run_at ?? undefined,
+        scheduled_from_branch: row.scheduled_from_branch ?? false,
+        schedule_id: (row.schedule_id as UUID | null) ?? undefined,
+        ready_for_prompt: row.ready_for_prompt ?? false,
+        archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
+        archived_reason: row.archived_reason ?? undefined,
+        current_context_usage: row.data.current_context_usage,
+        context_window_limit: row.data.context_window_limit,
+        last_context_update_at: row.data.last_context_update_at,
       },
-      permission_config: row.data.permission_config,
-      scheduled_run_at: row.scheduled_run_at ?? undefined,
-      scheduled_from_branch: row.scheduled_from_branch ?? false,
-      schedule_id: (row.schedule_id as UUID | null) ?? undefined,
-      ready_for_prompt: row.ready_for_prompt ?? false,
-      archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
-      archived_reason: row.archived_reason ?? undefined,
-      current_context_usage: row.data.current_context_usage,
-      context_window_limit: row.data.context_window_limit,
-      last_context_update_at: row.data.last_context_update_at,
-    };
+      row
+    );
   }
 
   /**
@@ -283,6 +295,30 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       if (error instanceof AmbiguousIdError) throw error;
       throw new RepositoryError(
         `Failed to find session branch: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Resolve the owning user id for a session without hydrating the full row.
+   * Used by realtime delivery to offer streaming events to the session
+   * creator's own connections as a fallback, so their open tabs keep updating
+   * even before they subscribe to the per-session stream channel.
+   */
+  async findCreatedByBySessionId(id: string): Promise<UUID | null> {
+    try {
+      const fullId = await this.resolveId(id);
+      const row = await select(this.db, { created_by: sessions.created_by })
+        .from(sessions)
+        .where(eq(sessions.session_id, fullId))
+        .one();
+      return (row?.created_by as UUID | undefined) ?? null;
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      if (error instanceof AmbiguousIdError) throw error;
+      throw new RepositoryError(
+        `Failed to find session owner: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -534,18 +570,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       const fullId = await this.resolveId(sessionId);
       const baseUrl = await getBaseUrl();
 
-      // Query sessions where parent_session_id or forked_from_session_id matches
-      // Use database-agnostic JSON extraction helper
-      const { jsonExtract } = await import('../database-wrapper');
-
       const results = await select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
         .where(
-          or(
-            sql`${jsonExtract(this.db, sessions.data, 'genealogy.parent_session_id')} = ${fullId}`,
-            sql`${jsonExtract(this.db, sessions.data, 'genealogy.forked_from_session_id')} = ${fullId}`
-          )
+          or(eq(sessions.parent_session_id, fullId), eq(sessions.forked_from_session_id, fullId))
         )
         .all();
 
@@ -563,6 +592,64 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     } catch (error) {
       throw new RepositoryError(
         `Failed to find child sessions: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Find all branch-local descendants for a session with one branch-scoped read.
+   *
+   * Archive cascades can touch large trees; building the descendant set in
+   * memory avoids one child lookup per visited node and relies on the
+   * materialized genealogy columns rather than JSON extraction.
+   */
+  async findBranchLocalDescendants(sessionId: string, branchId: BranchID): Promise<Session[]> {
+    try {
+      const fullId = await this.resolveId(sessionId);
+      const baseUrl = await getBaseUrl();
+      const results = await select(this.db)
+        .from(sessions)
+        .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+        .where(eq(sessions.branch_id, branchId))
+        .all();
+
+      const sessionById = new Map<string, Session>();
+      const childrenByParent = new Map<string, Session[]>();
+      for (const result of results as Array<{
+        sessions: SessionRow;
+        branches?: { board_id?: string } | null;
+      }>) {
+        const boardId = (result.branches?.board_id ?? null) as UUID | null;
+        const session = this.rowToSession(result.sessions, boardId, baseUrl);
+        sessionById.set(session.session_id, session);
+
+        const parentIds = [
+          session.genealogy?.parent_session_id,
+          session.genealogy?.forked_from_session_id,
+        ].filter((id): id is SessionID => typeof id === 'string' && id.length > 0);
+        for (const parentId of parentIds) {
+          const siblings = childrenByParent.get(parentId) ?? [];
+          siblings.push(session);
+          childrenByParent.set(parentId, siblings);
+        }
+      }
+
+      const descendants: Session[] = [];
+      const visited = new Set<string>([fullId]);
+      const queue = [...(childrenByParent.get(fullId) ?? [])];
+      while (queue.length > 0) {
+        const child = queue.shift();
+        if (!child || visited.has(child.session_id)) continue;
+        visited.add(child.session_id);
+        descendants.push(child);
+        queue.push(...(childrenByParent.get(child.session_id) ?? []));
+      }
+
+      return descendants.filter((session) => sessionById.has(session.session_id));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find branch-local descendants: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
@@ -688,9 +775,15 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           throw new RepositoryError('Session update did not produce an updated_at timestamp');
         }
 
-        // Return merged session with the persisted timestamp.
+        // Return merged session with the persisted timestamp and hidden tenant
+        // metadata preserved from the tenant-owned row. The in-memory merge uses
+        // object spread, so it intentionally does not carry non-enumerable
+        // properties from rowToSession(currentRow).
         merged.last_updated = insertData.updated_at.toISOString();
-        return merged;
+        if (insertData.archived_reason === null) {
+          merged.archived_reason = undefined;
+        }
+        return attachHiddenTenant(merged, currentRow);
       });
 
       return result;
@@ -699,6 +792,106 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to update session: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Atomically update archive state for a known set of sessions.
+   *
+   * This is used by manual archive/unarchive cascades so either the whole
+   * branch-local tree flips state or none of it does.
+   */
+  async updateArchiveStateForIds(
+    ids: string[],
+    archived: boolean,
+    archivedReason: SessionArchiveReason | null
+  ): Promise<Session[]> {
+    return this.updateArchiveStateForTargets(
+      ids.map((id) => ({
+        id,
+        archived,
+        archivedReason,
+      }))
+    );
+  }
+
+  /**
+   * Atomically update archive state for known sessions that may need distinct
+   * archive reasons.
+   */
+  async updateArchiveStateForTargets(targets: SessionArchiveStateUpdate[]): Promise<Session[]> {
+    if (targets.length === 0) return [];
+
+    try {
+      const ids = targets.map((target) => target.id);
+      const fullIds = await Promise.all(ids.map((id) => this.resolveId(id)));
+      const updates = targets.map((target, index) => ({
+        ...target,
+        id: fullIds[index],
+      }));
+      const baseUrl = await getBaseUrl();
+      const now = new Date();
+      const result = await this.db.transaction(async (tx) => {
+        const groups = new Map<string, SessionArchiveStateUpdate[]>();
+        for (const updateTarget of updates) {
+          const key = `${updateTarget.archived}:${updateTarget.archivedReason ?? ''}`;
+          const group = groups.get(key) ?? [];
+          group.push(updateTarget);
+          groups.set(key, group);
+        }
+
+        for (const group of groups.values()) {
+          const [first] = group;
+          if (!first) continue;
+          await update(txAsDb(tx), sessions)
+            .set({
+              archived: first.archived,
+              archived_reason: first.archivedReason,
+              updated_at: now,
+            })
+            .where(
+              inArray(
+                sessions.session_id,
+                group.map((target) => target.id)
+              )
+            )
+            .run();
+        }
+
+        const rows = await select(txAsDb(tx))
+          .from(sessions)
+          .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+          .where(inArray(sessions.session_id, fullIds))
+          .all();
+
+        if (rows.length !== fullIds.length) {
+          throw new EntityNotFoundError('Session', ids[0]);
+        }
+
+        const byId = new Map<string, Session>();
+        for (const row of rows as Array<{
+          sessions: SessionRow;
+          branches?: { board_id?: string } | null;
+        }>) {
+          const boardId = (row.branches?.board_id ?? null) as UUID | null;
+          byId.set(row.sessions.session_id, this.rowToSession(row.sessions, boardId, baseUrl));
+        }
+
+        return fullIds.map((id) => {
+          const session = byId.get(id);
+          if (!session) throw new EntityNotFoundError('Session', id);
+          return session;
+        });
+      });
+
+      return result;
+    } catch (error) {
+      if (error instanceof RepositoryError) throw error;
+      if (error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to update session archive state: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

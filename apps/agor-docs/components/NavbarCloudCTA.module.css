@@ -8,7 +8,7 @@
  *
  *   [Logo]  [Page items]  [Agor Cloud CTA]  [Search]  [GitHub]  [Discord]  [Hamburger]
  *
- * Those rules depend on the nav DOM order that nextra-theme-docs@3.3.x
+ * Those rules depend on the nav DOM order that nextra-theme-docs@4.x
  * emits — see the comment block above the :global rules. If a Nextra
  * upgrade shifts that DOM, this file is the only place that needs to
  * change.
@@ -100,7 +100,7 @@
 }
 
 /* Beat the global `.dark a { color: var(--agor-teal-light) }` rule in
- * pages/styles.css so the dark pill text stays legible. */
+ * app/styles.css so the dark pill text stays legible. */
 :global(.dark) .link,
 :global(.dark) .link:hover {
   color: #0a0a0a;
@@ -120,5 +120,5 @@
 }
 
 /* The Nextra nav reorder rules that put this CTA left-of-search live in
- * pages/styles.css — Next.js CSS modules don't allow standalone :global
+ * app/styles.css — Next.js CSS modules don't allow standalone :global
  * selectors. See the "Navbar CTA position" block there. */

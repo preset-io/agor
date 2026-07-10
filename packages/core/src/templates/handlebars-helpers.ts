@@ -292,6 +292,9 @@ export function renderTemplate(
  * - {{branch.name}} - Branch name (slug format)
  * - {{branch.path}} - Absolute path to branch directory
  * - {{branch.gid}} - Unix GID of branch's unix_group (resolved dynamically at execution time)
+ * - {{branch.base_ref}} - Source branch/tag name this branch was created from
+ *   (the "Base Branch"/"Base Tag" from the create dialog). Empty string if unknown.
+ * - {{branch.ref_type}} - 'branch' | 'tag': whether base_ref names a branch or a tag
  * - {{repo.slug}} - Repository slug
  * - {{host.ip_address}} - Primary non-loopback IPv4 of the daemon host
  *   (for health checks/URLs that must reach the host from inside a container).
@@ -312,12 +315,16 @@ export function buildBranchContext(branch: {
   custom_context?: Record<string, unknown>;
   unix_gid?: number;
   host_ip_address?: string;
+  base_ref?: string;
+  ref_type?: 'branch' | 'tag';
 }): Record<string, unknown> {
   const branchEntity = {
     unique_id: branch.branch_unique_id,
     name: branch.name,
     path: branch.path,
     gid: branch.unix_gid,
+    base_ref: branch.base_ref || '',
+    ref_type: branch.ref_type || 'branch',
   };
   return {
     // Scoped entities (accessible as {{entity.property}})

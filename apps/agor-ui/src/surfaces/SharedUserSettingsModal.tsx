@@ -9,6 +9,7 @@ export interface SharedUserSettingsModalProps {
   onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onRefreshCurrentUser: () => Promise<unknown>;
   onRestartOnboarding?: () => void | Promise<void>;
+  initialTab?: string;
 }
 
 /**
@@ -28,6 +29,7 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
   onUpdateUser,
   onRefreshCurrentUser,
   onRestartOnboarding,
+  initialTab,
 }) => (
   <UserSettingsModal
     open={open}
@@ -40,5 +42,6 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
       await onRefreshCurrentUser();
     }}
     onRestartOnboarding={onRestartOnboarding}
+    initialTab={initialTab}
   />
 );

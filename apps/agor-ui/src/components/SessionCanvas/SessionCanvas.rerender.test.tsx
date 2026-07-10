@@ -6,11 +6,13 @@ import type {
   CardWithType,
   Repo,
   Session,
+  User,
 } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { useStableCallback } from '../../hooks/useStableCallback';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { sessionPatched } from '../../store/agorRealtimeActions';
 import { agorStore } from '../../store/agorStore';
@@ -229,6 +231,7 @@ describe('SessionCanvas store-selector re-render isolation', () => {
       expect(cardNodeRenders).toBeGreaterThanOrEqual(1);
     });
 
+    const canvasBaseline = sessionCanvasRenders;
     const branchBBaseline = branchCardRenders.get('B') ?? 0;
     const branchABaseline = branchCardRenders.get('A') ?? 0;
     const cardNodeBaseline = cardNodeRenders;
@@ -242,9 +245,11 @@ describe('SessionCanvas store-selector re-render isolation', () => {
       expect(branchCardRenders.get('A') ?? 0).toBeGreaterThan(branchABaseline);
     });
 
-    // The win: branch B's card and the board-object-derived card node are
-    // untouched because their selector inputs (branch B's session bucket; this
-    // board's board-object array) kept the same reference across the patch.
+    // The win: the session patch is handled inside the affected BranchNode's
+    // per-branch subscription. SessionCanvas itself does not subscribe to the
+    // whole sessionsByBranch map, so React Flow's controlled node array is not
+    // rebuilt for every streaming session patch.
+    expect(sessionCanvasRenders).toBe(canvasBaseline);
     expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
     expect(cardNodeRenders).toBe(cardNodeBaseline);
   });
@@ -295,22 +300,126 @@ describe('SessionCanvas store-selector re-render isolation', () => {
     expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
     expect(cardNodeRenders).toBe(cardNodeBaseline);
   });
-});
 
-// Mirror of AppContent's `useStableCallback`: freeze a handler's identity across
-// renders while delegating to the latest impl via a ref. This is the exact
-// mechanism AppContent uses to keep SessionCanvas's action handlers stable, so
-// reproducing it here exercises the real prop-stabilization contract.
-function useStableCallback<TFn extends (...args: never[]) => unknown>(
-  callback: TFn | undefined
-): TFn | undefined {
-  const callbackRef = useRef(callback);
-  useLayoutEffect(() => {
-    callbackRef.current = callback;
+  it('a repoById patch that leaves displayed repos untouched does not re-render branch cards', async () => {
+    render(
+      <ConnectionProvider value={CONNECTION_VALUE}>
+        <SessionCanvas board={board} client={null} branches={BRANCHES} />
+      </ConnectionProvider>
+    );
+
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+    });
+
+    const canvasBaseline = sessionCanvasRenders;
+    const branchABaseline = branchCardRenders.get('A') ?? 0;
+    const branchBBaseline = branchCardRenders.get('B') ?? 0;
+
+    // A repo that is not on the board is added: the map reference changes (so
+    // the canvas re-renders and rebuilds its node array) but each displayed
+    // branch's repo object keeps its identity.
+    act(() => {
+      agorStore.setState({
+        repoById: new Map([
+          [REPO_ID, repo],
+          ['repo-2', { repo_id: 'repo-2', name: 'other', slug: 'other' } as unknown as Repo],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(sessionCanvasRenders).toBeGreaterThan(canvasBaseline);
+    });
+
+    // BranchNode's areEqual holds field-by-field (same branch, same repo
+    // object, stable handlers), so no branch card pays for the map churn.
+    expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
+    expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
   });
-  const stable = useCallback(((...args: never[]) => callbackRef.current?.(...args)) as TFn, []);
-  return callback ? stable : undefined;
-}
+
+  it('board-object churn with unchanged values does not re-render branch cards', async () => {
+    render(
+      <ConnectionProvider value={CONNECTION_VALUE}>
+        <SessionCanvas board={board} client={null} branches={BRANCHES} />
+      </ConnectionProvider>
+    );
+
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+    });
+
+    const canvasBaseline = sessionCanvasRenders;
+    const branchABaseline = branchCardRenders.get('A') ?? 0;
+    const branchBBaseline = branchCardRenders.get('B') ?? 0;
+
+    // Fresh array/object references with identical values — the placement maps
+    // derived from them rebuild, which is exactly what would hand every branch
+    // node a fresh `onUnpin` identity if that handler were not stabilized.
+    act(() => {
+      agorStore.setState({
+        boardObjectsByBoardId: new Map([
+          [
+            BOARD_ID,
+            boardObjects.map(
+              (object) =>
+                ({ ...object, position: { ...object.position } }) as unknown as BoardEntityObject
+            ),
+          ],
+        ]),
+      });
+    });
+
+    await waitFor(() => {
+      expect(sessionCanvasRenders).toBeGreaterThan(canvasBaseline);
+    });
+
+    expect(branchCardRenders.get('A') ?? 0).toBe(branchABaseline);
+    expect(branchCardRenders.get('B') ?? 0).toBe(branchBBaseline);
+  });
+
+  it('a userById patch re-renders branch cards WITHOUT rebuilding node data (documented contract)', async () => {
+    render(
+      <ConnectionProvider value={CONNECTION_VALUE}>
+        <SessionCanvas board={board} client={null} branches={BRANCHES} />
+      </ConnectionProvider>
+    );
+
+    await waitFor(() => {
+      expect(branchCardRenders.get('A')).toBeGreaterThanOrEqual(1);
+      expect(branchCardRenders.get('B')).toBeGreaterThanOrEqual(1);
+      expect(cardNodeRenders).toBeGreaterThanOrEqual(1);
+    });
+
+    const branchABaseline = branchCardRenders.get('A') ?? 0;
+    const branchBBaseline = branchCardRenders.get('B') ?? 0;
+    const cardNodeBaseline = cardNodeRenders;
+
+    act(() => {
+      agorStore.setState({
+        userById: new Map([['user-x', { user_id: 'user-x', username: 'x' } as unknown as User]]),
+      });
+    });
+
+    // Documented contract, the weaker of the two possible pins: BranchNode
+    // subscribes to the WHOLE user map (BranchCard renders arbitrary users —
+    // session and message authors resolved deep inside its session tree — so
+    // the set of relevant user ids is not derivable at subscription time, and
+    // a narrower per-branch selector is not mechanical). Any user-map change
+    // therefore re-renders every branch card...
+    await waitFor(() => {
+      expect(branchCardRenders.get('A') ?? 0).toBeGreaterThan(branchABaseline);
+      expect(branchCardRenders.get('B') ?? 0).toBeGreaterThan(branchBBaseline);
+    });
+
+    // ...but the map lives outside node `data`, so the node array is NOT
+    // rebuilt: card nodes (which do not consume users) keep their `data`
+    // references and stay un-rendered.
+    expect(cardNodeRenders).toBe(cardNodeBaseline);
+  });
+});
 
 // Lets a test trigger a parent re-render without touching SessionCanvas's props.
 let triggerParentRerender: () => void = () => {};

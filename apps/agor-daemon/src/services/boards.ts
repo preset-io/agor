@@ -284,6 +284,18 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   }
 
   /**
+   * Custom method: Atomically shallow-merge field patches into existing board
+   * objects (used by z-order reorder to persist only the changed zIndex).
+   */
+  async mergeBoardObjectFields(
+    boardId: string,
+    patches: Record<string, Partial<BoardObject>>,
+    _params?: BoardParams
+  ): Promise<Board> {
+    return this.boardRepo.mergeBoardObjectFields(boardId, patches);
+  }
+
+  /**
    * Custom method: Delete a zone and handle associated sessions
    */
   async deleteZone(

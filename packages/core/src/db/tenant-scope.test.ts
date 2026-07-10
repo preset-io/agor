@@ -3,6 +3,7 @@ import type { Database } from './client';
 import { insert } from './database-wrapper';
 import {
   createTenantScopedDatabaseProxy,
+  enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   MissingTenantDatabaseScopeError,
   requireCurrentTenantId,
@@ -31,6 +32,33 @@ describe('tenant-scoped database proxy', () => {
 
     expect(base.transaction).toHaveBeenCalledTimes(1);
     expect(tx.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs post-commit callbacks after the scoped transaction commits', async () => {
+    const events: string[] = [];
+    const base = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        events.push('begin');
+        const result = await callback({
+          execute: vi.fn(async () => []),
+          marker: vi.fn(() => 'tx'),
+        });
+        events.push('commit');
+        return result;
+      }),
+    };
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+
+    await runWithTenantDatabaseScope(db, 'tenant-a', async () => {
+      events.push('work');
+      expect(
+        enqueueTenantDatabasePostCommitCallback(async () => {
+          events.push('callback');
+        })
+      ).toBe(true);
+    });
+
+    expect(events).toEqual(['begin', 'work', 'commit', 'begin', 'callback', 'commit']);
   });
 
   it('reuses the active tenant transaction for nested scopes', async () => {

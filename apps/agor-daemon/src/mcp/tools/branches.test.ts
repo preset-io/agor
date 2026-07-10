@@ -254,6 +254,105 @@ describe('agor_branches_create', () => {
       baseServiceParams
     );
   });
+
+  it('creates a one-shot assistant branch by writing assistant metadata into custom_context', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-a', role: 'member' },
+    };
+    const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
+      branch_id: 'assistant-branch',
+      created_by: 'user-a',
+      ...(data as Record<string, unknown>),
+    }));
+    const reposGet = vi.fn(async () => ({
+      repo_id: 'repo-1',
+      slug: 'siebel-crm',
+      default_branch: 'main',
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'repos') return { get: reposGet, createBranch };
+        if (name === 'boards') return { get: vi.fn(async () => ({ board_id: 'board-1' })) };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app,
+      userId: 'user-a',
+      baseServiceParams,
+    });
+
+    const result = await create({
+      repoId: 'repo-1',
+      branchName: 'siebel-crm',
+      boardId: 'board-1',
+      autoSuffix: false,
+      assistant: { displayName: 'Siebel CRM', emoji: '🤖' },
+    });
+
+    // The assistant metadata must land on the initial branch row so
+    // BranchesService.create can wire the board primary assistant pointer and
+    // provision the Knowledge namespace atomically (mirrors the UI create flow).
+    expect(createBranch).toHaveBeenCalledWith(
+      'repo-1',
+      expect.objectContaining({
+        name: 'siebel-crm',
+        boardId: 'board-1',
+        custom_context: {
+          assistant: {
+            kind: 'assistant',
+            displayName: 'Siebel CRM',
+            emoji: '🤖',
+            frameworkRepo: 'siebel-crm',
+            createdViaOnboarding: false,
+          },
+        },
+      }),
+      baseServiceParams
+    );
+
+    const payload = JSON.parse(result.content[0].text) as { _assistant?: Record<string, unknown> };
+    expect(payload._assistant).toMatchObject({ created: true, display_name: 'Siebel CRM' });
+  });
+
+  it('does not set custom_context when no assistant metadata is provided', async () => {
+    const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
+      branch_id: 'plain-branch',
+      created_by: 'user-a',
+      ...(data as Record<string, unknown>),
+    }));
+    const reposGet = vi.fn(async () => ({
+      repo_id: 'repo-1',
+      slug: 'repo-slug',
+      default_branch: 'main',
+    }));
+    const app = {
+      service(name: string) {
+        if (name === 'repos') return { get: reposGet, createBranch };
+        if (name === 'boards') return { get: vi.fn(async () => ({ board_id: 'board-1' })) };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app,
+      userId: 'user-a',
+      baseServiceParams: {},
+    });
+
+    await create({
+      repoId: 'repo-1',
+      branchName: 'plain',
+      boardId: 'board-1',
+      autoSuffix: false,
+    });
+
+    const passed = createBranch.mock.calls[0][1] as Record<string, unknown>;
+    expect(passed).not.toHaveProperty('custom_context');
+  });
 });
 
 describe('branch MCP input schemas', () => {
@@ -296,6 +395,31 @@ describe('branch MCP input schemas', () => {
         ])
       );
     }
+  });
+
+  it('accepts a valid assistant object and rejects an empty assistant displayName', () => {
+    const config = registerAndCaptureConfig('agor_branches_create', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(
+      config.inputSchema?.safeParse({
+        repoId: 'repo-1',
+        branchName: 'siebel-crm',
+        boardId: 'board-1',
+        assistant: { displayName: 'Siebel CRM', emoji: '🤖' },
+      }).success
+    ).toBe(true);
+
+    expect(
+      config.inputSchema?.safeParse({
+        repoId: 'repo-1',
+        branchName: 'siebel-crm',
+        boardId: 'board-1',
+        assistant: { displayName: '   ' },
+      }).success
+    ).toBe(false);
   });
 
   it('rejects malformed pagination values before handler execution', () => {

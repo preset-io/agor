@@ -10,5 +10,7 @@
 
 // Side-effect imports — each file registers its widget component on load.
 import './EnvVarRequestWidget';
+import './GatewayTokenWidget';
 
 export { EnvVarRequestWidget } from './EnvVarRequestWidget';
+export { GatewayTokenWidget } from './GatewayTokenWidget';

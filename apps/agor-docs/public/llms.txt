@@ -2,7 +2,7 @@
 
 > Agor is a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini). It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
 
-Agor is open-source software licensed under BSL 1.1, created by Maxime Beauchemin.
+Agor is open-source software licensed under BSL 1.1, created by Preset Inc.
 
 - Website: https://agor.live
 - GitHub: https://github.com/preset-io/agor

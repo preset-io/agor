@@ -1,8 +1,7 @@
 import type { Branch, Link, Session } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { EMPTY_MAPS } from '../hooks/useAgorData';
 import { cancelAllHydrations, resetHydrationRevisions, runHydration } from './agorHydration';
-import { mergeLinksIntoMaps, reconcilePinnedBranchLinksIntoMaps } from './agorMaps';
+import { EMPTY_MAPS, mergeLinksIntoMaps, reconcilePinnedBranchLinksIntoMaps } from './agorMaps';
 import { branchPatched, linkCreated, linkRemoved, sessionRemoved } from './agorRealtimeActions';
 import { agorStore, getPinnedBranchLinkPreserveBranchIds } from './agorStore';
 

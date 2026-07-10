@@ -1,8 +1,6 @@
 import nextra from 'nextra';
 
 const withNextra = nextra({
-  theme: 'nextra-theme-docs',
-  themeConfig: './theme.config.tsx',
   latex: true,
   defaultShowCopyCode: true,
 });
@@ -14,6 +12,7 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH
 // Deployed to custom domain agor.live (no base path needed)
 export default withNextra({
   reactStrictMode: true,
+  devIndicators: false,
   output: 'export',
   images: {
     unoptimized: true,

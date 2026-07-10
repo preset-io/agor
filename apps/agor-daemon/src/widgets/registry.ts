@@ -87,6 +87,13 @@ export interface WidgetRegistryEntry<TParams, TSubmit, TResultMeta> {
    * explicit ("don't immediately re-ask") to avoid agent loops.
    */
   buildDismissedPrompt: (params: TParams) => string;
+  /**
+   * Optional gate on WHO may dismiss this widget, run before the message is
+   * marked 'dismissed'; throw (e.g. Forbidden) to reject. Absent means any
+   * caller allowed to reach the resolve endpoint may dismiss. Admin-only
+   * widgets set this so a dismissal can't sidestep the submit-side role check.
+   */
+  authorizeDismiss?: (ctx: WidgetSubmitCtx, params: TParams) => void | Promise<void>;
 }
 
 // Untyped variant used for storage / dispatch — the public API restores
