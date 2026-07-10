@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * Particle Background Component
  *

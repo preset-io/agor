@@ -478,9 +478,10 @@ export interface Session {
    *
    * - 'branch_archived': Cascaded from parent branch being archived
    * - 'manual': User manually archived this session
+   * - 'parent_archived': Cascaded from parent session being manually archived
    * - 'btw_completed': Ephemeral btw fork auto-archived after task completion
    */
-  archived_reason?: 'branch_archived' | 'manual' | 'btw_completed';
+  archived_reason?: 'branch_archived' | 'manual' | 'parent_archived' | 'btw_completed';
 
   /**
    * Durable non-genealogy relationships involving this session.

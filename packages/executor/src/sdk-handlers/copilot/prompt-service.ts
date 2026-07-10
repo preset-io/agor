@@ -20,6 +20,7 @@ import { CopilotClient } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -128,7 +129,8 @@ export class CopilotPromptService {
     permissionService?: PermissionService,
     messagesService?: MessagesService,
     tasksService?: TasksService,
-    sessionsService?: SessionsPatchClient
+    sessionsService?: SessionsPatchClient,
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     this.apiKey = apiKey;
     this.messagesRepo = messagesRepo;
@@ -154,6 +156,7 @@ export class CopilotPromptService {
     const serversWithSource = await getMcpServersForSession(sessionId, {
       sessionMCPRepo: this.sessionMCPServerRepo,
       mcpServerRepo: this.mcpServerRepo,
+      mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
     });
 
     const mcpServers = serversWithSource.map((s) => s.server);

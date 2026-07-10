@@ -17,31 +17,65 @@ vi.mock('../ApiKeyFields', () => ({
 vi.mock('../AgenticToolConfigForm', async () => {
   const { Form, Radio } = await import('antd');
 
+  const MockModelSelector = ({
+    agenticTool,
+    value,
+    onChange,
+  }: {
+    agenticTool: AgenticToolName;
+    value?: { model?: string };
+    onChange?: (value: { mode: 'alias'; model: string }) => void;
+  }) => (
+    <Radio.Group
+      value={value?.model}
+      onChange={(event) => onChange?.({ mode: 'alias', model: event.target.value })}
+    >
+      <Radio value="claude-sonnet-5">{agenticTool} model claude-sonnet-5</Radio>
+      <Radio value="claude-opus-4-8">{agenticTool} model claude-opus-4-8</Radio>
+    </Radio.Group>
+  );
+
   return {
     AgenticToolConfigForm: ({ agenticTool }: { agenticTool: AgenticToolName }) => (
-      <Form.Item name="permissionMode" label="Permission Mode">
-        <Radio.Group>
-          <Radio value="default">{agenticTool} default</Radio>
-          <Radio value="acceptEdits">{agenticTool} acceptEdits</Radio>
-          <Radio value="ask">{agenticTool} ask</Radio>
-          <Radio value="allow-all">{agenticTool} allow-all</Radio>
-        </Radio.Group>
-      </Form.Item>
+      <>
+        <Form.Item name="permissionMode" label="Permission Mode">
+          <Radio.Group>
+            <Radio value="default">{agenticTool} default</Radio>
+            <Radio value="acceptEdits">{agenticTool} acceptEdits</Radio>
+            <Radio value="ask">{agenticTool} ask</Radio>
+            <Radio value="allow-all">{agenticTool} allow-all</Radio>
+          </Radio.Group>
+        </Form.Item>
+        {/* Stand-in for ModelSelector so tests can assert the saved modelConfig alias. */}
+        <Form.Item name="modelConfig" label="Model">
+          <MockModelSelector agenticTool={agenticTool} />
+        </Form.Item>
+      </>
     ),
     buildConfigFromFormValues: (
       _tool: AgenticToolName,
-      values: { permissionMode?: string; mcpServerIds?: string[] }
+      values: {
+        permissionMode?: string;
+        mcpServerIds?: string[];
+        modelConfig?: { mode?: string; model?: string };
+      }
     ) => ({
       permissionMode: values.permissionMode,
       mcpServerIds: values.mcpServerIds ?? [],
+      ...(values.modelConfig ? { modelConfig: values.modelConfig } : {}),
     }),
     getClearedFormValues: () => ({ permissionMode: 'default', mcpServerIds: [] }),
     getFormValuesFromConfig: (
       _tool: AgenticToolName,
-      config?: { permissionMode?: string; mcpServerIds?: string[] }
+      config?: {
+        permissionMode?: string;
+        mcpServerIds?: string[];
+        modelConfig?: { mode?: string; model?: string };
+      }
     ) => ({
       permissionMode: config?.permissionMode ?? 'default',
       mcpServerIds: config?.mcpServerIds ?? [],
+      modelConfig: config?.modelConfig,
     }),
   };
 });
@@ -111,6 +145,62 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     }, ASYNC);
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole('heading', { name: 'Codex' })).toBeInTheDocument();
+  });
+
+  it('keeps a saved Claude model alias after the post-save re-hydration (#1769)', async () => {
+    // Stale `user` prop that never reflects the save — mirrors the realtime lag
+    // between the resolved patch and the Feathers `patched` event that refreshes
+    // the prop. Before the fix, clearing the draft after save re-ran hydration
+    // against this stale config and snapped the field back to sonnet-5.
+    const user = makeUser({
+      default_agentic_config: {
+        'claude-code': {
+          permissionMode: 'default',
+          mcpServerIds: [],
+          modelConfig: { mode: 'alias', model: 'claude-sonnet-5' },
+        },
+      },
+    });
+    const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={onClose}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /claude code/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText('claude-code model claude-sonnet-5')).toBeChecked();
+    }, ASYNC);
+
+    fireEvent.click(screen.getByLabelText('claude-code model claude-opus-4-8'));
+    expect(screen.getByLabelText('claude-code model claude-opus-4-8')).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith('user-1', {
+        default_agentic_config: {
+          'claude-code': {
+            permissionMode: 'default',
+            mcpServerIds: [],
+            modelConfig: { mode: 'alias', model: 'claude-opus-4-8' },
+          },
+        },
+      });
+    }, ASYNC);
+
+    // Regression assertion: the just-saved alias must survive the post-save
+    // draft-clear even though `user` is still stale.
+    expect(screen.getByLabelText('claude-code model claude-opus-4-8')).toBeChecked();
+    expect(screen.getByLabelText('claude-code model claude-sonnet-5')).not.toBeChecked();
   });
 
   it('clears the password field after saving General settings in place', async () => {

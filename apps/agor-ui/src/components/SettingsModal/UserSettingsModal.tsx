@@ -1,4 +1,5 @@
 import type {
+  AgenticToolConfigField,
   AgenticToolName,
   AgorClient,
   EnvVarMetadata,
@@ -41,6 +42,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById } from '../../store/selectors';
+import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import {
@@ -81,6 +83,7 @@ export interface UserSettingsModalProps {
   currentUser?: User | null;
   onUpdate?: (userId: string, updates: UpdateUserInput) => void;
   onRestartOnboarding?: () => void | Promise<void>;
+  initialTab?: string;
 }
 
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
@@ -91,12 +94,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   currentUser,
   onUpdate,
   onRestartOnboarding,
+  initialTab,
 }) => {
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
   const mcpServerById = useAgorStore(selectMcpServerById);
   const [form] = Form.useForm();
-  const [activeTab, setActiveTab] = useState<string>('general');
+  const [activeTab, setActiveTab] = useState<string>(initialTab ?? 'general');
   const initializedUserIdRef = useRef<string | null>(null);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
@@ -122,6 +126,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }),
     [claudeCliForm, claudeForm, codexForm, copilotForm, cursorForm, geminiForm, opencodeForm]
   );
+
+  // Jump to initialTab each time the modal opens (e.g. from a banner deep-link).
+  useEffect(() => {
+    if (open && initialTab) setActiveTab(initialTab);
+  }, [open, initialTab]);
 
   // Per-tool credential presence state, keyed `${tool}.${field}` for spinner
   // tracking. The actual presence map is rebuilt from `user.agentic_tools`
@@ -176,10 +185,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     });
   }, []);
 
-  // Initialize forms when user changes or modal opens
+  // Initialize forms when user changes or modal opens. A deep-linked
+  // `initialTab` must win here, otherwise this init (which runs after the
+  // initialTab effect on open) would reset the modal back to 'general'.
   const initializeForms = useCallback(
     (userData: User) => {
-      setActiveTab('general');
+      setActiveTab(initialTab ?? 'general');
       setDirtyAgenticConfigTools(new Set());
       setAgenticConfigDraftByTool({});
 
@@ -195,7 +206,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         must_change_password: userData.must_change_password ?? false,
       });
     },
-    [form]
+    [form, initialTab]
   );
 
   const loadUserGroups = useCallback(async () => {
@@ -247,6 +258,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Hydrate tab-specific forms only after that tab has rendered its
   // corresponding <Form>. Calling setFieldsValue on never-mounted form
   // instances triggers Ant's "useForm is not connected" console warning.
+  //
+  // `agenticConfigDraftByTool` is intentionally NOT a dependency: it is read as
+  // a "prefer the in-progress edit over the persisted config" source, but must
+  // not itself re-trigger hydration. On tab switch the effect already re-runs
+  // (via `activeTab`) with a fresh closure over the latest draft. Including the
+  // draft in the deps caused a post-save revert (#1769): `saveAgenticConfigs`
+  // clears the draft immediately after the patch resolves, which re-ran this
+  // effect against a `user` prop that had not yet been refreshed by the realtime
+  // `patched` event — reapplying the stale/empty config and wiping the just-saved
+  // model. Reacting only to `activeTab`/`user`/`open` keeps hydration correct
+  // while leaving the saved value in place until fresh `user` data arrives.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: draft is read-only here; see comment above.
   useEffect(() => {
     if (!open || !user) return;
 
@@ -268,7 +291,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           audioPrefs?.minDurationSeconds ?? DEFAULT_AUDIO_PREFERENCES.minDurationSeconds,
       });
     }
-  }, [activeTab, agenticConfigDraftByTool, audioForm, agenticFormByTool, open, user]);
+  }, [activeTab, audioForm, agenticFormByTool, open, user]);
 
   // Rehydrate per-tool credential presence and env-var metadata from the
   // server every time the modal opens, so flags reflect the latest patch.
@@ -412,7 +435,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // service merges only the touched fields and encrypts at rest.
   const handleToolFieldSave = async (
     tool: AgenticToolName,
-    field: string,
+    field: AgenticToolConfigField,
     value: string
   ): Promise<void> => {
     if (!user) return;
@@ -420,11 +443,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, {
-        agentic_tools: {
-          [tool]: { [field]: value },
-        } as UpdateUserInput['agentic_tools'],
-      });
+      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, value));
       setAgenticToolStatus((prev) => ({
         ...prev,
         [tool]: { ...(prev[tool] ?? {}), [field]: true },
@@ -438,17 +457,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   // Clear a per-tool credential field by sending `null` in the patch.
-  const handleToolFieldClear = async (tool: AgenticToolName, field: string): Promise<void> => {
+  const handleToolFieldClear = async (
+    tool: AgenticToolName,
+    field: AgenticToolConfigField
+  ): Promise<void> => {
     if (!user) return;
     const spinnerKey = `${tool}.${field}`;
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, {
-        agentic_tools: {
-          [tool]: { [field]: null },
-        } as UpdateUserInput['agentic_tools'],
-      });
+      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, null));
       setAgenticToolStatus((prev) => {
         const nextToolFields = { ...(prev[tool] ?? {}) };
         delete nextToolFields[field];
@@ -936,7 +954,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         // saving spinners are tracked in `savingToolField` keyed by `${tool}.${field}`.
         const toolFields = TOOL_FIELD_CONFIGS[toolName] ?? [];
         const fieldStatus: FieldStatus = agenticToolStatus[toolName] ?? {};
-        const savingForTool: Record<string, boolean> = Object.fromEntries(
+        const savingForTool: Partial<Record<AgenticToolConfigField, boolean>> = Object.fromEntries(
           toolFields.map((c) => [c.field, !!savingToolField[`${toolName}.${c.field}`]])
         );
         const defaultsPane = (
@@ -985,7 +1003,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               onClear={(field) => handleToolFieldClear(toolName, field)}
               saving={savingForTool}
               publicValues={
-                user?.agentic_tools_public_values?.[toolName] as Record<string, string> | undefined
+                user?.agentic_tools_public_values?.[toolName] as
+                  | Partial<Record<AgenticToolConfigField, string>>
+                  | undefined
               }
             />
           </>

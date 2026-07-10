@@ -9,6 +9,7 @@ import { shortId } from '@agor/core/db';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   SessionMCPServerRepository,
@@ -48,8 +49,17 @@ export class ClaudePromptService {
   /** Enable token-level streaming from Claude Agent SDK */
   private static readonly ENABLE_TOKEN_STREAMING = true;
 
-  /** Idle timeout for SDK event loop - throws error if no messages received for this duration */
-  private static readonly IDLE_TIMEOUT_MS = 300000; // 5 minutes
+  /**
+   * Idle timeout for SDK event loop - throws error if no messages are received
+   * for this duration.
+   *
+   * This is only a guard for a truly stuck SDK stream. Executor liveness is
+   * tracked separately by task heartbeats, so this must be long enough for
+   * legitimate silent tool calls (for example, a foreground Bash `sleep` or a
+   * long-running test command) to finish without Agor misclassifying the turn
+   * as hung.
+   */
+  private static readonly IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
 
   /** Serialize permission checks per session to prevent duplicate prompts for concurrent tool calls */
   private permissionLocks = new Map<SessionID, Promise<void>>();
@@ -67,7 +77,8 @@ export class ClaudePromptService {
     private reposRepo?: import('../../db/feathers-repositories').RepoRepository,
     private messagesService?: MessagesService, // FeathersJS Messages service for creating permission requests
     private mcpEnabled?: boolean,
-    private usersRepo?: UsersRepository
+    private usersRepo?: UsersRepository,
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -191,6 +202,7 @@ If you continue to see authentication errors, please contact your Agor administr
         messagesService: this.messagesService,
         branchesRepo: this.branchesRepo,
         usersRepo: this.usersRepo,
+        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
         permissionLocks: this.permissionLocks,
       },
       {
@@ -357,6 +369,7 @@ If you continue to see authentication errors, please contact your Agor administr
         messagesService: this.messagesService,
         branchesRepo: this.branchesRepo,
         usersRepo: this.usersRepo,
+        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
         permissionLocks: this.permissionLocks,
       },
       {

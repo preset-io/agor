@@ -5,21 +5,21 @@ or substitute fonts.
 
 ## Palette
 
-| Role | Value | Notes |
-|---|---|---|
-| Background base | `#05070b` | Deepest dark teal-navy |
-| Background mid | `#09111d` | Gradient midpoint |
-| Background low | `#070b12` | Gradient lower band |
-| Teal glow (TL) | `rgba(46,154,146,0.22)` | Top-left radial glow |
-| Blue glow (TR) | `rgba(35,136,242,0.16)` | Top-right radial glow |
-| Accent teal | `#7fe8df` | Primary accent (eyebrows, lines, highlights) |
-| Deep teal | `#2e9a92` | Gradient start for buttons / lines |
-| Mint | `#d9fb89` | Secondary accent, sparing |
-| Warm amber | `#f0a23a` | Board reveal gradient (top) |
-| Warm orange | `#e8731f` | Board reveal gradient + Mina cursor / labels |
-| Ink (text) | `#f8fafc` | Primary text |
-| Muted | `#aeb9c8` | Secondary text |
-| Button ink | `#031311` | Dark text on teal pill |
+| Role            | Value                   | Notes                                        |
+| --------------- | ----------------------- | -------------------------------------------- |
+| Background base | `#05070b`               | Deepest dark teal-navy                       |
+| Background mid  | `#09111d`               | Gradient midpoint                            |
+| Background low  | `#070b12`               | Gradient lower band                          |
+| Teal glow (TL)  | `rgba(46,154,146,0.22)` | Top-left radial glow                         |
+| Blue glow (TR)  | `rgba(35,136,242,0.16)` | Top-right radial glow                        |
+| Accent teal     | `#7fe8df`               | Primary accent (eyebrows, lines, highlights) |
+| Deep teal       | `#2e9a92`               | Gradient start for buttons / lines           |
+| Mint            | `#d9fb89`               | Secondary accent, sparing                    |
+| Warm amber      | `#f0a23a`               | Board reveal gradient (top)                  |
+| Warm orange     | `#e8731f`               | Board reveal gradient + Mina cursor / labels |
+| Ink (text)      | `#f8fafc`               | Primary text                                 |
+| Muted           | `#aeb9c8`               | Secondary text                               |
+| Button ink      | `#031311`               | Dark text on teal pill                       |
 
 - **Cool→warm contrast is the core idea:** dark-teal everywhere, then the warm amber/orange
   board is the one hot moment. Don't dilute it by adding orange elsewhere except the Mina cursor.

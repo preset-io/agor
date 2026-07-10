@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   boardObjectQueryValidator,
   branchQueryValidator,
+  mcpServerQueryValidator,
   typedValidateQuery,
   userQueryValidator,
 } from './feathers-validation';
@@ -89,6 +90,29 @@ describe('userQueryValidator', () => {
       offset: 3,
       $limit: 50,
       $skip: 5,
+    });
+  });
+});
+
+describe('mcpServerQueryValidator', () => {
+  it('preserves forUserId for executor per-user OAuth token injection', async () => {
+    const context = {
+      params: {
+        query: {
+          scope: 'global',
+          enabled: 'true',
+          forUserId: '019e8e1c',
+          unknown: 'removed',
+        },
+      },
+    };
+
+    await typedValidateQuery(mcpServerQueryValidator)(context);
+
+    expect(context.params.query).toEqual({
+      scope: 'global',
+      enabled: true,
+      forUserId: '019e8e1c',
     });
   });
 });

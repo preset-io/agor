@@ -1,12 +1,24 @@
 import type { AgorClient, Branch, Session, SessionID } from '@agor-live/client';
 import { EyeInvisibleOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
-import { Badge, Input, Space, Switch, Table, Tag, Tooltip, Typography, theme } from 'antd';
+import {
+  Badge,
+  Button,
+  Input,
+  Popconfirm,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { getSessionStatusTone } from '../../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
-import { ArchiveToggleButton } from '../../ArchiveButton';
+import { ArchiveIcon } from '../../ArchiveButton';
 import { TaskStatusIcon } from '../../TaskStatusIcon';
 import { ToolIcon } from '../../ToolIcon/ToolIcon';
 
@@ -164,32 +176,47 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
 
       setArchivingIds((prev) => new Set(prev).add(sessionId));
       try {
-        await currentClient.service('sessions').patch(sessionId, {
-          archived: archive,
-          archived_reason: archive ? 'manual' : undefined,
-        } as Partial<Session>);
+        const result = (await currentClient
+          .service(`sessions/${sessionId}/${archive ? 'archive' : 'unarchive'}`)
+          .create({})) as {
+          session?: Session;
+          affectedSessions?: Session[];
+        };
+        const affectedSessions =
+          result.affectedSessions && result.affectedSessions.length > 0
+            ? result.affectedSessions
+            : result.session
+              ? [result.session]
+              : [];
 
-        // Keep local archived cache in sync for this modal view
-        if (archive) {
-          const source = activeSessions.find((s) => s.session_id === sessionId);
-          if (source) {
-            setActiveSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
-            setArchivedSessions((prev) => {
-              if (prev.some((s) => s.session_id === sessionId)) return prev;
-              return [{ ...source, archived: true }, ...prev];
-            });
-          } else if (showArchived) {
-            void loadArchivedSessions();
+        // Keep local archived cache in sync for this modal view. Realtime
+        // events will converge other views; this prevents stale descendants in
+        // the currently open modal immediately after route completion.
+        if (affectedSessions.length > 0) {
+          const affectedIds = new Set(affectedSessions.map((session) => session.session_id));
+          setActiveSessions((prev) =>
+            prev.filter((session) => !affectedIds.has(session.session_id))
+          );
+          setArchivedSessions((prev) =>
+            prev.filter((session) => !affectedIds.has(session.session_id))
+          );
+
+          if (archive) {
+            setArchivedSessions((prev) => [...affectedSessions, ...prev]);
+          } else {
+            setActiveSessions((prev) =>
+              affectedSessions.reduce((next, session) => upsertSession(next, session), prev)
+            );
           }
+        } else if (showArchived) {
+          void loadArchivedSessions();
         } else {
-          const source = archivedSessions.find((s) => s.session_id === sessionId);
-          if (source) {
-            setActiveSessions((prev) => upsertSession(prev, { ...source, archived: false }));
-          }
-          setArchivedSessions((prev) => prev.filter((s) => s.session_id !== sessionId));
+          void loadActiveSessions();
         }
 
-        showSuccess(archive ? 'Session archived' : 'Session unarchived');
+        showSuccess(
+          archive ? 'Session and child sessions archived' : 'Session and child sessions unarchived'
+        );
       } catch (err) {
         showError(err instanceof Error ? err.message : 'Failed to update session');
       } finally {
@@ -200,15 +227,7 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
         });
       }
     },
-    [
-      activeSessions,
-      archivedSessions,
-      loadArchivedSessions,
-      showArchived,
-      showSuccess,
-      showError,
-      upsertSession,
-    ]
+    [loadActiveSessions, loadArchivedSessions, showArchived, showSuccess, showError, upsertSession]
   );
 
   const combinedSessions = useMemo(() => {
@@ -333,16 +352,41 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
       title: '',
       key: 'actions',
       width: 40,
-      render: (_, session) => (
-        <ArchiveToggleButton
-          archived={session.archived}
-          loading={archivingIds.has(session.session_id)}
-          tooltip={session.archived ? 'Archived • Click to unarchive' : 'Archive session'}
-          onToggle={(nextArchived) =>
-            handleArchiveToggle(session.session_id as SessionID, nextArchived)
-          }
-        />
-      ),
+      render: (_, session) => {
+        const nextArchived = !session.archived;
+        const actionLabel = nextArchived ? 'archive' : 'unarchive';
+        const title = nextArchived
+          ? 'Archive session and child sessions?'
+          : 'Unarchive session and child sessions?';
+        const description = nextArchived
+          ? 'This will archive this session and its branch-local child sessions.'
+          : 'This will unarchive this session and its branch-local child sessions.';
+        const tooltip = nextArchived
+          ? 'Archive session and child sessions'
+          : 'Archived • Click to unarchive session and child sessions';
+
+        return (
+          <Popconfirm
+            title={title}
+            description={description}
+            okText={nextArchived ? 'Archive' : 'Unarchive'}
+            cancelText="Cancel"
+            okButtonProps={{ danger: nextArchived }}
+            onConfirm={() => handleArchiveToggle(session.session_id as SessionID, nextArchived)}
+          >
+            <Tooltip title={tooltip}>
+              <Button
+                type="text"
+                size="small"
+                icon={<ArchiveIcon />}
+                loading={archivingIds.has(session.session_id)}
+                aria-label={`${actionLabel} session and child sessions`}
+                onClick={(event) => event.stopPropagation()}
+              />
+            </Tooltip>
+          </Popconfirm>
+        );
+      },
     },
   ];
 

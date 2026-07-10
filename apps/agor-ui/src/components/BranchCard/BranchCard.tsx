@@ -13,6 +13,7 @@ import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useProgressiveMount } from '../../hooks/useProgressiveMount';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
@@ -26,6 +27,7 @@ import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
 import { BranchSessionSections } from './BranchSessionSections';
+import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
@@ -65,6 +67,7 @@ interface BranchCardProps {
   defaultExpanded?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
   panelMode?: boolean; // Render inside side panel instead of as a draggable canvas card
+  progressiveMountKey?: string | number | null;
   /** True when this branch is the deep-link target of the current URL
    *  (`/w/<branchShort>/`). Folded together with `isFocused` (a session
    *  is open in the drawer) into a unified "selected" state — rendered
@@ -100,11 +103,27 @@ const BranchCardComponent = ({
   defaultExpanded = true,
   inPopover = false,
   panelMode = false,
+  progressiveMountKey,
   isActiveUrlTarget = false,
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
+
+  const branchBoardId = (branch as { board_id?: string | null }).board_id;
+
+  // Canvas cards hydrate their session sections in chunks after the board
+  // shell commits (#1768); panel/popover surfaces render a single card, so
+  // they mount immediately.
+  const sectionsReady = useProgressiveMount({
+    enabled: !inPopover && !panelMode,
+    priority: isActiveUrlTarget || sessions.some((s) => s.session_id === selectedSessionId) ? 2 : 0,
+    resetKey: progressiveMountKey ?? branchBoardId ?? 'unassigned',
+  });
+  const sessionShellMinHeight = useMemo(
+    () => estimateBranchSessionSectionsHeight(sessions, { defaultExpanded }),
+    [defaultExpanded, sessions]
+  );
 
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
@@ -213,6 +232,17 @@ const BranchCardComponent = ({
   }, [activeSessions, branch.needs_attention, isFocused]);
 
   const isDarkMode = isDarkTheme(token);
+  // AntD exposes `colorPrimaryBg` as the subtle primary surface token.
+  // In dark mode it can still read a bit bright on a large card, so mix it
+  // with the base background while staying in the primary token family.
+  const runningCardBackgroundColor = isDarkMode
+    ? `color-mix(in srgb, ${token.colorPrimaryBg} 67%, ${token.colorBgBase})`
+    : token.colorPrimaryBg;
+  const cardBackgroundColor = hasRunningSession
+    ? runningCardBackgroundColor
+    : isAgent
+      ? token.colorInfoBg
+      : undefined;
 
   // Memoize glow shadow string to avoid recomputing color normalization on every render
   const attentionGlowShadow = useMemo(() => {
@@ -306,10 +336,10 @@ const BranchCardComponent = ({
         width: panelMode ? '100%' : peekedSessions.length > 0 ? 880 : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
-          'box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
+          'background-color 0.2s ease-in-out, box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
         willChange: needsAttention && !inPopover ? 'box-shadow' : 'auto',
         ...highlightStyle,
-        ...(isAgent ? { backgroundColor: token.colorInfoBg } : {}),
+        ...(cardBackgroundColor ? { backgroundColor: cardBackgroundColor } : {}),
         // Disconnected chokepoint: block all in-card interactions (clicking
         // into a session, env pill actions, modals) and dim to communicate
         // the state. Canvas pan/zoom and the slim app-shell banner remain
@@ -550,24 +580,38 @@ const BranchCardComponent = ({
       )}
 
       {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
-      <div className={REACT_FLOW_NO_DRAG_CLASS}>
-        <BranchSessionSections
-          branch={branch}
-          sessions={sessions}
-          userById={userById}
-          currentUserId={currentUserId}
-          selectedSessionId={selectedSessionId}
-          onSessionClick={onSessionClick}
-          onCreateSession={onCreateSession}
-          onForkSession={onForkSession}
-          onSpawnSession={onSpawnSession}
-          onOpenSessionSettings={onOpenSessionSettings}
-          peekedSessionIds={peekedSessionIdSet}
-          onTogglePeekSession={!inPopover && !panelMode ? handleTogglePeekSession : undefined}
-          defaultExpanded={defaultExpanded}
-          mode="card"
-          client={client}
-        />
+      <div
+        className={REACT_FLOW_NO_DRAG_CLASS}
+        style={sectionsReady ? undefined : { minHeight: sessionShellMinHeight }}
+      >
+        {sectionsReady ? (
+          <BranchSessionSections
+            branch={branch}
+            sessions={sessions}
+            userById={userById}
+            currentUserId={currentUserId}
+            selectedSessionId={selectedSessionId}
+            onSessionClick={onSessionClick}
+            onCreateSession={onCreateSession}
+            onForkSession={onForkSession}
+            onSpawnSession={onSpawnSession}
+            onOpenSessionSettings={onOpenSessionSettings}
+            peekedSessionIds={peekedSessionIdSet}
+            onTogglePeekSession={!inPopover && !panelMode ? handleTogglePeekSession : undefined}
+            defaultExpanded={defaultExpanded}
+            mode="card"
+            client={client}
+          />
+        ) : (
+          // Truthful shell while this card waits for its hydration slot: real
+          // session count from data already in props, no fake placeholders.
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 12, display: 'block', padding: '4px 0' }}
+          >
+            Sessions ({peekableSessions.length})
+          </Typography.Text>
+        )}
       </div>
 
       {!inPopover && !panelMode && peekedSessions.length > 0 && (
