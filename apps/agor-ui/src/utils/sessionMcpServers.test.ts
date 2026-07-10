@@ -1,7 +1,7 @@
 import type { AgorClient } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { sessionMcpCreated } from '../store/agorRealtimeActions';
 import { agorStore } from '../store/agorStore';
+import { sessionMcpCreated } from '../store/sessionMcpActions';
 import { updateSessionMcpServers } from './sessionMcpServers';
 
 describe('updateSessionMcpServers', () => {

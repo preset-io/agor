@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor-live/client';
-import { sessionMcpCreated, sessionMcpRemoved } from '../store/agorRealtimeActions';
+import { sessionMcpCreated, sessionMcpRemoved } from '../store/sessionMcpActions';
 
 export async function updateSessionMcpServers(
   client: AgorClient,
