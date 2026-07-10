@@ -1,6 +1,6 @@
 import { Footer, Navbar } from 'nextra-theme-docs';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
-import { BRAND_NAME, getBasePath, LOGO_PATH } from '../lib/siteMetadata';
+import { BRAND_NAME, getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 
 const basePath = getBasePath();
 
@@ -9,9 +9,9 @@ export const logo = (
     {/* eslint-disable-next-line @next/next/no-img-element */}
     {/* biome-ignore lint/performance/noImgElement: Using img for static assets in docs */}
     <img
-      src={`${basePath}${LOGO_PATH}`}
+      src={`${basePath}${LOGO_MARK_PATH}`}
       alt={BRAND_NAME}
-      style={{ height: '42px', width: '42px', borderRadius: '50%' }}
+      style={{ height: '42px', width: '42px' }}
       suppressHydrationWarning
     />
     <strong

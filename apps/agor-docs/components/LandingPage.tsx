@@ -1,5 +1,24 @@
 'use client';
 
+import {
+  Activity,
+  Blocks,
+  Brain,
+  CalendarClock,
+  ClipboardList,
+  Code2,
+  DraftingCompass,
+  GitPullRequest,
+  Handshake,
+  Hash,
+  type LucideIcon,
+  Megaphone,
+  MessagesSquare,
+  Scale,
+  ShieldCheck,
+  SlidersHorizontal,
+  Target,
+} from 'lucide-react';
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -9,46 +28,58 @@ import {
   DISCORD_INVITE_URL,
   GITHUB_REPO_URL,
 } from '../lib/links';
-import { BRAND_NAME, LOGO_PATH } from '../lib/siteMetadata';
+import { BRAND_NAME, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import Aurora from './Aurora/Aurora';
 import { HubSpotFormModal } from './HubSpotFormModal';
 import styles from './LandingPage.module.css';
 
 const LANDING_PRIVATE_BETA_URL = 'https://agor.live/blog/agor-cloud#lets-get-cooking';
 
-const featureCards = [
+const featureCards: Array<{
+  title: string;
+  body: string;
+  href: string;
+  linkLabel: string;
+  icon: LucideIcon;
+}> = [
   {
     title: 'Shared memory',
+    icon: Brain,
     body: 'Each assistant gets a namespace in the knowledge base: semantically searchable, durable, and shared with the team.',
     href: '/guide/knowledge',
     linkLabel: 'Explore Knowledge',
   },
   {
     title: 'Skills + MCP',
+    icon: Blocks,
     body: 'Package repeatable workflows as skills and connect assistants to the MCP servers your team already trusts.',
     href: '/guide/internal-mcp',
     linkLabel: 'See MCP control',
   },
   {
     title: 'Conversational onboarding',
+    icon: MessagesSquare,
     body: 'Teach an assistant by talking to it. The programming language is conversation, and the useful parts become reusable context.',
     href: '/guide/assistants',
     linkLabel: 'Read about Assistants',
   },
   {
     title: 'Where your team works',
+    icon: Hash,
     body: 'Reach assistants from Slack, GitHub, or wherever work already happens through gateway channels.',
     href: '/guide/message-gateway',
     linkLabel: 'Open Message Gateway',
   },
   {
     title: 'Scheduled agency',
+    icon: CalendarClock,
     body: 'Run heartbeats, daily standups, audits, digests, or longer workflows without waiting for a prompt.',
     href: '/guide/scheduler',
     linkLabel: 'Explore Scheduler',
   },
   {
     title: 'Personality + boundaries',
+    icon: SlidersHorizontal,
     body: 'Tune voice, style, and level of agency so every assistant knows how bold to be and when to ask first.',
     href: '/blog/agent-modeling-101',
     linkLabel: 'Agent modeling 101',
@@ -189,24 +220,156 @@ const showcaseSlides = [
   },
 ];
 
-// Meet the roster — real assistants from our own Agor instance (mirrors the
-// Persistent-assistants screenshot; names and jobs are the genuine article).
-const rosterMembers = [
-  { emoji: '🦞', name: 'AgorClaw', role: 'Main coding orchestrator' },
-  { emoji: '🏛️', name: 'Preset Architect', role: 'Knows every repo and how they fit together' },
+// Meet the roster — real assistants from our own Agor instance (names and
+// jobs are the genuine article), rendered as blips on the Roster Radar.
+// `r`/`a` are polar coordinates (radius in radar units, angle in degrees)
+// around the scope's center; `status`/`mem` feed the hover tooltip.
+type RosterStatus = 'RUNNING' | 'BUSY' | 'IDLE';
+
+const rosterMembers: Array<{
+  icon: LucideIcon;
+  name: string;
+  role: string;
+  status: RosterStatus;
+  mem: string;
+  r: number;
+  a: number;
+}> = [
   {
-    emoji: '🐙',
+    icon: Code2,
+    name: 'AgorClaw',
+    role: 'Main coding orchestrator',
+    status: 'RUNNING',
+    mem: '1.8 GB',
+    r: 100,
+    a: -90,
+  },
+  {
+    icon: DraftingCompass,
+    name: 'Preset Architect',
+    role: 'Knows every repo and how they fit together',
+    status: 'RUNNING',
+    mem: '960 MB',
+    r: 170,
+    a: -58,
+  },
+  {
+    icon: GitPullRequest,
     name: 'GitHub Handler',
     role: 'Tag it on any PR or issue — it takes it from there',
+    status: 'IDLE',
+    mem: '512 MB',
+    r: 190,
+    a: 4,
   },
-  { emoji: '🖇️', name: 'Milchick', role: 'Chief-of-staff orchestrator' },
-  { emoji: '🏈', name: 'Peyton Manning', role: 'Sees the whole field, calls the right plays' },
-  { emoji: '📈', name: 'OpEx', role: 'Observability & operational excellence' },
-  { emoji: '🩹', name: 'patch-bot', role: 'Watches new builds of our base images' },
-  { emoji: '⚖️', name: 'Saul', role: 'Legal, contracts, redlines expert' },
-  { emoji: '🧊', name: 'Blake', role: 'Deal desk expert' },
-  { emoji: '📣', name: 'Peggy', role: 'Proposes, optimizes, and reviews ad campaigns' },
+  {
+    icon: ClipboardList,
+    name: 'Milchick',
+    role: 'Chief-of-staff orchestrator',
+    status: 'RUNNING',
+    mem: '1.2 GB',
+    r: 135,
+    a: -28,
+  },
+  {
+    icon: Target,
+    name: 'Peyton Manning',
+    role: 'Sees the whole field, calls the right plays',
+    status: 'BUSY',
+    mem: '2.1 GB',
+    r: 110,
+    a: 44,
+  },
+  {
+    icon: Activity,
+    name: 'OpEx',
+    role: 'Observability & operational excellence',
+    status: 'RUNNING',
+    mem: '740 MB',
+    r: 155,
+    a: 92,
+  },
+  {
+    icon: ShieldCheck,
+    name: 'patch-bot',
+    role: 'Watches new builds of our base images',
+    status: 'IDLE',
+    mem: '288 MB',
+    r: 195,
+    a: 138,
+  },
+  {
+    icon: Scale,
+    name: 'Saul',
+    role: 'Legal, contracts, redlines expert',
+    status: 'RUNNING',
+    mem: '1.1 GB',
+    r: 145,
+    a: 182,
+  },
+  {
+    icon: Handshake,
+    name: 'Blake',
+    role: 'Deal desk expert',
+    status: 'BUSY',
+    mem: '1.4 GB',
+    r: 180,
+    a: -134,
+  },
+  {
+    icon: Megaphone,
+    name: 'Peggy',
+    role: 'Proposes, optimizes, and reviews ad campaigns',
+    status: 'RUNNING',
+    mem: '890 MB',
+    r: 200,
+    a: -158,
+  },
 ];
+
+// Radar scope is authored on a 560×560 grid (center 280,280); positions are
+// expressed as percentages so the whole scope scales responsively. Values are
+// rounded to a fixed precision — full-precision floats serialize differently
+// between SSR and the client and trigger hydration mismatches.
+const RADAR_SIZE = 560;
+
+const radarPoint = (r: number, a: number): { x: number; y: number } => {
+  const rad = (a * Math.PI) / 180;
+  return {
+    x: Number((((RADAR_SIZE / 2 + r * Math.cos(rad)) / RADAR_SIZE) * 100).toFixed(3)),
+    y: Number((((RADAR_SIZE / 2 + r * Math.sin(rad)) / RADAR_SIZE) * 100).toFixed(3)),
+  };
+};
+
+const radarPosition = (r: number, a: number): CSSProperties => {
+  const { x, y } = radarPoint(r, a);
+  return { left: `${x}%`, top: `${y}%` };
+};
+
+// Tooltip anchoring: clamp the card's center away from the scope's edge so it
+// clears the circular overflow clip, and flip it below the blip for members in
+// the top region (no headroom above). The arrow slides back over the blip via
+// a container-query offset (cqw = 1% of the scope's width).
+const TOOLTIP_CLAMP_PCT = 23;
+
+const radarTooltip = (r: number, a: number): { style: CSSProperties; below: boolean } => {
+  const { x, y } = radarPoint(r, a);
+  const clampedX = Math.min(100 - TOOLTIP_CLAMP_PCT, Math.max(TOOLTIP_CLAMP_PCT, x));
+  return {
+    below: y < 40,
+    style: {
+      left: `${clampedX}%`,
+      top: `${y}%`,
+      '--tooltip-arrow-dx': `${Number((x - clampedX).toFixed(3))}cqw`,
+    } as CSSProperties,
+  };
+};
+
+const rosterStatusColor: Record<RosterStatus, string> = {
+  RUNNING: '#5fe9d0',
+  BUSY: '#56c7e8',
+  IDLE: '#e8c468',
+};
 
 // Multiplayer numbered cards (mockup design language, our copy)
 const liveCards = [
@@ -230,6 +393,7 @@ export function LandingPage() {
   const [activeShot, setActiveShot] = useState(0);
   const [activeSurface, setActiveSurface] = useState(0);
   const [activeFeature, setActiveFeature] = useState(0);
+  const [hoveredMember, setHoveredMember] = useState<number | null>(null);
 
   useEffect(() => {
     const landing = landingRef.current;
@@ -456,6 +620,62 @@ export function LandingPage() {
         </div>
       </section>
 
+      <section className={styles.workspaceSection} data-reveal>
+        <div className={styles.workspaceCopy}>
+          <span className={styles.eyebrow}>Agents that learn with you</span>
+          <h2>
+            Raise <span className={styles.headingAccent}>team assistants</span> with memory, skills,
+            and a place to <span className={styles.headingStrong}>work</span>
+          </h2>
+          <p>
+            One-off prompts don’t compound. In Agor, assistants have durable identities your team
+            can teach conversationally, then equip with memory, tools, channels, and schedules as
+            they grow — so your{' '}
+            <Link href={AI_ENABLEMENT_POST_URL} target="_blank" rel="noopener noreferrer">
+              most AI-enabled teammates
+            </Link>{' '}
+            can uplevel workflows across the entire org, and what works for one person finally
+            reaches everyone.
+          </p>
+        </div>
+        <div className={styles.featureRing} data-reveal>
+          <div className={styles.ringStage}>
+            {featureCards.map((feature, index) => {
+              const angle = ((-90 + index * (360 / featureCards.length)) * Math.PI) / 180;
+              const radius = 37.5; // percent of stage, from center to node center
+              const left = 50 + radius * Math.cos(angle);
+              const top = 50 + radius * Math.sin(angle);
+              const isActive = index === activeFeature;
+              return (
+                <button
+                  type="button"
+                  key={feature.title}
+                  className={
+                    isActive ? `${styles.ringNode} ${styles.ringNodeActive}` : styles.ringNode
+                  }
+                  style={{ left: `${left}%`, top: `${top}%` }}
+                  onMouseEnter={() => setActiveFeature(index)}
+                  onFocus={() => setActiveFeature(index)}
+                  onClick={() => setActiveFeature(index)}
+                  aria-pressed={isActive}
+                >
+                  <feature.icon size={16} aria-hidden />
+                  <span>{feature.title}</span>
+                </button>
+              );
+            })}
+            <div className={styles.ringHub}>
+              <div className={styles.ringHubInner} key={activeFeature}>
+                <p>{featureCards[activeFeature].body}</p>
+                <Link href={featureCards[activeFeature].href} className={styles.ringButton}>
+                  {featureCards[activeFeature].linkLabel} <span aria-hidden="true">→</span>
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Let power users get down to business</span>
@@ -503,87 +723,97 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.workspaceSection} data-reveal>
-        <div className={styles.workspaceCopy}>
-          <span className={styles.eyebrow}>Agents that learn with you</span>
-          <h2>
-            Raise <span className={styles.headingAccent}>team assistants</span> with memory, skills,
-            and a place to <span className={styles.headingStrong}>work</span>
-          </h2>
-          <p>
-            One-off prompts don’t compound. In Agor, assistants have durable identities your team
-            can teach conversationally, then equip with memory, tools, channels, and schedules as
-            they grow — so your{' '}
-            <Link href={AI_ENABLEMENT_POST_URL} target="_blank" rel="noopener noreferrer">
-              most AI-enabled teammates
-            </Link>{' '}
-            can uplevel workflows across the entire org, and what works for one person finally
-            reaches everyone.
-          </p>
-        </div>
-        <div className={styles.featureRing} data-reveal>
-          <div className={styles.ringStage}>
-            {featureCards.map((feature, index) => {
-              const angle = ((-90 + index * (360 / featureCards.length)) * Math.PI) / 180;
-              const radius = 37.5; // percent of stage, from center to node center
-              const left = 50 + radius * Math.cos(angle);
-              const top = 50 + radius * Math.sin(angle);
-              const isActive = index === activeFeature;
-              return (
-                <button
-                  type="button"
-                  key={feature.title}
-                  className={
-                    isActive ? `${styles.ringNode} ${styles.ringNodeActive}` : styles.ringNode
-                  }
-                  style={{ left: `${left}%`, top: `${top}%` }}
-                  onMouseEnter={() => setActiveFeature(index)}
-                  onFocus={() => setActiveFeature(index)}
-                  onClick={() => setActiveFeature(index)}
-                  aria-pressed={isActive}
-                >
-                  <span>{feature.title}</span>
-                </button>
-              );
-            })}
-            <div className={styles.ringHub}>
-              <div className={styles.ringHubInner} key={activeFeature}>
-                <p>{featureCards[activeFeature].body}</p>
-                <Link href={featureCards[activeFeature].href} className={styles.ringButton}>
-                  {featureCards[activeFeature].linkLabel} <span aria-hidden="true">→</span>
-                </Link>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <section className={styles.rosterSection} data-reveal>
-        <div className={styles.sectionHeader}>
-          <span className={styles.eyebrow}>Not mockups — our actual coworkers</span>
-          <h2>
-            Meet the <span className={styles.headingAccent}>roster</span>.
-          </h2>
-          <p className={styles.rosterSub}>
+        <div className={styles.rosterCopy}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.eyebrow}>Meet the Preset agent team</span>
+            <h2>
+              Full agentic <span className={styles.headingAccent}>coverage</span> for your org.
+            </h2>
+          </div>
+          <p className={styles.rosterBody}>
             The teammates running in our own Agor instance today — each with a name, a job, and a
             memory.
           </p>
+          <p className={styles.rosterStatusLine}>
+            <span className={styles.rosterStatusDot} aria-hidden="true" />
+            {rosterMembers.length} contacts tracked — hover to scan
+          </p>
         </div>
-        <div className={styles.rosterGrid}>
-          {rosterMembers.map((member, index) => (
-            <article
-              className={styles.rosterCard}
-              key={member.name}
-              data-reveal
-              style={revealDelay(index % 5)}
-            >
-              <span className={styles.rosterEmoji} aria-hidden="true">
-                {member.emoji}
-              </span>
-              <h3>{member.name}</h3>
-              <p>{member.role}</p>
-            </article>
-          ))}
+        <div className={styles.radarScope}>
+          <svg className={styles.radarSvg} viewBox="0 0 560 560" aria-hidden="true">
+            <circle cx="280" cy="280" r="100" fill="none" stroke="rgba(94, 233, 208, 0.14)" />
+            <circle cx="280" cy="280" r="190" fill="none" stroke="rgba(94, 233, 208, 0.12)" />
+            <circle cx="280" cy="280" r="270" fill="none" stroke="rgba(94, 233, 208, 0.1)" />
+            <line x1="280" y1="0" x2="280" y2="560" stroke="rgba(94, 233, 208, 0.07)" />
+            <line x1="0" y1="280" x2="560" y2="280" stroke="rgba(94, 233, 208, 0.07)" />
+          </svg>
+          <div className={styles.radarSweep} aria-hidden="true" />
+          <div className={styles.radarOrigin} aria-hidden="true">
+            <span className={styles.radarOriginDot} />
+            <span className={styles.radarOriginLabel}>AGOR</span>
+          </div>
+          {rosterMembers.map((member, index) => {
+            const isDimmed = hoveredMember !== null && hoveredMember !== index;
+            const blipClass = [
+              styles.radarBlip,
+              hoveredMember === index ? styles.radarBlipActive : '',
+              isDimmed ? styles.radarBlipDimmed : '',
+            ]
+              .filter(Boolean)
+              .join(' ');
+            return (
+              <button
+                type="button"
+                key={member.name}
+                className={blipClass}
+                style={radarPosition(member.r, member.a)}
+                onMouseEnter={() => setHoveredMember(index)}
+                onMouseLeave={() => setHoveredMember(null)}
+                onFocus={() => setHoveredMember(index)}
+                onBlur={() => setHoveredMember(null)}
+                aria-label={`${member.name} — ${member.role}`}
+              >
+                <span className={styles.blipIcon}>
+                  <member.icon size={19} aria-hidden />
+                </span>
+                <span className={styles.blipName}>{member.name}</span>
+              </button>
+            );
+          })}
+          {/* Tooltips render as siblings (after all blips) so the active one
+              stacks above every blip; visibility toggles via opacity. */}
+          {rosterMembers.map((member, index) => {
+            const tooltip = radarTooltip(member.r, member.a);
+            const tooltipClass = [
+              styles.radarTooltip,
+              tooltip.below ? styles.radarTooltipBelow : '',
+              hoveredMember === index ? styles.radarTooltipVisible : '',
+            ]
+              .filter(Boolean)
+              .join(' ');
+            return (
+              <div
+                key={member.name}
+                className={tooltipClass}
+                style={tooltip.style}
+                aria-hidden="true"
+              >
+                <p className={styles.tooltipName}>{member.name}</p>
+                <p className={styles.tooltipRole}>{member.role}</p>
+                <div className={styles.tooltipMeta}>
+                  <span
+                    className={styles.tooltipStatus}
+                    style={{ color: rosterStatusColor[member.status] }}
+                  >
+                    <span className={styles.tooltipStatusDot} />
+                    {member.status}
+                  </span>
+                  <span className={styles.tooltipMem}>mem {member.mem}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -663,7 +893,7 @@ export function LandingPage() {
       <footer className={styles.landingFooter} data-reveal>
         <div className={styles.footerBrand}>
           {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
-          <img src={LOGO_PATH} alt={`${BRAND_NAME} logo`} />
+          <img src={LOGO_MARK_PATH} alt={`${BRAND_NAME} logo`} />
           <div>
             <strong>agor</strong>
             <p>The command center for AI enablement.</p>

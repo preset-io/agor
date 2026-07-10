@@ -11,7 +11,10 @@ const DEFAULT_SITE_URL = 'https://agor.live';
 export const BRAND_NAME = 'agor';
 export const THEME_COLOR = '#2e9a92';
 export const FAVICON_PATH = '/favicon.png';
-export const LOGO_PATH = '/logo.png';
+export const LOGO_PATH = '/logo.svg';
+// Circle-less variant (transparent background) for chrome like the navbar,
+// where the full dark disc reads as a blob on dark surfaces.
+export const LOGO_MARK_PATH = '/logo-mark.svg';
 
 export const DEFAULT_TITLE = 'agor – The command center for AI enablement';
 

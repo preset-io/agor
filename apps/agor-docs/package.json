@@ -14,6 +14,7 @@
   "dependencies": {
     "@theguild/remark-mermaid": "^0.3.0",
     "katex": "^0.17.0",
+    "lucide-react": "^1.24.0",
     "next": "^15.5.20",
     "nextra": "^4.6.1",
     "nextra-theme-docs": "^4.6.1",
