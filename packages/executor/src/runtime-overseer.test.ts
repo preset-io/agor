@@ -211,4 +211,10 @@ describe('sanitizePulse', () => {
     expect(pulse.label).toHaveLength(120);
     expect(pulse).not.toHaveProperty('metadata');
   });
+
+  it('maps unmodeled pulse kinds to sdk.unknown', () => {
+    expect(sanitizePulse({ kind: 'sdk.private_event' } as never)).toEqual({
+      kind: 'sdk.unknown',
+    });
+  });
 });

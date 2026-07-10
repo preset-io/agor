@@ -1,4 +1,10 @@
-import type { Pulse, PulseSnapshot, Task, TaskID } from '@agor/core/types';
+import {
+  PULSE_KINDS,
+  type Pulse,
+  type PulseSnapshot,
+  type Task,
+  type TaskID,
+} from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000;
@@ -6,6 +12,7 @@ const MAX_KIND_LENGTH = 120;
 const MAX_ID_LENGTH = 160;
 const MAX_LABEL_LENGTH = 120;
 const DEFAULT_FLUSH_TIMEOUT_MS = 3_000;
+const VALID_PULSE_KINDS = new Set<string>(PULSE_KINDS);
 
 export interface AgenticToolRuntime {
   pulse(pulse: Pulse): void;
@@ -194,7 +201,11 @@ export class RuntimeOverseer implements AgenticToolRuntime {
 }
 
 export function sanitizePulse(pulse: Pulse): Pulse {
-  const kind = (trimString(pulse.kind, MAX_KIND_LENGTH) ?? 'sdk.unknown') as Pulse['kind'];
+  const candidateKind = trimString(pulse.kind, MAX_KIND_LENGTH);
+  const kind =
+    candidateKind && VALID_PULSE_KINDS.has(candidateKind)
+      ? (candidateKind as Pulse['kind'])
+      : 'sdk.unknown';
   const id = trimString(pulse.id, MAX_ID_LENGTH);
   const label = trimString(pulse.label, MAX_LABEL_LENGTH);
 

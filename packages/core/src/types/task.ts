@@ -126,19 +126,23 @@ export interface ContextUsageSnapshot {
   percentage: number;
 }
 
-export type PulseKind =
-  | 'executor.connected'
-  | 'sdk.started'
-  | 'sdk.first_event'
-  | 'sdk.progress'
-  | 'assistant.message'
-  | 'assistant.stream'
-  | 'thinking.progress'
-  | 'tool.started'
-  | 'tool.progress'
-  | 'tool.finished'
-  | 'permission.wait_started'
-  | 'permission.wait_ended';
+export const PULSE_KINDS = [
+  'executor.connected',
+  'sdk.started',
+  'sdk.first_event',
+  'sdk.progress',
+  'sdk.unknown',
+  'assistant.message',
+  'assistant.stream',
+  'thinking.progress',
+  'tool.started',
+  'tool.progress',
+  'tool.finished',
+  'permission.wait_started',
+  'permission.wait_ended',
+] as const;
+
+export type PulseKind = (typeof PULSE_KINDS)[number];
 
 export interface Pulse {
   kind: PulseKind;
