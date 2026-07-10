@@ -616,6 +616,14 @@ describe('createClient', () => {
       );
     });
 
+    it('registers tasks.connectExecutor custom method on client', () => {
+      const client = createClient();
+      const tasksService = client.service('tasks') as unknown as {
+        methods: MockedFunction<(...names: string[]) => unknown>;
+      };
+      expect(tasksService.methods).toHaveBeenCalledWith('connectExecutor');
+    });
+
     it('does not register custom methods on services without any', () => {
       const client = createClient();
       const sessionsService = client.service('sessions') as unknown as {
