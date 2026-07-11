@@ -44,6 +44,35 @@ function isSQLiteBusyError(error: unknown): boolean {
 export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   constructor(private db: Database) {}
 
+  /** Acquire the task write lock consistently across database dialects. */
+  private async lockTaskForMutation(txDb: Database, taskId: string): Promise<void> {
+    // PostgreSQL provides a real row lock. SQLite transactions begin deferred,
+    // so acquire the write lock with a no-op row update before reading.
+    if (isSQLiteDatabase(this.db)) {
+      await update(txDb, tasks)
+        .set({ status: sql`${tasks.status}` })
+        .where(eq(tasks.task_id, taskId))
+        .run();
+      return;
+    }
+
+    await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, taskId));
+  }
+
+  /** Retry an entire SQLite mutation so a contending writer re-reads fresh state. */
+  private async runTaskMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
+    try {
+      return await mutation();
+    } catch (error) {
+      // libSQL reports write contention immediately even with busy_timeout.
+      if (isSQLiteDatabase(this.db) && attempt < 4 && isSQLiteBusyError(error)) {
+        await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+        return this.runTaskMutation(mutation, attempt + 1);
+      }
+      throw error;
+    }
+  }
+
   /**
    * Convert database row to Task type
    */
@@ -373,33 +402,35 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   async connectExecutor(id: string): Promise<{ task: Task; transitioned: boolean } | null> {
     try {
       const fullId = await this.resolveId(id);
-      return await this.db.transaction(async (tx) => {
-        const txDb = txAsDb(tx);
-        await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, fullId));
+      return await this.runTaskMutation(() =>
+        this.db.transaction(async (tx) => {
+          const txDb = txAsDb(tx);
+          await this.lockTaskForMutation(txDb, fullId);
 
-        const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
-        if (!row) throw new EntityNotFoundError('Task', id);
+          const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+          if (!row) throw new EntityNotFoundError('Task', id);
 
-        if (row.status === TaskStatus.RUNNING && row.executor_connected_at) {
-          return { task: this.rowToTask(row), transitioned: false };
-        }
-        if (row.status !== TaskStatus.DISPATCHING) return null;
+          if (row.status === TaskStatus.RUNNING && row.executor_connected_at) {
+            return { task: this.rowToTask(row), transitioned: false };
+          }
+          if (row.status !== TaskStatus.DISPATCHING) return null;
 
-        const connectedAt = new Date();
-        await update(txDb, tasks)
-          .set({ status: TaskStatus.RUNNING, executor_connected_at: connectedAt })
-          .where(eq(tasks.task_id, fullId))
-          .run();
+          const connectedAt = new Date();
+          await update(txDb, tasks)
+            .set({ status: TaskStatus.RUNNING, executor_connected_at: connectedAt })
+            .where(eq(tasks.task_id, fullId))
+            .run();
 
-        return {
-          task: this.rowToTask({
-            ...row,
-            status: TaskStatus.RUNNING,
-            executor_connected_at: connectedAt,
-          }),
-          transitioned: true,
-        };
-      });
+          return {
+            task: this.rowToTask({
+              ...row,
+              status: TaskStatus.RUNNING,
+              executor_connected_at: connectedAt,
+            }),
+            transitioned: true,
+          };
+        })
+      );
     } catch (error) {
       if (error instanceof RepositoryError || error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
@@ -428,18 +459,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         this.db.transaction(async (tx) => {
           const txDb = txAsDb(tx);
 
-          // PostgreSQL provides a real row lock. SQLite transactions begin
-          // deferred, so acquire the write lock with a no-op row update before
-          // reading; otherwise two writers can both read the old status and the
-          // loser may fail with SQLITE_BUSY instead of observing the winner.
-          if (isSQLiteDatabase(this.db)) {
-            await update(txDb, tasks)
-              .set({ status: sql`${tasks.status}` })
-              .where(eq(tasks.task_id, fullId))
-              .run();
-          } else {
-            await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, fullId));
-          }
+          await this.lockTaskForMutation(txDb, fullId);
 
           // STEP 1: Read current task (within transaction)
           const currentRow = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
@@ -500,21 +520,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           // Return merged task (no need to re-fetch, we have it in memory)
           return merged;
         });
-      const runMutation = async (attempt = 0): Promise<Task> => {
-        try {
-          return await mutate();
-        } catch (error) {
-          // libSQL reports write contention immediately even with busy_timeout.
-          // Retry the whole row-locked mutation so it re-reads the winner's
-          // status before applying the terminal immutability check.
-          if (isSQLiteDatabase(this.db) && attempt < 4 && isSQLiteBusyError(error)) {
-            await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
-            return runMutation(attempt + 1);
-          }
-          throw error;
-        }
-      };
-      const result = await runMutation();
+      const result = await this.runTaskMutation(mutate);
       return result;
     } catch (error) {
       if (error instanceof RepositoryError) throw error;

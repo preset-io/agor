@@ -13,4 +13,13 @@ describe('Postgres migrations', () => {
     expect(migration).not.toMatch(/\bembedding\s+vector\b/i);
     expect(migration).toContain('kb_embedding_spaces');
   });
+
+  it('stores executor connection timestamps as UTC-safe instants', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0059_task_dispatching.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toMatch(/ADD COLUMN "executor_connected_at" timestamp with time zone/i);
+  });
 });

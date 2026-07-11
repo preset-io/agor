@@ -752,6 +752,23 @@ describe('TaskRepository.connectExecutor', () => {
     }
   );
 
+  dbTest('serializes concurrent executor claims without SQLite lock errors', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+
+    const claims = await Promise.all([
+      taskRepo.connectExecutor(created.task_id),
+      taskRepo.connectExecutor(created.task_id),
+    ]);
+
+    expect(claims.map((claim) => claim?.transitioned).sort()).toEqual([false, true]);
+    expect(new Set(claims.map((claim) => claim?.task.executor_connected_at)).size).toBe(1);
+    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.RUNNING);
+  });
+
   dbTest('does not accept a timestamp-less running row as a prior claim', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -920,45 +937,40 @@ describe('TaskRepository.update', () => {
     }
   );
 
-  dbTest('keeps terminal status when completion wins a concurrent resume race', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-    const sessionId = await createSessionWithDeps(db);
-    const created = await taskRepo.create(
-      createTaskData({
-        session_id: sessionId,
-        status: TaskStatus.AWAITING_PERMISSION,
-        executor_connected_at: '2026-07-10T20:00:00.000Z',
-      })
+  for (const resumableStatus of [TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT]) {
+    dbTest(
+      `keeps terminal status across a concurrent resume from ${resumableStatus}`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const created = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: resumableStatus,
+            executor_connected_at: '2026-07-10T20:00:00.000Z',
+          })
+        );
+
+        // Do not assume which transaction acquires the row lock first. If the
+        // resume wins it may complete before the terminal write; if completion
+        // wins, the resume must reject. The lifecycle invariant is identical.
+        const [completionResult, resumeResult] = await Promise.allSettled([
+          taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED }),
+          taskRepo.update(created.task_id, { status: TaskStatus.RUNNING }),
+        ]);
+
+        expect(completionResult.status).toBe('fulfilled');
+        if (resumeResult.status === 'fulfilled') {
+          expect(resumeResult.value.status).toBe(TaskStatus.RUNNING);
+        } else {
+          expect(String(resumeResult.reason)).toContain(
+            'terminal task status cannot be changed from completed'
+          );
+        }
+        expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.COMPLETED);
+      }
     );
-
-    const completion = taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED });
-    const resume = taskRepo.update(created.task_id, { status: TaskStatus.RUNNING });
-    const [completionResult, resumeResult] = await Promise.allSettled([completion, resume]);
-
-    expect(completionResult.status).toBe('fulfilled');
-    expect(resumeResult.status).toBe('rejected');
-    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.COMPLETED);
-  });
-
-  dbTest('allows a concurrent resume to be followed by terminal completion', async ({ db }) => {
-    const taskRepo = new TaskRepository(db);
-    const sessionId = await createSessionWithDeps(db);
-    const created = await taskRepo.create(
-      createTaskData({
-        session_id: sessionId,
-        status: TaskStatus.AWAITING_INPUT,
-        executor_connected_at: '2026-07-10T20:00:00.000Z',
-      })
-    );
-
-    const resume = taskRepo.update(created.task_id, { status: TaskStatus.RUNNING });
-    const completion = taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED });
-    const [resumeResult, completionResult] = await Promise.allSettled([resume, completion]);
-
-    expect(resumeResult.status).toBe('fulfilled');
-    expect(completionResult.status).toBe('fulfilled');
-    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.COMPLETED);
-  });
+  }
 
   dbTest('should update multiple fields and preserve unchanged ones', async ({ db }) => {
     const taskRepo = new TaskRepository(db);

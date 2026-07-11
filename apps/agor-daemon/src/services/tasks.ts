@@ -1185,6 +1185,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
     }
     if (connection.transitioned) {
+      const startedAt = Date.parse(connection.task.started_at ?? '');
+      const connectedAt = Date.parse(connection.task.executor_connected_at ?? '');
+      if (Number.isFinite(startedAt) && Number.isFinite(connectedAt)) {
+        console.log(
+          `🔌 [TasksService] Executor connected for task ${shortId(connection.task.task_id)} ` +
+            `in ${Math.max(0, connectedAt - startedAt)}ms`
+        );
+      }
       this.trackTaskStarted(connection.task);
       // The guarded repository transition bypasses the standard patch method,
       // so publish the canonical patched event explicitly for reactive clients.

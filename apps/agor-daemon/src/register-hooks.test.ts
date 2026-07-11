@@ -114,6 +114,31 @@ describe('protectServerManagedTaskWrites', () => {
     'create',
     'update',
     'patch',
+  ] as const)('rejects server-owned dispatching status on external %s', async (method) => {
+    await expect(
+      protectServerManagedTaskWrites(externalContext(method, { status: TaskStatus.DISPATCHING }))
+    ).rejects.toThrow('dispatching task status is server-managed');
+  });
+
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('rejects server-owned dispatching status in external %s array data', async (method) => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(method, [
+          { status: TaskStatus.CREATED },
+          { status: TaskStatus.DISPATCHING },
+        ])
+      )
+    ).rejects.toThrow('dispatching task status is server-managed');
+  });
+
+  it.each([
+    'create',
+    'update',
+    'patch',
   ] as const)('rejects server-owned running status on external %s', async (method) => {
     await expect(
       protectServerManagedTaskWrites(externalContext(method, { status: TaskStatus.RUNNING }))
@@ -159,6 +184,26 @@ describe('protectServerManagedTaskWrites', () => {
         )
       )
     ).rejects.toThrow('running task status is server-managed');
+  });
+
+  it('rejects a connected task-scoped executor forging dispatching', async () => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(
+          'patch',
+          { status: TaskStatus.DISPATCHING },
+          {
+            taskId: 'task-1',
+            executorTaskId: 'task-1',
+            persistedTask: {
+              task_id: 'task-1',
+              status: TaskStatus.AWAITING_INPUT,
+              executor_connected_at: '2026-07-10T20:00:00.000Z',
+            },
+          }
+        )
+      )
+    ).rejects.toThrow('dispatching task status is server-managed');
   });
 
   it('rejects a normal user resuming an already-connected task', async () => {
@@ -230,6 +275,15 @@ describe('protectServerManagedTaskWrites', () => {
   it('preserves trusted internal direct-to-running task writes', async () => {
     const context = externalContext('patch', {
       status: TaskStatus.RUNNING,
+    });
+    context.params.provider = undefined;
+
+    await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+  });
+
+  it('preserves trusted internal dispatching task writes', async () => {
+    const context = externalContext('patch', {
+      status: TaskStatus.DISPATCHING,
     });
     context.params.provider = undefined;
 

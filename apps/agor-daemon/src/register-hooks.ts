@@ -37,7 +37,7 @@ import {
   validateRenderedManagedEnvUrlFields,
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
-import type { Application } from '@agor/core/feathers';
+import type { Application, FeathersService } from '@agor/core/feathers';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
@@ -82,6 +82,7 @@ import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
   SessionsServiceImpl,
+  TasksServiceImpl,
 } from './declarations.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
@@ -480,6 +481,9 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   );
   if (records.some((write) => Object.hasOwn(write, 'executor_connected_at'))) {
     throw new Forbidden('executor_connected_at is server-managed');
+  }
+  if (records.some((write) => write.status === TaskStatus.DISPATCHING)) {
+    throw new Forbidden('dispatching task status is server-managed');
   }
   if (records.some((write) => write.status === TaskStatus.RUNNING)) {
     const isSingleRunningPatch =
@@ -2904,7 +2908,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Tasks hooks
   // ============================================================================
 
-  app.service('tasks').hooks({
+  const tasksService = app.service('tasks') as FeathersService<Application, TasksServiceImpl>;
+  tasksService.hooks({
     before: {
       all: [typedValidateQuery(taskQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
@@ -2962,7 +2967,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
       ],
-    } as never,
+    },
   });
 
   // ============================================================================

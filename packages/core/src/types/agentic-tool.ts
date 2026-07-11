@@ -47,6 +47,19 @@ export type AgenticToolName =
   | 'cursor';
 
 /**
+ * Agentic tools launched and observed directly by the daemon instead of the
+ * independently running executor process. Add future non-executor adapters
+ * here so task launch state does not accumulate tool-specific conditionals.
+ */
+export const NON_EXECUTOR_AGENTIC_TOOLS: ReadonlySet<AgenticToolName> = new Set([
+  'claude-code-cli',
+]);
+
+export function usesExecutorRuntime(tool: AgenticToolName): boolean {
+  return !NON_EXECUTOR_AGENTIC_TOOLS.has(tool);
+}
+
+/**
  * Agentic tool metadata for UI display
  *
  * Represents a configured agentic coding tool with installation status,

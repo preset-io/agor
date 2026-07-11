@@ -13,8 +13,15 @@ describe('buildTaskLaunchState', () => {
     expect(launchState).not.toHaveProperty('executor_connected_at');
   });
 
-  it('launches connected executors into dispatching', () => {
-    expect(buildTaskLaunchState('codex', '2026-07-10T20:00:00.000Z')).toEqual({
+  it.each([
+    'claude-code',
+    'codex',
+    'gemini',
+    'opencode',
+    'copilot',
+    'cursor',
+  ] as const)('launches %s through the executor dispatch state', (tool) => {
+    expect(buildTaskLaunchState(tool, '2026-07-10T20:00:00.000Z')).toEqual({
       status: TaskStatus.DISPATCHING,
       started_at: '2026-07-10T20:00:00.000Z',
     });

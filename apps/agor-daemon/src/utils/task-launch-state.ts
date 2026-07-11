@@ -1,5 +1,5 @@
 import type { AgenticToolName, Task } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { TaskStatus, usesExecutorRuntime } from '@agor/core/types';
 
 /**
  * Build the task fields persisted immediately before launch. CLI sessions have
@@ -11,7 +11,7 @@ export function buildTaskLaunchState(
   startedAt: string
 ): Pick<Task, 'status' | 'started_at'> {
   return {
-    status: agenticTool === 'claude-code-cli' ? TaskStatus.RUNNING : TaskStatus.DISPATCHING,
+    status: usesExecutorRuntime(agenticTool) ? TaskStatus.DISPATCHING : TaskStatus.RUNNING,
     started_at: startedAt,
   };
 }
