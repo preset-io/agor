@@ -311,21 +311,6 @@ export function normalizeLinkTargetKey(data: {
   return null;
 }
 
-export function buildKnowledgeRefUri(
-  ref: ReturnType<typeof extractKnowledgeLinks>[number]
-): string {
-  if ('document_id' in ref && ref.document_id) {
-    return `agor://kb/document/${ref.document_id}`;
-  }
-  return `agor://kb/${ref.namespace_slug}/${ref.path}`;
-}
-
-export function classifyUrlKind(url: string): LinkKind {
-  if (GITHUB_ISSUE_RE.test(url)) return 'issue';
-  if (GITHUB_PR_RE.test(url)) return 'pr';
-  return 'url';
-}
-
 export function extractMessageTextContent(message: Pick<Message, 'content'>): string[] {
   const { content } = message;
   if (typeof content === 'string') return [content];
@@ -346,7 +331,10 @@ export function extractLinksFromMessage(message: Pick<Message, 'content'>): Pars
   for (const rawText of textParts) {
     const text = stripMarkdownCode(rawText);
     for (const ref of extractKnowledgeLinks(text)) {
-      const refUri = buildKnowledgeRefUri(ref);
+      const refUri =
+        'document_id' in ref && ref.document_id
+          ? `agor://kb/document/${ref.document_id}`
+          : `agor://kb/${ref.namespace_slug}/${ref.path}`;
       const targetKey = normalizeRefTargetKey(refUri);
       if (seen.has(targetKey)) continue;
       seen.add(targetKey);
@@ -363,7 +351,7 @@ export function extractLinksFromMessage(message: Pick<Message, 'content'>): Pars
       if (seen.has(targetKey)) continue;
       seen.add(targetKey);
       drafts.push({
-        kind: classifyUrlKind(url),
+        kind: GITHUB_ISSUE_RE.test(url) ? 'issue' : GITHUB_PR_RE.test(url) ? 'pr' : 'url',
         source: 'parsed',
         url,
       });
