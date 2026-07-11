@@ -148,6 +148,7 @@ const makeInitialMeta = (): AgorMeta => ({
 
 let fullLinkRequestSequence = 0;
 const fullLinkRequestGeneration = new Map<string, number>();
+const fullLinkMutationGeneration = new Map<string, number>();
 type FullLinkOwnerScope = 'branch' | 'session';
 
 function fullLinkOwnerKey(scope: FullLinkOwnerScope, ownerId: string): string {
@@ -155,21 +156,31 @@ function fullLinkOwnerKey(scope: FullLinkOwnerScope, ownerId: string): string {
 }
 
 function resetFullLinkRequestGenerations(): void {
-  fullLinkRequestSequence = 0;
   fullLinkRequestGeneration.clear();
+  fullLinkMutationGeneration.clear();
 }
 
-function invalidateFullLinkRequest(scope: FullLinkOwnerScope, ownerId: string): number {
+function startFullLinkRequest(scope: FullLinkOwnerScope, ownerId: string): number {
   const generation = ++fullLinkRequestSequence;
   fullLinkRequestGeneration.set(fullLinkOwnerKey(scope, ownerId), generation);
   return generation;
 }
 
-/** Cancel in-flight owner-scoped full-link requests touched by realtime link churn. */
+function cancelFullLinkRequest(scope: FullLinkOwnerScope, ownerId: string): void {
+  startFullLinkRequest(scope, ownerId);
+}
+
+function invalidateFullLinkOwnerSnapshot(scope: FullLinkOwnerScope, ownerId: string): void {
+  const key = fullLinkOwnerKey(scope, ownerId);
+  fullLinkMutationGeneration.set(key, (fullLinkMutationGeneration.get(key) ?? 0) + 1);
+}
+
+/** Mark owner-scoped snapshots stale when a link mutation may race their fetch. */
 export function invalidateFullLinkRequestsForLink(link: Link | null | undefined): void {
   if (!link) return;
-  if (link.branch_id && !link.session_id) invalidateFullLinkRequest('branch', link.branch_id);
-  if (link.session_id && !link.branch_id) invalidateFullLinkRequest('session', link.session_id);
+  if (link.branch_id && !link.session_id) invalidateFullLinkOwnerSnapshot('branch', link.branch_id);
+  if (link.session_id && !link.branch_id)
+    invalidateFullLinkOwnerSnapshot('session', link.session_id);
 }
 
 function isLatestFullLinkRequest(
@@ -194,8 +205,8 @@ async function fetchAndReplaceFullOwnerLinks(
   scope: FullLinkOwnerScope,
   ownerId: string
 ): Promise<Link[]> {
-  const requestGeneration = invalidateFullLinkRequest(scope, ownerId);
-  const beforeBucket = fullLinkOwnerBucket(get(), scope, ownerId);
+  const requestGeneration = startFullLinkRequest(scope, ownerId);
+  const ownerKey = fullLinkOwnerKey(scope, ownerId);
   const query =
     scope === 'branch'
       ? {
@@ -208,18 +219,24 @@ async function fetchAndReplaceFullOwnerLinks(
           session_id: ownerId,
           $limit: PAGINATION.DEFAULT_LIMIT,
         };
-  const links = await client.service('links').findAll({ query });
+  while (isLatestFullLinkRequest(scope, ownerId, requestGeneration)) {
+    const mutationGeneration = fullLinkMutationGeneration.get(ownerKey) ?? 0;
+    const beforeBucket = fullLinkOwnerBucket(get(), scope, ownerId);
+    const links = await client.service('links').findAll({ query });
 
-  if (
-    !isLatestFullLinkRequest(scope, ownerId, requestGeneration) ||
-    fullLinkOwnerBucket(get(), scope, ownerId) !== beforeBucket
-  ) {
-    return [];
+    if (!isLatestFullLinkRequest(scope, ownerId, requestGeneration)) return [];
+    if (
+      (fullLinkMutationGeneration.get(ownerKey) ?? 0) !== mutationGeneration ||
+      fullLinkOwnerBucket(get(), scope, ownerId) !== beforeBucket
+    ) {
+      continue;
+    }
+
+    if (scope === 'branch') get().replaceFullBranchLinks(ownerId, links);
+    else get().replaceFullSessionLinks(ownerId, links);
+    return links;
   }
-
-  if (scope === 'branch') get().replaceFullBranchLinks(ownerId, links);
-  else get().replaceFullSessionLinks(ownerId, links);
-  return links;
+  return [];
 }
 
 function linkUpdatedAtMillis(link: Link): number | null {
@@ -326,8 +343,8 @@ export const agorStore = createStore<AgorState>()(
         if (session.branch_id === branchId) orphanIds.push(sessionId);
       }
 
-      invalidateFullLinkRequest('branch', branchId);
-      for (const sessionId of orphanIds) invalidateFullLinkRequest('session', sessionId);
+      cancelFullLinkRequest('branch', branchId);
+      for (const sessionId of orphanIds) cancelFullLinkRequest('session', sessionId);
 
       set((draft) => {
         if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
@@ -352,7 +369,7 @@ export const agorStore = createStore<AgorState>()(
     },
 
     evictSessionLinks: (sessionId) => {
-      invalidateFullLinkRequest('session', sessionId);
+      cancelFullLinkRequest('session', sessionId);
       const state = get();
       if (!state.linksBySession.has(sessionId) && !state.fullSessionLinkOwnerIds.has(sessionId)) {
         return;
@@ -368,7 +385,7 @@ export const agorStore = createStore<AgorState>()(
     },
 
     replaceFullSessionLinks: (sessionId, links) => {
-      invalidateFullLinkRequest('session', sessionId);
+      invalidateFullLinkOwnerSnapshot('session', sessionId);
       let mapsChanged = false;
       get().applyMaps((prev) => {
         const next = replaceFullSessionLinksInMaps(prev, sessionId, links);
@@ -382,7 +399,7 @@ export const agorStore = createStore<AgorState>()(
     },
 
     replaceFullBranchLinks: (branchId, links) => {
-      invalidateFullLinkRequest('branch', branchId);
+      invalidateFullLinkOwnerSnapshot('branch', branchId);
       const isDirectOutsideActiveBranchMap = !get().branchById.has(branchId);
       let mapsChanged = false;
       get().applyMaps((prev) => {
@@ -408,6 +425,9 @@ export const agorStore = createStore<AgorState>()(
       const existing = get().linkById.get(link.link_id);
       if (existing && isStaleLinkMutationResult(existing, link)) return;
 
+      invalidateFullLinkRequestsForLink(existing);
+      invalidateFullLinkRequestsForLink(link);
+
       let mapsChanged = false;
       get().applyMaps((prev) => {
         const next = upsertLinkInMaps(prev, link);
@@ -418,6 +438,8 @@ export const agorStore = createStore<AgorState>()(
     },
 
     applyKnownLinkRemovedResult: (link) => {
+      invalidateFullLinkRequestsForLink(get().linkById.get(link.link_id));
+      invalidateFullLinkRequestsForLink(link);
       let mapsChanged = false;
       get().applyMaps((prev) => {
         const next = removeLinkFromMaps(prev, link);
@@ -430,6 +452,9 @@ export const agorStore = createStore<AgorState>()(
     applyLinkMutationResult: (link) => {
       const existing = get().linkById.get(link.link_id);
       if (!existing || isStaleLinkMutationResult(existing, link)) return;
+
+      invalidateFullLinkRequestsForLink(existing);
+      invalidateFullLinkRequestsForLink(link);
 
       let mapsChanged = false;
       get().applyMaps((prev) => {

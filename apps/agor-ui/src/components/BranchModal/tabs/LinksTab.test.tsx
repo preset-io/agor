@@ -140,7 +140,7 @@ describe('LinksTab teammate promotion actions', () => {
 
     renderLinksTab(client, branchWithIssue);
 
-    fireEvent.click(await screen.findByRole('button', { name: /pin to branch card/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin preset-io/agor#154' }));
 
     await waitFor(() =>
       expect(calls).toContainEqual({

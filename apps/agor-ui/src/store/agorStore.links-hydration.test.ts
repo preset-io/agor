@@ -218,13 +218,14 @@ describe('agorStore link hydration', () => {
 
     olderGate.resolve([staleSessionLink]);
     await expect(olderHydration).resolves.toEqual([]);
+    expect(findAll).toHaveBeenCalledTimes(2);
 
     const state = agorStore.getState();
     expect(state.linkById.has('l-older-empty-race')).toBe(false);
     expect(state.linksBySession.has('s1')).toBe(false);
   });
 
-  it('suppresses stale full owner results when that owner changed during the fetch', async () => {
+  it('retries full owner hydration when that owner changed during the fetch', async () => {
     const staleSessionLink = link('l-stale-session-result', {
       session_id: 's1',
       title: 'stale',
@@ -235,26 +236,52 @@ describe('agorStore link hydration', () => {
       title: 'newer',
     });
     const gate = deferred<Link[]>();
-    const findAll = vi.fn().mockReturnValue(gate.promise);
+    const findAll = vi
+      .fn()
+      .mockReturnValueOnce(gate.promise)
+      .mockResolvedValueOnce([newerSessionLink]);
     const client = { service: vi.fn(() => ({ findAll })) } as never;
 
     const hydration = agorStore.getState().fetchAndReplaceFullSessionLinks(client, 's1');
     agorStore.getState().replaceFullSessionLinks('s1', [newerSessionLink]);
     gate.resolve([staleSessionLink]);
 
-    await expect(hydration).resolves.toEqual([]);
+    await expect(hydration).resolves.toEqual([newerSessionLink]);
+    expect(findAll).toHaveBeenCalledTimes(2);
     const state = agorStore.getState();
     expect(state.linkById.has('l-stale-session-result')).toBe(false);
     expect(state.linkById.get('l-newer-session-link')).toBe(newerSessionLink);
     expect(state.linksBySession.get('s1')).toEqual([newerSessionLink]);
   });
 
-  it('suppresses a stale empty-to-empty session full-owner result after realtime link churn', async () => {
+  it('retries a gated full owner fetch after a realtime create and applies the complete snapshot', async () => {
+    const createdSessionLink = link('l-created-during-fetch', { session_id: 's-realtime' });
+    const gate = deferred<Link[]>();
+    const findAll = vi
+      .fn()
+      .mockReturnValueOnce(gate.promise)
+      .mockResolvedValueOnce([createdSessionLink]);
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    const hydration = agorStore
+      .getState()
+      .fetchAndReplaceFullSessionLinks(client, createdSessionLink.session_id!);
+    linkCreated(createdSessionLink);
+    gate.resolve([]);
+
+    await expect(hydration).resolves.toEqual([createdSessionLink]);
+    expect(findAll).toHaveBeenCalledTimes(2);
+    expect(agorStore.getState().linksBySession.get(createdSessionLink.session_id!)).toEqual([
+      createdSessionLink,
+    ]);
+  });
+
+  it('retries an empty-to-empty session full-owner result after realtime link churn', async () => {
     const staleSessionLink = link('l-stale-session-churn', {
       session_id: 's-empty-churn',
     });
     const gate = deferred<Link[]>();
-    const findAll = vi.fn().mockReturnValue(gate.promise);
+    const findAll = vi.fn().mockReturnValueOnce(gate.promise).mockResolvedValueOnce([]);
     const client = { service: vi.fn(() => ({ findAll })) } as never;
 
     const hydration = agorStore
@@ -265,15 +292,16 @@ describe('agorStore link hydration', () => {
     gate.resolve([staleSessionLink]);
 
     await expect(hydration).resolves.toEqual([]);
+    expect(findAll).toHaveBeenCalledTimes(2);
     const state = agorStore.getState();
     expect(state.linkById.has(staleSessionLink.link_id)).toBe(false);
     expect(state.linksBySession.has(staleSessionLink.session_id!)).toBe(false);
   });
 
-  it('suppresses a stale empty-to-empty branch full-owner result after realtime link churn', async () => {
+  it('retries an empty-to-empty branch full-owner result after realtime link churn', async () => {
     const staleBranchLink = link('l-stale-branch-churn', { branch_id: 'b-empty-churn' });
     const gate = deferred<Link[]>();
-    const findAll = vi.fn().mockReturnValue(gate.promise);
+    const findAll = vi.fn().mockReturnValueOnce(gate.promise).mockResolvedValueOnce([]);
     const client = { service: vi.fn(() => ({ findAll })) } as never;
 
     const hydration = agorStore
@@ -284,6 +312,7 @@ describe('agorStore link hydration', () => {
     gate.resolve([staleBranchLink]);
 
     await expect(hydration).resolves.toEqual([]);
+    expect(findAll).toHaveBeenCalledTimes(2);
     const state = agorStore.getState();
     expect(state.linkById.has(staleBranchLink.link_id)).toBe(false);
     expect(state.linksByBranch.has(staleBranchLink.branch_id!)).toBe(false);
