@@ -39,10 +39,17 @@ const toolLogos: Record<string, string> = {
 // CLI mascot already has its own white outline — black would clip it.
 const LIGHT_BG_TOOLS = new Set(['claude-code-cli']);
 
+// These are image plates, not UI surfaces: the transparent logo artwork was
+// authored against exact black/white and must not invert with the app theme.
+// biome-ignore lint/plugin/noHardcodedColorLiteral: exact brand-asset image plate
+const DARK_LOGO_PLATE = '#000000';
+// biome-ignore lint/plugin/noHardcodedColorLiteral: exact brand-asset image plate
+const LIGHT_LOGO_PLATE = '#ffffff';
+
 export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className = '' }) => {
   const { token } = useToken();
   const logoSrc = toolLogos[tool];
-  const bg = LIGHT_BG_TOOLS.has(tool) ? token.colorWhite : token.colorTextBase;
+  const bg = LIGHT_BG_TOOLS.has(tool) ? LIGHT_LOGO_PLATE : DARK_LOGO_PLATE;
 
   // Fallback to emoji if no logo available
   const fallbackEmoji: Record<string, string> = {
