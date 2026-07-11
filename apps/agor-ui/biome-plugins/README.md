@@ -25,10 +25,11 @@ new violations fail `pnpm lint`.
 
 `scripts/test-frontend-color-plugins.mjs` exercises individually named positive and negative TSX
 and CSS cases, including issue prose, asset URLs, spaced/quoted SVG fragments, compound named
-colors, named shadows, `color-mix()`, quoted encoded data-SVG colors, conditional values, and
-suppression behavior. It exercises every canonical CSS named color in both languages to keep the
-rules' name sets aligned. Fixtures use unique temporary names so concurrent lint runs cannot
-collide. The test runs after the normal Biome check as part of `pnpm lint`.
+colors, named shadows, custom properties whose identifiers contain color names, `color-mix()`,
+quoted encoded data-SVG colors, conditional values, and suppression behavior. It exercises every
+canonical CSS named color in both languages to keep the rules' name sets aligned. Fixtures use
+unique temporary names so concurrent lint runs cannot collide. The test runs after the normal
+Biome check as part of `pnpm lint`.
 
 Prefer fixing a finding with the right vanilla AntD component. If a legitimate
 exact-color domain needs an exception, use the narrowest applicable suppression

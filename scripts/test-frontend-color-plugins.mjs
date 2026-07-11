@@ -22,8 +22,17 @@ const CSS_NAMED_COLORS =
 const tsxCases = [
   { name: 'tokenStyle', source: 'export const tokenStyle = { color: token.colorText };' },
   {
+    name: 'brandNamedVar',
+    source: "export const brandNamedVar = { color: 'var(--brand-blue)' };",
+  },
+  {
     name: 'tokenColorMix',
     source: `export const tokenColorMix = \`color-mix(in srgb, ${tokenInterpolation} 40%, transparent)\`;`,
+  },
+  {
+    name: 'brandNamedColorMix',
+    source:
+      "export const brandNamedColorMix = { color: 'color-mix(in srgb, var(--brand-blue), transparent)' };",
   },
   { name: 'issueRef', source: "export const issueRef = 'repo#123';" },
   { name: 'proseIssue', source: "export const proseIssue = 'Fixes #123456';" },
@@ -165,10 +174,16 @@ const tsxCases = [
 
 const cssCases = [
   { name: 'token', source: '.case-token { color: var(--ant-color-text); }' },
+  { name: 'brand-named-var', source: '.case-brand-named-var { color: var(--brand-blue); }' },
   {
     name: 'token-color-mix',
     source:
       '.case-token-color-mix { color: color-mix(in srgb, var(--ant-color-text), transparent); }',
+  },
+  {
+    name: 'brand-named-color-mix',
+    source:
+      '.case-brand-named-color-mix { color: color-mix(in srgb, var(--brand-blue), transparent); }',
   },
   { name: 'transparent', source: '.case-transparent { background: transparent; }' },
   { name: 'fragment', source: '.case-fragment { filter: url(#abcdef); }' },
