@@ -330,7 +330,7 @@ describe('one-time launch auth service', () => {
     expect(result.user.email).toBe('person@example.test');
 
     const row = await select(db).from(users).where(eq(users.user_id, 'local-user-1')).one();
-    expect((row?.data as { external_identities?: unknown[] }).external_identities).toHaveLength(1);
+    expect((row!.data as { external_identities?: unknown[] }).external_identities).toHaveLength(1);
   });
 
   it('does not merge a new external identity by email alone', async () => {
