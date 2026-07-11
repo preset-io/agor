@@ -64,6 +64,12 @@
   flex: 0 0 auto;
 }
 
+.drawerGlyph {
+  width: 28px;
+  min-height: 28px;
+  flex: 0 0 28px;
+}
+
 .glyphLabelSmall {
   font-size: 10px;
   font-weight: 800;

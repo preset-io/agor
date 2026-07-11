@@ -151,6 +151,7 @@ function makeClient(links: Link[]) {
 
 function makePromotionClient(args: {
   sessionLinks: Link[];
+  branchLinks?: Link[];
   teammateLinks: Link[];
   promoted: Link;
 }) {
@@ -165,13 +166,24 @@ function makePromotionClient(args: {
         },
         async findAll(params?: { query?: { owner_scope?: string; branch_id?: string } }) {
           calls.push({ service: path, method: 'findAll', args: [params] });
+          if (
+            params?.query?.owner_scope === 'branch' &&
+            params.query.branch_id === branch.branch_id
+          ) {
+            return args.branchLinks ?? [];
+          }
           if (params?.query?.owner_scope === 'branch') return args.teammateLinks;
           return args.sessionLinks;
         },
         async patch(id: string, body: unknown) {
           calls.push({ service: path, method: 'patch', args: [id, body] });
+          const existing = [
+            ...args.sessionLinks,
+            ...(args.branchLinks ?? []),
+            ...args.teammateLinks,
+          ].find((link) => link.link_id === id);
           return {
-            ...args.sessionLinks.find((link) => link.link_id === id),
+            ...existing,
             ...(body as object),
             link_id: id,
           };
@@ -290,6 +302,95 @@ describe('SessionPanel session links', () => {
     );
     expect(agorStore.getState().linkById.get(pinnedIssue.link_id)).toEqual(pinnedIssue);
     expect(agorStore.getState().linksByBranch.get(branch.branch_id)).toEqual([pinnedIssue]);
+  });
+
+  it('hydrates an existing branch URL so it can be promoted from the session organizer', async () => {
+    const branchWithIssue = {
+      ...branch,
+      issue_url: 'https://github.com/preset-io/agor/issues/154',
+    } as Branch;
+    const existingIssue = makeLink({
+      link_id: 'issue-link' as Link['link_id'],
+      branch_id: branch.branch_id,
+      session_id: null,
+      kind: 'issue',
+      title: 'preset-io/agor#154',
+      url: branchWithIssue.issue_url,
+      target_key: 'url:https://github.com/preset-io/agor/issues/154',
+      is_pinned: true,
+    });
+    const promotedIssue = makeLink({
+      ...existingIssue,
+      link_id: 'teammate-issue' as Link['link_id'],
+      branch_id: 'teammate-1' as Link['branch_id'],
+      metadata: { promoted_from_owner: { branch_id: branch.branch_id } },
+    });
+    agorStore.setState({
+      ...EMPTY_MAPS,
+      boardById: new Map([
+        ['board-1', { board_id: 'board-1', primary_teammate_id: 'teammate-1' } as Board],
+      ]),
+    });
+    const { client, calls } = makePromotionClient({
+      sessionLinks: [],
+      branchLinks: [existingIssue],
+      teammateLinks: [],
+      promoted: promotedIssue,
+    });
+
+    renderPanel(client, branchWithIssue);
+
+    fireEvent.click(await screen.findByLabelText('Open links organizer'));
+    fireEvent.click(await screen.findByLabelText('Manage links'));
+    fireEvent.click(await screen.findByLabelText('Teammate actions for preset-io/agor#154'));
+    fireEvent.click(await screen.findByText('Promote to teammate'));
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        service: 'links/issue-link/promote',
+        method: 'create',
+        args: [{ target: 'teammate', teammate_branch_id: 'teammate-1' }],
+      })
+    );
+    expect(agorStore.getState().linksByBranch.get('teammate-1')).toEqual([promotedIssue]);
+  });
+
+  it('patches an existing branch URL when pinning it from the session organizer', async () => {
+    const branchWithIssue = {
+      ...branch,
+      issue_url: 'https://github.com/preset-io/agor/issues/154',
+    } as Branch;
+    const existingIssue = makeLink({
+      link_id: 'issue-link' as Link['link_id'],
+      branch_id: branch.branch_id,
+      session_id: null,
+      kind: 'issue',
+      title: 'preset-io/agor#154',
+      url: branchWithIssue.issue_url,
+      target_key: 'url:https://github.com/preset-io/agor/issues/154',
+      is_pinned: false,
+    });
+    const { client, calls } = makePromotionClient({
+      sessionLinks: [],
+      branchLinks: [existingIssue],
+      teammateLinks: [],
+      promoted: existingIssue,
+    });
+
+    renderPanel(client, branchWithIssue);
+
+    fireEvent.click(await screen.findByLabelText('Open links organizer'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin to branch card' }));
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        service: 'links',
+        method: 'patch',
+        args: ['issue-link', { is_pinned: true }],
+      })
+    );
+    expect(agorStore.getState().linkById.get(existingIssue.link_id)?.is_pinned).toBe(true);
+    expect(calls.some((call) => call.service === 'links' && call.method === 'create')).toBe(false);
   });
 
   it('promotes a session link to the board primary teammate', async () => {

@@ -337,6 +337,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     [session?.session_id]
   );
   const sessionLinks = useAgorStore(sessionLinksSelector) ?? [];
+  const currentBranchLinksSelector = React.useMemo(
+    () => makeLinksForBranchSelector(branch?.branch_id ?? ''),
+    [branch?.branch_id]
+  );
+  const currentBranchLinks = useAgorStore(currentBranchLinksSelector) ?? [];
   const boardById = useAgorStore(selectBoardById);
   const teammateBranchId = branch?.board_id
     ? (boardById.get(branch.board_id)?.primary_teammate_id ?? null)
@@ -522,6 +527,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     setSessionLinksLoading(true);
     setSessionLinksError(null);
     const requests = [fetchAndReplaceFullSessionLinks(client, session.session_id)];
+    if (branch?.branch_id) {
+      requests.push(fetchAndReplaceFullBranchLinks(client, branch.branch_id));
+    }
     if (teammateBranchId && teammateBranchId !== branch?.branch_id) {
       requests.push(fetchAndReplaceFullBranchLinks(client, teammateBranchId));
     }
@@ -666,8 +674,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }, [tasks, session?.agentic_tool]);
 
   const linkDisplayItems = React.useMemo(
-    () => buildLinkDisplayItems({ branch, links: sessionLinks }),
-    [branch, sessionLinks]
+    () => buildLinkDisplayItems({ branch, links: [...sessionLinks, ...currentBranchLinks] }),
+    [branch, currentBranchLinks, sessionLinks]
   );
   const attachmentItems = React.useMemo(
     () => linkDisplayItems.map(displayItemToSessionAttachmentItem),

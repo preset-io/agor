@@ -99,11 +99,12 @@ function promotionAction(props: DrawerProps) {
   const busy = state.loading || props.teammatePromotionBusyKey === busyKey;
   const disabled = state.disabled || busy || (state.isPromoted && !state.teammateLinkId);
   const label = state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
+  const actionLabel = disabled && state.unavailableReason ? state.unavailableReason : label;
 
   return (
     <LinkOverflowAction
       ariaLabel={`Teammate actions for ${props.item.name}`}
-      actionLabel={label}
+      actionLabel={actionLabel}
       tooltip={state.unavailableReason ?? 'Teammate link actions'}
       disabled={disabled}
       loading={busy}
@@ -179,7 +180,15 @@ export function SessionAttachmentDrawerRow(props: DrawerProps) {
       }
     >
       <Flex component="span" align="flex-start" gap="small" className={styles.minWidthZero}>
-        <span aria-hidden="true">{attachmentIcon(props.item, disabled)}</span>
+        <Flex
+          component="span"
+          className={styles.drawerGlyph}
+          align="center"
+          justify="center"
+          aria-hidden="true"
+        >
+          {attachmentIcon(props.item, disabled)}
+        </Flex>
         <Flex component="span" vertical gap={token.sizeXXS} className={styles.rowContent}>
           <Typography.Text strong ellipsis disabled={disabled}>
             {props.item.name}
