@@ -65,6 +65,16 @@ function makeClient(args: { branchLinks: Link[]; teammateLinks: Link[]; promoted
   return { client, calls };
 }
 
+function renderLinksTab(client: AgorClient, targetBranch: Branch = branch) {
+  return render(
+    <MemoryRouter>
+      <AntApp>
+        <LinksTab branch={targetBranch} client={client} active open />
+      </AntApp>
+    </MemoryRouter>
+  );
+}
+
 describe('LinksTab teammate promotion actions', () => {
   beforeEach(() => {
     agorStore.setState({ ...EMPTY_MAPS });
@@ -80,13 +90,7 @@ describe('LinksTab teammate promotion actions', () => {
     seedStore([source]);
     const { client, calls } = makeClient({ branchLinks: [source], teammateLinks: [], promoted });
 
-    render(
-      <MemoryRouter>
-        <AntApp>
-          <LinksTab branch={branch} client={client} active open />
-        </AntApp>
-      </MemoryRouter>
-    );
+    renderLinksTab(client);
 
     await screen.findByText('Runbook');
     await waitFor(() =>
@@ -134,13 +138,7 @@ describe('LinksTab teammate promotion actions', () => {
       promoted: pinnedIssue,
     });
 
-    render(
-      <MemoryRouter>
-        <AntApp>
-          <LinksTab branch={branchWithIssue} client={client} active open />
-        </AntApp>
-      </MemoryRouter>
-    );
+    renderLinksTab(client, branchWithIssue);
 
     fireEvent.click(await screen.findByRole('button', { name: /pin to branch card/i }));
 
@@ -174,13 +172,7 @@ describe('LinksTab teammate promotion actions', () => {
       promoted,
     });
 
-    render(
-      <MemoryRouter>
-        <AntApp>
-          <LinksTab branch={branch} client={client} active open />
-        </AntApp>
-      </MemoryRouter>
-    );
+    renderLinksTab(client);
 
     await screen.findByText('Runbook');
     fireEvent.click(screen.getByLabelText('Teammate actions for Runbook'));
@@ -221,13 +213,7 @@ describe('LinksTab teammate promotion actions', () => {
       promoted: apiLink,
     });
 
-    render(
-      <MemoryRouter>
-        <AntApp>
-          <LinksTab branch={branch} client={client} active open />
-        </AntApp>
-      </MemoryRouter>
-    );
+    renderLinksTab(client);
 
     await screen.findByText('Runbook');
     expect(await screen.findByText('From Design review')).toBeTruthy();
@@ -246,13 +232,7 @@ describe('LinksTab teammate promotion actions', () => {
       promoted: makeLink(),
     });
 
-    render(
-      <MemoryRouter>
-        <AntApp>
-          <LinksTab branch={branch} client={client} active open />
-        </AntApp>
-      </MemoryRouter>
-    );
+    renderLinksTab(client);
 
     expect(screen.queryByRole('button', { name: /add link/i })).toBeNull();
     expect(
