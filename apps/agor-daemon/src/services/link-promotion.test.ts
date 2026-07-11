@@ -85,24 +85,34 @@ function promotionService(db: Database, options: { branchRbacEnabled?: boolean }
   };
 }
 
+function createUrl(db: Database, branchId: BranchID, url: string, patch: Partial<Link> = {}) {
+  return new LinksRepository(db).create({
+    branch_id: branchId,
+    kind: 'url',
+    source: 'manual',
+    url,
+    ...patch,
+  });
+}
+
+function promote(service: LinkPromotionService, source: Link, teammateBranchId: BranchID) {
+  return service.create(
+    { target: 'teammate', teammate_branch_id: teammateBranchId },
+    { route: { sourceLinkId: source.link_id } }
+  );
+}
+
 describe('LinkPromotionService', () => {
   dbTest('promotes URL links to teammate-owned pinned branch links', async ({ db }) => {
     const branch = await seedBranch(db);
     const teammate = await seedBranch(db, { teammate: true });
-    const source = await new LinksRepository(db).create({
-      branch_id: branch.branch_id,
-      kind: 'url',
-      source: 'manual',
-      url: 'https://example.com/promote-me',
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/promote-me', {
       title: 'Promote me',
       metadata: { source_note: 'trusted' },
     });
 
     const { service } = promotionService(db);
-    const promoted = await service.create(
-      { target: 'teammate', teammate_branch_id: teammate.branch_id },
-      { route: { sourceLinkId: source.link_id } }
-    );
+    const promoted = await promote(service, source, teammate.branch_id);
 
     expect(promoted).toMatchObject({
       branch_id: teammate.branch_id,
@@ -128,10 +138,7 @@ describe('LinkPromotionService', () => {
     });
 
     const { service } = promotionService(db);
-    const promoted = await service.create(
-      { target: 'teammate', teammate_branch_id: teammate.branch_id },
-      { route: { sourceLinkId: source.link_id } }
-    );
+    const promoted = await promote(service, source, teammate.branch_id);
 
     expect(promoted).toMatchObject({
       branch_id: teammate.branch_id,
@@ -160,10 +167,7 @@ describe('LinkPromotionService', () => {
       });
 
       const { service } = promotionService(db);
-      const promoted = await service.create(
-        { target: 'teammate', teammate_branch_id: teammate.branch_id },
-        { route: { sourceLinkId: source.link_id } }
-      );
+      const promoted = await promote(service, source, teammate.branch_id);
 
       expect(promoted).toMatchObject({
         branch_id: teammate.branch_id,
@@ -193,31 +197,18 @@ describe('LinkPromotionService', () => {
     });
 
     const { service } = promotionService(db);
-    await expect(
-      service.create(
-        { target: 'teammate', teammate_branch_id: teammate.branch_id },
-        { route: { sourceLinkId: source.link_id } }
-      )
-    ).rejects.toThrow('Internal links cannot be promoted');
+    await expect(promote(service, source, teammate.branch_id)).rejects.toThrow(
+      'Internal links cannot be promoted'
+    );
   });
 
   dbTest('rejects promotion to a non-teammate branch', async ({ db }) => {
     const branch = await seedBranch(db);
     const nonTeammate = await seedBranch(db);
-    const source = await new LinksRepository(db).create({
-      branch_id: branch.branch_id,
-      kind: 'url',
-      source: 'manual',
-      url: 'https://example.com/nope',
-    });
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/nope');
 
     const { service } = promotionService(db);
-    await expect(
-      service.create(
-        { target: 'teammate', teammate_branch_id: nonTeammate.branch_id },
-        { route: { sourceLinkId: source.link_id } }
-      )
-    ).rejects.toThrow(BadRequest);
+    await expect(promote(service, source, nonTeammate.branch_id)).rejects.toThrow(BadRequest);
   });
 
   dbTest('requires all permission on teammate branch when RBAC is enabled', async ({ db }) => {
@@ -225,12 +216,7 @@ describe('LinkPromotionService', () => {
     await seedUser(db, userId, 'link-promoter@example.com');
     const branch = await seedBranch(db, { othersCan: 'view' });
     const teammate = await seedBranch(db, { teammate: true, othersCan: 'view' });
-    const source = await new LinksRepository(db).create({
-      branch_id: branch.branch_id,
-      kind: 'url',
-      source: 'manual',
-      url: 'https://example.com/rbac',
-    });
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/rbac');
 
     const { service } = promotionService(db, { branchRbacEnabled: true });
     const params = {
@@ -254,28 +240,15 @@ describe('LinkPromotionService', () => {
   dbTest('dedupes by teammate owner and target key and re-pins existing copy', async ({ db }) => {
     const branch = await seedBranch(db);
     const teammate = await seedBranch(db, { teammate: true });
-    const repo = new LinksRepository(db);
-    const source = await repo.create({
-      branch_id: branch.branch_id,
-      kind: 'url',
-      source: 'manual',
-      url: 'https://example.com/dedupe#source',
-    });
-    const existing = await repo.create({
-      branch_id: teammate.branch_id,
-      kind: 'url',
-      source: 'manual',
-      url: 'https://example.com/dedupe#other',
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/dedupe#source');
+    const existing = await createUrl(db, teammate.branch_id, 'https://example.com/dedupe#other', {
       is_pinned: false,
       title: 'Teammate title',
       metadata: { teammate_owned: true },
     });
 
     const { service } = promotionService(db);
-    const promoted = await service.create(
-      { target: 'teammate', teammate_branch_id: teammate.branch_id },
-      { route: { sourceLinkId: source.link_id } }
-    );
+    const promoted = await promote(service, source, teammate.branch_id);
 
     expect(promoted.link_id).toBe(existing.link_id);
     expect(promoted.is_pinned).toBe(true);
@@ -287,18 +260,10 @@ describe('LinkPromotionService', () => {
     const branch = await seedBranch(db);
     const teammate = await seedBranch(db, { teammate: true });
     const repo = new LinksRepository(db);
-    const source = await repo.create({
-      branch_id: branch.branch_id,
-      kind: 'url',
-      source: 'manual',
-      url: 'https://example.com/remove-copy',
-    });
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/remove-copy');
 
     const { service, linksService } = promotionService(db);
-    const promoted = await service.create(
-      { target: 'teammate', teammate_branch_id: teammate.branch_id },
-      { route: { sourceLinkId: source.link_id } }
-    );
+    const promoted = await promote(service, source, teammate.branch_id);
 
     await linksService.remove(promoted.link_id);
     expect(await repo.findById(promoted.link_id)).toBeNull();
