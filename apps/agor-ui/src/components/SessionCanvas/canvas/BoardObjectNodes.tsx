@@ -340,6 +340,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       const rgb = color.toRgb();
       // If the color already has alpha, multiply it with the requested alpha
       const finalAlpha = rgb.a * alpha;
+      // biome-ignore lint/plugin/noHardcodedColorLiteral: persisted user color resolver emits CSS syntax from parsed channels
       return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${finalAlpha})`;
     } catch {
       // Fallback to token if parsing fails

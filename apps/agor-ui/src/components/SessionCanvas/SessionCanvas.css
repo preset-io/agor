@@ -1,3 +1,4 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: React Flow integration, tool cursors, and resize hit areas require third-party selectors */
 /* Adjust MiniMap panel to have more bottom spacing */
 .react-flow__panel.react-flow__minimap.bottom.right {
   margin-bottom: 75px;

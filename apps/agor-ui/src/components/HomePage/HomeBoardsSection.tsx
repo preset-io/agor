@@ -13,7 +13,7 @@ import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectSessionsByBranch } from '../../store/selectors';
 import { getTimeMs } from '../../utils/entityTime';
 import { formatRelativeTime } from '../../utils/time';
-import { glassSurfaceStyle } from './homeStyles';
+import { glassSurfaceStyle, withAlpha } from './homeStyles';
 import type { HomePageProps } from './types';
 
 const { Text } = Typography;
@@ -129,7 +129,7 @@ const BoardHomeCard = memo(function BoardHomeCard({
           cursor: 'pointer',
           background: 'transparent',
           boxShadow: hovered
-            ? `${token.boxShadowSecondary}, inset 0 1px 0 rgba(255, 255, 255, 0.12)`
+            ? `${token.boxShadowSecondary}, inset 0 1px 0 ${withAlpha(token.colorWhite, 0.12)}`
             : undefined,
           outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
           outlineOffset: focused ? 2 : undefined,

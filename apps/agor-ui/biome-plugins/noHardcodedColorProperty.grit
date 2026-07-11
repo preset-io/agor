@@ -1,26 +1,40 @@
 engine biome(1.0)
 language js(typescript, jsx)
 
-// Catch color literals where their object-property context makes the intent
-// unambiguous. This covers inline React styles, component style maps, and
-// semantic color maps without matching issue numbers or arbitrary hashes.
+// Three-digit hex and named colors are ambiguous outside styling code (for
+// example, issue references such as `repo#123`). Match those values only when
+// they occur anywhere beneath a color-bearing style property. `within` keeps
+// conditional and nested expressions covered instead of checking only direct
+// property values.
 or {
-  `color: $value`,
-  `background: $value`,
-  `backgroundColor: $value`,
-  `border: $value`,
-  `borderColor: $value`,
-  `borderTop: $value`,
-  `borderRight: $value`,
-  `borderBottom: $value`,
-  `borderLeft: $value`,
-  `outline: $value`,
-  `boxShadow: $value`,
-  `textShadow: $value`,
-  `fill: $value`,
-  `stroke: $value`
-} as $property where {
-  $value <: r"(?i)^[\"'`].*(?:#[0-9a-f]{3,8}|rgba?\(|hsla?\(|oklch\(|oklab\().*[\"'`]$",
-  not $value <: r"(?i)^[\"'](?:#(?:[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})|(?:rgba?|hsla?|oklch|oklab|color)\([^\"']*\))[\"']$",
-  register_diagnostic(span=$property, message="Use an Ant Design component or theme token instead of a hard-coded UI color. Exact-color domains require a documented plugin suppression.", severity="error")
+  JsStringLiteralExpression(),
+  JsTemplateExpression()
+} as $literal where {
+  $literal <: r"(?i)^[\"'`](?:#[0-9a-f]{3}|black|white|red|green|blue|gray|grey|yellow|orange|purple|pink)[\"'`]$",
+  $literal <: within or {
+    `color: $_`,
+    `background: $_`,
+    `backgroundColor: $_`,
+    `backgroundImage: $_`,
+    `border: $_`,
+    `borderColor: $_`,
+    `borderTop: $_`,
+    `borderRight: $_`,
+    `borderBottom: $_`,
+    `borderLeft: $_`,
+    `borderTopColor: $_`,
+    `borderRightColor: $_`,
+    `borderBottomColor: $_`,
+    `borderLeftColor: $_`,
+    `outline: $_`,
+    `boxShadow: $_`,
+    `textShadow: $_`,
+    `textDecorationColor: $_`,
+    `caretColor: $_`,
+    `accentColor: $_`,
+    `fill: $_`,
+    `stroke: $_`,
+    `filter: $_`
+  } ,
+  register_diagnostic(span=$literal, message="Use an Ant Design component or theme token instead of a hard-coded UI color. Exact-color domains require a documented plugin suppression.", severity="error")
 }

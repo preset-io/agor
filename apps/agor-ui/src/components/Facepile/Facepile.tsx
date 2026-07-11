@@ -8,10 +8,9 @@
  */
 
 import type { ActiveUser, Board, BoardID } from '@agor-live/client';
-import { Avatar, Tooltip, theme } from 'antd';
+import { Avatar, Flex, Tooltip, theme } from 'antd';
 import type { CSSProperties } from 'react';
 import { slackAvatarRadius, UserIdentityAvatar } from '../UserIdentityAvatar';
-import './Facepile.css';
 
 export interface FacepileProps {
   activeUsers: ActiveUser[];
@@ -48,7 +47,12 @@ export const Facepile: React.FC<FacepileProps> = ({
   }
 
   return (
-    <div className="facepile" style={style}>
+    <Flex
+      component="span"
+      align="center"
+      gap={8}
+      style={{ display: 'inline-flex', lineHeight: 1, verticalAlign: 'middle', ...style }}
+    >
       {visibleUsers.map(({ user, cursor, boardId }) => {
         const board = boardId && boardById ? boardById.get(boardId) : null;
         const boardName = board?.name || 'Unknown Board';
@@ -74,7 +78,7 @@ export const Facepile: React.FC<FacepileProps> = ({
               </div>
             }
           >
-            <span>
+            <Flex component="span" style={{ lineHeight: 1 }}>
               <UserIdentityAvatar
                 user={user}
                 style={{
@@ -86,7 +90,7 @@ export const Facepile: React.FC<FacepileProps> = ({
                   }
                 }}
               />
-            </span>
+            </Flex>
           </Tooltip>
         );
       })}
@@ -94,17 +98,17 @@ export const Facepile: React.FC<FacepileProps> = ({
       {overflowCount > 0 && (
         <Tooltip
           title={
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Flex vertical gap={6}>
               {overflowUsers.map(({ user }) => (
-                <div key={user.user_id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Flex key={user.user_id} align="center" gap={6}>
                   <UserIdentityAvatar user={user} size={20} fontSize="16px" />
                   <span>{user.name || user.email}</span>
-                </div>
+                </Flex>
               ))}
-            </div>
+            </Flex>
           }
         >
-          <span>
+          <Flex component="span" style={{ lineHeight: 1 }}>
             <Avatar
               shape="square"
               size={40}
@@ -118,9 +122,9 @@ export const Facepile: React.FC<FacepileProps> = ({
             >
               +{overflowCount}
             </Avatar>
-          </span>
+          </Flex>
         </Tooltip>
       )}
-    </div>
+    </Flex>
   );
 };

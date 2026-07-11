@@ -100,7 +100,7 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
                 xmlns="http://www.w3.org/2000/svg"
                 style={{
                   color: color ?? token.colorPrimary,
-                  filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3))',
+                  filter: `drop-shadow(0 2px 4px ${token.colorBgMask})`,
                 }}
               >
                 <title>{`${user.name || user.email}'s cursor`}</title>

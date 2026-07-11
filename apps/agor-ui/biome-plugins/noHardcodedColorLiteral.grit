@@ -1,11 +1,15 @@
 engine biome(1.0)
 language js(typescript, jsx)
 
-// Catch standalone color values in palettes and constants even when the
-// surrounding property has a domain-specific name such as `dark` or `idle`.
-// Requiring the entire string to be a color avoids matching issue references,
-// URLs, IDs, and hashes that merely contain a `#123`-shaped substring.
-JsStringLiteralExpression() as $literal where {
-  $literal <: r"(?i)^[\"'](?:#(?:[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})|(?:rgba?|hsla?|oklch|oklab|color)\([^\"']*\))[\"']$",
+// Catch unambiguous color syntax anywhere inside a string, not just when the
+// color is the entire value. This covers conditional values, gradients,
+// shadows, generated HTML/CSS, and template strings. Three-digit hex and
+// named colors are handled by the context-aware property rule because values
+// such as `repo#123` are common and are not necessarily colors.
+or {
+  JsStringLiteralExpression(),
+  JsTemplateExpression()
+} as $literal where {
+  $literal <: r"(?is)^[\"'`](?:#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4})|.*(?:(?:[^0-9a-z_/-])#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4})|(?:rgba?|hsla?|oklch|oklab|color)\([^\"'`]*\)|(?:[ :,()]#[0-9a-f]{3}|#[0-9a-f]{3}[ :,()%]))).*[\"'`]$",
   register_diagnostic(span=$literal, message="Use an Ant Design component or theme token instead of a hard-coded color literal. Intentional palettes require a documented plugin suppression.", severity="error")
 }

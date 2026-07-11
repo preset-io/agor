@@ -16,6 +16,7 @@ export const withAlpha = (color: string, alpha: number): string => {
       const r = (value >> 16) & 255;
       const g = (value >> 8) & 255;
       const b = value & 255;
+      // biome-ignore lint/plugin/noHardcodedColorLiteral: centralized theme-color alpha resolver emits CSS syntax from token channels
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     }
   }
@@ -27,6 +28,7 @@ export const withAlpha = (color: string, alpha: number): string => {
       .map((part) => part.trim())
       .slice(0, 3);
     if (r == null || g == null || b == null) return color;
+    // biome-ignore lint/plugin/noHardcodedColorLiteral: centralized theme-color alpha resolver emits CSS syntax from token channels
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 

@@ -25,9 +25,10 @@ Use this order, stopping as early as possible:
 1. Vanilla AntD component with its normal appearance.
 2. AntD component composition and public props.
 3. Existing Agor shared component.
-4. A small inline `style` adjustment using values from `theme.useToken()`.
-5. A reusable, low-level AntD-backed component once the pattern repeats.
-6. CSS only when inline styles cannot express the requirement cleanly.
+4. AntD's semantic `styles`/`classNames` API when a component exposes it.
+5. A small inline `style` adjustment using values from `theme.useToken()`.
+6. A reusable, low-level AntD-backed component once the pattern repeats.
+7. CSS only when inline styles cannot express the requirement cleanly.
 
 Prefer `Flex`/`Space` and AntD props for routine layout. If styling is necessary, inline `style`
 props are preferred over a CSS file: they keep the deviation local and make token use explicit.
@@ -35,11 +36,18 @@ Use `theme.useToken()` systematically for spacing, typography, sizes, radii, col
 borders, and hover/focus/disabled/status values. Agor's `useTheme()` answers theme-mode questions;
 it is not the AntD token API.
 
-Avoid CSS files when possible. CSS is reasonable for pseudo-selectors, media queries, keyframes,
-third-party internals, and genuine canvas/editor/browser-semantic needs. Keep it small and
-theme-aware. Vast or intricate component CSS is usually evidence that the wrong AntD primitive or
-abstraction was chosen. Do not style `.ant-*` internals when public props or a better primitive can
-express the design.
+New first-party CSS files are denied by default. CSS is a documented exception for
+pseudo-selectors, media queries, keyframes, third-party internals, rendered semantic content, and
+genuine canvas/editor/browser needs. Keep it small and theme-aware; suppress `noFirstPartyCss` at
+the file level with the concrete reason. Vast or intricate component CSS is usually evidence that
+the wrong AntD primitive or abstraction was chosen. Do not style `.ant-*` internals when public
+props or a better primitive can express the design.
+
+In React code, use typed values from `theme.useToken()` rather than spelling
+`var(--ant-*)` strings. Raw AntD CSS variables are appropriate inside an approved CSS file or at a
+non-React API boundary that accepts only CSS/HTML strings; document that boundary with a narrow
+suppression. This keeps normal components coupled to the theme API rather than its configurable
+CSS-variable prefix.
 
 ## Deviations and exact colors
 
@@ -66,7 +74,8 @@ palette into a constants file just to avoid tokens.
 - [ ] The chosen AntD component owns the visual states instead of a styled `div` recreating it.
 - [ ] A repeated bespoke interaction was reused or extracted.
 - [ ] Styling deviations are small, inline where practical, and use `theme.useToken()`.
-- [ ] Any CSS is necessary, bounded, and not compensating for the wrong base component.
+- [ ] Any CSS is necessary, bounded, and carries a concrete `noFirstPartyCss` exception.
+- [ ] Raw `--ant-*` strings appear only in approved CSS or documented non-React boundaries.
 - [ ] No `.ant-*` internals are overridden when public APIs suffice.
 - [ ] Keyboard, focus, names, contrast, loading, disabled, and error states were considered.
 - [ ] Any deviation/exact color has a narrow documented reason and works across supported themes.

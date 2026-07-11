@@ -1,0 +1,10 @@
+engine biome(1.0)
+language css
+
+// First-party CSS is an exception: prefer AntD props/composition, semantic
+// `styles`, or a light token-backed `style` prop. A whole-file suppression
+// must explain the selector, keyframe, semantic-content, or integration need.
+CssDeclarationWithSemicolon() as $declaration where {
+  not $declaration <: after CssDeclarationWithSemicolon(),
+  register_diagnostic(span=$declaration, message="Prefer Ant Design composition and token-backed inline styles over a first-party CSS file. Genuine selector or integration needs require a documented whole-file suppression.", severity="error")
+}

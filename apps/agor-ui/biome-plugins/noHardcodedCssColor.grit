@@ -6,6 +6,6 @@ language css
 // terminal, syntax, visualization, and screenshot CSS should be suppressed
 // explicitly after review.
 CssDeclarationWithSemicolon() as $declaration where {
-  $declaration <: r"(?i).*(?:#[0-9a-f]{3,8}|rgba?\(|hsla?\(|oklch\(|oklab\(|color\().*",
+  $declaration <: r"(?i).*(?:#[0-9a-f]{3,8}|rgba?\(|hsla?\(|oklch\(|oklab\(|color\(|(?:color|background|border(?:-[a-z-]+)?|outline|box-shadow|text-shadow|fill|stroke)\s*:[^;]*(?:black|white|red|green|blue|gray|grey|yellow|orange|purple|pink)).*",
   register_diagnostic(span=$declaration, message="Use an Ant Design component or theme CSS variable instead of a hard-coded CSS color. Exact-color domains require a documented plugin suppression.", severity="error")
 }

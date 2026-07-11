@@ -14,7 +14,6 @@ import { Input, Popover, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useEmojiAutocomplete } from '@/hooks/useEmojiAutocomplete';
 import { mapToArray } from '@/utils/mapHelpers';
-import './AutocompleteTextarea.css';
 import {
   buildKbDocLink,
   buildKbMarkdownLink,

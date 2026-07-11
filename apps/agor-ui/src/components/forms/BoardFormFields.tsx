@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: centralized user-selectable board background palette stores exact persisted gradients
 import type { Board, Group, User } from '@agor-live/client';
 import type { FormInstance } from 'antd';
 import { Alert, Checkbox, ColorPicker, Form, Input, Select, Space, Tabs, Typography } from 'antd';

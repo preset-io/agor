@@ -2606,7 +2606,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('select');
                     }}
                     style={{
-                      borderLeft: activeTool === 'select' ? '3px solid #1677ff' : 'none',
+                      borderLeft:
+                        activeTool === 'select'
+                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                          : 'none',
                     }}
                   >
                     <SelectOutlined style={{ fontSize: '16px' }} />
@@ -2626,7 +2629,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('zone');
                     }}
                     style={{
-                      borderLeft: activeTool === 'zone' ? '3px solid #1677ff' : 'none',
+                      borderLeft:
+                        activeTool === 'zone'
+                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                          : 'none',
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2650,7 +2656,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('comment');
                     }}
                     style={{
-                      borderLeft: activeTool === 'comment' ? '3px solid #1677ff' : 'none',
+                      borderLeft:
+                        activeTool === 'comment'
+                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                          : 'none',
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2677,7 +2686,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('markdown');
                     }}
                     style={{
-                      borderLeft: activeTool === 'markdown' ? '3px solid #1677ff' : 'none',
+                      borderLeft:
+                        activeTool === 'markdown'
+                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                          : 'none',
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
