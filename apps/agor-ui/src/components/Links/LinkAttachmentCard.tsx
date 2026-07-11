@@ -43,13 +43,6 @@ export interface LinkAttachmentCardProps {
   onOpenTarget?: (target: LinkAttachmentTarget) => void;
 }
 
-export function targetForLinkAttachment(args: {
-  url?: string | null;
-  refUri?: string | null;
-}): LinkAttachmentTarget | null {
-  return targetForLinkDisplay(args);
-}
-
 export const LinkAttachmentGlyph: React.FC<{
   kind?: LinkKind | string | null;
   mimeType?: string | null;
@@ -124,7 +117,7 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
-  const target = targetForLinkAttachment({ url, refUri });
+  const target = targetForLinkDisplay({ url, refUri });
   const contentItem: LinkContentItem = {
     category: getLinkDisplayCategory({ kind, mimeType, title, filePath, refUri }),
     source: source === 'upload' ? 'upload' : undefined,
