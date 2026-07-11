@@ -42,6 +42,14 @@ const mockSession: Partial<Session> = {
   agentic_tool: 'claude-code',
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 // 10s timeout per test: these exercise full Antd Modal mount + async
 // confirm + waitFor cycles which intermittently brush against vitest's
 // 5s default on slower CI runners (observed flaking on multiple PRs).
@@ -103,5 +111,55 @@ describe('ForkSpawnModal prompt preservation', { timeout: 10_000 }, () => {
 
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('do the thing'));
     await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1));
+  });
+
+  it.each([
+    'fork',
+    'spawn',
+  ] as const)('does not let a stale %s confirmation reset a modal rebound to another session', async (action) => {
+    const confirmation = deferred<boolean>();
+    const onConfirm = vi.fn().mockReturnValue(confirmation.promise);
+    const onCancel = vi.fn();
+    const { rerender } = render(
+      <ForkSpawnModal
+        open
+        action={action}
+        session={mockSession as Session}
+        initialPrompt="Original modal prompt"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        client={null}
+        userById={new Map()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`${action} Session`, 'i') }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <ForkSpawnModal
+        open
+        action={action}
+        session={{ ...mockSession, session_id: 'session-new', title: 'New Session' } as Session}
+        initialPrompt="New modal prompt"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        client={null}
+        userById={new Map()}
+      />
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('prompt-textarea')).toHaveValue('New modal prompt')
+    );
+
+    confirmation.resolve(false);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: new RegExp(`${action} Session`, 'i') })
+      ).toBeEnabled()
+    );
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByTestId('prompt-textarea')).toHaveValue('New modal prompt');
   });
 });

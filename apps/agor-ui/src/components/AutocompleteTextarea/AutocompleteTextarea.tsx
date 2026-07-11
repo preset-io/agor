@@ -86,6 +86,7 @@ type KbLinkTarget = 'stable-uri' | 'absolute-route';
 interface AutocompleteTextareaProps {
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
   onKeyPress?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   placeholder?: string;
   client: AgorClient | null;
@@ -364,6 +365,7 @@ export const AutocompleteTextarea = React.forwardRef<
     {
       value,
       onChange,
+      disabled = false,
       onKeyPress,
       placeholder = 'Send a prompt, fork, or create a subsession... (type @ for files/users, : for emojis)',
       client,
@@ -1479,6 +1481,7 @@ export const AutocompleteTextarea = React.forwardRef<
             }
           }}
           value={value}
+          disabled={disabled}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}

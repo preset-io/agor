@@ -30,7 +30,7 @@ const COMPOSER_UPLOAD_EXTENSION_MIME_TYPES = new Map<string, string>([
 export const MAX_COMPOSER_UPLOAD_FILES = 10;
 export const MAX_COMPOSER_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
 export const MAX_COMPOSER_UPLOAD_TOTAL_SIZE = 100 * 1024 * 1024;
-export const MAX_COMPOSER_UPLOAD_FILES_MESSAGE = `Composer supports up to ${MAX_COMPOSER_UPLOAD_FILES} pending files`;
+export const MAX_COMPOSER_UPLOAD_FILES_MESSAGE = `Composer supports up to ${MAX_COMPOSER_UPLOAD_FILES} attachments`;
 
 export type ComposerAttachmentStatus = 'pending' | 'uploading' | 'uploaded' | 'failed';
 
@@ -95,7 +95,7 @@ export function validateComposerFileIntake(
 ): { acceptedFiles: File[]; rejections: ComposerFileRejection[] } {
   const rejections: ComposerFileRejection[] = [];
   const currentUploadBatch = currentAttachments.filter(
-    (attachment) => attachment.destination === destination && attachment.status !== 'uploaded'
+    (attachment) => attachment.destination === destination
   );
   let totalSize = currentUploadBatch.reduce((sum, attachment) => sum + attachment.file.size, 0);
   const candidates: File[] = [];
@@ -155,20 +155,6 @@ export function isBlockingComposerAttachment(attachment: ComposerAttachment): bo
 
 export function getComposerUploadAccept(): undefined {
   return undefined;
-}
-
-export interface ComposerPromptValueSource {
-  promptHandle?: { getValue: () => string } | null;
-  inputValueRefValue?: string;
-  sendStartValue: string;
-}
-
-export function getLatestComposerPromptText({
-  promptHandle,
-  inputValueRefValue,
-  sendStartValue,
-}: ComposerPromptValueSource): string {
-  return promptHandle?.getValue() ?? inputValueRefValue ?? sendStartValue;
 }
 
 export function buildPromptWithAttachments(text: string, attachmentPaths: string[]): string {

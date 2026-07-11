@@ -37,7 +37,7 @@ export interface SessionPanelContentProps {
   setQueuedTasks: React.Dispatch<React.SetStateAction<Task[]>>;
   spawnModalOpen: boolean;
   setSpawnModalOpen: (open: boolean) => void;
-  onSpawnModalConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
+  onSpawnModalConfirm: (config: string | Partial<SpawnConfig>) => Promise<unknown>;
   inputValueRef: React.RefObject<string>;
   isOpen: boolean;
   /** Claude Code CLI view toggle. Ignored for non-CLI tools. */

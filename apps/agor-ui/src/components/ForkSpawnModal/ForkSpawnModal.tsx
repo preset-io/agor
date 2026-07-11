@@ -32,7 +32,8 @@ export interface ForkSpawnModalProps {
   currentUser?: User | null;
   mcpServerById?: Map<string, MCPServer>;
   initialPrompt?: string;
-  onConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
+  /** Return false when the modal was rebound and must preserve its current form/open state. */
+  onConfirm: (config: string | Partial<SpawnConfig>) => Promise<unknown>;
   afterClose?: () => void;
   onCancel: () => void;
   client: AgorClient | null;
@@ -132,7 +133,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
 
     try {
       if (action === 'fork') {
-        await onConfirm(prompt);
+        if ((await onConfirm(prompt)) === false) return;
       } else {
         // Build spawn config based on preset
         const spawnConfig: Partial<SpawnConfig> = { prompt };
@@ -165,7 +166,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
           spawnConfig.includeOriginalPrompt = values.includeOriginalPrompt;
         }
 
-        await onConfirm(spawnConfig);
+        if ((await onConfirm(spawnConfig)) === false) return;
       }
 
       // Only reset + close on success. If onConfirm rejects, the modal stays

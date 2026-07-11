@@ -84,7 +84,6 @@ import { ToolIcon } from '../ToolIcon';
 import {
   buildPromptWithAttachments,
   getComposerUploadAccept,
-  getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
@@ -126,6 +125,8 @@ interface PromptInputProps {
   /** Called on Enter (without Shift) when there is sendable composer content */
   onSubmit: () => void;
   hasExternalInput?: boolean;
+  disabled?: boolean;
+  mutationLockedRef?: React.RefObject<boolean>;
   // Forwarded to AutocompleteTextarea
   placeholder?: string;
   autoSize?: { minRows?: number; maxRows?: number };
@@ -150,6 +151,8 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       inputValueRef,
       onSubmit,
       hasExternalInput = false,
+      disabled = false,
+      mutationLockedRef,
       placeholder,
       autoSize,
       client,
@@ -173,11 +176,12 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
 
     const handlePromptChange = React.useCallback(
       (nextValue: string) => {
+        if (disabled || mutationLockedRef?.current) return;
         valueRef.current = nextValue;
         inputValueRef.current = nextValue;
         setValue(nextValue);
       },
-      [inputValueRef]
+      [disabled, inputValueRef, mutationLockedRef]
     );
 
     // Track empty↔non-empty transitions → notify parent (minimal re-renders)
@@ -205,6 +209,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
           deleteDraft(sessionId);
         },
         insertText: (text: string) => {
+          if (disabled || mutationLockedRef?.current) return;
           setValue((prev) => {
             const trimmed = prev.trim();
             const separator = trimmed ? ' ' : '';
@@ -215,7 +220,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
           });
         },
       }),
-      [sessionId, deleteDraft, inputValueRef]
+      [sessionId, deleteDraft, disabled, inputValueRef, mutationLockedRef]
     );
 
     // Session switch: save old draft, load new one
@@ -261,6 +266,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       <AutocompleteTextarea
         ref={textareaElementRef}
         value={value}
+        disabled={disabled}
         onChange={handlePromptChange}
         placeholder={placeholder}
         autoSize={autoSize}
@@ -347,6 +353,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const teammateLinks = useAgorStore(teammateLinksSelector) ?? [];
   const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
   const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
+  // The ref blocks same-tick re-entry; reactive state locks composer mutations
+  // for the full lifetime of every prompt, fork, BTW, or spawn action.
+  const composerActionInFlightRef = React.useRef(false);
+  const [composerBusy, setComposerBusy] = React.useState(false);
   const {
     pinningKeys,
     teammateBusyKeys,
@@ -455,6 +465,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [queuedTasks, setQueuedTasks] = React.useState<Task[]>([]);
   const [forkModalOpen, setForkModalOpen] = React.useState(false);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
+  const forkModalGenerationRef = React.useRef(0);
+  const spawnModalGenerationRef = React.useRef(0);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
@@ -512,15 +524,31 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     addAttachments: addComposerAttachments,
     removeAttachment: removeComposerAttachment,
     uploadAttachments: uploadComposerAttachments,
-    uploading: composerAttachmentUploading,
     uploadingRef: composerAttachmentUploadingRef,
     validationError: composerAttachmentValidationError,
     setValidationError: setComposerAttachmentValidationError,
   } = useComposerAttachments({
     sessionId: session?.session_id ?? null,
     showError,
+    mutationLockedRef: composerActionInFlightRef,
   });
-  const composerSendInFlightRef = React.useRef(false);
+
+  const beginComposerAction = () => {
+    if (composerActionInFlightRef.current) return false;
+    composerActionInFlightRef.current = true;
+    setComposerBusy(true);
+    return true;
+  };
+  const finishComposerAction = () => {
+    composerActionInFlightRef.current = false;
+    setComposerBusy(false);
+  };
+  const composerStillOwnsAction = (
+    actionSessionId: SessionID,
+    actionIdentity: { sessionId: SessionID | null; generation: number }
+  ) =>
+    composerSessionIdentityRef.current.sessionId === actionSessionId &&
+    composerSessionIdentityRef.current.generation === actionIdentity.generation;
 
   const loadSessionLinks = React.useCallback(async () => {
     if (!open || !client || !session?.session_id) return;
@@ -849,7 +877,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (!session) return null;
     return (
       <SessionComposerDropZone
-        disabled={composerAttachmentUploading}
+        disabled={composerBusy}
         onDragActiveChange={setComposerDropActive}
         onFilesDrop={addComposerAttachments}
       >
@@ -863,7 +891,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         )}
         <SessionAttachmentTray
           attachments={composerAttachments}
-          disabled={composerAttachmentUploading}
+          disabled={composerBusy}
           onRemove={removeComposerAttachment}
         />
         <PromptInput
@@ -876,6 +904,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           inputValueRef={inputValueRef}
           onSubmit={stableFooterHandlers.onSendPrompt}
           hasExternalInput={hasComposerAttachments}
+          disabled={composerBusy}
+          mutationLockedRef={composerActionInFlightRef}
           placeholder={
             isRunning
               ? 'Queue here… @ for mentions, : for emoji'
@@ -885,7 +915,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}
-          filesDropDisabled={composerAttachmentUploading}
+          filesDropDisabled={composerBusy}
           showFilesDropOverlay={false}
           suppressEmptyHighlight={composerDropActive}
           slashCommands={
@@ -902,7 +932,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           type="file"
           accept={getComposerUploadAccept()}
           multiple
-          disabled={composerAttachmentUploading}
+          disabled={composerBusy}
           style={{ display: 'none' }}
           onChange={(event) => {
             addComposerAttachments(Array.from(event.target.files ?? []));
@@ -914,7 +944,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }, [
     session,
     sessionCustomContext,
-    composerAttachmentUploading,
+    composerBusy,
     composerAttachmentValidationError,
     composerAttachments,
     composerDropActive,
@@ -1005,21 +1035,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   ];
 
   const openAdvancedUpload = (initialFiles: File[] = []) => {
-    if (composerAttachmentUploadingRef.current) return;
+    if (composerActionInFlightRef.current || composerAttachmentUploadingRef.current) return;
     setAdvancedUploadInitialFiles(initialFiles);
     setUploadModalOpen(true);
   };
 
   const handleSendPrompt = async () => {
     if (
-      composerSendInFlightRef.current ||
+      composerActionInFlightRef.current ||
       composerAttachmentUploadingRef.current ||
       connectionDisabled
     ) {
       return;
     }
 
-    composerSendInFlightRef.current = true;
+    if (!beginComposerAction()) return;
     try {
       const sendStartSessionId = session.session_id;
       const sendStartComposerIdentity = composerSessionIdentityRef.current;
@@ -1046,23 +1076,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         sendStartSessionId
       );
       const attachmentPaths = uploadedFiles.map((file) => file.path);
-      const composerStillOwnsSend =
-        composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
-        composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;
-      // Re-read from the imperative textarea handle after upload only if the
-      // same composer instance still owns this send. When the user switches
-      // sessions during a delayed upload, promptRef points at the newly active
-      // composer; reading/clearing it would mix the new prompt into the old
-      // session. In that case we send the original snapshot to the original
-      // session and preserve the active composer's text/attachments.
-      const latestValue = composerStillOwnsSend
-        ? getLatestComposerPromptText({
-            promptHandle: promptRef.current,
-            inputValueRefValue: inputValueRef.current,
-            sendStartValue: value,
-          })
-        : value;
-      const promptToSend = buildPromptWithAttachments(latestValue, attachmentPaths);
+      const promptToSend = buildPromptWithAttachments(value, attachmentPaths);
       if (!promptToSend.trim()) return;
 
       // Single entry point: /prompt. The daemon decides run-vs-queue based on
@@ -1075,14 +1089,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         ? await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode, uploadLinkIds)
         : await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
       if (sendResult === false) return;
-      if (uploadLinkIds.length > 0) {
+      if (
+        uploadLinkIds.length > 0 &&
+        composerStillOwnsAction(sendStartSessionId, sendStartComposerIdentity)
+      ) {
         // The daemon attributes upload links to the newly persisted user
         // message during prompt creation. Refetch here instead of relying on a
         // pair of rapid created/patched socket events arriving in order.
         await loadSessionLinks();
       }
 
-      if (composerStillOwnsSend) {
+      if (composerStillOwnsAction(sendStartSessionId, sendStartComposerIdentity)) {
         promptRef.current?.clear();
         clearComposerAttachments();
         setComposerAttachmentValidationError(null);
@@ -1097,12 +1114,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // Re-engage the bottom lock so a scrolled-up user follows their just-sent
       // message and the streaming reply (behavior 3). `scrollToBottom` is the
       // function ConversationView exposed via onScrollRef.
-      if (composerStillOwnsSend) scrollToBottom?.();
+      if (composerStillOwnsAction(sendStartSessionId, sendStartComposerIdentity)) {
+        scrollToBottom?.();
+      }
     } catch (error) {
       console.error('Composer send failed — keeping prompt and files in composer:', error);
       showError(error instanceof Error ? error.message : 'Failed to send prompt');
     } finally {
-      composerSendInFlightRef.current = false;
+      finishComposerAction();
     }
   };
 
@@ -1148,7 +1167,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleFork = async () => {
-    if (!session) return;
+    if (!session || composerActionInFlightRef.current) return;
     if (composerAttachmentsRef.current.length > 0) {
       showError(
         'Attachments are only supported for normal Send for now. Remove attachments to fork.'
@@ -1158,16 +1177,26 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     const value = promptRef.current?.getValue() ?? '';
     const promptToSend = value.trim();
     if (!promptToSend) {
+      forkModalGenerationRef.current += 1;
       setForkModalOpen(true);
       return;
     }
+    if (!beginComposerAction()) return;
+    const actionSessionId = session.session_id;
+    const actionIdentity = composerSessionIdentityRef.current;
     try {
-      await onFork?.(session.session_id, promptToSend);
+      await onFork?.(actionSessionId, promptToSend);
       // Only clear the compose box + draft on success, so a failed fork
       // leaves the typed prompt intact for the user to retry.
-      promptRef.current?.clear();
+      if (composerStillOwnsAction(actionSessionId, actionIdentity)) {
+        promptRef.current?.clear();
+      } else {
+        deleteDraft(actionSessionId);
+      }
     } catch (error) {
       console.error('Fork failed — keeping prompt in compose box:', error);
+    } finally {
+      finishComposerAction();
     }
   };
 
@@ -1175,10 +1204,23 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (!session) return;
     const prompt = typeof config === 'string' ? config : (config.prompt ?? '');
     if (!prompt) return;
-    await onFork?.(session.session_id, prompt);
+    if (!beginComposerAction()) throw new Error('Another composer action is already in progress.');
+    const actionSessionId = session.session_id;
+    const actionIdentity = composerSessionIdentityRef.current;
+    const modalGeneration = forkModalGenerationRef.current;
+    try {
+      await onFork?.(actionSessionId, prompt);
+      return (
+        composerStillOwnsAction(actionSessionId, actionIdentity) &&
+        forkModalGenerationRef.current === modalGeneration
+      );
+    } finally {
+      finishComposerAction();
+    }
   };
 
   const handleBtwSend = async () => {
+    if (composerActionInFlightRef.current) return;
     if (composerAttachmentsRef.current.length > 0) {
       showError(
         'Attachments are only supported for normal Send for now. Remove attachments to send BTW.'
@@ -1188,26 +1230,41 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     const value = promptRef.current?.getValue() ?? '';
     if (!value.trim() || connectionDisabled) return;
     const promptToSend = value.trim();
+    if (!beginComposerAction()) return;
+    const actionSessionId = session.session_id;
+    const actionIdentity = composerSessionIdentityRef.current;
     try {
-      await onBtwFork?.(session.session_id, promptToSend);
-      promptRef.current?.clear();
+      await onBtwFork?.(actionSessionId, promptToSend);
+      if (composerStillOwnsAction(actionSessionId, actionIdentity)) {
+        promptRef.current?.clear();
+      } else {
+        deleteDraft(actionSessionId);
+      }
     } catch (error) {
       console.error('BTW fork failed — keeping prompt in compose box:', error);
+    } finally {
+      finishComposerAction();
     }
   };
 
   const handleSpawnOpen = () => {
+    if (composerActionInFlightRef.current) return;
     if (composerAttachmentsRef.current.length > 0) {
       showError(
         'Attachments are only supported for normal Send for now. Remove attachments to spawn.'
       );
       return;
     }
+    spawnModalGenerationRef.current += 1;
     setSpawnModalOpen(true);
   };
 
   const handleSpawnModalConfirm = async (config: string | Partial<SpawnConfig>) => {
     if (!session || !client) return;
+    if (!beginComposerAction()) throw new Error('Another composer action is already in progress.');
+    const actionSessionId = session.session_id;
+    const actionIdentity = composerSessionIdentityRef.current;
+    const modalGeneration = spawnModalGenerationRef.current;
 
     // Daemon owns the spawn-subsession meta-prompt template. The UI sends raw
     // `{userPrompt, config}` to /sessions/:id/spawn-prompt, which renders the
@@ -1237,12 +1294,24 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             extraInstructions: config.extraInstructions,
           };
 
-    await client
-      .service(`sessions/${session.session_id}/spawn-prompt`)
-      .create({ ...spawnConfig, parentPermissionMode: permissionMode });
+    try {
+      await client
+        .service(`sessions/${actionSessionId}/spawn-prompt`)
+        .create({ ...spawnConfig, parentPermissionMode: permissionMode });
 
-    setSpawnModalOpen(false);
-    promptRef.current?.clear();
+      const composerStillOwnsSpawn = composerStillOwnsAction(actionSessionId, actionIdentity);
+      const modalStillOwnsSpawn = spawnModalGenerationRef.current === modalGeneration;
+      if (composerStillOwnsSpawn && modalStillOwnsSpawn) {
+        promptRef.current?.clear();
+        return true;
+      }
+      if (!composerStillOwnsSpawn) {
+        deleteDraft(actionSessionId);
+      }
+      return false;
+    } finally {
+      finishComposerAction();
+    }
   };
 
   const handlePermissionModeChange = (newMode: PermissionMode) => {
@@ -1364,7 +1433,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       stopRequestInFlight={stopRequestInFlight}
       hasInput={hasInput || hasComposerAttachments}
       composerAttachmentsPresent={hasComposerAttachments}
-      composerAttachmentUploading={composerAttachmentUploading}
+      composerBusy={composerBusy}
       connectionDisabled={connectionDisabled}
       toolCaps={toolCaps}
       effortLevel={effortLevel}
@@ -1614,7 +1683,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             queuedTasks={queuedTasks}
             setQueuedTasks={setQueuedTasks}
             spawnModalOpen={spawnModalOpen}
-            setSpawnModalOpen={setSpawnModalOpen}
+            setSpawnModalOpen={(nextOpen) => {
+              spawnModalGenerationRef.current += 1;
+              setSpawnModalOpen(nextOpen);
+            }}
             onSpawnModalConfirm={handleSpawnModalConfirm}
             inputValueRef={inputValueRef}
             isOpen={open}
@@ -1662,7 +1734,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           session={session}
           currentUser={currentUserId ? (userById.get(currentUserId) ?? null) : null}
           onConfirm={handleForkModalConfirm}
-          onCancel={() => setForkModalOpen(false)}
+          onCancel={() => {
+            forkModalGenerationRef.current += 1;
+            setForkModalOpen(false);
+          }}
           client={client}
           userById={userById}
         />

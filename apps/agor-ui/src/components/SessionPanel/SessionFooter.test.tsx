@@ -266,13 +266,13 @@ describe('SessionFooter pinned items', () => {
     expect(screen.getByTestId('btw-fork-bar-btn')).toBeInTheDocument();
   });
 
-  it('labels and disables upload action buttons while attachments upload', () => {
+  it('labels and disables upload action buttons while the composer sends', () => {
     localStorage.setItem(
       'agor-footer-prefs',
       JSON.stringify({ pinnedItems: ['upload', 'advanced-upload'] })
     );
 
-    render(<SessionFooter {...baseProps} composerAttachmentUploading={true} />, {
+    render(<SessionFooter {...baseProps} composerBusy />, {
       wrapper: Wrapper,
     });
 

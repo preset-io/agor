@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPromptWithAttachments,
-  getLatestComposerPromptText,
   isBlockingComposerAttachment,
   isPreviewableComposerImage,
   summarizeComposerFileRejections,
@@ -33,26 +32,6 @@ Attached files:
     expect(buildPromptWithAttachments('   ', ['.agor/uploads/chart-a.png'])).toBe(
       'Attached files:\n- .agor/uploads/chart-a.png'
     );
-  });
-
-  it('uses the live textarea value for prompt edits typed during attachment upload', () => {
-    expect(
-      getLatestComposerPromptText({
-        promptHandle: { getValue: () => 'send-start text plus upload-time edit' },
-        inputValueRefValue: 'send-start text',
-        sendStartValue: 'send-start text',
-      })
-    ).toBe('send-start text plus upload-time edit');
-  });
-
-  it('does not resurrect send-start text when the live textarea is cleared during upload', () => {
-    expect(
-      getLatestComposerPromptText({
-        promptHandle: { getValue: () => '' },
-        inputValueRefValue: 'send-start text',
-        sendStartValue: 'send-start text',
-      })
-    ).toBe('');
   });
 
   it('matches the server image allowlist used by composer-native attachments', () => {
@@ -121,11 +100,11 @@ Attached files:
       expect.arrayContaining([
         expect.objectContaining({
           file: expect.objectContaining({ name: 'note-0.txt' }),
-          reason: 'Composer supports up to 10 pending files',
+          reason: 'Composer supports up to 10 attachments',
         }),
         expect.objectContaining({
           file: expect.objectContaining({ name: 'note-10.txt' }),
-          reason: 'Composer supports up to 10 pending files',
+          reason: 'Composer supports up to 10 attachments',
         }),
       ])
     );
@@ -145,7 +124,7 @@ Attached files:
     expect(acceptedFiles).toHaveLength(0);
     expect(rejections).toHaveLength(12);
     expect(summarizeComposerFileRejections(rejections)).toBe(
-      'bad.svg: Composer supports up to 10 pending files (+11 more)'
+      'bad.svg: Composer supports up to 10 attachments (+11 more)'
     );
   });
 
@@ -171,11 +150,74 @@ Attached files:
     expect(rejections).toEqual([
       expect.objectContaining({
         file: expect.objectContaining({ name: 'incoming-0.txt' }),
-        reason: 'Composer supports up to 10 pending files',
+        reason: 'Composer supports up to 10 attachments',
       }),
       expect.objectContaining({
         file: expect.objectContaining({ name: 'incoming-1.txt' }),
-        reason: 'Composer supports up to 10 pending files',
+        reason: 'Composer supports up to 10 attachments',
+      }),
+    ]);
+  });
+
+  it('counts uploaded retry attachments toward the file cap', () => {
+    const currentAttachments = Array.from({ length: 10 }, (_, index) => ({
+      id: `uploaded-${index}`,
+      file: new File(['x'], `uploaded-${index}.txt`, { type: 'text/plain' }),
+      destination: 'branch' as const,
+      status: 'uploaded' as const,
+      uploadedFile: {
+        filename: `uploaded-${index}.txt`,
+        path: `.agor/uploads/uploaded-${index}.txt`,
+        size: 1,
+        mimeType: 'text/plain',
+      },
+    }));
+    const incoming = new File(['x'], 'incoming.txt', { type: 'text/plain' });
+
+    const { acceptedFiles, rejections } = validateComposerFileIntake(
+      [incoming],
+      currentAttachments
+    );
+
+    expect(acceptedFiles).toEqual([]);
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        file: incoming,
+        reason: 'Composer supports up to 10 attachments',
+      }),
+    ]);
+  });
+
+  it('counts uploaded retry attachment bytes toward the total-size cap', () => {
+    const uploadedFiles = ['uploaded-a.bin', 'uploaded-b.bin'].map((name) => {
+      const file = new File(['x'], name, { type: 'application/octet-stream' });
+      Object.defineProperty(file, 'size', { value: 50 * 1024 * 1024 });
+      return file;
+    });
+    const incoming = new File(['x'], 'incoming.bin', { type: 'application/octet-stream' });
+    Object.defineProperty(incoming, 'size', { value: 1 });
+
+    const { acceptedFiles, rejections } = validateComposerFileIntake(
+      [incoming],
+      uploadedFiles.map((file, index) => ({
+        id: `uploaded-${index}`,
+        file,
+        destination: 'branch',
+        status: 'uploaded' as const,
+        uploadedFile: {
+          filename: file.name,
+          path: `.agor/uploads/${file.name}`,
+          size: file.size,
+          mimeType: file.type,
+        },
+      }))
+    );
+
+    expect(acceptedFiles).toEqual([]);
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        file: incoming,
+        reason: 'Selected files exceed 100 MB total',
       }),
     ]);
   });
