@@ -1,4 +1,4 @@
-import type { LinkKind, LinkSource } from '@agor-live/client';
+import type { LinkKind } from '@agor-live/client';
 import { DownloadOutlined } from '@ant-design/icons';
 import { Button, Flex, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
@@ -26,7 +26,7 @@ export type LinkAttachmentTarget = LinkDisplayTarget;
 
 export interface LinkAttachmentCardProps {
   kind?: LinkKind | null;
-  source?: LinkSource | 'branch' | 'fixture' | string | null;
+  source?: string | null;
   linkId?: string | null;
   title: string;
   subtitle?: string | null;

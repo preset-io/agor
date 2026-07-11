@@ -42,9 +42,6 @@ function matchesAttachmentSearch(item: LinkDisplayItem, query: string): boolean 
   ]);
 }
 
-type LinksCategoryTab = LinkCategoryTabKey;
-type LinksSort = LinkSortKey;
-
 interface Props {
   items: SessionAttachmentItem[];
   loading?: boolean;
@@ -80,8 +77,8 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   const { preview, setPreview, openItem } = useLinkFileActions(navigate);
   const [popoverOpen, setPopoverOpen] = React.useState(false);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
-  const [activeCategory, setActiveCategory] = React.useState<LinksCategoryTab>('all');
-  const [sortOrder, setSortOrder] = React.useState<LinksSort>('az');
+  const [activeCategory, setActiveCategory] = React.useState<LinkCategoryTabKey>('all');
+  const [sortOrder, setSortOrder] = React.useState<LinkSortKey>('az');
   const [searchQuery, setSearchQuery] = React.useState('');
 
   const visibleItems = items;
