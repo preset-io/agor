@@ -70,6 +70,10 @@ function hasOwn<K extends PropertyKey>(data: object, key: K): boolean {
   return Object.hasOwn(data, key);
 }
 
+function patchValue<K extends keyof LinkPatch>(data: LinkPatch, existing: Link[K], key: K) {
+  return hasOwn(data, key) ? (data[key] ?? null) : (existing ?? null);
+}
+
 function validateLinkSemantics(data: {
   kind: LinkKind;
   source: LinkSource;
@@ -385,20 +389,12 @@ export class LinksRepository {
     const existing = await this.findById(id);
     if (!existing) throw new RepositoryError(`Link ${id} not found`);
 
-    const sourceMessageId = hasOwn(data, 'source_message_id')
-      ? (data.source_message_id ?? null)
-      : (existing.source_message_id ?? null);
-    const url = hasOwn(data, 'url') ? (data.url ?? null) : (existing.url ?? null);
-    const refUri = hasOwn(data, 'ref_uri') ? (data.ref_uri ?? null) : (existing.ref_uri ?? null);
-    const filePath = hasOwn(data, 'file_path')
-      ? (data.file_path ?? null)
-      : (existing.file_path ?? null);
-    const targetObjectType = hasOwn(data, 'target_object_type')
-      ? (data.target_object_type ?? null)
-      : (existing.target_object_type ?? null);
-    const targetObjectId = hasOwn(data, 'target_object_id')
-      ? (data.target_object_id ?? null)
-      : (existing.target_object_id ?? null);
+    const sourceMessageId = patchValue(data, existing.source_message_id, 'source_message_id');
+    const url = patchValue(data, existing.url, 'url');
+    const refUri = patchValue(data, existing.ref_uri, 'ref_uri');
+    const filePath = patchValue(data, existing.file_path, 'file_path');
+    const targetObjectType = patchValue(data, existing.target_object_type, 'target_object_type');
+    const targetObjectId = patchValue(data, existing.target_object_id, 'target_object_id');
     const targetCount = countLinkTargets({ url, ref_uri: refUri, file_path: filePath });
     if (targetCount !== 1) {
       throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
@@ -422,12 +418,10 @@ export class LinksRepository {
         target_object_type: targetObjectType,
         target_object_id: targetObjectId,
       }),
-      is_pinned: hasOwn(data, 'is_pinned') ? (data.is_pinned ?? false) : existing.is_pinned,
-      title: hasOwn(data, 'title') ? (data.title ?? null) : (existing.title ?? null),
-      mime_type: hasOwn(data, 'mime_type')
-        ? (data.mime_type ?? null)
-        : (existing.mime_type ?? null),
-      metadata: hasOwn(data, 'metadata') ? (data.metadata ?? null) : (existing.metadata ?? null),
+      is_pinned: patchValue(data, existing.is_pinned, 'is_pinned') ?? false,
+      title: patchValue(data, existing.title, 'title'),
+      mime_type: patchValue(data, existing.mime_type, 'mime_type'),
+      metadata: patchValue(data, existing.metadata, 'metadata'),
       updated_at: new Date(),
     } satisfies Partial<LinkInsert>;
     validateLinkSemantics({

@@ -66,6 +66,24 @@ interface LinksHooksContext {
   superadminOpts: { allowSuperadmin: boolean };
 }
 
+type ExternalMutationError = (
+  record: Record<string, unknown>,
+  context: HookContext
+) => string | null;
+
+function rejectExternalMutation(getError: ExternalMutationError) {
+  return (context: HookContext) => {
+    if (!context.params.provider) return context;
+    const records = Array.isArray(context.data) ? context.data : [context.data];
+    for (const record of records) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
+      const error = getError(record as Record<string, unknown>, context);
+      if (error) throw new Forbidden(error);
+    }
+    return context;
+  };
+}
+
 export function linksHooks({
   db,
   branchRepository,
@@ -197,51 +215,22 @@ export function linksHooks({
     return context;
   };
 
-  const rejectLinkDerivedFields = (context: HookContext) => {
-    if (!context.params.provider) return context;
-    const records = Array.isArray(context.data) ? context.data : [context.data];
-    for (const record of records as Array<Record<string, unknown> | undefined>) {
-      if (record && 'target_key' in record) {
-        throw new Forbidden("Link field 'target_key' is server-derived");
-      }
-    }
-    return context;
-  };
-
-  const rejectExternalFileBackedLinkMutations = (context: HookContext) => {
-    if (!context.params.provider) return context;
-    const records = Array.isArray(context.data) ? context.data : [context.data];
-    for (const record of records) {
-      if (isExternalFileBackedLinkMutation(record)) {
-        throw new Forbidden('File-backed links must be created through the upload endpoint');
-      }
-    }
-    return context;
-  };
-
-  const rejectExternalInternalLinkMutations = (context: HookContext) => {
-    if (!context.params.provider) return context;
-    const records = Array.isArray(context.data) ? context.data : [context.data];
-    for (const record of records) {
-      if (isExternalInternalLinkMutation(record)) {
-        throw new Forbidden(
-          'Internal links require target authorization and are not externally available'
-        );
-      }
-    }
-    return context;
-  };
-
-  const rejectExternalLinkProvenanceMutations = (context: HookContext) => {
-    if (!context.params.provider) return context;
-    const records = Array.isArray(context.data) ? context.data : [context.data];
-    const method = context.method === 'patch' ? 'patch' : 'create';
-    for (const record of records) {
-      const error = getExternalLinkProvenanceMutationError(record, method);
-      if (error) throw new Forbidden(error);
-    }
-    return context;
-  };
+  const rejectLinkDerivedFields = rejectExternalMutation((record) =>
+    'target_key' in record ? "Link field 'target_key' is server-derived" : null
+  );
+  const rejectExternalFileBackedLinkMutations = rejectExternalMutation((record) =>
+    isExternalFileBackedLinkMutation(record)
+      ? 'File-backed links must be created through the upload endpoint'
+      : null
+  );
+  const rejectExternalInternalLinkMutations = rejectExternalMutation((record) =>
+    isExternalInternalLinkMutation(record)
+      ? 'Internal links require target authorization and are not externally available'
+      : null
+  );
+  const rejectExternalLinkProvenanceMutations = rejectExternalMutation((record, context) =>
+    getExternalLinkProvenanceMutationError(record, context.method === 'patch' ? 'patch' : 'create')
+  );
 
   return {
     before: {
