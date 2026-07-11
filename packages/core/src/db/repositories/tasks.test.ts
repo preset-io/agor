@@ -855,6 +855,111 @@ describe('TaskRepository.update', () => {
     });
   });
 
+  for (const terminalStatus of [TaskStatus.COMPLETED, TaskStatus.STOPPED]) {
+    dbTest(
+      `does not revive a ${terminalStatus} task through awaiting_permission then running`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const created = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: terminalStatus,
+            executor_connected_at: '2026-07-10T20:00:00.000Z',
+          })
+        );
+
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.AWAITING_PERMISSION })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.RUNNING })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        expect((await taskRepo.findById(created.task_id))?.status).toBe(terminalStatus);
+      }
+    );
+  }
+
+  for (const terminalStatus of [TaskStatus.COMPLETED, TaskStatus.STOPPED]) {
+    dbTest(
+      `does not revive a ${terminalStatus} task through awaiting_input then running`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const created = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: terminalStatus,
+            executor_connected_at: '2026-07-10T20:00:00.000Z',
+          })
+        );
+
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.AWAITING_INPUT })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.RUNNING })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        expect((await taskRepo.findById(created.task_id))?.status).toBe(terminalStatus);
+      }
+    );
+  }
+
+  dbTest(
+    'allows metadata-only updates after completion without changing status',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const created = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.COMPLETED })
+      );
+
+      const updated = await taskRepo.update(created.task_id, { tool_use_count: 7 });
+
+      expect(updated).toMatchObject({ status: TaskStatus.COMPLETED, tool_use_count: 7 });
+    }
+  );
+
+  dbTest('keeps terminal status when completion wins a concurrent resume race', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.AWAITING_PERMISSION,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+      })
+    );
+
+    const completion = taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED });
+    const resume = taskRepo.update(created.task_id, { status: TaskStatus.RUNNING });
+    const [completionResult, resumeResult] = await Promise.allSettled([completion, resume]);
+
+    expect(completionResult.status).toBe('fulfilled');
+    expect(resumeResult.status).toBe('rejected');
+    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.COMPLETED);
+  });
+
+  dbTest('allows a concurrent resume to be followed by terminal completion', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.AWAITING_INPUT,
+        executor_connected_at: '2026-07-10T20:00:00.000Z',
+      })
+    );
+
+    const resume = taskRepo.update(created.task_id, { status: TaskStatus.RUNNING });
+    const completion = taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED });
+    const [resumeResult, completionResult] = await Promise.allSettled([resume, completion]);
+
+    expect(resumeResult.status).toBe('fulfilled');
+    expect(completionResult.status).toBe('fulfilled');
+    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.COMPLETED);
+  });
+
   dbTest('should update multiple fields and preserve unchanged ones', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
