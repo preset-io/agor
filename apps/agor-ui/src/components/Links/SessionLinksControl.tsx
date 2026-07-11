@@ -28,7 +28,6 @@ type PreviewState = {
 export function LinkRow({
   item,
   compact = false,
-  inline = false,
   onPreview,
   onDownload,
   onTogglePinned,
@@ -36,7 +35,6 @@ export function LinkRow({
 }: {
   item: LinkDisplayItem;
   compact?: boolean;
-  inline?: boolean;
   onPreview?: (item: LinkDisplayItem) => void;
   onDownload?: (item: LinkDisplayItem) => void;
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
@@ -65,7 +63,6 @@ export function LinkRow({
             }
           : undefined
       }
-      style={inline ? undefined : { width: '100%' }}
       actions={
         canTogglePin ? (
           <LinkPinAction

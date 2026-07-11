@@ -14,7 +14,6 @@ interface ActionLinkRowProps {
   disabled?: boolean;
   compact?: boolean;
   bordered?: boolean;
-  style?: React.CSSProperties;
 }
 
 /**
@@ -32,7 +31,6 @@ export function ActionLinkRow({
   disabled = false,
   compact = false,
   bordered = false,
-  style,
 }: ActionLinkRowProps) {
   const { token } = theme.useToken();
   const primaryPadding = compact
@@ -74,7 +72,6 @@ export function ActionLinkRow({
       style={{
         borderBottom: bordered ? `1px solid ${token.colorBorderSecondary}` : undefined,
         borderRadius: token.borderRadius,
-        ...style,
       }}
     >
       {primary}
