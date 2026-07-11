@@ -112,6 +112,7 @@
 }
 
 .heroSection,
+.problemSection,
 .liveSection,
 .workspaceSection,
 .productShowcase,
@@ -262,6 +263,17 @@
 .headingAccent {
   font-weight: 600;
   background: linear-gradient(110deg, #34e6c4, #7ad9ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Amber variant for the problem-section headline — the warning register
+ * (sampled from the roster radar's IDLE color #e8c468). Mint stays reserved
+ * for the solution, which arrives at the section's pivot line. */
+.headingAccentWarm {
+  font-weight: 600;
+  background: linear-gradient(110deg, #e8c468, #f5af19);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -885,11 +897,17 @@
   line-height: 1.6;
 }
 
+/* "Compound Amplifying Bus" section — the calm mint answer that lands right
+ * after the amber traffic pileup. Left: copy with the giant gradient
+ * "compound"; right: six trust items strung down a vertical spine with
+ * amplifying ripple rings. overflow: hidden keeps the ripples inside the
+ * card at narrow widths. */
 .controlSection {
   display: grid;
-  grid-template-columns: 1fr 0.8fr;
-  gap: 42px;
+  grid-template-columns: 0.95fr 1.05fr;
+  gap: 56px;
   align-items: center;
+  overflow: hidden;
   margin-top: 40px;
   padding: 66px 28px;
   border-radius: 36px;
@@ -906,61 +924,162 @@
   color: rgba(255, 255, 255, 0.72);
 }
 
-.trustList {
-  display: grid;
-  gap: 12px;
+/* The dominant word of the section — combined with .headingAccent in the TSX
+ * for the mint gradient; this class (later in the file, same specificity)
+ * supplies the display-font scale and its own line. */
+.compoundWord {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-display-stack);
+  font-size: clamp(3.3rem, 6vw, 5.3rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.02;
+}
+
+/* --- The bus itself. Each .busItem draws its own spine segment (::before,
+ * continuous through row padding; trimmed to the node center on first/last
+ * rows) and a dotted connector out to the text (::after). The node carries
+ * a pulsing ring plus concentric ripple rings on an infinite 3s ease-out
+ * loop — size/count/delays come from static CSS vars set inline in the TSX
+ * and grow toward the bottom of the line. --- */
+.busList {
   margin: 0;
-  padding: 0;
+  padding: 6px 0;
   list-style: none;
 }
 
-.trustList li {
-  padding: 16px 18px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 18px;
-  color: rgba(255, 255, 255, 0.86);
-  background: rgba(255, 255, 255, 0.06);
-  transition:
-    border-color 0.25s ease,
-    background 0.25s ease;
+.busItem {
+  position: relative;
+  padding: 0 0 42px 92px;
 }
 
-.trustList a {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  color: rgba(255, 255, 255, 0.86);
-  text-decoration: none;
+.busItem:last-child {
+  padding-bottom: 0;
 }
 
-.trustLabel {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--font-display-stack);
-  font-weight: 600;
-}
-
-.trustLabel::before {
+.busItem::before {
   content: "";
-  width: 8px;
-  height: 8px;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 12px;
+  width: 2px;
+  background: rgba(52, 230, 196, 0.34);
+}
+
+.busItem:first-child::before {
+  top: 16px;
+}
+
+.busItem:last-child::before {
+  bottom: auto;
+  height: 16px;
+}
+
+.busItem::after {
+  content: "";
+  position: absolute;
+  top: 16px;
+  left: 32px;
+  width: 46px;
+  border-top: 1px dashed rgba(52, 230, 196, 0.28);
+}
+
+.busNode {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  width: 26px;
+  height: 26px;
+}
+
+.busNodeDot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid var(--landing-teal);
   border-radius: 50%;
-  background: var(--landing-teal);
-  box-shadow: 0 0 10px var(--landing-teal);
-  flex-shrink: 0;
+  background: rgba(7, 16, 15, 0.9);
+  animation: busPulse 3s ease-in-out infinite;
 }
 
-.trustBody {
+.busRipple {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--ripple-size, 12px);
+  height: var(--ripple-size, 12px);
+  margin: calc(var(--ripple-size, 12px) / -2) 0 0 calc(var(--ripple-size, 12px) / -2);
+  border: 1px solid rgba(52, 230, 196, 0.5);
+  border-radius: 50%;
+  opacity: 0;
+  animation: busRipple 3s ease-out infinite;
+  animation-delay: var(--ripple-delay, 0ms);
+}
+
+@keyframes busRipple {
+  0% {
+    opacity: 0.65;
+    transform: scale(0.45);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(3);
+  }
+}
+
+@keyframes busPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 230, 196, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 14px 3px rgba(52, 230, 196, 0.16);
+  }
+}
+
+.busTitle {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.16rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  /* First-line center sits at ~16px from the row top — matches the node
+   * center and the connector's top offset. */
+  line-height: 1.4;
+}
+
+.busDesc {
+  margin-top: 6px;
   color: rgba(255, 255, 255, 0.58);
-  font-size: 0.9rem;
-  font-weight: 500;
-  line-height: 1.5;
+  font-size: 0.92rem;
+  line-height: 1.55;
 }
 
-.trustList li:hover {
-  border-color: rgba(52, 230, 196, 0.28);
-  background: rgba(52, 230, 196, 0.08);
+/* Link-styled button — opens the HubSpot beta modal (not a navigation). */
+.busBetaLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--landing-teal);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 230, 196, 0.45);
+  text-underline-offset: 3px;
+  transition:
+    color 0.25s ease,
+    text-decoration-color 0.25s ease;
+}
+
+.busBetaLink:hover {
+  color: #a8f5ed;
+  text-decoration-color: #a8f5ed;
 }
 
 .finalCta {
@@ -1046,6 +1165,25 @@
   color: var(--landing-teal);
 }
 
+/* "Built by Preset" credit — last line of the footer, spanning both grid
+ * columns. Same dim-to-mint hover register as the footer links. */
+.footerCredit {
+  grid-column: 1 / -1;
+  margin: 12px 0 0;
+  color: #5b6d68;
+  font-size: 0.85rem;
+}
+
+.footerCreditLink {
+  color: var(--landing-muted);
+  text-decoration: none;
+  transition: color 140ms ease;
+}
+
+.footerCreditLink:hover {
+  color: var(--landing-teal);
+}
+
 .landingShell [data-reveal] {
   opacity: 0;
   transform: translateY(34px) scale(0.985);
@@ -1083,144 +1221,6 @@
     opacity: 1;
     transform: none;
     transition: none;
-  }
-}
-
-@media (max-width: 980px) {
-  .liveGrid {
-    grid-template-columns: 1fr;
-  }
-
-  .surfaceExplorer {
-    grid-template-columns: 1fr;
-  }
-
-  .surfaceRail {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 16px;
-    border-right: 0;
-    border-bottom: 1px solid rgba(52, 230, 196, 0.1);
-  }
-
-  .surfaceRailLabel {
-    width: 100%;
-    padding: 0 10px 10px;
-  }
-
-  .surfaceRailItem {
-    padding: 8px 14px;
-    border: 1px solid rgba(52, 230, 196, 0.16);
-    border-radius: 999px;
-    font-size: 0.88rem;
-  }
-
-  .surfaceShot {
-    height: clamp(240px, 52vw, 420px);
-  }
-
-  .surfaceInfo {
-    padding: 20px 22px 24px;
-  }
-
-  .showcaseSlide {
-    min-height: 340px;
-  }
-
-  /* Tighten the collage composition for narrow containers */
-  .slideCollage {
-    height: 300px;
-  }
-
-  .slideCollageMain {
-    top: 34px;
-    width: 86%;
-  }
-
-  .slideCollageFacepile {
-    top: 0;
-    width: 46%;
-  }
-
-  .slideCollageCursor {
-    right: 0;
-    bottom: 6px;
-    width: 32%;
-  }
-
-  .liveSection,
-  .workspaceSection,
-  .controlSection {
-    grid-template-columns: 1fr;
-  }
-
-  .landingFooter {
-    grid-template-columns: 1fr;
-    gap: 36px;
-  }
-
-  .workspaceCopy {
-    position: static;
-  }
-}
-
-@media (max-width: 720px) {
-  .landingShell {
-    margin-top: -2rem;
-  }
-
-  .heroSection,
-  .liveSection,
-  .workspaceSection,
-  .productShowcase,
-  .finalCta {
-    padding: 64px 24px;
-  }
-
-  .heroSection {
-    padding-top: 96px;
-  }
-
-  .heroCopy h1 {
-    font-size: clamp(3.05rem, 14vw, 4.75rem);
-  }
-
-  .heroActions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .primaryButton,
-  .secondaryButton,
-  .textButton {
-    width: 100%;
-  }
-
-  .featureGrid,
-  .sectionHeader h2,
-  .liveCopy h2,
-  .workspaceCopy h2,
-  .controlSection h2,
-  .finalCta h2 {
-    font-size: clamp(2.25rem, 10.5vw, 3.65rem);
-  }
-
-  .controlSection {
-    margin-inline: 24px;
-    padding: 48px 24px;
-  }
-
-  .landingFooter {
-    padding: 48px 24px 72px;
-  }
-
-  .footerLinks {
-    gap: 18px;
-  }
-
-  .footerLinks h4 {
-    letter-spacing: 0.06em;
   }
 }
 
@@ -1274,12 +1274,55 @@
 }
 
 .showcaseFrame {
+  position: relative;
   margin-top: 24px;
   overflow: hidden;
   border: 1px solid rgba(52, 230, 196, 0.14);
   border-radius: 20px;
   background: #081210;
   box-shadow: 0 50px 120px -50px rgba(0, 0, 0, 0.8);
+}
+
+/* Prev/next carousel arrows — circular glass buttons hugging the stage edges.
+ * They sit inside the data-reveal section but not ON the reveal element, so
+ * they own their transition list (hover animates instead of snapping). */
+.showcaseArrow {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(52, 230, 196, 0.25);
+  border-radius: 50%;
+  background: rgba(8, 18, 16, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: var(--landing-muted);
+  cursor: pointer;
+  translate: 0 -50%;
+  transition:
+    border-color 0.25s ease,
+    background 0.25s ease,
+    color 0.25s ease,
+    scale 0.25s ease;
+}
+
+.showcaseArrow:hover {
+  border-color: rgba(52, 230, 196, 0.6);
+  background: rgba(10, 24, 21, 0.75);
+  color: var(--landing-teal);
+  scale: 1.07;
+}
+
+.showcaseArrowLeft {
+  left: 14px;
+}
+
+.showcaseArrowRight {
+  right: 14px;
 }
 
 .showcaseChrome {
@@ -1433,6 +1476,303 @@
 
 .liveSection .cardLink {
   margin-top: 34px;
+}
+
+/* --- "The problem" section: scattered "collision" composition. The six
+ * amber cards pile into a loose horizontal band — each .problemSlot carries a
+ * static scatter pose (rotate/translate/negative-margin/z-index from CSS vars
+ * set inline in the TSX) plus the crash entrance animation (triggers live in
+ * the higher-specificity overrides section at the end of the file). The band
+ * bleeds wider than the 1180px text column so six cards fit at desktop; the
+ * shell's overflow: hidden clips any fly-in frames. Mobile falls back to the
+ * tidy grid (see the relocated max-width media blocks at the end). --- */
+.problemScatter {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: min(100vw - 80px, 1440px);
+  margin-top: 40px;
+  margin-left: 50%;
+  padding: 72px 0 108px;
+  /* Shared vanishing point for the per-slot rotateX/rotateY "tossed pile"
+   * tilt. No preserve-3d — slots stay flattened so z-index keeps ruling the
+   * overlap order. */
+  perspective: 1200px;
+  transform: translateX(-50%);
+}
+
+/* Slot = static collision pose + animation carrier. `rotate`/`translate` are
+ * the independent CSS properties (NOT transform) so the crash keyframes can
+ * animate `transform` and compose on top without fighting the resting pose.
+ * The subtle 3D toss (rotateX/rotateY) lives in the resting `transform`; the
+ * crash keyframes override `transform` wholesale (flat during travel) and
+ * their final frame restores this exact stack, so animation end and resting
+ * state are pixel-identical — no pop. */
+.problemSlot {
+  position: relative;
+  z-index: var(--slot-z, 1);
+  flex: 0 1 clamp(240px, 18vw, 320px);
+  min-width: 0;
+  margin-left: var(--slot-ml, 0px);
+  rotate: var(--slot-rot, 0deg);
+  translate: 0 var(--slot-y, 0px);
+  transform: rotateX(var(--slot-rx, 0deg)) rotateY(var(--slot-ry, 0deg));
+}
+
+/* Traffic-pileup entrance: all six cards glide in from the RIGHT as one
+ * straight, vertically ALIGNED convoy — every travel keyframe transform
+ * starts with rotate(-slot-rot) to cancel the slot's resting `rotate`, then
+ * translates, so travel is a pure horizontal slide at the shared baseline
+ * (translate's y cancels the resting --slot-y). Cards FADE IN mid-journey:
+ * opacity 0→1 over the first 14.29% (200ms) while already sliding at full
+ * speed, so the convoy materializes together partway to the pile. Shared
+ * 1400ms clock, constant convoy speed 0.75px/ms (enter-x = 450 + 60px per
+ * gap), travel is LINEAR the whole way — no ease-out, no dwell, no
+ * re-acceleration. The lead card brakes hard at the wall (linear to 38.57% /
+ * x=45px, then a velocity-matched decel to a stop at 47.14%); the cards
+ * behind never brake: each runs out of road at full speed exactly one 80ms
+ * beat after the one ahead, slamming at 48.57/54.29/60/65.71/71.43%
+ * (680/760/840/920/1000ms). Card N's slam is the impact that knocks card N-1
+ * into its scattered pose — a single jolt of forward shove + drop/pop to
+ * --slot-y + spring to --slot-rot with overshoot/wobble — so card N's stop %
+ * IS card N-1's jolt %. The same jolt delivers the subtle 3D toss: cards are
+ * FLAT (no rotateX/rotateY) during travel; the impact overshoots the tilt to
+ * 1.32x, recoils to 0.88x, and settles at the resting --slot-rx/--slot-ry,
+ * whose final frame exactly matches .problemSlot's resting transform (no end
+ * pop). The lead's pose comes from card 2's impact; the last card's pose
+ * comes from its own impact, plowing 12px past its mark as it crumples into
+ * the pile. Y offsets, rotations, and tilt only ever appear through the
+ * crash. */
+@keyframes problemCrash1 {
+  0% {
+    opacity: 0;
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(var(--enter-x, 450px), calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: linear;
+  }
+  14.29% {
+    opacity: 1;
+  }
+  38.57% {
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(45px, calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: cubic-bezier(0.25, 0.5, 0.5, 1);
+  }
+  47.14%,
+  48.57% {
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(0px, calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: cubic-bezier(0.2, 0.7, 0.4, 1);
+  }
+  52.86% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 1.32)) rotateY(calc(var(--slot-ry, 0deg) * 1.32))
+      rotate(calc(var(--slot-rot, 0deg) * 0.32)) translate(-9px, calc(var(--slot-y, 0px) * 0.26));
+  }
+  58.57% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 0.88)) rotateY(calc(var(--slot-ry, 0deg) * 0.88))
+      rotate(calc(var(--slot-rot, 0deg) * -0.12)) translate(2px, calc(var(--slot-y, 0px) * -0.08));
+  }
+  64.29%,
+  100% {
+    transform: rotateX(var(--slot-rx, 0deg)) rotateY(var(--slot-ry, 0deg)) rotate(0deg)
+      translate(0px, 0px);
+  }
+}
+
+@keyframes problemCrash2 {
+  0% {
+    opacity: 0;
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(var(--enter-x, 510px), calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: linear;
+  }
+  14.29% {
+    opacity: 1;
+  }
+  48.57%,
+  54.29% {
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(0px, calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: cubic-bezier(0.2, 0.7, 0.4, 1);
+  }
+  58.57% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 1.32)) rotateY(calc(var(--slot-ry, 0deg) * 1.32))
+      rotate(calc(var(--slot-rot, 0deg) * 0.32)) translate(-9px, calc(var(--slot-y, 0px) * 0.26));
+  }
+  64.29% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 0.88)) rotateY(calc(var(--slot-ry, 0deg) * 0.88))
+      rotate(calc(var(--slot-rot, 0deg) * -0.12)) translate(2px, calc(var(--slot-y, 0px) * -0.08));
+  }
+  70%,
+  100% {
+    transform: rotateX(var(--slot-rx, 0deg)) rotateY(var(--slot-ry, 0deg)) rotate(0deg)
+      translate(0px, 0px);
+  }
+}
+
+@keyframes problemCrash3 {
+  0% {
+    opacity: 0;
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(var(--enter-x, 570px), calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: linear;
+  }
+  14.29% {
+    opacity: 1;
+  }
+  54.29%,
+  60% {
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(0px, calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: cubic-bezier(0.2, 0.7, 0.4, 1);
+  }
+  64.29% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 1.32)) rotateY(calc(var(--slot-ry, 0deg) * 1.32))
+      rotate(calc(var(--slot-rot, 0deg) * 0.32)) translate(-9px, calc(var(--slot-y, 0px) * 0.26));
+  }
+  70% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 0.88)) rotateY(calc(var(--slot-ry, 0deg) * 0.88))
+      rotate(calc(var(--slot-rot, 0deg) * -0.12)) translate(2px, calc(var(--slot-y, 0px) * -0.08));
+  }
+  75.71%,
+  100% {
+    transform: rotateX(var(--slot-rx, 0deg)) rotateY(var(--slot-ry, 0deg)) rotate(0deg)
+      translate(0px, 0px);
+  }
+}
+
+@keyframes problemCrash4 {
+  0% {
+    opacity: 0;
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(var(--enter-x, 630px), calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: linear;
+  }
+  14.29% {
+    opacity: 1;
+  }
+  60%,
+  65.71% {
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(0px, calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: cubic-bezier(0.2, 0.7, 0.4, 1);
+  }
+  70% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 1.32)) rotateY(calc(var(--slot-ry, 0deg) * 1.32))
+      rotate(calc(var(--slot-rot, 0deg) * 0.32)) translate(-9px, calc(var(--slot-y, 0px) * 0.26));
+  }
+  75.71% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 0.88)) rotateY(calc(var(--slot-ry, 0deg) * 0.88))
+      rotate(calc(var(--slot-rot, 0deg) * -0.12)) translate(2px, calc(var(--slot-y, 0px) * -0.08));
+  }
+  81.43%,
+  100% {
+    transform: rotateX(var(--slot-rx, 0deg)) rotateY(var(--slot-ry, 0deg)) rotate(0deg)
+      translate(0px, 0px);
+  }
+}
+
+@keyframes problemCrash5 {
+  0% {
+    opacity: 0;
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(var(--enter-x, 690px), calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: linear;
+  }
+  14.29% {
+    opacity: 1;
+  }
+  65.71%,
+  71.43% {
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(0px, calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: cubic-bezier(0.2, 0.7, 0.4, 1);
+  }
+  75.71% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 1.32)) rotateY(calc(var(--slot-ry, 0deg) * 1.32))
+      rotate(calc(var(--slot-rot, 0deg) * 0.32)) translate(-9px, calc(var(--slot-y, 0px) * 0.26));
+  }
+  81.43% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 0.88)) rotateY(calc(var(--slot-ry, 0deg) * 0.88))
+      rotate(calc(var(--slot-rot, 0deg) * -0.12)) translate(2px, calc(var(--slot-y, 0px) * -0.08));
+  }
+  87.14%,
+  100% {
+    transform: rotateX(var(--slot-rx, 0deg)) rotateY(var(--slot-ry, 0deg)) rotate(0deg)
+      translate(0px, 0px);
+  }
+}
+
+/* Last card: its slam IS its own impact — still at full linear speed when it
+ * reaches its mark at 71.43%, it plows 12px past (decel curve's initial
+ * slope continues the travel velocity) while the impact simultaneously
+ * knocks it into its pose, then rebounds and settles. */
+@keyframes problemCrash6 {
+  0% {
+    opacity: 0;
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(var(--enter-x, 750px), calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: linear;
+  }
+  14.29% {
+    opacity: 1;
+  }
+  71.43% {
+    transform: rotate(calc(-1 * var(--slot-rot, 0deg)))
+      translate(0px, calc(-1 * var(--slot-y, 0px)));
+    animation-timing-function: cubic-bezier(0.16, 0.6, 0.3, 1);
+  }
+  75.71% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 1.32)) rotateY(calc(var(--slot-ry, 0deg) * 1.32))
+      rotate(calc(var(--slot-rot, 0deg) * 0.32)) translate(-12px, calc(var(--slot-y, 0px) * 0.26));
+  }
+  81.43% {
+    transform: rotateX(calc(var(--slot-rx, 0deg) * 0.88)) rotateY(calc(var(--slot-ry, 0deg) * 0.88))
+      rotate(calc(var(--slot-rot, 0deg) * -0.12)) translate(3px, calc(var(--slot-y, 0px) * -0.08));
+  }
+  87.14%,
+  100% {
+    transform: rotateX(var(--slot-rx, 0deg)) rotateY(var(--slot-ry, 0deg)) rotate(0deg)
+      translate(0px, 0px);
+  }
+}
+
+.problemCard {
+  border-color: rgba(232, 196, 104, 0.14);
+  background: linear-gradient(180deg, rgba(33, 29, 18, 0.55), rgba(17, 15, 10, 0.4));
+}
+
+.problemCard:hover {
+  border-color: rgba(232, 196, 104, 0.35);
+}
+
+.problemIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(232, 196, 104, 0.22);
+  border-radius: 10px;
+  background: rgba(232, 196, 104, 0.08);
+  color: #e8c468;
+}
+
+/* Rhetorical hinge below the grid — the first mint on the page's own scroll
+ * past the hero, marking the hand-off from problem to solution. */
+.problemPivot {
+  max-width: 30ch;
+  margin: 60px auto 0;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: clamp(1.55rem, 2.7vw, 2.3rem);
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  line-height: 1.18;
+  text-align: center;
+  text-wrap: balance;
 }
 
 .controlActions {
@@ -1760,4 +2100,270 @@
 .controlSection p a:hover {
   color: #a8f5ed;
   text-decoration-color: #a8f5ed;
+}
+
+/* Problem-section crash choreography. Slots hold opacity 0 until the
+ * IntersectionObserver stamps .isVisible on the section (it carries
+ * data-reveal); then the six per-slot pile-up timelines run on one shared
+ * 1400ms clock (fill-mode both covers the pre-start hold and the settled
+ * end state; each keyframe's own 0% opacity + final transform match the
+ * gate and resting pose, so there's no flash or double-fade). */
+.problemSection:not(.isVisible) .problemSlot {
+  opacity: 0;
+}
+
+.problemSection.isVisible .problemSlot:nth-child(1) {
+  animation: problemCrash1 1400ms both;
+}
+
+.problemSection.isVisible .problemSlot:nth-child(2) {
+  animation: problemCrash2 1400ms both;
+}
+
+.problemSection.isVisible .problemSlot:nth-child(3) {
+  animation: problemCrash3 1400ms both;
+}
+
+.problemSection.isVisible .problemSlot:nth-child(4) {
+  animation: problemCrash4 1400ms both;
+}
+
+.problemSection.isVisible .problemSlot:nth-child(5) {
+  animation: problemCrash5 1400ms both;
+}
+
+.problemSection.isVisible .problemSlot:nth-child(6) {
+  animation: problemCrash6 1400ms both;
+}
+
+/* --- Viewport media queries — kept AFTER every base rule they override
+ * (equal specificity means source order decides; these blocks previously sat
+ * mid-file and several overrides — .liveGrid, .problemGrid, .showcaseSlide,
+ * .slideCollage* — were dead because their base rules came later). --- */
+@media (max-width: 980px) {
+  .liveGrid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Problem section: back to the tidy 2-col grid — scatter pose, 3D toss,
+   * and crash animation reset; slots get a simple staggered fade-up instead. */
+  .problemScatter {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 22px;
+    width: auto;
+    margin-top: 48px;
+    margin-left: 0;
+    padding: 0;
+    perspective: none;
+    transform: none;
+  }
+
+  .problemSlot {
+    z-index: auto;
+    margin-left: 0;
+    rotate: none;
+    translate: none;
+    transform: none;
+  }
+
+  .problemSection:not(.isVisible) .problemSlot {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+
+  .problemSection.isVisible .problemSlot {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity 600ms cubic-bezier(0.22, 1, 0.36, 1) var(--slot-delay, 0ms),
+      transform 600ms cubic-bezier(0.22, 1, 0.36, 1) var(--slot-delay, 0ms);
+  }
+
+  /* :nth-child(n) matches every slot — it's only here to out-rank the
+   * per-slot (0,4,0) desktop animation triggers above. */
+  .problemSection.isVisible .problemSlot:nth-child(n) {
+    animation: none;
+  }
+
+  .surfaceExplorer {
+    grid-template-columns: 1fr;
+  }
+
+  .surfaceRail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 16px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(52, 230, 196, 0.1);
+  }
+
+  .surfaceRailLabel {
+    width: 100%;
+    padding: 0 10px 10px;
+  }
+
+  .surfaceRailItem {
+    padding: 8px 14px;
+    border: 1px solid rgba(52, 230, 196, 0.16);
+    border-radius: 999px;
+    font-size: 0.88rem;
+  }
+
+  .surfaceShot {
+    height: clamp(240px, 52vw, 420px);
+  }
+
+  .surfaceInfo {
+    padding: 20px 22px 24px;
+  }
+
+  .showcaseSlide {
+    min-height: 340px;
+  }
+
+  /* Tighten the collage composition for narrow containers */
+  .slideCollage {
+    height: 300px;
+  }
+
+  .slideCollageMain {
+    top: 34px;
+    width: 86%;
+  }
+
+  .slideCollageFacepile {
+    top: 0;
+    width: 46%;
+  }
+
+  .slideCollageCursor {
+    right: 0;
+    bottom: 6px;
+    width: 32%;
+  }
+
+  .liveSection,
+  .workspaceSection,
+  .controlSection {
+    grid-template-columns: 1fr;
+  }
+
+  /* Bus stacks under the copy block: shorter node column + connector. */
+  .busItem {
+    padding-bottom: 34px;
+    padding-left: 58px;
+  }
+
+  .busItem::after {
+    width: 14px;
+  }
+
+  .landingFooter {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+
+  .workspaceCopy {
+    position: static;
+  }
+}
+
+@media (max-width: 720px) {
+  .landingShell {
+    margin-top: -2rem;
+  }
+
+  .heroSection,
+  .problemSection,
+  .liveSection,
+  .workspaceSection,
+  .productShowcase,
+  .finalCta {
+    padding: 64px 24px;
+  }
+
+  .problemScatter {
+    grid-template-columns: 1fr;
+  }
+
+  .heroSection {
+    padding-top: 96px;
+  }
+
+  .heroCopy h1 {
+    font-size: clamp(3.05rem, 14vw, 4.75rem);
+  }
+
+  .heroActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .primaryButton,
+  .secondaryButton,
+  .textButton {
+    width: 100%;
+  }
+
+  .featureGrid,
+  .sectionHeader h2,
+  .liveCopy h2,
+  .workspaceCopy h2,
+  .controlSection h2,
+  .finalCta h2 {
+    font-size: clamp(2.25rem, 10.5vw, 3.65rem);
+  }
+
+  .controlSection {
+    margin-inline: 24px;
+    padding: 48px 24px;
+  }
+
+  /* Tab pills stay usable at phone widths; the floating arrows would sit on
+   * top of the slide content, so drop them. */
+  .showcaseArrow {
+    display: none;
+  }
+
+  .landingFooter {
+    padding: 48px 24px 72px;
+  }
+
+  .footerLinks {
+    gap: 18px;
+  }
+
+  .footerLinks h4 {
+    letter-spacing: 0.06em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No crash choreography — cards appear instantly in their scattered pose
+   * (independent rotate/translate still apply; transform: none drops the 3D
+   * toss, keeping the pile flat). */
+  .problemSection:not(.isVisible) .problemSlot,
+  .problemSection.isVisible .problemSlot {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  /* Out-ranks the per-slot (0,4,0) desktop animation triggers. */
+  .problemSection.isVisible .problemSlot:nth-child(n) {
+    animation: none;
+  }
+
+  /* Bus: no pulse, no ripple loop — nodes keep a single faint static ring. */
+  .busNodeDot {
+    animation: none;
+  }
+
+  .busRipple {
+    opacity: 0.18;
+    transform: scale(1.6);
+    animation: none;
+  }
 }

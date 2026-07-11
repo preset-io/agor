@@ -3,21 +3,29 @@
 import {
   Activity,
   Blocks,
+  Boxes,
   Brain,
   CalendarClock,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   Code2,
+  DatabaseZap,
   DraftingCompass,
+  EyeOff,
   GitPullRequest,
   Handshake,
   Hash,
   type LucideIcon,
   Megaphone,
   MessagesSquare,
+  Repeat,
   Scale,
   ShieldCheck,
   SlidersHorizontal,
   Target,
+  Unlink,
+  UserX,
 } from 'lucide-react';
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
@@ -34,6 +42,119 @@ import { HubSpotFormModal } from './HubSpotFormModal';
 import styles from './LandingPage.module.css';
 
 const LANDING_PRIVATE_BETA_URL = 'https://agor.live/blog/agor-cloud#lets-get-cooking';
+
+// "The problem" cards — the diagnosis before the pitch. Amber accents (see
+// .problemCard in the CSS module) mark these as the warning register; the
+// mint solution palette arrives at the pivot line below the grid.
+const problemCards: Array<{ icon: LucideIcon; title: string; body: string }> = [
+  {
+    icon: Boxes,
+    title: 'Boxed into silos',
+    body: 'Agents live in personal terminals, but real processes cut across teams. The work crosses boundaries; the agents can’t.',
+  },
+  {
+    icon: DatabaseZap,
+    title: 'Context everywhere, truth nowhere',
+    body: 'Knowledge is scattered across repos, docs, and DMs — so agents answer confidently without your business’s actual context.',
+  },
+  {
+    icon: EyeOff,
+    title: 'Zero line of sight',
+    body: 'Tokens burned isn’t a KPI. Nobody can point to which AI work actually moved the business.',
+  },
+  {
+    icon: Unlink,
+    title: 'Married to one model',
+    body: 'It’s a multi-model world. Hard-wiring workflows to a single frontier is signing up for tomorrow’s migration.',
+  },
+  {
+    icon: UserX,
+    title: 'Multipliers who can’t multiply',
+    body: 'AI-enablement skill is scarce and mostly grown in-house — and the few people who have it are stuck doing instead of enabling.',
+  },
+  {
+    icon: Repeat,
+    title: 'Efficiency theater',
+    body: 'Most AI spend just makes old processes faster — not the business different.',
+  },
+];
+
+// Static scatter pose per problem card (SSR-safe literals — no randomness).
+// --slot-y/--slot-rot/--slot-ml/--slot-z are the resting collision pose;
+// --slot-rx/--slot-ry are a subtle 3D "tossed pile" tilt (rotateX/rotateY)
+// that only appears in the settled state — cards travel flat and pick the
+// tilt up with the impact jolt. --enter-x is how far off to the RIGHT each
+// card starts its glide-in; cards FADE IN mid-journey (0→1 over the first
+// 200ms) already moving at full speed. All six travel as one straight,
+// vertically ALIGNED convoy at the same constant speed (0.75px/ms):
+// enter-x = 450px lead travel + 60px per travel gap, so each card runs out
+// of road exactly 80ms after the one ahead. The lead brakes at the wall;
+// everyone behind plows in at full speed, and each impact knocks the card
+// ahead into its resting Y/rotation/3D tilt — see @keyframes
+// problemCrash1–6 in the CSS module. --slot-delay only staggers the mobile
+// fade-up fallback.
+const problemScatterSlots = [
+  {
+    '--slot-y': '30px',
+    '--slot-rot': '-2.4deg',
+    '--slot-rx': '2.6deg',
+    '--slot-ry': '-4.2deg',
+    '--slot-ml': '0px',
+    '--slot-z': 3,
+    '--slot-delay': '0ms',
+    '--enter-x': '450px',
+  },
+  {
+    '--slot-y': '-40px',
+    '--slot-rot': '3.1deg',
+    '--slot-rx': '-3.4deg',
+    '--slot-ry': '3.1deg',
+    '--slot-ml': '-24px',
+    '--slot-z': 4,
+    '--slot-delay': '110ms',
+    '--enter-x': '510px',
+  },
+  {
+    '--slot-y': '70px',
+    '--slot-rot': '-3deg',
+    '--slot-rx': '3.8deg',
+    '--slot-ry': '4.6deg',
+    '--slot-ml': '-30px',
+    '--slot-z': 6,
+    '--slot-delay': '220ms',
+    '--enter-x': '570px',
+  },
+  {
+    '--slot-y': '-50px',
+    '--slot-rot': '2.3deg',
+    '--slot-rx': '-2.2deg',
+    '--slot-ry': '-5deg',
+    '--slot-ml': '-38px',
+    '--slot-z': 5,
+    '--slot-delay': '330ms',
+    '--enter-x': '630px',
+  },
+  {
+    '--slot-y': '20px',
+    '--slot-rot': '-1.7deg',
+    '--slot-rx': '3.2deg',
+    '--slot-ry': '2.4deg',
+    '--slot-ml': '-20px',
+    '--slot-z': 2,
+    '--slot-delay': '440ms',
+    '--enter-x': '690px',
+  },
+  {
+    '--slot-y': '-10px',
+    '--slot-rot': '2.8deg',
+    '--slot-rx': '-3.9deg',
+    '--slot-ry': '-3.3deg',
+    '--slot-ml': '-28px',
+    '--slot-z': 1,
+    '--slot-delay': '550ms',
+    '--enter-x': '750px',
+  },
+] as unknown as CSSProperties[];
 
 const featureCards: Array<{
   title: string;
@@ -155,36 +276,57 @@ const harnesses: Array<{ name: string; logo?: string; glyph?: string; beta?: boo
   { name: 'Cursor', logo: '/tools/cursor.png', beta: true },
 ];
 
-const trustItems = [
+// The "Compound Amplifying Bus": six trust items on a vertical mint spine —
+// the deliberate counterpoint to the six amber problem cards piled up in the
+// section above (same count, calm straight line). Order is intentional: it
+// answers the problem cards in spirit (context moats, tomorrow's migration,
+// tokens-not-a-KPI, scarce multipliers, safe openness). Ripple ring sizes
+// and delays are static literals (SSR-safe, no randomness): ring count and
+// size grow toward the bottom of the line — the "amplifying" effect. Delays
+// spread each node's rings evenly across the shared 3s loop.
+const busItems: Array<{
+  title: string;
+  desc: string;
+  beta?: boolean;
+  rippleSize: number;
+  rippleDelays: number[];
+}> = [
   {
-    label: 'Open source & self-hosted',
-    body: 'Your repos, your database, your infrastructure. BSL 1.1.',
-    href: '/guide/getting-started',
+    title: 'Open source & self-hosted',
+    desc: 'Your repos, your database, your infrastructure — nobody’s moat but yours. BSL 1.1.',
+    rippleSize: 10,
+    rippleDelays: [0, 1500],
   },
   {
-    label: 'No frontier lock-in',
-    body: 'Claude Code, Codex, Gemini, Copilot, OpenCode. Pick the best harness per session, on your own provider subscription.',
-    href: '/guide/sdk-comparison',
+    title: 'No frontier lock-in',
+    desc: 'Claude Code, Codex, Gemini, Copilot, OpenCode. Pick the best harness per session — and switch the day something better ships.',
+    rippleSize: 13,
+    rippleDelays: [0, 1000, 2000],
   },
   {
-    label: 'Governance & visibility',
-    body: 'Keep AI work visible, auditable, and compounding across every team in the org.',
-    href: '/guide/boards',
+    title: 'Governance & visibility',
+    desc: 'One auditable canvas for every session and prompt, so leadership sees outcomes — not token bills.',
+    rippleSize: 17,
+    rippleDelays: [0, 750, 1500, 2250],
   },
   {
-    label: 'MCP-native',
-    body: 'Anything you can do, an agent can do too, over Agor’s own MCP server.',
-    href: '/guide/internal-mcp',
+    title: 'MCP-native',
+    desc: 'Anything you can do, an agent can do too, over Agor’s own MCP server. Enablement that scales beyond headcount.',
+    rippleSize: 20,
+    rippleDelays: [0, 600, 1200, 1800, 2400],
   },
   {
-    label: 'Unix-level isolation',
-    body: 'Progressive isolation modes for when teams and security demand it.',
-    href: '/guide/multiplayer-unix-isolation',
+    title: 'Unix-level isolation',
+    desc: 'Progressive isolation modes that open the canvas to the whole org without handing out the keys.',
+    rippleSize: 24,
+    rippleDelays: [0, 600, 1200, 1800, 2400],
   },
   {
-    label: 'Agor Cloud is coming',
-    body: 'Managed hosting for teams who’d rather not run it themselves.',
-    href: '/blog/agor-cloud',
+    title: 'Agor Cloud is coming',
+    desc: 'Managed hosting for teams who’d rather not run it themselves — ',
+    beta: true,
+    rippleSize: 27,
+    rippleDelays: [0, 600, 1200, 1800, 2400],
   },
 ];
 
@@ -470,7 +612,7 @@ export function LandingPage() {
                 className={styles.primaryButton}
                 onClick={() => setIsBetaFormOpen(true)}
               >
-                Join the Agor Cloud private beta
+                Sign up for Agor Cloud
               </button>
               <Link href="/guide/getting-started" className={styles.secondaryButton}>
                 Install locally
@@ -489,6 +631,111 @@ export function LandingPage() {
         </section>
       </div>
 
+      <section className={styles.problemSection} data-reveal>
+        <span className={styles.eyebrow}>Why AI stalls at work</span>
+        <h2 className={styles.liveStatement}>
+          Don&rsquo;t fall for the <span className={styles.headingAccentWarm}>AI silo trap</span>
+        </h2>
+        <p className={styles.liveSub}>
+          <span className={styles.headingDim}>
+            Disconnected tools, solo wins, no line of sight.
+          </span>
+        </p>
+        {/* Collision composition: slots carry the static scatter pose (rotate/
+            translate/negative margins/z-index via CSS vars) plus the crash
+            entrance animation, keyed off .problemSection.isVisible — the inner
+            .problemCard keeps its own hover behavior. Cards deliberately lack
+            data-reveal so the shared reveal transform can't fight the crash
+            keyframes. */}
+        <div className={styles.problemScatter}>
+          {problemCards.map((card, index) => (
+            <div className={styles.problemSlot} key={card.title} style={problemScatterSlots[index]}>
+              <article className={`${styles.numberedCard} ${styles.problemCard}`}>
+                <span className={styles.problemIcon}>
+                  <card.icon size={17} aria-hidden />
+                </span>
+                <h3>{card.title}</h3>
+                <p>{card.body}</p>
+              </article>
+            </div>
+          ))}
+        </div>
+        <p className={styles.problemPivot}>
+          Agor helps your team avoid this{' '}
+          <span className={styles.headingAccent}>operational nightmare</span>
+        </p>
+      </section>
+
+      {/* Story beat: six amber cards in a chaotic pile above → six mint items
+          on a calm straight line here. The "Compound Amplifying Bus". */}
+      <section className={styles.controlSection} data-reveal>
+        <div>
+          <span className={styles.eyebrow}>Build teams as a team</span>
+          <h2>
+            You’re <span className={styles.headingStrong}>using</span> AI
+            <br />
+            Now make it{' '}
+            <span className={`${styles.headingAccent} ${styles.compoundWord}`}>compound</span>
+          </h2>
+          <p>
+            Agor is built for the{' '}
+            <Link href={AI_ENABLEMENT_POST_URL} target="_blank" rel="noopener noreferrer">
+              AI Enablement Engineer
+            </Link>
+            , acting as a force-multiplier for everyone around them. Give them the ideal platform to
+            make every win visible and shared, every pattern reusable, and let your AI leadership
+            watch as it compounds.
+          </p>
+          <div className={styles.controlActions}>
+            <Link
+              href={AGOR_CLOUD_DEMO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.secondaryButton}
+            >
+              Talk to us about enterprise
+            </Link>
+          </div>
+        </div>
+        <ul className={styles.busList}>
+          {busItems.map((item) => (
+            <li key={item.title} className={styles.busItem}>
+              <span className={styles.busNode} aria-hidden="true">
+                {item.rippleDelays.map((delay) => (
+                  <i
+                    key={delay}
+                    className={styles.busRipple}
+                    style={
+                      {
+                        '--ripple-size': `${item.rippleSize}px`,
+                        '--ripple-delay': `${delay}ms`,
+                      } as CSSProperties
+                    }
+                  />
+                ))}
+                <i className={styles.busNodeDot} />
+              </span>
+              <h3 className={styles.busTitle}>{item.title}</h3>
+              <div className={styles.busDesc}>
+                {item.desc}
+                {item.beta && (
+                  <>
+                    <button
+                      type="button"
+                      className={styles.busBetaLink}
+                      onClick={() => setIsBetaFormOpen(true)}
+                    >
+                      register for the Agor Cloud beta
+                    </button>
+                    .
+                  </>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
       <div className={styles.auroraBand}>
         <div className={styles.bandAurora} aria-hidden="true">
           {/* Warm ramp sampled from the demo board's background — ambient
@@ -501,7 +748,7 @@ export function LandingPage() {
             <span className={styles.headingAccent}>the terminal</span>
           </h2>
           <p className={styles.liveSub}>
-            Don’t let AI tools trap people in their corner.
+            One shared board instead of ten private terminals.
             <br />
             <span className={styles.headingDim}>
               Agor puts your whole team on one live,{' '}
@@ -617,6 +864,24 @@ export function LandingPage() {
               ))}
             </div>
           </div>
+          <button
+            type="button"
+            aria-label="Previous example"
+            className={`${styles.showcaseArrow} ${styles.showcaseArrowLeft}`}
+            onClick={() =>
+              setActiveShot((activeShot + showcaseSlides.length - 1) % showcaseSlides.length)
+            }
+          >
+            <ChevronLeft size={22} aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label="Next example"
+            className={`${styles.showcaseArrow} ${styles.showcaseArrowRight}`}
+            onClick={() => setActiveShot((activeShot + 1) % showcaseSlides.length)}
+          >
+            <ChevronRight size={22} aria-hidden />
+          </button>
         </div>
       </section>
 
@@ -817,46 +1082,6 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={styles.controlSection} data-reveal>
-        <div>
-          <span className={styles.eyebrow}>Build teams as a team</span>
-          <h2>
-            Everyone’s <span className={styles.headingStrong}>using</span> AI.
-            <br />
-            Now make it <span className={styles.headingAccent}>compound</span>
-          </h2>
-          <p>
-            Agor is built for the{' '}
-            <Link href={AI_ENABLEMENT_POST_URL} target="_blank" rel="noopener noreferrer">
-              AI Enablement Engineer
-            </Link>{' '}
-            — the teammate already multiplying everyone around them. Choose the right agent harness,
-            keep your data yours, and give your AI leadership one platform to empower the entire org
-            with full agentic power.
-          </p>
-          <div className={styles.controlActions}>
-            <Link
-              href={AGOR_CLOUD_DEMO_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={styles.secondaryButton}
-            >
-              Talk to us about enterprise
-            </Link>
-          </div>
-        </div>
-        <ul className={styles.trustList}>
-          {trustItems.map((item) => (
-            <li key={item.label}>
-              <Link href={item.href}>
-                <span className={styles.trustLabel}>{item.label} →</span>
-                <span className={styles.trustBody}>{item.body}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </section>
-
       <section className={styles.finalCta} data-reveal>
         <div className={styles.ctaCard}>
           <h2>
@@ -873,7 +1098,7 @@ export function LandingPage() {
               className={styles.primaryButton}
               onClick={() => setIsBetaFormOpen(true)}
             >
-              Join the Agor Cloud private beta
+              Sign up for Agor Cloud
             </button>
             <Link
               href={AGOR_CLOUD_DEMO_URL}
@@ -925,10 +1150,21 @@ export function LandingPage() {
               Discord
             </Link>
             <Link href={LANDING_PRIVATE_BETA_URL} target="_blank" rel="noopener noreferrer">
-              Join the Agor Cloud private beta
+              Sign up for Agor Cloud
             </Link>
           </div>
         </div>
+        <p className={styles.footerCredit}>
+          Built by{' '}
+          <Link
+            href="https://preset.io"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.footerCreditLink}
+          >
+            Preset, Inc.
+          </Link>
+        </p>
       </footer>
 
       <HubSpotFormModal

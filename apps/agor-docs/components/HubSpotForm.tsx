@@ -51,9 +51,10 @@ const HUBSPOT_FORM_CSS = `
     width: 100%;
     box-sizing: border-box;
     /* height:auto so HubSpot's default fixed input height doesn't clip the
-     * padding and push text to the top — lets the vertical padding center. */
-    height: auto;
-    padding: 1.15rem 1.6rem;
+     * padding and push text to the top — lets the vertical padding center.
+     * !important beats HubSpot's own late-loading stylesheet. */
+    height: auto !important;
+    padding: 1.45rem 1.8rem !important;
     line-height: 1.4;
     font-size: 1rem;
     font-family: inherit;

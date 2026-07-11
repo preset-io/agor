@@ -14,7 +14,7 @@ interface JoinBetaCTAProps {
  * inline-embedded (blog/agor-cloud) and anywhere a beta CTA should keep the
  * reader on the page. Reuses CloudInviteCTA's primary-pill styling.
  */
-export function JoinBetaCTA({ label = 'Join the Agor Cloud Private Beta' }: JoinBetaCTAProps) {
+export function JoinBetaCTA({ label = 'Sign up for Agor Cloud' }: JoinBetaCTAProps) {
   const [isOpen, setIsOpen] = useState(false);
   return (
     <div className={styles.wrapper}>
