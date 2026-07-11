@@ -127,6 +127,52 @@ describe('LinksTab teammate promotion actions', () => {
     expect(agorStore.getState().linksByBranch.get('teammate-1')).toEqual([promoted]);
   });
 
+  it('adds a newly materialized branch pin to the store immediately', async () => {
+    const branchWithIssue = {
+      ...branch,
+      issue_url: 'https://github.com/preset-io/agor/issues/154',
+    } as Branch;
+    const pinnedIssue = makeLink({
+      link_id: 'issue-link' as Link['link_id'],
+      kind: 'issue',
+      title: 'preset-io/agor#154',
+      url: branchWithIssue.issue_url,
+      target_key: 'url:https://github.com/preset-io/agor/issues/154',
+      is_pinned: true,
+    });
+    seedStore([]);
+    const { client, calls } = makeClient({
+      branchLinks: [],
+      teammateLinks: [],
+      promoted: pinnedIssue,
+    });
+
+    render(
+      <MemoryRouter>
+        <AntApp>
+          <LinksTab branch={branchWithIssue} client={client} active open />
+        </AntApp>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: /pin to branch card/i }));
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        service: 'links',
+        method: 'create',
+        args: [expect.objectContaining({ is_pinned: true, url: branchWithIssue.issue_url })],
+      })
+    );
+    expect(agorStore.getState().linkById.get(pinnedIssue.link_id)).toEqual(pinnedIssue);
+    expect(
+      agorStore
+        .getState()
+        .linksByBranch.get(branch.branch_id)
+        ?.some((link) => link.link_id === pinnedIssue.link_id && link.is_pinned)
+    ).toBe(true);
+  });
+
   it('removes the teammate-owned copy without removing the source link', async () => {
     const source = makeLink();
     const promoted = makeLink({

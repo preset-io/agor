@@ -1139,7 +1139,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         branchId: branch?.branch_id,
         sessionId: session.session_id,
       });
-      applyLinkMutationResult(updated);
+      if (item.linkId) applyLinkMutationResult(updated);
+      else applyKnownLinkCreatedResult(updated);
     } catch (error) {
       showError(`Failed to update link: ${error instanceof Error ? error.message : String(error)}`);
     } finally {

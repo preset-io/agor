@@ -178,8 +178,11 @@ export function stripAttachmentFilePaths(text: string, attachmentLinks: Link[]):
           .trimEnd(),
       };
     })
-    // Preserve intentional blank lines; discard only lines emptied by redaction.
-    .filter(({ changed, value }) => !changed || value.trim().length > 0)
+    // Preserve intentional blank lines; discard lines emptied by redaction,
+    // including Markdown list markers that only introduced an attachment path.
+    .filter(
+      ({ changed, value }) => !changed || (value.trim().length > 0 && !/^[-*+]$/.test(value.trim()))
+    )
     .map(({ value }) => value)
     .join('\n');
 

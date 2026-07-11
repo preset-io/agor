@@ -25,16 +25,6 @@ const PREVIEW_CATEGORIES: Partial<Record<LinkDisplayCategory, LinkPreviewKind>> 
   text: 'text',
 };
 
-const DOWNLOAD_CATEGORIES = new Set<LinkDisplayCategory>([
-  'pdf',
-  'spreadsheet',
-  'csv',
-  'document',
-  'code',
-  'json',
-  'log',
-]);
-
 function getLinkContentPath(
   linkId: string,
   disposition: LinkContentDisposition = 'attachment'
@@ -58,12 +48,7 @@ export function getLinkPreviewKind(item: LinkContentItem): LinkPreviewKind | nul
 
 export function getLinkContentAction(item: LinkContentItem): LinkContentAction | null {
   if (getLinkPreviewKind(item)) return 'preview';
-  if (
-    item.source === 'upload' &&
-    item.linkId &&
-    item.filePath &&
-    DOWNLOAD_CATEGORIES.has(item.category)
-  ) {
+  if (item.source === 'upload' && item.linkId && item.filePath) {
     return 'download';
   }
   return null;

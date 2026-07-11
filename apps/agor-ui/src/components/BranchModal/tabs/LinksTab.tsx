@@ -140,14 +140,22 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
           item,
           branchId: branch.branch_id,
         });
-        applyLinkMutationResult(updated);
+        if (item.linkId) applyLinkMutationResult(updated);
+        else applyKnownLinkCreatedResult(updated);
       } catch (err) {
         showError(`Failed to update pin: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
         setPinningLinkId(null);
       }
     },
-    [applyLinkMutationResult, branch.branch_id, client, pinningLinkId, showError]
+    [
+      applyKnownLinkCreatedResult,
+      applyLinkMutationResult,
+      branch.branch_id,
+      client,
+      pinningLinkId,
+      showError,
+    ]
   );
 
   const handlePromoteToTeammate = useCallback(

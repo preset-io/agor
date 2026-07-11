@@ -89,6 +89,33 @@ describe('MessageBlock attachments', () => {
     expect(document.body.textContent).not.toContain('This session · Upload');
   });
 
+  it('hides the composer attachment heading and list markers when cards render', () => {
+    render(
+      <MemoryRouter>
+        <MessageBlock
+          message={makeMessage({
+            content: 'Attached files:\n- .agor/uploads/session/chart.png',
+          })}
+          attachmentLinks={[
+            makeLink({
+              kind: 'image',
+              title: 'chart.png',
+              file_path: '.agor/uploads/session/chart.png',
+              target_key: 'file:.agor/uploads/session/chart.png',
+              mime_type: 'image/png',
+            }),
+          ]}
+        />
+      </MemoryRouter>
+    );
+
+    expect(
+      screen.getByRole('button', { name: /open image preview for chart\.png/i })
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('Attached files');
+    expect(document.body.textContent).not.toMatch(/(^|\s)-($|\s)/);
+  });
+
   it('keeps custom upload prefixes but hides attachment path lists', () => {
     render(
       <MemoryRouter>

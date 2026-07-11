@@ -192,7 +192,7 @@ function makePromotionClient(args: {
   return { client, calls };
 }
 
-function renderPanel(client: AgorClient) {
+function renderPanel(client: AgorClient, panelBranch: Branch = branch) {
   return render(
     <MemoryRouter>
       <ConnectionProvider value={connected}>
@@ -201,7 +201,7 @@ function renderPanel(client: AgorClient) {
             <SessionPanel
               client={client}
               session={session}
-              branch={branch}
+              branch={panelBranch}
               open
               onClose={vi.fn()}
             />
@@ -253,6 +253,43 @@ describe('SessionPanel session links', () => {
       },
     });
     expect(agorStore.getState().linksBySession.get('session-1')).toEqual([link]);
+  });
+
+  it('adds a branch link materialized from the session organizer to the store', async () => {
+    const branchWithIssue = {
+      ...branch,
+      issue_url: 'https://github.com/preset-io/agor/issues/154',
+    } as Branch;
+    const pinnedIssue = makeLink({
+      link_id: 'issue-link' as Link['link_id'],
+      branch_id: branch.branch_id,
+      session_id: null,
+      kind: 'issue',
+      title: 'preset-io/agor#154',
+      url: branchWithIssue.issue_url,
+      target_key: 'url:https://github.com/preset-io/agor/issues/154',
+      is_pinned: true,
+    });
+    const { client, calls } = makePromotionClient({
+      sessionLinks: [],
+      teammateLinks: [],
+      promoted: pinnedIssue,
+    });
+
+    renderPanel(client, branchWithIssue);
+
+    fireEvent.click(await screen.findByLabelText('Open links organizer'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin to branch card' }));
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        service: 'links',
+        method: 'create',
+        args: [expect.objectContaining({ is_pinned: true, url: branchWithIssue.issue_url })],
+      })
+    );
+    expect(agorStore.getState().linkById.get(pinnedIssue.link_id)).toEqual(pinnedIssue);
+    expect(agorStore.getState().linksByBranch.get(branch.branch_id)).toEqual([pinnedIssue]);
   });
 
   it('promotes a session link to the board primary teammate', async () => {
