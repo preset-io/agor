@@ -10,6 +10,7 @@ import {
   normalizeRefTargetKey,
   normalizeUrlTargetKey,
 } from '@agor/core/types';
+import { isPathInsideRoot } from '../utils/branch-workspace-path.js';
 import { getUploadDirectory } from '../utils/upload.js';
 
 const LEGACY_ATTACHMENT_HEADING = /^Attached files:\s*$/i;
@@ -70,11 +71,6 @@ export function extractLegacyAttachmentPaths(message: Pick<Message, 'content'>):
   return [...new Set(paths)];
 }
 
-function isInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
 function looksLikeLegacyUploadPath(value: string): boolean {
   return /(^|[\\/])\.agor[\\/]uploads[\\/]/i.test(value) || /(^|[\\/])uploads[\\/]/i.test(value);
 }
@@ -99,7 +95,7 @@ async function resolveLegacyUpload(
     const stat = await fs.lstat(candidate).catch(() => null);
     if (!stat?.isFile() || stat.isSymbolicLink()) continue;
     const real = await fs.realpath(candidate).catch(() => null);
-    if (!real || !isInside(uploadRootReal, real)) continue;
+    if (!real || !isPathInsideRoot(uploadRootReal, real, { allowRoot: true })) continue;
     const title = path.basename(real);
     const mimeType =
       MIME_BY_EXTENSION[path.extname(title).toLowerCase()] ?? 'application/octet-stream';

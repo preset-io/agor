@@ -33,7 +33,7 @@ import {
   type SessionAttachmentTeammateState,
 } from './SessionAttachmentRows';
 
-export type SessionAttachmentItem = LinkDisplayItem;
+type SessionAttachmentItem = LinkDisplayItem;
 
 function matchesAttachmentSearch(item: LinkDisplayItem, query: string): boolean {
   return matchesLinkDisplaySearch(item, query, [
@@ -81,9 +81,8 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   const [sortOrder, setSortOrder] = React.useState<LinkSortKey>('az');
   const [searchQuery, setSearchQuery] = React.useState('');
 
-  const visibleItems = items;
-  const hasItems = visibleItems.length > 0;
-  const categoryCounts = React.useMemo(() => getLinkCategoryCounts(visibleItems), [visibleItems]);
+  const hasItems = items.length > 0;
+  const categoryCounts = React.useMemo(() => getLinkCategoryCounts(items), [items]);
 
   const openPinnedManager = React.useCallback(() => {
     setActiveCategory('all');
@@ -97,7 +96,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
   if (!hasItems && !loading && !error) return null;
 
-  const quickItems = selectQuickLinkDisplayItems(visibleItems);
+  const quickItems = selectQuickLinkDisplayItems(items);
 
   const openTarget = (item: SessionAttachmentItem) => {
     if (getLinkUnavailableReason(item)) return;
@@ -105,7 +104,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     openItem(item);
   };
 
-  const drawerItems = visibleItems
+  const drawerItems = items
     .filter((item) => matchesLinkCategoryTab(item, activeCategory))
     .filter((item) => matchesAttachmentSearch(item, searchQuery))
     .sort((a, b) => compareLinkDisplayItemsBySort(a, b, sortOrder));
@@ -184,12 +183,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
           }}
         >
           <Tooltip title="Attachments">
-            <Badge
-              count={visibleItems.length}
-              color={token.colorPrimary}
-              size="small"
-              offset={[-4, 4]}
-            >
+            <Badge count={items.length} color={token.colorPrimary} size="small" offset={[-4, 4]}>
               <Button
                 type="text"
                 aria-label="Open links organizer"

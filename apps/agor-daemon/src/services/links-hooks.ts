@@ -101,7 +101,7 @@ export function linksHooks({
     return context;
   };
 
-  const scopeFindToAccessibleLinksSql = () => (context: HookContext) => {
+  const scopeFindToAccessibleLinksSql = (context: HookContext) => {
     if (!branchRbacEnabled || !context.params.provider) return context;
     if (context.params.user?._isServiceAccount) return context;
     const user = context.params.user;
@@ -231,27 +231,27 @@ export function linksHooks({
   const rejectExternalLinkProvenanceMutations = rejectExternalMutation((record, context) =>
     getExternalLinkProvenanceMutationError(record, context.method === 'patch' ? 'patch' : 'create')
   );
+  const externalMutationGuards = [
+    rejectLinkDerivedFields,
+    rejectExternalLinkProvenanceMutations,
+    rejectExternalFileBackedLinkMutations,
+    rejectExternalInternalLinkMutations,
+  ];
 
   return {
     before: {
       all: [typedValidateQuery(linkQueryValidator), requireAuth, executorRuntimeScopeGuard()],
-      find: [hideExternalInternalLinks, scopeFindToAccessibleLinksSql()],
+      find: [hideExternalInternalLinks, scopeFindToAccessibleLinksSql],
       get: [ensureLinkOwnerAccess('view')],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create links'),
-        rejectLinkDerivedFields,
-        rejectExternalLinkProvenanceMutations,
-        rejectExternalFileBackedLinkMutations,
-        rejectExternalInternalLinkMutations,
+        ...externalMutationGuards,
         injectCreatedBy(),
         ensureLinkOwnerAccess('mutate'),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update links'),
-        rejectLinkDerivedFields,
-        rejectExternalLinkProvenanceMutations,
-        rejectExternalFileBackedLinkMutations,
-        rejectExternalInternalLinkMutations,
+        ...externalMutationGuards,
         rejectLinkOwnerPatch,
         ensureLinkOwnerAccess('mutate'),
       ],

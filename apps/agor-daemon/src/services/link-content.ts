@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, Link, Params } from '@agor/core/types';
 import type { Request, Response } from 'express';
+import { isPathInsideRoot } from '../utils/branch-workspace-path.js';
 import { getUploadDirectory } from '../utils/upload.js';
 
 const INLINE_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
@@ -35,11 +36,6 @@ interface ResolvedLinkContentFile {
 
 function normalizeMimeType(value?: string | null): string {
   return (value ?? '').split(';')[0].trim().toLowerCase();
-}
-
-function isPathInside(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 function encodeContentDispositionValue(value: string): string {
@@ -132,7 +128,7 @@ export async function resolveUploadedLinkContentFile(
     throw new LinkContentError(404, 'File content not found');
   });
 
-  if (!isPathInside(uploadRootReal, fileReal)) {
+  if (!isPathInsideRoot(uploadRootReal, fileReal, { allowRoot: true })) {
     throw new LinkContentError(403, 'File content not available');
   }
 
