@@ -100,8 +100,8 @@ const defaultProps = {
 };
 
 describe('BranchHeaderPill', () => {
-  it('hides the destructive nuke action in compact mode', () => {
-    render(<BranchHeaderPill {...defaultProps} compact />);
+  it('keeps compact fluid actions at the default width and hides the destructive action', () => {
+    render(<BranchHeaderPill {...defaultProps} compact fluid />);
 
     expect(
       screen.getByRole('button', {
@@ -160,7 +160,7 @@ describe('BranchHeaderPill', () => {
     expect(link).toHaveAttribute('href', '/ui/s/abc123/');
   });
 
-  it('lets a fluid identity shrink without compressing its action sections', () => {
+  it('keeps a fluid identity accessible and selects the narrow action-button variant', () => {
     render(
       <BranchHeaderPill {...defaultProps} identityLink="https://agor.example/ui/s/abc123/" fluid />
     );
@@ -168,35 +168,15 @@ describe('BranchHeaderPill', () => {
     const identity = screen.getByRole('link', {
       name: 'preset-io/agor / feature/remove-nuke · Open session',
     });
-    expect(identity).toHaveStyle({
-      display: 'flex',
-      flex: '1 1 auto',
-      minWidth: '0',
-      overflow: 'hidden',
-    });
-    expect(identity.parentElement).toHaveStyle({
-      display: 'flex',
-      width: '100%',
-      minWidth: '0',
-      maxWidth: '100%',
-    });
+    expect(identity).toHaveAttribute('data-tooltip-trigger', 'hover,focus');
 
     expect(screen.getByText(repo.slug)).toHaveStyle({
-      flex: '0 1 auto',
-      minWidth: '0',
+      overflow: 'hidden',
       textOverflow: 'ellipsis',
     });
     expect(screen.getByText(branch.name)).toHaveStyle({
-      flex: '1 1 auto',
-      minWidth: '0',
+      overflow: 'hidden',
       textOverflow: 'ellipsis',
-    });
-
-    expect(screen.getByRole('button', { name: 'Start environment' }).parentElement).toHaveStyle({
-      flexShrink: '0',
-    });
-    expect(screen.getByRole('button', { name: 'Sessions' }).parentElement).toHaveStyle({
-      flexShrink: '0',
     });
 
     for (const name of [

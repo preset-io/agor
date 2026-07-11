@@ -6,6 +6,7 @@ import {
   App as AntApp,
   Button,
   Empty,
+  Flex,
   Select,
   Skeleton,
   Space,
@@ -299,7 +300,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </div>
             </div>
 
-            <div style={{ minWidth: 0 }}>
+            <Flex vertical style={{ minWidth: 0 }}>
               <BranchHeaderPill
                 repo={primaryTeammateRepo}
                 branch={primaryTeammateBranch}
@@ -312,7 +313,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               {(primaryTeammateBranch.created_by ||
                 primaryTeammateBranch.issue_url ||
                 primaryTeammateBranch.pull_request_url) && (
-                <Space size={4} wrap style={{ marginTop: 4 }}>
+                <Flex gap={token.sizeUnit} wrap style={{ marginTop: token.sizeUnit }}>
                   {primaryTeammateBranch.created_by && (
                     <CreatedByTag
                       createdBy={primaryTeammateBranch.created_by}
@@ -333,9 +334,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                       currentRepo={primaryTeammateRepo}
                     />
                   )}
-                </Space>
+                </Flex>
               )}
-            </div>
+            </Flex>
             {teammateDescription && (
               <div className="markdown-compact" style={{ color: token.colorTextSecondary }}>
                 <MarkdownRenderer content={teammateDescription} compact showControls={false} />

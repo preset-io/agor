@@ -9,7 +9,7 @@ import {
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Divider, Flex, Space, Tabs, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAgorStore } from '../../store/agorStore';
@@ -136,7 +136,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
         >
           {/* Pills section (only shown if there's content) */}
           {branch && (
-            <div style={{ flex: '1 1 0', minWidth: 0 }}>
+            <Flex vertical style={{ flex: '1 1 0', minWidth: 0 }}>
               {/* Unified Branch Pill — owns the first row so its actions keep priority. */}
               {repo && (
                 <BranchHeaderPill
@@ -152,7 +152,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                 />
               )}
               {(branch.issue_url || branch.pull_request_url) && (
-                <Space size={8} wrap style={{ marginTop: token.sizeUnit }}>
+                <Space size={token.sizeUnit * 2} wrap style={{ marginTop: token.sizeUnit }}>
                   {branch.issue_url && (
                     <IssuePill issueUrl={branch.issue_url} currentRepo={repo ?? undefined} />
                   )}
@@ -164,7 +164,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                   )}
                 </Space>
               )}
-            </div>
+            </Flex>
           )}
           {/* Spacer if no pills */}
           {!branch && <div style={{ flex: 1 }} />}

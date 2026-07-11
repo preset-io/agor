@@ -51,7 +51,26 @@ interface BranchHeaderPillProps {
 }
 
 const PILL_HEIGHT = 22;
-const FLUID_ACTION_WIDTH = 20;
+const ACTION_BUTTON_HEIGHT = 22;
+const DEFAULT_ACTION_BUTTON_WIDTH = 22;
+
+const DEFAULT_ACTION_BUTTON_STYLE: React.CSSProperties = {
+  height: ACTION_BUTTON_HEIGHT,
+  width: DEFAULT_ACTION_BUTTON_WIDTH,
+  minWidth: DEFAULT_ACTION_BUTTON_WIDTH,
+  padding: 0,
+};
+
+// The configured environment and shortcut sections cannot shrink. Reclaim two
+// pixels per action only in the constrained, non-compact fluid layout so the
+// complete action row fits before identity text collapses to its ellipsis.
+const FLUID_ACTION_BUTTON_WIDTH = 20;
+const FLUID_ACTION_BUTTON_STYLE: React.CSSProperties = {
+  height: ACTION_BUTTON_HEIGHT,
+  width: FLUID_ACTION_BUTTON_WIDTH,
+  minWidth: FLUID_ACTION_BUTTON_WIDTH,
+  padding: 0,
+};
 
 export function BranchHeaderPill({
   repo,
@@ -85,17 +104,8 @@ export function BranchHeaderPill({
   const controlDisabledTooltip = resolvedCanControlEnvironment
     ? undefined
     : "Requires branch 'all' permission or admin access";
-  // The configured environment and shortcut sections have an intrinsic width
-  // that cannot shrink. Reclaim two pixels per action only in the constrained,
-  // non-compact fluid layout so the complete action row fits before identity
-  // text is allowed to collapse to its ellipsis.
-  const actionWidth = fluid && !compact ? FLUID_ACTION_WIDTH : PILL_HEIGHT;
-  const iconButtonStyle: React.CSSProperties = {
-    height: PILL_HEIGHT,
-    width: actionWidth,
-    minWidth: actionWidth,
-    padding: 0,
-  };
+  const actionButtonStyle =
+    fluid && !compact ? FLUID_ACTION_BUTTON_STYLE : DEFAULT_ACTION_BUTTON_STYLE;
 
   const status = env?.status || 'stopped';
   const isRunning = status === 'running';
@@ -367,7 +377,7 @@ export function BranchHeaderPill({
                       if (!startDisabled) onStartEnvironment(branch.branch_id);
                     }}
                     disabled={startDisabled}
-                    style={iconButtonStyle}
+                    style={actionButtonStyle}
                   />
                 </Tooltip>
               )}
@@ -396,7 +406,7 @@ export function BranchHeaderPill({
                       if (!stopDisabled) onStopEnvironment(branch.branch_id);
                     }}
                     disabled={stopDisabled}
-                    style={iconButtonStyle}
+                    style={actionButtonStyle}
                   />
                 </Tooltip>
               )}
@@ -414,7 +424,7 @@ export function BranchHeaderPill({
                       if (resolvedCanControlEnvironment) onViewLogs(branch.branch_id);
                     }}
                     disabled={!resolvedCanControlEnvironment}
-                    style={iconButtonStyle}
+                    style={actionButtonStyle}
                   />
                 </Tooltip>
               )}
@@ -435,7 +445,7 @@ export function BranchHeaderPill({
                       }
                     }}
                     disabled={connectionDisabled || !resolvedCanControlEnvironment}
-                    style={iconButtonStyle}
+                    style={actionButtonStyle}
                   />
                 </Tooltip>
               )}
@@ -486,7 +496,7 @@ export function BranchHeaderPill({
             aria-label="Sessions"
             icon={<TeamOutlined />}
             onClick={openTab('sessions')}
-            style={iconButtonStyle}
+            style={actionButtonStyle}
           />
         </Tooltip>
         <Tooltip title="Files">
@@ -496,7 +506,7 @@ export function BranchHeaderPill({
             aria-label="Files"
             icon={<FolderOutlined />}
             onClick={openTab('files')}
-            style={iconButtonStyle}
+            style={actionButtonStyle}
           />
         </Tooltip>
         <Tooltip title="Schedule">
@@ -506,7 +516,7 @@ export function BranchHeaderPill({
             aria-label="Schedule"
             icon={<CalendarOutlined />}
             onClick={openTab('schedule')}
-            style={iconButtonStyle}
+            style={actionButtonStyle}
           />
         </Tooltip>
         <Tooltip title="Edit branch">
@@ -519,7 +529,7 @@ export function BranchHeaderPill({
               e.stopPropagation();
               openModal();
             }}
-            style={iconButtonStyle}
+            style={actionButtonStyle}
           />
         </Tooltip>
       </div>
