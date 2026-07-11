@@ -75,6 +75,20 @@ async function seedSession(db: Database, branchId: BranchID) {
   });
 }
 
+function message(content: Message['content'], patch: Partial<Message> = {}): Message {
+  return {
+    message_id: generateId() as MessageID,
+    session_id: generateId() as SessionID,
+    type: 'user',
+    role: 'user',
+    index: 0,
+    timestamp: new Date().toISOString(),
+    content_preview: typeof content === 'string' ? content : '',
+    content,
+    ...patch,
+  } as Message;
+}
+
 describe('LinksService', () => {
   it('does not expose full update over Feathers transports', () => {
     expect(LINKS_SERVICE_METHODS).not.toContain('update');
@@ -352,26 +366,14 @@ describe('LinksService', () => {
     };
     const hook = ingestParsedLinksAfterMessageCreate(app as never);
 
-    const first = {
-      message_id: generateId() as MessageID,
-      session_id: session.session_id,
-      type: 'user',
-      role: 'user',
-      index: 0,
-      timestamp: new Date().toISOString(),
-      content_preview: 'See agor://kb/team/runbook.md',
-      content: 'See agor://kb/team/runbook.md and https://github.com/preset-io/agor/issues/90',
-    } as Message;
-    const second = {
-      message_id: generateId() as MessageID,
-      session_id: session.session_id,
-      type: 'assistant',
-      role: 'assistant',
-      index: 1,
-      timestamp: new Date().toISOString(),
-      content_preview: 'PR https://github.com/preset-io/agor/pull/91',
-      content: [{ type: 'text', text: 'PR https://github.com/preset-io/agor/pull/91' }],
-    } as Message;
+    const first = message(
+      'See agor://kb/team/runbook.md and https://github.com/preset-io/agor/issues/90',
+      { session_id: session.session_id }
+    );
+    const second = message(
+      [{ type: 'text', text: 'PR https://github.com/preset-io/agor/pull/91' }],
+      { session_id: session.session_id, type: 'assistant', role: 'assistant', index: 1 }
+    );
     const messagesRepo = new MessagesRepository(db);
     await messagesRepo.create(first);
     await messagesRepo.create(second);
@@ -407,19 +409,10 @@ describe('LinksService', () => {
       }),
     };
     const hook = ingestParsedLinksAfterMessageCreate(app as never);
-    const message = {
-      message_id: generateId() as MessageID,
-      session_id: generateId() as SessionID,
-      type: 'user',
-      role: 'user',
-      index: 0,
-      timestamp: new Date().toISOString(),
-      content_preview: 'See https://example.com/failure',
-      content: 'See https://example.com/failure',
-    } as Message;
+    const failedMessage = message('See https://example.com/failure');
 
-    await expect(hook({ result: message, params: {} } as never)).resolves.toMatchObject({
-      result: message,
+    await expect(hook({ result: failedMessage, params: {} } as never)).resolves.toMatchObject({
+      result: failedMessage,
     });
     expect(create).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith('[Links] Failed to ingest parsed message links:', failure);
@@ -432,18 +425,11 @@ describe('LinksService', () => {
     const hook = ingestParsedLinksAfterMessageCreate({
       service: () => ({ create }),
     } as never);
-    const message = {
-      message_id: generateId() as MessageID,
-      session_id: generateId() as SessionID,
-      type: 'user',
-      role: 'user',
-      index: 0,
-      timestamp: new Date().toISOString(),
-      content_preview: 'many links',
-      content: Array.from({ length: 101 }, (_, index) => `https://example.com/${index}`).join(' '),
-    } as Message;
+    const cappedMessage = message(
+      Array.from({ length: 101 }, (_, index) => `https://example.com/${index}`).join(' ')
+    );
 
-    await hook({ result: message, params: {} } as never);
+    await hook({ result: cappedMessage, params: {} } as never);
 
     expect(create).toHaveBeenCalledWith(expect.any(Array), expect.any(Object));
     expect(create.mock.calls[0][0]).toHaveLength(100);
@@ -460,20 +446,11 @@ describe('LinksService', () => {
       }),
     };
     const hook = ingestParsedLinksAfterMessageCreate(app as never);
-    const message = {
-      message_id: generateId() as MessageID,
-      session_id: generateId() as SessionID,
-      type: 'user',
-      role: 'user',
-      index: 0,
-      timestamp: new Date().toISOString(),
-      content_preview: 'See https://example.com/tenant',
-      content: 'See https://example.com/tenant',
-    } as Message;
+    const tenantMessage = message('See https://example.com/tenant');
     const tenant = { tenant_id: 'tenant-a', source: 'auth_claim' };
 
     await hook({
-      result: message,
+      result: tenantMessage,
       params: {
         provider: 'rest',
         tenant,
@@ -483,7 +460,7 @@ describe('LinksService', () => {
     } as never);
 
     expect(create).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ session_id: message.session_id })]),
+      expect.arrayContaining([expect.objectContaining({ session_id: tenantMessage.session_id })]),
       expect.objectContaining({
         provider: undefined,
         tenant,
@@ -588,17 +565,11 @@ describe('LinksService', () => {
     const hook = ingestParsedLinksAfterMessageCreate(app as never);
 
     await hook({
-      result: {
+      result: message('Uploaded a file', {
         message_id: messageId,
         session_id: sessionId,
         task_id: 'task-1',
-        type: 'user',
-        role: 'user',
-        index: 0,
-        timestamp: new Date().toISOString(),
-        content_preview: 'Uploaded a file',
-        content: 'Uploaded a file',
-      } as Message,
+      }),
       params: { user: { user_id: userId } },
     } as never);
 
