@@ -57,24 +57,24 @@ export function PinnedLinkList({
           style={{ marginBottom: pinnedItems.length > 0 || loading || error ? token.sizeXS : 0 }}
         >
           <PushpinFilled style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }} />
-          <Typography.Text type="secondary" strong style={{ fontSize: token.fontSizeSM }}>
+          <Typography.Text className={styles.smallText} type="secondary" strong>
             Pinned links
           </Typography.Text>
           {pinnedItems.length > 0 && countMode === 'total' && (
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            <Typography.Text className={styles.smallText} type="secondary">
               {pinnedItems.length}
             </Typography.Text>
           )}
           {hiddenCount > 0 && countMode === 'hidden' && (
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            <Typography.Text className={styles.smallText} type="secondary">
               +{hiddenCount} more
             </Typography.Text>
           )}
-          {loading && <Spin size="small" style={{ marginLeft: 'auto' }} />}
+          {loading && <Spin className={styles.marginLeftAuto} size="small" />}
         </Flex>
 
         {error ? (
-          <Typography.Text type="danger" style={{ fontSize: token.fontSizeSM }}>
+          <Typography.Text className={styles.smallText} type="danger">
             {error}
           </Typography.Text>
         ) : inlineItems.length > 0 ? (
@@ -97,7 +97,7 @@ export function PinnedLinkList({
             )}
           </Space>
         ) : loading ? (
-          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+          <Typography.Text className={styles.smallText} type="secondary">
             {loadingLabel}
           </Typography.Text>
         ) : null}

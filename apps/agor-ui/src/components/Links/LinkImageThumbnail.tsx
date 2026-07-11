@@ -126,7 +126,7 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
               ) : (
                 <FileImageOutlined style={{ fontSize: token.fontSizeHeading2 }} />
               )}
-              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              <Typography.Text className={styles.smallText} type="secondary">
                 {loading ? 'Loading preview…' : 'Click to preview'}
               </Typography.Text>
             </Flex>
@@ -141,7 +141,7 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
             style={{ padding: `${token.paddingXXS}px ${token.paddingXS}px` }}
           >
             <FileImageOutlined style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
-            <Typography.Text ellipsis style={{ maxWidth: 230, fontSize: token.fontSizeSM }}>
+            <Typography.Text className={styles.smallText} ellipsis style={{ maxWidth: 230 }}>
               {title}
             </Typography.Text>
           </Flex>
