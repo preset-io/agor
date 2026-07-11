@@ -12,7 +12,6 @@ type TeammatePromotionState =
         | 'same-owner'
         | 'missing-source-link'
         | 'missing-target'
-        | 'file-lifetime'
         | 'internal-target-access';
     }
   | {
@@ -41,8 +40,6 @@ export function getTeammatePromotionUnavailableReason(
       return 'Cannot promote generated branch metadata';
     case 'missing-target':
       return 'Cannot promote a link without a target';
-    case 'file-lifetime':
-      return 'File promotion awaits upload retention support';
     case 'internal-target-access':
       return 'Internal promotion awaits target access checks';
   }
@@ -102,14 +99,6 @@ export function getTeammatePromotionState(args: {
 
   const teammateLink = findTeammateLinkForTarget(args.item, args.teammateLinks);
   if (teammateLink) return { canPromote: true, isPromoted: true, teammateLink, reason: null };
-  if (args.item.filePath || args.item.source === 'upload') {
-    return {
-      canPromote: false,
-      isPromoted: false,
-      teammateLink: null,
-      reason: 'file-lifetime',
-    };
-  }
   if (args.item.kind === 'internal') {
     return {
       canPromote: false,

@@ -159,7 +159,7 @@ describe('linkPromotion', () => {
     ).toMatchObject({ canPromote: false, reason: 'same-owner' });
   });
 
-  it('keeps unresolved file and internal promotion unavailable', () => {
+  it('allows uploaded files and keeps internal promotion unavailable', () => {
     expect(
       getTeammatePromotionState({
         item: item({
@@ -173,7 +173,7 @@ describe('linkPromotion', () => {
         sourceBranchId: 'branch-1',
         teammateLinks: [],
       })
-    ).toMatchObject({ canPromote: false, reason: 'file-lifetime' });
+    ).toMatchObject({ canPromote: true, isPromoted: false, reason: null });
 
     expect(
       getTeammatePromotionState({

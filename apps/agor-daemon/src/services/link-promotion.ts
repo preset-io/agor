@@ -58,11 +58,24 @@ type TrustedTargetCreateFields =
       file_path: null;
       target_object_type: Link['target_object_type'];
       target_object_id: Link['target_object_id'];
+    }
+  | {
+      url: null;
+      ref_uri: null;
+      file_path: string;
+      target_object_type: null;
+      target_object_id: null;
     };
 
 function trustedTargetCreateFields(source: Link): TrustedTargetCreateFields {
-  if (source.file_path || source.source === 'upload') {
-    throw new BadRequest('File-backed links cannot be promoted until upload retention is defined');
+  if (source.source === 'upload' && source.file_path) {
+    return {
+      url: null,
+      ref_uri: null,
+      file_path: source.file_path,
+      target_object_type: null,
+      target_object_id: null,
+    };
   }
   if (source.kind === 'internal' || source.target_object_type || source.target_object_id) {
     throw new BadRequest(
@@ -171,10 +184,15 @@ export class LinkPromotionService {
       branch_id: teammateBranch.branch_id,
       session_id: null,
       kind: source.kind,
-      source: 'manual',
+      // Uploads live in the shared upload root. Promotion creates another
+      // authorized owner reference to the same durable file; it does not copy
+      // or move the content. Any future cleanup must retain files while a link
+      // with the same file target still exists.
+      source: source.file_path ? ('upload' as const) : ('manual' as const),
       ...targetFields,
       is_pinned: true,
       title: source.title ?? null,
+      mime_type: source.file_path ? source.mime_type : null,
       created_by: callerId,
     } satisfies LinkCreate;
 
