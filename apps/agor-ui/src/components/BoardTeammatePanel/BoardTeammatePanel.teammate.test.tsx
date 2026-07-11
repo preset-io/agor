@@ -13,7 +13,9 @@ vi.mock('../BranchCard', () => ({
 }));
 
 vi.mock('../BranchHeaderPill', () => ({
-  BranchHeaderPill: () => <div data-testid="branch-header-pill" />,
+  BranchHeaderPill: ({ fluid }: { fluid?: boolean }) => (
+    <div data-testid="branch-header-pill" data-fluid={String(fluid)} />
+  ),
 }));
 
 const board = { board_id: 'board-1', name: 'Board', slug: 'board' } as Board;
@@ -49,5 +51,6 @@ describe('BoardTeammatePanel teammate tab', () => {
     expect(screen.getByTestId('teammate-session-sections')).toHaveTextContent(
       'defaultExpanded:true'
     );
+    expect(screen.getByTestId('branch-header-pill')).toHaveAttribute('data-fluid', 'true');
   });
 });

@@ -14,8 +14,21 @@ vi.mock('antd', async () => {
     }: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon?: React.ReactNode }) =>
       React.createElement('button', props, icon, children),
     Spin: () => React.createElement('span', null, 'loading'),
-    Tooltip: ({ children }: { children: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
+    Tooltip: ({
+      children,
+      trigger,
+    }: {
+      children: React.ReactNode;
+      trigger?: string | string[];
+    }) => {
+      if (!React.isValidElement(children)) {
+        return React.createElement(React.Fragment, null, children);
+      }
+
+      return React.cloneElement(children as React.ReactElement<Record<string, unknown>>, {
+        'data-tooltip-trigger': Array.isArray(trigger) ? trigger.join(',') : trigger,
+      });
+    },
     Tag: Object.assign(
       ({ children, ...props }: React.HTMLAttributes<HTMLSpanElement>) =>
         React.createElement('span', props, children),
@@ -90,16 +103,29 @@ describe('BranchHeaderPill', () => {
   it('hides the destructive nuke action in compact mode', () => {
     render(<BranchHeaderPill {...defaultProps} compact />);
 
+    expect(
+      screen.getByRole('button', {
+        name: 'preset-io/agor / feature/remove-nuke · Open branch settings',
+      })
+    ).toHaveAttribute('data-tooltip-trigger', 'hover,focus');
     expect(screen.getByRole('button', { name: 'Start environment' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Stop environment' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View environment logs' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Nuke environment' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sessions' })).toHaveStyle({
+      width: '22px',
+      minWidth: '22px',
+    });
   });
 
   it('keeps the destructive nuke action in non-compact mode', () => {
     render(<BranchHeaderPill {...defaultProps} />);
 
     expect(screen.getByRole('button', { name: 'Nuke environment' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start environment' })).toHaveStyle({
+      width: '22px',
+      minWidth: '22px',
+    });
   });
 
   it('can explicitly hide only the destructive nuke action', () => {
@@ -114,8 +140,11 @@ describe('BranchHeaderPill', () => {
   it('uses the supplied identity link for the branch identity area', () => {
     render(<BranchHeaderPill {...defaultProps} identityLink="https://agor.example/ui/s/abc123/" />);
 
-    const link = screen.getByRole('link', { name: /preset-io\/agor.*feature\/remove-nuke/ });
+    const link = screen.getByRole('link', {
+      name: 'preset-io/agor / feature/remove-nuke · Open session',
+    });
     expect(link).toHaveAttribute('href', 'https://agor.example/ui/s/abc123/');
+    expect(link).toHaveAttribute('data-tooltip-trigger', 'hover,focus');
   });
 
   it('renders basename-aware internal identity links', () => {
@@ -125,7 +154,66 @@ describe('BranchHeaderPill', () => {
       </MemoryRouter>
     );
 
-    const link = screen.getByRole('link', { name: /preset-io\/agor.*feature\/remove-nuke/ });
+    const link = screen.getByRole('link', {
+      name: 'preset-io/agor / feature/remove-nuke · Open session',
+    });
     expect(link).toHaveAttribute('href', '/ui/s/abc123/');
+  });
+
+  it('lets a fluid identity shrink without compressing its action sections', () => {
+    render(
+      <BranchHeaderPill {...defaultProps} identityLink="https://agor.example/ui/s/abc123/" fluid />
+    );
+
+    const identity = screen.getByRole('link', {
+      name: 'preset-io/agor / feature/remove-nuke · Open session',
+    });
+    expect(identity).toHaveStyle({
+      display: 'flex',
+      flex: '1 1 auto',
+      minWidth: '0',
+      overflow: 'hidden',
+    });
+    expect(identity.parentElement).toHaveStyle({
+      display: 'flex',
+      width: '100%',
+      minWidth: '0',
+      maxWidth: '100%',
+    });
+
+    expect(screen.getByText(repo.slug)).toHaveStyle({
+      flex: '0 1 auto',
+      minWidth: '0',
+      textOverflow: 'ellipsis',
+    });
+    expect(screen.getByText(branch.name)).toHaveStyle({
+      flex: '1 1 auto',
+      minWidth: '0',
+      textOverflow: 'ellipsis',
+    });
+
+    expect(screen.getByRole('button', { name: 'Start environment' }).parentElement).toHaveStyle({
+      flexShrink: '0',
+    });
+    expect(screen.getByRole('button', { name: 'Sessions' }).parentElement).toHaveStyle({
+      flexShrink: '0',
+    });
+
+    for (const name of [
+      'Start environment',
+      'Stop environment',
+      'View environment logs',
+      'Nuke environment',
+      'Sessions',
+      'Files',
+      'Schedule',
+      'Edit branch',
+    ]) {
+      expect(screen.getByRole('button', { name })).toHaveStyle({
+        height: '22px',
+        width: '20px',
+        minWidth: '20px',
+      });
+    }
   });
 });
