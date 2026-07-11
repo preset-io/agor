@@ -23,4 +23,26 @@ describe('LinkContentPreviewModal', () => {
     expect(content.tagName).toBe('PRE');
     expect(screen.queryByRole('heading', { name: 'Not a heading' })).not.toBeInTheDocument();
   });
+
+  it('revokes an image object URL that resolves after the preview closes', async () => {
+    let resolveImage!: (value: string) => void;
+    vi.spyOn(linkContent, 'fetchLinkImageObjectUrl').mockReturnValue(
+      new Promise((resolve) => {
+        resolveImage = resolve;
+      })
+    );
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const { unmount } = render(
+      <LinkContentPreviewModal
+        target={{ linkId: 'link-image', title: 'image.png' }}
+        kind="image"
+        onClose={vi.fn()}
+      />
+    );
+
+    unmount();
+    resolveImage('blob:late-preview');
+
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith('blob:late-preview'));
+  });
 });

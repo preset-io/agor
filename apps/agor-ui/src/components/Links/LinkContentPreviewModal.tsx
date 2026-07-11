@@ -51,6 +51,10 @@ export const LinkContentPreviewModal: React.FC<LinkContentPreviewModalProps> = (
     const request =
       kind === 'image'
         ? fetchLinkImageObjectUrl(target.linkId, controller.signal).then((value) => {
+            if (cancelled) {
+              URL.revokeObjectURL(value);
+              throw new DOMException('Preview request aborted', 'AbortError');
+            }
             objectUrl = value;
             return { kind: 'image' as const, value };
           })

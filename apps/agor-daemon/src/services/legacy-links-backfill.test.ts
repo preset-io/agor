@@ -32,6 +32,18 @@ describe('legacy links backfill', () => {
     ]);
   });
 
+  it('extracts paths from the legacy advanced-upload notification', () => {
+    const message = {
+      content:
+        'Note: the user uploaded file(s): /home/me/.agor/uploads/a.png, /home/me/.agor/uploads/b.md\n\nPlease review them.',
+    } as Pick<Message, 'content'>;
+
+    expect(extractLegacyAttachmentPaths(message)).toEqual([
+      '/home/me/.agor/uploads/a.png',
+      '/home/me/.agor/uploads/b.md',
+    ]);
+  });
+
   dbTest(
     'backfills existing URLs, Knowledge refs, and safe uploaded files idempotently',
     async ({ db }) => {
@@ -92,6 +104,10 @@ describe('legacy links backfill', () => {
       tempRoots.push(uploadRoot, outsideRoot);
       const outsidePath = path.join(outsideRoot, 'secret.txt');
       await fs.writeFile(outsidePath, 'secret');
+      await fs.writeFile(
+        path.join(uploadRoot, 'secret.txt'),
+        'unrelated upload with same basename'
+      );
       await new MessagesRepository(db).create({
         message_id: generateId(),
         session_id: session.session_id,

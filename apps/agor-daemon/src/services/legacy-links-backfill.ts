@@ -2,11 +2,18 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { LinksRepository, MessagesRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { LinkCreate, Message, SessionID, UUID } from '@agor/core/types';
-import { extractLinksFromMessage, extractMessageTextContent } from '@agor/core/types';
+import {
+  extractLinksFromMessage,
+  extractMessageTextContent,
+  normalizeFileTargetKey,
+  normalizeRefTargetKey,
+  normalizeUrlTargetKey,
+} from '@agor/core/types';
 import { getUploadDirectory } from '../utils/upload.js';
 
 const LEGACY_ATTACHMENT_HEADING = /^Attached files:\s*$/i;
 const LEGACY_ATTACHMENT_ITEM = /^\s*[-*+]\s+(.+?)\s*$/;
+const LEGACY_UPLOAD_NOTE = /(?:^|\n)(?:note:\s*)?the user uploaded file\(s\):\s*([^\n]+)/gi;
 const MAX_PARSED_LINKS_PER_MESSAGE = 100;
 
 const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
@@ -45,6 +52,11 @@ function stripPathQuotes(value: string): string {
 export function extractLegacyAttachmentPaths(message: Pick<Message, 'content'>): string[] {
   const paths: string[] = [];
   for (const text of extractMessageTextContent(message)) {
+    for (const match of text.matchAll(LEGACY_UPLOAD_NOTE)) {
+      for (const value of match[1].split(/,\s+/).map(stripPathQuotes)) {
+        if (value) paths.push(value);
+      }
+    }
     const lines = text.split(/\r?\n/);
     for (let index = 0; index < lines.length; index += 1) {
       if (!LEGACY_ATTACHMENT_HEADING.test(lines[index].trim())) continue;
@@ -73,14 +85,16 @@ async function resolveLegacyUpload(
   uploadRoot: string,
   uploadRootReal: string
 ): Promise<{ filePath: string; title: string; mimeType: string } | null> {
-  if (!looksLikeLegacyUploadPath(rawPath) && !path.isAbsolute(rawPath)) return null;
+  const legacyUploadPath = looksLikeLegacyUploadPath(rawPath);
+  if (!legacyUploadPath && !path.isAbsolute(rawPath)) return null;
 
   const directCandidate = path.isAbsolute(rawPath) ? path.resolve(rawPath) : null;
   const basename = path.basename(rawPath);
   if (!basename || basename === '.' || basename === path.sep) return null;
-  const candidates = [directCandidate, path.join(uploadRoot, basename)].filter(
-    (candidate): candidate is string => Boolean(candidate)
-  );
+  const candidates = [
+    directCandidate,
+    legacyUploadPath ? path.join(uploadRoot, basename) : null,
+  ].filter((candidate): candidate is string => Boolean(candidate));
 
   for (const candidate of candidates) {
     const stat = await fs.lstat(candidate).catch(() => null);
@@ -114,66 +128,50 @@ export async function backfillLegacySessionLinks(args: {
   if (messages.length === 0) return;
 
   const linksRepository = new LinksRepository(args.db);
+  const existingTargetKeys = new Set(
+    (await linksRepository.findAll({ sessionId: args.sessionId })).map((link) => link.target_key)
+  );
   const uploadRoot = args.uploadRoot ?? getUploadDirectory();
   const uploadRootReal = await fs.realpath(uploadRoot).catch(() => null);
   const drafts: Partial<LinkCreate>[] = [];
 
   for (const message of messages) {
     for (const parsed of extractLinksFromMessage(message).slice(0, MAX_PARSED_LINKS_PER_MESSAGE)) {
-      const target = parsed.url ? { url: parsed.url } : { ref_uri: parsed.ref_uri };
-      const existing = await linksRepository.findByOwnerAndTarget({
+      const targetKey = parsed.url
+        ? normalizeUrlTargetKey(parsed.url)
+        : normalizeRefTargetKey(parsed.ref_uri ?? '');
+      if (existingTargetKeys.has(targetKey)) continue;
+      existingTargetKeys.add(targetKey);
+      drafts.push({
+        ...parsed,
         session_id: args.sessionId,
         branch_id: null,
-        ...target,
-      });
-      if (!existing) {
-        drafts.push({
-          ...parsed,
-          session_id: args.sessionId,
-          branch_id: null,
-          source_message_id: message.message_id,
-          created_by: null,
-        } as Partial<LinkCreate>);
-      }
+        source_message_id: message.message_id,
+        created_by: null,
+      } as Partial<LinkCreate>);
     }
 
     if (!uploadRootReal) continue;
     for (const legacyPath of extractLegacyAttachmentPaths(message).slice(0, 10)) {
       const upload = await resolveLegacyUpload(legacyPath, uploadRoot, uploadRootReal);
       if (!upload) continue;
-      const existing = await linksRepository.findByOwnerAndTarget({
+      const targetKey = normalizeFileTargetKey(upload.filePath);
+      if (existingTargetKeys.has(targetKey)) continue;
+      existingTargetKeys.add(targetKey);
+      drafts.push({
         session_id: args.sessionId,
         branch_id: null,
+        source_message_id: message.message_id,
+        source: 'upload',
+        kind: upload.mimeType.startsWith('image/') ? 'image' : 'document',
         file_path: upload.filePath,
+        title: upload.title,
+        mime_type: upload.mimeType,
+        metadata: { legacy_backfill: true },
+        created_by: null,
       });
-      if (!existing) {
-        drafts.push({
-          session_id: args.sessionId,
-          branch_id: null,
-          source_message_id: message.message_id,
-          source: 'upload',
-          kind: upload.mimeType.startsWith('image/') ? 'image' : 'document',
-          file_path: upload.filePath,
-          title: upload.title,
-          mime_type: upload.mimeType,
-          metadata: { legacy_backfill: true, originalPath: legacyPath },
-          created_by: null,
-        });
-      }
     }
   }
 
-  // A message may repeat the same target. Preserve first-message attribution,
-  // matching the repository's normal dedupe contract, before entering the
-  // transactional batch.
-  const uniqueDrafts = new Map<string, Partial<LinkCreate>>();
-  for (const draft of drafts) {
-    const key = draft.url
-      ? `url:${draft.url}`
-      : draft.ref_uri
-        ? `ref:${draft.ref_uri}`
-        : `file:${draft.file_path}`;
-    if (!uniqueDrafts.has(key)) uniqueDrafts.set(key, draft);
-  }
-  await linksRepository.upsertManyWithStatus([...uniqueDrafts.values()]);
+  await linksRepository.upsertManyWithStatus(drafts);
 }
