@@ -36,11 +36,7 @@ import { AgorAvatar } from '../AgorAvatar';
 import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { CopyableContent } from '../CopyableContent';
 import { LinkAttachmentCard, type LinkAttachmentTarget } from '../Links/LinkAttachmentCard';
-import { LinkImagePreviewModal, type LinkImagePreviewTarget } from '../Links/LinkImagePreviewModal';
-import {
-  LinkMarkdownPreviewModal,
-  type LinkMarkdownPreviewTarget,
-} from '../Links/LinkMarkdownPreviewModal';
+import { LinkContentPreviewModal, type LinkPreviewTarget } from '../Links/LinkContentPreviewModal';
 import { getSafeLinkContentLabel } from '../Links/linkContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
@@ -425,10 +421,10 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
-  const [previewTarget, setPreviewTarget] = React.useState<LinkImagePreviewTarget | null>(null);
-  const [markdownTarget, setMarkdownTarget] = React.useState<LinkMarkdownPreviewTarget | null>(
-    null
-  );
+  const [preview, setPreview] = React.useState<{
+    target: LinkPreviewTarget;
+    kind: 'image' | 'markdown';
+  } | null>(null);
 
   const openAttachmentTarget = React.useCallback(
     (target: LinkAttachmentTarget) => {
@@ -856,8 +852,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                               compact
                               onDark={isUser}
                               imageThumbnail
-                              onOpenImage={setPreviewTarget}
-                              onOpenMarkdown={setMarkdownTarget}
+                              onOpenImage={(target) => setPreview({ target, kind: 'image' })}
+                              onOpenMarkdown={(target) => setPreview({ target, kind: 'markdown' })}
                               onOpenTarget={openAttachmentTarget}
                             />
                           ))}
@@ -1025,8 +1021,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
             </div>
           );
         })()}
-      <LinkImagePreviewModal target={previewTarget} onClose={() => setPreviewTarget(null)} />
-      <LinkMarkdownPreviewModal target={markdownTarget} onClose={() => setMarkdownTarget(null)} />
+      {preview && (
+        <LinkContentPreviewModal
+          target={preview.target}
+          kind={preview.kind}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </>
   );
 };

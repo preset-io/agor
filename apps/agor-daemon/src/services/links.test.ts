@@ -107,23 +107,34 @@ describe('LinksService', () => {
     await expect(service.remove(null, { query: {} })).rejects.toThrow(/does not support multi/);
   });
 
-  dbTest('emits the repository upsert outcome without a duplicate lookup', async ({ db }) => {
+  dbTest('rolls back every row when an atomic multi-create fails', async ({ db }) => {
     const branch = await seedBranch(db, 'view');
     const session = await seedSession(db, branch.branch_id);
     const service = new LinksService(db);
-    const emit = vi.fn();
-    (service as unknown as { emit: typeof emit }).emit = emit;
-    const data = {
-      session_id: session.session_id,
-      kind: 'url' as const,
-      source: 'manual' as const,
-      url: 'https://example.com/upsert-event',
-    };
 
-    await service.create(data);
-    await service.create({ ...data, title: 'updated' });
+    await expect(
+      service.create([
+        {
+          session_id: session.session_id,
+          kind: 'url',
+          source: 'manual',
+          url: 'https://example.com/atomic-first',
+        },
+        {
+          session_id: session.session_id,
+          kind: 'document',
+          source: 'manual',
+          url: 'https://example.com/invalid-document-target',
+        },
+      ])
+    ).rejects.toThrow(/requires target file_path/);
 
-    expect(emit.mock.calls.map(([event]) => event)).toEqual(['created', 'patched']);
+    await expect(
+      new LinksRepository(db).findByOwnerAndTarget({
+        session_id: session.session_id,
+        url: 'https://example.com/atomic-first',
+      })
+    ).resolves.toBeNull();
   });
 
   dbTest('rejects full update while preserving single patch/remove', async ({ db }) => {
@@ -412,6 +423,31 @@ describe('LinksService', () => {
     });
     expect(create).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith('[Links] Failed to ingest parsed message links:', failure);
+    warn.mockRestore();
+  });
+
+  it('caps parsed links per message and reports truncation', async () => {
+    const create = vi.fn(async () => []);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const hook = ingestParsedLinksAfterMessageCreate({
+      service: () => ({ create }),
+    } as never);
+    const message = {
+      message_id: generateId() as MessageID,
+      session_id: generateId() as SessionID,
+      type: 'user',
+      role: 'user',
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content_preview: 'many links',
+      content: Array.from({ length: 101 }, (_, index) => `https://example.com/${index}`).join(' '),
+    } as Message;
+
+    await hook({ result: message, params: {} } as never);
+
+    expect(create).toHaveBeenCalledWith(expect.any(Array), expect.any(Object));
+    expect(create.mock.calls[0][0]).toHaveLength(100);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('101 found, 100 retained'));
     warn.mockRestore();
   });
 

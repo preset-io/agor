@@ -1,7 +1,7 @@
 import { FileImageOutlined } from '@ant-design/icons';
 import { Button, Flex, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
-import type { LinkImagePreviewTarget } from './LinkImagePreviewModal';
+import type { LinkPreviewTarget } from './LinkContentPreviewModal';
 import { fetchLinkImageObjectUrl, getSafeLinkContentLabel } from './linkContent';
 import styles from './linkUi.module.css';
 
@@ -9,7 +9,7 @@ interface LinkImageThumbnailProps {
   linkId: string;
   title: string;
   subtitle?: string | null;
-  onOpen: (target: LinkImagePreviewTarget) => void;
+  onOpen: (target: LinkPreviewTarget) => void;
 }
 
 export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({

@@ -3,21 +3,24 @@ import type React from 'react';
 import {
   ActionLinkRow,
   canPersistLinkPin,
+  getLinkDisplaySecondaryLabel,
   isFileLinkDisplayItem,
   isKnowledgeLinkDisplayItem,
+  type LinkDisplayItem,
   LinkOverflowAction,
   LinkPinAction,
 } from '../Links';
 import { LinkAttachmentGlyph } from '../Links/LinkAttachmentCard';
 import { getLinkItemIcon } from '../Links/LinkVisual';
-import styles from '../Links/linkUi.module.css';
 import {
-  canDownloadSessionFile,
-  canPreviewSessionImage,
-  getSessionAttachmentTargetDisplay,
-  type SessionAttachmentItem,
-  sessionAttachmentDisabledReason,
-} from './sessionAttachmentModel';
+  getLinkContentAction,
+  getLinkPreviewKind,
+  getLinkUnavailableReason,
+  getSafeLinkContentLabel,
+} from '../Links/linkContent';
+import styles from '../Links/linkUi.module.css';
+
+export type SessionAttachmentItem = LinkDisplayItem;
 
 export interface SessionAttachmentTeammateState {
   isPromoted: boolean;
@@ -66,6 +69,11 @@ function canTogglePinned(
   onTogglePinned?: SharedProps['onTogglePinned']
 ) {
   return canPersistLinkPin(item) && Boolean(onTogglePinned);
+}
+
+function getTargetDisplay(item: SessionAttachmentItem): string {
+  if (item.filePath) return getSafeLinkContentLabel(item.filePath) || 'Uploaded file';
+  return getLinkDisplaySecondaryLabel(item) || 'No target';
 }
 
 function pinAction(props: SharedProps) {
@@ -118,14 +126,15 @@ function promotionAction(props: DrawerProps) {
 }
 
 export function SessionAttachmentQuickRow(props: SharedProps) {
-  const { token } = theme.useToken();
-  const disabledReason = sessionAttachmentDisabledReason(props.item);
+  const disabledReason = getLinkUnavailableReason(props.item);
   const disabled = Boolean(disabledReason);
+  const previewKind = getLinkPreviewKind(props.item);
+  const contentAction = getLinkContentAction(props.item);
   const actionLabel =
     disabledReason ??
-    (canPreviewSessionImage(props.item)
+    (previewKind === 'image'
       ? `Preview image ${props.item.name}`
-      : canDownloadSessionFile(props.item)
+      : contentAction === 'download'
         ? `Download file ${props.item.name}`
         : `Open link ${props.item.name}`);
 
@@ -144,10 +153,9 @@ export function SessionAttachmentQuickRow(props: SharedProps) {
               {attachmentIcon(props.item, disabled)}
             </Flex>
             <Typography.Text
-              className={styles.minWidthZero}
               ellipsis
               disabled={disabled}
-              style={{ fontSize: token.fontSizeSM }}
+              className={`${styles.minWidthZero} ${styles.smallText}`}
             >
               {props.item.name}
             </Typography.Text>
@@ -160,7 +168,7 @@ export function SessionAttachmentQuickRow(props: SharedProps) {
 
 export function SessionAttachmentDrawerRow(props: DrawerProps) {
   const { token } = theme.useToken();
-  const disabledReason = sessionAttachmentDisabledReason(props.item);
+  const disabledReason = getLinkUnavailableReason(props.item);
   const disabled = Boolean(disabledReason);
 
   return (
@@ -192,11 +200,11 @@ export function SessionAttachmentDrawerRow(props: DrawerProps) {
           <Typography.Text strong ellipsis disabled={disabled}>
             {props.item.name}
           </Typography.Text>
-          <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
-            {getSessionAttachmentTargetDisplay(props.item)}
+          <Typography.Text className={styles.smallText} type="secondary" ellipsis>
+            {getTargetDisplay(props.item)}
           </Typography.Text>
           {disabledReason && (
-            <Typography.Text type="warning" style={{ fontSize: token.fontSizeSM }}>
+            <Typography.Text className={styles.smallText} type="warning">
               {disabledReason}
             </Typography.Text>
           )}

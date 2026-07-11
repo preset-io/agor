@@ -28,8 +28,10 @@ import type {
 } from '@agor/core/types';
 import { extractLinksFromMessage } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { backfillLegacySessionLinks } from './legacy-links-backfill.js';
 
 export const LINKS_SERVICE_METHODS = ['find', 'get', 'create', 'patch', 'remove'] as const;
+const MAX_PARSED_LINKS_PER_MESSAGE = 100;
 
 type LinkParams = QueryParams<{
   board_id?: UUID;
@@ -49,8 +51,9 @@ type LinkParams = QueryParams<{
 
 export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams> {
   private linksRepo: LinksRepository;
+  private legacyBackfills = new Map<string, Promise<void>>();
 
-  constructor(db: TenantScopeAwareDatabase) {
+  constructor(private readonly db: TenantScopeAwareDatabase) {
     const linksRepo = new LinksRepository(db);
     super(linksRepo, {
       id: 'link_id',
@@ -65,6 +68,23 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
   }
 
   protected async fetchData(query: Query, params?: LinkParams): Promise<Link[]> {
+    if (typeof query.session_id === 'string') {
+      const sessionId = query.session_id as SessionID;
+      const backfillKey = `${sessionId}:${params?._agorSqlLinkAccessUserId ?? '*'}`;
+      let backfill = this.legacyBackfills.get(backfillKey);
+      if (!backfill) {
+        backfill = backfillLegacySessionLinks({
+          db: this.db,
+          sessionId,
+          visibleToUserId: params?._agorSqlLinkAccessUserId,
+        }).catch((error) => {
+          this.legacyBackfills.delete(backfillKey);
+          throw error;
+        });
+        this.legacyBackfills.set(backfillKey, backfill);
+      }
+      await backfill;
+    }
     const filter: Parameters<LinksRepository['findAll']>[0] = {};
     if (typeof query.board_id === 'string') filter.boardId = query.board_id as UUID;
     if (
@@ -100,16 +120,13 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
 
   async create(data: Partial<Link> | Partial<Link>[], params?: LinkParams): Promise<Link | Link[]> {
     if (Array.isArray(data)) {
-      const results: Link[] = [];
-      for (const item of data) {
-        results.push((await this.create(item, params)) as Link);
-      }
-      return results;
+      const results = await this.linksRepo.upsertManyWithStatus(
+        data as readonly Partial<LinkCreate>[]
+      );
+      return results.map((result) => result.link);
     }
 
-    const { link, created } = await this.linksRepo.upsertWithStatus(data as Partial<LinkCreate>);
-    this.emit?.(created ? 'created' : 'patched', link, params);
-    return link;
+    return (await this.linksRepo.upsertWithStatus(data as Partial<LinkCreate>)).link;
   }
 
   async update(_id: Id, _data: Partial<Link>, _params?: LinkParams): Promise<Link> {
@@ -152,7 +169,12 @@ export function ingestParsedLinksAfterMessageCreate(app: Application) {
     const drafts: Partial<LinkCreate>[] = [];
     for (const message of messages) {
       const parsed = extractLinksFromMessage(message);
-      for (const link of parsed) {
+      if (parsed.length > MAX_PARSED_LINKS_PER_MESSAGE) {
+        console.warn(
+          `[Links] Truncated parsed links for message ${message.message_id}: ${parsed.length} found, ${MAX_PARSED_LINKS_PER_MESSAGE} retained`
+        );
+      }
+      for (const link of parsed.slice(0, MAX_PARSED_LINKS_PER_MESSAGE)) {
         drafts.push({
           ...link,
           session_id: message.session_id,

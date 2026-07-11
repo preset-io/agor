@@ -4,9 +4,8 @@ import { useCallback, useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
 import { ActionLinkRow } from './ActionLinkRow';
 import { LinkPinAction } from './LinkActions';
-import { LinkImagePreviewModal } from './LinkImagePreviewModal';
-import { LinkMarkdownPreviewModal } from './LinkMarkdownPreviewModal';
-import { getLinkCompactGlyph } from './LinkVisual';
+import { LinkContentPreviewModal } from './LinkContentPreviewModal';
+import { LinkRowGlyph } from './LinkVisual';
 import {
   downloadLinkContent,
   getLinkContentAction,
@@ -24,29 +23,6 @@ type PreviewState = {
   item: LinkDisplayItem;
   kind: LinkPreviewKind;
 };
-
-function LinkGlyph({ item }: { item: LinkDisplayItem }) {
-  const { token } = theme.useToken();
-  return (
-    <span
-      className={styles.glyph}
-      aria-hidden="true"
-      style={{
-        width: 34,
-        height: 24,
-        borderRadius: token.borderRadiusSM,
-        background: token.colorFillTertiary,
-        color: token.colorTextSecondary,
-        border: `1px solid ${token.colorBorderSecondary}`,
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: 0.2,
-      }}
-    >
-      {getLinkCompactGlyph(item.category)}
-    </span>
-  );
-}
 
 function getPinActionLabel(item: LinkDisplayItem): string {
   if (item.ownerScope === 'branch') {
@@ -95,7 +71,7 @@ export function LinkRow({
             }
           : undefined
       }
-      style={{ width: inline ? 'auto' : '100%' }}
+      style={inline ? undefined : { width: '100%' }}
       actions={
         canTogglePin ? (
           <LinkPinAction
@@ -108,7 +84,7 @@ export function LinkRow({
       }
     >
       <Flex component="span" align="center" gap="small" className={styles.rowContent}>
-        <LinkGlyph item={item} />
+        <LinkRowGlyph category={item.category} compact />
         <Flex component="span" vertical className={styles.rowContent}>
           <Flex component="span" align="center" gap="small" className={styles.minWidthZero}>
             <Typography.Text
@@ -126,10 +102,9 @@ export function LinkRow({
           </Flex>
           {!compact && targetLabel && (
             <Typography.Text
-              className={styles.rowTarget}
               type="secondary"
               ellipsis
-              style={{ fontSize: token.fontSizeSM }}
+              className={`${styles.rowTarget} ${styles.smallText}`}
             >
               {targetLabel}
             </Typography.Text>
@@ -199,13 +174,5 @@ export function LinkPreviewModal({
     title: getCompactLinkDisplayName(preview.item),
     subtitle: getLinkDisplaySecondaryLabel(preview.item),
   };
-  return preview.kind === 'image' ? (
-    <LinkImagePreviewModal target={target} onClose={onClose} />
-  ) : (
-    <LinkMarkdownPreviewModal
-      target={target}
-      plainText={preview.kind === 'text'}
-      onClose={onClose}
-    />
-  );
+  return <LinkContentPreviewModal target={target} kind={preview.kind} onClose={onClose} />;
 }

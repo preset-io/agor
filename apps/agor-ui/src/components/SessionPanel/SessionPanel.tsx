@@ -55,9 +55,6 @@ import { useAgorStore } from '../../store/agorStore';
 import {
   makeLinksForBranchSelector,
   makeLinksForSessionSelector,
-  selectApplyKnownLinkCreatedResult,
-  selectApplyKnownLinkRemovedResult,
-  selectApplyLinkMutationResult,
   selectBoardById,
   selectFetchAndReplaceFullBranchLinks,
   selectFetchAndReplaceFullSessionLinks,
@@ -78,8 +75,7 @@ import {
   getTeammatePromotionUnavailableReason,
   groupRenderableLinksByMessageId,
   type LinkDisplayItem,
-  promoteLinkToTeammate,
-  toggleLinkDisplayItemPinned,
+  useLinkMutations,
 } from '../Links';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
@@ -91,7 +87,6 @@ import {
   isBlockingComposerAttachment,
 } from './composerAttachments';
 import {
-  displayItemToSessionAttachmentItem,
   type SessionAttachmentItem,
   SessionAttachmentsDropdown,
 } from './SessionAttachmentsDropdown';
@@ -354,9 +349,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const teammateLinks = useAgorStore(teammateLinksSelector) ?? [];
   const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
   const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
-  const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
-  const applyKnownLinkCreatedResult = useAgorStore(selectApplyKnownLinkCreatedResult);
-  const applyKnownLinkRemovedResult = useAgorStore(selectApplyKnownLinkRemovedResult);
+  const {
+    pinningKey: pinningLinkId,
+    teammateBusyKey: teammateActionKey,
+    togglePinned: handleToggleSessionLinkPinned,
+    promoteToTeammate: handlePromoteSessionLinkToTeammate,
+    removeFromTeammate: handleRemoveSessionLinkFromTeammate,
+  } = useLinkMutations({
+    client,
+    branchId: branch?.branch_id,
+    sessionId: session?.session_id,
+    teammateBranchId,
+  });
   const [sessionLinksLoading, setSessionLinksLoading] = React.useState(false);
   const [sessionLinksError, setSessionLinksError] = React.useState<string | null>(null);
   const linksLoadRequestRef = React.useRef(0);
@@ -457,8 +461,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
-  const [pinningLinkId, setPinningLinkId] = React.useState<string | null>(null);
-  const [teammateActionKey, setTeammateActionKey] = React.useState<string | null>(null);
   const openPinnedLinksManagerRef = React.useRef<(() => void) | null>(null);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
@@ -678,10 +680,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     () => buildLinkDisplayItems({ branch, links: [...sessionLinks, ...currentBranchLinks] }),
     [branch, currentBranchLinks, sessionLinks]
   );
-  const attachmentItems = React.useMemo(
-    () => linkDisplayItems.map(displayItemToSessionAttachmentItem),
-    [linkDisplayItems]
-  );
+  const attachmentItems = linkDisplayItems;
 
   const pinnedSessionLinkItems = React.useMemo(
     () => linkDisplayItems.filter((item) => item.ownerScope === 'session' && item.isPinned),
@@ -1128,25 +1127,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleToggleSessionLinkPinned = async (item: LinkDisplayItem) => {
-    if (!client) return;
-    setPinningLinkId(item.linkId ?? item.key);
-    try {
-      const updated = await toggleLinkDisplayItemPinned({
-        client,
-        item,
-        branchId: branch?.branch_id,
-        sessionId: session.session_id,
-      });
-      if (item.linkId) applyLinkMutationResult(updated);
-      else applyKnownLinkCreatedResult(updated);
-    } catch (error) {
-      showError(`Failed to update link: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setPinningLinkId(null);
-    }
-  };
-
   const teammateStateForSessionLink = (item: LinkDisplayItem) => {
     const state = getTeammatePromotionState({
       item,
@@ -1173,47 +1153,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return teammateStateForSessionLink(item);
   };
 
-  const handlePromoteSessionLinkToTeammate = async (item: LinkDisplayItem) => {
-    if (!client || !teammateBranchId || !item.linkId) return;
-    setTeammateActionKey(item.linkId);
-    try {
-      const promoted = await promoteLinkToTeammate({
-        client,
-        sourceLinkId: item.linkId,
-        teammateBranchId,
-      });
-      applyKnownLinkCreatedResult(promoted);
-      showSuccess('Promoted to teammate');
-    } catch (error) {
-      showError(
-        `Failed to add link to teammate: ${error instanceof Error ? error.message : String(error)}`
-      );
-    } finally {
-      setTeammateActionKey(null);
-    }
-  };
-
   const handlePromoteAttachmentToTeammate = async (item: SessionAttachmentItem) => {
     await handlePromoteSessionLinkToTeammate(item);
-  };
-
-  const handleRemoveSessionLinkFromTeammate = async (
-    _item: LinkDisplayItem,
-    teammateLinkId: string
-  ) => {
-    if (!client) return;
-    setTeammateActionKey(teammateLinkId);
-    try {
-      const removed = (await client.service('links').remove(teammateLinkId)) as Link;
-      applyKnownLinkRemovedResult(removed);
-      showSuccess('Removed from teammate');
-    } catch (error) {
-      showError(
-        `Failed to remove link from teammate: ${error instanceof Error ? error.message : String(error)}`
-      );
-    } finally {
-      setTeammateActionKey(null);
-    }
   };
 
   const handleRemoveAttachmentFromTeammate = async (

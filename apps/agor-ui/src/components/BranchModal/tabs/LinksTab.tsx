@@ -1,4 +1,4 @@
-import type { AgorClient, Branch, Link, Session } from '@agor-live/client';
+import type { AgorClient, Branch, Session } from '@agor-live/client';
 import { Alert, Empty, Flex, List, Space, Spin, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
@@ -6,17 +6,12 @@ import { useNavigate } from 'react-router-dom';
 import { useAgorStore } from '../../../store/agorStore';
 import {
   makeLinksForBranchSelector,
-  selectApplyKnownLinkCreatedResult,
-  selectApplyKnownLinkRemovedResult,
-  selectApplyLinkMutationResult,
   selectBoardById,
   selectFetchAndReplaceFullBranchLinks,
   selectSessionById,
 } from '../../../store/selectors';
-import { useThemedMessage } from '../../../utils/message';
 import {
   buildLinkDisplayItems,
-  canPersistLinkPin,
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
   type LinkCategoryTabKey,
@@ -24,8 +19,7 @@ import {
   type LinkSortKey,
   matchesLinkCategoryTab,
   matchesLinkDisplaySearch,
-  promoteLinkToTeammate,
-  toggleLinkDisplayItemPinned,
+  useLinkMutations,
 } from '../../Links';
 import { LinkCollectionControls } from '../../Links/LinkCollectionControls';
 import styles from '../../Links/linkUi.module.css';
@@ -64,13 +58,9 @@ function itemMatchesSearch(
 const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
-  const { showSuccess, showError } = useThemedMessage();
   const boardById = useAgorStore(selectBoardById);
   const sessionById = useAgorStore(selectSessionById);
   const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
-  const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
-  const applyKnownLinkCreatedResult = useAgorStore(selectApplyKnownLinkCreatedResult);
-  const applyKnownLinkRemovedResult = useAgorStore(selectApplyKnownLinkRemovedResult);
   const branchLinksSelector = useMemo(
     () => makeLinksForBranchSelector(branch.branch_id),
     [branch.branch_id]
@@ -88,8 +78,17 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
-  const [teammatePromotionBusyKey, setTeammatePromotionBusyKey] = useState<string | null>(null);
+  const {
+    pinningKey: pinningLinkId,
+    teammateBusyKey: teammatePromotionBusyKey,
+    togglePinned: handleTogglePinned,
+    promoteToTeammate: handlePromoteToTeammate,
+    removeFromTeammate: handleRemoveFromTeammate,
+  } = useLinkMutations({
+    client,
+    branchId: branch.branch_id,
+    teammateBranchId,
+  });
   const { preview, setPreview, openItem } = useLinkFileActions(navigate);
   const [activeCategory, setActiveCategory] = useState<LinkCategoryTabKey>('all');
   const [sortOrder, setSortOrder] = useState<LinkSortKey>('az');
@@ -129,89 +128,13 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
     [activeCategory, items, searchQuery, sessionById, sortOrder]
   );
 
-  const handleTogglePinned = useCallback(
-    async (item: LinkDisplayItem) => {
-      if (!client || !canPersistLinkPin(item) || pinningLinkId) return;
-      const pinningKey = item.linkId ?? item.key;
-      setPinningLinkId(pinningKey);
-      try {
-        const updated = await toggleLinkDisplayItemPinned({
-          client,
-          item,
-          branchId: branch.branch_id,
-        });
-        if (item.linkId) applyLinkMutationResult(updated);
-        else applyKnownLinkCreatedResult(updated);
-      } catch (err) {
-        showError(`Failed to update pin: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        setPinningLinkId(null);
-      }
-    },
-    [
-      applyKnownLinkCreatedResult,
-      applyLinkMutationResult,
-      branch.branch_id,
-      client,
-      pinningLinkId,
-      showError,
-    ]
-  );
-
-  const handlePromoteToTeammate = useCallback(
-    async (item: LinkDisplayItem) => {
-      if (!client || !teammateBranchId || !item.linkId || teammatePromotionBusyKey) return;
-      setTeammatePromotionBusyKey(item.linkId);
-      try {
-        const promoted = await promoteLinkToTeammate({
-          client,
-          sourceLinkId: item.linkId,
-          teammateBranchId,
-        });
-        applyKnownLinkCreatedResult(promoted);
-        showSuccess('Promoted to teammate');
-      } catch (err) {
-        showError(`Failed to promote link: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        setTeammatePromotionBusyKey(null);
-      }
-    },
-    [
-      applyKnownLinkCreatedResult,
-      teammateBranchId,
-      teammatePromotionBusyKey,
-      client,
-      showError,
-      showSuccess,
-    ]
-  );
-
-  const handleRemoveFromTeammate = useCallback(
-    async (_item: LinkDisplayItem, teammateLinkId: string) => {
-      if (!client || teammatePromotionBusyKey) return;
-      setTeammatePromotionBusyKey(teammateLinkId);
-      try {
-        const removed = (await client.service('links').remove(teammateLinkId)) as Link;
-        applyKnownLinkRemovedResult(removed);
-        showSuccess('Removed from teammate');
-      } catch (err) {
-        showError(
-          `Failed to remove teammate link: ${err instanceof Error ? err.message : String(err)}`
-        );
-      } finally {
-        setTeammatePromotionBusyKey(null);
-      }
-    },
-    [applyKnownLinkRemovedResult, teammatePromotionBusyKey, client, showError, showSuccess]
-  );
-
   return (
     <>
       <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
       <div className={styles.linkListViewport} data-testid="branch-links-tab">
         <Space className={styles.fullWidth} direction="vertical" size={token.sizeMD}>
           {error && (
-            <div style={{ padding: `0 ${token.paddingLG}px` }}>
+            <div className={styles.linkListInset}>
               <Alert message="Error" description={error} type="error" showIcon />
             </div>
           )}
@@ -222,7 +145,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
             </Flex>
           ) : items.length > 0 ? (
             <Space className={styles.fullWidth} direction="vertical" size={token.sizeMD}>
-              <div style={{ padding: `0 ${token.paddingLG}px` }}>
+              <div className={styles.linkListInset}>
                 <LinkCollectionControls
                   categoryCounts={categoryCounts}
                   activeCategory={activeCategory}
@@ -235,7 +158,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
               </div>
               {visibleItems.length > 0 ? (
                 <List
-                  style={{ padding: `0 ${token.paddingLG}px` }}
+                  className={styles.linkListInset}
                   dataSource={visibleItems}
                   renderItem={(item) => (
                     <BranchLinkListItem

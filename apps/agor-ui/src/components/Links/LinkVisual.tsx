@@ -11,12 +11,14 @@ import {
   LinkOutlined,
   StopOutlined,
 } from '@ant-design/icons';
+import { Flex, theme } from 'antd';
 import type React from 'react';
 import {
   getLinkDisplayGlyphLabel,
   type LinkDisplayCategory,
   type LinkDisplayItem,
 } from './linkDisplay';
+import styles from './linkUi.module.css';
 
 export function getLinkCategoryIcon(
   category: LinkDisplayCategory,
@@ -84,4 +86,33 @@ export function getLinkItemIcon(
     return <FileTextOutlined />;
   }
   return getLinkCategoryIcon(item.category);
+}
+
+export function LinkRowGlyph({
+  category,
+  disabled = false,
+  compact = false,
+}: {
+  category: LinkDisplayCategory;
+  disabled?: boolean;
+  compact?: boolean;
+}) {
+  const { token } = theme.useToken();
+  return (
+    <Flex
+      component="span"
+      className={`${styles.glyph} ${compact ? styles.compactRowGlyph : styles.rowGlyph}`}
+      align="center"
+      justify="center"
+      aria-hidden="true"
+      style={{
+        borderRadius: compact ? token.borderRadiusSM : token.borderRadiusLG,
+        background: token.colorFillTertiary,
+        color: disabled ? token.colorTextDisabled : token.colorTextTertiary,
+        border: compact ? `1px solid ${token.colorBorderSecondary}` : undefined,
+      }}
+    >
+      {getLinkCompactGlyph(category, disabled)}
+    </Flex>
+  );
 }

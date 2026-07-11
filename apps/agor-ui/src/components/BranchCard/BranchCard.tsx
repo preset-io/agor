@@ -1,4 +1,4 @@
-import type { AgorClient, Branch, Link, Repo, Session, SpawnConfig, User } from '@agor-live/client';
+import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
 import { getTeammateConfig, isSessionExecuting, isTeammate } from '@agor-live/client';
 import {
   BranchesOutlined,
@@ -15,8 +15,7 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useProgressiveMount } from '../../hooks/useProgressiveMount';
 import { useAgorStore } from '../../store/agorStore';
-import { makeLinksForBranchSelector, selectApplyLinkMutationResult } from '../../store/selectors';
-import { useThemedMessage } from '../../utils/message';
+import { makeLinksForBranchSelector } from '../../store/selectors';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
@@ -25,7 +24,7 @@ import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { EnvironmentPill } from '../EnvironmentPill';
-import { buildLinkDisplayItems, type LinkDisplayItem } from '../Links';
+import { buildLinkDisplayItems, type LinkDisplayItem, useLinkMutations } from '../Links';
 import { PinnedLinkList } from '../Links/PinnedLinkList';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
@@ -132,14 +131,12 @@ const BranchCardComponent = ({
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
-  const { showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const branchLinksSelector = useMemo(
     () => makeLinksForBranchSelector(branch.branch_id),
     [branch.branch_id]
   );
   const branchLinks = useAgorStore(branchLinksSelector) ?? [];
-  const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
 
   const branchBoardId = (branch as { board_id?: string | null }).board_id;
 
@@ -159,7 +156,10 @@ const BranchCardComponent = ({
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [archiveDeleteModalMounted, setArchiveDeleteModalMounted] = useState(false);
-  const [pinningLinkId, setPinningLinkId] = useState<string | null>(null);
+  const { pinningKey: pinningLinkId, togglePinned: handleToggleLinkPinned } = useLinkMutations({
+    client,
+    branchId: branch.branch_id,
+  });
 
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
@@ -284,26 +284,6 @@ const BranchCardComponent = ({
     : isAgent
       ? token.colorInfoBg
       : undefined;
-
-  const handleToggleLinkPinned = useCallback(
-    async (item: LinkDisplayItem) => {
-      if (!client || !item.linkId || pinningLinkId) return;
-      setPinningLinkId(item.linkId);
-      try {
-        const updated = (await client.service('links').patch(item.linkId, {
-          is_pinned: !item.isPinned,
-        })) as Link;
-        applyLinkMutationResult(updated);
-      } catch (error) {
-        showError(
-          `Failed to update pin: ${error instanceof Error ? error.message : String(error)}`
-        );
-      } finally {
-        setPinningLinkId(null);
-      }
-    },
-    [applyLinkMutationResult, client, pinningLinkId, showError]
-  );
 
   // Memoize glow shadow string to avoid recomputing color normalization on every render
   const attentionGlowShadow = useMemo(() => {

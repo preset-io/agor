@@ -1,20 +1,20 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LinkMarkdownPreviewModal } from './LinkMarkdownPreviewModal';
+import { LinkContentPreviewModal } from './LinkContentPreviewModal';
 import * as linkContent from './linkContent';
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('LinkMarkdownPreviewModal', () => {
+describe('LinkContentPreviewModal', () => {
   it('preserves plain-text formatting when the shared preview handles a text link', async () => {
     vi.spyOn(linkContent, 'fetchLinkMarkdownText').mockResolvedValue('# Not a heading');
 
     render(
-      <LinkMarkdownPreviewModal
+      <LinkContentPreviewModal
         target={{ linkId: 'link-1', title: 'notes.txt' }}
-        plainText
+        kind="text"
         onClose={vi.fn()}
       />
     );

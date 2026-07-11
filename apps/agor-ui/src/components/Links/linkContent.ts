@@ -166,10 +166,11 @@ export function fetchLinkImageObjectUrl(linkId: string, signal?: AbortSignal): P
   });
 }
 
-export async function fetchLinkMarkdownText(linkId: string): Promise<string> {
+export async function fetchLinkMarkdownText(linkId: string, signal?: AbortSignal): Promise<string> {
   const response = await fetchLinkContent(linkId, {
     disposition: 'inline',
     accept: 'text/markdown, text/plain;q=0.9',
+    signal,
   });
   return response.text();
 }

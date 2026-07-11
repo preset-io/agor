@@ -6,6 +6,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import fs from 'node:fs/promises';
 import {
   type AgorConfig,
   loadConfig,
@@ -205,6 +206,21 @@ interface RouteParams extends Params {
   };
   user?: User;
   _trustedUploadLinkIds?: LinkID[];
+}
+
+export async function persistUploadLinksOrCleanup(args: {
+  uploadLinks: Partial<LinkCreate>[];
+  uploadedFiles: Array<{ path: string }>;
+  create: (links: Partial<LinkCreate>[]) => Promise<Link | Link[]>;
+}): Promise<Link[]> {
+  if (args.uploadLinks.length === 0) return [];
+  try {
+    const created = await args.create(args.uploadLinks);
+    return Array.isArray(created) ? created : [created];
+  } catch (error) {
+    await Promise.allSettled(args.uploadedFiles.map((file) => fs.unlink(file.path)));
+    throw error;
+  }
 }
 
 export function sanitizePromptTaskMetadata(
@@ -2097,13 +2113,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         created_by: (params.user?.user_id as UUID | undefined) ?? null,
       }));
 
-      const createdUploadLinks: Link[] = [];
-      if (uploadLinks.length > 0) {
-        const created = (await app
-          .service('links')
-          .create(uploadLinks, { ...params, provider: undefined } as Params)) as Link | Link[];
-        createdUploadLinks.push(...(Array.isArray(created) ? created : [created]));
-      }
+      // Multer has already committed these files to disk. Link rows are the
+      // ownership/authorization boundary, so a failed atomic row batch must not
+      // leave unowned bytes behind for a retry to duplicate.
+      const createdUploadLinks = await persistUploadLinksOrCleanup({
+        uploadLinks,
+        uploadedFiles,
+        create: (links) =>
+          app
+            .service('links')
+            .create(links, { ...params, provider: undefined } as Params) as Promise<Link | Link[]>,
+      });
 
       let notificationError: string | null = null;
       if ((notifyAgent === 'true' || notifyAgent === true) && message) {

@@ -294,6 +294,24 @@ export class LinksRepository {
     }
   }
 
+  /**
+   * Upsert a batch atomically. Callers use the returned statuses to publish
+   * realtime events only after the transaction has committed.
+   */
+  async upsertManyWithStatus(
+    data: readonly Partial<LinkCreate>[]
+  ): Promise<Array<{ link: Link; created: boolean }>> {
+    if (data.length === 0) return [];
+    return this.db.transaction(async (tx) => {
+      const repository = new LinksRepository(tx as unknown as Database);
+      const results: Array<{ link: Link; created: boolean }> = [];
+      for (const item of data) {
+        results.push(await repository.upsertWithStatus(item));
+      }
+      return results;
+    });
+  }
+
   async upsert(data: Partial<LinkCreate>): Promise<Link> {
     return this.create(data);
   }

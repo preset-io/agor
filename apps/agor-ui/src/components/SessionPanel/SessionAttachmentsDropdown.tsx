@@ -13,8 +13,18 @@ import {
 } from 'antd';
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { isFileLinkDisplayItem, type LinkCategoryTabKey, type LinkSortKey } from '../Links';
+import {
+  compareLinkDisplayItemsBySort,
+  getLinkCategoryCounts,
+  isFileLinkDisplayItem,
+  type LinkCategoryTabKey,
+  type LinkDisplayItem,
+  type LinkSortKey,
+  matchesLinkCategoryTab,
+  matchesLinkDisplaySearch,
+} from '../Links';
 import { LinkCollectionControls } from '../Links/LinkCollectionControls';
+import { getLinkUnavailableReason, getSafeLinkContentLabel } from '../Links/linkContent';
 import styles from '../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../Links/SessionLinksControl';
 import {
@@ -22,17 +32,15 @@ import {
   SessionAttachmentQuickRow,
   type SessionAttachmentTeammateState,
 } from './SessionAttachmentRows';
-import {
-  compareSessionAttachments as compareDrawerItems,
-  sessionAttachmentDisabledReason as disabledReasonForItem,
-  getSessionAttachmentCategoryCounts as getCategoryCounts,
-  matchesSessionAttachmentSearch as itemMatchesSearch,
-  matchesSessionAttachmentCategory as matchesCategory,
-  type SessionAttachmentItem,
-} from './sessionAttachmentModel';
 
-export type { SessionAttachmentItem } from './sessionAttachmentModel';
-export { displayItemToSessionAttachmentItem } from './sessionAttachmentModel';
+export type SessionAttachmentItem = LinkDisplayItem;
+
+function matchesAttachmentSearch(item: LinkDisplayItem, query: string): boolean {
+  return matchesLinkDisplaySearch(item, query, [
+    item.filePath ? getSafeLinkContentLabel(item.filePath) : null,
+    item.sourceSessionId?.slice(0, 8),
+  ]);
+}
 
 type LinksCategoryTab = LinkCategoryTabKey;
 type LinksSort = LinkSortKey;
@@ -83,7 +91,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   const nonPinnedNonFiles = visibleItems.filter(
     (item) => !item.isPinned && !isFileLinkDisplayItem(item)
   );
-  const categoryCounts = React.useMemo(() => getCategoryCounts(visibleItems), [visibleItems]);
+  const categoryCounts = React.useMemo(() => getLinkCategoryCounts(visibleItems), [visibleItems]);
 
   const openPinnedManager = React.useCallback(() => {
     setActiveCategory('all');
@@ -108,20 +116,20 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   const quickItems = [...quickPinned, ...quickRecent, ...quickFiles];
 
   const openTarget = (item: SessionAttachmentItem) => {
-    if (disabledReasonForItem(item)) return;
+    if (getLinkUnavailableReason(item)) return;
     setPopoverOpen(false);
     openItem(item);
   };
 
   const drawerItems = visibleItems
-    .filter((item) => matchesCategory(item, activeCategory))
-    .filter((item) => itemMatchesSearch(item, searchQuery))
-    .sort((a, b) => compareDrawerItems(a, b, sortOrder));
+    .filter((item) => matchesLinkCategoryTab(item, activeCategory))
+    .filter((item) => matchesAttachmentSearch(item, searchQuery))
+    .sort((a, b) => compareLinkDisplayItemsBySort(a, b, sortOrder));
 
   const quickContent = (
     <div className={styles.organizerPopover} data-testid="links-organizer-popover">
       <Flex align="flex-start" justify="space-between" gap="small">
-        <div style={{ minWidth: 0 }}>
+        <div className={styles.minWidthZero}>
           <Typography.Text strong>Links</Typography.Text>
         </div>
         <Tooltip title="Manage links">
@@ -141,15 +149,11 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
       {error && (
         <div style={{ marginTop: token.sizeSM }}>
-          <Typography.Text
-            className={styles.blockText}
-            type="danger"
-            style={{ fontSize: token.fontSizeSM }}
-          >
+          <Typography.Text type="danger" className={`${styles.blockText} ${styles.smallText}`}>
             {error}
           </Typography.Text>
           {onRetry && (
-            <Button type="link" size="small" onClick={onRetry} style={{ paddingInline: 0 }}>
+            <Button className={styles.noInlinePadding} type="link" size="small" onClick={onRetry}>
               Retry
             </Button>
           )}
@@ -166,10 +170,6 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
         <Flex
           className={`${styles.organizerScroll} ${styles.organizerQuickList}`}
           vertical
-          style={{
-            marginTop: token.sizeSM,
-            paddingRight: token.sizeXXS,
-          }}
           gap={token.sizeXXS}
         >
           {quickItems.map((item) => (
@@ -188,7 +188,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
   return (
     <>
-      <Space size={4} align="center" style={{ minWidth: 0 }}>
+      <Space className={styles.minWidthZero} size={4} align="center">
         <Popover
           open={popoverOpen}
           onOpenChange={setPopoverOpen}
@@ -240,10 +240,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links in this view." />
             ) : (
               <div
-                className={`${styles.organizerScroll} ${styles.organizerDrawerList}`}
-                style={{
-                  paddingRight: token.sizeXS,
-                }}
+                className={`${styles.organizerScroll} ${styles.organizerDrawerList} ${styles.drawerListPadding}`}
               >
                 {drawerItems.map((item) => (
                   <SessionAttachmentDrawerRow

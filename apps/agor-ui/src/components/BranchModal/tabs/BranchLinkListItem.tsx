@@ -11,7 +11,7 @@ import {
   LinkOverflowAction,
   LinkPinAction,
 } from '../../Links';
-import { getLinkCompactGlyph } from '../../Links/LinkVisual';
+import { LinkRowGlyph } from '../../Links/LinkVisual';
 import { getLinkUnavailableReason } from '../../Links/linkContent';
 import styles from '../../Links/linkUi.module.css';
 
@@ -27,25 +27,6 @@ interface BranchLinkListItemProps {
   onTogglePinned: (item: LinkDisplayItem) => void | Promise<void>;
   onPromote: (item: LinkDisplayItem) => void | Promise<void>;
   onRemove: (item: LinkDisplayItem, teammateLinkId: string) => void | Promise<void>;
-}
-
-function BranchGlyph({ item, disabled }: { item: LinkDisplayItem; disabled: boolean }) {
-  const { token } = theme.useToken();
-  return (
-    <Flex
-      className={`${styles.glyph} ${styles.branchGlyph}`}
-      align="center"
-      justify="center"
-      aria-hidden="true"
-      style={{
-        borderRadius: token.borderRadiusLG,
-        background: token.colorFillTertiary,
-        color: disabled ? token.colorTextDisabled : token.colorTextTertiary,
-      }}
-    >
-      {getLinkCompactGlyph(item.category, disabled)}
-    </Flex>
-  );
 }
 
 function PromotionAction(props: BranchLinkListItemProps) {
@@ -86,7 +67,7 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
   const pinLabel = props.item.isPinned ? 'Unpin from branch card' : 'Pin to branch card';
 
   return (
-    <List.Item style={{ paddingBlock: 0 }}>
+    <List.Item className={styles.listItemFlush}>
       <ActionLinkRow
         disabled={disabled}
         ariaLabel={disabledReason ? `${title}: ${disabledReason}` : `Open ${title}`}
@@ -107,9 +88,14 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
         }
       >
         <Flex component="span" align="flex-start" gap="small" className={styles.minWidthZero}>
-          <BranchGlyph item={props.item} disabled={disabled} />
+          <LinkRowGlyph category={props.item.category} disabled={disabled} />
           <Flex component="span" vertical gap={token.sizeXXS} className={styles.rowContent}>
-            <Typography.Text strong ellipsis disabled={disabled} style={{ lineHeight: 1.25 }}>
+            <Typography.Text
+              className={styles.compactLineHeight}
+              strong
+              ellipsis
+              disabled={disabled}
+            >
               {title}
             </Typography.Text>
             {targetLabel && (
@@ -118,12 +104,12 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
               </Typography.Text>
             )}
             {props.sourceSessionLabel && (
-              <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
+              <Typography.Text className={styles.smallText} type="secondary" ellipsis>
                 From {props.sourceSessionLabel}
               </Typography.Text>
             )}
             {disabledReason && (
-              <Typography.Text type="warning" style={{ fontSize: token.fontSizeSM }}>
+              <Typography.Text className={styles.smallText} type="warning">
                 {disabledReason}
               </Typography.Text>
             )}

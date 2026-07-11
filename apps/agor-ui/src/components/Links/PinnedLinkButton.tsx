@@ -38,9 +38,9 @@ export function PinnedLinkButton({
           {icon}
         </span>
         <Typography.Text
+          className={`${styles.smallText} ${styles.minWidthZero}`}
           ellipsis
           disabled={disabled}
-          style={{ fontSize: token.fontSizeSM, minWidth: 0 }}
         >
           {label}
         </Typography.Text>

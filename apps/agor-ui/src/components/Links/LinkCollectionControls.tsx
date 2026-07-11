@@ -58,7 +58,7 @@ export function LinkCollectionControls({
           aria-label="Search links"
         />
         <Space className={styles.collectionSort} size={token.sizeXS}>
-          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+          <Typography.Text className={styles.smallText} type="secondary">
             Sort
           </Typography.Text>
           <Select<LinkSortKey>

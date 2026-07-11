@@ -6,6 +6,38 @@
   min-width: 0;
 }
 
+.smallText {
+  font-size: var(--ant-font-size-sm);
+}
+
+.compactLineHeight {
+  line-height: 1.25;
+}
+
+.listItemFlush {
+  padding-block: 0;
+}
+
+.linkListInset {
+  padding-inline: var(--ant-padding-lg);
+}
+
+.noInlinePadding {
+  padding-inline: 0;
+}
+
+.marginLeftAuto {
+  margin-left: auto;
+}
+
+.inlineAutoWidth {
+  width: auto;
+}
+
+.drawerListPadding {
+  padding-right: var(--ant-padding-xs);
+}
+
 .actionRow {
   width: 100%;
   min-width: 0;
@@ -51,11 +83,19 @@
   flex-direction: column;
 }
 
-.branchGlyph {
+.rowGlyph {
   width: 28px;
   height: 28px;
   font-size: 10px;
   font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+.compactRowGlyph {
+  width: 34px;
+  height: 24px;
+  font-size: 10px;
+  font-weight: 700;
   letter-spacing: 0.2px;
 }
 
@@ -266,6 +306,8 @@
 
 .organizerQuickList {
   max-height: 308px;
+  margin-top: var(--ant-margin-sm);
+  padding-right: var(--ant-padding-xxs);
 }
 
 .organizerDrawerList {

@@ -154,6 +154,23 @@ const TRAILING_PUNCTUATION_RE = /[.,;:!?\]}]+$/;
 const GITHUB_ISSUE_RE = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+(?:[/?#].*)?$/i;
 const GITHUB_PR_RE = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+(?:[/?#].*)?$/i;
 
+function stripMarkdownCode(text: string): string {
+  let fence: string | null = null;
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      const marker = line.trimStart().match(/^(`{3,}|~{3,})/)?.[1] ?? null;
+      if (marker) {
+        if (!fence) fence = marker[0];
+        else if (marker[0] === fence) fence = null;
+        return '';
+      }
+      if (fence) return '';
+      return line.replace(/(`+)(.*?)\1/g, '');
+    })
+    .join('\n');
+}
+
 export function isLinkKind(value: unknown): value is LinkKind {
   return typeof value === 'string' && (LINK_KINDS as readonly string[]).includes(value);
 }
@@ -326,7 +343,8 @@ export function extractLinksFromMessage(message: Pick<Message, 'content'>): Pars
   const drafts: ParsedLinkDraft[] = [];
   const seen = new Set<string>();
 
-  for (const text of textParts) {
+  for (const rawText of textParts) {
+    const text = stripMarkdownCode(rawText);
     for (const ref of extractKnowledgeLinks(text)) {
       const refUri = buildKnowledgeRefUri(ref);
       const targetKey = normalizeRefTargetKey(refUri);

@@ -3,7 +3,7 @@ import { DownloadOutlined } from '@ant-design/icons';
 import { Button, Flex, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useThemedMessage } from '../../utils/message';
-import type { LinkImagePreviewTarget } from './LinkImagePreviewModal';
+import type { LinkPreviewTarget } from './LinkContentPreviewModal';
 import { LinkImageThumbnail } from './LinkImageThumbnail';
 import { getLinkCategoryIcon, getLinkCategoryLabel } from './LinkVisual';
 import {
@@ -38,8 +38,8 @@ export interface LinkAttachmentCardProps {
   compact?: boolean;
   onDark?: boolean;
   imageThumbnail?: boolean;
-  onOpenImage?: (target: LinkImagePreviewTarget) => void;
-  onOpenMarkdown?: (target: LinkImagePreviewTarget) => void;
+  onOpenImage?: (target: LinkPreviewTarget) => void;
+  onOpenMarkdown?: (target: LinkPreviewTarget) => void;
   onOpenTarget?: (target: LinkAttachmentTarget) => void;
 }
 

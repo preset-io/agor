@@ -64,6 +64,24 @@ describe('extractLinksFromMessage', () => {
     expect(links).toHaveLength(2);
   });
 
+  it('does not collect URLs or Knowledge examples from inline or fenced code', () => {
+    const links = extractLinksFromMessage(
+      message(
+        [
+          'Open https://example.com/visible',
+          '`https://example.com/inline`',
+          '```text',
+          'https://example.com/fenced agor://kb/example/only.md',
+          '```',
+        ].join('\n')
+      )
+    );
+
+    expect(links).toEqual([
+      expect.objectContaining({ kind: 'url', url: 'https://example.com/visible' }),
+    ]);
+  });
+
   it('ignores non-text structured message payloads', () => {
     const links = extractLinksFromMessage(
       message({
