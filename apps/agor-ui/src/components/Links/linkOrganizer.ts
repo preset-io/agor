@@ -99,16 +99,6 @@ export function getLinkCategoryCounts(
   };
 }
 
-export function getLinkCategorySummary(items: LinkDisplayItem[]): string {
-  const counts = getLinkCategoryCounts(items);
-  return [
-    `${counts.files} ${counts.files === 1 ? 'file' : 'files'}`,
-    `${counts.links} ${counts.links === 1 ? 'link' : 'links'}`,
-    `${counts.knowledge} knowledge`,
-    `${counts.issues} ${counts.issues === 1 ? 'issue/PR' : 'issues/PRs'}`,
-  ].join(' · ');
-}
-
 export function matchesLinkDisplaySearch(
   item: LinkDisplayItem,
   query: string,

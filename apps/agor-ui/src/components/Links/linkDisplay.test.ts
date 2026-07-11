@@ -16,7 +16,6 @@ import {
 import {
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
-  getLinkCategorySummary,
   matchesLinkCategoryTab,
 } from './linkOrganizer';
 import { makeTestLink as makeLink } from './testUtils';
@@ -166,7 +165,6 @@ describe('link display helpers', () => {
       issues: 1,
     });
     expect(matchesLinkCategoryTab(items[0], 'links')).toBe(true);
-    expect(getLinkCategorySummary(items)).toBe('1 file · 1 link · 1 knowledge · 1 issue/PR');
   });
 
   it('keeps pinned rows first under default and alternate sort orders', () => {
