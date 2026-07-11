@@ -1079,6 +1079,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         ? await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode, uploadLinkIds)
         : await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
       if (sendResult === false) return;
+      if (uploadLinkIds.length > 0) {
+        // The daemon attributes upload links to the newly persisted user
+        // message during prompt creation. Refetch here instead of relying on a
+        // pair of rapid created/patched socket events arriving in order.
+        await loadSessionLinks();
+      }
 
       if (composerStillOwnsSend) {
         promptRef.current?.clear();
