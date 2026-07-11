@@ -150,7 +150,7 @@ async function advanceToOptions() {
   });
   fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
   clickButton(/^Continue$/);
-  await flush();
+  await waitFor(() => expect(getButton(/^Back$/).disabled).toBe(false));
 }
 
 /**
@@ -160,14 +160,14 @@ async function advanceToOptions() {
 async function advanceToCreateAppStep() {
   await advanceToOptions();
   clickButton(/^Continue$/);
-  await flush();
+  await waitFor(() => expect(getButton(/Copy manifest/)).toBeInTheDocument());
 }
 
 /** Advance all the way to the final "Tokens & test" step (step 3). */
 async function advanceToTokensStep() {
   await advanceToCreateAppStep();
   clickButton(/^Continue$/);
-  await flush();
+  await screen.findByPlaceholderText('xoxb-...');
 }
 
 describe('GatewayChannelsTable Slack create wizard', () => {
@@ -213,11 +213,9 @@ describe('GatewayChannelsTable Slack create wizard', () => {
 
     // Slack aligns users by default, so no run-as user is required to advance.
     clickButton(/^Continue$/);
-    await flush();
-    expect(getButton(/Copy manifest/)).toBeInTheDocument();
+    await waitFor(() => expect(getButton(/Copy manifest/)).toBeInTheDocument());
     clickButton(/^Continue$/);
-    await flush();
-    expect(getButton(/Create channel/)).toBeInTheDocument();
+    await waitFor(() => expect(getButton(/Create channel/)).toBeInTheDocument());
     expect(queryButton(/^Continue$/)).toBeUndefined();
     expect(screen.getByPlaceholderText('xoxb-...')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('xapp-...')).toBeInTheDocument();
