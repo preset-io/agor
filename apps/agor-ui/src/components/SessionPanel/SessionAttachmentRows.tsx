@@ -21,7 +21,7 @@ import {
 } from '../Links/linkContent';
 import styles from '../Links/linkUi.module.css';
 
-export type SessionAttachmentItem = LinkDisplayItem;
+type SessionAttachmentItem = LinkDisplayItem;
 
 export interface SessionAttachmentTeammateState {
   isPromoted: boolean;

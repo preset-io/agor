@@ -5,6 +5,7 @@ import type { LinkCreate, Message, SessionID, UUID } from '@agor/core/types';
 import {
   extractLinksFromMessage,
   extractMessageTextContent,
+  MAX_PARSED_LINKS_PER_MESSAGE,
   normalizeFileTargetKey,
   normalizeRefTargetKey,
   normalizeUrlTargetKey,
@@ -14,8 +15,6 @@ import { getUploadDirectory } from '../utils/upload.js';
 const LEGACY_ATTACHMENT_HEADING = /^Attached files:\s*$/i;
 const LEGACY_ATTACHMENT_ITEM = /^\s*[-*+]\s+(.+?)\s*$/;
 const LEGACY_UPLOAD_NOTE = /(?:^|\n)(?:note:\s*)?the user uploaded file\(s\):\s*([^\n]+)/gi;
-const MAX_PARSED_LINKS_PER_MESSAGE = 100;
-
 const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',

@@ -22,4 +22,25 @@ describe('LinkAttachmentCard', () => {
       navigation: 'external',
     });
   });
+
+  it('preserves the preview kind when opening uploaded text', () => {
+    const onOpenPreview = vi.fn();
+    render(
+      <LinkAttachmentCard
+        kind="document"
+        source="upload"
+        linkId="link-1"
+        title="notes.txt"
+        filePath="notes.txt"
+        mimeType="text/plain"
+        onOpenPreview={onOpenPreview}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open notes.txt' }));
+    expect(onOpenPreview).toHaveBeenCalledWith(
+      { linkId: 'link-1', title: 'notes.txt', subtitle: 'notes.txt' },
+      'text'
+    );
+  });
 });

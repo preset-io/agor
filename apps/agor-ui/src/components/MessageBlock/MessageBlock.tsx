@@ -37,7 +37,7 @@ import { CollapsibleMarkdown } from '../CollapsibleText/CollapsibleMarkdown';
 import { CopyableContent } from '../CopyableContent';
 import { LinkAttachmentCard, type LinkAttachmentTarget } from '../Links/LinkAttachmentCard';
 import { LinkContentPreviewModal, type LinkPreviewTarget } from '../Links/LinkContentPreviewModal';
-import { getSafeLinkContentLabel } from '../Links/linkContent';
+import { getSafeLinkContentLabel, type LinkPreviewKind } from '../Links/linkContent';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { PermissionRequestBlock } from '../PermissionRequestBlock';
 import { SystemMessage } from '../SystemMessage';
@@ -423,7 +423,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const navigate = useNavigate();
   const [preview, setPreview] = React.useState<{
     target: LinkPreviewTarget;
-    kind: 'image' | 'markdown';
+    kind: LinkPreviewKind;
   } | null>(null);
 
   const openAttachmentTarget = React.useCallback(
@@ -852,8 +852,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                               compact
                               onDark={isUser}
                               imageThumbnail
-                              onOpenImage={(target) => setPreview({ target, kind: 'image' })}
-                              onOpenMarkdown={(target) => setPreview({ target, kind: 'markdown' })}
+                              onOpenPreview={(target, kind) => setPreview({ target, kind })}
                               onOpenTarget={openAttachmentTarget}
                             />
                           ))}

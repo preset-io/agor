@@ -13,6 +13,7 @@ import {
   getLinkUnavailableReason,
   getSafeLinkContentLabel,
   type LinkContentItem,
+  type LinkPreviewKind,
 } from './linkContent';
 import {
   getLinkDisplayCategory,
@@ -38,8 +39,7 @@ export interface LinkAttachmentCardProps {
   compact?: boolean;
   onDark?: boolean;
   imageThumbnail?: boolean;
-  onOpenImage?: (target: LinkPreviewTarget) => void;
-  onOpenMarkdown?: (target: LinkPreviewTarget) => void;
+  onOpenPreview?: (target: LinkPreviewTarget, kind: LinkPreviewKind) => void;
   onOpenTarget?: (target: LinkAttachmentTarget) => void;
 }
 
@@ -111,8 +111,7 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
   compact = false,
   onDark = false,
   imageThumbnail = false,
-  onOpenImage,
-  onOpenMarkdown,
+  onOpenPreview,
   onOpenTarget,
 }) => {
   const { token } = theme.useToken();
@@ -130,19 +129,18 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
   const previewKind = disabledReason ? null : getLinkPreviewKind(contentItem);
   const contentAction = disabledReason ? null : getLinkContentAction(contentItem);
   const canPreviewImage = previewKind === 'image';
-  const canPreviewMarkdown = previewKind === 'markdown' || previewKind === 'text';
   const canDownload = contentAction === 'download';
   const reason = disabledReason ?? getLinkUnavailableReason(contentItem);
   const disabled = Boolean(reason);
   const description = getSafeLinkContentLabel(subtitle ?? refUri ?? url ?? filePath);
 
-  if (imageThumbnail && canPreviewImage && linkId && onOpenImage) {
+  if (imageThumbnail && canPreviewImage && linkId && onOpenPreview) {
     return (
       <LinkImageThumbnail
         linkId={linkId}
         title={title}
         subtitle={description}
-        onOpen={onOpenImage}
+        onOpen={(target) => onOpenPreview(target, 'image')}
       />
     );
   }
@@ -151,12 +149,8 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
     event.preventDefault();
     event.stopPropagation();
     if (disabled) return;
-    if (canPreviewImage && linkId && onOpenImage) {
-      onOpenImage({ linkId, title, subtitle: description });
-      return;
-    }
-    if (canPreviewMarkdown && linkId && onOpenMarkdown) {
-      onOpenMarkdown({ linkId, title, subtitle: description });
+    if (previewKind && linkId && onOpenPreview) {
+      onOpenPreview({ linkId, title, subtitle: description }, previewKind);
       return;
     }
     if (target) onOpenTarget?.(target);

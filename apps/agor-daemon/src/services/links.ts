@@ -26,13 +26,11 @@ import type {
   Task,
   UUID,
 } from '@agor/core/types';
-import { extractLinksFromMessage } from '@agor/core/types';
+import { extractLinksFromMessage, MAX_PARSED_LINKS_PER_MESSAGE } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { backfillLegacySessionLinks } from './legacy-links-backfill.js';
 
 export const LINKS_SERVICE_METHODS = ['find', 'get', 'create', 'patch', 'remove'] as const;
-const MAX_PARSED_LINKS_PER_MESSAGE = 100;
-
 type LinkParams = QueryParams<{
   board_id?: UUID;
   owner_scope?: LinkOwnerScope;

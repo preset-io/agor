@@ -22,6 +22,8 @@ export type LinkOwnerScope = (typeof LINK_OWNER_SCOPES)[number];
 export const LINK_TARGET_FIELDS = ['url', 'ref_uri', 'file_path'] as const;
 export type LinkTargetField = (typeof LINK_TARGET_FIELDS)[number];
 
+export const MAX_PARSED_LINKS_PER_MESSAGE = 100;
+
 export const LINK_TARGET_OBJECT_TYPES = [
   'artifact',
   'board',

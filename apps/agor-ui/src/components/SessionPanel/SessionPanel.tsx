@@ -86,10 +86,7 @@ import {
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
-import {
-  type SessionAttachmentItem,
-  SessionAttachmentsDropdown,
-} from './SessionAttachmentsDropdown';
+import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionAttachmentTray } from './SessionAttachmentTray';
 import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
@@ -1149,21 +1146,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     };
   };
 
-  const teammateStateForAttachment = (item: SessionAttachmentItem) => {
-    return teammateStateForSessionLink(item);
-  };
-
-  const handlePromoteAttachmentToTeammate = async (item: SessionAttachmentItem) => {
-    await handlePromoteSessionLinkToTeammate(item);
-  };
-
-  const handleRemoveAttachmentFromTeammate = async (
-    item: SessionAttachmentItem,
-    teammateLinkId: string
-  ) => {
-    await handleRemoveSessionLinkFromTeammate(item, teammateLinkId);
-  };
-
   const handleFork = async () => {
     if (!session) return;
     if (composerAttachmentsRef.current.length > 0) {
@@ -1460,9 +1442,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               pinningLinkId={pinningLinkId}
               onTogglePinned={handleToggleSessionLinkPinned}
               onRegisterOpenPinnedManager={handleRegisterOpenPinnedManager}
-              getTeammateActionState={teammateStateForAttachment}
-              onPromoteToTeammate={handlePromoteAttachmentToTeammate}
-              onRemoveFromTeammate={handleRemoveAttachmentFromTeammate}
+              getTeammateActionState={teammateStateForSessionLink}
+              onPromoteToTeammate={handlePromoteSessionLinkToTeammate}
+              onRemoveFromTeammate={handleRemoveSessionLinkFromTeammate}
             />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">

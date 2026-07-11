@@ -36,8 +36,6 @@ export const selectFetchAndReplaceFullSessionLinks = (s: AgorState) =>
   s.fetchAndReplaceFullSessionLinks;
 export const selectFetchAndReplaceFullBranchLinks = (s: AgorState) =>
   s.fetchAndReplaceFullBranchLinks;
-export const selectApplyKnownLinkCreatedResult = (s: AgorState) => s.applyKnownLinkCreatedResult;
-export const selectApplyKnownLinkRemovedResult = (s: AgorState) => s.applyKnownLinkRemovedResult;
 export const selectApplyLinkMutationResult = (s: AgorState) => s.applyLinkMutationResult;
 
 /**
