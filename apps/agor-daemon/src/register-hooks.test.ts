@@ -18,6 +18,7 @@
  * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
+import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   enrichSessionFindResultWithRemoteRelationships,
@@ -83,9 +84,46 @@ describe('protectServerManagedTaskWrites', () => {
     ).toThrow('executor_connected_at is server-managed');
   });
 
-  it('preserves internal task writes', () => {
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('rejects server-owned running status on external %s', (method) => {
+    expect(() =>
+      protectServerManagedTaskWrites(externalContext(method, { status: TaskStatus.RUNNING }))
+    ).toThrow('running task status is server-managed');
+  });
+
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('rejects server-owned running status in external %s array data', (method) => {
+    expect(() =>
+      protectServerManagedTaskWrites(
+        externalContext(method, [{ status: TaskStatus.CREATED }, { status: TaskStatus.RUNNING }])
+      )
+    ).toThrow('running task status is server-managed');
+  });
+
+  it('blocks the external dispatching-to-created-to-running bypass', () => {
+    expect(() =>
+      protectServerManagedTaskWrites(externalContext('patch', { status: TaskStatus.CREATED }))
+    ).not.toThrow();
+    expect(() =>
+      protectServerManagedTaskWrites(externalContext('patch', { status: TaskStatus.RUNNING }))
+    ).toThrow('running task status is server-managed');
+  });
+
+  it('allows external executors to finish running tasks', () => {
+    expect(() =>
+      protectServerManagedTaskWrites(externalContext('patch', { status: TaskStatus.COMPLETED }))
+    ).not.toThrow();
+  });
+
+  it('preserves trusted internal direct-to-running task writes', () => {
     const context = externalContext('patch', {
-      executor_connected_at: '2026-07-10T20:00:00.000Z',
+      status: TaskStatus.RUNNING,
     });
     context.params.provider = undefined;
 

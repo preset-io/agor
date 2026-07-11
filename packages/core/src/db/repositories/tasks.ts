@@ -364,7 +364,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
         if (!row) throw new EntityNotFoundError('Task', id);
 
-        if (row.status === TaskStatus.RUNNING) {
+        if (row.status === TaskStatus.RUNNING && row.executor_connected_at) {
           return { task: this.rowToTask(row), transitioned: false };
         }
         if (row.status !== TaskStatus.DISPATCHING) return null;

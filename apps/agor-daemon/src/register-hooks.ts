@@ -71,6 +71,7 @@ import {
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
   ROLES,
+  TaskStatus,
 } from '@agor/core/types';
 import {
   executorRuntimeScopeGuard,
@@ -445,18 +446,19 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'leaderboard',
 ];
 
-/** Prevent callers on a Feathers transport from forging executor-owned task fields. */
+/** Prevent callers on a Feathers transport from forging executor-owned task state. */
 export function protectServerManagedTaskWrites(context: HookContext): HookContext {
   if (!context.params.provider) return context;
 
   const writes = Array.isArray(context.data) ? context.data : [context.data];
-  if (
-    writes.some(
-      (write) =>
-        write !== null && typeof write === 'object' && Object.hasOwn(write, 'executor_connected_at')
-    )
-  ) {
+  const records = writes.filter(
+    (write): write is Record<string, unknown> => write !== null && typeof write === 'object'
+  );
+  if (records.some((write) => Object.hasOwn(write, 'executor_connected_at'))) {
     throw new Forbidden('executor_connected_at is server-managed');
+  }
+  if (records.some((write) => write.status === TaskStatus.RUNNING)) {
+    throw new Forbidden('running task status is server-managed');
   }
 
   return context;

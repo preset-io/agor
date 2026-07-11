@@ -752,6 +752,20 @@ describe('TaskRepository.connectExecutor', () => {
     }
   );
 
+  dbTest('does not accept a timestamp-less running row as a prior claim', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const corrupted = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    expect(await taskRepo.connectExecutor(corrupted.task_id)).toBeNull();
+    expect(await taskRepo.findById(corrupted.task_id)).toMatchObject({
+      status: TaskStatus.RUNNING,
+      executor_connected_at: undefined,
+    });
+  });
+
   dbTest('does not revive stopping, stopped, or terminal tasks', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
