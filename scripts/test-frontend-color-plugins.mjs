@@ -21,10 +21,22 @@ const CSS_NAMED_COLORS =
 
 const tsxCases = [
   { name: 'tokenStyle', source: 'export const tokenStyle = { color: token.colorText };' },
+  {
+    name: 'tokenColorMix',
+    source: `export const tokenColorMix = \`color-mix(in srgb, ${tokenInterpolation} 40%, transparent)\`;`,
+  },
   { name: 'issueRef', source: "export const issueRef = 'repo#123';" },
   { name: 'proseIssue', source: "export const proseIssue = 'Fixes #123456';" },
   { name: 'svgFragment', source: "export const svgFragment = { filter: 'url(#abcdef)' };" },
   { name: 'namedSvgFragment', source: "export const namedSvgFragment = { filter: 'url(#red)' };" },
+  {
+    name: 'quotedSvgFragment',
+    source: 'export const quotedSvgFragment = { filter: \'url("#abcdef")\' };',
+  },
+  {
+    name: 'spacedSvgFragment',
+    source: "export const spacedSvgFragment = { filter: 'url( #abcdef)' };",
+  },
   {
     name: 'assetUrl',
     source: "export const assetUrl = { backgroundImage: 'url(/assets/white-logo.svg)' };",
@@ -79,6 +91,11 @@ const tsxCases = [
     source: "export const namedGradient = { backgroundImage: 'linear-gradient(white, black)' };",
     violation: true,
   },
+  {
+    name: 'colorMix',
+    source: "export const colorMix = 'color-mix(in srgb, red, blue)';",
+    violation: true,
+  },
   { name: 'hwbColor', source: "export const hwbColor = 'hwb(120 0% 0%)';", violation: true },
   { name: 'labColor', source: "export const labColor = 'lab(50% 20 30)';", violation: true },
   { name: 'lchColor', source: "export const lchColor = 'lch(50% 40 30)';", violation: true },
@@ -119,8 +136,24 @@ const tsxCases = [
     violation: true,
   },
   {
+    name: 'generatedBoxShadow',
+    source: 'export const generatedBoxShadow = \'<span style="box-shadow:0 0 2px red">x</span>\';',
+    violation: true,
+  },
+  {
+    name: 'generatedTextShadow',
+    source:
+      'export const generatedTextShadow = \'<span style="text-shadow:0 0 2px blue">x</span>\';',
+    violation: true,
+  },
+  {
     name: 'encodedSvg',
     source: "export const encodedSvg = 'data:image/svg+xml,fill=%231677ff';",
+    violation: true,
+  },
+  {
+    name: 'quotedEncodedSvg',
+    source: `export const quotedEncodedSvg = "data:image/svg+xml,<svg fill='%23fff'>";`,
     violation: true,
   },
   ...CSS_NAMED_COLORS.map((name) => ({
@@ -132,9 +165,16 @@ const tsxCases = [
 
 const cssCases = [
   { name: 'token', source: '.case-token { color: var(--ant-color-text); }' },
+  {
+    name: 'token-color-mix',
+    source:
+      '.case-token-color-mix { color: color-mix(in srgb, var(--ant-color-text), transparent); }',
+  },
   { name: 'transparent', source: '.case-transparent { background: transparent; }' },
   { name: 'fragment', source: '.case-fragment { filter: url(#abcdef); }' },
   { name: 'named-fragment', source: '.case-named-fragment { filter: url(#red); }' },
+  { name: 'quoted-fragment', source: '.case-quoted-fragment { filter: url("#abcdef"); }' },
+  { name: 'spaced-fragment', source: '.case-spaced-fragment { filter: url( #abcdef); }' },
   {
     name: 'asset-url',
     source: ".case-asset-url { background: url('/assets/white-logo.svg'); }",
@@ -156,6 +196,21 @@ const cssCases = [
   { name: 'hwb', source: '.case-hwb { color: hwb(120 0% 0%); }', violation: true },
   { name: 'lab', source: '.case-lab { color: lab(50% 20 30); }', violation: true },
   { name: 'lch', source: '.case-lch { color: lch(50% 40 30); }', violation: true },
+  {
+    name: 'color-mix',
+    source: '.case-color-mix { color: color-mix(in srgb, red, blue); }',
+    violation: true,
+  },
+  {
+    name: 'box-shadow-named',
+    source: '.case-box-shadow-named { box-shadow: 0 0 2px red; }',
+    violation: true,
+  },
+  {
+    name: 'text-shadow-named',
+    source: '.case-text-shadow-named { text-shadow: 0 0 2px blue; }',
+    violation: true,
+  },
   {
     name: 'drop-shadow-named',
     source: '.case-drop-shadow-named { filter: drop-shadow(0 2px 3px red); }',
