@@ -58,4 +58,39 @@ describe('SessionAttachmentsDropdown', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open links organizer' }));
     expect(await screen.findByText('Loading links…')).toBeInTheDocument();
   });
+
+  it('does not show an overflow action for an unsupported uploaded-file promotion', async () => {
+    const item = {
+      key: 'link:file-1',
+      linkId: 'file-1',
+      name: 'report.pdf',
+      targetKey: 'file:report.pdf',
+      category: 'pdf' as const,
+      kind: 'document' as const,
+      source: 'upload' as const,
+      ownerScope: 'session' as const,
+      isPinned: false,
+      filePath: 'report.pdf',
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionAttachmentsDropdown
+          items={[item]}
+          onTogglePinned={vi.fn()}
+          getTeammateActionState={() => ({
+            isPromoted: false,
+            disabled: true,
+            unavailableReason: 'File promotion awaits upload retention support',
+          })}
+        />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open links organizer' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage links' }));
+
+    expect(screen.queryByRole('button', { name: /teammate actions/i })).toBeNull();
+    expect(screen.queryByText(/upload retention/i)).toBeNull();
+  });
 });

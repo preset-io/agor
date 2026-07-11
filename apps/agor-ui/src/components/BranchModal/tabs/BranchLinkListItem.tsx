@@ -55,6 +55,7 @@ function PromotionAction(props: BranchLinkListItemProps) {
     teammateLinks: props.teammateLinks,
     sourceBranchId: props.sourceBranchId,
   });
+  if (!state.canPromote) return null;
   const busy =
     props.teammateBusyKey === (state.teammateLink?.link_id ?? props.item.linkId ?? props.item.key);
   const label = getTeammatePromotionActionLabel(state);
@@ -63,8 +64,8 @@ function PromotionAction(props: BranchLinkListItemProps) {
     <LinkOverflowAction
       ariaLabel={`Teammate actions for ${getCompactLinkDisplayName(props.item)}`}
       actionLabel={label}
-      tooltip={state.canPromote ? 'Teammate link actions' : label}
-      disabled={!state.canPromote || busy}
+      tooltip="Teammate link actions"
+      disabled={busy}
       loading={busy}
       onAction={() => {
         if (state.isPromoted && state.teammateLink) {

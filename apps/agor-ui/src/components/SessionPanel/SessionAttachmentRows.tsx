@@ -94,18 +94,17 @@ function pinAction(props: SharedProps) {
 
 function promotionAction(props: DrawerProps) {
   const state = props.getTeammateActionState?.(props.item);
-  if (!state) return null;
+  if (!state || state.disabled) return null;
   const busyKey = state.teammateLinkId ?? props.item.linkId ?? props.item.key;
   const busy = state.loading || props.teammatePromotionBusyKey === busyKey;
-  const disabled = state.disabled || busy || (state.isPromoted && !state.teammateLinkId);
+  const disabled = busy || (state.isPromoted && !state.teammateLinkId);
   const label = state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
-  const actionLabel = disabled && state.unavailableReason ? state.unavailableReason : label;
 
   return (
     <LinkOverflowAction
       ariaLabel={`Teammate actions for ${props.item.name}`}
-      actionLabel={actionLabel}
-      tooltip={state.unavailableReason ?? 'Teammate link actions'}
+      actionLabel={label}
+      tooltip="Teammate link actions"
       disabled={disabled}
       loading={busy}
       onAction={() => {
