@@ -2,6 +2,7 @@ import { Flex, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import {
   ActionLinkRow,
+  canPersistLinkPin,
   isFileLinkDisplayItem,
   isKnowledgeLinkDisplayItem,
   LinkOverflowAction,
@@ -64,19 +65,21 @@ function canTogglePinned(
   item: SessionAttachmentItem,
   onTogglePinned?: SharedProps['onTogglePinned']
 ) {
-  return item.ownerScope === 'session' && Boolean(item.linkId) && Boolean(onTogglePinned);
+  return canPersistLinkPin(item) && Boolean(onTogglePinned);
 }
 
 function pinAction(props: SharedProps) {
   const toggleable = canTogglePinned(props.item, props.onTogglePinned);
-  const isPinning = Boolean(props.item.linkId && props.pinningLinkId === props.item.linkId);
+  const isPinning = props.pinningLinkId === (props.item.linkId ?? props.item.key);
   const label = toggleable
     ? props.item.isPinned
-      ? 'Unpin from session header'
-      : 'Pin in session'
-    : props.item.ownerScope === 'branch'
-      ? 'Pin is read-only here'
-      : 'Pin unavailable';
+      ? props.item.ownerScope === 'branch'
+        ? 'Unpin from branch card'
+        : 'Unpin from session header'
+      : props.item.ownerScope === 'branch'
+        ? 'Pin to branch card'
+        : 'Pin in session'
+    : 'Pin unavailable';
 
   return (
     <LinkPinAction

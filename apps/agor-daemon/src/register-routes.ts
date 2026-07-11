@@ -224,6 +224,48 @@ function trustedUploadTaskMetadata(
   return uploadLinkIds && uploadLinkIds.length > 0 ? { upload_link_ids: uploadLinkIds } : {};
 }
 
+export async function resolveTrustedPromptUploadLinkIds(
+  app: Application,
+  sessionId: SessionID,
+  requestedLinkIds: unknown,
+  params: RouteParams
+): Promise<LinkID[]> {
+  const trusted = new Set(params._trustedUploadLinkIds ?? []);
+  if (requestedLinkIds === undefined) return [...trusted];
+  if (
+    !Array.isArray(requestedLinkIds) ||
+    requestedLinkIds.length > 10 ||
+    requestedLinkIds.some((linkId) => typeof linkId !== 'string' || !linkId)
+  ) {
+    throw new BadRequest('uploadLinkIds must contain at most 10 link IDs');
+  }
+
+  const userId = params.user?.user_id;
+  if (!userId) throw new NotAuthenticated('Authentication required to attach uploads');
+  const linksService = app.service('links') as unknown as {
+    get(id: string, params?: Params): Promise<Link>;
+  };
+
+  for (const requestedLinkId of new Set(requestedLinkIds as string[])) {
+    const link = await linksService.get(requestedLinkId, {
+      ...params,
+      provider: undefined,
+    } as Params);
+    if (
+      link.source !== 'upload' ||
+      link.session_id !== sessionId ||
+      link.branch_id ||
+      link.source_message_id ||
+      link.created_by !== userId
+    ) {
+      throw new Forbidden('Upload link does not belong to this prompt');
+    }
+    trusted.add(link.link_id);
+  }
+
+  return [...trusted];
+}
+
 function isServiceAccountRoute(params: RouteParams): boolean {
   return (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
 }
@@ -1422,6 +1464,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           permissionMode?: import('@agor/core/types').PermissionMode;
           stream?: boolean;
           messageSource?: MessageSource;
+          uploadLinkIds?: LinkID[];
           /**
            * Optional extra task metadata merged onto the queued/created task.
            * Used by internal callers (e.g. widget submissions) to stamp
@@ -1454,6 +1497,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         let session = await sessionsService.get(id, params);
         id = session.session_id;
+        params._trustedUploadLinkIds = await resolveTrustedPromptUploadLinkIds(
+          app,
+          id as SessionID,
+          data.uploadLinkIds,
+          params
+        );
 
         // Early validation: reject unsupported tools when stateless_fs_mode is enabled
         if (config.execution?.stateless_fs_mode) {
@@ -2086,9 +2135,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
       }
 
+      const uploadLinkByFilePath = new Map(
+        createdUploadLinks.flatMap((link) => (link.file_path ? [[link.file_path, link]] : []))
+      );
       res.json({
         success: true,
-        files: uploadedFiles,
+        files: uploadedFiles.map((file) => ({
+          ...file,
+          linkId: uploadLinkByFilePath.get(file.filename)?.link_id,
+        })),
         ...(notificationError && { warning: notificationError }),
       });
     } catch (error) {

@@ -7,6 +7,7 @@ export interface UploadedFile {
   path: string;
   size: number;
   mimeType: string;
+  linkId?: string;
 }
 
 export interface UploadFilesToSessionOptions {

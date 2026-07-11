@@ -16,6 +16,7 @@ import {
 import { useThemedMessage } from '../../../utils/message';
 import {
   buildLinkDisplayItems,
+  canPersistLinkPin,
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
   type LinkCategoryTabKey,
@@ -24,6 +25,7 @@ import {
   matchesLinkCategoryTab,
   matchesLinkDisplaySearch,
   promoteLinkToTeammate,
+  toggleLinkDisplayItemPinned,
 } from '../../Links';
 import { LinkCollectionControls } from '../../Links/LinkCollectionControls';
 import styles from '../../Links/linkUi.module.css';
@@ -129,12 +131,15 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
 
   const handleTogglePinned = useCallback(
     async (item: LinkDisplayItem) => {
-      if (!client || !item.linkId || pinningLinkId) return;
-      setPinningLinkId(item.linkId);
+      if (!client || !canPersistLinkPin(item) || pinningLinkId) return;
+      const pinningKey = item.linkId ?? item.key;
+      setPinningLinkId(pinningKey);
       try {
-        const updated = (await client.service('links').patch(item.linkId, {
-          is_pinned: !item.isPinned,
-        })) as Link;
+        const updated = await toggleLinkDisplayItemPinned({
+          client,
+          item,
+          branchId: branch.branch_id,
+        });
         applyLinkMutationResult(updated);
       } catch (err) {
         showError(`Failed to update pin: ${err instanceof Error ? err.message : String(err)}`);
@@ -142,7 +147,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
         setPinningLinkId(null);
       }
     },
-    [applyLinkMutationResult, client, pinningLinkId, showError]
+    [applyLinkMutationResult, branch.branch_id, client, pinningLinkId, showError]
   );
 
   const handlePromoteToTeammate = useCallback(
@@ -233,7 +238,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       teammateLinks={teammatePromotionLinks}
                       sourceBranchId={branch.branch_id}
                       teammateBusyKey={teammatePromotionBusyKey}
-                      pinning={item.linkId === pinningLinkId}
+                      pinning={(item.linkId ?? item.key) === pinningLinkId}
                       onOpen={openItem}
                       onTogglePinned={handleTogglePinned}
                       onPromote={handlePromoteToTeammate}

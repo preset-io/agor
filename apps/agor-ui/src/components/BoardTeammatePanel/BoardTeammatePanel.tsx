@@ -527,7 +527,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           <Typography.Text strong>Assign an existing teammate</Typography.Text>
           <Select
             showSearch
-            placeholder="Select an teammate"
+            placeholder="Select a teammate"
             value={selectedTeammateId}
             onChange={setSelectedTeammateId}
             options={teammateOptions}

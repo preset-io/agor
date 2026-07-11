@@ -9,6 +9,7 @@ export * from './LinkVisual';
 export * from './linkContent';
 export * from './linkDisplay';
 export * from './linkOrganizer';
+export * from './linkPinning';
 export * from './linkPromotion';
 export * from './PinnedLinkButton';
 export * from './PinnedLinkList';

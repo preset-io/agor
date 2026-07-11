@@ -30,6 +30,7 @@ import type {
   KnowledgeSemanticSettingsPublic,
   Link,
   LinkCreate,
+  LinkID,
   LinkPatch,
   MCPServer,
   Message,
@@ -99,6 +100,8 @@ export interface SessionPromptRequest {
   permissionMode?: PermissionMode;
   stream?: boolean;
   messageSource?: 'gateway' | 'agor';
+  /** Upload links created by the composer immediately before this prompt. */
+  uploadLinkIds?: LinkID[];
 }
 
 export interface QueuedSessionPromptResult {

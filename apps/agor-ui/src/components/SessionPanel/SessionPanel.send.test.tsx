@@ -160,6 +160,7 @@ describe('SessionPanel composer send', () => {
           path: '.agor/uploads/chart.png',
           size: 5,
           mimeType: 'image/png',
+          linkId: 'upload-link-1',
         },
       ],
     });
@@ -168,7 +169,8 @@ describe('SessionPanel composer send', () => {
     expect(onSendPrompt).toHaveBeenCalledWith(
       'session-1',
       'Attached files:\n- .agor/uploads/chart.png\n\nCompare this chart and mention the anomaly',
-      expect.any(String)
+      expect.any(String),
+      ['upload-link-1']
     );
   });
 

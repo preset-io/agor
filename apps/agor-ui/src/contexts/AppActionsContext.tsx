@@ -1,4 +1,10 @@
-import type { PermissionMode, PermissionScope, Session, SpawnConfig } from '@agor-live/client';
+import type {
+  LinkID,
+  PermissionMode,
+  PermissionScope,
+  Session,
+  SpawnConfig,
+} from '@agor-live/client';
 import type React from 'react';
 import { createContext, useContext } from 'react';
 import type { BranchModalTab } from '../components/BranchModal/BranchModal';
@@ -14,7 +20,8 @@ export interface AppActionsContextValue {
   onSendPrompt?: (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    uploadLinkIds?: LinkID[]
   ) => boolean | undefined | Promise<boolean | undefined>;
   onFork?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;

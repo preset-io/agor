@@ -2,6 +2,7 @@ import type { Link } from '@agor-live/client';
 import { Flex, List, Typography, theme } from 'antd';
 import {
   ActionLinkRow,
+  canPersistLinkPin,
   getCompactLinkDisplayName,
   getLinkDisplaySecondaryLabel,
   getTeammatePromotionActionLabel,
@@ -96,7 +97,7 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
             <LinkPinAction
               pinned={props.item.isPinned}
               label={`${pinLabel} ${title}`}
-              disabled={!props.item.linkId}
+              disabled={!canPersistLinkPin(props.item)}
               loading={props.pinning}
               onToggle={() => props.onTogglePinned(props.item)}
             />

@@ -78,6 +78,7 @@ import {
   getTeammatePromotionUnavailableReason,
   type LinkDisplayItem,
   promoteLinkToTeammate,
+  toggleLinkDisplayItemPinned,
 } from '../Links';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
@@ -1071,7 +1072,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // Single entry point: /prompt. The daemon decides run-vs-queue based on
       // session state and reports it back via `task.status`. The 'queued'
       // WebSocket event populates the queue panel for queued prompts.
-      const sendResult = await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
+      const uploadLinkIds = uploadedFiles.flatMap((file) =>
+        file.linkId ? [file.linkId as Link['link_id']] : []
+      );
+      const sendResult = uploadLinkIds.length
+        ? await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode, uploadLinkIds)
+        : await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
       if (sendResult === false) return;
 
       if (composerStillOwnsSend) {
@@ -1117,13 +1123,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleToggleSessionLinkPinned = async (item: { linkId?: string; isPinned: boolean }) => {
-    if (!client || !item.linkId) return;
-    setPinningLinkId(item.linkId);
+  const handleToggleSessionLinkPinned = async (item: LinkDisplayItem) => {
+    if (!client) return;
+    setPinningLinkId(item.linkId ?? item.key);
     try {
-      const updated = (await client.service('links').patch(item.linkId, {
-        is_pinned: !item.isPinned,
-      })) as Link;
+      const updated = await toggleLinkDisplayItemPinned({
+        client,
+        item,
+        branchId: branch?.branch_id,
+        sessionId: session.session_id,
+      });
       applyLinkMutationResult(updated);
     } catch (error) {
       showError(`Failed to update link: ${error instanceof Error ? error.message : String(error)}`);
@@ -1502,12 +1511,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               error={sessionLinksError}
               onRetry={() => void loadSessionLinks()}
               pinningLinkId={pinningLinkId}
-              onTogglePinned={(item) =>
-                handleToggleSessionLinkPinned({
-                  linkId: item.linkId ?? undefined,
-                  isPinned: item.isPinned === true,
-                })
-              }
+              onTogglePinned={handleToggleSessionLinkPinned}
               onRegisterOpenPinnedManager={handleRegisterOpenPinnedManager}
               getTeammateActionState={teammateStateForAttachment}
               onPromoteToTeammate={handlePromoteAttachmentToTeammate}
