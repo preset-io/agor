@@ -20,12 +20,12 @@ describe('ToolIcon image plates', () => {
     });
   });
 
-  it('keeps the CLI mascot on its exact white plate in dark mode', () => {
+  it('keeps the white-outlined CLI mascot on its exact black plate in dark mode', () => {
     renderInDarkTheme('claude-code-cli');
 
     expect(screen.getByAltText('claude-code-cli logo').parentElement).toHaveStyle({
       // biome-ignore lint/plugin/noHardcodedColorLiteral: regression fixture asserts the exact brand-asset plate
-      background: '#ffffff',
+      background: '#000000',
     });
   });
 });
