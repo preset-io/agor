@@ -2,8 +2,9 @@ import { FileImageOutlined } from '@ant-design/icons';
 import { Button, Flex, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import type { LinkPreviewTarget } from './LinkContentPreviewModal';
-import { fetchLinkImageObjectUrl, getSafeLinkContentLabel } from './linkContent';
+import { getSafeLinkContentLabel } from './linkContent';
 import styles from './linkUi.module.css';
+import { useLinkPreviewResource } from './useLinkPreviewResource';
 
 interface LinkImageThumbnailProps {
   linkId: string;
@@ -24,9 +25,7 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
   const [shouldLoad, setShouldLoad] = React.useState(
     () => typeof IntersectionObserver === 'undefined'
   );
-  const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  const [failed, setFailed] = React.useState(false);
+  const [failedUrl, setFailedUrl] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (shouldLoad) return;
@@ -48,40 +47,9 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
     return () => observer.disconnect();
   }, [shouldLoad]);
 
-  React.useEffect(() => {
-    if (!shouldLoad) return;
-
-    const controller = new AbortController();
-    let cancelled = false;
-    let createdUrl: string | null = null;
-    setLoading(true);
-    setFailed(false);
-    setObjectUrl(null);
-
-    fetchLinkImageObjectUrl(linkId, controller.signal)
-      .then((url) => {
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        createdUrl = url;
-        setObjectUrl(url);
-      })
-      .catch((error) => {
-        if (!cancelled && !(error instanceof Error && error.name === 'AbortError')) {
-          setFailed(true);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (createdUrl) URL.revokeObjectURL(createdUrl);
-    };
-  }, [linkId, shouldLoad]);
+  const { resource, error, loading } = useLinkPreviewResource(linkId, 'image', shouldLoad);
+  const objectUrl = resource?.value;
+  const failed = Boolean(error || (objectUrl && failedUrl === objectUrl));
 
   const handleOpen = (event: React.MouseEvent) => {
     event.preventDefault();
@@ -111,7 +79,7 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
               src={objectUrl}
               alt={title}
               decoding="async"
-              onError={() => setFailed(true)}
+              onError={() => setFailedUrl(objectUrl ?? null)}
             />
           ) : (
             <Flex

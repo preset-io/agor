@@ -64,20 +64,13 @@ function attachmentIcon(item: SessionAttachmentItem, disabled: boolean): React.R
   return getLinkItemIcon(item, disabled);
 }
 
-function canTogglePinned(
-  item: SessionAttachmentItem,
-  onTogglePinned?: SharedProps['onTogglePinned']
-) {
-  return canPersistLinkPin(item) && Boolean(onTogglePinned);
-}
-
 function getTargetDisplay(item: SessionAttachmentItem): string {
   if (item.filePath) return getSafeLinkContentLabel(item.filePath) || 'Uploaded file';
   return getLinkDisplaySecondaryLabel(item) || 'No target';
 }
 
 function pinAction(props: SharedProps) {
-  const toggleable = canTogglePinned(props.item, props.onTogglePinned);
+  const toggleable = canPersistLinkPin(props.item) && Boolean(props.onTogglePinned);
   const isPinning = props.pinningLinkId === (props.item.linkId ?? props.item.key);
   const label = toggleable
     ? props.item.isPinned
@@ -125,7 +118,8 @@ function promotionAction(props: DrawerProps) {
   );
 }
 
-export function SessionAttachmentQuickRow(props: SharedProps) {
+function SessionAttachmentRow({ drawer, ...props }: DrawerProps & { drawer: boolean }) {
+  const { token } = theme.useToken();
   const disabledReason = getLinkUnavailableReason(props.item);
   const disabled = Boolean(disabledReason);
   const previewKind = getLinkPreviewKind(props.item);
@@ -138,78 +132,75 @@ export function SessionAttachmentQuickRow(props: SharedProps) {
         ? `Download file ${props.item.name}`
         : `Open link ${props.item.name}`);
 
-  return (
-    <Tooltip title={actionLabel} placement="left">
-      <div>
-        <ActionLinkRow
-          compact
-          disabled={disabled}
-          ariaLabel={actionLabel}
-          onActivate={() => props.onOpen(props.item)}
-          actions={pinAction(props)}
-        >
-          <Flex component="span" align="center" gap="small" className={styles.minWidthZero}>
-            <Flex component="span" className={styles.quickGlyph} align="center" justify="center">
-              {attachmentIcon(props.item, disabled)}
-            </Flex>
-            <Typography.Text
-              ellipsis
-              disabled={disabled}
-              className={`${styles.minWidthZero} ${styles.smallText}`}
-            >
-              {props.item.name}
-            </Typography.Text>
-          </Flex>
-        </ActionLinkRow>
-      </div>
-    </Tooltip>
-  );
-}
-
-export function SessionAttachmentDrawerRow(props: DrawerProps) {
-  const { token } = theme.useToken();
-  const disabledReason = getLinkUnavailableReason(props.item);
-  const disabled = Boolean(disabledReason);
-
-  return (
+  const row = (
     <ActionLinkRow
-      bordered
+      bordered={drawer}
+      compact={!drawer}
       disabled={disabled}
-      ariaLabel={
-        disabledReason ? `${props.item.name}: ${disabledReason}` : `Open ${props.item.name}`
-      }
+      ariaLabel={drawer && disabledReason ? `${props.item.name}: ${disabledReason}` : actionLabel}
       onActivate={() => props.onOpen(props.item)}
       actions={
         <>
           {pinAction(props)}
-          {promotionAction(props)}
+          {drawer && promotionAction(props)}
         </>
       }
     >
-      <Flex component="span" align="flex-start" gap="small" className={styles.minWidthZero}>
-        <Flex
-          component="span"
-          className={styles.drawerGlyph}
-          align="center"
-          justify="center"
-          aria-hidden="true"
-        >
-          {attachmentIcon(props.item, disabled)}
+      {drawer ? (
+        <Flex component="span" align="flex-start" gap="small" className={styles.minWidthZero}>
+          <Flex
+            component="span"
+            className={styles.drawerGlyph}
+            align="center"
+            justify="center"
+            aria-hidden="true"
+          >
+            {attachmentIcon(props.item, disabled)}
+          </Flex>
+          <Flex component="span" vertical gap={token.sizeXXS} className={styles.rowContent}>
+            <Typography.Text strong ellipsis disabled={disabled}>
+              {props.item.name}
+            </Typography.Text>
+            <Typography.Text className={styles.smallText} type="secondary" ellipsis>
+              {getTargetDisplay(props.item)}
+            </Typography.Text>
+            {disabledReason && (
+              <Typography.Text className={styles.smallText} type="warning">
+                {disabledReason}
+              </Typography.Text>
+            )}
+          </Flex>
         </Flex>
-        <Flex component="span" vertical gap={token.sizeXXS} className={styles.rowContent}>
-          <Typography.Text strong ellipsis disabled={disabled}>
+      ) : (
+        <Flex component="span" align="center" gap="small" className={styles.minWidthZero}>
+          <Flex component="span" className={styles.quickGlyph} align="center" justify="center">
+            {attachmentIcon(props.item, disabled)}
+          </Flex>
+          <Typography.Text
+            ellipsis
+            disabled={disabled}
+            className={`${styles.minWidthZero} ${styles.smallText}`}
+          >
             {props.item.name}
           </Typography.Text>
-          <Typography.Text className={styles.smallText} type="secondary" ellipsis>
-            {getTargetDisplay(props.item)}
-          </Typography.Text>
-          {disabledReason && (
-            <Typography.Text className={styles.smallText} type="warning">
-              {disabledReason}
-            </Typography.Text>
-          )}
         </Flex>
-      </Flex>
+      )}
     </ActionLinkRow>
   );
+
+  return drawer ? (
+    row
+  ) : (
+    <Tooltip title={actionLabel} placement="left">
+      <div>{row}</div>
+    </Tooltip>
+  );
+}
+
+export function SessionAttachmentQuickRow(props: SharedProps) {
+  return <SessionAttachmentRow {...props} drawer={false} />;
+}
+
+export function SessionAttachmentDrawerRow(props: DrawerProps) {
+  return <SessionAttachmentRow {...props} drawer />;
 }

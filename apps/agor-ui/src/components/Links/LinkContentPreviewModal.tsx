@@ -1,14 +1,13 @@
 import { Alert, Modal, Spin, Typography, theme } from 'antd';
-import React from 'react';
+import type React from 'react';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import {
-  fetchLinkImageObjectUrl,
-  fetchLinkMarkdownText,
   getSafeLinkContentLabel,
   type LinkContentTarget,
   type LinkPreviewKind,
 } from './linkContent';
 import styles from './linkUi.module.css';
+import { useLinkPreviewResource } from './useLinkPreviewResource';
 
 export type LinkPreviewTarget = LinkContentTarget;
 
@@ -18,72 +17,16 @@ interface LinkContentPreviewModalProps {
   onClose: () => void;
 }
 
-type LoadedPreview =
-  | { kind: 'image'; value: string }
-  | { kind: 'markdown' | 'text'; value: string };
-
 export const LinkContentPreviewModal: React.FC<LinkContentPreviewModalProps> = ({
   target,
   kind,
   onClose,
 }) => {
   const { token } = theme.useToken();
-  const [loaded, setLoaded] = React.useState<LoadedPreview | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
   const safeSubtitle = getSafeLinkContentLabel(target?.subtitle);
-
-  React.useEffect(() => {
-    const linkId = target?.linkId;
-    if (!linkId) {
-      setLoaded(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    const controller = new AbortController();
-    setLoaded(null);
-    setError(null);
-    setLoading(true);
-
-    const request =
-      kind === 'image'
-        ? fetchLinkImageObjectUrl(linkId, controller.signal).then((value) => {
-            if (cancelled) {
-              URL.revokeObjectURL(value);
-              throw new DOMException('Preview request aborted', 'AbortError');
-            }
-            objectUrl = value;
-            return { kind: 'image' as const, value };
-          })
-        : fetchLinkMarkdownText(linkId, controller.signal).then((value) => ({
-            kind,
-            value,
-          }));
-
-    request
-      .then((value) => {
-        if (!cancelled) setLoaded(value);
-      })
-      .catch((reason) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : 'Preview failed');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [kind, target?.linkId]);
-
-  const image = loaded?.kind === 'image' ? loaded.value : null;
-  const text = loaded && loaded.kind !== 'image' ? loaded.value : null;
+  const { resource, error, loading } = useLinkPreviewResource(target?.linkId, kind);
+  const image = resource?.kind === 'image' ? resource.value : null;
+  const text = resource && resource.kind !== 'image' ? resource.value : null;
 
   return (
     <Modal
@@ -134,7 +77,7 @@ export const LinkContentPreviewModal: React.FC<LinkContentPreviewModalProps> = (
         )}
         {text &&
           !error &&
-          (loaded?.kind === 'text' ? (
+          (resource?.kind === 'text' ? (
             <pre className={styles.plainTextPreview}>{text}</pre>
           ) : (
             <MarkdownRenderer content={text} />

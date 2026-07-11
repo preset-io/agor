@@ -1,7 +1,7 @@
 import {
+  FILE_LINK_CATEGORIES,
   getCompactLinkDisplayName,
   getLinkDisplaySecondaryLabel,
-  type LinkDisplayCategory,
   type LinkDisplayItem,
 } from './linkDisplay';
 
@@ -9,19 +9,6 @@ export type LinkCategoryTabKey = 'all' | 'files' | 'links' | 'knowledge' | 'issu
 export type LinkSortKey = 'az' | 'za' | 'recent' | 'oldest';
 
 const KB_URI_PREFIX = 'agor://kb/';
-const FILE_CATEGORIES = new Set<LinkDisplayCategory>([
-  'image',
-  'pdf',
-  'spreadsheet',
-  'csv',
-  'document',
-  'markdown',
-  'text',
-  'code',
-  'json',
-  'log',
-]);
-
 export const LINK_CATEGORY_TAB_LABELS: Record<LinkCategoryTabKey, string> = {
   all: 'All',
   files: 'Files',
@@ -38,7 +25,7 @@ export const LINK_SORT_LABELS: Record<LinkSortKey, string> = {
 };
 
 export function isFileLinkDisplayItem(item: LinkDisplayItem): boolean {
-  return Boolean(item.filePath) || FILE_CATEGORIES.has(item.category);
+  return Boolean(item.filePath) || FILE_LINK_CATEGORIES.has(item.category);
 }
 
 export function isKnowledgeLinkDisplayItem(item: LinkDisplayItem): boolean {

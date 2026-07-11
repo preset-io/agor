@@ -6,28 +6,16 @@ import {
   getTeammatePromotionState,
   promoteLinkToTeammate,
 } from './linkPromotion';
+import { makeTestLink } from './testUtils';
 
-function link(overrides: Partial<Link> = {}): Link {
-  return {
-    link_id: 'link-1' as Link['link_id'],
+const link = (overrides: Partial<Link> = {}) =>
+  makeTestLink({
     branch_id: 'teammate-1' as Link['branch_id'],
     session_id: null,
-    kind: 'url',
-    source: 'manual',
     url: 'https://example.com',
-    ref_uri: null,
-    file_path: null,
-    target_key: 'url:https://example.com/',
     is_pinned: true,
-    title: null,
-    mime_type: null,
-    metadata: null,
-    created_by: null,
-    created_at: '2026-01-01T00:00:00.000Z',
-    updated_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
-  };
-}
+  });
 
 function item(overrides: Partial<LinkDisplayItem> = {}): LinkDisplayItem {
   return {

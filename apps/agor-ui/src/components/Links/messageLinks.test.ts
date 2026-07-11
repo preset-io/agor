@@ -1,29 +1,15 @@
 import type { Link } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import { groupRenderableLinksByMessageId } from './messageLinks';
+import { makeTestLink } from './testUtils';
 
-function link(overrides: Partial<Link>): Link {
-  return {
-    link_id: 'link-1',
-    branch_id: null,
-    session_id: 'session-1',
+const link = (overrides: Partial<Link>) =>
+  makeTestLink({
     source_message_id: 'message-1',
-    kind: 'url',
     source: 'parsed',
     url: 'https://example.com',
-    ref_uri: null,
-    file_path: null,
-    target_key: 'url:https://example.com/',
-    is_pinned: false,
-    title: null,
-    mime_type: null,
-    metadata: null,
-    created_by: null,
-    created_at: '2026-07-01T00:00:00.000Z',
-    updated_at: '2026-07-01T00:00:00.000Z',
     ...overrides,
-  } as Link;
-}
+  });
 
 describe('groupRenderableLinksByMessageId', () => {
   it('groups uploaded files and parsed references while excluding unrelated links', () => {

@@ -53,18 +53,11 @@ export function getLinkCategoryIcon(
   }
 }
 
-export function getLinkCategoryLabel(category: LinkDisplayCategory): string {
-  return getLinkDisplayGlyphLabel(category);
-}
-
-export function getLinkCompactGlyph(
-  category: LinkDisplayCategory,
-  disabled = false
-): React.ReactNode {
+function getLinkCompactGlyph(category: LinkDisplayCategory, disabled = false): React.ReactNode {
   if (disabled || category === 'issue' || category === 'pr') {
     return getLinkCategoryIcon(category, disabled);
   }
-  return getLinkCategoryLabel(category);
+  return getLinkDisplayGlyphLabel(category);
 }
 
 export function getLinkItemIcon(

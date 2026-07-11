@@ -60,6 +60,41 @@ const KB_URI_PREFIX = 'agor://kb/';
 const KB_DOCUMENT_URI_PREFIX = 'agor://kb/document/';
 const KB_UNIT_URI_PREFIX = 'agor://kb/unit/';
 const SAFE_WEB_PROTOCOLS = new Set(['http:', 'https:']);
+export const FILE_LINK_CATEGORIES = new Set<LinkDisplayCategory>([
+  'image',
+  'pdf',
+  'spreadsheet',
+  'csv',
+  'document',
+  'markdown',
+  'text',
+  'code',
+  'json',
+  'log',
+]);
+const CODE_EXTENSIONS = new Set(
+  'js jsx ts tsx py rb go rs java c cc cpp h hpp css scss html xml yaml yml toml sql sh zsh'.split(
+    ' '
+  )
+);
+const GLYPH_LABELS: Record<LinkDisplayCategory, string> = {
+  knowledge: 'KB',
+  image: 'IMG',
+  pdf: 'PDF',
+  spreadsheet: 'XLS',
+  csv: 'CSV',
+  document: 'DOC',
+  markdown: 'MD',
+  text: 'TXT',
+  code: 'CODE',
+  json: 'JSON',
+  log: 'LOG',
+  issue: 'ISSUE',
+  pr: 'PR',
+  url: 'URL',
+  internal: 'REF',
+  unknown: 'LINK',
+};
 
 function cleanSegment(value: string): string {
   try {
@@ -184,75 +219,13 @@ export function getLinkDisplayCategory(args: {
   if (ext === 'log') return 'log';
   if (['md', 'markdown'].includes(ext) || mime === 'text/markdown') return 'markdown';
   if (mime.startsWith('text/') || ['txt', 'adoc', 'rst'].includes(ext)) return 'text';
-  if (
-    [
-      'js',
-      'jsx',
-      'ts',
-      'tsx',
-      'py',
-      'rb',
-      'go',
-      'rs',
-      'java',
-      'c',
-      'cc',
-      'cpp',
-      'h',
-      'hpp',
-      'css',
-      'scss',
-      'html',
-      'xml',
-      'yaml',
-      'yml',
-      'toml',
-      'sql',
-      'sh',
-      'zsh',
-    ].includes(ext)
-  ) {
-    return 'code';
-  }
+  if (CODE_EXTENSIONS.has(ext)) return 'code';
 
   return args.filePath ? 'document' : 'unknown';
 }
 
 export function getLinkDisplayGlyphLabel(category: LinkDisplayCategory): string {
-  switch (category) {
-    case 'knowledge':
-      return 'KB';
-    case 'image':
-      return 'IMG';
-    case 'pdf':
-      return 'PDF';
-    case 'spreadsheet':
-      return 'XLS';
-    case 'csv':
-      return 'CSV';
-    case 'document':
-      return 'DOC';
-    case 'markdown':
-      return 'MD';
-    case 'text':
-      return 'TXT';
-    case 'code':
-      return 'CODE';
-    case 'json':
-      return 'JSON';
-    case 'log':
-      return 'LOG';
-    case 'issue':
-      return 'ISSUE';
-    case 'pr':
-      return 'PR';
-    case 'url':
-      return 'URL';
-    case 'internal':
-      return 'REF';
-    default:
-      return 'LINK';
-  }
+  return GLYPH_LABELS[category];
 }
 
 export function getCompactLinkDisplayName(
@@ -263,17 +236,11 @@ export function getCompactLinkDisplayName(
     pr: ['PR: '],
     url: ['Link: ', 'URL: ', 'Saved URL: '],
     image: ['Image: ', 'File: '],
-    pdf: ['File: '],
-    spreadsheet: ['File: '],
-    csv: ['File: '],
-    document: ['File: '],
-    markdown: ['File: '],
-    text: ['File: '],
-    code: ['File: '],
-    json: ['File: '],
-    log: ['File: '],
   };
-  for (const prefix of prefixesByCategory[item.category] ?? []) {
+  const prefixes =
+    prefixesByCategory[item.category] ??
+    (FILE_LINK_CATEGORIES.has(item.category) ? ['File: '] : []);
+  for (const prefix of prefixes) {
     if (item.name.startsWith(prefix)) return item.name.slice(prefix.length);
   }
   return item.name;
@@ -311,7 +278,7 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
   const targetKey = targetKeyForLink(link);
   if (!targetKey) return null;
 
-  const target = targetForLinkDisplay({ url: link.url, refUri: link.ref_uri });
+  const displayTarget = targetForLinkDisplay({ url: link.url, refUri: link.ref_uri });
   const promotedFromSessionId = getPromotedFromSessionId(link.metadata);
   const base = {
     key: `link:${link.link_id}`,
@@ -325,25 +292,22 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
     sessionId: link.session_id ?? undefined,
     sourceSessionId: link.session_id ?? promotedFromSessionId,
     mimeType: link.mime_type ?? undefined,
-    href: target?.href,
-    navigation: target?.navigation,
+    href: displayTarget?.href,
+    navigation: displayTarget?.navigation,
     createdAt: link.created_at,
     updatedAt: link.updated_at,
   } satisfies Partial<LinkDisplayItem>;
 
+  let targetData: Pick<LinkDisplayItem, 'name' | 'category' | 'url' | 'refUri' | 'filePath'>;
   if (link.url) {
     const prefix = githubKindLabel(link.kind) ?? 'Link';
-    return {
-      ...base,
+    targetData = {
       name: titleOrNull(link.title) ?? `${prefix}: ${getUrlDisplayLabel(link.url)}`,
       category: getLinkDisplayCategory({ kind: link.kind, mimeType: link.mime_type }),
       url: link.url,
-    } as LinkDisplayItem;
-  }
-
-  if (link.ref_uri) {
-    return {
-      ...base,
+    };
+  } else if (link.ref_uri) {
+    targetData = {
       name: titleOrNull(link.title) ?? getRefDisplayLabel(link.ref_uri),
       category: getLinkDisplayCategory({
         kind: link.kind,
@@ -351,14 +315,12 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
         refUri: link.ref_uri,
       }),
       refUri: link.ref_uri,
-    } as LinkDisplayItem;
-  }
-
-  if (link.file_path) {
-    const fallbackPrefix = link.kind === 'image' ? 'Image' : 'File';
-    return {
-      ...base,
-      name: titleOrNull(link.title) ?? `${fallbackPrefix}: ${lastPathSegment(link.file_path)}`,
+    };
+  } else if (link.file_path) {
+    targetData = {
+      name:
+        titleOrNull(link.title) ??
+        `${link.kind === 'image' ? 'Image' : 'File'}: ${lastPathSegment(link.file_path)}`,
       category: getLinkDisplayCategory({
         kind: link.kind,
         mimeType: link.mime_type,
@@ -366,10 +328,10 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
         filePath: link.file_path,
       }),
       filePath: link.file_path,
-    } as LinkDisplayItem;
-  }
+    };
+  } else return null;
 
-  return null;
+  return { ...base, ...targetData } as LinkDisplayItem;
 }
 
 function branchUrlToDisplayItem(args: {

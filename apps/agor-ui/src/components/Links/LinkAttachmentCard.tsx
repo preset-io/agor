@@ -5,7 +5,7 @@ import type React from 'react';
 import { useThemedMessage } from '../../utils/message';
 import type { LinkPreviewTarget } from './LinkContentPreviewModal';
 import { LinkImageThumbnail } from './LinkImageThumbnail';
-import { getLinkCategoryIcon, getLinkCategoryLabel } from './LinkVisual';
+import { getLinkCategoryIcon } from './LinkVisual';
 import {
   downloadLinkContent,
   getLinkContentAction,
@@ -16,7 +16,7 @@ import {
 } from './linkContent';
 import {
   getLinkDisplayCategory,
-  type LinkDisplayCategory,
+  getLinkDisplayGlyphLabel,
   type LinkDisplayTarget,
   targetForLinkDisplay,
 } from './linkDisplay';
@@ -43,23 +43,11 @@ export interface LinkAttachmentCardProps {
   onOpenTarget?: (target: LinkAttachmentTarget) => void;
 }
 
-type AttachmentCategory = LinkDisplayCategory;
-
 export function targetForLinkAttachment(args: {
   url?: string | null;
   refUri?: string | null;
 }): LinkAttachmentTarget | null {
   return targetForLinkDisplay(args);
-}
-
-function inferLinkAttachmentCategory(args: {
-  kind?: LinkKind | string | null;
-  mimeType?: string | null;
-  title?: string | null;
-  filePath?: string | null;
-  refUri?: string | null;
-}): AttachmentCategory {
-  return getLinkDisplayCategory(args);
 }
 
 export const LinkAttachmentGlyph: React.FC<{
@@ -82,7 +70,7 @@ export const LinkAttachmentGlyph: React.FC<{
   size = 'md',
 }) => {
   const { token } = theme.useToken();
-  const category = inferLinkAttachmentCategory({ kind, mimeType, title, filePath, refUri });
+  const category = getLinkDisplayCategory({ kind, mimeType, title, filePath, refUri });
   const dimension = size === 'sm' ? 28 : 38;
   return (
     <span
@@ -105,11 +93,11 @@ export const LinkAttachmentGlyph: React.FC<{
       }}
     >
       {size === 'sm' ? (
-        <span className={styles.glyphLabelSmall}>{getLinkCategoryLabel(category)}</span>
+        <span className={styles.glyphLabelSmall}>{getLinkDisplayGlyphLabel(category)}</span>
       ) : (
         <>
           <span className={styles.glyphIcon}>{getLinkCategoryIcon(category, disabled)}</span>
-          <span className={styles.glyphLabel}>{getLinkCategoryLabel(category)}</span>
+          <span className={styles.glyphLabel}>{getLinkDisplayGlyphLabel(category)}</span>
         </>
       )}
     </span>
@@ -138,7 +126,7 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
   const { showError } = useThemedMessage();
   const target = targetForLinkAttachment({ url, refUri });
   const contentItem: LinkContentItem = {
-    category: inferLinkAttachmentCategory({ kind, mimeType, title, filePath, refUri }),
+    category: getLinkDisplayCategory({ kind, mimeType, title, filePath, refUri }),
     source: source === 'upload' ? 'upload' : undefined,
     linkId: linkId ?? undefined,
     filePath: filePath ?? undefined,
