@@ -15,15 +15,15 @@ import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { UsersRepository } from './users';
 
-export async function seedLinkBoard(db: Database, boardId: BoardID) {
-  await new BoardRepository(db).create({
+export async function seedLinkBoard(db: Database, boardId = generateId() as BoardID) {
+  return new BoardRepository(db).create({
     board_id: boardId,
     name: `Links Board ${boardId}`,
     created_by: 'owner' as UUID,
   });
 }
 
-export async function seedLinkUser(db: Database, userId: UUID, email: string) {
+export async function seedLinkUser(db: Database, userId: UUID, email = `${userId}@example.com`) {
   await new UsersRepository(db).create({ user_id: userId, email, name: email });
 }
 
@@ -34,8 +34,12 @@ export async function seedLinkBranch(
     createdBy?: UUID;
     othersCan?: 'none' | 'view' | 'session' | 'prompt' | 'all';
     archived?: boolean;
+    createBoard?: boolean;
+    teammate?: boolean;
   }
 ) {
+  const boardId =
+    options?.boardId ?? (options?.createBoard ? (await seedLinkBoard(db)).board_id : undefined);
   const repo = await new RepoRepository(db).create({
     repo_id: generateId() as UUID,
     slug: `links-repo-${generateId()}`,
@@ -52,15 +56,20 @@ export async function seedLinkBranch(
     ref: 'refs/heads/test',
     branch_unique_id: 1,
     path: `/tmp/${generateId()}`,
-    board_id: options?.boardId,
+    board_id: boardId,
     created_by: options?.createdBy ?? ('owner' as UUID),
     permission_source: 'override',
     others_can: options?.othersCan ?? 'view',
     archived: options?.archived,
+    custom_context: options?.teammate ? { teammate: { kind: 'teammate' } } : undefined,
   });
 }
 
-export async function seedLinkSession(db: Database, branchId: BranchID, createdBy: UUID) {
+export async function seedLinkSession(
+  db: Database,
+  branchId: BranchID,
+  createdBy = 'owner' as UUID
+) {
   return new SessionRepository(db).create({
     session_id: generateId() as SessionID,
     branch_id: branchId,

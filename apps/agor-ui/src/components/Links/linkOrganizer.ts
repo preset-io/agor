@@ -99,6 +99,29 @@ export function getLinkCategoryCounts(
   };
 }
 
+export function selectQuickLinkDisplayItems(
+  items: readonly LinkDisplayItem[],
+  limit = 7
+): LinkDisplayItem[] {
+  if (limit <= 0) return [];
+
+  const selected = items.filter((item) => item.isPinned).slice(0, Math.min(3, limit));
+  const selectedKeys = new Set(selected.map((item) => item.key));
+  const files = items.filter(isFileLinkDisplayItem);
+  const selectedFileCount = selected.filter(isFileLinkDisplayItem).length;
+  const reservedFileSlots = Math.max(0, Math.min(2, files.length) - selectedFileCount);
+  const recentLimit = Math.max(0, limit - selected.length - reservedFileSlots);
+
+  selected.push(
+    ...items.filter((item) => !item.isPinned && !isFileLinkDisplayItem(item)).slice(0, recentLimit)
+  );
+  for (const file of files) {
+    if (selected.length >= limit) break;
+    if (!selectedKeys.has(file.key)) selected.push(file);
+  }
+  return selected;
+}
+
 export function matchesLinkDisplaySearch(
   item: LinkDisplayItem,
   query: string,

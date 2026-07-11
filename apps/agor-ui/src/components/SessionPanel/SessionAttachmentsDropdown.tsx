@@ -16,12 +16,12 @@ import { useNavigate } from 'react-router-dom';
 import {
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
-  isFileLinkDisplayItem,
   type LinkCategoryTabKey,
   type LinkDisplayItem,
   type LinkSortKey,
   matchesLinkCategoryTab,
   matchesLinkDisplaySearch,
+  selectQuickLinkDisplayItems,
 } from '../Links';
 import { LinkCollectionControls } from '../Links/LinkCollectionControls';
 import { getLinkUnavailableReason, getSafeLinkContentLabel } from '../Links/linkContent';
@@ -83,11 +83,6 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
   const visibleItems = items;
   const hasItems = visibleItems.length > 0;
-  const pinnedItems = visibleItems.filter((item) => item.isPinned);
-  const files = visibleItems.filter(isFileLinkDisplayItem);
-  const nonPinnedNonFiles = visibleItems.filter(
-    (item) => !item.isPinned && !isFileLinkDisplayItem(item)
-  );
   const categoryCounts = React.useMemo(() => getLinkCategoryCounts(visibleItems), [visibleItems]);
 
   const openPinnedManager = React.useCallback(() => {
@@ -102,15 +97,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
   if (!hasItems && !loading && !error) return null;
 
-  const fileReserve = files.length > 0 ? Math.min(2, files.length) : 0;
-  const quickPinned = pinnedItems.slice(0, Math.min(3, pinnedItems.length));
-  const quickPinnedKeys = new Set(quickPinned.map((item) => item.key));
-  const quickRecent = nonPinnedNonFiles.slice(0, Math.max(0, 7 - quickPinned.length - fileReserve));
-  const quickRecentKeys = new Set(quickRecent.map((item) => item.key));
-  const quickFiles = files
-    .filter((item) => !quickPinnedKeys.has(item.key) && !quickRecentKeys.has(item.key))
-    .slice(0, Math.max(0, 7 - quickPinned.length - quickRecent.length));
-  const quickItems = [...quickPinned, ...quickRecent, ...quickFiles];
+  const quickItems = selectQuickLinkDisplayItems(visibleItems);
 
   const openTarget = (item: SessionAttachmentItem) => {
     if (getLinkUnavailableReason(item)) return;

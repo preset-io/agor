@@ -347,12 +347,31 @@ function replaceLinkBucket(
   return next;
 }
 
-function isBranchOwnedBy(link: Link, branchId: string): boolean {
-  return link.branch_id === branchId && !link.session_id;
-}
+function replaceFullOwnerLinksInMaps(
+  prev: DataMaps,
+  scope: 'branch' | 'session',
+  ownerId: string,
+  links: readonly Link[]
+): DataMaps {
+  const branchOwned = scope === 'branch';
+  const ownerLinks = links.filter((link) =>
+    branchOwned
+      ? link.branch_id === ownerId && !link.session_id
+      : link.session_id === ownerId && !link.branch_id
+  );
+  const fetchedIds = new Set(ownerLinks.map((link) => link.link_id));
+  const bucketKey = branchOwned ? 'linksByBranch' : 'linksBySession';
 
-function isSessionOwnedBy(link: Link, sessionId: string): boolean {
-  return link.session_id === sessionId && !link.branch_id;
+  let next = prev;
+  for (const link of prev[bucketKey].get(ownerId) ?? []) {
+    if (!fetchedIds.has(link.link_id)) {
+      next = removeLinkFromMaps(next, link.link_id);
+    }
+  }
+  next = mergeLinksIntoMaps(next, ownerLinks);
+
+  const nextBuckets = replaceLinkBucket(next[bucketKey], ownerId, ownerLinks);
+  return nextBuckets === next[bucketKey] ? next : { ...next, [bucketKey]: nextBuckets };
 }
 
 export function replaceFullBranchLinksInMaps(
@@ -360,20 +379,7 @@ export function replaceFullBranchLinksInMaps(
   branchId: string,
   links: readonly Link[]
 ): DataMaps {
-  const ownerLinks = links.filter((link) => isBranchOwnedBy(link, branchId));
-  const fetchedIds = new Set(ownerLinks.map((link) => link.link_id));
-
-  let next = prev;
-  for (const link of prev.linksByBranch.get(branchId) ?? []) {
-    if (!fetchedIds.has(link.link_id)) {
-      next = removeLinkFromMaps(next, link.link_id);
-    }
-  }
-  next = mergeLinksIntoMaps(next, ownerLinks);
-
-  const linksByBranch = replaceLinkBucket(next.linksByBranch, branchId, ownerLinks);
-  if (linksByBranch === next.linksByBranch) return next;
-  return { ...next, linksByBranch };
+  return replaceFullOwnerLinksInMaps(prev, 'branch', branchId, links);
 }
 
 export function replaceFullSessionLinksInMaps(
@@ -381,20 +387,7 @@ export function replaceFullSessionLinksInMaps(
   sessionId: string,
   links: readonly Link[]
 ): DataMaps {
-  const ownerLinks = links.filter((link) => isSessionOwnedBy(link, sessionId));
-  const fetchedIds = new Set(ownerLinks.map((link) => link.link_id));
-
-  let next = prev;
-  for (const link of prev.linksBySession.get(sessionId) ?? []) {
-    if (!fetchedIds.has(link.link_id)) {
-      next = removeLinkFromMaps(next, link.link_id);
-    }
-  }
-  next = mergeLinksIntoMaps(next, ownerLinks);
-
-  const linksBySession = replaceLinkBucket(next.linksBySession, sessionId, ownerLinks);
-  if (linksBySession === next.linksBySession) return next;
-  return { ...next, linksBySession };
+  return replaceFullOwnerLinksInMaps(prev, 'session', sessionId, links);
 }
 
 export function removeLinkFromMaps(prev: DataMaps, linkOrId: Link | string): DataMaps {

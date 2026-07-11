@@ -1,68 +1,26 @@
-import {
-  BoardRepository,
-  BranchRepository,
-  LinksRepository,
-  RepoRepository,
-  SessionRepository,
-  UsersRepository,
-} from '@agor/core/db';
+import { BranchRepository, LinksRepository } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
-import type { BoardID, BranchID, Link, SessionID, UUID } from '@agor/core/types';
+import type { BranchID, Link, UUID } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import type { Database } from '../../../../packages/core/src/db/client';
+import {
+  seedLinkBranch,
+  seedLinkSession as seedSession,
+  seedLinkUser as seedUser,
+} from '../../../../packages/core/src/db/repositories/links.test-helpers';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
 import { LinkPromotionService } from './link-promotion';
 import { LinksService } from './links';
 
-async function seedUser(db: Database, userId: UUID, email = `${userId}@example.com`) {
-  await new UsersRepository(db).create({ user_id: userId, email, name: email });
-}
-
-async function seedBoard(db: Database) {
-  return new BoardRepository(db).create({
-    board_id: generateId() as BoardID,
-    name: 'Link promotion board',
-    created_by: 'owner' as UUID,
-  });
-}
-
 async function seedBranch(
   db: Database,
   options: { teammate?: boolean; othersCan?: 'none' | 'view' | 'session' | 'prompt' | 'all' } = {}
 ) {
-  const repo = await new RepoRepository(db).create({
-    repo_id: generateId() as UUID,
-    slug: `link-promotion-${generateId()}`,
-    name: 'Link Promotion Repo',
-    repo_type: 'remote',
-    remote_url: 'https://github.com/example/repo.git',
-    local_path: `/tmp/${generateId()}`,
-    default_branch: 'main',
-  });
-  const board = await seedBoard(db);
-  return new BranchRepository(db).create({
-    branch_id: generateId() as BranchID,
-    repo_id: repo.repo_id,
-    name: `link-promotion-branch-${generateId()}`,
-    ref: 'refs/heads/test',
-    branch_unique_id: 1,
-    path: `/tmp/${generateId()}`,
-    board_id: board.board_id,
-    created_by: 'owner' as UUID,
-    permission_source: 'override',
-    others_can: options.othersCan ?? 'none',
-    custom_context: options.teammate ? { teammate: { kind: 'teammate' } } : undefined,
-  });
-}
-
-async function seedSession(db: Database, branchId: BranchID) {
-  return new SessionRepository(db).create({
-    session_id: generateId() as SessionID,
-    branch_id: branchId,
-    created_by: 'owner' as UUID,
-    tasks: [],
-    genealogy: { children: [] },
+  return seedLinkBranch(db, {
+    createBoard: true,
+    teammate: options.teammate,
+    othersCan: options.othersCan ?? 'none',
   });
 }
 

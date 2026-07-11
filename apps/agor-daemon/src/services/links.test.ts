@@ -1,12 +1,4 @@
-import {
-  BoardRepository,
-  BranchRepository,
-  LinksRepository,
-  MessagesRepository,
-  RepoRepository,
-  SessionRepository,
-  UsersRepository,
-} from '@agor/core/db';
+import { BranchRepository, LinksRepository, MessagesRepository } from '@agor/core/db';
 import type {
   BoardID,
   BranchID,
@@ -19,59 +11,26 @@ import type {
 } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { Database } from '../../../../packages/core/src/db/client';
+import {
+  seedLinkBoard as seedBoard,
+  seedLinkBranch,
+  seedLinkSession as seedSession,
+  seedLinkUser as seedUser,
+} from '../../../../packages/core/src/db/repositories/links.test-helpers';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
 import { ingestParsedLinksAfterMessageCreate, LINKS_SERVICE_METHODS, LinksService } from './links';
 import { linksHooks } from './links-hooks';
-
-async function seedUser(db: Database, userId: UUID, email: string) {
-  await new UsersRepository(db).create({ user_id: userId, email, name: email });
-}
-
-async function seedBoard(db: Database, boardId: BoardID) {
-  await new BoardRepository(db).create({
-    board_id: boardId,
-    name: `Links Service Board ${boardId}`,
-    created_by: 'owner' as UUID,
-  });
-}
 
 async function seedBranch(
   db: Database,
   othersCan: 'none' | 'view' = 'none',
   options?: { boardId?: BoardID; archived?: boolean }
 ) {
-  const repo = await new RepoRepository(db).create({
-    repo_id: generateId() as UUID,
-    slug: `links-service-repo-${generateId()}`,
-    name: 'Links Service Repo',
-    repo_type: 'remote',
-    remote_url: 'https://github.com/example/repo.git',
-    local_path: `/tmp/${generateId()}`,
-    default_branch: 'main',
-  });
-  return new BranchRepository(db).create({
-    branch_id: generateId() as BranchID,
-    repo_id: repo.repo_id,
-    name: `links-service-branch-${generateId()}`,
-    ref: 'refs/heads/test',
-    branch_unique_id: 1,
-    path: `/tmp/${generateId()}`,
-    board_id: options?.boardId,
-    created_by: 'owner' as UUID,
-    permission_source: 'override',
-    others_can: othersCan,
+  return seedLinkBranch(db, {
+    boardId: options?.boardId,
     archived: options?.archived,
-  });
-}
-
-async function seedSession(db: Database, branchId: BranchID) {
-  return new SessionRepository(db).create({
-    session_id: generateId() as SessionID,
-    branch_id: branchId,
-    created_by: 'owner' as UUID,
-    tasks: [],
-    genealogy: { children: [] },
+    othersCan,
   });
 }
 
