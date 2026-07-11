@@ -1,15 +1,14 @@
 engine biome(1.0)
 language js(typescript, jsx)
 
-// Catch unambiguous color syntax anywhere inside a string, not just when the
-// color is the entire value. This covers conditional values, gradients,
-// shadows, generated HTML/CSS, and template strings. Three-digit hex and
-// named colors are handled by the context-aware property rule because values
-// such as `repo#123` are common and are not necessarily colors.
+// Match only unambiguous color syntax outside style-property context: complete
+// color literals, CSS color functions, encoded SVG colors, and hex colors in
+// gradients/shadows, border styles, or embedded CSS declarations. Ordinary
+// prose such as `Fixes #123456` deliberately does not match.
 or {
   JsStringLiteralExpression(),
   JsTemplateExpression()
 } as $literal where {
-  $literal <: r"(?is)^[\"'`](?:#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4})|.*(?:(?:[^0-9a-z_/-])#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4})|(?:rgba?|hsla?|oklch|oklab|color)\([^\"'`]*\)|(?:[ :,()]#[0-9a-f]{3}|#[0-9a-f]{3}[ :,()%]))).*[\"'`]$",
+  $literal <: r"(?is)^[\"\'`](?:#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4})[\"\'`]$|.*(?:rgba?|hsla?|oklch|oklab|color)\([^\"\'`]*\).*[\"\'`]$|.*%23(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4}|[0-9a-f]{3}).*[\"\'`]$|.*(?:(?:(?:repeating-)?(?:linear|radial|conic)-gradient|drop-shadow)\([^\"\'`]*#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4}|[0-9a-f]{3})|(?:solid|dashed|dotted|double)\s+#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4}|[0-9a-f]{3})|(?:color|background(?:-color)?|border(?:-[a-z-]+)?|outline|box-shadow|text-shadow|fill|stroke)\s*:\s*#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4}|[0-9a-f]{3})).*[\"\'`]$)",
   register_diagnostic(span=$literal, message="Use an Ant Design component or theme token instead of a hard-coded color literal. Intentional palettes require a documented plugin suppression.", severity="error")
 }

@@ -133,8 +133,8 @@ export function useSessionSearch(
   const { token } = theme.useToken();
   const resolvedColors = colors ?? {
     highlight: token.colorWarning,
-    current: token.colorWarning,
-    currentText: token.colorTextLightSolid,
+    current: token.colorWarningBg,
+    currentText: token.colorText,
   };
 
   const [searchOpen, setSearchOpen] = useState(false);

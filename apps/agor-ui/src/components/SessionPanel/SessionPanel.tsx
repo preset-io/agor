@@ -435,11 +435,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     closeSearch,
     goNext,
     goPrev,
-  } = useSessionSearch(conversationRef, {
-    highlight: token.colorWarning,
-    current: token.colorWarning,
-    currentText: token.colorTextLightSolid,
-  });
+  } = useSessionSearch(conversationRef);
   const composerSessionIdentityRef = React.useRef<{
     sessionId: SessionID | null;
     generation: number;

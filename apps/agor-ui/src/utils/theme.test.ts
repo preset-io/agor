@@ -1,18 +1,25 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: color-parser inputs and expected transformations are the test contract
+
+import { theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import { describe, expect, it } from 'vitest';
 import { ensureColorVisible, getContrastingTextColor, isDarkTheme } from './theme';
 
 const contrastTokens = {
   colorText: '#777777',
-  colorTextBase: '#111111',
-  colorWhite: '#fefefe',
 };
 
 describe('getContrastingTextColor', () => {
-  it('uses theme endpoints for light and dark opaque backgrounds', () => {
-    expect(getContrastingTextColor('#ffffff', contrastTokens)).toBe(contrastTokens.colorTextBase);
-    expect(getContrastingTextColor('#000000', contrastTokens)).toBe(contrastTokens.colorWhite);
+  it('chooses absolute WCAG endpoints for light and dark opaque backgrounds', () => {
+    expect(getContrastingTextColor('#ffffff', contrastTokens)).toBe('#000000');
+    expect(getContrastingTextColor('#000000', contrastTokens)).toBe('#ffffff');
+  });
+
+  it('does not inherit identical white endpoints from AntD darkAlgorithm tokens', () => {
+    const darkToken = theme.getDesignToken({ algorithm: theme.darkAlgorithm });
+    expect(darkToken.colorTextBase).toBe(darkToken.colorWhite);
+    expect(getContrastingTextColor('#f5f5f5', darkToken)).toBe('#000000');
+    expect(getContrastingTextColor('#141414', darkToken)).toBe('#ffffff');
   });
 
   it('uses normal theme text for transparent or invalid backgrounds', () => {
