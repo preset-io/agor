@@ -197,32 +197,6 @@
   }
 }
 
-.brandMark {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 34px;
-  color: var(--landing-ink);
-  font-family: var(--font-display-stack);
-  font-size: 1.58rem;
-  font-weight: 600;
-}
-
-.brandMark img {
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
-  box-shadow: 0 0 34px rgba(52, 230, 196, 0.2);
-}
-
-.brandMark span {
-  background: var(--landing-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.kicker,
 .eyebrow {
   display: block;
   margin: 0 0 22px;
@@ -236,7 +210,6 @@
 
 .heroCopy h1,
 .sectionHeader h2,
-.liveCopy h2,
 .workspaceCopy h2,
 .controlSection h2,
 .finalCta h2 {
@@ -307,15 +280,6 @@
 .footerEtymology span {
   color: var(--landing-teal);
   font-weight: 700;
-}
-
-.heroMeta {
-  margin: 18px 0 0;
-  color: var(--landing-muted);
-  font-family: var(--font-mono-stack);
-  font-size: 0.8rem;
-  font-weight: 400;
-  letter-spacing: 0.02em;
 }
 
 .harnessStrip {
@@ -413,8 +377,7 @@
 }
 
 .primaryButton,
-.secondaryButton,
-.textButton {
+.secondaryButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -441,8 +404,7 @@
 }
 
 .primaryButton:hover,
-.secondaryButton:hover,
-.textButton:hover {
+.secondaryButton:hover {
   transform: translateY(-2px);
 }
 
@@ -465,14 +427,6 @@
   color: var(--landing-ink);
 }
 
-.landingShell .textButton {
-  border: 0;
-  color: var(--landing-muted);
-  background: transparent;
-  cursor: pointer;
-  font-family: inherit;
-}
-
 .githubIcon {
   width: 1.05em;
   height: 1.05em;
@@ -484,71 +438,18 @@
 }
 
 .sectionHeader h2,
-.liveCopy h2,
 .workspaceCopy h2,
 .controlSection h2,
 .finalCta h2 {
   font-size: clamp(2.45rem, 4vw, 4.05rem);
 }
 
-.featureGrid {
-  display: grid;
-  gap: 18px;
-  margin-top: 48px;
-}
-
-.featureCard {
-  min-height: 236px;
-  padding: 26px;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid rgba(52, 230, 196, 0.12);
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(15, 34, 31, 0.7), rgba(10, 22, 20, 0.5));
-  transition:
-    translate 0.3s ease,
-    border-color 0.3s ease;
-}
-
-.featureCard:hover {
-  translate: 0 -5px;
-  border-color: rgba(52, 230, 196, 0.32);
-}
-
-.featureCard h3 {
-  margin: 0;
-  color: var(--landing-ink);
-  font-family: var(--font-display-stack);
-  font-size: 1.35rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.featureCard p,
-.liveCopy p,
 .workspaceCopy p,
 .controlSection p,
 .finalCta p {
   margin: 16px 0 0;
   color: var(--landing-muted);
   line-height: 1.7;
-}
-
-.cardLink {
-  display: inline-flex;
-  margin-top: auto;
-  padding-top: 22px;
-  transition: color 0.25s ease;
-  color: var(--landing-teal);
-  font-family: var(--font-mono-stack);
-  font-size: 0.8rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-decoration: none;
-}
-
-.cardLink:hover {
-  color: #a8f5ed;
 }
 
 /* --- Capability ring: nodes orbit a hub that reveals the active card --- */
@@ -802,11 +703,6 @@
 .workspaceCopy {
   position: sticky;
   top: 92px;
-}
-
-.featureGrid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 0;
 }
 
 /* Workspace section above carries 88px bottom padding — no extra gap needed */
@@ -1488,10 +1384,6 @@
   line-height: 1.6;
 }
 
-.liveSection .cardLink {
-  margin-top: 34px;
-}
-
 /* --- "The problem" section: scattered "collision" composition. The six
  * amber cards pile into a loose horizontal band — each .problemSlot carries a
  * static scatter pose (rotate/translate/negative-margin/z-index from CSS vars
@@ -2159,9 +2051,9 @@
 }
 
 /* --- Viewport media queries — kept AFTER every base rule they override
- * (equal specificity means source order decides; these blocks previously sat
- * mid-file and several overrides — .liveGrid, .problemGrid, .showcaseSlide,
- * .slideCollage* — were dead because their base rules came later). --- */
+ * (equal specificity means source order decides; these blocks once sat
+ * mid-file and several overrides were dead because their base rules came
+ * later — never move a media query above a base rule it overrides). --- */
 @media (max-width: 980px) {
   .liveGrid {
     grid-template-columns: 1fr;
@@ -2227,6 +2119,8 @@
   }
 
   .surfaceRailItem {
+    /* Pill height clears the 40px touch-target floor. */
+    min-height: 40px;
     padding: 8px 14px;
     border: 1px solid rgba(52, 230, 196, 0.16);
     border-radius: 999px;
@@ -2303,14 +2197,11 @@
   }
 
   .primaryButton,
-  .secondaryButton,
-  .textButton {
+  .secondaryButton {
     width: 100%;
   }
 
-  .featureGrid,
   .sectionHeader h2,
-  .liveCopy h2,
   .workspaceCopy h2,
   .controlSection h2,
   .finalCta h2 {
@@ -2326,6 +2217,21 @@
    * top of the slide content, so drop them. */
   .showcaseArrow {
     display: none;
+  }
+
+  /* The 16:9 video frame is short at phone widths — drop the desktop slide
+   * min-height so the stage hugs the media instead of floating it in a tall
+   * empty well. */
+  .showcaseSlide {
+    min-height: 0;
+    padding: 18px;
+  }
+
+  /* Info row can't fit copy + button side by side — stack them. */
+  .surfaceInfo {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
   }
 
   .landingFooter {

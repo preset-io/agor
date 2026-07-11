@@ -737,7 +737,10 @@ export function LandingPage() {
                 <div className={styles.showcaseSlide} key={slide.label}>
                   {/* Poster is the frame's background image so it shows under
                       prefers-reduced-motion (CSS hides the video) and with JS
-                      off (no play() call ever fires). */}
+                      off (no play() call ever fires). Only the first slide
+                      preloads — four eager mp4s (~5MB) is real weight on a
+                      phone; play() on the other slides triggers their fetch
+                      when they're actually activated. */}
                   <div
                     className={styles.slideVideoFrame}
                     style={{ backgroundImage: `url(${slide.poster})` }}
@@ -750,7 +753,7 @@ export function LandingPage() {
                       muted
                       loop
                       playsInline
-                      preload="auto"
+                      preload={index === 0 ? 'auto' : 'none'}
                       poster={slide.poster}
                       aria-label={slide.label}
                     >

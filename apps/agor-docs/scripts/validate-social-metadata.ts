@@ -14,7 +14,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.resolve(__dirname, '..');
-const pagesDir = path.join(appDir, 'pages');
+const pagesDir = path.join(appDir, 'content');
 const publicDir = path.join(appDir, 'public');
 
 type PageMetadata = {
@@ -60,7 +60,7 @@ function parseFrontMatter(filePath: string): FrontMatterLike {
 
 function assertBlogPostsMatchPages(pages: PageMetadata[], errors: string[]): void {
   const blogPages = pages.filter(
-    (page) => page.filePath.startsWith('pages/blog/') && page.filePath.endsWith('.mdx')
+    (page) => page.filePath.startsWith('content/blog/') && page.filePath.endsWith('.mdx')
   );
   const pageSlugs = new Set(
     blogPages.map((page) => path.basename(page.filePath, path.extname(page.filePath)))
@@ -69,13 +69,13 @@ function assertBlogPostsMatchPages(pages: PageMetadata[], errors: string[]): voi
 
   for (const slug of pageSlugs) {
     if (!listedSlugs.has(slug)) {
-      errors.push(`pages/blog/${slug}.mdx: missing entry in lib/blogPosts.ts`);
+      errors.push(`content/blog/${slug}.mdx: missing entry in lib/blogPosts.ts`);
     }
   }
 
   for (const post of blogPosts) {
     if (!pageSlugs.has(post.slug)) {
-      errors.push(`lib/blogPosts.ts: entry has no matching pages/blog/${post.slug}.mdx`);
+      errors.push(`lib/blogPosts.ts: entry has no matching content/blog/${post.slug}.mdx`);
     }
   }
 

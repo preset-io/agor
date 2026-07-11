@@ -8,8 +8,6 @@
 
 export const DISCORD_INVITE_URL = 'https://discord.gg/Qh4TrFQZpd';
 export const GITHUB_REPO_URL = 'https://github.com/preset-io/agor';
-export const GITHUB_DISCUSSIONS_URL = 'https://github.com/preset-io/agor/discussions';
-export const GITHUB_ISSUES_URL = 'https://github.com/preset-io/agor/issues';
 
 // Agor Cloud private beta interest form (Preset landing page, replaces
 // the legacy Google Forms link). Consumed by CloudInviteCTA in the
