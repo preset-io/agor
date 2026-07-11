@@ -142,6 +142,7 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
     source: source === 'upload' ? 'upload' : undefined,
     linkId: linkId ?? undefined,
     filePath: filePath ?? undefined,
+    mimeType: mimeType ?? undefined,
     kind: kind ?? undefined,
     href: target?.href,
   };

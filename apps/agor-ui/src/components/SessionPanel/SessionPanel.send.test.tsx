@@ -413,7 +413,7 @@ describe('SessionPanel composer send', () => {
     expect(onBtwFork).not.toHaveBeenCalled();
   });
 
-  it('shows unsupported file intake errors before upload/send', async () => {
+  it('accepts arbitrary file types into the composer', async () => {
     const onSendPrompt = vi.fn();
     renderSessionPanel({ onSendPrompt });
 
@@ -424,15 +424,11 @@ describe('SessionPanel composer send', () => {
       },
     });
 
-    await waitFor(() => {
-      expect(
-        screen.getAllByText(/unsafe.html: Unsupported file type: text\/html/).length
-      ).toBeGreaterThan(0);
-    });
+    await waitFor(() => expect(screen.getByLabelText('unsafe.html')).toBeInTheDocument());
 
     expect(uploadMockState.uploadFilesToSession).not.toHaveBeenCalled();
     expect(onSendPrompt).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText('Preview unsafe.html')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Remove unsafe.html')).toBeInTheDocument();
   });
 
   it('shows a visible cap error and rejects an incoming batch over 10 files', async () => {
@@ -466,7 +462,7 @@ describe('SessionPanel composer send', () => {
     expect(onSendPrompt).not.toHaveBeenCalled();
   });
 
-  it('prioritizes the visible cap error for mixed invalid and over-cap batches', async () => {
+  it('shows the cap error for an over-cap batch containing arbitrary file types', async () => {
     const onSendPrompt = vi.fn();
     renderSessionPanel({ onSendPrompt });
 
@@ -489,9 +485,8 @@ describe('SessionPanel composer send', () => {
 
     await waitFor(() => {
       expect(
-        screen.getAllByText(
-          /pending-00.txt: Composer supports up to 10 pending files \(\+11 more\)/
-        ).length
+        screen.getAllByText(/bad.svg: Composer supports up to 10 pending files \(\+11 more\)/)
+          .length
       ).toBeGreaterThan(0);
     });
 

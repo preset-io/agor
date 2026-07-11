@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, Link, Params } from '@agor/core/types';
 import type { Request, Response } from 'express';
-import { ALLOWED_UPLOAD_MIME_TYPES, getUploadDirectory } from '../utils/upload.js';
+import { getUploadDirectory } from '../utils/upload.js';
 
 const INLINE_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
   'image/png',
@@ -82,10 +82,6 @@ export function chooseLinkContentDisposition(args: {
   const requested = args.requestedDisposition === 'inline' ? 'inline' : 'attachment';
   const mimeType = normalizeMimeType(args.mimeType);
 
-  if (!ALLOWED_UPLOAD_MIME_TYPES.has(mimeType)) {
-    throw new LinkContentError(415, 'Unsupported file type');
-  }
-
   if (requested !== 'inline') return 'attachment';
 
   if (INLINE_IMAGE_MIME_TYPES.has(mimeType)) {
@@ -140,10 +136,7 @@ export async function resolveUploadedLinkContentFile(
     throw new LinkContentError(403, 'File content not available');
   }
 
-  const mimeType = normalizeMimeType(link.mime_type);
-  if (!ALLOWED_UPLOAD_MIME_TYPES.has(mimeType)) {
-    throw new LinkContentError(415, 'Unsupported file type');
-  }
+  const mimeType = normalizeMimeType(link.mime_type) || 'application/octet-stream';
 
   return {
     path: fileReal,

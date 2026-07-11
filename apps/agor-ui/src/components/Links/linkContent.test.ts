@@ -72,8 +72,19 @@ describe('getLinkContentAction', () => {
         kind: 'image',
         linkId: 'image-1',
         filePath: 'chart.png',
+        mimeType: 'image/png',
       })
     ).toBe('preview');
+    expect(
+      getLinkContentAction({
+        category: 'image',
+        source: 'upload',
+        kind: 'image',
+        linkId: 'svg-1',
+        filePath: 'diagram.svg',
+        mimeType: 'image/svg+xml',
+      })
+    ).toBe('download');
     expect(
       getLinkContentAction({
         category: 'document',

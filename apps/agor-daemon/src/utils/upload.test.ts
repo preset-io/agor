@@ -2,7 +2,6 @@
  * Upload-middleware tests.
  *
  * The multer instance is opaque, so we exercise its config indirectly:
- *   - the exported MIME allowlist excludes dangerous types
  *   - the limits constants match what the prompt specifies
  *   - the live multer instance carries those limits
  *   - aggregate-size middlewares reject oversize requests (pre + post multer)
@@ -13,7 +12,6 @@ import path from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  ALLOWED_UPLOAD_MIME_TYPES,
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
   enforceTotalUploadSize,
@@ -37,24 +35,7 @@ function mockRes() {
   return res as Response & { _status?: number; _body?: unknown };
 }
 
-describe('upload allowlist', () => {
-  it('accepts common safe MIMEs', () => {
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('image/png')).toBe(true);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('image/jpeg')).toBe(true);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('text/plain')).toBe(true);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('text/markdown')).toBe(true);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('application/pdf')).toBe(true);
-  });
-
-  it('rejects HTML / executable / script-bearing MIMEs', () => {
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('text/html')).toBe(false);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('application/x-msdownload')).toBe(false);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('application/x-sh')).toBe(false);
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('application/javascript')).toBe(false);
-    // SVG is intentionally excluded — can carry inline <script>.
-    expect(ALLOWED_UPLOAD_MIME_TYPES.has('image/svg+xml')).toBe(false);
-  });
-
+describe('upload limits', () => {
   it('multer instance carries the configured limits', () => {
     // Tiny stand-ins for the repos — the limit fields are read off the multer
     // instance directly, so the storage callbacks never run.

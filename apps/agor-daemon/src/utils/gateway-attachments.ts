@@ -15,7 +15,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
 import {
-  ALLOWED_UPLOAD_MIME_TYPES,
   buildUploadFilename,
   getUploadDirectory,
   MAX_UPLOAD_FILE_SIZE,
@@ -30,6 +29,12 @@ export interface AttachmentIngestResult {
 }
 
 const MAX_REDIRECT_HOPS = 3;
+const SAFE_GATEWAY_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
 
 /**
  * Whether a platform file URL may be downloaded with the channel's bot token.
@@ -49,16 +54,16 @@ export function isAllowedSlackFileUrl(rawUrl: string): boolean {
 }
 
 /**
- * Image MIME types the upload pipeline accepts — membership in the upload
- * route's allowlist, which deliberately excludes script-bearing image types
- * like image/svg+xml.
+ * Image MIME types that are safe to ingest from a remote gateway and preview.
+ * The direct upload route accepts arbitrary files; remote gateway ingestion
+ * remains raster-only because it downloads content using a bot credential.
  */
 function isAllowedImageMime(rawMime: string): boolean {
   const mime = rawMime.split(';')[0].trim().toLowerCase();
-  return mime.startsWith('image/') && ALLOWED_UPLOAD_MIME_TYPES.has(mime);
+  return SAFE_GATEWAY_IMAGE_MIME_TYPES.has(mime);
 }
 
-/** Image attachments the upload pipeline accepts (same allowlist as the upload route). */
+/** Safe raster image attachments accepted from inbound gateways. */
 export function isIngestableImageFile(file: InboundFile): boolean {
   return isAllowedImageMime(file.mimetype);
 }

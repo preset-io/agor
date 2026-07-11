@@ -13,7 +13,7 @@ type LinkContentAction = 'preview' | 'download';
 export type LinkPreviewKind = 'image' | 'markdown' | 'text';
 export type LinkContentItem = Pick<
   LinkDisplayItem,
-  'category' | 'filePath' | 'href' | 'kind' | 'linkId' | 'source'
+  'category' | 'filePath' | 'href' | 'kind' | 'linkId' | 'mimeType' | 'source'
 >;
 
 const INLINE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -43,6 +43,12 @@ function getLinkContentUrl(
 
 export function getLinkPreviewKind(item: LinkContentItem): LinkPreviewKind | null {
   if (item.source !== 'upload' || !item.linkId || !item.filePath) return null;
+  const mimeType = item.mimeType?.split(';')[0]?.trim().toLowerCase();
+  if (mimeType) {
+    if (item.category === 'image' && !INLINE_IMAGE_MIME_TYPES.has(mimeType)) return null;
+    if (item.category === 'markdown' && mimeType !== 'text/markdown') return null;
+    if (item.category === 'text' && mimeType !== 'text/plain') return null;
+  }
   return PREVIEW_CATEGORIES[item.category] ?? null;
 }
 

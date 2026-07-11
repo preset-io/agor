@@ -7,20 +7,6 @@ export const COMPOSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
   'image/webp',
 ]);
 
-export const COMPOSER_UPLOAD_MIME_TYPES = new Set([
-  ...COMPOSER_PREVIEW_IMAGE_MIME_TYPES,
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-  'application/json',
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/zip',
-  'application/gzip',
-  'application/x-tar',
-]);
-
 const COMPOSER_UPLOAD_EXTENSION_MIME_TYPES = new Map<string, string>([
   ['.png', 'image/png'],
   ['.jpg', 'image/jpeg'],
@@ -97,10 +83,6 @@ export function isPreviewableComposerImage(file: File): boolean {
   return COMPOSER_PREVIEW_IMAGE_MIME_TYPES.has(inferComposerUploadMimeType(file));
 }
 
-export function isSupportedComposerUploadFile(file: File): boolean {
-  return COMPOSER_UPLOAD_MIME_TYPES.has(inferComposerUploadMimeType(file));
-}
-
 function formatBytes(bytes: number): string {
   const mb = bytes / (1024 * 1024);
   return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
@@ -119,14 +101,6 @@ export function validateComposerFileIntake(
   const candidates: File[] = [];
 
   for (const file of files) {
-    if (!isSupportedComposerUploadFile(file)) {
-      rejections.push({
-        file,
-        reason: `Unsupported file type: ${file.type || 'unknown'}`,
-      });
-      continue;
-    }
-
     if (file.size > MAX_COMPOSER_UPLOAD_FILE_SIZE) {
       rejections.push({
         file,
@@ -179,8 +153,8 @@ export function isBlockingComposerAttachment(attachment: ComposerAttachment): bo
   return attachment.status === 'failed';
 }
 
-export function getComposerUploadAccept(): string {
-  return Array.from(COMPOSER_UPLOAD_MIME_TYPES).join(',');
+export function getComposerUploadAccept(): undefined {
+  return undefined;
 }
 
 export interface ComposerPromptValueSource {

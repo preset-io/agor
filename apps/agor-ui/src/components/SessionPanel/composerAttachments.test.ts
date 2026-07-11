@@ -4,7 +4,6 @@ import {
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
   isPreviewableComposerImage,
-  isSupportedComposerUploadFile,
   summarizeComposerFileRejections,
   validateComposerFileIntake,
 } from './composerAttachments';
@@ -65,30 +64,23 @@ Attached files:
     ).toBe(false);
   });
 
-  it('validates composer upload file types before send', () => {
-    expect(
-      isSupportedComposerUploadFile(new File(['x'], 'notes.txt', { type: 'text/plain' }))
-    ).toBe(true);
-    expect(
-      isSupportedComposerUploadFile(new File(['x'], 'chart.svg', { type: 'image/svg+xml' }))
-    ).toBe(false);
-
+  it('accepts arbitrary file types while keeping unsafe images out of inline preview', () => {
     const { acceptedFiles, rejections } = validateComposerFileIntake([
       new File(['x'], 'notes.txt', { type: 'text/plain' }),
       new File(['x'], 'unsafe.svg', { type: 'image/svg+xml' }),
+      new File(['<script>'], 'page.html', { type: 'text/html' }),
     ]);
 
-    expect(acceptedFiles.map((file) => file.name)).toEqual(['notes.txt']);
-    expect(rejections).toEqual([
-      expect.objectContaining({
-        file: expect.objectContaining({ name: 'unsafe.svg' }),
-        reason: 'Unsupported file type: image/svg+xml',
-      }),
+    expect(acceptedFiles.map((file) => file.name)).toEqual([
+      'notes.txt',
+      'unsafe.svg',
+      'page.html',
     ]);
+    expect(rejections).toEqual([]);
+    expect(isPreviewableComposerImage(acceptedFiles[1])).toBe(false);
   });
 
-  it('infers supported file types from safe extensions when dropped files have empty MIME', () => {
-    expect(isSupportedComposerUploadFile(new File(['x'], 'notes.txt', { type: '' }))).toBe(true);
+  it('infers preview MIME for known extensions without rejecting unknown files', () => {
     expect(isPreviewableComposerImage(new File(['x'], 'chart.png', { type: '' }))).toBe(true);
 
     const { acceptedFiles, rejections } = validateComposerFileIntake([
@@ -97,30 +89,22 @@ Attached files:
       new File(['<svg />'], 'unsafe.svg', { type: '' }),
     ]);
 
-    expect(rejections).toEqual([
-      expect.objectContaining({
-        file: expect.objectContaining({ name: 'unsafe.svg' }),
-        reason: 'Unsupported file type: unknown',
-      }),
-    ]);
+    expect(rejections).toEqual([]);
     expect(acceptedFiles.map((file) => [file.name, file.type])).toEqual([
       ['notes.txt', 'text/plain'],
       ['report.pdf', 'application/pdf'],
+      ['unsafe.svg', ''],
     ]);
   });
 
-  it('does not trust extensions when the browser reports an unsupported MIME type', () => {
+  it('preserves a browser-reported MIME type without blocking the upload', () => {
     const { acceptedFiles, rejections } = validateComposerFileIntake([
       new File(['<script>'], 'renamed.txt', { type: 'text/html' }),
     ]);
 
-    expect(acceptedFiles).toHaveLength(0);
-    expect(rejections).toEqual([
-      expect.objectContaining({
-        file: expect.objectContaining({ name: 'renamed.txt' }),
-        reason: 'Unsupported file type: text/html',
-      }),
-    ]);
+    expect(acceptedFiles).toHaveLength(1);
+    expect(acceptedFiles[0].type).toBe('text/html');
+    expect(rejections).toEqual([]);
   });
 
   it('rejects a supported incoming batch that exceeds one backend request batch', () => {
@@ -147,7 +131,7 @@ Attached files:
     );
   });
 
-  it('prioritizes the cap message when mixed invalid and supported files exceed the cap', () => {
+  it('applies the file-count cap uniformly across arbitrary file types', () => {
     const files = [
       new File(['<svg />'], 'bad.svg', { type: 'image/svg+xml' }),
       ...Array.from(
@@ -161,7 +145,7 @@ Attached files:
     expect(acceptedFiles).toHaveLength(0);
     expect(rejections).toHaveLength(12);
     expect(summarizeComposerFileRejections(rejections)).toBe(
-      'note-0.txt: Composer supports up to 10 pending files (+11 more)'
+      'bad.svg: Composer supports up to 10 pending files (+11 more)'
     );
   });
 

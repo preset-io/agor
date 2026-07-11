@@ -100,7 +100,7 @@ describe('link content route helpers', () => {
     expect(
       chooseLinkContentDisposition({
         requestedDisposition: 'attachment',
-        mimeType: 'application/pdf',
+        mimeType: 'text/html',
         size: 10,
       })
     ).toBe('attachment');
@@ -111,6 +111,19 @@ describe('link content route helpers', () => {
         size: 10,
       })
     ).toThrow(LinkContentError);
+  });
+
+  it('resolves arbitrary uploaded file types for attachment download', async () => {
+    await withTempUploads(async (root) => {
+      await fs.writeFile(path.join(root, 'payload.custom'), 'payload');
+
+      await expect(
+        resolveUploadedLinkContentFile(
+          link({ file_path: 'payload.custom', mime_type: 'application/x-custom' }),
+          root
+        )
+      ).resolves.toMatchObject({ mimeType: 'application/x-custom' });
+    });
   });
 
   it('emits attachment-safe content disposition filenames', () => {
