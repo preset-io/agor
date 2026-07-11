@@ -348,8 +348,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
   const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
   const {
-    pinningKey: pinningLinkId,
-    teammateBusyKey: teammateActionKey,
+    pinningKeys,
+    teammateBusyKeys,
     togglePinned: handleToggleSessionLinkPinned,
     promoteToTeammate: handlePromoteSessionLinkToTeammate,
     removeFromTeammate: handleRemoveSessionLinkFromTeammate,
@@ -1133,12 +1133,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       teammateLinks,
     });
     const unavailableReason = getTeammatePromotionUnavailableReason(state);
-    const actionKey = state.isPromoted ? state.teammateLink.link_id : item.linkId;
+    const actionKey = item.linkId ?? item.key;
     return {
       isPromoted: state.isPromoted,
       teammateLinkId: state.teammateLink?.link_id,
       disabled: !state.canPromote || !client || connectionDisabled,
-      loading: actionKey ? teammateActionKey === actionKey : false,
+      loading: teammateBusyKeys.has(actionKey),
       unavailableReason:
         unavailableReason ??
         (!client || connectionDisabled
@@ -1440,12 +1440,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               loading={sessionLinksLoading}
               error={sessionLinksError}
               onRetry={() => void loadSessionLinks()}
-              pinningLinkId={pinningLinkId}
+              pinningKeys={pinningKeys}
               onTogglePinned={handleToggleSessionLinkPinned}
               onRegisterOpenPinnedManager={handleRegisterOpenPinnedManager}
               getTeammateActionState={teammateStateForSessionLink}
               onPromoteToTeammate={handlePromoteSessionLinkToTeammate}
               onRemoveFromTeammate={handleRemoveSessionLinkFromTeammate}
+              teammatePromotionBusyKeys={teammateBusyKeys}
             />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">

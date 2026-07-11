@@ -1,10 +1,31 @@
 import type { AgorClient, Link } from '@agor-live/client';
+import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { agorStore } from '../../store/agorStore';
 import { useThemedMessage } from '../../utils/message';
 import type { LinkDisplayItem } from './linkDisplay';
 import { toggleLinkDisplayItemPinned } from './linkPinning';
 import { promoteLinkToTeammate } from './linkPromotion';
+
+function startBusy(
+  busy: MutableRefObject<Set<string>>,
+  setBusy: Dispatch<SetStateAction<ReadonlySet<string>>>,
+  key: string
+): boolean {
+  if (busy.current.has(key)) return false;
+  busy.current.add(key);
+  setBusy(new Set(busy.current));
+  return true;
+}
+
+function finishBusy(
+  busy: MutableRefObject<Set<string>>,
+  setBusy: Dispatch<SetStateAction<ReadonlySet<string>>>,
+  key: string
+): void {
+  busy.current.delete(key);
+  setBusy(new Set(busy.current));
+}
 
 interface UseLinkMutationsOptions {
   client: AgorClient | null;
@@ -20,17 +41,15 @@ export function useLinkMutations({
   teammateBranchId,
 }: UseLinkMutationsOptions) {
   const { showSuccess, showError } = useThemedMessage();
-  const [pinningKey, setPinningKey] = useState<string | null>(null);
-  const [teammateBusyKey, setTeammateBusyKey] = useState<string | null>(null);
-  const pinningRef = useRef(false);
-  const teammateBusyRef = useRef(false);
+  const [pinningKeys, setPinningKeys] = useState<ReadonlySet<string>>(new Set());
+  const [teammateBusyKeys, setTeammateBusyKeys] = useState<ReadonlySet<string>>(new Set());
+  const pinningRef = useRef(new Set<string>());
+  const teammateBusyRef = useRef(new Set<string>());
 
   const togglePinned = useCallback(
     async (item: LinkDisplayItem) => {
-      if (!client || pinningRef.current) return;
-      pinningRef.current = true;
       const key = item.linkId ?? item.key;
-      setPinningKey(key);
+      if (!client || !startBusy(pinningRef, setPinningKeys, key)) return;
       try {
         const updated = await toggleLinkDisplayItemPinned({
           client,
@@ -46,8 +65,7 @@ export function useLinkMutations({
           `Failed to update pin: ${error instanceof Error ? error.message : String(error)}`
         );
       } finally {
-        pinningRef.current = false;
-        setPinningKey(null);
+        finishBusy(pinningRef, setPinningKeys, key);
       }
     },
     [branchId, client, sessionId, showError]
@@ -55,9 +73,13 @@ export function useLinkMutations({
 
   const promoteToTeammate = useCallback(
     async (item: LinkDisplayItem) => {
-      if (!client || !teammateBranchId || !item.linkId || teammateBusyRef.current) return;
-      teammateBusyRef.current = true;
-      setTeammateBusyKey(item.linkId);
+      if (
+        !client ||
+        !teammateBranchId ||
+        !item.linkId ||
+        !startBusy(teammateBusyRef, setTeammateBusyKeys, item.linkId)
+      )
+        return;
       try {
         const promoted = await promoteLinkToTeammate({
           client,
@@ -71,18 +93,16 @@ export function useLinkMutations({
           `Failed to promote link: ${error instanceof Error ? error.message : String(error)}`
         );
       } finally {
-        teammateBusyRef.current = false;
-        setTeammateBusyKey(null);
+        finishBusy(teammateBusyRef, setTeammateBusyKeys, item.linkId);
       }
     },
     [client, showError, showSuccess, teammateBranchId]
   );
 
   const removeFromTeammate = useCallback(
-    async (_item: LinkDisplayItem, teammateLinkId: string) => {
-      if (!client || teammateBusyRef.current) return;
-      teammateBusyRef.current = true;
-      setTeammateBusyKey(teammateLinkId);
+    async (item: LinkDisplayItem, teammateLinkId: string) => {
+      const key = item.linkId ?? item.key;
+      if (!client || !startBusy(teammateBusyRef, setTeammateBusyKeys, key)) return;
       try {
         const removed = (await client.service('links').remove(teammateLinkId)) as Link;
         agorStore.getState().applyKnownLinkRemovedResult(removed);
@@ -92,16 +112,15 @@ export function useLinkMutations({
           `Failed to remove teammate link: ${error instanceof Error ? error.message : String(error)}`
         );
       } finally {
-        teammateBusyRef.current = false;
-        setTeammateBusyKey(null);
+        finishBusy(teammateBusyRef, setTeammateBusyKeys, key);
       }
     },
     [client, showError, showSuccess]
   );
 
   return {
-    pinningKey,
-    teammateBusyKey,
+    pinningKeys,
+    teammateBusyKeys,
     togglePinned,
     promoteToTeammate,
     removeFromTeammate,

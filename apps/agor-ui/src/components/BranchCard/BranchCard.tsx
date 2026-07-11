@@ -39,11 +39,11 @@ const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
 function BranchCardPinnedLinksBlock({
   items,
   onTogglePinned,
-  pinningLinkId,
+  pinningKeys,
 }: {
   items: LinkDisplayItem[];
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
-  pinningLinkId?: string | null;
+  pinningKeys?: ReadonlySet<string>;
 }) {
   return (
     <PinnedLinkList
@@ -51,7 +51,7 @@ function BranchCardPinnedLinksBlock({
       className={REACT_FLOW_NO_DRAG_CLASS}
       data-testid="branch-card-pinned-links"
       onTogglePinned={onTogglePinned}
-      pinningLinkId={pinningLinkId}
+      pinningKeys={pinningKeys}
     />
   );
 }
@@ -156,7 +156,7 @@ const BranchCardComponent = ({
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [archiveDeleteModalMounted, setArchiveDeleteModalMounted] = useState(false);
-  const { pinningKey: pinningLinkId, togglePinned: handleToggleLinkPinned } = useLinkMutations({
+  const { pinningKeys, togglePinned: handleToggleLinkPinned } = useLinkMutations({
     client,
     branchId: branch.branch_id,
   });
@@ -627,7 +627,7 @@ const BranchCardComponent = ({
         <BranchCardPinnedLinksBlock
           items={pinnedLinkItems}
           onTogglePinned={client ? handleToggleLinkPinned : undefined}
-          pinningLinkId={pinningLinkId}
+          pinningKeys={pinningKeys}
         />
       )}
 

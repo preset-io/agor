@@ -38,12 +38,12 @@ export interface SessionAttachmentTeammateActions {
     item: SessionAttachmentItem,
     teammateLinkId: string
   ) => void | Promise<void>;
-  teammatePromotionBusyKey?: string | null;
+  teammatePromotionBusyKeys?: ReadonlySet<string>;
 }
 
 interface SharedProps {
   item: SessionAttachmentItem;
-  pinningLinkId?: string | null;
+  pinningKeys?: ReadonlySet<string>;
   onOpen: (item: SessionAttachmentItem) => void;
   onTogglePinned?: (item: SessionAttachmentItem) => void | Promise<void>;
 }
@@ -74,7 +74,7 @@ function getTargetDisplay(item: SessionAttachmentItem): string {
 
 function pinAction(props: SharedProps) {
   const toggleable = canPersistLinkPin(props.item) && Boolean(props.onTogglePinned);
-  const isPinning = props.pinningLinkId === (props.item.linkId ?? props.item.key);
+  const isPinning = props.pinningKeys?.has(props.item.linkId ?? props.item.key) ?? false;
   const ariaLabel = getLinkPinActionLabel(props.item, { available: toggleable });
 
   return (
@@ -91,8 +91,8 @@ function pinAction(props: SharedProps) {
 function promotionAction(props: DrawerProps) {
   const state = props.getTeammateActionState?.(props.item);
   if (!state || state.disabled) return null;
-  const busyKey = state.teammateLinkId ?? props.item.linkId ?? props.item.key;
-  const busy = state.loading || props.teammatePromotionBusyKey === busyKey;
+  const busyKey = props.item.linkId ?? props.item.key;
+  const busy = state.loading || Boolean(props.teammatePromotionBusyKeys?.has(busyKey));
   const disabled = busy || (state.isPromoted && !state.teammateLinkId);
   const label = state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
 

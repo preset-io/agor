@@ -150,6 +150,12 @@ export function createLinksService(db: TenantScopeAwareDatabase): LinksService {
   return new LinksService(db);
 }
 
+export function registerLinksService(app: Application, db: TenantScopeAwareDatabase): void {
+  app.use('/links', createLinksService(db), {
+    methods: [...LINKS_SERVICE_METHODS],
+  });
+}
+
 function normalizeCreatedMessages(result: unknown): Message[] {
   if (Array.isArray(result)) return result as Message[];
   return result ? [result as Message] : [];

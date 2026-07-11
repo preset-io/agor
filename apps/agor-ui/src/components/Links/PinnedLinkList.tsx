@@ -10,7 +10,7 @@ interface PinnedLinkListProps {
   loading?: boolean;
   error?: string | null;
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
-  pinningLinkId?: string | null;
+  pinningKeys?: ReadonlySet<string>;
   onOpenMore?: () => void;
   countMode?: 'hidden' | 'total';
   loadingLabel?: string;
@@ -25,7 +25,7 @@ export function PinnedLinkList({
   loading = false,
   error = null,
   onTogglePinned,
-  pinningLinkId,
+  pinningKeys,
   onOpenMore,
   countMode = 'hidden',
   loadingLabel = 'Loading links…',
@@ -87,7 +87,7 @@ export function PinnedLinkList({
                 onPreview={openPreview}
                 onDownload={downloadItem}
                 onTogglePinned={onTogglePinned}
-                pinning={item.linkId === pinningLinkId}
+                pinning={pinningKeys?.has(item.linkId ?? item.key) ?? false}
               />
             ))}
             {hiddenCount > 0 && onOpenMore && (

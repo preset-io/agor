@@ -1,4 +1,5 @@
 import { BranchRepository, LinksRepository, MessagesRepository } from '@agor/core/db';
+import { type Application, feathers } from '@agor/core/feathers';
 import type {
   BoardID,
   BranchID,
@@ -19,7 +20,12 @@ import {
 } from '../../../../packages/core/src/db/repositories/links.test-helpers';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
-import { ingestParsedLinksAfterMessageCreate, LINKS_SERVICE_METHODS, LinksService } from './links';
+import {
+  ingestParsedLinksAfterMessageCreate,
+  LINKS_SERVICE_METHODS,
+  LinksService,
+  registerLinksService,
+} from './links';
 import { linksHooks } from './links-hooks';
 
 async function seedBranch(
@@ -79,6 +85,54 @@ describe('LinksService', () => {
     );
     await expect(service.remove(null, { query: {} })).rejects.toThrow(/does not support multi/);
   });
+
+  dbTest(
+    'emits one event per CRUD result through the registered Feathers service',
+    async ({ db }) => {
+      const branch = await seedBranch(db, 'view');
+      const session = await seedSession(db, branch.branch_id);
+      const app = feathers();
+      registerLinksService(app as Application, db);
+      const service = app.service('links');
+      const created: Link[] = [];
+      const patched: Link[] = [];
+      const removed: Link[] = [];
+      service.on('created', (link: Link) => created.push(link));
+      service.on('patched', (link: Link) => patched.push(link));
+      service.on('removed', (link: Link) => removed.push(link));
+
+      const first = (await service.create({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: 'https://example.com/events/first',
+      })) as Link;
+      const many = (await service.create([
+        {
+          session_id: session.session_id,
+          kind: 'url',
+          source: 'manual',
+          url: 'https://example.com/events/second',
+        },
+        {
+          session_id: session.session_id,
+          kind: 'url',
+          source: 'manual',
+          url: 'https://example.com/events/third',
+        },
+      ])) as Link[];
+      const changed = (await service.patch(first.link_id, { title: 'Changed' })) as Link;
+      const deleted = (await service.remove(first.link_id)) as Link;
+
+      expect(created.map((link) => link.link_id)).toEqual([
+        first.link_id,
+        many[0].link_id,
+        many[1].link_id,
+      ]);
+      expect(patched.map((link) => link.link_id)).toEqual([changed.link_id]);
+      expect(removed.map((link) => link.link_id)).toEqual([deleted.link_id]);
+    }
+  );
 
   dbTest('rolls back every row when an atomic multi-create fails', async ({ db }) => {
     const branch = await seedBranch(db, 'view');

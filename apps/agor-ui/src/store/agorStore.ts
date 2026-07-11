@@ -29,7 +29,7 @@ import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createStore } from 'zustand/vanilla';
 import type { InitialLoadItemKey, InitialLoadingStage } from '../hooks/useAgorData';
-import { bumpRevision } from './agorHydration';
+import { bumpRevision, getHydrationRetryDelay } from './agorHydration';
 import {
   type DataMaps,
   EMPTY_MAPS,
@@ -219,7 +219,12 @@ async function fetchAndReplaceFullOwnerLinks(
           session_id: ownerId,
           $limit: PAGINATION.DEFAULT_LIMIT,
         };
-  while (isLatestFullLinkRequest(scope, ownerId, requestGeneration)) {
+  for (let attempt = 0; isLatestFullLinkRequest(scope, ownerId, requestGeneration); attempt++) {
+    const delayMs = getHydrationRetryDelay(attempt);
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      if (!isLatestFullLinkRequest(scope, ownerId, requestGeneration)) return [];
+    }
     const mutationGeneration = fullLinkMutationGeneration.get(ownerKey) ?? 0;
     const beforeBucket = fullLinkOwnerBucket(get(), scope, ownerId);
     const links = await client.service('links').findAll({ query });

@@ -1,9 +1,13 @@
 import type { Branch, Link, Session } from '@agor-live/client';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cancelAllHydrations, resetHydrationRevisions, runHydration } from './agorHydration';
 import { mergeLinksIntoMaps, reconcilePinnedBranchLinksIntoMaps } from './agorMaps';
 import { branchPatched, linkCreated, linkRemoved, sessionRemoved } from './agorRealtimeActions';
-import { agorStore, getPinnedBranchLinkPreserveBranchIds } from './agorStore';
+import {
+  agorStore,
+  getPinnedBranchLinkPreserveBranchIds,
+  invalidateFullLinkRequestsForLink,
+} from './agorStore';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -385,5 +389,119 @@ describe('agorStore link hydration', () => {
     expect(state.linkById.size).toBe(0);
     expect(state.linksByBranch.has('b1')).toBe(false);
     expect(state.linksBySession.has('s1')).toBe(false);
+  });
+});
+
+describe('agorStore full-link hydration retry policy', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('converges immediately after one transient owner mutation', async () => {
+    const ownerLink = link('l-transient', { session_id: 's-transient' });
+    let calls = 0;
+    const findAll = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) invalidateFullLinkRequestsForLink(ownerLink);
+      return [ownerLink];
+    });
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+
+    await expect(
+      agorStore.getState().fetchAndReplaceFullSessionLinks(client, ownerLink.session_id!)
+    ).resolves.toEqual([ownerLink]);
+    expect(findAll).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('backs off under sustained owner churn and applies after a quiet fetch', async () => {
+    const ownerLink = link('l-sustained', { session_id: 's-sustained' });
+    let calls = 0;
+    const findAll = vi.fn(async () => {
+      calls += 1;
+      if (calls <= 5) invalidateFullLinkRequestsForLink(ownerLink);
+      return [ownerLink];
+    });
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+    const hydration = agorStore
+      .getState()
+      .fetchAndReplaceFullSessionLinks(client, ownerLink.session_id!);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(findAll).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(199);
+    expect(findAll).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(findAll).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(399);
+    expect(findAll).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(hydration).resolves.toEqual([ownerLink]);
+    expect(findAll).toHaveBeenCalledTimes(6);
+  });
+
+  it('does not fetch again when the owner is evicted during backoff', async () => {
+    const ownerLink = link('l-cancelled', { session_id: 's-cancelled' });
+    const findAll = vi.fn(async () => {
+      invalidateFullLinkRequestsForLink(ownerLink);
+      return [ownerLink];
+    });
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+    const hydration = agorStore
+      .getState()
+      .fetchAndReplaceFullSessionLinks(client, ownerLink.session_id!);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(findAll).toHaveBeenCalledTimes(4);
+    agorStore.getState().evictSessionLinks(ownerLink.session_id!);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(hydration).resolves.toEqual([]);
+    expect(findAll).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not fetch again when the store resets during backoff', async () => {
+    const ownerLink = link('l-reset', { session_id: 's-reset' });
+    const findAll = vi.fn(async () => {
+      invalidateFullLinkRequestsForLink(ownerLink);
+      return [ownerLink];
+    });
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+    const hydration = agorStore
+      .getState()
+      .fetchAndReplaceFullSessionLinks(client, ownerLink.session_id!);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(findAll).toHaveBeenCalledTimes(4);
+    agorStore.getState().reset();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(hydration).resolves.toEqual([]);
+    expect(findAll).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not let a superseded request fetch again after its backoff', async () => {
+    const ownerLink = link('l-superseded', { session_id: 's-superseded' });
+    let calls = 0;
+    const findAll = vi.fn(async () => {
+      calls += 1;
+      if (calls <= 4) invalidateFullLinkRequestsForLink(ownerLink);
+      return [ownerLink];
+    });
+    const client = { service: vi.fn(() => ({ findAll })) } as never;
+    const older = agorStore
+      .getState()
+      .fetchAndReplaceFullSessionLinks(client, ownerLink.session_id!);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(findAll).toHaveBeenCalledTimes(4);
+    await expect(
+      agorStore.getState().fetchAndReplaceFullSessionLinks(client, ownerLink.session_id!)
+    ).resolves.toEqual([ownerLink]);
+    expect(findAll).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    await expect(older).resolves.toEqual([]);
+    expect(findAll).toHaveBeenCalledTimes(5);
   });
 });

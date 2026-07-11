@@ -47,7 +47,7 @@ interface Props extends SessionAttachmentTeammateActions {
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
-  pinningLinkId?: string | null;
+  pinningKeys?: ReadonlySet<string>;
   onTogglePinned?: (item: SessionAttachmentItem) => void | Promise<void>;
   onRegisterOpenPinnedManager?: (openPinnedManager: (() => void) | null) => void;
 }
@@ -57,13 +57,13 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   loading = false,
   error = null,
   onRetry,
-  pinningLinkId = null,
+  pinningKeys,
   onTogglePinned,
   onRegisterOpenPinnedManager,
   getTeammateActionState,
   onPromoteToTeammate,
   onRemoveFromTeammate,
-  teammatePromotionBusyKey = null,
+  teammatePromotionBusyKeys,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -152,7 +152,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             <SessionAttachmentQuickRow
               key={item.key}
               item={item}
-              pinningLinkId={pinningLinkId}
+              pinningKeys={pinningKeys}
               onOpen={openTarget}
               onTogglePinned={onTogglePinned}
             />
@@ -217,13 +217,13 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
                   <SessionAttachmentDrawerRow
                     key={item.key}
                     item={item}
-                    pinningLinkId={pinningLinkId}
+                    pinningKeys={pinningKeys}
                     onOpen={openTarget}
                     onTogglePinned={onTogglePinned}
                     getTeammateActionState={getTeammateActionState}
                     onPromoteToTeammate={onPromoteToTeammate}
                     onRemoveFromTeammate={onRemoveFromTeammate}
-                    teammatePromotionBusyKey={teammatePromotionBusyKey}
+                    teammatePromotionBusyKeys={teammatePromotionBusyKeys}
                   />
                 ))}
               </div>

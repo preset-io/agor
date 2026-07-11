@@ -79,8 +79,8 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const {
-    pinningKey: pinningLinkId,
-    teammateBusyKey: teammatePromotionBusyKey,
+    pinningKeys,
+    teammateBusyKeys,
     togglePinned: handleTogglePinned,
     promoteToTeammate: handlePromoteToTeammate,
     removeFromTeammate: handleRemoveFromTeammate,
@@ -168,8 +168,8 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       teammateBranchId={teammateBranchId}
                       teammateLinks={teammatePromotionLinks}
                       sourceBranchId={branch.branch_id}
-                      teammateBusyKey={teammatePromotionBusyKey}
-                      pinning={(item.linkId ?? item.key) === pinningLinkId}
+                      teammateBusyKeys={teammateBusyKeys}
+                      pinning={pinningKeys.has(item.linkId ?? item.key)}
                       onOpen={openItem}
                       onTogglePinned={handleTogglePinned}
                       onPromote={handlePromoteToTeammate}

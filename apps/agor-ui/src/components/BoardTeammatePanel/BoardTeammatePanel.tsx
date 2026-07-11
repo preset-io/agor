@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Branch, Link, Repo, SpawnConfig } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo, SpawnConfig } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -20,7 +20,6 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { type AgorState, useAgorStore } from '../../store/agorStore';
 import {
   makeLinksForBranchSelector,
-  selectApplyLinkMutationResult,
   selectBranchById,
   selectCommentById,
   selectFetchAndReplaceFullBranchLinks,
@@ -34,7 +33,7 @@ import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardSessionList } from '../BranchListDrawer';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
-import { buildLinkDisplayItems, type LinkDisplayItem } from '../Links';
+import { buildLinkDisplayItems, type LinkDisplayItem, useLinkMutations } from '../Links';
 import { PinnedLinkList } from '../Links/PinnedLinkList';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
@@ -46,14 +45,14 @@ function TeammatePinnedLinksBlock({
   loading,
   error,
   onTogglePinned,
-  pinningLinkId,
+  pinningKeys,
   onOpenMore,
 }: {
   items: LinkDisplayItem[];
   loading: boolean;
   error: string | null;
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
-  pinningLinkId?: string | null;
+  pinningKeys?: ReadonlySet<string>;
   onOpenMore?: () => void;
 }) {
   return (
@@ -64,7 +63,7 @@ function TeammatePinnedLinksBlock({
       countMode="total"
       loadingLabel="Loading teammate links…"
       onTogglePinned={onTogglePinned}
-      pinningLinkId={pinningLinkId}
+      pinningKeys={pinningKeys}
       onOpenMore={onOpenMore}
     />
   );
@@ -163,7 +162,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     [primaryTeammateBranch?.branch_id]
   );
   const teammateLinksHydrated = useAgorStore(teammateLinksHydratedSelector);
-  const applyLinkMutationResult = useAgorStore(selectApplyLinkMutationResult);
   const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
   const boardObjects = board?.objects;
   const defaultTab: BoardTeammatePanelTab = primaryTeammateInaccessible
@@ -253,7 +251,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById]);
   const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
   const [assigningTeammate, setAssigningTeammate] = useState(false);
-  const [teammatePinningLinkId, setTeammatePinningLinkId] = useState<string | null>(null);
+  const { pinningKeys: teammatePinningKeys, togglePinned: handleToggleTeammatePinned } =
+    useLinkMutations({ client, branchId: primaryTeammateBranch?.branch_id });
   const [teammateLinksLoading, setTeammateLinksLoading] = useState(false);
   const [teammateLinksError, setTeammateLinksError] = useState<string | null>(null);
 
@@ -344,23 +343,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     fetchAndReplaceFullBranchLinks,
     primaryTeammateBranch?.branch_id,
   ]);
-
-  const handleToggleTeammatePinned = async (item: LinkDisplayItem) => {
-    if (!client || !item.linkId || teammatePinningLinkId) return;
-    setTeammatePinningLinkId(item.linkId);
-    try {
-      const updated = (await client.service('links').patch(item.linkId, {
-        is_pinned: !item.isPinned,
-      })) as Link;
-      applyLinkMutationResult(updated);
-    } catch (error) {
-      message.error(
-        `Failed to update teammate link: ${error instanceof Error ? error.message : String(error)}`
-      );
-    } finally {
-      setTeammatePinningLinkId(null);
-    }
-  };
 
   const teammateContent = (() => {
     if (primaryTeammateBranch && primaryTeammateRepo) {
@@ -457,7 +439,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             loading={teammateLinksLoading}
             error={teammateLinksError}
             onTogglePinned={client ? handleToggleTeammatePinned : undefined}
-            pinningLinkId={teammatePinningLinkId}
+            pinningKeys={teammatePinningKeys}
             onOpenMore={() => onOpenSettings?.(primaryTeammateBranch.branch_id, 'links')}
           />
 

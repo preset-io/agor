@@ -22,7 +22,7 @@ interface BranchLinkListItemProps {
   teammateBranchId?: string | null;
   teammateLinks: Link[];
   sourceBranchId: string;
-  teammateBusyKey?: string | null;
+  teammateBusyKeys?: ReadonlySet<string>;
   pinning: boolean;
   onOpen: (item: LinkDisplayItem) => void;
   onTogglePinned: (item: LinkDisplayItem) => void | Promise<void>;
@@ -38,8 +38,7 @@ function PromotionAction(props: BranchLinkListItemProps) {
     sourceBranchId: props.sourceBranchId,
   });
   if (!state.canPromote) return null;
-  const busy =
-    props.teammateBusyKey === (state.teammateLink?.link_id ?? props.item.linkId ?? props.item.key);
+  const busy = props.teammateBusyKeys?.has(props.item.linkId ?? props.item.key) ?? false;
   const label = getTeammatePromotionActionLabel(state);
 
   return (
