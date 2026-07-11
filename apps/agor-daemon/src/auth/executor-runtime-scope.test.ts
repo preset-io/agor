@@ -49,6 +49,14 @@ describe('executorRuntimeScopeGuard', () => {
     await expect(requireExecutorRuntimeToken()(context)).rejects.toThrow(/executor token/);
   });
 
+  it('allows a patch only for the executor token task', async () => {
+    const matching = ctx({ method: 'patch', id: 'task-1', data: { status: 'running' } });
+    const otherTask = ctx({ method: 'patch', id: 'task-2', data: { status: 'running' } });
+
+    await expect(executorRuntimeScopeGuard()(matching)).resolves.toBe(matching);
+    await expect(executorRuntimeScopeGuard()(otherTask)).rejects.toThrow(/task scope/);
+  });
+
   it('narrows find queries to executor token scope', async () => {
     const context = ctx({ path: 'messages', method: 'find' });
 

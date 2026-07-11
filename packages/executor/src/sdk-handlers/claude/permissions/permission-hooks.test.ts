@@ -130,6 +130,12 @@ describe('createCanUseToolCallback', () => {
       expect(result.updatedInput).toEqual({ command: 'ls' });
       // No persistence rule emitted when remember=false.
       expect(result.updatedPermissions).toBeUndefined();
+      expect(deps.tasksService.patch).toHaveBeenNthCalledWith(1, taskId, {
+        status: 'awaiting_permission',
+      });
+      expect(deps.tasksService.patch).toHaveBeenNthCalledWith(2, taskId, {
+        status: 'running',
+      });
       // Lock was acquired AND released.
       expect(deps.permissionLocks.size).toBe(0);
     });

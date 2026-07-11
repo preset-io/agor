@@ -75,6 +75,7 @@ import {
 } from '@agor/core/types';
 import {
   executorRuntimeScopeGuard,
+  isTaskScopedExecutorRequest,
   requireExecutorRuntimeToken,
 } from './auth/executor-runtime-scope.js';
 import type {
@@ -446,8 +447,31 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'leaderboard',
 ];
 
+const EXECUTOR_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
+  TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.AWAITING_INPUT,
+]);
+
+async function isConnectedExecutorResume(context: HookContext): Promise<boolean> {
+  if (context.method !== 'patch' || typeof context.id !== 'string') return false;
+  if (!isTaskScopedExecutorRequest(context, context.id)) return false;
+
+  const service = context.service as unknown as {
+    findByIdForScopeCheck?: (id: string) => Promise<unknown>;
+  };
+  const existing = await service.findByIdForScopeCheck?.(context.id);
+  if (!existing || typeof existing !== 'object') return false;
+
+  const task = existing as { status?: unknown; executor_connected_at?: unknown };
+  return (
+    EXECUTOR_RESUMABLE_TASK_STATUSES.has(task.status as TaskStatus) &&
+    typeof task.executor_connected_at === 'string' &&
+    task.executor_connected_at.length > 0
+  );
+}
+
 /** Prevent callers on a Feathers transport from forging executor-owned task state. */
-export function protectServerManagedTaskWrites(context: HookContext): HookContext {
+export async function protectServerManagedTaskWrites(context: HookContext): Promise<HookContext> {
   if (!context.params.provider) return context;
 
   const writes = Array.isArray(context.data) ? context.data : [context.data];
@@ -458,7 +482,13 @@ export function protectServerManagedTaskWrites(context: HookContext): HookContex
     throw new Forbidden('executor_connected_at is server-managed');
   }
   if (records.some((write) => write.status === TaskStatus.RUNNING)) {
-    throw new Forbidden('running task status is server-managed');
+    const isSingleRunningPatch =
+      records.length === 1 &&
+      records[0].status === TaskStatus.RUNNING &&
+      !Array.isArray(context.data);
+    if (!isSingleRunningPatch || !(await isConnectedExecutorResume(context))) {
+      throw new Forbidden('running task status is server-managed');
+    }
   }
 
   return context;

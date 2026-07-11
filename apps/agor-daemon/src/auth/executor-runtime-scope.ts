@@ -43,6 +43,11 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
   return null;
 }
 
+/** Whether this authenticated transport request carries executor scope for one task. */
+export function isTaskScopedExecutorRequest(context: HookContext, taskId: string): boolean {
+  return scopedPayload(context)?.task_id === taskId;
+}
+
 function expectClaim(claim: string | undefined, label: string): string {
   if (!claim) {
     throw new Forbidden(`Executor token is missing ${label} scope`);
