@@ -4,7 +4,6 @@
 
 import type { ManagedEnvExecutionMode } from '../environment/webhook';
 import type { BranchPermissionLevel } from '../types/branch';
-import type { DaemonResourcesConfig } from '../types/config-resources';
 import type { UserRole } from '../types/user';
 
 export type { ManagedEnvExecutionMode };
@@ -1182,27 +1181,6 @@ export interface AgorConfig {
    */
   proxies?: Record<string, AgorProxyConfig>;
 
-  /** Declarative resource definitions for headless/k8s deployments */
-  resources?: DaemonResourcesConfig;
-
-  /**
-   * Service tier configuration for lean daemon mode.
-   *
-   * Controls which FeathersJS service groups are registered and how they're exposed.
-   * Each group can be: 'off' | 'internal' | 'readonly' | 'on' (default: 'on').
-   *
-   * @example Executor pod config
-   * ```yaml
-   * services:
-   *   core: on
-   *   branches: on
-   *   repos: readonly
-   *   users: internal
-   *   boards: off
-   *   cards: off
-   * ```
-   */
-  services?: import('../types/config-services').DaemonServicesConfig;
 }
 
 /**
@@ -1224,5 +1202,4 @@ export type ConfigKey =
   | `telemetry.${keyof AgorTelemetrySettings}`
   | `knowledge.${keyof AgorKnowledgeSettings}`
   | `credentials.${keyof AgorCredentials}`
-  | `onboarding.${keyof AgorOnboardingSettings}`
-  | `services.${keyof import('../types/config-services').DaemonServicesConfig}`;
+  | `onboarding.${keyof AgorOnboardingSettings}`;

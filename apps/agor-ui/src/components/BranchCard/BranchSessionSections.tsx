@@ -36,7 +36,6 @@ import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useThemedMessage } from '../../utils/message';
 import {
@@ -250,8 +249,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const { modal } = App.useApp();
   const { showSuccess, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
-  const schedulerEnabled = useServiceEnabled('scheduler');
-  const gatewayEnabled = useServiceEnabled('gateway');
   const { archiveSession } = useSessionActions(client);
 
   const [forkSpawnModal, setForkSpawnModal] = useState<{
@@ -498,12 +495,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     [activeSessions, isGatewaySession]
   );
   const searchablePanelSessions = useMemo(
-    () => [
-      ...manualSessions,
-      ...(schedulerEnabled ? scheduledSessions : []),
-      ...(gatewayEnabled ? gatewaySessions : []),
-    ],
-    [gatewayEnabled, gatewaySessions, manualSessions, scheduledSessions, schedulerEnabled]
+    () => [...manualSessions, ...scheduledSessions, ...gatewaySessions],
+    [gatewaySessions, manualSessions, scheduledSessions]
   );
   const sortedManualSessions = useMemo(
     () => (isManualSessionsOpen ? sortSessions(manualSessions, sort) : []),
@@ -1237,7 +1230,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             <div style={{ marginTop: 8 }}>{sessionListHeader}</div>
           ) : null}
 
-          {schedulerEnabled && scheduledSessions.length > 0 && (
+          {scheduledSessions.length > 0 && (
             <Collapse
               activeKey={openSectionKeys}
               onChange={handleScheduledRunsChange}
@@ -1256,7 +1249,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             />
           )}
 
-          {gatewayEnabled && gatewaySessions.length > 0 && (
+          {gatewaySessions.length > 0 && (
             <Collapse
               activeKey={openSectionKeys}
               onChange={handleGatewaySessionsChange}

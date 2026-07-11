@@ -88,7 +88,6 @@ function makeStartupContextWithGuardedDb(fixtures: StartupFixtures = {}) {
     },
     DAEMON_PORT: 3030,
     DAEMON_HOST: 'localhost',
-    svcEnabled: vi.fn(() => false),
     safeService: vi.fn(),
     getSocketServer: vi.fn(() => null),
     sessionsService,

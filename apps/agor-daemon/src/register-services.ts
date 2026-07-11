@@ -146,7 +146,6 @@ export interface RegisterServicesContext {
   db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
-  svcEnabled: (group: string) => boolean;
   jwtSecret: string;
   daemonUrl: string;
   /** True when the daemon is serving the bundled UI itself at /ui (installed agor-live). */
@@ -179,12 +178,11 @@ export interface RegisteredServices {
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const { db, app, config, svcEnabled, jwtSecret, daemonUrl, branchRbacEnabled, allowSuperadmin } =
-    ctx;
+  const { db, app, config, jwtSecret, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
 
   const _superadminOpts = { allowSuperadmin };
 
-  // Helper: safely get a service (returns undefined if not registered due to tier=off)
+  // Helper for optional or conditionally registered integration services.
   const safeService = (path: string) => {
     try {
       return app.service(path);
@@ -251,7 +249,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     //      the executor for live tool/thinking visualization.
     events: ['queued', 'tool:start', 'tool:complete', 'thinking:chunk', 'failed'],
   });
-  if (svcEnabled('leaderboard')) {
+  {
     app.use('/leaderboard', createLeaderboardService(db));
   }
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
@@ -307,7 +305,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Boards, board-objects, cards, artifacts, board-comments
   // ============================================================================
 
-  if (svcEnabled('boards')) {
+  {
     app.use(
       '/boards',
       createBoardsService(db, (boardObject, params) => {
@@ -343,12 +341,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const boardsService = safeService('boards') as unknown as BoardsServiceImpl | undefined;
 
-  if (svcEnabled('cards')) {
+  {
     app.use('/card-types', createCardTypesService(db));
     app.use('/cards', createCardsService(db));
   }
 
-  if (svcEnabled('artifacts')) {
+  {
     // `agor-query` is the runtime-introspection fan-out event (daemon →
     // viewer's browser tab). Feathers' default `serviceEvents` is just
     // ['created','updated','patched','removed'], so without this it
@@ -357,7 +355,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.use('/artifacts', createArtifactsService(db, app), { events: ['agor-query'] });
   }
 
-  if (svcEnabled('boards')) {
+  {
     app.use('/board-comments', createBoardCommentsService(db));
   }
 
@@ -480,7 +478,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   let oauthCallbackHandler: ((req: express.Request, res: express.Response) => void) | null = null;
 
   // The OAuth callback middleware is registered in boot.ts; here we set the handler
-  if (svcEnabled('mcp_servers')) {
+  {
     const mcpResult = await registerMCPServices(ctx, sessionsService);
     oauthCallbackHandler = mcpResult.oauthCallbackHandler;
   }
@@ -489,7 +487,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Gateway services
   // ============================================================================
 
-  if (svcEnabled('gateway')) {
+  {
     app.use('/gateway-channels', createGatewayChannelsService(db));
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit
@@ -565,7 +563,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const usersRepository = new UsersRepository(db);
   const sessionsRepository = new SessionRepository(db);
 
-  if (svcEnabled('file_browser')) {
+  {
     app.use('/context', createContextService(branchRepository));
     app.use('/file', createFileService(branchRepository));
     app.use('/files', createFilesService(db, app));
@@ -577,12 +575,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/templates', createTemplatesService());
   app.service('/templates').hooks({ before: { create: [ctx.requireAuth] } });
 
-  const terminalsService = svcEnabled('terminals') ? new TerminalsService(app, db) : null;
-  if (terminalsService) {
-    app.use('/terminals', terminalsService, {
-      events: ['data', 'exit'],
-    });
-  }
+  const terminalsService = new TerminalsService(app, db);
+  app.use('/terminals', terminalsService, {
+    events: ['data', 'exit'],
+  });
 
   // ============================================================================
   // Session MCP Servers (top-level for WebSocket events)
@@ -610,7 +606,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
   });
 
-  if (svcEnabled('mcp_servers')) {
+  {
     app.use('/session-mcp-servers', {
       async find(params?: {
         query?: {

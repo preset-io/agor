@@ -53,8 +53,7 @@ import {
 } from '@agor/core/feathers';
 import { buildGitConfigParameters } from '@agor/core/git/pure';
 import { registerHandlebarsHelpers } from '@agor/core/templates/handlebars-helpers';
-import type { HookContext, ServiceGroupName, ServiceTier, User } from '@agor/core/types';
-import { getServiceTier, isServiceEnabled } from '@agor/core/types';
+import type { HookContext, User } from '@agor/core/types';
 import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
@@ -73,7 +72,6 @@ import {
 import { initializeDatabase } from './setup/database.js';
 import { warnDeprecatedAnonymousConfig } from './setup/first-run-admin.js';
 import { securityHeaders } from './setup/security-headers.js';
-import { logServicesConfig, resolveServicesConfig } from './setup/service-tiers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/static-assets.js';
 import { configureSwagger } from './setup/swagger.js';
@@ -213,15 +211,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // `daemon.allowAnonymous` / `daemon.requireAuth` see what to do; the keys
   // are otherwise silently ignored.
   warnDeprecatedAnonymousConfig(config);
-
-  // Resolve service tier configuration (validate deps, auto-promote)
-  const servicesConfig = resolveServicesConfig(config.services);
-  logServicesConfig(servicesConfig);
-
-  const svcTier = (group: string): ServiceTier =>
-    getServiceTier(servicesConfig, group as ServiceGroupName);
-  const svcEnabled = (group: string): boolean =>
-    isServiceEnabled(servicesConfig, group as ServiceGroupName);
 
   // --------------------------------------------------------------------------
   // Auth configuration
@@ -489,9 +478,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // already answers correctly for both dev (no, vite serves on its own port)
   // and installed (yes, it sits at ../ui).
   // --------------------------------------------------------------------------
-  const serveStaticFiles = servicesConfig.static_files !== 'off';
   let bundledUiAvailable = false;
-  if (serveStaticFiles) {
+  {
     const path = await import('node:path');
     const { fileURLToPath } = await import('node:url');
     const { existsSync } = await import('node:fs');
@@ -533,7 +521,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   }
 
   // Serve static assets (e.g., self-hosted Sandpack bundler) if available
-  if (serveStaticFiles) {
+  {
     const pathMod = await import('node:path');
     const { fileURLToPath: toPath } = await import('node:url');
     const { existsSync: exists } = await import('node:fs');
@@ -707,7 +695,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     db,
     app,
     config,
-    svcEnabled,
     jwtSecret,
     daemonUrl,
     bundledUiAvailable,
@@ -725,7 +712,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     db,
     app,
     config,
-    svcEnabled,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
@@ -745,8 +731,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     db,
     app,
     config,
-    svcEnabled,
-    svcTier,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
@@ -756,7 +740,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     DAEMON_PORT,
     DAEMON_VERSION,
     DAEMON_BUILD_INFO,
-    servicesConfig,
     resolvedSecurity,
     sessionsService: services.sessionsService,
     messagesService: services.messagesService,
@@ -778,7 +761,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     config,
     DAEMON_PORT,
     DAEMON_HOST,
-    svcEnabled,
     safeService,
     getSocketServer: socketIOConfig.getSocketServer,
     sessionsService: services.sessionsService,

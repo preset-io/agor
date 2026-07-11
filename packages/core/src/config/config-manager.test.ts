@@ -206,6 +206,15 @@ describe('loadConfig', () => {
     );
   });
 
+  it.each(['resources', 'services'])('rejects the removed %s config surface', async (key) => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ [key]: {} }), 'utf-8');
+
+    await expect(loadConfig()).rejects.toThrow(new RegExp(`'${key}' has been removed`));
+  });
+
   it('should handle partial config with missing sections', async () => {
     const partialConfig: AgorConfig = {
       daemon: { port: 4040 },

@@ -1,8 +1,8 @@
 /**
  * `agor daemon start` - Start daemon as a detached background process.
  *
- * Validates config (including services: section) up front, then spawns
- * the daemon in the background via daemon-manager. The CLI exits
+ * Loads config up front, then spawns the daemon in the background via
+ * daemon-manager. The CLI exits
  * immediately; logs go to ~/.agor/logs/daemon.log.
  *
  * Port/host are set via config.yaml (daemon.port / daemon.host) or env vars (PORT).
@@ -12,7 +12,6 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgorConfig } from '@agor/core/config';
 import { loadConfig, loadConfigFromFile } from '@agor/core/config';
-import { validateAllowedTiers, validateServiceDependencies } from '@agor-live/client';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import {
@@ -49,8 +48,6 @@ export default class DaemonStart extends Command {
     // 1. Load & validate config
     const config = flags.config ? await this.loadConfigFromPath(flags.config) : await loadConfig();
 
-    this.validateServicesConfig(config);
-
     // 2. Check if already running
     const existingPid = getDaemonPid();
     if (existingPid !== null) {
@@ -67,7 +64,6 @@ export default class DaemonStart extends Command {
     // 4. Foreground mode: import and run in-process (blocks forever)
     if (flags.foreground) {
       this.log(chalk.bold('Starting Agor daemon in foreground...'));
-      this.logServicesInfo(config);
       try {
         const daemonModule = await this.importDaemonModule();
         await daemonModule.startDaemon({ config });
@@ -81,7 +77,6 @@ export default class DaemonStart extends Command {
 
     // 5. Background mode (default): spawn detached process
     this.log(chalk.bold('Starting Agor daemon...'));
-    this.logServicesInfo(config);
 
     const daemonPath = this.resolveDaemonEntrypoint();
 
@@ -125,43 +120,6 @@ export default class DaemonStart extends Command {
     // log level filters and is clearly separated from any stdout consumers.
     process.stderr.write(chalk.red(formatPendingMigrationsMessage(info)));
     this.exit(1);
-  }
-
-  private validateServicesConfig(config: AgorConfig): void {
-    if (!config.services) return;
-
-    const tierViolations = validateAllowedTiers(config.services);
-    if (tierViolations.length > 0) {
-      this.log(chalk.red('Services configuration error:'));
-      for (const v of tierViolations) {
-        this.log(
-          chalk.red(`  '${v.group}' cannot be '${v.tier}' (allowed: ${v.allowed.join(', ')})`)
-        );
-      }
-      this.exit(1);
-    }
-
-    const depViolations = validateServiceDependencies(config.services);
-    if (depViolations.length > 0) {
-      this.log(chalk.yellow('Service dependency warnings (will be auto-promoted at boot):'));
-      for (const v of depViolations) {
-        this.log(
-          chalk.yellow(
-            `  '${v.service}' requires '${v.dependency}' to be at least '${v.requiredTier}'`
-          )
-        );
-      }
-    }
-  }
-
-  private logServicesInfo(config: AgorConfig): void {
-    if (!config.services) return;
-    const nonDefault = Object.entries(config.services).filter(
-      ([, tier]) => tier !== undefined && tier !== 'on'
-    );
-    if (nonDefault.length > 0) {
-      this.log(chalk.dim(`  Services: ${nonDefault.map(([g, t]) => `${g}=${t}`).join(', ')}`));
-    }
   }
 
   private async importDaemonModule(): Promise<{

@@ -2,7 +2,7 @@
  * Authentication & Custom REST Routes Registration
  *
  * Registers authentication configuration, token refresh, custom REST
- * endpoints (prompt, stop, fork, spawn, upload, etc.), and service-tier hooks.
+ * endpoints (prompt, stop, fork, spawn, upload, etc.), and the error handler.
  * Extracted from index.ts for maintainability.
  */
 
@@ -45,7 +45,6 @@ import {
 import { type PermissionDecision, PermissionService } from '@agor/core/permissions';
 import type {
   AuthenticatedParams,
-  DaemonServicesConfig,
   HookContext,
   Message,
   MessageSource,
@@ -53,8 +52,6 @@ import type {
   Params,
   PermissionRequestContent,
   ScheduleID,
-  ServiceGroupName,
-  ServiceTier,
   Session,
   SessionID,
   SessionMCPServer,
@@ -69,7 +66,6 @@ import {
   hasMinimumRole,
   MessageRole,
   ROLES,
-  SERVICE_GROUP_NAMES,
   SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
@@ -113,7 +109,6 @@ import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
 import { registerProxies } from './setup/proxies.js';
-import { applyTierHooks } from './setup/service-tiers.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
@@ -224,8 +219,6 @@ export interface RegisterRoutesContext {
   db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
-  svcEnabled: (group: string) => boolean;
-  svcTier: (group: string) => ServiceTier;
   jwtSecret: string;
   branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
@@ -240,7 +233,6 @@ export interface RegisterRoutesContext {
    * signal for the version-sync banner — see setup/build-info.ts.
    */
   DAEMON_BUILD_INFO: import('./setup/build-info.js').BuildInfo;
-  servicesConfig: DaemonServicesConfig;
   /**
    * Resolved security config (CSP/CORS after defaults+extras+override merge).
    * Used by /health to surface the effective policy to admin users.
@@ -264,15 +256,13 @@ export interface RegisterRoutesContext {
 }
 
 /**
- * Register authentication configuration, custom REST routes, and tier hooks.
+ * Register authentication configuration and custom REST routes.
  */
 export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> {
   const {
     db,
     app,
     config,
-    svcEnabled,
-    svcTier,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
@@ -282,7 +272,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     DAEMON_PORT: _DAEMON_PORT,
     DAEMON_VERSION,
     DAEMON_BUILD_INFO,
-    servicesConfig,
     resolvedSecurity,
     sessionsService,
     messagesService,
@@ -3387,8 +3376,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Session MCP servers routes
   // ============================================================================
 
-  if (svcEnabled('mcp_servers'))
-    registerAuthenticatedRoute(
+  registerAuthenticatedRoute(
       app,
       '/sessions/:id/mcp-servers',
       {
@@ -3767,7 +3755,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             CURSOR_API_KEY: !!(config.credentials?.CURSOR_API_KEY || process.env.CURSOR_API_KEY),
           },
         },
-        services: servicesConfig,
         features: {
           // Web terminal availability: UI should hide terminal buttons when false.
           // Server-side gate in register-hooks.ts is the source of truth; this
@@ -3993,63 +3980,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // ============================================================================
-  // Apply service tier hooks
-  // ============================================================================
-
-  const SERVICE_GROUP_PATHS: Partial<Record<ServiceGroupName, string[]>> = {
-    core: ['sessions', 'tasks', 'messages'],
-    branches: ['branches'],
-    repos: ['repos'],
-    users: ['users'],
-    boards: ['boards', 'board-objects', 'board-comments'],
-    cards: ['cards', 'card-types'],
-    artifacts: ['artifacts'],
-    gateway: ['gateway', 'gateway-channels', 'thread-session-map'],
-    terminals: ['terminals'],
-    file_browser: ['file', 'files', 'context'],
-    mcp_servers: ['mcp-servers', 'session-mcp-servers'],
-    leaderboard: ['leaderboard'],
-    knowledge: [
-      'kb/namespaces',
-      'kb/documents',
-      'kb/versions',
-      'kb/search',
-      'kb/settings',
-      'kb/indexing/status',
-      'kb/indexing/reindex',
-      'kb/graph',
-    ],
-  };
-
-  const mappedGroups = new Set(Object.keys(SERVICE_GROUP_PATHS));
-  for (const name of SERVICE_GROUP_NAMES) {
-    if (!mappedGroups.has(name)) {
-      console.warn(
-        `[services] Service group '${name}' has no path mapping — tier hooks will not apply`
-      );
-    }
-  }
-
-  for (const [group, paths] of Object.entries(SERVICE_GROUP_PATHS)) {
-    const tier = svcTier(group as string);
-    if (tier === 'on' || tier === 'off') continue;
-    for (const path of paths) {
-      try {
-        applyTierHooks(app, path, tier);
-      } catch {
-        // Service may not be registered
-      }
-    }
-  }
-
-  // ============================================================================
   // MCP routes
   // ============================================================================
 
   if (config.daemon?.mcpEnabled !== false) {
     const { setupMCPRoutes } = await import('./mcp/server.js');
     const toolSearchEnabled = config.daemon?.mcpToolSearch !== false;
-    setupMCPRoutes(app, db, toolSearchEnabled, servicesConfig);
+    setupMCPRoutes(app, db, toolSearchEnabled);
     console.log(
       `✅ MCP server enabled at POST /mcp${toolSearchEnabled ? ' (tool search mode)' : ''}`
     );

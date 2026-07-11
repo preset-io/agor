@@ -23,7 +23,6 @@ import {
   boardPath,
   ENTITY_PATH_SEGMENTS,
   hasMinimumRole,
-  isServiceEnabled,
   ROLES,
   sessionPath,
 } from '@agor-live/client';
@@ -43,7 +42,6 @@ import { buildPromptWithAttachments } from './components/SessionPanel/composerAt
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
-import { ServicesConfigContext } from './contexts/ServicesConfigContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import {
   useAgorClient,
@@ -252,7 +250,6 @@ function AppContent() {
     config: authConfig,
     instanceConfig,
     onboardingConfig,
-    servicesConfig,
     featuresConfig,
     loading: authConfigLoading,
     error: authConfigError,
@@ -447,9 +444,7 @@ function AppContent() {
   // Whether this user can actually reach the MCP settings tab. Mirrors the tab's
   // own gate in SettingsModal (`mcpEnabled && isAdmin`), so the "Connect tools"
   // banner is never a dead-end for users who can't open it.
-  const canManageMcp =
-    isServiceEnabled(servicesConfig, 'mcp_servers') &&
-    hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
@@ -1728,8 +1723,7 @@ function AppContent() {
 
   // Render main app
   return (
-    <ServicesConfigContext.Provider value={servicesConfig}>
-      <ConnectionProvider value={connectionContextValue}>
+    <ConnectionProvider value={connectionContextValue}>
         {/* Force Password Change Modal - shown when user.must_change_password is true */}
         <ForcePasswordChangeModal
           open={!!currentUser?.must_change_password}
@@ -1851,8 +1845,7 @@ function AppContent() {
             <Route path="/*" element={desktopAppElement} />
           </Routes>
         </Suspense>
-      </ConnectionProvider>
-    </ServicesConfigContext.Provider>
+    </ConnectionProvider>
   );
 }
 

@@ -179,6 +179,21 @@ async function ensureAgorHome(): Promise<void> {
  * Validate config and throw helpful errors for deprecated/invalid settings
  */
 function validateConfig(config: AgorConfig): void {
+  const removedConfig = config as AgorConfig & {
+    resources?: unknown;
+    services?: unknown;
+  };
+  if (removedConfig.resources !== undefined) {
+    throw new Error(
+      "Config error: 'resources' has been removed. Create users, repositories, and branches through their typed APIs instead."
+    );
+  }
+  if (removedConfig.services !== undefined) {
+    throw new Error(
+      "Config error: 'services' has been removed. Agor services are registered consistently for every tenant."
+    );
+  }
+
   // Check for deprecated 'opportunistic' unix_user_mode
   const mode = config.execution?.unix_user_mode;
   if (mode === ('opportunistic' as never)) {

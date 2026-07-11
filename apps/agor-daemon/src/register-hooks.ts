@@ -374,7 +374,6 @@ export interface RegisterHooksContext {
   db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
-  svcEnabled: (group: string) => boolean;
   jwtSecret: string;
   branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
@@ -448,7 +447,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     db,
     app,
     config,
-    svcEnabled,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
@@ -904,7 +902,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   });
 
   // Custom REST routes for artifact payload and console
-  if (svcEnabled('artifacts')) {
+  {
     registerAuthenticatedRoute(
       app,
       '/artifacts/:id/payload',
@@ -2786,7 +2784,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Leaderboard hooks
   // ============================================================================
 
-  if (svcEnabled('leaderboard')) {
+  {
     app.service('leaderboard').hooks({
       before: {
         all: [requireAuth],

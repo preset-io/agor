@@ -52,7 +52,6 @@ export interface StartupContext {
   DAEMON_PORT: number;
   /** Bind address (default: 'localhost', use '0.0.0.0' for containers) */
   DAEMON_HOST: string;
-  svcEnabled: (group: string) => boolean;
   /** Safe service getter — returns undefined if service is not registered */
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service return type varies by path
   safeService: (path: string) => any;
@@ -533,7 +532,6 @@ export async function startup(ctx: StartupContext): Promise<void> {
     config,
     DAEMON_PORT,
     DAEMON_HOST,
-    svcEnabled,
     safeService,
     getSocketServer,
     terminalsService,
@@ -623,7 +621,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 6. Start scheduler service (background worker)
   let schedulerService: SchedulerService | null = null;
-  if (svcEnabled('scheduler')) {
+  {
     const multiTenancy = resolveMultiTenancyConfig(config);
     schedulerService = new SchedulerService(db, app, {
       tickInterval: 30000, // 30 seconds
@@ -642,7 +640,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)
   let knowledgeEmbeddingIndexer: KnowledgeEmbeddingIndexer | null = null;
-  if (svcEnabled('knowledge')) {
+  {
     knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
       tenantId: startupTenantParams(config).tenant.tenant_id,
     });
