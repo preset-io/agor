@@ -22,6 +22,7 @@ import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { RuntimeOverseer } from './runtime-overseer.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
+import { ExecutorShutdown } from './shutdown.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
 
 patchConsole();
@@ -52,8 +53,15 @@ export class AgorExecutor {
   private client: AgorClient | null = null;
   private abortController: AbortController;
   private isRunning = false;
+  private shutdown: ExecutorShutdown;
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
+    this.shutdown = new ExecutorShutdown({
+      abortController: this.abortController,
+      isRunning: () => this.isRunning,
+      markStopped: () => this.tryMarkTaskTerminal(TaskStatus.STOPPED),
+      log: (message) => console.log(message),
+    });
   }
 
   /**
@@ -94,10 +102,17 @@ export class AgorExecutor {
       // Execute the task
       await this.executeTask();
 
+      if (await this.shutdown.finishGracefully()) return;
+
       // Exit successfully
       console.log('[executor] Task completed, exiting');
       process.exit(0);
     } catch (error) {
+      if (this.shutdown.requested) {
+        await this.shutdown.finishGracefully();
+        return;
+      }
+
       console.error('[executor] Fatal error:', error);
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
@@ -198,28 +213,8 @@ export class AgorExecutor {
    * Setup graceful shutdown handlers
    */
   private setupShutdownHandlers(): void {
-    const shutdown = async (signal: string) => {
-      console.log(`[executor] Received ${signal}, shutting down...`);
-
-      const wasRunning = this.isRunning;
-      if (wasRunning) {
-        this.abortController.abort();
-      }
-
-      // The daemon's stop route already patches the task to STOPPED before
-      // sending the signal — this fallback only fires if we received an
-      // out-of-band signal and the task is still active.
-      await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
-
-      // Normal execution owns runtime finalization. If a provider does not
-      // unwind after abort, the daemon's SIGKILL escalation remains the bound.
-      if (wasRunning) return;
-
-      process.exit(0);
-    };
-
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => void this.shutdown.trigger('SIGTERM'));
+    process.on('SIGINT', () => void this.shutdown.trigger('SIGINT'));
 
     process.on('uncaughtException', async (error) => {
       console.error('[executor] Uncaught exception:', error);
