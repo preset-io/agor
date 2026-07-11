@@ -30,19 +30,35 @@ const DEVICE_SCALE_FACTOR = 2;
 // the page reports ready. Scenes without visible Sandpack content can go
 // shorter, but every scene shows the board, so keep a generous floor.
 const SCENES = {
-  multiplayer: { floorMs: 10_000 },
+  multiplayer: { floorMs: 6_000 },
   // Session panel covers the Sandpack nodes; short floor is enough.
   session: { floorMs: 4_000 },
   artifact: { floorMs: 10_000 },
   settings: { floorMs: 6_000 },
+  // Showcase-carousel scenes (landing page "So much more than a chat box").
+  // boards shows the whole board incl. Sandpack apps → generous floor.
+  // multiplayer's framing shows only the Ship zone (no Sandpack in frame)
+  // and gateway covers the canvas entirely (Slack stage + session panel).
+  boards: { floorMs: 10_000 },
+  sessions: { floorMs: 6_000 },
+  gateway: { floorMs: 5_000 },
 };
 
 const parseArgs = (argv) => {
-  const args = { scene: 'all', frame: null, baseUrl: 'http://localhost:5173' };
+  const args = {
+    scene: 'all',
+    frame: null,
+    baseUrl: 'http://localhost:5173',
+    dsf: DEVICE_SCALE_FACTOR,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--scene') args.scene = argv[++i];
     else if (argv[i] === '--frame') args.frame = Number(argv[++i]);
     else if (argv[i] === '--base-url') args.baseUrl = argv[++i];
+    // Frame pixel density. The viewport stays 1920×1080 (scene choreography
+    // is authored in that coordinate space) — use --dsf 1 for the showcase
+    // renditions (1600×900 output) so frames stay ~4× smaller than 4K.
+    else if (argv[i] === '--dsf') args.dsf = Number(argv[++i]);
     else {
       console.error(`Unknown argument: ${argv[i]}`);
       process.exit(1);
@@ -68,7 +84,7 @@ const captureScene = async (browser, name, config, args) => {
 
   const context = await browser.newContext({
     viewport: VIEWPORT,
-    deviceScaleFactor: DEVICE_SCALE_FACTOR,
+    deviceScaleFactor: args.dsf,
   });
   const page = await context.newPage();
   page.on('pageerror', (error) => console.warn(`[${name}] page error:`, error.message));

@@ -15,7 +15,8 @@ import type { StaticRemoteCursor } from '../../components/SessionCanvas/canvas/R
 import { SessionSettingsModal } from '../../components/SessionSettingsModal';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
-import { DemoSessionStage } from './DemoSessionStage';
+import { DemoSessionStage, type StageVariant } from './DemoSessionStage';
+import { DemoSlackStage } from './DemoSlackStage';
 import {
   buildDemoStoreMaps,
   demoActiveUsers,
@@ -26,8 +27,11 @@ import {
   demoUsers,
 } from './fixtureData';
 import { artifactScene } from './scenes/artifact';
+import { boardsScene } from './scenes/boards';
+import { GATEWAY_PROMPT, gatewayScene } from './scenes/gateway';
 import { multiplayerScene } from './scenes/multiplayer';
 import { sessionScene } from './scenes/session';
+import { sessionsLoopScene } from './scenes/sessionsLoop';
 import { settingsScene } from './scenes/settings';
 import { ActionRunner, type SceneDefinition, type Track } from './timeline';
 import './MarketingVideoPage.css';
@@ -37,6 +41,16 @@ const SCENES: Record<string, SceneDefinition> = {
   session: sessionScene,
   artifact: artifactScene,
   settings: settingsScene,
+  // Showcase-carousel cuts (apps/agor-docs "So much more than a chat box").
+  boards: boardsScene,
+  sessions: sessionsLoopScene,
+  gateway: gatewayScene,
+};
+
+// Which DemoSessionStage story each scene tells (default: 'coding').
+const STAGE_VARIANT_BY_SCENE: Record<string, StageVariant> = {
+  gateway: 'gateway',
+  multiplayer: 'collab',
 };
 
 declare global {
@@ -195,6 +209,108 @@ const DemoScreenPointer = ({ scene, t }: { scene: SceneDefinition; t: number }) 
   );
 };
 
+/** Labeled teammate cursors in SCREEN space (page px) — for scenes where
+ * named users interact with UI above the canvas (the staged session panel,
+ * the Slack stage). Mirrors RemoteCursorLayer's cursor + name-chip styling. */
+const DemoScreenCursors = ({ scene, t }: { scene: SceneDefinition; t: number }) => {
+  if (!scene.screenCursors || scene.screenCursors.length === 0) return null;
+  return (
+    <>
+      {scene.screenCursors.map((cursor) => {
+        const user = cursor.user ?? demoUsers[cursor.userIndex];
+        const position = cursor.pos.sample(t);
+        const ripple = cursor.ripple?.sample(t) ?? 0;
+        const rippleSize = 8 + ripple * 36;
+        return (
+          <div
+            key={user.user_id}
+            style={{
+              position: 'fixed',
+              left: 0,
+              top: 0,
+              transform: `translate3d(${position.x}px, ${position.y}px, 0) scale(1.3)`,
+              transformOrigin: 'top left',
+              zIndex: 99_998,
+              pointerEvents: 'none',
+            }}
+          >
+            <div style={{ position: 'relative', width: 24, height: 24 }}>
+              {ripple > 0 && ripple <= 1 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: 4,
+                    left: 6,
+                    width: rippleSize,
+                    height: rippleSize,
+                    marginLeft: -rippleSize / 2,
+                    marginTop: -rippleSize / 2,
+                    borderRadius: '50%',
+                    border: `2px solid ${cursor.color}`,
+                    opacity: 1 - ripple,
+                  }}
+                />
+              )}
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M5.5 3.5L18.5 12L11 14L8 20.5L5.5 3.5Z"
+                  fill={cursor.color}
+                  stroke="#1f1f1f"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                  style={{ filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4))' }}
+                />
+              </svg>
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 24,
+                  left: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '4px 8px',
+                  borderRadius: 4,
+                  fontSize: 12,
+                  whiteSpace: 'nowrap',
+                  background: cursor.color,
+                  color: '#ffffff',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.35)',
+                }}
+              >
+                <span style={{ fontSize: 14 }}>{user.emoji}</span>
+                <span style={{ fontWeight: 500 }}>{user.name || user.email}</span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+};
+
+/** Full-frame loop-closure veil: fades the ENTIRE page to its background
+ * color while scene state (transcript, comments, cursors) resets to the
+ * establish beat, then lifts — the whole-composition analog of
+ * DemoSessionStage's panel-scoped resetVeil. */
+const DemoGlobalVeil = ({ scene, t }: { scene: SceneDefinition; t: number }) => {
+  if (!scene.uiFlags.globalVeil) return null;
+  const veil = sampleFlag(scene.uiFlags, 'globalVeil', t);
+  if (veil <= 0) return null;
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100_000,
+        background: '#07111d',
+        opacity: veil,
+        pointerEvents: 'none',
+      }}
+    />
+  );
+};
+
 // Session shown in the settings scene: landing-hero-polish's claude-code session.
 const settingsSession = demoSessions.find(
   (session) => session.session_id === '019ee88d-demo-branch-0000-000000000101-session-1'
@@ -322,7 +438,7 @@ export const MarketingVideoPage = () => {
   }, [play, scene]);
 
   const cursors: StaticRemoteCursor[] = scene.cursors.map((cursor) => {
-    const user = demoUsers[cursor.userIndex];
+    const user = cursor.user ?? demoUsers[cursor.userIndex];
     const position = cursor.pos.sample(t);
     return {
       userId: user.user_id,
@@ -392,8 +508,18 @@ export const MarketingVideoPage = () => {
                 />
                 <ArtifactRevealOverlay scene={scene} t={t} />
               </ReactFlowProvider>
-              {/* Scene "session": staged session panel docked to the right */}
-              {scene.uiFlags.sessionPhase && <DemoSessionStage scene={scene} t={t} />}
+              {/* Scenes "session"/"sessions"/"gateway"/"multiplayer": staged panel on the right */}
+              {scene.uiFlags.sessionPhase && (
+                <DemoSessionStage
+                  scene={scene}
+                  t={t}
+                  variant={STAGE_VARIANT_BY_SCENE[scene.name] ?? 'coding'}
+                />
+              )}
+              {/* Scene "gateway": Slack-style channel stage on the left */}
+              {scene.uiFlags.slackPhase && (
+                <DemoSlackStage scene={scene} t={t} prompt={GATEWAY_PROMPT} />
+              )}
             </main>
             {settingsSession && scene.uiFlags.settingsOpen && (
               <SessionSettingsModal
@@ -405,6 +531,8 @@ export const MarketingVideoPage = () => {
               />
             )}
             <DemoScreenPointer scene={scene} t={t} />
+            <DemoScreenCursors scene={scene} t={t} />
+            <DemoGlobalVeil scene={scene} t={t} />
           </Layout>
         </ConnectionProvider>
       </AntdApp>

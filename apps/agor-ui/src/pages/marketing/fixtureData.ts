@@ -38,6 +38,15 @@ export const demoUsers = [
   { user_id: 'demo-user-ivy', name: 'Ivy', email: 'ivy@example.com', emoji: '🌿' },
 ] as User[];
 
+// Agent-labeled cursor identity for the demo videos. Deliberately NOT part of
+// demoUsers so the facepile count (and its "+7" overflow) stays unchanged.
+export const demoAgentUser = {
+  user_id: 'demo-agent-agorclaw',
+  name: 'AgorClaw',
+  email: 'agorclaw@agents.agor.live',
+  emoji: '🤖',
+} as User;
+
 export const demoBoard: Board = {
   board_id: demoBoardId,
   name: 'Launch board',
@@ -554,6 +563,30 @@ export const demoComments = [
       },
     },
     mentions: [demoUsers[0].user_id],
+    created_at: new Date(demoNow),
+  },
+  {
+    // Jules's reply pin, parked just below Mina's comment. The boards showcase
+    // scene types its content char-by-char (a spatial-comment reply beat);
+    // everywhere else it's a quiet second pin on the multiplayer-presence card.
+    comment_id: '019ee88d-demo-comment-0000-000000000302',
+    board_id: demoBoardId,
+    created_by: demoUsers[5].user_id,
+    content: '@mina capped at five with a +7 chip — done ✅',
+    content_preview: '@mina capped at five with a +7 chip — done ✅',
+    branch_id: branchFixtures[1].id as BranchID,
+    resolved: false,
+    edited: false,
+    reactions: [],
+    position: {
+      relative: {
+        parent_id: branchFixtures[1].id,
+        parent_type: 'branch',
+        offset_x: 560,
+        offset_y: 300,
+      },
+    },
+    mentions: [demoUsers[2].user_id],
     created_at: new Date(demoNow),
   },
 ] as unknown as BoardComment[];

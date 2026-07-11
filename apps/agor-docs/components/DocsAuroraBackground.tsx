@@ -30,7 +30,14 @@ export function DocsAuroraBackground() {
         opacity: 0.35,
       }}
     >
-      <Aurora colorStops={['#2e9a92', '#34e6c4', '#7ad9ff']} amplitude={0.9} blend={1} />
+      {/* speed 0.6 = 40% slower than default; docs pages should shimmer, not swim.
+          The landing page is unaffected (opaque shell + its own aurora band). */}
+      <Aurora
+        colorStops={['#2e9a92', '#34e6c4', '#7ad9ff']}
+        amplitude={0.9}
+        blend={1}
+        speed={0.6}
+      />
     </div>
   );
 }

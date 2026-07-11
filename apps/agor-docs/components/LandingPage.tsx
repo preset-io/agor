@@ -30,15 +30,11 @@ import {
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import {
-  AGOR_CLOUD_DEMO_URL,
-  AI_ENABLEMENT_POST_URL,
-  DISCORD_INVITE_URL,
-  GITHUB_REPO_URL,
-} from '../lib/links';
+import { AI_ENABLEMENT_POST_URL, DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { BRAND_NAME, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import Aurora from './Aurora/Aurora';
 import { HubSpotFormModal } from './HubSpotFormModal';
+import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 import styles from './LandingPage.module.css';
 
 const LANDING_PRIVATE_BETA_URL = 'https://agor.live/blog/agor-cloud#lets-get-cooking';
@@ -341,24 +337,33 @@ function GitHubIcon() {
   );
 }
 
-// "So much more than a chat box" carousel. The multiplayer collage
-// (comment + facepile + cursor screenshots) leads as slide 1.
+// "So much more than a chat box" carousel. Each slide is a short loop-perfect
+// demo video rendered by the demo-videos pipeline (apps/agor-docs/demo-videos);
+// the poster doubles as the reduced-motion / JS-off fallback.
 const showcaseSlides = [
-  { label: 'Multiplayer presence', caption: 'live cursors · comments · facepile', collage: true },
+  {
+    label: 'Multiplayer presence',
+    caption: 'live cursors · shared session · queued follow-up',
+    video: '/videos/showcase-multiplayer.mp4',
+    poster: '/videos/showcase-multiplayer-poster.jpg',
+  },
   {
     label: 'Spatial boards',
     caption: 'launch board · spatial canvas',
-    image: '/screenshots/board-hero.png',
+    video: '/videos/showcase-boards.mp4',
+    poster: '/videos/showcase-boards-poster.jpg',
   },
   {
     label: 'Rich agent sessions',
     caption: 'session · tool calls with full context',
-    image: '/screenshots/conversation_full_page.png',
+    video: '/videos/showcase-sessions.mp4',
+    poster: '/videos/showcase-sessions-poster.jpg',
   },
   {
     label: 'Message gateway',
-    caption: 'slack · @DatAgor picks up the ticket',
-    image: '/screenshots/marketing/agor-marketing-slack-thread.png',
+    caption: 'slack · @Agor picks up the ticket',
+    video: '/videos/showcase-gateway.mp4',
+    poster: '/videos/showcase-gateway-poster.jpg',
   },
 ];
 
@@ -532,10 +537,34 @@ const liveCards = [
 export function LandingPage() {
   const landingRef = useRef<HTMLDivElement>(null);
   const [isBetaFormOpen, setIsBetaFormOpen] = useState(false);
+  const [isDemoFormOpen, setIsDemoFormOpen] = useState(false);
   const [activeShot, setActiveShot] = useState(0);
   const [activeSurface, setActiveSurface] = useState(0);
   const [activeFeature, setActiveFeature] = useState(0);
   const [hoveredMember, setHoveredMember] = useState<number | null>(null);
+  const slideVideoRefs = useRef<Array<HTMLVideoElement | null>>([]);
+
+  // Showcase carousel playback gating: only the active slide's video plays;
+  // off-screen slides pause (four loops on one page would otherwise decode
+  // simultaneously forever). Under prefers-reduced-motion nothing plays — the
+  // CSS hides the videos and the poster background shows instead.
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return;
+    }
+    slideVideoRefs.current.forEach((video, index) => {
+      if (!video) {
+        return;
+      }
+      if (index === activeShot) {
+        video.play().catch(() => {
+          // Autoplay can be rejected (e.g. data-saver); the poster still shows.
+        });
+      } else {
+        video.pause();
+      }
+    });
+  }, [activeShot]);
 
   useEffect(() => {
     const landing = landingRef.current;
@@ -632,9 +661,9 @@ export function LandingPage() {
       </div>
 
       <section className={styles.problemSection} data-reveal>
-        <span className={styles.eyebrow}>Why AI stalls at work</span>
         <h2 className={styles.liveStatement}>
-          Don&rsquo;t fall for the <span className={styles.headingAccentWarm}>AI silo trap</span>
+          Don&rsquo;t let AI <span className={styles.headingAccentWarm}>silo</span> your{' '}
+          <span className={styles.headingStrong}>team</span>
         </h2>
         <p className={styles.liveSub}>
           <span className={styles.headingDim}>
@@ -666,11 +695,203 @@ export function LandingPage() {
         </p>
       </section>
 
-      {/* Story beat: six amber cards in a chaotic pile above → six mint items
-          on a calm straight line here. The "Compound Amplifying Bus". */}
+      <section className={styles.showcaseSection} data-reveal>
+        <div className={styles.showcaseHeader}>
+          <div className={styles.sectionHeader}>
+            <h2>
+              So much <span className={styles.headingStrong}>more</span> than a{' '}
+              <span className={styles.headingAccent}>chat box</span>
+            </h2>
+          </div>
+          <div className={styles.showcaseTabs}>
+            {showcaseSlides.map((slide, index) => (
+              <button
+                type="button"
+                key={slide.label}
+                className={
+                  index === activeShot
+                    ? `${styles.showcaseTab} ${styles.showcaseTabActive}`
+                    : styles.showcaseTab
+                }
+                onClick={() => setActiveShot(index)}
+              >
+                {slide.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className={styles.showcaseFrame}>
+          <div className={styles.showcaseChrome}>
+            <span className={styles.chromeDot} style={{ background: '#ff6f5e' }} />
+            <span className={styles.chromeDot} style={{ background: '#ffd166' }} />
+            <span className={styles.chromeDot} style={{ background: '#34e6c4' }} />
+            <span className={styles.chromeCaption}>{showcaseSlides[activeShot].caption}</span>
+          </div>
+          <div className={styles.showcaseViewport}>
+            {/* Track is 400% wide with 25% slides — keep in sync with showcaseSlides.length */}
+            <div
+              className={styles.showcaseTrack}
+              style={{ transform: `translateX(-${activeShot * 25}%)` }}
+            >
+              {showcaseSlides.map((slide, index) => (
+                <div className={styles.showcaseSlide} key={slide.label}>
+                  {/* Poster is the frame's background image so it shows under
+                      prefers-reduced-motion (CSS hides the video) and with JS
+                      off (no play() call ever fires). */}
+                  <div
+                    className={styles.slideVideoFrame}
+                    style={{ backgroundImage: `url(${slide.poster})` }}
+                  >
+                    <video
+                      ref={(element) => {
+                        slideVideoRefs.current[index] = element;
+                      }}
+                      className={styles.slideVideo}
+                      muted
+                      loop
+                      playsInline
+                      preload="auto"
+                      poster={slide.poster}
+                      aria-label={slide.label}
+                    >
+                      <source src={slide.video} type="video/mp4" />
+                    </video>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Previous example"
+            className={`${styles.showcaseArrow} ${styles.showcaseArrowLeft}`}
+            onClick={() =>
+              setActiveShot((activeShot + showcaseSlides.length - 1) % showcaseSlides.length)
+            }
+          >
+            <ChevronLeft size={22} aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label="Next example"
+            className={`${styles.showcaseArrow} ${styles.showcaseArrowRight}`}
+            onClick={() => setActiveShot((activeShot + 1) % showcaseSlides.length)}
+          >
+            <ChevronRight size={22} aria-hidden />
+          </button>
+        </div>
+      </section>
+
+      <section className={styles.workspaceSection} data-reveal>
+        <div className={styles.workspaceCopy}>
+          <span className={styles.eyebrow}>Agents that learn with you</span>
+          <h2>
+            Raise <span className={styles.headingAccent}>AI teammates</span> with memory, skills,
+            and a place to <span className={styles.headingStrong}>work</span>
+          </h2>
+          <p>
+            One-off prompts don’t compound. In Agor, teammates have durable identities your team can
+            teach conversationally, then equip with memory, tools, channels, and schedules as they
+            grow. Your{' '}
+            <Link href={AI_ENABLEMENT_POST_URL} target="_blank" rel="noopener noreferrer">
+              most AI-enabled teammates
+            </Link>{' '}
+            can uplevel workflows across the entire org, and what works for one person finally
+            reaches everyone.
+          </p>
+        </div>
+        <div className={styles.featureRing} data-reveal>
+          <div className={styles.ringStage}>
+            {featureCards.map((feature, index) => {
+              const angle = ((-90 + index * (360 / featureCards.length)) * Math.PI) / 180;
+              const radius = 37.5; // percent of stage, from center to node center
+              const left = 50 + radius * Math.cos(angle);
+              const top = 50 + radius * Math.sin(angle);
+              const isActive = index === activeFeature;
+              return (
+                <button
+                  type="button"
+                  key={feature.title}
+                  className={
+                    isActive ? `${styles.ringNode} ${styles.ringNodeActive}` : styles.ringNode
+                  }
+                  style={{ left: `${left}%`, top: `${top}%` }}
+                  onMouseEnter={() => setActiveFeature(index)}
+                  onFocus={() => setActiveFeature(index)}
+                  onClick={() => setActiveFeature(index)}
+                  aria-pressed={isActive}
+                >
+                  <span className={styles.ringNodeIcon} aria-hidden>
+                    <feature.icon size={15} />
+                  </span>
+                  <span>{feature.title}</span>
+                </button>
+              );
+            })}
+            <div className={styles.ringHub}>
+              <div className={styles.ringHubInner} key={activeFeature}>
+                <p>{featureCards[activeFeature].body}</p>
+                <Link href={featureCards[activeFeature].href} className={styles.ringButton}>
+                  {featureCards[activeFeature].linkLabel} <span aria-hidden="true">→</span>
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.productShowcase} data-reveal>
+        <div className={styles.sectionHeader}>
+          <span className={styles.eyebrow}>Let power users get down to business</span>
+          <h2>
+            Every surface <span className={styles.headingStrong}>AI enablers</span> need to{' '}
+            <span className={styles.headingAccent}>orchestrate AI</span>
+          </h2>
+        </div>
+        <div className={styles.surfaceExplorer} data-reveal>
+          <div className={styles.surfaceRail}>
+            <span className={styles.surfaceRailLabel}>Product surfaces</span>
+            {productPreviews.map((preview, index) => (
+              <button
+                type="button"
+                key={preview.title}
+                className={
+                  index === activeSurface
+                    ? `${styles.surfaceRailItem} ${styles.surfaceRailItemActive}`
+                    : styles.surfaceRailItem
+                }
+                onClick={() => setActiveSurface(index)}
+              >
+                {preview.title}
+              </button>
+            ))}
+          </div>
+          <div className={styles.surfaceStage}>
+            <div className={styles.surfaceInfo}>
+              <div>
+                <h3>{productPreviews[activeSurface].title}</h3>
+                <p>{productPreviews[activeSurface].body}</p>
+              </div>
+              <Link href={productPreviews[activeSurface].href} className={styles.secondaryButton}>
+                Learn more →
+              </Link>
+            </div>
+            {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+            <img
+              key={productPreviews[activeSurface].image}
+              className={styles.surfaceShot}
+              src={productPreviews[activeSurface].image}
+              alt={productPreviews[activeSurface].title}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Story beat: the problem section's six amber cards in a chaotic pile
+          → six mint items on a calm straight line here. The "Compound
+          Amplifying Bus". */}
       <section className={styles.controlSection} data-reveal>
         <div>
-          <span className={styles.eyebrow}>Build teams as a team</span>
           <h2>
             You’re <span className={styles.headingStrong}>using</span> AI
             <br />
@@ -687,14 +908,13 @@ export function LandingPage() {
             watch as it compounds.
           </p>
           <div className={styles.controlActions}>
-            <Link
-              href={AGOR_CLOUD_DEMO_URL}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
               className={styles.secondaryButton}
+              onClick={() => setIsDemoFormOpen(true)}
             >
               Talk to us about enterprise
-            </Link>
+            </button>
           </div>
         </div>
         <ul className={styles.busList}>
@@ -794,199 +1014,6 @@ export function LandingPage() {
           </p>
         </section>
       </div>
-
-      <section className={styles.showcaseSection} data-reveal>
-        <div className={styles.showcaseHeader}>
-          <div className={styles.sectionHeader}>
-            <h2>
-              So much <span className={styles.headingStrong}>more</span> than a{' '}
-              <span className={styles.headingAccent}>chat box</span>
-            </h2>
-          </div>
-          <div className={styles.showcaseTabs}>
-            {showcaseSlides.map((slide, index) => (
-              <button
-                type="button"
-                key={slide.label}
-                className={
-                  index === activeShot
-                    ? `${styles.showcaseTab} ${styles.showcaseTabActive}`
-                    : styles.showcaseTab
-                }
-                onClick={() => setActiveShot(index)}
-              >
-                {slide.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className={styles.showcaseFrame}>
-          <div className={styles.showcaseChrome}>
-            <span className={styles.chromeDot} style={{ background: '#ff6f5e' }} />
-            <span className={styles.chromeDot} style={{ background: '#ffd166' }} />
-            <span className={styles.chromeDot} style={{ background: '#34e6c4' }} />
-            <span className={styles.chromeCaption}>{showcaseSlides[activeShot].caption}</span>
-          </div>
-          <div className={styles.showcaseViewport}>
-            {/* Track is 400% wide with 25% slides — keep in sync with showcaseSlides.length */}
-            <div
-              className={styles.showcaseTrack}
-              style={{ transform: `translateX(-${activeShot * 25}%)` }}
-            >
-              {showcaseSlides.map((slide) => (
-                <div className={styles.showcaseSlide} key={slide.label}>
-                  {slide.collage ? (
-                    <div className={styles.slideCollage}>
-                      {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-                      <img
-                        className={styles.slideCollageMain}
-                        src="/screenshots/marketing/agor-marketing-social-comment-context.png"
-                        alt="Board comment attached to an active Agor branch card"
-                      />
-                      {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-                      <img
-                        className={styles.slideCollageFacepile}
-                        src="/screenshots/marketing/agor-marketing-facepile-tooltip.png"
-                        alt="Agor facepile with overflow and active teammate tooltip"
-                      />
-                      {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-                      <img
-                        className={styles.slideCollageCursor}
-                        src="/screenshots/marketing/agor-marketing-cursor-indicator.png"
-                        alt="Live cursor indicator showing Mina on the board"
-                      />
-                    </div>
-                  ) : (
-                    /* biome-ignore lint/performance/noImgElement: Static product screenshot */
-                    <img className={styles.slideImage} src={slide.image} alt={slide.label} />
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-          <button
-            type="button"
-            aria-label="Previous example"
-            className={`${styles.showcaseArrow} ${styles.showcaseArrowLeft}`}
-            onClick={() =>
-              setActiveShot((activeShot + showcaseSlides.length - 1) % showcaseSlides.length)
-            }
-          >
-            <ChevronLeft size={22} aria-hidden />
-          </button>
-          <button
-            type="button"
-            aria-label="Next example"
-            className={`${styles.showcaseArrow} ${styles.showcaseArrowRight}`}
-            onClick={() => setActiveShot((activeShot + 1) % showcaseSlides.length)}
-          >
-            <ChevronRight size={22} aria-hidden />
-          </button>
-        </div>
-      </section>
-
-      <section className={styles.workspaceSection} data-reveal>
-        <div className={styles.workspaceCopy}>
-          <span className={styles.eyebrow}>Agents that learn with you</span>
-          <h2>
-            Raise <span className={styles.headingAccent}>AI teammates</span> with memory, skills,
-            and a place to <span className={styles.headingStrong}>work</span>
-          </h2>
-          <p>
-            One-off prompts don’t compound. In Agor, teammates have durable identities your team can
-            teach conversationally, then equip with memory, tools, channels, and schedules as they
-            grow — so your{' '}
-            <Link href={AI_ENABLEMENT_POST_URL} target="_blank" rel="noopener noreferrer">
-              most AI-enabled teammates
-            </Link>{' '}
-            can uplevel workflows across the entire org, and what works for one person finally
-            reaches everyone.
-          </p>
-        </div>
-        <div className={styles.featureRing} data-reveal>
-          <div className={styles.ringStage}>
-            {featureCards.map((feature, index) => {
-              const angle = ((-90 + index * (360 / featureCards.length)) * Math.PI) / 180;
-              const radius = 37.5; // percent of stage, from center to node center
-              const left = 50 + radius * Math.cos(angle);
-              const top = 50 + radius * Math.sin(angle);
-              const isActive = index === activeFeature;
-              return (
-                <button
-                  type="button"
-                  key={feature.title}
-                  className={
-                    isActive ? `${styles.ringNode} ${styles.ringNodeActive}` : styles.ringNode
-                  }
-                  style={{ left: `${left}%`, top: `${top}%` }}
-                  onMouseEnter={() => setActiveFeature(index)}
-                  onFocus={() => setActiveFeature(index)}
-                  onClick={() => setActiveFeature(index)}
-                  aria-pressed={isActive}
-                >
-                  <feature.icon size={16} aria-hidden />
-                  <span>{feature.title}</span>
-                </button>
-              );
-            })}
-            <div className={styles.ringHub}>
-              <div className={styles.ringHubInner} key={activeFeature}>
-                <p>{featureCards[activeFeature].body}</p>
-                <Link href={featureCards[activeFeature].href} className={styles.ringButton}>
-                  {featureCards[activeFeature].linkLabel} <span aria-hidden="true">→</span>
-                </Link>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className={styles.productShowcase} data-reveal>
-        <div className={styles.sectionHeader}>
-          <span className={styles.eyebrow}>Let power users get down to business</span>
-          <h2>
-            Every surface <span className={styles.headingStrong}>AI enablers</span> need to{' '}
-            <span className={styles.headingAccent}>orchestrate AI</span>
-          </h2>
-        </div>
-        <div className={styles.surfaceExplorer} data-reveal>
-          <div className={styles.surfaceRail}>
-            <span className={styles.surfaceRailLabel}>Product surfaces</span>
-            {productPreviews.map((preview, index) => (
-              <button
-                type="button"
-                key={preview.title}
-                className={
-                  index === activeSurface
-                    ? `${styles.surfaceRailItem} ${styles.surfaceRailItemActive}`
-                    : styles.surfaceRailItem
-                }
-                onClick={() => setActiveSurface(index)}
-              >
-                {preview.title}
-              </button>
-            ))}
-          </div>
-          <div className={styles.surfaceStage}>
-            <div className={styles.surfaceInfo}>
-              <div>
-                <h3>{productPreviews[activeSurface].title}</h3>
-                <p>{productPreviews[activeSurface].body}</p>
-              </div>
-              <Link href={productPreviews[activeSurface].href} className={styles.secondaryButton}>
-                Learn more →
-              </Link>
-            </div>
-            {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-            <img
-              key={productPreviews[activeSurface].image}
-              className={styles.surfaceShot}
-              src={productPreviews[activeSurface].image}
-              alt={productPreviews[activeSurface].title}
-            />
-          </div>
-        </div>
-      </section>
 
       <section className={styles.rosterSection} data-reveal>
         <div className={styles.rosterCopy}>
@@ -1100,14 +1127,13 @@ export function LandingPage() {
             >
               Sign up for Agor Cloud
             </button>
-            <Link
-              href={AGOR_CLOUD_DEMO_URL}
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
               className={styles.secondaryButton}
+              onClick={() => setIsDemoFormOpen(true)}
             >
               Book a demo
-            </Link>
+            </button>
             <Link href="/guide/getting-started" className={styles.secondaryButton}>
               Get started
             </Link>
@@ -1155,6 +1181,8 @@ export function LandingPage() {
           </div>
         </div>
         <p className={styles.footerCredit}>
+          {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
+          <img src="/preset-logo.svg" alt="Preset logo" className={styles.footerCreditLogo} />
           Built by{' '}
           <Link
             href="https://preset.io"
@@ -1172,6 +1200,7 @@ export function LandingPage() {
         onClose={() => setIsBetaFormOpen(false)}
         title="Join the Agor Cloud private beta"
       />
+      <HubSpotMeetingModal isOpen={isDemoFormOpen} onClose={() => setIsDemoFormOpen(false)} />
     </div>
   );
 }

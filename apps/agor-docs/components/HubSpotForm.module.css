@@ -25,10 +25,16 @@
   opacity: 0.85;
 }
 
+/* Styled as a link whether it's an <a> or a modal-view-swap <button>. */
 .demoLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
   font-weight: 600;
   color: #7fe8df;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .demoLink:hover {

@@ -64,6 +64,59 @@
   outline-offset: 2px;
 }
 
+/* Meeting-scheduler variant — the HubSpot calendar wants more width than the
+ * signup form, and it arrives as an iframe we fade in once loaded. */
+.contentWide {
+  max-width: 900px;
+}
+
+.meetingLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 220px;
+}
+
+.meetingSpinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(52, 230, 196, 0.18);
+  border-top-color: #34e6c4;
+  animation: meetingSpin 0.8s linear infinite;
+}
+
+@keyframes meetingSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.meetingFrame {
+  display: block;
+  width: 100%;
+  height: min(680px, 74vh);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.meetingFrameReady {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meetingSpinner {
+    animation-duration: 2s;
+  }
+  .meetingFrame {
+    transition: none;
+  }
+}
+
 @media (max-width: 640px) {
   .backdrop {
     padding: 1rem 0.5rem;

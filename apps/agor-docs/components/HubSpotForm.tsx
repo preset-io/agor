@@ -121,6 +121,9 @@ interface HubSpotFormProps {
   portalId?: string;
   formId?: string;
   region?: string;
+  /** When set, "Book a Demo" invokes this (e.g. swap to the in-modal
+   * scheduler) instead of linking out to meetings.hubspot.com. */
+  onBookDemo?: () => void;
 }
 
 export function HubSpotForm({
@@ -129,6 +132,7 @@ export function HubSpotForm({
   portalId = HUBSPOT_PORTAL_ID,
   formId = HUBSPOT_FORM_ID,
   region = HUBSPOT_REGION,
+  onBookDemo,
 }: HubSpotFormProps) {
   // useId returns ":r0:"-style strings; strip ":" so we can use it
   // safely in both a DOM id and a CSS selector.
@@ -179,14 +183,20 @@ export function HubSpotForm({
       {showDemoLink && (
         <p className={styles.demoLine}>
           Prefer a chat first?{' '}
-          <a
-            href={AGOR_CLOUD_DEMO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.demoLink}
-          >
-            Book a Demo →
-          </a>
+          {onBookDemo ? (
+            <button type="button" className={styles.demoLink} onClick={onBookDemo}>
+              Book a Demo →
+            </button>
+          ) : (
+            <a
+              href={AGOR_CLOUD_DEMO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.demoLink}
+            >
+              Book a Demo →
+            </a>
+          )}
         </p>
       )}
     </div>

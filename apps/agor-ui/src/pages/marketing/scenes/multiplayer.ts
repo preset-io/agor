@@ -1,59 +1,55 @@
-// Scene 1 — "multiplayer" (8s, loop-perfect).
-// Ari drags the landing-hero-polish branch card from Ship → Review and back,
-// Mina types her spatial comment, Jules inspects the cost-cockpit artifact.
-// Every track returns to its t=0 value by 8000ms so the video loops seamlessly.
-//
-// Coordinates are flow-space (board units). Rest positions match
-// demoStaticCursors so the video's first frame agrees with the static
-// screenshot fixture. Tune visually via /demo/marketing-video?scene=multiplayer&play=1
+// Scene — "multiplayer" (8s, loop-perfect showcase cut).
+// ONE collaborative story told in a single session, using the board + staged
+// session-panel composition (DemoSessionStage's 'collab' variant):
+//   · Ari's cursor moves to the session composer, types a prompt, hits Send —
+//     the agent starts responding in the transcript.
+//   · Jules arrives at the SAME composer and types a follow-up while the
+//     agent is still running; sending it lands as a QUEUED TASK (tasks are
+//     the queueable unit) — the drawer + Send-button badge appear.
+//   · Meanwhile Mina drops a spatial comment on the board at left, typed
+//     char-by-char in the pin's hover bubble.
+// Loop closure: a full-frame veil (uiFlags.globalVeil) masks the reset of the
+// transcript, composer, queue, and comment back to the establish beat.
+// No AgorClaw in this scene. Tune via ?scene=multiplayer&play=1
 
 import { clickPulses, type Keyframe, path, type SceneDefinition, Track } from '../timeline';
 
 const DURATION = 8_000;
 
-// Viewport framing: board content spans roughly x 60–2980, y 80–1730.
-// Pane is 1920×1016 (1080 viewport minus 64px header) → zoom 0.56 centers it.
-const BASE_VIEWPORT = { x: 109, y: 0, zoom: 0.56 };
+export const MULTIPLAYER_PROMPT = 'Add ⌘1–⌘9 shortcuts to jump between boards?';
+export const MULTIPLAYER_FOLLOWUP = 'Also wire ⌘K to open the board switcher?';
+export const MULTIPLAYER_RESPONSE =
+  'On it — ⌘1 through ⌘9 now jump straight to your pinned boards. Wiring the bindings into `useKeyboardShortcuts.ts`…';
 
-// landing-hero-polish: zone-ship (60,650) + rel (70,110) → abs (130,760).
-const HERO_OBJECT_ID = 'board-object-019ee88d-demo-branch-0000-000000000101';
-const HERO_HOME_REL = { x: 70, y: 110 };
-const HERO_HOME_ABS = { x: 130, y: 760 };
-// Drop target: zone-review (820,650) + rel (140,750) → abs (960,1400).
-const HERO_DROP_REL = { x: 140, y: 750 };
-const HERO_DROP_ABS = { x: 960, y: 1400 };
-// Raised midpoint gives the drag path a natural arc.
-const HERO_ARC_MID = { x: 545, y: 980 };
+// Viewport framing: the left 1040px strip frames the Ship zone (flow
+// (60,650)–(740,1730)) with both branch cards and the comment pins; the
+// 880px session panel owns the right side. Gentle drift returns home.
+const VIEW_START = { x: -32, y: -427, zoom: 0.78 };
+const VIEW_END = { x: -44, y: -439, zoom: 0.8 };
 
-// Cursor tip rides the card's header while dragging.
-const GRAB_OFFSET = { x: 200, y: 24 };
-const grab = (p: { x: number; y: number }): [number, number] => [
-  p.x + GRAB_OFFSET.x,
-  p.y + GRAB_OFFSET.y,
-];
-
-const [heroGrabX, heroGrabY] = grab(HERO_HOME_ABS);
-const [heroDropX, heroDropY] = grab(HERO_DROP_ABS);
-const [heroMidX, heroMidY] = grab(HERO_ARC_MID);
-
-// Rest positions (must match demoStaticCursors).
-const ARI_REST: [number, number] = [1370, 620];
-const MINA_REST: [number, number] = [2550, 260];
-const JULES_REST: [number, number] = [650, 820];
-
-// Mina's spatial comment sits at branch multiplayer-presence (130,1170) + offset (420,80).
+// Mina's spatial comment: branch multiplayer-presence (130,1170) + offset
+// (420,80) → abs (550,1250). Flow-space cursor coordinates.
 const COMMENT_ID = '019ee88d-demo-comment-0000-000000000301';
-const COMMENT_TEXT = 'Can we keep the facepile capped but still show the +7 overflow?';
-const COMMENT_POS: [number, number] = [620, 1300];
+const COMMENT_TEXT = 'Presence cursors feel alive — love seeing who is in the session 👀';
+const MINA_REST: [number, number] = [2550, 260]; // off-frame right; she enters
+// Hold just below-left of the pin so her name chip never covers the bubble.
+const MINA_PIN: [number, number] = [498, 1296];
 
-// Cost-cockpit app node: (620,80) 780×495 → center ~(1010,330).
-const COCKPIT_CENTER: [number, number] = [1010, 330];
+// Screen-space waypoints (page px, 1920×1080) for the panel interactions —
+// same composer/send calibration as scenes/session.ts.
+const COMPOSER: [number, number] = [1_250, 1_014];
+const SEND_BUTTON: [number, number] = [1_852, 1_050];
+const ARI_REST: [number, number] = [620, 420];
+const ARI_TRANSCRIPT: [number, number] = [1_380, 690];
+const JULES_REST: [number, number] = [1_500, 250];
+const JULES_QUEUE: [number, number] = [1_300, 900];
 
-/** Toggle the spatial comment pin's React hover state so its preview bubble
- * shows the live-typed content. React's onMouseEnter/onMouseLeave respond to
- * dispatched mouseover/mouseout events. */
-const hoverCommentPin = (hovered: boolean) => {
-  const pin = document.querySelector('.react-flow__node-comment > div');
+/** Toggle a specific comment pin's React hover state so its preview bubble
+ * shows the live-typed content (mouseover/mouseout reach React's handlers). */
+const hoverCommentPin = (commentId: string, hovered: boolean) => {
+  const pin = document.querySelector(
+    `.react-flow__node-comment[data-id="comment-${commentId}"] > div`
+  );
   pin?.dispatchEvent(
     new MouseEvent(hovered ? 'mouseover' : 'mouseout', {
       bubbles: true,
@@ -62,129 +58,159 @@ const hoverCommentPin = (hovered: boolean) => {
   );
 };
 
-/** Type text between t0–t1, hold, then erase quickly between t2–t3 so the
- * scene loops back to an empty comment. */
-const typeAndErase = (
-  text: string,
-  t0: number,
-  t1: number,
-  t2: number,
-  t3: number
-): Track<string> => {
+/** Typewriter reveal between t0–t1 (with caret), cleared instantly at tClear. */
+const typeThenClear = (text: string, t0: number, t1: number, tClear: number): Track<string> => {
   const chars = [...text];
   const keyframes: Keyframe<string>[] = [{ t: 0, v: '' }];
-  const typeStep = (t1 - t0) / chars.length;
+  const perChar = (t1 - t0) / Math.max(chars.length, 1);
   chars.forEach((_, index) => {
     const revealed = chars.slice(0, index + 1).join('');
     keyframes.push({
-      t: t0 + typeStep * (index + 1),
+      t: t0 + perChar * (index + 1),
       v: index + 1 < chars.length ? `${revealed}▍` : revealed,
       easing: 'hold',
     });
   });
-  const eraseStep = (t3 - t2) / chars.length;
-  chars.forEach((_, index) => {
-    keyframes.push({
-      t: t2 + eraseStep * (index + 1),
-      v: chars.slice(0, chars.length - index - 1).join(''),
-      easing: 'hold',
-    });
-  });
+  keyframes.push({ t: tClear, v: '', easing: 'hold' });
   return new Track(keyframes);
 };
+
+/** Two people share one composer: segment A types then clears at its send,
+ * segment B types then clears at ITS send. */
+const twoTypists = (
+  a: { text: string; t0: number; t1: number; tClear: number },
+  b: { text: string; t0: number; t1: number; tClear: number }
+): Track<string> => {
+  const keyframes: Keyframe<string>[] = [{ t: 0, v: '' }];
+  for (const segment of [a, b]) {
+    const chars = [...segment.text];
+    const perChar = (segment.t1 - segment.t0) / Math.max(chars.length, 1);
+    chars.forEach((_, index) => {
+      const revealed = chars.slice(0, index + 1).join('');
+      keyframes.push({
+        t: segment.t0 + perChar * (index + 1),
+        v: index + 1 < chars.length ? `${revealed}▍` : revealed,
+        easing: 'hold',
+      });
+    });
+    keyframes.push({ t: segment.tClear, v: '', easing: 'hold' });
+  }
+  return new Track(keyframes);
+};
+
+// Full-frame loop-closure veil — opaque 7_300–7_500 while everything resets.
+const VEIL = new Track([
+  { t: 0, v: 0 },
+  { t: 6_900, v: 0, easing: 'hold' },
+  { t: 7_300, v: 1 },
+  { t: 7_500, v: 1, easing: 'hold' },
+  { t: 7_950, v: 0 },
+]);
 
 export const multiplayerScene: SceneDefinition = {
   name: 'multiplayer',
   durationMs: DURATION,
-  viewport: new Track([{ t: 0, v: BASE_VIEWPORT }]),
+  viewport: new Track([
+    { t: 0, v: VIEW_START },
+    { t: 7_000, v: VIEW_END, easing: 'linear' },
+    { t: 8_000, v: VIEW_START },
+  ]),
   cursors: [
     {
-      // Ari drags the branch card Ship → Review → Ship.
-      userIndex: 1,
-      color: '#06b6d4',
-      pos: path([
-        [0, ...ARI_REST],
-        [800, heroGrabX, heroGrabY],
-        [950, heroGrabX, heroGrabY, 'hold'],
-        [1_780, heroMidX, heroMidY],
-        [2_600, heroDropX, heroDropY],
-        [3_200, heroDropX + 80, heroDropY - 70],
-        [5_400, heroDropX, heroDropY],
-        [5_550, heroDropX, heroDropY, 'hold'],
-        [6_400, heroMidX, heroMidY],
-        [7_200, heroGrabX, heroGrabY],
-        [8_000, ...ARI_REST],
-      ]),
-      ripple: clickPulses([900, 2_700, 5_500, 7_300]),
-    },
-    {
-      // Mina types her spatial comment.
+      // Mina (flow-space, on the board): drops her spatial comment on the
+      // multiplayer-presence card while the panel story unfolds at right.
       userIndex: 2,
       color: '#f97316',
       pos: path([
         [0, ...MINA_REST],
-        [1_800, COMMENT_POS[0], COMMENT_POS[1]],
-        [2_000, COMMENT_POS[0] - 20, COMMENT_POS[1] - 20],
-        [4_600, COMMENT_POS[0] - 20, COMMENT_POS[1] - 20, 'hold'],
-        [5_600, COMMENT_POS[0] + 80, COMMENT_POS[1] - 100],
-        [7_600, ...MINA_REST],
+        [1_200, MINA_PIN[0] + 14, MINA_PIN[1] - 36],
+        [1_350, ...MINA_PIN],
+        [4_900, MINA_PIN[0] + 6, MINA_PIN[1] + 4],
+        [6_900, ...MINA_PIN],
+        [7_900, ...MINA_REST],
       ]),
-      ripple: clickPulses([1_900, 4_700]),
+      ripple: clickPulses([1_400]),
+    },
+  ],
+  screenCursors: [
+    {
+      // Ari (screen-space, over the panel): prompts the session.
+      userIndex: 1,
+      color: '#06b6d4',
+      pos: path([
+        [0, ...ARI_REST],
+        [700, ...COMPOSER],
+        [2_600, COMPOSER[0], COMPOSER[1], 'hold'],
+        [2_750, ...SEND_BUTTON],
+        [3_050, SEND_BUTTON[0], SEND_BUTTON[1], 'hold'],
+        [3_700, ...ARI_TRANSCRIPT],
+        [5_600, ARI_TRANSCRIPT[0] + 40, ARI_TRANSCRIPT[1] + 30],
+        [6_900, ...ARI_TRANSCRIPT],
+        [7_900, ...ARI_REST],
+      ]),
+      ripple: clickPulses([780, 2_850]),
     },
     {
-      // Jules inspects the cost-cockpit artifact.
+      // Jules (screen-space): queues a follow-up in the SAME composer while
+      // the agent is still running.
       userIndex: 5,
       color: '#eab308',
       pos: path([
         [0, ...JULES_REST],
-        [3_600, COCKPIT_CENTER[0], COCKPIT_CENTER[1]],
-        [4_000, COCKPIT_CENTER[0] + 70, COCKPIT_CENTER[1] - 30],
-        [4_400, COCKPIT_CENTER[0], COCKPIT_CENTER[1] - 60],
-        [4_800, COCKPIT_CENTER[0] - 70, COCKPIT_CENTER[1] - 30],
-        [5_200, COCKPIT_CENTER[0], COCKPIT_CENTER[1]],
-        [7_400, ...JULES_REST],
+        [2_900, JULES_REST[0], JULES_REST[1], 'hold'],
+        [3_500, COMPOSER[0] - 30, COMPOSER[1] - 4],
+        [5_400, COMPOSER[0] - 30, COMPOSER[1] - 4, 'hold'],
+        [5_550, ...SEND_BUTTON],
+        [5_850, SEND_BUTTON[0], SEND_BUTTON[1], 'hold'],
+        [6_400, ...JULES_QUEUE],
+        [6_900, JULES_QUEUE[0] + 30, JULES_QUEUE[1] + 10],
+        [7_900, ...JULES_REST],
       ]),
-      ripple: clickPulses([5_300]),
+      ripple: clickPulses([3_600, 5_650]),
     },
   ],
-  nodePlacements: [
-    {
-      objectId: HERO_OBJECT_ID,
-      // Positions flip rel↔abs at the exact instants zoneId flips, mirroring
-      // the product's pin/unpin math so the node never jumps on screen.
-      pos: new Track([
-        { t: 0, v: HERO_HOME_REL },
-        { t: 900, v: HERO_HOME_ABS, easing: 'hold' },
-        { t: 950, v: HERO_HOME_ABS },
-        { t: 1_780, v: HERO_ARC_MID },
-        { t: 2_600, v: HERO_DROP_ABS },
-        { t: 2_700, v: HERO_DROP_REL, easing: 'hold' },
-        { t: 5_500, v: HERO_DROP_ABS, easing: 'hold' },
-        { t: 5_550, v: HERO_DROP_ABS },
-        { t: 6_400, v: HERO_ARC_MID },
-        { t: 7_200, v: HERO_HOME_ABS },
-        { t: 7_300, v: HERO_HOME_REL, easing: 'hold' },
-      ]),
-      zoneId: new Track<string | null>([
-        { t: 0, v: 'zone-ship' },
-        { t: 900, v: null, easing: 'hold' },
-        { t: 2_700, v: 'zone-review', easing: 'hold' },
-        { t: 5_500, v: null, easing: 'hold' },
-        { t: 7_300, v: 'zone-ship', easing: 'hold' },
-      ]),
-    },
-  ],
+  nodePlacements: [],
   commentTexts: [
     {
       commentId: COMMENT_ID,
-      text: typeAndErase(COMMENT_TEXT, 2_000, 4_600, 7_300, 7_800),
+      // Mina types 1.5–4.9s; cleared under the opaque veil at 7.4s.
+      text: typeThenClear(COMMENT_TEXT, 1_500, 4_900, 7_400),
     },
   ],
-  uiFlags: {},
+  uiFlags: {
+    // Transcript phases (see scenes/session.ts legend). The live task NEVER
+    // completes here — it stays running so Jules's queued follow-up makes
+    // sense. Reset to the establish beat under the opaque veil.
+    sessionPhase: new Track([
+      { t: 0, v: 0 },
+      { t: 2_900, v: 1, easing: 'hold' },
+      { t: 3_250, v: 2, easing: 'hold' },
+      { t: 3_800, v: 3, easing: 'hold' },
+      { t: 4_350, v: 4, easing: 'hold' },
+      { t: 7_400, v: 0, easing: 'hold' },
+    ]),
+    // Jules's follow-up lands as a queued task when he hits Send (5.65s).
+    queuedVisible: new Track([
+      { t: 0, v: 0 },
+      { t: 5_700, v: 1, easing: 'hold' },
+      { t: 7_400, v: 0, easing: 'hold' },
+    ]),
+    globalVeil: VEIL,
+  },
+  textTracks: {
+    // One composer, two authors: Ari 0.8–2.6s (sends at 2.85s), then Jules
+    // 3.7–5.4s (sends at 5.65s, queueing).
+    composer: twoTypists(
+      { text: MULTIPLAYER_PROMPT, t0: 800, t1: 2_600, tClear: 2_900 },
+      { text: MULTIPLAYER_FOLLOWUP, t0: 3_700, t1: 5_400, tClear: 5_700 }
+    ),
+    // Agent reply streams in while the task keeps running; cleared under veil.
+    response: typeThenClear(MULTIPLAYER_RESPONSE, 4_550, 6_800, 7_400),
+  },
   actions: [
-    // Open the comment pin's hover preview while Mina types (the bubble is
-    // the only place the typed text is visible), close it before loop wrap.
-    { t: 1_900, run: () => hoverCommentPin(true) },
-    { t: 5_100, run: () => hoverCommentPin(false) },
+    // Open Mina's pin hover bubble while she types (the bubble is the only
+    // place the typed text is visible); close it under the opaque veil.
+    { t: 1_400, run: () => hoverCommentPin(COMMENT_ID, true) },
+    { t: 7_350, run: () => hoverCommentPin(COMMENT_ID, false) },
   ],
 };

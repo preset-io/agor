@@ -612,9 +612,26 @@
     color 0.28s ease;
 }
 
-/* Lucide icon before the node label — never let flex squish it. Color rides
- * currentColor, so active/hover states tint the icon with the text. */
-.ringNode svg {
+/* Icon rides in a mini mint badge pinned to the circle's top edge, keeping
+ * the label alone in the circle so it centers without early line-wraps. */
+.ringNodeIcon {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #2ea78f, #1f7c68);
+  color: #fff;
+  border: 2px solid rgba(7, 16, 15, 0.92);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.ringNodeIcon svg {
   flex-shrink: 0;
 }
 
@@ -740,6 +757,15 @@
     padding: 15px 20px;
     border-radius: 14px;
     font-size: 1rem;
+    gap: 10px;
+  }
+  /* Pills, not circles, at this width — icon badge goes back inline. */
+  .ringNodeIcon {
+    position: static;
+    transform: none;
+    width: 26px;
+    height: 26px;
+    border-width: 0;
   }
   .ringNodeActive {
     transform: none;
@@ -1122,7 +1148,7 @@
 
 .footerBrand strong {
   display: block;
-  color: var(--landing-ink);
+  color: var(--landing-teal);
   font-family: var(--font-display-stack);
   font-size: 1.15rem;
   font-weight: 600;
@@ -1130,7 +1156,7 @@
 
 .footerBrand p {
   margin: 6px 0 0;
-  max-width: 240px;
+  max-width: 300px;
   color: var(--landing-muted);
   font-size: 0.92rem;
   line-height: 1.5;
@@ -1169,9 +1195,19 @@
  * columns. Same dim-to-mint hover register as the footer links. */
 .footerCredit {
   grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 12px 0 0;
   color: #5b6d68;
   font-size: 0.85rem;
+}
+
+.footerCreditLogo {
+  width: 18px;
+  height: 17px;
+  /* Preset green reads loud against the muted credit line — dim it slightly. */
+  opacity: 0.8;
 }
 
 .footerCreditLink {
@@ -1366,50 +1402,28 @@
   background: radial-gradient(closest-side at 50% 40%, rgba(52, 230, 196, 0.07), transparent);
 }
 
-.slideImage {
-  max-width: 100%;
-  max-height: 460px;
+/* Slide media: a 16:9 demo-video loop inside the browser-frame stage. The
+ * poster is painted as the frame's background image so it doubles as the
+ * reduced-motion / JS-off fallback (the video element hides via the media
+ * query at the end of this file). */
+.slideVideoFrame {
+  position: relative;
+  width: min(940px, 100%);
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
   border: 1px solid rgba(52, 230, 196, 0.12);
   border-radius: 12px;
-  background: #0b1715;
+  background-color: #0b1715;
+  background-position: center;
+  background-size: cover;
   box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.7);
 }
 
-/* Slide 1: the multiplayer collage — comment context, facepile, live cursor */
-.slideCollage {
-  position: relative;
-  width: min(780px, 100%);
-  height: 460px;
-}
-
-.slideCollageMain {
-  position: absolute;
-  left: 0;
-  top: 44px;
-  width: 70%;
-  border: 1px solid rgba(52, 230, 196, 0.14);
-  border-radius: 12px;
-  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.7);
-}
-
-.slideCollageFacepile {
-  position: absolute;
-  right: 0;
-  top: 8px;
-  width: 40%;
-  border: 1px solid rgba(52, 230, 196, 0.14);
-  border-radius: 12px;
-  box-shadow: 0 24px 60px -26px rgba(0, 0, 0, 0.75);
-}
-
-.slideCollageCursor {
-  position: absolute;
-  right: 7%;
-  bottom: 12px;
-  width: 26%;
-  border: 1px solid rgba(52, 230, 196, 0.14);
-  border-radius: 12px;
-  box-shadow: 0 24px 60px -26px rgba(0, 0, 0, 0.75);
+.slideVideo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 /* Two-tone statement headline + numbered card grid (multiplayer section) */
@@ -2083,6 +2097,14 @@
   z-index: 1;
 }
 
+/* Active ring node brightens its icon badge with it. */
+.ringNodeActive .ringNodeIcon {
+  background: linear-gradient(180deg, #34e6c4, #2ea78f);
+  box-shadow:
+    0 0 0 3px rgba(52, 230, 196, 0.18),
+    0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
 /* Inline links inside landing body copy (e.g. the AI Enablement Engineer
  * post) — explicit so they read as links regardless of site theme. */
 .workspaceCopy p a,
@@ -2223,27 +2245,6 @@
     min-height: 340px;
   }
 
-  /* Tighten the collage composition for narrow containers */
-  .slideCollage {
-    height: 300px;
-  }
-
-  .slideCollageMain {
-    top: 34px;
-    width: 86%;
-  }
-
-  .slideCollageFacepile {
-    top: 0;
-    width: 46%;
-  }
-
-  .slideCollageCursor {
-    right: 0;
-    bottom: 6px;
-    width: 32%;
-  }
-
   .liveSection,
   .workspaceSection,
   .controlSection {
@@ -2365,5 +2366,11 @@
     opacity: 0.18;
     transform: scale(1.6);
     animation: none;
+  }
+
+  /* Showcase carousel: hide the video loops — the poster frame painted on
+   * .slideVideoFrame's background shows instead (mirrors the hero video). */
+  .slideVideo {
+    display: none;
   }
 }

@@ -3,6 +3,8 @@
 // `t` (ms) so the Playwright capture pipeline can step frames and get
 // identical output every run. No wall-clock, no randomness.
 
+import type { User } from '@agor-live/client';
+
 export type Easing = 'linear' | 'easeInOut' | 'easeOutCubic' | 'hold';
 
 export interface Keyframe<T> {
@@ -161,11 +163,26 @@ export const constant = <T>(v: T): Track<T> => new Track([{ t: 0, v }]);
 // ---------------------------------------------------------------------------
 
 export interface CursorTimeline {
-  /** Index into demoUsers. */
+  /** Index into demoUsers. Ignored when `user` is provided. */
   userIndex: number;
+  /** Explicit user override for cursors that aren't part of demoUsers
+   * (e.g. agent-labeled cursors like AgorClaw). */
+  user?: User;
   color: string;
   pos: Track<Vec2>;
   /** Ripple progress 0..1 (see clickPulses). */
+  ripple?: Track<number>;
+}
+
+/** Labeled cursor in SCREEN space (page px, 1920×1080) rather than flow space.
+ * Used when a named teammate interacts with UI that sits above the canvas
+ * (the staged session panel, the Slack stage) where flow-space cursors would
+ * be hidden behind the overlay. Rendered by MarketingVideoPage. */
+export interface ScreenCursorTimeline {
+  userIndex: number;
+  user?: User;
+  color: string;
+  pos: Track<Vec2>;
   ripple?: Track<number>;
 }
 
@@ -187,6 +204,8 @@ export interface SceneDefinition {
   durationMs: number;
   viewport: Track<ViewportState>;
   cursors: CursorTimeline[];
+  /** Labeled cursors rendered in screen space above panels/overlays. */
+  screenCursors?: ScreenCursorTimeline[];
   nodePlacements: NodePlacementTimeline[];
   commentTexts: CommentTextTimeline[];
   /** Free-form scalar tracks for scene-specific UI (overlay reveal progress,
