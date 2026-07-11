@@ -9,9 +9,11 @@ afterEach(() => {
 
 describe('LinkContentPreviewModal', () => {
   it('preserves plain-text formatting when the shared preview handles a text link', async () => {
-    vi.spyOn(linkContent, 'fetchLinkMarkdownText').mockResolvedValue('# Not a heading');
+    const fetchText = vi
+      .spyOn(linkContent, 'fetchLinkMarkdownText')
+      .mockResolvedValue('# Not a heading');
 
-    render(
+    const { rerender } = render(
       <LinkContentPreviewModal
         target={{ linkId: 'link-1', title: 'notes.txt' }}
         kind="text"
@@ -22,6 +24,15 @@ describe('LinkContentPreviewModal', () => {
     const content = await screen.findByText('# Not a heading');
     expect(content.tagName).toBe('PRE');
     expect(screen.queryByRole('heading', { name: 'Not a heading' })).not.toBeInTheDocument();
+
+    rerender(
+      <LinkContentPreviewModal
+        target={{ linkId: 'link-1', title: 'renamed-notes.txt' }}
+        kind="text"
+        onClose={vi.fn()}
+      />
+    );
+    expect(fetchText).toHaveBeenCalledTimes(1);
   });
 
   it('revokes an image object URL that resolves after the preview closes', async () => {

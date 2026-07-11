@@ -34,7 +34,8 @@ export const LinkContentPreviewModal: React.FC<LinkContentPreviewModalProps> = (
   const safeSubtitle = getSafeLinkContentLabel(target?.subtitle);
 
   React.useEffect(() => {
-    if (!target) {
+    const linkId = target?.linkId;
+    if (!linkId) {
       setLoaded(null);
       setError(null);
       setLoading(false);
@@ -50,7 +51,7 @@ export const LinkContentPreviewModal: React.FC<LinkContentPreviewModalProps> = (
 
     const request =
       kind === 'image'
-        ? fetchLinkImageObjectUrl(target.linkId, controller.signal).then((value) => {
+        ? fetchLinkImageObjectUrl(linkId, controller.signal).then((value) => {
             if (cancelled) {
               URL.revokeObjectURL(value);
               throw new DOMException('Preview request aborted', 'AbortError');
@@ -58,7 +59,7 @@ export const LinkContentPreviewModal: React.FC<LinkContentPreviewModalProps> = (
             objectUrl = value;
             return { kind: 'image' as const, value };
           })
-        : fetchLinkMarkdownText(target.linkId, controller.signal).then((value) => ({
+        : fetchLinkMarkdownText(linkId, controller.signal).then((value) => ({
             kind,
             value,
           }));
@@ -79,7 +80,7 @@ export const LinkContentPreviewModal: React.FC<LinkContentPreviewModalProps> = (
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [kind, target]);
+  }, [kind, target?.linkId]);
 
   const image = loaded?.kind === 'image' ? loaded.value : null;
   const text = loaded && loaded.kind !== 'image' ? loaded.value : null;
