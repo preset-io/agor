@@ -1,4 +1,4 @@
-import { Flex, Tooltip, Typography, theme } from 'antd';
+import { Flex, Typography, theme } from 'antd';
 import type React from 'react';
 import {
   ActionLinkRow,
@@ -183,13 +183,7 @@ function SessionAttachmentRow({ drawer, ...props }: DrawerProps & { drawer: bool
     </ActionLinkRow>
   );
 
-  return drawer ? (
-    row
-  ) : (
-    <Tooltip title={actionLabel} placement="left">
-      <div>{row}</div>
-    </Tooltip>
-  );
+  return row;
 }
 
 export function SessionAttachmentQuickRow(props: SharedProps) {
