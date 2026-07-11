@@ -67,7 +67,7 @@ export function LinkRow({
         canTogglePin ? (
           <LinkPinAction
             pinned={item.isPinned}
-            label={getLinkPinActionLabel(item)}
+            ariaLabel={getLinkPinActionLabel(item)}
             loading={pinning}
             onToggle={() => onTogglePinned?.(item)}
           />

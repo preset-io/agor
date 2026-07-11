@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 
 describe('SessionAttachmentsDropdown', () => {
-  it('allows a derived branch link to be pinned from the organizer', async () => {
+  it.each([
+    ['Pin', false],
+    ['Unpin', true],
+  ])('shows a concise %s action for an organizer link', async (action, isPinned) => {
     const onTogglePinned = vi.fn();
     const item = {
       key: 'branch:issue',
@@ -14,7 +17,7 @@ describe('SessionAttachmentsDropdown', () => {
       kind: 'issue' as const,
       source: 'branch' as const,
       ownerScope: 'branch' as const,
-      isPinned: false,
+      isPinned,
       url: 'https://github.com/preset-io/agor/issues/154',
       href: 'https://github.com/preset-io/agor/issues/154',
       navigation: 'external' as const,
@@ -27,10 +30,10 @@ describe('SessionAttachmentsDropdown', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open links organizer' }));
     const pinButton = await screen.findByRole('button', {
-      name: 'Pin to branch card: preset-io/agor#154',
+      name: `${action} preset-io/agor#154`,
     });
     fireEvent.mouseOver(pinButton);
-    expect(await screen.findByText('Pin to branch card: preset-io/agor#154')).toBeInTheDocument();
+    expect(await screen.findByText(action)).toBeInTheDocument();
     fireEvent.click(pinButton);
     expect(onTogglePinned).toHaveBeenCalledWith(item);
   });

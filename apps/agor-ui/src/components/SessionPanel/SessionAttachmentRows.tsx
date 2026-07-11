@@ -75,15 +75,12 @@ function getTargetDisplay(item: SessionAttachmentItem): string {
 function pinAction(props: SharedProps) {
   const toggleable = canPersistLinkPin(props.item) && Boolean(props.onTogglePinned);
   const isPinning = props.pinningLinkId === (props.item.linkId ?? props.item.key);
-  const label = getLinkPinActionLabel(props.item, {
-    available: toggleable,
-    sessionDestination: 'session header',
-  });
+  const ariaLabel = getLinkPinActionLabel(props.item, { available: toggleable });
 
   return (
     <LinkPinAction
       pinned={props.item.isPinned}
-      label={label}
+      ariaLabel={ariaLabel}
       disabled={!toggleable}
       loading={isPinning}
       onToggle={() => props.onTogglePinned?.(props.item)}

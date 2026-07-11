@@ -3,7 +3,7 @@ import { Button, Dropdown, Tooltip, theme } from 'antd';
 
 interface LinkPinActionProps {
   pinned: boolean;
-  label: string;
+  ariaLabel: string;
   onToggle: () => void | Promise<void>;
   disabled?: boolean;
   loading?: boolean;
@@ -11,21 +11,21 @@ interface LinkPinActionProps {
 
 export function LinkPinAction({
   pinned,
-  label,
+  ariaLabel,
   onToggle,
   disabled = false,
   loading = false,
 }: LinkPinActionProps) {
   const { token } = theme.useToken();
   return (
-    <Tooltip title={label}>
+    <Tooltip title={pinned ? 'Unpin' : 'Pin'}>
       <Button
         type="text"
         size="small"
         shape="circle"
         disabled={disabled}
         loading={loading}
-        aria-label={label}
+        aria-label={ariaLabel}
         icon={pinned ? <PushpinFilled /> : <PushpinOutlined />}
         onClick={() => void onToggle()}
         style={{ color: pinned ? token.colorWarning : token.colorTextTertiary }}

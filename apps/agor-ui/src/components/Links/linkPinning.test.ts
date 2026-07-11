@@ -52,15 +52,14 @@ describe('toggleLinkDisplayItemPinned', () => {
 
 describe('getLinkPinActionLabel', () => {
   it.each([
-    [branchIssue, {}, 'Pin to branch card: preset-io/agor#154'],
-    [{ ...branchIssue, isPinned: true }, {}, 'Unpin from branch card: preset-io/agor#154'],
-    [{ ...branchIssue, ownerScope: 'session' as const }, {}, 'Pin in session: preset-io/agor#154'],
+    [branchIssue, {}, 'Pin preset-io/agor#154'],
+    [{ ...branchIssue, isPinned: true }, {}, 'Unpin preset-io/agor#154'],
+    [branchIssue, { available: false }, 'Pin unavailable for preset-io/agor#154'],
     [
-      { ...branchIssue, ownerScope: 'session' as const, isPinned: true },
-      { sessionDestination: 'session header' },
-      'Unpin from session header: preset-io/agor#154',
+      { ...branchIssue, isPinned: true },
+      { available: false },
+      'Unpin unavailable for preset-io/agor#154',
     ],
-    [branchIssue, { available: false }, 'Pin unavailable: preset-io/agor#154'],
   ])('includes the compact link name', (item, options, expected) => {
     expect(getLinkPinActionLabel(item, options)).toBe(expected);
   });

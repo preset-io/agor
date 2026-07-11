@@ -323,9 +323,7 @@ describe('SessionPanel session links', () => {
     renderPanel(client, branchWithIssue);
 
     fireEvent.click(await screen.findByLabelText('Open links organizer'));
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Pin to branch card: preset-io/agor#154' })
-    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin preset-io/agor#154' }));
 
     await waitFor(() =>
       expect(calls).toContainEqual({
@@ -401,9 +399,7 @@ describe('SessionPanel session links', () => {
     renderPanel(client, branchWithIssue);
 
     fireEvent.click(await screen.findByLabelText('Open links organizer'));
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Pin to branch card: preset-io/agor#154' })
-    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin preset-io/agor#154' }));
 
     await waitFor(() =>
       expect(calls).toContainEqual({
