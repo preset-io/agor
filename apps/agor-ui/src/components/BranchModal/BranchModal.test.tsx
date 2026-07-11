@@ -12,6 +12,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { makeTestLink } from '../Links/testUtils';
 import { BranchModal } from './BranchModal';
 import { buildTeammateKnowledgePatch } from './tabs/KnowledgeTab';
 import {
@@ -23,28 +24,14 @@ import {
   renderWithApp,
 } from './testUtils';
 
-function makeLink(overrides: Partial<Link> = {}): Link {
-  return {
-    link_id: 'link-1',
+const makeLink = (overrides: Partial<Link> = {}) =>
+  makeTestLink({
     branch_id: 'branch-1',
     session_id: null,
-    source_message_id: null,
-    kind: 'url',
-    source: 'manual',
     url: 'https://example.com/runbook',
-    ref_uri: null,
-    file_path: null,
-    target_key: 'url:https://example.com/runbook',
-    is_pinned: false,
     title: 'Runbook',
-    mime_type: null,
-    metadata: null,
-    created_by: null,
-    created_at: '2026-07-01T00:00:00.000Z',
-    updated_at: '2026-07-01T00:00:00.000Z',
     ...overrides,
-  } as Link;
-}
+  });
 
 function renderBranchModal({
   branch = makeBranch(),

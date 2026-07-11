@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { makeTestLink } from '../Links/testUtils';
 import BranchCard from './BranchCard';
 
 vi.mock('./BranchSessionSections', () => ({
@@ -27,28 +28,15 @@ const repo = {
   slug: 'preset-io/agor',
 } as unknown as Repo;
 
-function makeLink(overrides: Partial<Link> = {}): Link {
-  return {
-    link_id: 'link-1',
+const makeLink = (overrides: Partial<Link> = {}) =>
+  makeTestLink({
     branch_id: 'branch-1',
     session_id: null,
-    source_message_id: null,
-    kind: 'url',
-    source: 'manual',
     url: 'https://example.com/runbook',
-    ref_uri: null,
-    file_path: null,
-    target_key: 'url:https://example.com/runbook',
     is_pinned: true,
     title: 'Runbook',
-    mime_type: null,
-    metadata: null,
-    created_by: null,
-    created_at: '2026-07-01T00:00:00.000Z',
-    updated_at: '2026-07-01T00:00:00.000Z',
     ...overrides,
-  } as Link;
-}
+  });
 
 describe('BranchCard pinned links', () => {
   beforeEach(() => {

@@ -1,5 +1,5 @@
 import type { Branch, Link } from '@agor-live/client';
-import { normalizeRefTargetKey, normalizeUrlTargetKey } from '@agor-live/client';
+import { normalizeUrlTargetKey } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import {
   buildLinkDisplayItems,
@@ -19,37 +19,7 @@ import {
   getLinkCategorySummary,
   matchesLinkCategoryTab,
 } from './linkOrganizer';
-
-const now = '2026-07-01T00:00:00.000Z';
-
-function makeLink(patch: Partial<Link> & Pick<Link, 'link_id' | 'kind' | 'source'>): Link {
-  return {
-    link_id: patch.link_id,
-    branch_id: null,
-    session_id: 'session-1' as Link['session_id'],
-    source_message_id: null,
-    kind: patch.kind,
-    source: patch.source,
-    url: null,
-    ref_uri: null,
-    file_path: null,
-    target_key: patch.url
-      ? normalizeUrlTargetKey(patch.url)
-      : patch.ref_uri
-        ? normalizeRefTargetKey(patch.ref_uri)
-        : patch.file_path
-          ? `file:${patch.file_path}`
-          : '',
-    is_pinned: false,
-    title: null,
-    mime_type: null,
-    metadata: null,
-    created_by: null,
-    created_at: now,
-    updated_at: now,
-    ...patch,
-  } as Link;
-}
+import { makeTestLink as makeLink } from './testUtils';
 
 describe('link display helpers', () => {
   it('routes path-addressed KB refs and rejects opaque document/unit refs', () => {

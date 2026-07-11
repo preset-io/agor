@@ -7,6 +7,7 @@ import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { makeTestLink } from '../Links/testUtils';
 import SessionPanel from './SessionPanel';
 
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
@@ -97,28 +98,13 @@ const branch = {
   archived: false,
 } as unknown as Branch;
 
-function makeLink(overrides: Partial<Link> = {}): Link {
-  return {
-    link_id: 'link-1',
-    branch_id: null,
-    session_id: 'session-1',
-    source_message_id: null,
-    kind: 'url',
-    source: 'manual',
+const makeLink = (overrides: Partial<Link> = {}) =>
+  makeTestLink({
     url: 'https://example.com/session-runbook',
-    ref_uri: null,
-    file_path: null,
-    target_key: 'url:https://example.com/session-runbook',
     is_pinned: true,
     title: 'Session Runbook',
-    mime_type: null,
-    metadata: null,
-    created_by: null,
-    created_at: '2026-07-01T00:00:00.000Z',
-    updated_at: '2026-07-01T00:00:00.000Z',
     ...overrides,
-  } as Link;
-}
+  });
 
 function makeClient(links: Link[]) {
   const calls: Array<{ service: string; method: string; args: unknown[] }> = [];
