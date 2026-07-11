@@ -107,7 +107,7 @@ function postgresSessionTenantMatchesLink(db: Database) {
     : undefined;
 }
 
-function branchOwnerOnBoardExists(db: Database, boardId: UUID) {
+function activeBranchOwnerExists(db: Database, boardId?: UUID) {
   return exists(
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads.
     (db as any)
@@ -118,25 +118,7 @@ function branchOwnerOnBoardExists(db: Database, boardId: UUID) {
           ...[
             postgresBranchTenantMatchesLink(db),
             eq(branches.branch_id, links.branch_id),
-            eq(branches.board_id, boardId),
-            eq(branches.archived, false),
-          ].filter(isDefinedCondition)
-        )
-      )
-  );
-}
-
-function activeBranchOwnerExists(db: Database) {
-  return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads.
-    (db as any)
-      .select({ _: sql`1` })
-      .from(branches)
-      .where(
-        and(
-          ...[
-            postgresBranchTenantMatchesLink(db),
-            eq(branches.branch_id, links.branch_id),
+            boardId ? eq(branches.board_id, boardId) : undefined,
             eq(branches.archived, false),
           ].filter(isDefinedCondition)
         )
@@ -356,7 +338,7 @@ export class LinksRepository {
       conditions.push(activeBranchOwnerExists(this.db));
     }
     if (filter?.boardId) {
-      const branchScope = branchOwnerOnBoardExists(this.db, filter.boardId);
+      const branchScope = activeBranchOwnerExists(this.db, filter.boardId);
       const sessionScope = sessionOwnerOnBoardExists(this.db, filter.boardId);
       if (filter.ownerScope === 'branch') conditions.push(branchScope);
       else if (filter.ownerScope === 'session') conditions.push(sessionScope);
