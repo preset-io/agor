@@ -19,7 +19,7 @@ describe('extractLinksFromMessage', () => {
   it('extracts KB refs, generic URLs, and obvious GitHub issue/PR URLs from text', () => {
     const links = extractLinksFromMessage(
       message(
-        'See agor://kb/team/runbook.md and /knowledge/team/Notes plus https://example.com/a. ' +
+        'See agor://kb/team/runbook.md and kb://orgs/preset/pr-review and /knowledge/team/Notes plus https://example.com/a. ' +
           'GitHub: https://github.com/preset-io/agor/issues/90 and https://github.com/preset-io/agor/pull/91'
       )
     );
@@ -27,6 +27,10 @@ describe('extractLinksFromMessage', () => {
     expect(links).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: 'kb_ref', ref_uri: 'agor://kb/team/runbook.md' }),
+        expect.objectContaining({
+          kind: 'kb_ref',
+          ref_uri: 'agor://kb/orgs/preset/pr-review',
+        }),
         expect.objectContaining({ kind: 'kb_ref', ref_uri: 'agor://kb/team/Notes' }),
         expect.objectContaining({ kind: 'url', url: 'https://example.com/a' }),
         expect.objectContaining({

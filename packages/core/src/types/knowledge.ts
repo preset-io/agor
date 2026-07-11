@@ -332,11 +332,12 @@ export type KnowledgeLinkRef =
   | { document_id: KnowledgeDocumentID; namespace_slug?: undefined; path?: undefined }
   | { document_id?: undefined; namespace_slug: string; path: string };
 
-// Matches both canonical URIs (agor://kb/<slug>/<path>) and in-app route links
-// (/kb/<slug>/<path> or /knowledge/<slug>/<path>) as inserted by the editor's
-// `@` autocomplete. Path segments may be percent-encoded.
+// Matches canonical URIs (agor://kb/<slug>/<path>), the compact kb:// alias
+// used in agent-facing references, and in-app route links (/kb/<slug>/<path>
+// or /knowledge/<slug>/<path>) as inserted by the editor's `@` autocomplete.
+// Path segments may be percent-encoded.
 const KNOWLEDGE_LINK_RE =
-  /(?:agor:\/\/kb\/|\/(?:kb|knowledge)\/)([A-Za-z0-9._~%-]+)\/([^\s)"'<>]+)/g;
+  /(?:agor:\/\/kb\/|kb:\/\/|\/(?:kb|knowledge)\/)([A-Za-z0-9._~%-]+)\/([^\s)"'<>]+)/g;
 
 const safeDecodeSegment = (segment: string): string => {
   try {

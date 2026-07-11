@@ -13,6 +13,7 @@ import {
   type AgorClient,
   type ContentBlock as CoreContentBlock,
   type DiffEnrichment,
+  extractLinksFromMessage,
   type Link,
   type Message,
   type PermissionRequestContent,
@@ -119,6 +120,9 @@ function getAttachmentTitle(link: Link): string {
   if (originalName) return originalName;
   if (link.title) return link.title;
   if (link.file_path) return link.file_path.split('/').pop() || link.file_path;
+  if (link.kind === 'kb_ref' && link.ref_uri) {
+    return `KB: ${link.ref_uri.replace(/^agor:\/\/kb\//i, '')}`;
+  }
   if (link.kind === 'kb_ref') return 'Knowledge link';
   if (link.kind === 'document') return 'Uploaded document';
   return 'Uploaded file';
@@ -506,6 +510,11 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   // Determine if this should be displayed as user or agent message
   const isUser = message.role === 'user' && !isTaskPrompt && !isTaskResult;
   const isAgent = message.role === 'assistant' || isTaskPrompt || isTaskResult || isSystem;
+  const derivedKnowledgeLinks = extractLinksFromMessage(message).flatMap((draft) => {
+    const refUri = draft.kind === 'kb_ref' ? draft.ref_uri : null;
+    if (!refUri || attachmentLinks.some((link) => link.ref_uri === refUri)) return [];
+    return [{ refUri }];
+  });
 
   // Check if message is currently streaming
   const isStreaming = 'isStreaming' in message && message.isStreaming === true;
@@ -523,13 +532,15 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   // Get current user's emoji
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
 
-  const hasUserAttachments = isUser && attachmentLinks.length > 0;
+  const hasMessageLinks = attachmentLinks.length > 0 || derivedKnowledgeLinks.length > 0;
+  const hasUserUploadAttachments =
+    isUser && attachmentLinks.some((link) => link.source === 'upload' && link.file_path);
 
   // Skip rendering if message has no content, unless upload attachments are
   // associated with the message. Attachment-only user turns are valid when a
   // user uploads files without extra prompt text.
   if (
-    !hasUserAttachments &&
+    !hasMessageLinks &&
     (!message.content || (typeof message.content === 'string' && message.content.trim() === ''))
   ) {
     return null;
@@ -537,7 +548,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
   // Skip rendering if message has empty content array (can happen during patch events), unless
   // the message carries upload attachments.
-  if (!hasUserAttachments && Array.isArray(message.content) && message.content.length === 0) {
+  if (!hasMessageLinks && Array.isArray(message.content) && message.content.length === 0) {
     return null;
   }
 
@@ -640,7 +651,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     // Handle string content
     if (typeof message.content === 'string') {
       // Add Task tool prefix if this is a Task prompt
-      const rawContent = hasUserAttachments
+      const rawContent = hasUserUploadAttachments
         ? stripAttachmentFilePaths(message.content, attachmentLinks)
         : message.content;
       const content = isTaskPrompt ? `[Task Tool]\n${rawContent}` : rawContent;
@@ -665,7 +676,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           thinkingBlocks.push(text);
         } else if (block.type === 'text') {
           let text = (block as unknown as TextBlock).text;
-          if (hasUserAttachments) {
+          if (hasUserUploadAttachments) {
             text = stripAttachmentFilePaths(text, attachmentLinks);
           }
           if (!text) continue;
@@ -744,7 +755,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const hasTextBefore = textBeforeTools.some((text) => text.trim().length > 0);
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
-  const hasAttachments = isUser && attachmentLinks.length > 0;
+  const hasAttachments = hasMessageLinks;
 
   if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools && !hasAttachments) {
     return null;
@@ -828,7 +839,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                           </div>
                         );
                       })}
-                      {isUser && attachmentLinks.length > 0 && (
+                      {attachmentLinks.length > 0 && (
                         <Flex vertical align="flex-start" gap={token.sizeUnit}>
                           {attachmentLinks.map((link) => (
                             <LinkAttachmentCard
@@ -847,6 +858,22 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                               imageThumbnail
                               onOpenImage={setPreviewTarget}
                               onOpenMarkdown={setMarkdownTarget}
+                              onOpenTarget={openAttachmentTarget}
+                            />
+                          ))}
+                        </Flex>
+                      )}
+                      {derivedKnowledgeLinks.length > 0 && (
+                        <Flex vertical align="flex-start" gap={token.sizeUnit}>
+                          {derivedKnowledgeLinks.map(({ refUri }) => (
+                            <LinkAttachmentCard
+                              key={refUri}
+                              kind="kb_ref"
+                              source="parsed"
+                              title={`KB: ${refUri.replace(/^agor:\/\/kb\//i, '')}`}
+                              refUri={refUri}
+                              compact
+                              onDark={isUser}
                               onOpenTarget={openAttachmentTarget}
                             />
                           ))}

@@ -11,6 +11,7 @@ export * from './linkDisplay';
 export * from './linkOrganizer';
 export * from './linkPinning';
 export * from './linkPromotion';
+export * from './messageLinks';
 export * from './PinnedLinkButton';
 export * from './PinnedLinkList';
 export * from './PromotedPinnedLinks';

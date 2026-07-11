@@ -29,6 +29,12 @@ describe('extractKnowledgeLinks', () => {
     ]);
   });
 
+  it('extracts compact kb:// agent references', () => {
+    expect(extractKnowledgeLinks('See kb://orgs/preset/pr-review here')).toEqual([
+      { namespace_slug: 'orgs', path: 'preset/pr-review' },
+    ]);
+  });
+
   it('extracts rename-proof agor://kb/document/<uuid> id references', () => {
     const id = '0190a000-0000-7000-8000-0000000000aa';
     const md = `See [Arch](agor://kb/document/${id}) for details.`;

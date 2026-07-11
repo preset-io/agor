@@ -56,6 +56,53 @@ describe('MessageBlock attachments', () => {
     expect(screen.getByRole('button', { name: /open spec\.pdf/i })).toBeInTheDocument();
   });
 
+  it('renders parsed knowledge references as cards in assistant messages', () => {
+    render(
+      <MemoryRouter>
+        <MessageBlock
+          message={makeMessage({
+            role: 'assistant',
+            type: 'assistant',
+            content: 'See kb://orgs/preset/pr-review',
+          })}
+          attachmentLinks={[
+            makeLink({
+              kind: 'kb_ref',
+              source: 'parsed',
+              file_path: null,
+              target_key: 'ref:agor://kb/orgs/preset/pr-review',
+              title: null,
+              mime_type: null,
+              ref_uri: 'agor://kb/orgs/preset/pr-review',
+            }),
+          ]}
+        />
+      </MemoryRouter>
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Open KB: orgs/preset/pr-review' })
+    ).toBeInTheDocument();
+  });
+
+  it('renders a knowledge card immediately for a compact reference without a persisted link', () => {
+    render(
+      <MemoryRouter>
+        <MessageBlock
+          message={makeMessage({
+            role: 'assistant',
+            type: 'assistant',
+            content: 'See kb://orgs/preset/pr-review',
+          })}
+        />
+      </MemoryRouter>
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Open KB: orgs/preset/pr-review' })
+    ).toBeInTheDocument();
+  });
+
   it('hides full paths from default upload notifications when attachment cards render', () => {
     render(
       <MemoryRouter>

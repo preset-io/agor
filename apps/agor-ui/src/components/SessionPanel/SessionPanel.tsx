@@ -76,6 +76,7 @@ import {
   buildLinkDisplayItems,
   getTeammatePromotionState,
   getTeammatePromotionUnavailableReason,
+  groupRenderableLinksByMessageId,
   type LinkDisplayItem,
   promoteLinkToTeammate,
   toggleLinkDisplayItemPinned,
@@ -687,17 +688,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     [linkDisplayItems]
   );
   const attachmentLinksByMessageId = React.useMemo(() => {
-    const byMessageId = new Map<string, Link[]>();
-    for (const link of sessionLinks) {
-      if (link.source !== 'upload' || !link.source_message_id) continue;
-      const isUploadAttachment =
-        Boolean(link.file_path) && (link.kind === 'image' || link.kind === 'document');
-      if (!isUploadAttachment) continue;
-      const existing = byMessageId.get(link.source_message_id) ?? [];
-      existing.push(link);
-      byMessageId.set(link.source_message_id, existing);
-    }
-    return byMessageId;
+    return groupRenderableLinksByMessageId(sessionLinks);
   }, [sessionLinks]);
 
   const handleRegisterOpenPinnedManager = React.useCallback(

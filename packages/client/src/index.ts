@@ -51,6 +51,7 @@ export * from '@agor/core/client';
 export { shortId } from '@agor/core/client';
 export { isValidSlug, REPO_SLUG_PATTERN } from '@agor/core/config/browser';
 export type { PaginatedResult } from '@agor/core/types';
+export { extractLinksFromMessage } from '@agor/core/types';
 export * from './models';
 export type {
   ReactiveAgorClient,
