@@ -26,7 +26,12 @@ describe('SessionAttachmentsDropdown', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Open links organizer' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Pin to branch card' }));
+    const pinButton = await screen.findByRole('button', {
+      name: 'Pin to branch card: preset-io/agor#154',
+    });
+    fireEvent.mouseOver(pinButton);
+    expect(await screen.findByText('Pin to branch card: preset-io/agor#154')).toBeInTheDocument();
+    fireEvent.click(pinButton);
     expect(onTogglePinned).toHaveBeenCalledWith(item);
   });
 

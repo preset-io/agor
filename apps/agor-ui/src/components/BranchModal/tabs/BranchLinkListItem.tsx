@@ -78,7 +78,7 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
           <>
             <LinkPinAction
               pinned={props.item.isPinned}
-              label={`${getLinkPinActionLabel(props.item)} ${title}`}
+              label={getLinkPinActionLabel(props.item)}
               disabled={!canPersistLinkPin(props.item)}
               loading={props.pinning}
               onToggle={() => props.onTogglePinned(props.item)}

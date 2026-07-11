@@ -10,13 +10,18 @@ export function canPersistLinkPin(item: LinkDisplayItem): boolean {
 }
 
 export function getLinkPinActionLabel(
-  item: Pick<LinkDisplayItem, 'isPinned' | 'ownerScope'>,
-  sessionDestination = 'session'
+  item: Pick<LinkDisplayItem, 'category' | 'isPinned' | 'name' | 'ownerScope'>,
+  options: { available?: boolean; sessionDestination?: string } = {}
 ): string {
+  const name = getCompactLinkDisplayName(item);
+  if (options.available === false) return `Pin unavailable: ${name}`;
   if (item.ownerScope === 'branch') {
-    return item.isPinned ? 'Unpin from branch card' : 'Pin to branch card';
+    return `${item.isPinned ? 'Unpin from branch card' : 'Pin to branch card'}: ${name}`;
   }
-  return item.isPinned ? `Unpin from ${sessionDestination}` : 'Pin in session';
+  const action = item.isPinned
+    ? `Unpin from ${options.sessionDestination ?? 'session'}`
+    : 'Pin in session';
+  return `${action}: ${name}`;
 }
 
 export async function toggleLinkDisplayItemPinned(args: {

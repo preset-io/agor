@@ -189,6 +189,35 @@ describe('LinksTab teammate promotion actions', () => {
     expect(agorStore.getState().linkById.has('link-1')).toBe(true);
   });
 
+  it("removes a link directly from the teammate branch's own Links tab", async () => {
+    const teammateBranch = { ...branch, branch_id: 'teammate-1' } as Branch;
+    const ownedLink = makeLink({
+      link_id: 'teammate-link' as Link['link_id'],
+      branch_id: 'teammate-1' as Link['branch_id'],
+    });
+    seedStore([], [ownedLink]);
+    const { client, calls } = makeClient({
+      branchLinks: [],
+      teammateLinks: [ownedLink],
+      promoted: ownedLink,
+    });
+
+    renderLinksTab(client, teammateBranch);
+
+    await screen.findByText('Runbook');
+    fireEvent.click(screen.getByLabelText('Teammate actions for Runbook'));
+    fireEvent.click(await screen.findByText('Remove from teammate'));
+
+    await waitFor(() => {
+      expect(calls).toContainEqual({
+        service: 'links',
+        method: 'remove',
+        args: ['teammate-link'],
+      });
+    });
+    expect(agorStore.getState().linkById.has('teammate-link')).toBe(false);
+  });
+
   it('searches links and shows source session attribution from the centralized store', async () => {
     const sourceSession = {
       session_id: 'session-source-1',

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LinkDisplayItem } from './linkDisplay';
-import { selectQuickLinkDisplayItems } from './linkOrganizer';
+import { selectPinnedLinkDisplayItems, selectQuickLinkDisplayItems } from './linkOrganizer';
 
 function item(key: string, options: { pinned?: boolean; file?: boolean } = {}): LinkDisplayItem {
   return {
@@ -25,5 +25,17 @@ describe('selectQuickLinkDisplayItems', () => {
     expect(selectQuickLinkDisplayItems(items).map(({ key }) => key)).toEqual(
       items.map(({ key }) => key)
     );
+  });
+});
+
+describe('selectPinnedLinkDisplayItems', () => {
+  it('keeps pinned links from every owner scope', () => {
+    const sessionPin = item('session-pin', { pinned: true });
+    const branchPin = { ...item('branch-pin', { pinned: true }), ownerScope: 'branch' as const };
+
+    expect(selectPinnedLinkDisplayItems([sessionPin, item('unpinned'), branchPin])).toEqual([
+      sessionPin,
+      branchPin,
+    ]);
   });
 });

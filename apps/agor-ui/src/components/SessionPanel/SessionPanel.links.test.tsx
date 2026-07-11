@@ -53,13 +53,13 @@ vi.mock('./SessionMcpFooterControl', () => ({
 
 vi.mock('./SessionPanelContent', () => ({
   SessionPanelContent: ({
-    pinnedSessionLinks = [],
+    pinnedContextLinks = [],
   }: {
-    pinnedSessionLinks?: Array<{ key: string; name: string }>;
+    pinnedContextLinks?: Array<{ key: string; name: string }>;
   }) => (
     <div>
       <div>Session content</div>
-      {pinnedSessionLinks.map((link) => (
+      {pinnedContextLinks.map((link) => (
         <span key={link.key}>{link.name}</span>
       ))}
     </div>
@@ -252,6 +252,57 @@ describe('SessionPanel session links', () => {
     expect(agorStore.getState().linksBySession.get('session-1')).toEqual([link]);
   });
 
+  it('shows the same mixed branch and session pins in the conversation strip', async () => {
+    const sessionPin = makeLink({ title: 'Session Runbook' });
+    const branchPin = makeLink({
+      link_id: 'branch-pin' as Link['link_id'],
+      branch_id: branch.branch_id,
+      session_id: null,
+      title: 'Branch Runbook',
+      url: 'https://example.com/branch-runbook',
+      target_key: 'url:https://example.com/branch-runbook',
+    });
+    const { client } = makePromotionClient({
+      sessionLinks: [sessionPin],
+      branchLinks: [branchPin],
+      teammateLinks: [],
+      promoted: branchPin,
+    });
+
+    renderPanel(client);
+
+    expect(await screen.findByText('Session Runbook')).toBeInTheDocument();
+    expect(await screen.findByText('Branch Runbook')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Open links organizer'));
+    const popover = await screen.findByTestId('links-organizer-popover');
+    expect(within(popover).getByText('Session Runbook')).toBeInTheDocument();
+    expect(within(popover).getByText('Branch Runbook')).toBeInTheDocument();
+  });
+
+  it('deduplicates same-target session and branch pins before rendering the strip', async () => {
+    const sessionPin = makeLink({ title: 'Session Runbook' });
+    const duplicateBranchPin = makeLink({
+      link_id: 'branch-pin' as Link['link_id'],
+      branch_id: branch.branch_id,
+      session_id: null,
+      title: 'Branch duplicate',
+    });
+    const { client } = makePromotionClient({
+      sessionLinks: [sessionPin],
+      branchLinks: [duplicateBranchPin],
+      teammateLinks: [],
+      promoted: duplicateBranchPin,
+    });
+
+    renderPanel(client);
+
+    expect(await screen.findByText('Session Runbook')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(agorStore.getState().linksByBranch.get(branch.branch_id)).toEqual([duplicateBranchPin])
+    );
+    expect(screen.queryByText('Branch duplicate')).toBeNull();
+  });
+
   it('adds a branch link materialized from the session organizer to the store', async () => {
     const pinnedIssue = makeLink({
       link_id: 'issue-link' as Link['link_id'],
@@ -272,7 +323,9 @@ describe('SessionPanel session links', () => {
     renderPanel(client, branchWithIssue);
 
     fireEvent.click(await screen.findByLabelText('Open links organizer'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Pin to branch card' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Pin to branch card: preset-io/agor#154' })
+    );
 
     await waitFor(() =>
       expect(calls).toContainEqual({
@@ -348,7 +401,9 @@ describe('SessionPanel session links', () => {
     renderPanel(client, branchWithIssue);
 
     fireEvent.click(await screen.findByLabelText('Open links organizer'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Pin to branch card' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Pin to branch card: preset-io/agor#154' })
+    );
 
     await waitFor(() =>
       expect(calls).toContainEqual({

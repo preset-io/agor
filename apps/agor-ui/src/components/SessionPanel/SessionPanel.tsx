@@ -75,6 +75,7 @@ import {
   getTeammatePromotionUnavailableReason,
   groupRenderableLinksByMessageId,
   type LinkDisplayItem,
+  selectPinnedLinkDisplayItems,
   useLinkMutations,
 } from '../Links';
 import type { ModelConfig } from '../ModelSelector';
@@ -679,8 +680,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   );
   const attachmentItems = linkDisplayItems;
 
-  const pinnedSessionLinkItems = React.useMemo(
-    () => linkDisplayItems.filter((item) => item.ownerScope === 'session' && item.isPinned),
+  const pinnedContextLinkItems = React.useMemo(
+    () => selectPinnedLinkDisplayItems(linkDisplayItems),
     [linkDisplayItems]
   );
   const attachmentLinksByMessageId = React.useMemo(() => {
@@ -1619,7 +1620,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             cliViewMode={cliViewMode}
             setCliViewMode={setCliViewMode}
             attachmentLinksByMessageId={attachmentLinksByMessageId}
-            pinnedSessionLinks={pinnedSessionLinkItems}
+            pinnedContextLinks={pinnedContextLinkItems}
             onPinnedOverflow={handleOpenPinnedManager}
             forceExpandAll={searchOpen && query.trim().length > 0}
           />

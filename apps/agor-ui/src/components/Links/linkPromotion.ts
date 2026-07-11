@@ -82,7 +82,17 @@ export function getTeammatePromotionState(args: {
   if (!args.teammateBranchId) {
     return { canPromote: false, isPromoted: false, teammateLink: null, reason: 'no-teammate' };
   }
-  if (args.sourceBranchId && args.sourceBranchId === args.teammateBranchId) {
+  if (
+    args.item.ownerScope === 'branch' &&
+    args.sourceBranchId &&
+    args.sourceBranchId === args.teammateBranchId
+  ) {
+    const ownedLink = args.item.linkId
+      ? (args.teammateLinks.find((link) => link.link_id === args.item.linkId) ?? null)
+      : null;
+    if (ownedLink) {
+      return { canPromote: true, isPromoted: true, teammateLink: ownedLink, reason: null };
+    }
     return { canPromote: false, isPromoted: false, teammateLink: null, reason: 'same-owner' };
   }
   if (!args.item.linkId) {

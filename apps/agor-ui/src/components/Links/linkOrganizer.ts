@@ -105,7 +105,7 @@ export function selectQuickLinkDisplayItems(
 ): LinkDisplayItem[] {
   if (limit <= 0) return [];
 
-  const selected = items.filter((item) => item.isPinned).slice(0, Math.min(3, limit));
+  const selected = selectPinnedLinkDisplayItems(items).slice(0, Math.min(3, limit));
   const selectedKeys = new Set(selected.map((item) => item.key));
   const files = items.filter(isFileLinkDisplayItem);
   const selectedFileCount = selected.filter(isFileLinkDisplayItem).length;
@@ -120,6 +120,10 @@ export function selectQuickLinkDisplayItems(
     if (!selectedKeys.has(file.key)) selected.push(file);
   }
   return selected;
+}
+
+export function selectPinnedLinkDisplayItems(items: readonly LinkDisplayItem[]): LinkDisplayItem[] {
+  return items.filter((item) => item.isPinned);
 }
 
 export function matchesLinkDisplaySearch(

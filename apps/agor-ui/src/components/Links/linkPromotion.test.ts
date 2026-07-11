@@ -139,12 +139,49 @@ describe('linkPromotion', () => {
 
     expect(
       getTeammatePromotionState({
-        item: item(),
+        item: item({ ownerScope: 'branch' }),
         teammateBranchId: 'teammate-1',
         sourceBranchId: 'teammate-1',
         teammateLinks: [],
       })
     ).toMatchObject({ canPromote: false, reason: 'same-owner' });
+  });
+
+  it('treats an exact link owned by the teammate branch as removable membership', () => {
+    const ownedLink = link({ link_id: 'source-1' as Link['link_id'] });
+
+    expect(
+      getTeammatePromotionState({
+        item: item({ ownerScope: 'branch' }),
+        teammateBranchId: 'teammate-1',
+        sourceBranchId: 'teammate-1',
+        teammateLinks: [ownedLink],
+      })
+    ).toMatchObject({ canPromote: true, isPromoted: true, teammateLink: ownedLink });
+  });
+
+  it('keeps session-owned links promotable when their session is on the teammate branch', () => {
+    expect(
+      getTeammatePromotionState({
+        item: item(),
+        teammateBranchId: 'teammate-1',
+        sourceBranchId: 'teammate-1',
+        teammateLinks: [],
+      })
+    ).toMatchObject({ canPromote: true, isPromoted: false, reason: null });
+  });
+
+  it('finds removable teammate membership for a session link on the teammate branch', () => {
+    const teammateLink = link({ link_id: 'teammate-copy' as Link['link_id'] });
+
+    expect(
+      getTeammatePromotionState({
+        item: item(),
+        teammateBranchId: 'teammate-1',
+        sourceBranchId: 'teammate-1',
+        teammateLinks: [teammateLink],
+      })
+    ).toMatchObject({ canPromote: true, isPromoted: true, teammateLink });
   });
 
   it('allows uploaded files and keeps internal promotion unavailable', () => {

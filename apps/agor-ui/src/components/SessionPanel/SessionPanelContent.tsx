@@ -47,7 +47,7 @@ export interface SessionPanelContentProps {
    *  expected to render the bar itself (legacy header-level placement). */
   setCliViewMode?: (mode: 'terminal' | 'conversation') => void;
   attachmentLinksByMessageId?: Map<string, Link[]>;
-  pinnedSessionLinks?: PromotedPinnedLinkItem[];
+  pinnedContextLinks?: PromotedPinnedLinkItem[];
   onPinnedOverflow?: () => void;
   /** When true, all task blocks are force-expanded (used by in-session search) */
   forceExpandAll?: boolean;
@@ -73,7 +73,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     cliViewMode = 'terminal',
     setCliViewMode,
     attachmentLinksByMessageId,
-    pinnedSessionLinks = [],
+    pinnedContextLinks = [],
     onPinnedOverflow,
     forceExpandAll = false,
   }) => {
@@ -190,7 +190,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           </Space>
         </div>
 
-        {pinnedSessionLinks.length > 0 && (
+        {pinnedContextLinks.length > 0 && (
           <Flex
             data-testid="session-pinned-preconversation"
             align="center"
@@ -213,7 +213,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               Pinned
             </Typography.Text>
             <PromotedPinnedLinks
-              items={pinnedSessionLinks}
+              items={pinnedContextLinks}
               onOverflow={onPinnedOverflow}
               data-testid="session-pinned-preconversation-links"
             />
@@ -288,7 +288,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           <Divider
             style={{
               margin:
-                pinnedSessionLinks.length > 0
+                pinnedContextLinks.length > 0
                   ? `${token.sizeUnit}px 0`
                   : `${token.sizeUnit * 2}px 0`,
             }}
