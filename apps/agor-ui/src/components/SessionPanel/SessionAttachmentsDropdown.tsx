@@ -30,7 +30,7 @@ import { LinkPreviewModal, useLinkFileActions } from '../Links/SessionLinksContr
 import {
   SessionAttachmentDrawerRow,
   SessionAttachmentQuickRow,
-  type SessionAttachmentTeammateState,
+  type SessionAttachmentTeammateActions,
 } from './SessionAttachmentRows';
 
 type SessionAttachmentItem = LinkDisplayItem;
@@ -42,7 +42,7 @@ function matchesAttachmentSearch(item: LinkDisplayItem, query: string): boolean 
   ]);
 }
 
-interface Props {
+interface Props extends SessionAttachmentTeammateActions {
   items: SessionAttachmentItem[];
   loading?: boolean;
   error?: string | null;
@@ -50,13 +50,6 @@ interface Props {
   pinningLinkId?: string | null;
   onTogglePinned?: (item: SessionAttachmentItem) => void | Promise<void>;
   onRegisterOpenPinnedManager?: (openPinnedManager: (() => void) | null) => void;
-  getTeammateActionState?: (item: SessionAttachmentItem) => SessionAttachmentTeammateState | null;
-  onPromoteToTeammate?: (item: SessionAttachmentItem) => void | Promise<void>;
-  onRemoveFromTeammate?: (
-    item: SessionAttachmentItem,
-    teammateLinkId: string
-  ) => void | Promise<void>;
-  teammatePromotionBusyKey?: string | null;
 }
 
 export const SessionAttachmentsDropdown: React.FC<Props> = ({

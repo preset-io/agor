@@ -31,14 +31,7 @@ export interface SessionAttachmentTeammateState {
   unavailableReason?: string | null;
 }
 
-interface SharedProps {
-  item: SessionAttachmentItem;
-  pinningLinkId?: string | null;
-  onOpen: (item: SessionAttachmentItem) => void;
-  onTogglePinned?: (item: SessionAttachmentItem) => void | Promise<void>;
-}
-
-interface DrawerProps extends SharedProps {
+export interface SessionAttachmentTeammateActions {
   getTeammateActionState?: (item: SessionAttachmentItem) => SessionAttachmentTeammateState | null;
   onPromoteToTeammate?: (item: SessionAttachmentItem) => void | Promise<void>;
   onRemoveFromTeammate?: (
@@ -47,6 +40,15 @@ interface DrawerProps extends SharedProps {
   ) => void | Promise<void>;
   teammatePromotionBusyKey?: string | null;
 }
+
+interface SharedProps {
+  item: SessionAttachmentItem;
+  pinningLinkId?: string | null;
+  onOpen: (item: SessionAttachmentItem) => void;
+  onTogglePinned?: (item: SessionAttachmentItem) => void | Promise<void>;
+}
+
+interface DrawerProps extends SharedProps, SessionAttachmentTeammateActions {}
 
 function attachmentIcon(item: SessionAttachmentItem, disabled: boolean): React.ReactNode {
   if (isFileLinkDisplayItem(item) || isKnowledgeLinkDisplayItem(item)) {
