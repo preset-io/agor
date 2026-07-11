@@ -35,39 +35,39 @@ const makeLink = (patch: Partial<Link> = {}) =>
     ...patch,
   });
 
+function renderMessage(patch: Partial<Message>, attachmentLinks?: Link[]) {
+  return render(
+    <MemoryRouter>
+      <MessageBlock message={makeMessage(patch)} attachmentLinks={attachmentLinks} />
+    </MemoryRouter>
+  );
+}
+
 describe('MessageBlock attachments', () => {
   it('renders a user attachment-only message with blank content', () => {
-    render(
-      <MemoryRouter>
-        <MessageBlock message={makeMessage({ content: '   ' })} attachmentLinks={[makeLink()]} />
-      </MemoryRouter>
-    );
+    renderMessage({ content: '   ' }, [makeLink()]);
 
     expect(screen.getByRole('button', { name: /open spec\.pdf/i })).toBeInTheDocument();
   });
 
   it('renders parsed knowledge references as cards in assistant messages', () => {
-    render(
-      <MemoryRouter>
-        <MessageBlock
-          message={makeMessage({
-            role: 'assistant',
-            type: 'assistant',
-            content: 'See kb://orgs/preset/pr-review',
-          })}
-          attachmentLinks={[
-            makeLink({
-              kind: 'kb_ref',
-              source: 'parsed',
-              file_path: null,
-              target_key: 'ref:agor://kb/orgs/preset/pr-review',
-              title: null,
-              mime_type: null,
-              ref_uri: 'agor://kb/orgs/preset/pr-review',
-            }),
-          ]}
-        />
-      </MemoryRouter>
+    renderMessage(
+      {
+        role: 'assistant',
+        type: 'assistant',
+        content: 'See kb://orgs/preset/pr-review',
+      },
+      [
+        makeLink({
+          kind: 'kb_ref',
+          source: 'parsed',
+          file_path: null,
+          target_key: 'ref:agor://kb/orgs/preset/pr-review',
+          title: null,
+          mime_type: null,
+          ref_uri: 'agor://kb/orgs/preset/pr-review',
+        }),
+      ]
     );
 
     expect(
@@ -76,17 +76,11 @@ describe('MessageBlock attachments', () => {
   });
 
   it('renders a knowledge card immediately for a compact reference without a persisted link', () => {
-    render(
-      <MemoryRouter>
-        <MessageBlock
-          message={makeMessage({
-            role: 'assistant',
-            type: 'assistant',
-            content: 'See kb://orgs/preset/pr-review',
-          })}
-        />
-      </MemoryRouter>
-    );
+    renderMessage({
+      role: 'assistant',
+      type: 'assistant',
+      content: 'See kb://orgs/preset/pr-review',
+    });
 
     expect(
       screen.getByRole('button', { name: 'Open KB: orgs/preset/pr-review' })
@@ -94,26 +88,22 @@ describe('MessageBlock attachments', () => {
   });
 
   it('hides full paths from default upload notifications when attachment cards render', () => {
-    render(
-      <MemoryRouter>
-        <MessageBlock
-          message={makeMessage({
-            content:
-              'Uploaded files: /home/agor/.agor/uploads/session/spec.pdf, /home/agor/.agor/uploads/session/chart.png',
-          })}
-          attachmentLinks={[
-            makeLink(),
-            makeLink({
-              link_id: 'link-2' as Link['link_id'],
-              kind: 'image',
-              title: 'chart.png',
-              file_path: '/home/agor/.agor/uploads/session/chart.png',
-              target_key: 'file:/home/agor/.agor/uploads/session/chart.png',
-              mime_type: 'image/png',
-            }),
-          ]}
-        />
-      </MemoryRouter>
+    renderMessage(
+      {
+        content:
+          'Uploaded files: /home/agor/.agor/uploads/session/spec.pdf, /home/agor/.agor/uploads/session/chart.png',
+      },
+      [
+        makeLink(),
+        makeLink({
+          link_id: 'link-2' as Link['link_id'],
+          kind: 'image',
+          title: 'chart.png',
+          file_path: '/home/agor/.agor/uploads/session/chart.png',
+          target_key: 'file:/home/agor/.agor/uploads/session/chart.png',
+          mime_type: 'image/png',
+        }),
+      ]
     );
 
     expect(screen.getByRole('button', { name: /open spec\.pdf/i })).toBeInTheDocument();
@@ -127,24 +117,15 @@ describe('MessageBlock attachments', () => {
   });
 
   it('hides the composer attachment heading and list markers when cards render', () => {
-    render(
-      <MemoryRouter>
-        <MessageBlock
-          message={makeMessage({
-            content: 'Attached files:\n- .agor/uploads/session/chart.png',
-          })}
-          attachmentLinks={[
-            makeLink({
-              kind: 'image',
-              title: 'chart.png',
-              file_path: '.agor/uploads/session/chart.png',
-              target_key: 'file:.agor/uploads/session/chart.png',
-              mime_type: 'image/png',
-            }),
-          ]}
-        />
-      </MemoryRouter>
-    );
+    renderMessage({ content: 'Attached files:\n- .agor/uploads/session/chart.png' }, [
+      makeLink({
+        kind: 'image',
+        title: 'chart.png',
+        file_path: '.agor/uploads/session/chart.png',
+        target_key: 'file:.agor/uploads/session/chart.png',
+        mime_type: 'image/png',
+      }),
+    ]);
 
     expect(
       screen.getByRole('button', { name: /open image preview for chart\.png/i })
@@ -154,31 +135,27 @@ describe('MessageBlock attachments', () => {
   });
 
   it('keeps custom upload prefixes but hides attachment path lists', () => {
-    render(
-      <MemoryRouter>
-        <MessageBlock
-          message={makeMessage({
-            content:
-              'QA upload set: /home/agor/.agor/uploads/session/a.png, /home/agor/.agor/uploads/session/b.md',
-          })}
-          attachmentLinks={[
-            makeLink({
-              title: 'a.png',
-              kind: 'image',
-              file_path: '/home/agor/.agor/uploads/session/a.png',
-              target_key: 'file:/home/agor/.agor/uploads/session/a.png',
-              mime_type: 'image/png',
-            }),
-            makeLink({
-              link_id: 'link-2' as Link['link_id'],
-              title: 'b.md',
-              file_path: '/home/agor/.agor/uploads/session/b.md',
-              target_key: 'file:/home/agor/.agor/uploads/session/b.md',
-              mime_type: 'text/markdown',
-            }),
-          ]}
-        />
-      </MemoryRouter>
+    renderMessage(
+      {
+        content:
+          'QA upload set: /home/agor/.agor/uploads/session/a.png, /home/agor/.agor/uploads/session/b.md',
+      },
+      [
+        makeLink({
+          title: 'a.png',
+          kind: 'image',
+          file_path: '/home/agor/.agor/uploads/session/a.png',
+          target_key: 'file:/home/agor/.agor/uploads/session/a.png',
+          mime_type: 'image/png',
+        }),
+        makeLink({
+          link_id: 'link-2' as Link['link_id'],
+          title: 'b.md',
+          file_path: '/home/agor/.agor/uploads/session/b.md',
+          target_key: 'file:/home/agor/.agor/uploads/session/b.md',
+          mime_type: 'text/markdown',
+        }),
+      ]
     );
 
     expect(screen.getByText('QA upload set:')).toBeInTheDocument();
@@ -187,15 +164,7 @@ describe('MessageBlock attachments', () => {
   });
 
   it('leaves normal user messages without attachments unchanged', () => {
-    render(
-      <MemoryRouter>
-        <MessageBlock
-          message={makeMessage({
-            content: 'Please inspect /home/agor/.agor/uploads/session/spec.pdf',
-          })}
-        />
-      </MemoryRouter>
-    );
+    renderMessage({ content: 'Please inspect /home/agor/.agor/uploads/session/spec.pdf' });
 
     expect(document.body.textContent).toContain(
       'Please inspect /home/agor/.agor/uploads/session/spec.pdf'
@@ -228,11 +197,7 @@ describe('MessageBlock attachments', () => {
   });
 
   it('keeps blank messages without attachments hidden', () => {
-    const { container } = render(
-      <MemoryRouter>
-        <MessageBlock message={makeMessage({ content: '   ' })} />
-      </MemoryRouter>
-    );
+    const { container } = renderMessage({ content: '   ' });
 
     expect(container).toBeEmptyDOMElement();
   });
