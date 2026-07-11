@@ -9,6 +9,16 @@ export function canPersistLinkPin(item: LinkDisplayItem): boolean {
   );
 }
 
+export function getLinkPinActionLabel(
+  item: Pick<LinkDisplayItem, 'isPinned' | 'ownerScope'>,
+  sessionDestination = 'session'
+): string {
+  if (item.ownerScope === 'branch') {
+    return item.isPinned ? 'Unpin from branch card' : 'Pin to branch card';
+  }
+  return item.isPinned ? `Unpin from ${sessionDestination}` : 'Pin in session';
+}
+
 export async function toggleLinkDisplayItemPinned(args: {
   client: AgorClient;
   item: LinkDisplayItem;

@@ -5,6 +5,7 @@ import {
   canPersistLinkPin,
   getCompactLinkDisplayName,
   getLinkDisplaySecondaryLabel,
+  getLinkPinActionLabel,
   getTeammatePromotionActionLabel,
   getTeammatePromotionState,
   type LinkDisplayItem,
@@ -64,7 +65,6 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
   const disabled = Boolean(disabledReason);
   const title = getCompactLinkDisplayName(props.item);
   const targetLabel = getLinkDisplaySecondaryLabel(props.item);
-  const pinLabel = props.item.isPinned ? 'Unpin from branch card' : 'Pin to branch card';
 
   return (
     <List.Item className={styles.listItemFlush}>
@@ -78,7 +78,7 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
           <>
             <LinkPinAction
               pinned={props.item.isPinned}
-              label={`${pinLabel} ${title}`}
+              label={`${getLinkPinActionLabel(props.item)} ${title}`}
               disabled={!canPersistLinkPin(props.item)}
               loading={props.pinning}
               onToggle={() => props.onTogglePinned(props.item)}

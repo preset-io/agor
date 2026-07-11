@@ -98,6 +98,11 @@ const branch = {
   archived: false,
 } as unknown as Branch;
 
+const branchWithIssue = {
+  ...branch,
+  issue_url: 'https://github.com/preset-io/agor/issues/154',
+} as Branch;
+
 const makeLink = (overrides: Partial<Link> = {}) =>
   makeTestLink({
     url: 'https://example.com/session-runbook',
@@ -210,6 +215,16 @@ function renderPanel(client: AgorClient, panelBranch: Branch = branch) {
   );
 }
 
+function seedPrimaryTeammate(state: Partial<ReturnType<typeof agorStore.getState>> = {}) {
+  agorStore.setState({
+    ...EMPTY_MAPS,
+    ...state,
+    boardById: new Map([
+      ['board-1', { board_id: 'board-1', primary_teammate_id: 'teammate-1' } as Board],
+    ]),
+  });
+}
+
 describe('SessionPanel session links', () => {
   beforeEach(() => {
     agorStore.setState({ ...EMPTY_MAPS });
@@ -219,23 +234,7 @@ describe('SessionPanel session links', () => {
     const link = makeLink();
     const { client, calls } = makeClient([link]);
 
-    render(
-      <MemoryRouter>
-        <ConnectionProvider value={connected}>
-          <AppActionsProvider value={{}}>
-            <AntApp>
-              <SessionPanel
-                client={client}
-                session={session}
-                branch={branch}
-                open
-                onClose={vi.fn()}
-              />
-            </AntApp>
-          </AppActionsProvider>
-        </ConnectionProvider>
-      </MemoryRouter>
-    );
+    renderPanel(client);
 
     await screen.findByText('Session Runbook');
     await waitFor(() => {
@@ -254,10 +253,6 @@ describe('SessionPanel session links', () => {
   });
 
   it('adds a branch link materialized from the session organizer to the store', async () => {
-    const branchWithIssue = {
-      ...branch,
-      issue_url: 'https://github.com/preset-io/agor/issues/154',
-    } as Branch;
     const pinnedIssue = makeLink({
       link_id: 'issue-link' as Link['link_id'],
       branch_id: branch.branch_id,
@@ -291,10 +286,6 @@ describe('SessionPanel session links', () => {
   });
 
   it('hydrates an existing branch URL so it can be promoted from the session organizer', async () => {
-    const branchWithIssue = {
-      ...branch,
-      issue_url: 'https://github.com/preset-io/agor/issues/154',
-    } as Branch;
     const existingIssue = makeLink({
       link_id: 'issue-link' as Link['link_id'],
       branch_id: branch.branch_id,
@@ -311,12 +302,7 @@ describe('SessionPanel session links', () => {
       branch_id: 'teammate-1' as Link['branch_id'],
       metadata: { promoted_from_owner: { branch_id: branch.branch_id } },
     });
-    agorStore.setState({
-      ...EMPTY_MAPS,
-      boardById: new Map([
-        ['board-1', { board_id: 'board-1', primary_teammate_id: 'teammate-1' } as Board],
-      ]),
-    });
+    seedPrimaryTeammate();
     const { client, calls } = makePromotionClient({
       sessionLinks: [],
       branchLinks: [existingIssue],
@@ -342,10 +328,6 @@ describe('SessionPanel session links', () => {
   });
 
   it('patches an existing branch URL when pinning it from the session organizer', async () => {
-    const branchWithIssue = {
-      ...branch,
-      issue_url: 'https://github.com/preset-io/agor/issues/154',
-    } as Branch;
     const existingIssue = makeLink({
       link_id: 'issue-link' as Link['link_id'],
       branch_id: branch.branch_id,
@@ -387,12 +369,7 @@ describe('SessionPanel session links', () => {
       session_id: null,
       is_pinned: true,
     });
-    agorStore.setState({
-      ...EMPTY_MAPS,
-      boardById: new Map([
-        ['board-1', { board_id: 'board-1', primary_teammate_id: 'teammate-1' } as Board],
-      ]),
-    });
+    seedPrimaryTeammate();
     const { client, calls } = makePromotionClient({
       sessionLinks: [source],
       teammateLinks: [],
@@ -425,11 +402,7 @@ describe('SessionPanel session links', () => {
       session_id: null,
       is_pinned: true,
     });
-    agorStore.setState({
-      ...EMPTY_MAPS,
-      boardById: new Map([
-        ['board-1', { board_id: 'board-1', primary_teammate_id: 'teammate-1' } as Board],
-      ]),
+    seedPrimaryTeammate({
       linksByBranch: new Map([['teammate-1', [promoted]]]),
       linkById: new Map([[promoted.link_id, promoted]]),
     });

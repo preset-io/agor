@@ -4,6 +4,7 @@ import {
   ActionLinkRow,
   canPersistLinkPin,
   getLinkDisplaySecondaryLabel,
+  getLinkPinActionLabel,
   isFileLinkDisplayItem,
   isKnowledgeLinkDisplayItem,
   type LinkDisplayItem,
@@ -73,13 +74,7 @@ function pinAction(props: SharedProps) {
   const toggleable = canPersistLinkPin(props.item) && Boolean(props.onTogglePinned);
   const isPinning = props.pinningLinkId === (props.item.linkId ?? props.item.key);
   const label = toggleable
-    ? props.item.isPinned
-      ? props.item.ownerScope === 'branch'
-        ? 'Unpin from branch card'
-        : 'Unpin from session header'
-      : props.item.ownerScope === 'branch'
-        ? 'Pin to branch card'
-        : 'Pin in session'
+    ? getLinkPinActionLabel(props.item, 'session header')
     : 'Pin unavailable';
 
   return (

@@ -17,19 +17,13 @@ import {
   getLinkDisplaySecondaryLabel,
   type LinkDisplayItem,
 } from './linkDisplay';
+import { getLinkPinActionLabel } from './linkPinning';
 import styles from './linkUi.module.css';
 
 type PreviewState = {
   item: LinkDisplayItem;
   kind: LinkPreviewKind;
 };
-
-function getPinActionLabel(item: LinkDisplayItem): string {
-  if (item.ownerScope === 'branch') {
-    return item.isPinned ? 'Unpin from branch card' : 'Pin to branch card';
-  }
-  return item.isPinned ? 'Unpin from session' : 'Pin in session';
-}
 
 export function LinkRow({
   item,
@@ -76,7 +70,7 @@ export function LinkRow({
         canTogglePin ? (
           <LinkPinAction
             pinned={item.isPinned}
-            label={`${getPinActionLabel(item)} ${title}`}
+            label={`${getLinkPinActionLabel(item)} ${title}`}
             loading={pinning}
             onToggle={() => onTogglePinned?.(item)}
           />

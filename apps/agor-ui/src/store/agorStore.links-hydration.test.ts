@@ -13,6 +13,16 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function link(linkId: string, owner: Partial<Link>): Link {
+  return {
+    link_id: linkId,
+    branch_id: null,
+    session_id: null,
+    is_pinned: false,
+    ...owner,
+  } as Link;
+}
+
 beforeEach(() => {
   cancelAllHydrations();
   resetHydrationRevisions();
@@ -22,18 +32,11 @@ beforeEach(() => {
 describe('agorStore link hydration', () => {
   it('lets pinned-only hydration prune active full buckets but preserves direct archived full buckets', () => {
     const activeBranch = { branch_id: 'b-active' } as Branch;
-    const activePinned = {
-      link_id: 'l-active-pinned',
-      branch_id: 'b-active',
-      session_id: null,
-      is_pinned: true,
-    } as Link;
-    const archivedPinned = {
-      link_id: 'l-archived-pinned',
+    const activePinned = link('l-active-pinned', { branch_id: 'b-active', is_pinned: true });
+    const archivedPinned = link('l-archived-pinned', {
       branch_id: 'b-archived',
-      session_id: null,
       is_pinned: true,
-    } as Link;
+    });
 
     agorStore.getState().setMap('branchById', new Map([['b-active', activeBranch]]));
     agorStore.getState().replaceFullBranchLinks('b-active', [activePinned]);
@@ -54,12 +57,10 @@ describe('agorStore link hydration', () => {
 
   it('prunes a formerly-active full branch bucket after branch hydration drops the owner', () => {
     const activeBranch = { branch_id: 'b-formerly-active' } as Branch;
-    const stalePinned = {
-      link_id: 'l-formerly-active-pinned',
+    const stalePinned = link('l-formerly-active-pinned', {
       branch_id: 'b-formerly-active',
-      session_id: null,
       is_pinned: true,
-    } as Link;
+    });
 
     agorStore.getState().setMap('branchById', new Map([['b-formerly-active', activeBranch]]));
     agorStore.getState().replaceFullBranchLinks('b-formerly-active', [stalePinned]);
@@ -79,12 +80,7 @@ describe('agorStore link hydration', () => {
   });
 
   it('fetches and replaces a full branch link bucket through the centralized action', async () => {
-    const fetchedBranchLink = {
-      link_id: 'l-fetched-branch',
-      branch_id: 'b1',
-      session_id: null,
-      is_pinned: true,
-    } as Link;
+    const fetchedBranchLink = link('l-fetched-branch', { branch_id: 'b1', is_pinned: true });
     const findAll = vi.fn().mockResolvedValue([fetchedBranchLink]);
     const service = vi.fn(() => ({ findAll }));
     const client = { service } as never;
@@ -106,18 +102,8 @@ describe('agorStore link hydration', () => {
   it('applies concurrent unrelated full session and branch hydrations independently', async () => {
     const sessionGate = deferred<Link[]>();
     const branchGate = deferred<Link[]>();
-    const sessionLink = {
-      link_id: 'l-session-full',
-      branch_id: null,
-      session_id: 's1',
-      is_pinned: false,
-    } as Link;
-    const branchLink = {
-      link_id: 'l-branch-full',
-      branch_id: 'b1',
-      session_id: null,
-      is_pinned: true,
-    } as Link;
+    const sessionLink = link('l-session-full', { session_id: 's1' });
+    const branchLink = link('l-branch-full', { branch_id: 'b1', is_pinned: true });
     const findAll = vi.fn(({ query }) => {
       if (query.session_id === 's1') return sessionGate.promise;
       if (query.branch_id === 'b1') return branchGate.promise;
@@ -142,18 +128,14 @@ describe('agorStore link hydration', () => {
 
   it('does not let direct full owner hydration cancel global pinned hydration', async () => {
     const activeBranch = { branch_id: 'b-active' } as Branch;
-    const staleActivePinned = {
-      link_id: 'l-stale-active-pinned',
+    const staleActivePinned = link('l-stale-active-pinned', {
       branch_id: 'b-active',
-      session_id: null,
       is_pinned: true,
-    } as Link;
-    const directArchivedLink = {
-      link_id: 'l-direct-archived',
+    });
+    const directArchivedLink = link('l-direct-archived', {
       branch_id: 'b-archived',
-      session_id: null,
       is_pinned: true,
-    } as Link;
+    });
     const globalGate = deferred<Link[]>();
     let globalCalls = 0;
 
@@ -194,12 +176,10 @@ describe('agorStore link hydration', () => {
 
   it('does not let global pinned hydration cancel direct full owner hydration', async () => {
     const directGate = deferred<Link[]>();
-    const directArchivedLink = {
-      link_id: 'l-direct-after-global',
+    const directArchivedLink = link('l-direct-after-global', {
       branch_id: 'b-archived',
-      session_id: null,
       is_pinned: true,
-    } as Link;
+    });
     const findAll = vi.fn().mockReturnValue(directGate.promise);
     const client = { service: vi.fn(() => ({ findAll })) } as never;
 
@@ -222,12 +202,7 @@ describe('agorStore link hydration', () => {
   });
 
   it('suppresses an older same-owner result after a newer empty request applies', async () => {
-    const staleSessionLink = {
-      link_id: 'l-older-empty-race',
-      branch_id: null,
-      session_id: 's1',
-      is_pinned: false,
-    } as Link;
+    const staleSessionLink = link('l-older-empty-race', { session_id: 's1' });
     const olderGate = deferred<Link[]>();
     let calls = 0;
     const findAll = vi.fn(() => {
@@ -250,20 +225,15 @@ describe('agorStore link hydration', () => {
   });
 
   it('suppresses stale full owner results when that owner changed during the fetch', async () => {
-    const staleSessionLink = {
-      link_id: 'l-stale-session-result',
-      branch_id: null,
+    const staleSessionLink = link('l-stale-session-result', {
       session_id: 's1',
-      is_pinned: false,
       title: 'stale',
-    } as Link;
-    const newerSessionLink = {
-      link_id: 'l-newer-session-link',
-      branch_id: null,
+    });
+    const newerSessionLink = link('l-newer-session-link', {
       session_id: 's1',
       is_pinned: true,
       title: 'newer',
-    } as Link;
+    });
     const gate = deferred<Link[]>();
     const findAll = vi.fn().mockReturnValue(gate.promise);
     const client = { service: vi.fn(() => ({ findAll })) } as never;
@@ -280,12 +250,9 @@ describe('agorStore link hydration', () => {
   });
 
   it('suppresses a stale empty-to-empty session full-owner result after realtime link churn', async () => {
-    const staleSessionLink = {
-      link_id: 'l-stale-session-churn',
-      branch_id: null,
+    const staleSessionLink = link('l-stale-session-churn', {
       session_id: 's-empty-churn',
-      is_pinned: false,
-    } as Link;
+    });
     const gate = deferred<Link[]>();
     const findAll = vi.fn().mockReturnValue(gate.promise);
     const client = { service: vi.fn(() => ({ findAll })) } as never;
@@ -304,12 +271,7 @@ describe('agorStore link hydration', () => {
   });
 
   it('suppresses a stale empty-to-empty branch full-owner result after realtime link churn', async () => {
-    const staleBranchLink = {
-      link_id: 'l-stale-branch-churn',
-      branch_id: 'b-empty-churn',
-      session_id: null,
-      is_pinned: false,
-    } as Link;
+    const staleBranchLink = link('l-stale-branch-churn', { branch_id: 'b-empty-churn' });
     const gate = deferred<Link[]>();
     const findAll = vi.fn().mockReturnValue(gate.promise);
     const client = { service: vi.fn(() => ({ findAll })) } as never;
@@ -329,12 +291,9 @@ describe('agorStore link hydration', () => {
 
   it('suppresses a stale empty-to-empty branch full-owner result after branch archive eviction', async () => {
     const branch = { branch_id: 'b-empty-evicted', archived: false } as Branch;
-    const staleBranchLink = {
-      link_id: 'l-stale-branch-after-evict',
+    const staleBranchLink = link('l-stale-branch-after-evict', {
       branch_id: 'b-empty-evicted',
-      session_id: null,
-      is_pinned: false,
-    } as Link;
+    });
     const gate = deferred<Link[]>();
     const findAll = vi.fn().mockReturnValue(gate.promise);
     const client = { service: vi.fn(() => ({ findAll })) } as never;
@@ -355,12 +314,9 @@ describe('agorStore link hydration', () => {
 
   it('suppresses a stale empty-to-empty session full-owner result after session removal eviction', async () => {
     const session = { session_id: 's-empty-removed', branch_id: 'b1', archived: false } as Session;
-    const staleSessionLink = {
-      link_id: 'l-stale-session-after-remove',
-      branch_id: null,
+    const staleSessionLink = link('l-stale-session-after-remove', {
       session_id: 's-empty-removed',
-      is_pinned: false,
-    } as Link;
+    });
     const gate = deferred<Link[]>();
     const findAll = vi.fn().mockReturnValue(gate.promise);
     const client = { service: vi.fn(() => ({ findAll })) } as never;
@@ -384,18 +340,8 @@ describe('agorStore link hydration', () => {
   it('branch eviction removes branch links and child session links', () => {
     const branch = { branch_id: 'b1' } as Branch;
     const session = { session_id: 's1', branch_id: 'b1' } as Session;
-    const branchLink = {
-      link_id: 'l-branch',
-      branch_id: 'b1',
-      session_id: null,
-      is_pinned: true,
-    } as Link;
-    const sessionLink = {
-      link_id: 'l-session',
-      branch_id: null,
-      session_id: 's1',
-      is_pinned: true,
-    } as Link;
+    const branchLink = link('l-branch', { branch_id: 'b1', is_pinned: true });
+    const sessionLink = link('l-session', { session_id: 's1', is_pinned: true });
 
     agorStore.getState().setMap('branchById', new Map([['b1', branch]]));
     agorStore.getState().setMap('sessionById', new Map([['s1', session]]));
