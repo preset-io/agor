@@ -409,6 +409,8 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'branches/:id/group-grants',
   'boards/:id/group-grants',
   'app-variables',
+  'agentic-tool-settings',
+  'agentic-tool-presets',
   'mcp-servers',
   'mcp-servers/discover',
   'mcp-servers/oauth-auth-headers',
@@ -582,6 +584,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     await invalidateRealtimeBranchAccess(branchId);
     return context;
   };
+
+  safeService('agentic-tool-settings')?.hooks({
+    before: {
+      patch: [requireMinimumRole(ROLES.ADMIN, 'manage workspace agentic tools')],
+    },
+  });
+
+  safeService('agentic-tool-presets')?.hooks({
+    before: {
+      create: [requireMinimumRole(ROLES.ADMIN, 'manage agentic tool presets')],
+      patch: [requireMinimumRole(ROLES.ADMIN, 'manage agentic tool presets')],
+      remove: [requireMinimumRole(ROLES.ADMIN, 'manage agentic tool presets')],
+    },
+  });
 
   const invalidateRealtimeBranchFromRoute = async (context: HookContext): Promise<HookContext> => {
     await invalidateRealtimeBranchAccess(context.params.route?.id);
@@ -2779,18 +2795,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
   });
-
-  // ============================================================================
-  // Leaderboard hooks
-  // ============================================================================
-
-  {
-    app.service('leaderboard').hooks({
-      before: {
-        all: [requireAuth],
-      },
-    });
-  }
+  app.service('leaderboard').hooks({
+    before: {
+      all: [requireAuth],
+    },
+  });
 
   // ============================================================================
   // Schedules hooks

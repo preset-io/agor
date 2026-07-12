@@ -140,6 +140,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   onCodexPermissionChange,
   promptInputSlot,
 }) => {
+  const managedByPreset = Boolean(session.agentic_tool_preset_id);
   const { token } = theme.useToken();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const [prefs, setPref] = useFooterPreferences();
@@ -255,7 +256,17 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         >
           Model
         </Typography.Text>
-        <div style={{ maxWidth: 160, flexShrink: 0 }}>
+        <div
+          style={{
+            maxWidth: 160,
+            flexShrink: 0,
+            pointerEvents: managedByPreset ? 'none' : undefined,
+            opacity: managedByPreset ? 0.65 : undefined,
+          }}
+          title={
+            managedByPreset ? 'Managed by preset; switch presets in Session Settings' : undefined
+          }
+        >
           <ModelSelector
             value={modelConfig}
             onChange={onModelConfigChange}
@@ -285,13 +296,20 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           >
             Effort
           </Typography.Text>
-          <EffortSelector
-            value={effortLevel}
-            onChange={onEffortChange}
-            size="small"
-            compact
-            plain
-          />
+          <div
+            style={{
+              pointerEvents: managedByPreset ? 'none' : undefined,
+              opacity: managedByPreset ? 0.65 : undefined,
+            }}
+          >
+            <EffortSelector
+              value={effortLevel}
+              onChange={onEffortChange}
+              size="small"
+              compact
+              plain
+            />
+          </div>
         </div>
       )}
 
@@ -311,18 +329,25 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         >
           Permissions
         </Typography.Text>
-        <PermissionModeSelector
-          value={permissionMode}
-          onChange={onPermissionModeChange}
-          agentic_tool={session.agentic_tool}
-          codexSandboxMode={codexSandboxMode}
-          codexApprovalPolicy={codexApprovalPolicy}
-          onCodexChange={onCodexPermissionChange}
-          compact
-          iconOnly={false}
-          plain
-          size="small"
-        />
+        <div
+          style={{
+            pointerEvents: managedByPreset ? 'none' : undefined,
+            opacity: managedByPreset ? 0.65 : undefined,
+          }}
+        >
+          <PermissionModeSelector
+            value={permissionMode}
+            onChange={onPermissionModeChange}
+            agentic_tool={session.agentic_tool}
+            codexSandboxMode={codexSandboxMode}
+            codexApprovalPolicy={codexApprovalPolicy}
+            onCodexChange={onCodexPermissionChange}
+            compact
+            iconOnly={false}
+            plain
+            size="small"
+          />
+        </div>
       </div>
 
       <Divider style={{ margin: '4px 0' }} />
@@ -1278,19 +1303,25 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             {/* Model chip */}
             {modelName && pinnedChips.includes('model') && (
               <Popover
-                trigger="click"
+                trigger={managedByPreset ? [] : 'click'}
                 placement="topLeft"
                 title="Model"
                 overlayStyle={{ maxWidth: 'none' }}
                 overlayInnerStyle={{ padding: 8 }}
                 content={
                   <div style={{ width: 420 }}>
-                    <ModelSelector
-                      value={modelConfig}
-                      onChange={onModelConfigChange}
-                      agentic_tool={session.agentic_tool}
-                      client={client}
-                    />
+                    {managedByPreset ? (
+                      <Typography.Text>
+                        Managed by preset. Switch presets in Session Settings.
+                      </Typography.Text>
+                    ) : (
+                      <ModelSelector
+                        value={modelConfig}
+                        onChange={onModelConfigChange}
+                        agentic_tool={session.agentic_tool}
+                        client={client}
+                      />
+                    )}
                   </div>
                 }
               >
@@ -1298,7 +1329,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   icon={<RobotOutlined />}
                   color="default"
                   style={{
-                    cursor: 'pointer',
+                    cursor: managedByPreset ? 'default' : 'pointer',
                     height: 22,
                     display: 'inline-flex',
                     alignItems: 'center',

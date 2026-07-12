@@ -251,17 +251,6 @@ export interface AgorExternalLaunchSettings {
 }
 
 /**
- * OpenCode.ai integration settings
- */
-export interface AgorOpenCodeSettings {
-  /** Enable OpenCode integration (default: false) */
-  enabled?: boolean;
-
-  /** URL where OpenCode server is running (default: http://localhost:4096) */
-  serverUrl?: string;
-}
-
-/**
  * Database configuration settings
  */
 export interface AgorDatabaseSettings {
@@ -385,9 +374,6 @@ export interface AgorExecutionSettings {
    * branch requires at least `session` permission on that branch.
    */
   allow_web_terminal?: boolean;
-
-  /** Enable experimental Cursor SDK provider surfaces (default: false). */
-  cursor_sdk_enabled?: boolean;
 
   /** Allow superadmin role (default: false). When true, superadmin role gets branch RBAC bypass. Opt-in for self-hosted deployments. */
   allow_superadmin?: boolean;
@@ -945,47 +931,6 @@ export interface AgorAnalyticsModulePluginSettings {
 }
 
 /**
- * Supported credential keys (enum for type safety)
- */
-export enum CredentialKey {
-  ANTHROPIC_API_KEY = 'ANTHROPIC_API_KEY',
-  ANTHROPIC_AUTH_TOKEN = 'ANTHROPIC_AUTH_TOKEN',
-  ANTHROPIC_BASE_URL = 'ANTHROPIC_BASE_URL',
-  OPENAI_API_KEY = 'OPENAI_API_KEY',
-  GEMINI_API_KEY = 'GEMINI_API_KEY',
-  COPILOT_GITHUB_TOKEN = 'COPILOT_GITHUB_TOKEN',
-  CURSOR_API_KEY = 'CURSOR_API_KEY',
-}
-
-/**
- * Tool credentials (API keys, tokens, etc.)
- */
-export interface AgorCredentials {
-  /** Anthropic API key for Claude Code */
-  ANTHROPIC_API_KEY?: string;
-
-  /** Anthropic auth token for proxy/enterprise setups (alternative to API key)
-   * Used by Claude Code SDK for token-based authentication (e.g., AWS Bedrock, OAuth proxies) */
-  ANTHROPIC_AUTH_TOKEN?: string;
-
-  /** Custom Anthropic API base URL (default: https://api.anthropic.com)
-   * Useful for proxies, Claude Enterprise deployments, or third-party compatible APIs */
-  ANTHROPIC_BASE_URL?: string;
-
-  /** OpenAI API key for Codex */
-  OPENAI_API_KEY?: string;
-
-  /** Google Gemini API key */
-  GEMINI_API_KEY?: string;
-
-  /** GitHub token for Copilot */
-  COPILOT_GITHUB_TOKEN?: string;
-
-  /** Cursor API key for the experimental Cursor SDK provider */
-  CURSOR_API_KEY?: string;
-}
-
-/**
  * Onboarding settings (consumed by UI wizard; may be set by existing installs)
  */
 export interface AgorOnboardingSettings {
@@ -1135,9 +1080,6 @@ export interface AgorConfig {
   /** Database configuration */
   database?: AgorDatabaseSettings;
 
-  /** OpenCode.ai integration settings */
-  opencode?: AgorOpenCodeSettings;
-
   /** Generic external one-time launch-code authentication. */
   external_launch?: AgorExternalLaunchSettings;
 
@@ -1162,9 +1104,6 @@ export interface AgorConfig {
   /** Knowledge Base semantic search settings. */
   knowledge?: AgorKnowledgeSettings;
 
-  /** Tool credentials (API keys, tokens) */
-  credentials?: AgorCredentials;
-
   /** Onboarding settings (CLI init → UI wizard) */
   onboarding?: AgorOnboardingSettings;
 
@@ -1180,7 +1119,6 @@ export interface AgorConfig {
    * See `apps/agor-docs/pages/guide/api-proxies.mdx`.
    */
   proxies?: Record<string, AgorProxyConfig>;
-
 }
 
 /**
@@ -1192,7 +1130,6 @@ export type ConfigKey =
   | `daemon.${keyof AgorDaemonSettings}`
   | `ui.${keyof AgorUISettings}`
   | `database.${keyof AgorDatabaseSettings}`
-  | `opencode.${keyof AgorOpenCodeSettings}`
   | `external_launch.${keyof AgorExternalLaunchSettings}`
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
@@ -1201,5 +1138,4 @@ export type ConfigKey =
   | `analytics.${keyof AgorAnalyticsSettings}`
   | `telemetry.${keyof AgorTelemetrySettings}`
   | `knowledge.${keyof AgorKnowledgeSettings}`
-  | `credentials.${keyof AgorCredentials}`
   | `onboarding.${keyof AgorOnboardingSettings}`;

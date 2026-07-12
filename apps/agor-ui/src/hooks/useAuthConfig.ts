@@ -23,17 +23,9 @@ interface InstanceConfig {
   description?: string;
 }
 
-interface SystemCredentials {
-  ANTHROPIC_API_KEY?: boolean;
-  OPENAI_API_KEY?: boolean;
-  GEMINI_API_KEY?: boolean;
-  CURSOR_API_KEY?: boolean;
-}
-
 interface OnboardingConfig {
   teammatePending?: boolean;
   frameworkRepoUrl?: string;
-  systemCredentials?: SystemCredentials;
 }
 
 export interface FeaturesConfig {

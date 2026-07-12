@@ -4,7 +4,6 @@
  * Reusable form section for configuring agentic tool settings:
  * - Model selection (Claude/Codex/Gemini specific)
  * - Permission mode
- * - MCP server attachments
  * - Codex-specific fields (sandbox, approval, network) — only in full mode
  *
  * Used by session creation, settings, defaults, schedules, gateway channels,
@@ -15,12 +14,11 @@
  * - Codex-specific fields are omitted (rendered separately via CodexSettingsForm)
  */
 
-import type { AgenticToolName, AgorClient, MCPServer } from '@agor-live/client';
+import type { AgenticToolName, AgorClient } from '@agor-live/client';
 import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { EffortSelector } from '../EffortSelector';
-import { SessionMcpServersField } from '../MCPServerSelect';
 import { ModelSelector } from '../ModelSelector';
 import {
   CODEX_APPROVAL_POLICIES,
@@ -31,8 +29,6 @@ import {
 export interface AgenticToolConfigFormProps {
   /** The agentic tool being configured */
   agenticTool: AgenticToolName;
-  /** Available MCP servers */
-  mcpServerById: Map<string, MCPServer>;
   /** Whether to show help text under each field */
   showHelpText?: boolean;
   /**
@@ -42,13 +38,6 @@ export interface AgenticToolConfigFormProps {
    *   Use CodexSettingsForm separately for those.
    */
   compact?: boolean;
-  /**
-   * Suppress the MCP Servers field. Use when the parent renders MCP as a
-   * standalone first-class field elsewhere in the form (e.g., NewSessionModal
-   * promotes it to the primary zone). Avoids duplicate `mcpServerIds`
-   * Form.Items in the same Form.
-   */
-  hideMcpServers?: boolean;
   /**
    * Optional Feathers client. When set, the embedded ModelSelector can fetch
    * dynamic Copilot models via `/copilot-models`. Without it, the picker
@@ -68,10 +57,8 @@ const MODEL_LABELS: Record<string, string> = {
 
 export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
   agenticTool,
-  mcpServerById,
   showHelpText = true,
   compact = false,
-  hideMcpServers = false,
   client,
 }) => {
   const modelLabel = MODEL_LABELS[agenticTool] ?? 'Claude Model';
@@ -164,10 +151,6 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
         >
           <CodexNetworkAccessToggle showWarning={showHelpText} />
         </Form.Item>
-      )}
-
-      {!hideMcpServers && (
-        <SessionMcpServersField mcpServerById={mcpServerById} showHelpText={showHelpText} />
       )}
     </>
   );

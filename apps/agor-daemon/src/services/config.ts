@@ -92,33 +92,6 @@ function getExecutorTokenPayload(params?: Params): ExecutorTokenPayload | undefi
 }
 
 /**
- * Mask API keys for secure display
- */
-function maskApiKey(key: string | undefined): string | undefined {
-  if (!key || typeof key !== 'string') return undefined;
-  if (key.length <= 10) return '***';
-  return `${key.substring(0, 10)}...`;
-}
-
-/**
- * Mask all credentials in config
- */
-function maskCredentials(config: AgorConfig): AgorConfig {
-  if (!config.credentials) return config;
-
-  return {
-    ...config,
-    credentials: {
-      ANTHROPIC_API_KEY: maskApiKey(config.credentials.ANTHROPIC_API_KEY),
-      ANTHROPIC_AUTH_TOKEN: maskApiKey(config.credentials.ANTHROPIC_AUTH_TOKEN),
-      ANTHROPIC_BASE_URL: config.credentials.ANTHROPIC_BASE_URL,
-      OPENAI_API_KEY: maskApiKey(config.credentials.OPENAI_API_KEY),
-      GEMINI_API_KEY: maskApiKey(config.credentials.GEMINI_API_KEY),
-    },
-  };
-}
-
-/**
  * Config service class
  */
 export class ConfigService {
@@ -134,8 +107,7 @@ export class ConfigService {
    * Get full config (masked)
    */
   async find(_params?: Params): Promise<AgorConfig> {
-    const config = await loadConfig();
-    return maskCredentials(config);
+    return loadConfig();
   }
 
   /**
@@ -143,11 +115,10 @@ export class ConfigService {
    */
   async get(id: string, _params?: Params): Promise<unknown> {
     const config = await loadConfig();
-    const masked = maskCredentials(config);
 
-    // Support dot notation (e.g., "credentials.ANTHROPIC_API_KEY")
+    // Support dot notation for the remaining bootstrap configuration.
     const parts = id.split('.');
-    let value: unknown = masked;
+    let value: unknown = config;
 
     for (const part of parts) {
       if (value && typeof value === 'object' && part in value) {
@@ -164,7 +135,7 @@ export class ConfigService {
    * Custom method: Resolve API key for a task
    *
    * This allows executors to request API key resolution without direct database access.
-   * The service handles the precedence: user-level > config > env > native auth.
+   * The service follows the tenant's explicit user/workspace resolution policy.
    *
    * Called via: client.service('config/resolve-api-key').create({ taskId, keyName })
    */
@@ -190,7 +161,8 @@ export class ConfigService {
     params?: Params
   ): Promise<{
     apiKey: string | null;
-    source: 'user' | 'config' | 'env' | 'native';
+    connection?: Record<string, string>;
+    source: 'user' | 'tenant' | 'none';
     useNativeAuth: boolean;
     decryptionFailed?: boolean;
   }> {
@@ -289,11 +261,20 @@ export class ConfigService {
       db: this.db,
       tool,
     });
+    if (result.useNativeAuth) {
+      const config = await loadConfig();
+      if (config.multi_tenancy?.mode === 'required_from_auth') {
+        throw new BadRequest(
+          'Shared machine subscription authentication is unavailable in hosted multitenant mode'
+        );
+      }
+    }
 
     // Map KeyResolutionResult to service response type
     return {
       apiKey: result.apiKey ?? null,
-      source: result.source === 'none' ? 'native' : result.source,
+      connection: result.connection as Record<string, string> | undefined,
+      source: result.source,
       useNativeAuth: result.useNativeAuth,
       ...(result.decryptionFailed && { decryptionFailed: true }),
     };
@@ -302,51 +283,17 @@ export class ConfigService {
   /**
    * Update config values
    *
-   * SECURITY: Only allow updating credentials and opencode sections from UI
+   * Temporary compatibility surface for onboarding state only. Product settings
+   * must use tenant-owned typed services.
    */
   async patch(_id: null, data: Partial<AgorConfig>, _params?: Params): Promise<AgorConfig> {
     // Log patch keys without values to avoid leaking secrets
     const patchSections = Object.keys(data);
-    const credentialKeys = data.credentials ? Object.keys(data.credentials) : [];
-    console.log(
-      `[Config Service] Patch received: sections=[${patchSections}] credential_keys=[${credentialKeys}]`
-    );
+    console.log(`[Config Service] Patch received: sections=[${patchSections}]`);
+    if (patchSections.some((section) => section !== 'onboarding')) {
+      throw new BadRequest('Only onboarding may be patched through the legacy config service');
+    }
     const config = await loadConfig();
-
-    // Only allow updating credentials section for security
-    if (data.credentials) {
-      // Initialize credentials if not present
-      if (!config.credentials) {
-        config.credentials = {};
-      }
-
-      // Update or delete credential keys
-      for (const [key, value] of Object.entries(data.credentials)) {
-        if (value === undefined || value === null) {
-          // Explicitly delete the key when value is undefined or null
-          delete config.credentials[key as keyof typeof config.credentials];
-        } else {
-          // Set the key
-          (config.credentials as Record<string, string>)[key] = value;
-        }
-      }
-    }
-
-    // Allow updating opencode configuration
-    if (data.opencode) {
-      // Initialize opencode if not present
-      if (!config.opencode) {
-        config.opencode = {};
-      }
-
-      // Update opencode settings
-      if (data.opencode.enabled !== undefined) {
-        config.opencode.enabled = data.opencode.enabled;
-      }
-      if (data.opencode.serverUrl !== undefined) {
-        config.opencode.serverUrl = data.opencode.serverUrl;
-      }
-    }
 
     // Allow updating onboarding configuration
     if (data.onboarding) {
@@ -370,22 +317,7 @@ export class ConfigService {
     await saveConfig(config);
     console.log('[Config Service] Config saved successfully');
 
-    // Propagate credentials to process.env for hot-reload
-    // Precedence rule: config.yaml (UI) > environment variables
-    if (data.credentials) {
-      for (const [key, value] of Object.entries(data.credentials)) {
-        if (value === undefined || value === null) {
-          // Delete from process.env if credential was cleared
-          delete process.env[key];
-        } else {
-          // Update process.env (UI takes precedence)
-          process.env[key] = value;
-        }
-      }
-    }
-
-    // Return masked config
-    return maskCredentials(config);
+    return config;
   }
 }
 

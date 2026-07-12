@@ -56,25 +56,21 @@ vi.mock('../AgenticToolConfigForm', async () => {
       _tool: AgenticToolName,
       values: {
         permissionMode?: string;
-        mcpServerIds?: string[];
         modelConfig?: { mode?: string; model?: string };
       }
     ) => ({
       permissionMode: values.permissionMode,
-      mcpServerIds: values.mcpServerIds ?? [],
       ...(values.modelConfig ? { modelConfig: values.modelConfig } : {}),
     }),
-    getClearedFormValues: () => ({ permissionMode: 'default', mcpServerIds: [] }),
+    getClearedFormValues: () => ({ permissionMode: 'default' }),
     getFormValuesFromConfig: (
       _tool: AgenticToolName,
       config?: {
         permissionMode?: string;
-        mcpServerIds?: string[];
         modelConfig?: { mode?: string; model?: string };
       }
     ) => ({
       permissionMode: config?.permissionMode ?? 'default',
-      mcpServerIds: config?.mcpServerIds ?? [],
       modelConfig: config?.modelConfig,
     }),
   };
@@ -105,8 +101,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   it('saves dirty agentic defaults across tabs and closes from the footer', async () => {
     const user = makeUser({
       default_agentic_config: {
-        'claude-code': { permissionMode: 'default', mcpServerIds: [] },
-        codex: { permissionMode: 'ask', mcpServerIds: [] },
+        'claude-code': { permissionMode: 'default' },
+        codex: { permissionMode: 'ask' },
       },
     });
     const onUpdate = vi.fn();
@@ -138,9 +134,14 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledWith('user-1', {
         default_agentic_config: {
-          'claude-code': { permissionMode: 'acceptEdits', mcpServerIds: [] },
-          codex: { permissionMode: 'allow-all', mcpServerIds: [] },
+          'claude-code': { permissionMode: 'acceptEdits' },
+          codex: { permissionMode: 'allow-all' },
         },
+        default_agentic_selection: {
+          'claude-code': { source: 'inline' },
+          codex: { source: 'inline' },
+        },
+        default_mcp_server_ids: [],
       });
     }, ASYNC);
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -155,7 +156,6 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       default_agentic_config: {
         'claude-code': {
           permissionMode: 'default',
-          mcpServerIds: [],
           modelConfig: { mode: 'alias', model: 'claude-sonnet-5' },
         },
       },
@@ -189,10 +189,13 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         default_agentic_config: {
           'claude-code': {
             permissionMode: 'default',
-            mcpServerIds: [],
             modelConfig: { mode: 'alias', model: 'claude-opus-4-8' },
           },
         },
+        default_agentic_selection: {
+          'claude-code': { source: 'inline' },
+        },
+        default_mcp_server_ids: [],
       });
     }, ASYNC);
 

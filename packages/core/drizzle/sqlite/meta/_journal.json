@@ -449,6 +449,27 @@
       "when": 1782200000000,
       "tag": "0065_primary_teammate_id",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "6",
+      "when": 1783800000000,
+      "tag": "0066_agentic_tool_presets",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "6",
+      "when": 1783900000000,
+      "tag": "0067_decouple_mcp_from_agentic_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "6",
+      "when": 1784000000000,
+      "tag": "0068_default_agentic_tool_presets",
+      "breakpoints": true
     }
   ]
 }

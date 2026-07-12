@@ -467,12 +467,12 @@ describe('OnboardingWizard', () => {
         codex: {
           modelConfig: { model: 'gpt-5', effort: 'high' },
           permissionMode: 'auto',
-          mcpServerIds: ['mcp-1'],
           codexSandboxMode: 'workspace-write',
           codexApprovalPolicy: 'on-request',
           codexNetworkAccess: true,
         },
       },
+      default_mcp_server_ids: ['mcp-1'],
     } as Partial<User>);
 
     const view = renderWizard({ repoById, onCreateBranch, onCreateSession, onComplete, user });

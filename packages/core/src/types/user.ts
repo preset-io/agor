@@ -1,4 +1,9 @@
-import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
+import type {
+  AgenticToolName,
+  CodexApprovalPolicy,
+  CodexNetworkAccess,
+  CodexSandboxMode,
+} from './agentic-tool';
 import type { UserID } from './id';
 import type { EffortLevel, PermissionMode } from './session';
 
@@ -104,8 +109,6 @@ export interface DefaultAgenticToolConfig {
   modelConfig?: DefaultModelConfig;
   /** Default permission mode (Claude/Gemini unified mode) */
   permissionMode?: PermissionMode;
-  /** Default MCP server IDs to attach */
-  mcpServerIds?: string[];
   /** Codex-specific: sandbox mode */
   codexSandboxMode?: CodexSandboxMode;
   /** Codex-specific: approval policy */
@@ -127,6 +130,10 @@ export interface DefaultAgenticConfig {
   cursor?: DefaultAgenticToolConfig;
 }
 
+export type UserAgenticDefaultSelections = Partial<
+  Record<AgenticToolName, import('./agentic-tool-preset').UserAgenticDefaultSelection>
+>;
+
 /**
  * Per-tool credential field shapes.
  *
@@ -145,6 +152,9 @@ export interface CodexConfig {
   OPENAI_API_KEY?: string;
   OPENAI_BASE_URL?: string;
 }
+
+export type AgenticAuthMethod = 'api_key' | 'subscription';
+export type AgenticAuthMethods = Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>;
 
 export interface GeminiConfig {
   GEMINI_API_KEY?: string;
@@ -449,6 +459,8 @@ export interface User extends BaseUserFields {
    * encrypted-string to `boolean` for presence checking.
    */
   agentic_tools?: AgenticToolsStatus;
+  /** Explicit authentication method; inactive credentials remain stored but are never resolved. */
+  agentic_auth_methods?: AgenticAuthMethods;
   /**
    * Plaintext values for fields listed in `AGENTIC_TOOLS_PUBLIC_FIELDS` —
    * only populated when the requester is the field's owner. Lets the UI
@@ -463,6 +475,9 @@ export interface User extends BaseUserFields {
   env_vars?: Record<string, EnvVarMetadata>;
   // Default agentic tool configuration (prepopulates session creation forms)
   default_agentic_config?: DefaultAgenticConfig;
+  default_agentic_selection?: UserAgenticDefaultSelections;
+  // Default MCP selection, independent of the selected agentic tool.
+  default_mcp_server_ids?: string[];
 }
 
 /**
@@ -587,6 +602,7 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
    * touched; `null` clears the field, a string sets it. Field names = env var names.
    */
   agentic_tools?: AgenticToolsUpdate;
+  agentic_auth_methods?: AgenticAuthMethods;
   // Environment variables for update (accepts plaintext, encrypted before storage).
   // `null` clears the variable. A plain `string` creates/updates the value and leaves
   // the existing scope in place (defaults to 'global' for new vars).
@@ -599,6 +615,9 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
   env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configuration
   default_agentic_config?: DefaultAgenticConfig;
+  default_agentic_selection?: UserAgenticDefaultSelections;
+  // Default MCP selection, independent of the selected agentic tool.
+  default_mcp_server_ids?: string[];
 }
 
 /**

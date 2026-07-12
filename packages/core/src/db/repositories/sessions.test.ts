@@ -91,6 +91,7 @@ function createPostgresStyleSessionRow(overrides?: Partial<SessionRow> & { tenan
     unix_username: null,
     status: SessionStatus.IDLE,
     agentic_tool: 'claude-code',
+    agentic_tool_preset_id: null,
     board_id: null,
     parent_session_id: null,
     forked_from_session_id: null,

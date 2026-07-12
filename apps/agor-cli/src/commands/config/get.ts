@@ -11,14 +11,12 @@ export default class ConfigGet extends Command {
   static examples = [
     '<%= config.bin %> <%= command.id %> defaults.board',
     '<%= config.bin %> <%= command.id %> defaults.agent',
-    '<%= config.bin %> <%= command.id %> credentials.ANTHROPIC_API_KEY',
     '<%= config.bin %> <%= command.id %> daemon.port',
   ];
 
   static args = {
     key: Args.string({
-      description:
-        'Configuration key in format: section.key (e.g., daemon.port, credentials.ANTHROPIC_API_KEY)',
+      description: 'Configuration key in format: section.key (e.g., daemon.port)',
       required: true,
     }),
   };

@@ -257,11 +257,7 @@ export class CopilotPromptService {
     // Create CopilotClient (spawns CLI process)
     this.client = new CopilotClient({
       useStdio: true,
-      githubToken:
-        this.apiKey ||
-        process.env.COPILOT_GITHUB_TOKEN ||
-        process.env.GH_TOKEN ||
-        process.env.GITHUB_TOKEN,
+      githubToken: this.apiKey || undefined,
       env: {
         HOME: process.env.HOME || '',
       },

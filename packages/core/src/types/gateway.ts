@@ -215,9 +215,10 @@ export interface GatewayEnvVar {
 
 export interface GatewayAgenticConfig {
   agent: AgenticToolName;
+  /** Live preset reference. Remaining runtime fields are ignored when present. */
+  presetId?: import('./agentic-tool-preset').AgenticToolPresetID;
   modelConfig?: DefaultModelConfig;
   permissionMode?: PermissionMode;
-  mcpServerIds?: string[];
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
@@ -254,6 +255,8 @@ export interface GatewayChannel {
   channel_key: string; // UUID — the auth secret for inbound webhooks
   config: Record<string, unknown>; // Platform credentials (encrypted at rest)
   agentic_config: GatewayAgenticConfig | null; // Session creation settings
+  /** MCP servers attached independently of the agentic-tool configuration. */
+  mcp_server_ids?: string[];
   enabled: boolean;
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601

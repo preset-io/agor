@@ -12,7 +12,6 @@ export default class ConfigUnset extends Command {
   static examples = [
     '<%= config.bin %> <%= command.id %> defaults.board',
     '<%= config.bin %> <%= command.id %> defaults.agent',
-    '<%= config.bin %> <%= command.id %> credentials.ANTHROPIC_API_KEY',
   ];
 
   static args = {

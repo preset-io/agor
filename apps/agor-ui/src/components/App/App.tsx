@@ -914,6 +914,7 @@ export const App: React.FC<AppProps> = ({
     const sessionConfig: NewSessionConfig = {
       branch_id: branch.branch_id,
       agent: result.agent,
+      agenticToolPresetId: result.agenticToolPresetId,
       title: `${result.emoji ? `${result.emoji} ` : ''}${result.displayName} bootstrap`,
       initialPrompt: buildTeammateBootstrapPrompt({
         displayName: result.displayName,

@@ -51,7 +51,12 @@ import {
   permissionModeForCli,
   slugForCwd,
 } from '@agor/core/claude-cli';
-import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  isTenantAgenticToolEnabled,
+  resolveMultiTenancyConfig,
+  resolveProviderConnection,
+} from '@agor/core/config';
 import {
   generateId,
   getCurrentTenantId,
@@ -99,6 +104,55 @@ import {
 function getDb(app: Application): TenantScopeAwareDatabase | null {
   const db = (app.get('database') ?? app.get('db')) as TenantScopeAwareDatabase | undefined;
   return db ?? null;
+}
+
+function claudeCliProviderEnvPath(sessionId: SessionID): string {
+  return path.join(os.tmpdir(), `agor-claude-cli-provider-${sessionId}.sh`);
+}
+
+/** Overlay the session owner's scoped connection without exposing it to generic terminals. */
+export async function resolveClaudeCliProviderSpawn(
+  app: Application,
+  session: Session,
+  built: { bin: string; args: string[] }
+): Promise<{ bin: string; args: string[] } | null> {
+  const db = getDb(app) ?? undefined;
+  if (!db || !(await isTenantAgenticToolEnabled('claude-code', db))) return null;
+  const resolved = await resolveProviderConnection('claude-code', {
+    userId: (session.created_by as import('@agor/core/types').UserID | null) ?? undefined,
+    db,
+  });
+  const connection = resolved.connection as Record<string, string | undefined>;
+  const hasCredential = [
+    'ANTHROPIC_API_KEY',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_AUTH_TOKEN',
+  ].some((field) => connection[field]?.trim());
+  if (resolved.decryptionFailed || !hasCredential) return null;
+
+  const envPath = claudeCliProviderEnvPath(session.session_id);
+  const exports = Object.entries(connection).map(([key, value]) => {
+    const escaped = (value ?? '').replace(/'/g, "'\\''");
+    return `export ${key}='${escaped}'`;
+  });
+  fs.writeFileSync(envPath, `#!/bin/sh\n${exports.join('\n')}\n`, { mode: 0o600 });
+  if (session.unix_username) {
+    try {
+      childProcess.execFileSync('sudo', ['-n', 'chown', session.unix_username, envPath], {
+        stdio: 'pipe',
+        timeout: 2000,
+      });
+    } catch (error) {
+      fs.rmSync(envPath, { force: true });
+      throw new Error(
+        `Failed to prepare scoped Claude CLI credentials for ${session.unix_username}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  return {
+    bin: '/bin/sh',
+    args: ['-c', '. "$1"; shift; exec "$@"', 'agor-claude-cli', envPath, built.bin, ...built.args],
+  };
 }
 
 const cliWatcherTenantBySession = new Map<string, string>();
@@ -1402,7 +1456,7 @@ export async function onCliSessionCreated(
   const jsonlPath = claudeSessionJsonlPath(homeDir, branchCwd, session.session_id);
   const mcpConfigPath = await writeClaudeCliMcpConfigForSession(app, session);
   const spawnCfg = buildSpawnConfigForSession(session, branchCwd, { mcpConfigPath });
-  const built = buildClaudeCliSpawn(spawnCfg);
+  const built = await resolveClaudeCliProviderSpawn(app, session, buildClaudeCliSpawn(spawnCfg));
   const tabName = spawnCfg.displayName ?? `cli-${shortId(session.session_id)}`;
 
   // 1) Persist cli_state for diagnostics + restart recovery.
@@ -1467,14 +1521,9 @@ export async function onCliSessionCreated(
   //    Best-effort — drops silently if the user hasn't opened the terminal
   //    modal yet. Log the attempt either way so we can see it in the
   //    daemon logs while testing.
-  const dispatched = dispatchZellijClaudeTab(
-    app,
-    session.created_by,
-    tabName,
-    branchCwd,
-    built.bin,
-    built.args
-  );
+  const dispatched = built
+    ? dispatchZellijClaudeTab(app, session.created_by, tabName, branchCwd, built.bin, built.args)
+    : false;
   console.log(
     JSON.stringify({
       layer: 'claude-cli-integration.onCliSessionCreated',
@@ -1482,7 +1531,7 @@ export async function onCliSessionCreated(
       slug,
       jsonl_path: jsonlPath,
       tab_dispatched: dispatched,
-      spawn: { bin: built.bin, args: built.args },
+      spawn: built ? { bin: built.bin, args: built.args } : { blocked: 'scoped-auth-required' },
     })
   );
 }

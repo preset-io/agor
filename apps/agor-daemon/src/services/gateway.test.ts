@@ -21,6 +21,14 @@ vi.mock('@agor/core/gateway', async (importOriginal) => {
   };
 });
 
+vi.mock('@agor/core/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/config')>();
+  return {
+    ...actual,
+    assertInlineAgenticConfigurationAllowed: vi.fn(async () => undefined),
+  };
+});
+
 vi.mock('../utils/gateway-attachments.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/gateway-attachments.js')>();
   return {

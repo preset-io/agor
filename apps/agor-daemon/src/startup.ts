@@ -640,14 +640,12 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 7. Start Knowledge embedding indexer (no-op unless semantic search is configured)
   let knowledgeEmbeddingIndexer: KnowledgeEmbeddingIndexer | null = null;
-  {
-    knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
-      tenantId: startupTenantParams(config).tenant.tenant_id,
-    });
-    knowledgeEmbeddingIndexer.start();
-    app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
-    console.log('🧠 Knowledge embedding indexer started');
-  }
+  knowledgeEmbeddingIndexer = new KnowledgeEmbeddingIndexer(db, {
+    tenantId: startupTenantParams(config).tenant.tenant_id,
+  });
+  knowledgeEmbeddingIndexer.start();
+  app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
+  console.log('🧠 Knowledge embedding indexer started');
 
   // 8. Initialize gateway: refresh channel state cache, then start Socket Mode listeners
   const gatewayService = safeService('gateway') as unknown as GatewayService | undefined;

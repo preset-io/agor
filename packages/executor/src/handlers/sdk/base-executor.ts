@@ -5,7 +5,11 @@
  * Claude, Codex, Gemini, and OpenCode executors.
  */
 
-import { type ApiKeyName, resolveApiKey } from '@agor/core/config';
+import {
+  type ApiKeyName,
+  resolveApiKey,
+  stripProviderCredentialEnvironment,
+} from '@agor/core/config';
 import { generateId, shortId } from '@agor/core/db';
 import type {
   AgenticToolName,
@@ -377,6 +381,31 @@ export async function resolveApiKeyForTask(
   }
 }
 
+function installProviderConnection(connection: Record<string, string | undefined>): void {
+  const sanitized = stripProviderCredentialEnvironment(process.env);
+  for (const key of Object.keys(process.env)) {
+    if (!Object.hasOwn(sanitized, key)) delete process.env[key];
+  }
+  for (const [key, value] of Object.entries(connection)) {
+    if (value?.trim()) process.env[key] = value;
+  }
+}
+
+function hasProviderCredential(
+  tool: AgenticToolName,
+  connection: Record<string, string | undefined>
+): boolean {
+  const fields: Partial<Record<AgenticToolName, readonly string[]>> = {
+    'claude-code': ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'],
+    'claude-code-cli': ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'],
+    codex: ['OPENAI_API_KEY'],
+    gemini: ['GEMINI_API_KEY'],
+    copilot: ['COPILOT_GITHUB_TOKEN'],
+    cursor: ['CURSOR_API_KEY'],
+  };
+  return (fields[tool] ?? []).some((field) => connection[field]?.trim());
+}
+
 /**
  * Execute a tool task - shared implementation for all SDK tools
  */
@@ -413,11 +442,13 @@ export async function executeToolTask(params: {
   // executor-mediated git work.
   await stampGitStateAtTaskStart(client, sessionId, taskId);
 
-  // Resolve API key with proper precedence (user → config → env → native auth).
-  // Pass `toolName` so the daemon scopes the per-user lookup to this tool's
-  // credential bucket — prevents cross-SDK leak (e.g. Codex picking up an
-  // ANTHROPIC_API_KEY stored under claude-code).
+  // Resolve one complete user-or-tenant provider connection.
   const resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
+  const connection = {
+    ...(resolution.connection ?? {}),
+    ...(resolution.apiKey ? { [apiKeyEnvVar]: resolution.apiKey } : {}),
+  } as Record<string, string | undefined>;
+  installProviderConnection(connection);
 
   // Fail fast if stored key can't be decrypted (e.g. master secret changed)
   if (resolution.decryptionFailed) {
@@ -427,14 +458,15 @@ export async function executeToolTask(params: {
         `Please re-enter your API key in Settings > ${toolName} > Authentication.`
     );
   }
+  if (!hasProviderCredential(toolName, connection) && !resolution.useNativeAuth) {
+    throw new Error(`No scoped ${toolName} credential is configured for this workspace or user.`);
+  }
 
   // Log resolution result
   if (resolution.apiKey) {
     sdkDebug(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);
   } else {
-    sdkDebug(
-      `[${toolName}] No API key found - SDK will use native authentication (OAuth/CLI login)`
-    );
+    sdkDebug(`[${toolName}] No scoped provider API key is configured`);
   }
 
   // Create execution context

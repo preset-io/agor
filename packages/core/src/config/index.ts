@@ -4,6 +4,7 @@
  * Exports configuration management, repo reference parsing utilities.
  */
 
+export * from './agentic-tool-preset-resolver';
 export * from './agor-yml';
 export * from './config-manager';
 export * from './constants';
@@ -37,5 +38,6 @@ export {
   SANDPACK_CSP_FRAME_SRC,
   SANDPACK_CSP_WORKER_SRC,
 } from './security-resolver';
+export * from './tenant-agentic-tool-resolver';
 export * from './types';
 export * from './variant-resolver';

@@ -5,6 +5,7 @@
  */
 
 import type {
+  AgenticToolPreset,
   Artifact,
   AuthenticationResult,
   Board,
@@ -18,6 +19,7 @@ import type {
   CloneRepositoryResult,
   ContextFileDetail,
   ContextFileListItem,
+  CreateAgenticToolPreset,
   Group,
   GroupMembership,
   KnowledgeDocument,
@@ -30,6 +32,7 @@ import type {
   KnowledgeSemanticSettingsPublic,
   MCPServer,
   Message,
+  PatchAgenticToolPreset,
   PermissionMode,
   Repo,
   Schedule,
@@ -38,6 +41,8 @@ import type {
   TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
   TemplateRenderResponse,
+  TenantAgenticToolSettings,
+  TenantAgenticToolSettingsPatch,
   User,
   UserAvatarSettings,
   UserAvatarSyncRequest,
@@ -201,6 +206,8 @@ export interface ServiceTypes {
   'kb/indexing/status': KnowledgeIndexingStatus;
   'kb/indexing/reindex': { queued: number; status: KnowledgeEmbeddingStatus };
   templates: TemplateRenderResponse;
+  'agentic-tool-settings': TenantAgenticToolSettings;
+  'agentic-tool-presets': AgenticToolPreset;
 }
 
 /**
@@ -240,6 +247,20 @@ export interface AgorService<
   // Emit custom events to WebSocket clients (available at runtime via FeathersJS socket.io integration)
   emit(event: string, data: unknown): void;
 }
+
+export type AgenticToolSettingsService = AgorService<
+  TenantAgenticToolSettings,
+  never,
+  never,
+  TenantAgenticToolSettingsPatch
+>;
+
+export type AgenticToolPresetsService = AgorService<
+  AgenticToolPreset,
+  CreateAgenticToolPreset,
+  never,
+  PatchAgenticToolPreset
+>;
 
 /**
  * Sessions service with custom methods for forking, spawning, and genealogy
@@ -565,6 +586,8 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
+  service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
 
   // Bulk operation endpoints
   service(path: 'messages/bulk'): MessagesService;

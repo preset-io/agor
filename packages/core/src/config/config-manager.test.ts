@@ -58,9 +58,6 @@ function createConfigData(overrides?: Partial<AgorConfig>): AgorConfig {
       port: 8080,
       host: '127.0.0.1',
     },
-    credentials: {
-      ANTHROPIC_API_KEY: 'test-key-123',
-    },
     ...overrides,
   };
 }
@@ -206,13 +203,48 @@ describe('loadConfig', () => {
     );
   });
 
-  it.each(['resources', 'services'])('rejects the removed %s config surface', async (key) => {
+  it.each([
+    'resources',
+    'services',
+    'credentials',
+    'opencode',
+  ])('rejects the removed %s config surface', async (key) => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(configPath, yaml.dump({ [key]: {} }), 'utf-8');
 
     await expect(loadConfig()).rejects.toThrow(new RegExp(`'${key}' has been removed`));
+  });
+
+  it('rejects the removed execution.cursor_sdk_enabled flag', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ execution: { cursor_sdk_enabled: true } }), 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/execution\.cursor_sdk_enabled.*removed/);
+  });
+
+  it('rejects unrecognized top-level keys', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ speculative_feature: true }), 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/unrecognized top-level key: speculative_feature/);
+  });
+
+  it('reports every unrecognized nested key with its full path', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ daemon: { surprise: true }, execution: { branch_storage: { mystery: 1 } } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(
+      /daemon\.surprise.*execution\.branch_storage\.mystery/
+    );
   });
 
   it('should handle partial config with missing sections', async () => {
@@ -739,14 +771,6 @@ describe('getConfigValue', () => {
     expect(value).toBeUndefined();
   });
 
-  it('should handle credentials key', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    const apiKey = await getConfigValue('credentials.ANTHROPIC_API_KEY');
-    expect(apiKey).toBe('test-key-123');
-  });
-
   it('should handle boolean values', async () => {
     const config = createConfigData();
     await saveConfig(config);
@@ -797,10 +821,10 @@ describe('setConfigValue', () => {
 
   it('should create section if it does not exist', async () => {
     await saveConfig({});
-    await setConfigValue('credentials.ANTHROPIC_API_KEY', 'new-key');
+    await setConfigValue('onboarding.teammatePending', true);
 
     const loaded = await loadConfig();
-    expect(loaded.credentials?.ANTHROPIC_API_KEY).toBe('new-key');
+    expect(loaded.onboarding?.teammatePending).toBe(true);
   });
 
   it('should update existing value', async () => {
@@ -898,7 +922,7 @@ describe('unsetConfigValue', () => {
   it('should not error when unsetting from non-existent section', async () => {
     await saveConfig({});
 
-    await expect(unsetConfigValue('credentials.SOME_KEY')).resolves.not.toThrow();
+    await expect(unsetConfigValue('onboarding.someUnknownKey')).resolves.not.toThrow();
   });
 
   it('should preserve other keys in same section', async () => {

@@ -84,10 +84,10 @@ describe('resolveApiKeyForTask', () => {
     expect(resolveApiKey).not.toHaveBeenCalled();
   });
 
-  it('keeps local fallback for legacy or unavailable daemon resolution', async () => {
+  it('keeps unavailable daemon fallback fail-closed', async () => {
     vi.mocked(resolveApiKey).mockReturnValue({
-      apiKey: 'local-key',
-      source: 'env',
+      apiKey: undefined,
+      source: 'none',
       useNativeAuth: false,
     });
 
@@ -98,7 +98,7 @@ describe('resolveApiKeyForTask', () => {
         'task-1' as never,
         'codex' as never
       )
-    ).resolves.toMatchObject({ apiKey: 'local-key', source: 'env' });
+    ).resolves.toMatchObject({ apiKey: undefined, source: 'none' });
 
     expect(resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {});
   });

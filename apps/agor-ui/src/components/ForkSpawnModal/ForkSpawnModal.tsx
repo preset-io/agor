@@ -17,7 +17,10 @@ import { getDefaultPermissionMode } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Checkbox, Collapse, Form, Modal, Radio, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
-import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import {
+  AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
+} from '../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -79,7 +82,6 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         codexSandboxMode: userDefaults?.codexSandboxMode,
         codexApprovalPolicy: userDefaults?.codexApprovalPolicy,
         codexNetworkAccess: userDefaults?.codexNetworkAccess,
-        mcpServerIds: userDefaults?.mcpServerIds || [],
       };
     },
     [currentUser, session]
@@ -106,9 +108,19 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   useEffect(() => {
     if (!open || !session || configPreset !== 'custom') return;
     const agentTool = session.agentic_tool || 'claude-code';
-    form.setFieldsValue(getCustomConfigDefaults(agentTool));
+    form.setFieldsValue({
+      ...getCustomConfigDefaults(agentTool),
+      mcpServerIds: currentUser?.default_mcp_server_ids || [],
+    });
     setSelectedAgent(agentTool);
-  }, [open, session, configPreset, form, getCustomConfigDefaults]);
+  }, [
+    open,
+    session,
+    configPreset,
+    form,
+    getCustomConfigDefaults,
+    currentUser?.default_mcp_server_ids,
+  ]);
 
   const handleOk = async () => {
     // Validate fields first. If validation fails, bail out WITHOUT clearing
@@ -138,14 +150,20 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         const spawnConfig: Partial<SpawnConfig> = { prompt };
 
         if (configPreset === 'custom') {
-          // Include full config overrides
           spawnConfig.agent = values.agent || selectedAgent;
-          spawnConfig.permissionMode = values.permissionMode;
-          spawnConfig.modelConfig = values.modelConfig;
-          spawnConfig.codexSandboxMode = values.codexSandboxMode;
-          spawnConfig.codexApprovalPolicy = values.codexApprovalPolicy;
-          spawnConfig.codexNetworkAccess = values.codexNetworkAccess;
-          spawnConfig.mcpServerIds = values.mcpServerIds;
+          if (
+            values.agenticToolPresetId &&
+            values.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
+          ) {
+            spawnConfig.presetId = values.agenticToolPresetId;
+          } else {
+            spawnConfig.permissionMode = values.permissionMode;
+            spawnConfig.modelConfig = values.modelConfig;
+            spawnConfig.codexSandboxMode = values.codexSandboxMode;
+            spawnConfig.codexApprovalPolicy = values.codexApprovalPolicy;
+            spawnConfig.codexNetworkAccess = values.codexNetworkAccess;
+            spawnConfig.mcpServerIds = values.mcpServerIds;
+          }
           spawnConfig.extraInstructions = values.extraInstructions;
           // Always send envVarNames in custom preset so the user can
           // explicitly clear inherited selections (empty array = explicit
@@ -283,10 +301,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                       key: 'agentic-tool-config',
                       label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
                       children: (
-                        <AgenticToolConfigForm
-                          agenticTool={selectedAgent}
+                        <AgenticToolConfigurationPicker
+                          tool={selectedAgent}
                           mcpServerById={mcpServerById}
                           showHelpText={false}
+                          client={client}
                         />
                       ),
                     },

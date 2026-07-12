@@ -47,7 +47,7 @@ export const ResolvedConfigSliceSchema = z.object({
     })
     .optional(),
 
-  /** From `config.opencode.*` */
+  /** Runtime-resolved OpenCode endpoint, when a scoped endpoint is introduced. */
   opencode: z
     .object({
       serverUrl: z.string().optional(),

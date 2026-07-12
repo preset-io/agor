@@ -8,7 +8,7 @@
 
 import {
   type AgorConfig,
-  loadConfig,
+  isTenantAgenticToolEnabled,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   resolveTenantContext,
@@ -958,15 +958,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         };
         const cwd = branch?.path;
         if (!cwd) throw new Error('Branch has no path; cannot restart');
-        const { buildSpawnConfigForSession, writeClaudeCliMcpConfigForSession } = await import(
-          './services/claude-cli-integration.js'
-        );
+        const {
+          buildSpawnConfigForSession,
+          resolveClaudeCliProviderSpawn,
+          writeClaudeCliMcpConfigForSession,
+        } = await import('./services/claude-cli-integration.js');
         const { buildClaudeCliSpawn } = await import('@agor/core/claude-cli');
         const mcpConfigPath = await writeClaudeCliMcpConfigForSession(app, session, {
           actor: params.user ?? null,
         });
         const spawnCfg = buildSpawnConfigForSession(session, cwd, { mcpConfigPath });
-        const built = buildClaudeCliSpawn(spawnCfg);
+        const built = await resolveClaudeCliProviderSpawn(
+          app,
+          session,
+          buildClaudeCliSpawn(spawnCfg)
+        );
+        if (!built) throw new Error('No scoped Claude credential is configured');
         if (app.io) {
           app.io.to(channel).emit('terminal:tab', {
             userId: targetUserId,
@@ -1432,6 +1439,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         let session = await sessionsService.get(id, params);
         id = session.session_id;
+
+        if (!(await isTenantAgenticToolEnabled(session.agentic_tool ?? 'claude-code', db))) {
+          throw new Forbidden(
+            `${session.agentic_tool ?? 'claude-code'} is disabled for this workspace`
+          );
+        }
+        session = await sessionsService.materializeAgenticToolPreset(session, params);
+        if (
+          session.agentic_tool_preset_id &&
+          data.permissionMode !== undefined &&
+          data.permissionMode !== session.permission_config?.mode
+        ) {
+          throw new Forbidden('Preset-backed sessions cannot override permission mode per task');
+        }
 
         // Early validation: reject unsupported tools when stateless_fs_mode is enabled
         if (config.execution?.stateless_fs_mode) {
@@ -3377,201 +3398,191 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
 
   registerAuthenticatedRoute(
-      app,
-      '/sessions/:id/mcp-servers',
-      {
-        async find(params: RouteParams) {
-          const id = params.route?.id;
-          if (!id) throw new Error('Session ID required');
-          await requireSessionScopedConfigOwnerOrAdmin(id, params);
-          const enabledOnly =
-            params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
-          const includeGlobal =
-            params.query?.includeGlobal === 'true' || params.query?.includeGlobal === true;
-          const includeMetadata =
-            params.query?.includeMetadata === 'true' || params.query?.includeMetadata === true;
-          const mcpService = app.service('mcp-servers');
-          const queryForUserId =
-            typeof params.query?.forUserId === 'string' ? params.query.forUserId : undefined;
-          const authPayloadType = (
-            params as RouteParams & { authentication?: { payload?: { type?: unknown } } }
-          ).authentication?.payload?.type;
-          const routeUser = params.user as
-            | (NonNullable<RouteParams['user']> & { _isServiceAccount?: boolean })
-            | undefined;
-          const userId = resolveForUserIdWithGate({
-            queryForUserId,
-            isServiceAccount: routeUser?._isServiceAccount,
-            authPayloadType,
-            callerUserId: params.user?.user_id,
-          });
-          const rawLookupParams = {
+    app,
+    '/sessions/:id/mcp-servers',
+    {
+      async find(params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        const enabledOnly =
+          params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
+        const includeGlobal =
+          params.query?.includeGlobal === 'true' || params.query?.includeGlobal === true;
+        const includeMetadata =
+          params.query?.includeMetadata === 'true' || params.query?.includeMetadata === true;
+        const mcpService = app.service('mcp-servers');
+        const queryForUserId =
+          typeof params.query?.forUserId === 'string' ? params.query.forUserId : undefined;
+        const authPayloadType = (
+          params as RouteParams & { authentication?: { payload?: { type?: unknown } } }
+        ).authentication?.payload?.type;
+        const routeUser = params.user as
+          | (NonNullable<RouteParams['user']> & { _isServiceAccount?: boolean })
+          | undefined;
+        const userId = resolveForUserIdWithGate({
+          queryForUserId,
+          isServiceAccount: routeUser?._isServiceAccount,
+          authPayloadType,
+          callerUserId: params.user?.user_id,
+        });
+        const rawLookupParams = {
+          ...params,
+          provider: undefined,
+          query: {
+            ...(userId ? { forUserId: userId } : {}),
+          },
+        };
+        if (includeMetadata) {
+          const linksResult = await app.service('session-mcp-servers').find({
             ...params,
             provider: undefined,
             query: {
-              ...(userId ? { forUserId: userId } : {}),
+              session_id: id,
+              ...(enabledOnly ? { enabled: true } : {}),
+              $limit: 1000,
             },
-          };
-          if (includeMetadata) {
-            const linksResult = await app.service('session-mcp-servers').find({
-              ...params,
-              provider: undefined,
-              query: {
-                session_id: id,
-                ...(enabledOnly ? { enabled: true } : {}),
-                $limit: 1000,
-              },
-            });
-            const links = (Array.isArray(linksResult) ? linksResult : linksResult.data) as Array<
-              SessionMCPServer & { added_at: Date | string | number }
-            >;
-            const withMetadata = await Promise.all(
-              links.map(async (link) => {
-                try {
-                  const server = await mcpService.get(link.mcp_server_id, rawLookupParams);
-                  return {
-                    server,
-                    added_at: new Date(link.added_at).getTime(),
-                    enabled: Boolean(link.enabled),
-                  };
-                } catch (_error) {
-                  return null;
-                }
-              })
-            );
-            const entries = withMetadata.filter(
-              (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
-            );
-            return shouldExposeMCPServerSecrets(params, {
-              allowSessionToken: true,
-              sessionId: id,
-            })
-              ? entries
-              : entries.map((entry) => ({
-                  ...entry,
-                  server: redactMCPServerSecrets(entry.server),
-                }));
-          }
-          const sessionServerRefs = await sessionMCPServersService.listServers(
-            id as import('@agor/core/types').SessionID,
-            enabledOnly,
-            params
-          );
-          const sessionServers = await Promise.all(
-            sessionServerRefs.map(async (server) => {
+          });
+          const links = (Array.isArray(linksResult) ? linksResult : linksResult.data) as Array<
+            SessionMCPServer & { added_at: Date | string | number }
+          >;
+          const withMetadata = await Promise.all(
+            links.map(async (link) => {
               try {
-                return await mcpService.get(server.mcp_server_id, rawLookupParams);
+                const server = await mcpService.get(link.mcp_server_id, rawLookupParams);
+                return {
+                  server,
+                  added_at: new Date(link.added_at).getTime(),
+                  enabled: Boolean(link.enabled),
+                };
               } catch (_error) {
-                return server;
+                return null;
               }
             })
           );
-          const globalQuery = {
-            scope: 'global',
-            ...(enabledOnly ? { enabled: true } : {}),
-            ...(userId ? { forUserId: userId } : {}),
-            $limit: 1000,
-          };
-          const globalResult = includeGlobal
-            ? await mcpService.find({
-                ...params,
-                provider: undefined,
-                query: globalQuery,
-              })
-            : [];
-          const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
-          const servers = includeGlobal
-            ? [
-                ...new Map(
-                  [...globalServers, ...sessionServers].map((server) => [
-                    server.mcp_server_id,
-                    server,
-                  ])
-                ).values(),
-              ]
-            : sessionServers;
+          const entries = withMetadata.filter(
+            (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
+          );
           return shouldExposeMCPServerSecrets(params, {
             allowSessionToken: true,
             sessionId: id,
           })
-            ? servers
-            : servers.map(redactMCPServerSecrets);
-        },
-        async create(data: { mcpServerId: string }, params: RouteParams) {
-          const id = params.route?.id;
-          if (!id) throw new Error('Session ID required');
-          if (!data.mcpServerId) throw new Error('MCP Server ID required');
-          await requireSessionScopedConfigOwnerOrAdmin(id, params);
-
-          await sessionMCPServersService.addServer(
-            id as import('@agor/core/types').SessionID,
-            data.mcpServerId as import('@agor/core/types').MCPServerID,
-            params
-          );
-
-          const relationship = {
-            session_id: id,
-            mcp_server_id: data.mcpServerId,
-            enabled: true,
-            added_at: new Date(),
-          };
-          emitServiceEvent(app, {
-            path: 'session-mcp-servers',
-            event: 'created',
-            data: relationship,
-            params,
-          });
-
-          return relationship;
-        },
-        async remove(mcpId: string, params: RouteParams) {
-          const id = params.route?.id;
-          if (!id) throw new Error('Session ID required');
-          if (!mcpId) throw new Error('MCP Server ID required');
-          await requireSessionScopedConfigOwnerOrAdmin(id, params);
-
-          await sessionMCPServersService.removeServer(
-            id as import('@agor/core/types').SessionID,
-            mcpId as import('@agor/core/types').MCPServerID,
-            params
-          );
-
-          const relationship = {
-            session_id: id,
-            mcp_server_id: mcpId,
-          };
-          emitServiceEvent(app, {
-            path: 'session-mcp-servers',
-            event: 'removed',
-            data: relationship,
-            params,
-          });
-
-          return relationship;
-        },
-        async patch(mcpId: string, data: { enabled: boolean }, params: RouteParams) {
-          const id = params.route?.id;
-          if (!id) throw new Error('Session ID required');
-          if (!mcpId) throw new Error('MCP Server ID required');
-          if (typeof data.enabled !== 'boolean') throw new Error('enabled field required');
-          await requireSessionScopedConfigOwnerOrAdmin(id, params);
-          return sessionMCPServersService.toggleServer(
-            id as import('@agor/core/types').SessionID,
-            mcpId as import('@agor/core/types').MCPServerID,
-            data.enabled,
-            params
-          );
-        },
-        // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
-      } as any,
-      {
-        find: { role: ROLES.MEMBER, action: 'view session MCP servers' },
-        create: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
-        remove: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
-        patch: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
+            ? entries
+            : entries.map((entry) => ({
+                ...entry,
+                server: redactMCPServerSecrets(entry.server),
+              }));
+        }
+        const sessionServerRefs = await sessionMCPServersService.listServers(
+          id as import('@agor/core/types').SessionID,
+          enabledOnly,
+          params
+        );
+        const sessionServers = await Promise.all(
+          sessionServerRefs.map(async (server) => {
+            try {
+              return await mcpService.get(server.mcp_server_id, rawLookupParams);
+            } catch (_error) {
+              return server;
+            }
+          })
+        );
+        const globalQuery = {
+          scope: 'global',
+          ...(enabledOnly ? { enabled: true } : {}),
+          ...(userId ? { forUserId: userId } : {}),
+          $limit: 1000,
+        };
+        const globalResult = includeGlobal
+          ? await mcpService.find({
+              ...params,
+              provider: undefined,
+              query: globalQuery,
+            })
+          : [];
+        const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
+        const servers = includeGlobal
+          ? [
+              ...new Map(
+                [...globalServers, ...sessionServers].map((server) => [
+                  server.mcp_server_id,
+                  server,
+                ])
+              ).values(),
+            ]
+          : sessionServers;
+        return shouldExposeMCPServerSecrets(params, {
+          allowSessionToken: true,
+          sessionId: id,
+        })
+          ? servers
+          : servers.map(redactMCPServerSecrets);
       },
-      requireAuth
-    );
+      async create(data: { mcpServerId: string }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (!data.mcpServerId) throw new Error('MCP Server ID required');
+        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+
+        await sessionMCPServersService.addServer(
+          id as import('@agor/core/types').SessionID,
+          data.mcpServerId as import('@agor/core/types').MCPServerID,
+          params
+        );
+
+        const relationship = {
+          session_id: id,
+          mcp_server_id: data.mcpServerId,
+          enabled: true,
+          added_at: new Date(),
+        };
+        app.service('session-mcp-servers').emit('created', relationship);
+
+        return relationship;
+      },
+      async remove(mcpId: string, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (!mcpId) throw new Error('MCP Server ID required');
+        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+
+        await sessionMCPServersService.removeServer(
+          id as import('@agor/core/types').SessionID,
+          mcpId as import('@agor/core/types').MCPServerID,
+          params
+        );
+
+        const relationship = {
+          session_id: id,
+          mcp_server_id: mcpId,
+        };
+        app.service('session-mcp-servers').emit('removed', relationship);
+
+        return relationship;
+      },
+      async patch(mcpId: string, data: { enabled: boolean }, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Session ID required');
+        if (!mcpId) throw new Error('MCP Server ID required');
+        if (typeof data.enabled !== 'boolean') throw new Error('enabled field required');
+        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        return sessionMCPServersService.toggleServer(
+          id as import('@agor/core/types').SessionID,
+          mcpId as import('@agor/core/types').MCPServerID,
+          data.enabled,
+          params
+        );
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
+    } as any,
+    {
+      find: { role: ROLES.MEMBER, action: 'view session MCP servers' },
+      create: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
+      remove: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
+      patch: { role: ROLES.MEMBER, action: 'modify session MCP servers' },
+    },
+    requireAuth
+  );
 
   // ============================================================================
   // Session env selections (v0.5 env-var-access)
@@ -3740,20 +3751,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             config.onboarding?.persistedAgentPending ??
             false,
           frameworkRepoUrl: config.onboarding?.frameworkRepoUrl,
-          systemCredentials: {
-            ANTHROPIC_API_KEY: !!(
-              config.credentials?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
-            ),
-            ANTHROPIC_AUTH_TOKEN: !!(
-              config.credentials?.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_AUTH_TOKEN
-            ),
-            ANTHROPIC_BASE_URL: !!(
-              config.credentials?.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL
-            ),
-            OPENAI_API_KEY: !!(config.credentials?.OPENAI_API_KEY || process.env.OPENAI_API_KEY),
-            GEMINI_API_KEY: !!(config.credentials?.GEMINI_API_KEY || process.env.GEMINI_API_KEY),
-            CURSOR_API_KEY: !!(config.credentials?.CURSOR_API_KEY || process.env.CURSOR_API_KEY),
-          },
         },
         features: {
           // Web terminal availability: UI should hide terminal buttons when false.
@@ -3778,9 +3775,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // surfaces when true. Server-side gates (e.g. ArtifactsService.
           // grantTrust) are the source of truth and reject regardless.
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
-          // Cursor SDK provider is available as a beta surface. The legacy
-          // cursor_sdk_enabled flag is retained in config for compatibility but
-          // no longer gates provider visibility.
+          // Tenant agentic-tool settings provide the authoritative availability gate.
           cursorSdk: true,
           // Resolved branch storage policy. The daemon still enforces this at
           // create time; the UI uses it to pick the right default and disable
@@ -3872,112 +3867,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   // Liveness (/livez) and readiness (/readyz) probes — see health/routes.ts.
   registerHealthProbeRoutes(app, db);
-
-  // ============================================================================
-  // OpenCode models + health endpoints
-  // ============================================================================
-
-  app.use('/opencode/models', {
-    async find() {
-      try {
-        const freshConfig = await loadConfig();
-        const opencodeConfig = freshConfig.opencode;
-        if (!opencodeConfig?.enabled) {
-          throw new Error('OpenCode is not enabled in configuration');
-        }
-
-        const serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
-        console.log('[OpenCode] Fetching models from server:', serverUrl);
-
-        const response = await fetch(`${serverUrl}/config/providers`);
-
-        if (!response.ok) {
-          throw new Error(`OpenCode server returned ${response.status}: ${response.statusText}`);
-        }
-
-        const data = (await response.json()) as {
-          providers: Array<{
-            id: string;
-            name: string;
-            models: Record<string, { name?: string }>;
-          }>;
-          default: Record<string, string>;
-        };
-
-        const connectedProviders = data.providers;
-
-        const transformedProviders = connectedProviders.map((provider) => ({
-          id: provider.id,
-          name: provider.name,
-          models: Object.entries(provider.models)
-            .map(([modelId, modelMeta]) => ({
-              id: modelId,
-              name: modelMeta.name || modelId,
-            }))
-            .sort((a, b) => a.name.localeCompare(b.name)),
-        }));
-
-        return {
-          providers: transformedProviders,
-          default: data.default,
-          serverUrl: serverUrl,
-        };
-      } catch (error) {
-        console.error('[OpenCode] Failed to fetch models:', error);
-        throw new Error(
-          `Failed to fetch OpenCode models: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-    },
-  });
-
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  const opencodeModelsService = app.service('opencode/models') as any;
-  opencodeModelsService.docs = {
-    description: 'Get available OpenCode providers and models (requires OpenCode server running)',
-    security: [],
-  };
-
-  app.use('/opencode/health', {
-    // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies, runtime query param check
-    async find(params?: any) {
-      try {
-        let serverUrl: string;
-
-        if (params?.query?.serverUrl) {
-          serverUrl = params.query.serverUrl;
-        } else {
-          const freshConfig = await loadConfig();
-          const opencodeConfig = freshConfig.opencode;
-          if (!opencodeConfig?.enabled) {
-            throw new Error('OpenCode is not enabled in configuration');
-          }
-          serverUrl = opencodeConfig.serverUrl || 'http://localhost:4096';
-        }
-
-        const response = await fetch(`${serverUrl}/config`);
-
-        return {
-          connected: response.ok,
-          status: response.status,
-          serverUrl: serverUrl,
-        };
-      } catch (error) {
-        console.error('[OpenCode] Health check failed:', error);
-        return {
-          connected: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    },
-  });
-
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  const opencodeHealthService = app.service('opencode/health') as any;
-  opencodeHealthService.docs = {
-    description: 'Test connection to OpenCode server',
-    security: [],
-  };
 
   // ============================================================================
   // MCP routes

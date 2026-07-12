@@ -91,6 +91,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         session_id: sessionId,
         status: row.status,
         agentic_tool: row.agentic_tool,
+        agentic_tool_preset_id:
+          (row.agentic_tool_preset_id as Session['agentic_tool_preset_id']) ?? undefined,
         created_at: new Date(row.created_at).toISOString(),
         last_updated: row.updated_at
           ? new Date(row.updated_at).toISOString()
@@ -146,6 +148,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       updated_at: session.last_updated ? new Date(session.last_updated) : new Date(now),
       status: session.status ?? SessionStatus.IDLE,
       agentic_tool: session.agentic_tool ?? 'claude-code',
+      agentic_tool_preset_id: session.agentic_tool_preset_id ?? null,
       created_by: session.created_by,
       unix_username: session.unix_username ?? null, // Stamped at creation time by setSessionUnixUsername hook
       board_id: null, // Board ID tracked separately in boards.sessions array

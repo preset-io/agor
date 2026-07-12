@@ -278,11 +278,15 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         label: 'Integrations',
         type: 'group' as const,
         children: [
-          {
-            key: 'agentic-tools',
-            label: 'Agentic Tools',
-            icon: <ThunderboltOutlined />,
-          },
+          ...(isAdmin
+            ? [
+                {
+                  key: 'agentic-tools',
+                  label: 'Agentic Tools',
+                  icon: <ThunderboltOutlined />,
+                },
+              ]
+            : []),
           ...(isAdmin
             ? [
                 {

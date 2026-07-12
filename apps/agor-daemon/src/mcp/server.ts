@@ -283,9 +283,7 @@ export function buildRegistry(): ToolRegistry {
   // Register all domain tools with domain tracking.
   // Handlers receive a dummy context — they won't be called.
   const dummyCtx = {} as McpContext;
-  registerDomainTools(tempServer, dummyCtx, (domain) =>
-    registry.setCurrentDomain(domain)
-  );
+  registerDomainTools(tempServer, dummyCtx, (domain) => registry.setCurrentDomain(domain));
 
   // Search/execute tools always registered (meta-tools)
   registry.setCurrentDomain('discovery');
@@ -322,10 +320,7 @@ function getRegistry(): {
  * Tool handlers close over `ctx` for per-request user/session scope.
  * The registry and tools/list response are shared across all requests.
  */
-function createMcpServer(
-  ctx: McpContext,
-  toolSearchEnabled: boolean
-): McpServer {
+function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer {
   const server = new McpServer(
     {
       name: 'agor',

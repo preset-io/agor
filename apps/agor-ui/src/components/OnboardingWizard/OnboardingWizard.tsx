@@ -389,7 +389,7 @@ export function OnboardingWizard({
         }),
         modelConfig: toSessionModelConfig(agentDefaults?.modelConfig),
         effort: agentDefaults?.modelConfig?.effort,
-        mcpServerIds: agentDefaults?.mcpServerIds,
+        mcpServerIds: user?.default_mcp_server_ids,
         permissionMode,
       };
 

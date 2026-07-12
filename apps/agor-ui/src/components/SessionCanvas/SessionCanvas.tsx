@@ -2907,6 +2907,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               action,
               renderedTemplate,
               agent,
+              agenticToolPresetId,
               modelConfig,
               permissionMode,
               mcpServerIds,
@@ -2925,6 +2926,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   const newSession = await client.service('sessions').create({
                     branch_id: branchTriggerModal.branchId,
                     agentic_tool: (agent || 'claude-code') as AgenticToolName,
+                    agentic_tool_preset_id:
+                      agenticToolPresetId as Session['agentic_tool_preset_id'],
                     description: `Session from zone "${branchTriggerModal.zoneName}"`,
                     status: 'idle',
                     model_config: modelConfig

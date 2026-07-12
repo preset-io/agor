@@ -136,6 +136,8 @@ export interface Session {
 
   /** Which agentic coding tool is running this session (Claude Code, Codex, Gemini) */
   agentic_tool: AgenticToolName;
+  /** Live tenant preset reference. When set, atomic runtime fields are read-only. */
+  agentic_tool_preset_id?: import('./agentic-tool-preset').AgenticToolPresetID | null;
   /** Agentic tool/CLI version */
   agentic_tool_version?: string;
   /** SDK session ID for maintaining conversation history (Claude Agent SDK, Codex SDK, etc.) */
@@ -706,6 +708,9 @@ export interface SpawnConfig {
 
   /** Agentic tool to use (defaults to parent's tool) */
   agent?: AgenticToolName;
+
+  /** Live tenant preset. Same-tool children inherit the parent's preset by default. */
+  presetId?: import('./agentic-tool-preset').AgenticToolPresetID;
 
   /** Permission mode override (defaults based on config preset) */
   permissionMode?: PermissionMode;

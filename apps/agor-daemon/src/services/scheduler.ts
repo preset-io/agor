@@ -37,6 +37,11 @@
  *   as a v0.19 backwards-compat alias.
  */
 
+import {
+  assertInlineAgenticConfigurationAllowed,
+  presetConfigurationToScheduleConfig,
+  resolveAgenticToolPreset,
+} from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   BranchRepository,
@@ -624,7 +629,17 @@ export class SchedulerService {
       // 5. Resolve unix_username (schedule's creator is the execution identity).
       const { creator, unixUsername } = await this.resolveCreatorUnixUsername(schedule);
 
-      const cfg = schedule.agentic_tool_config;
+      let cfg = schedule.agentic_tool_config;
+      if (cfg.preset_id) {
+        const preset = await resolveAgenticToolPreset(this.db, cfg.agentic_tool, cfg.preset_id);
+        cfg = presetConfigurationToScheduleConfig(
+          cfg.agentic_tool,
+          cfg.preset_id,
+          preset.configuration
+        );
+      } else {
+        await assertInlineAgenticConfigurationAllowed(this.db, cfg.agentic_tool);
+      }
       const scheduleModelConfig = cfg.model_config
         ? resolveSessionDefaults({
             agenticTool: cfg.agentic_tool,
@@ -638,6 +653,7 @@ export class SchedulerService {
       const session: Partial<Session> = {
         branch_id: branch.branch_id,
         agentic_tool: cfg.agentic_tool,
+        agentic_tool_preset_id: cfg.preset_id,
         status: SessionStatus.IDLE,
         created_by: schedule.created_by,
         unix_username: unixUsername,
@@ -715,8 +731,8 @@ export class SchedulerService {
       // An explicit empty array in schedule means "no MCPs" — does NOT
       // fall through to branch.
       const effectiveMcpIds =
-        cfg.mcp_server_ids !== undefined
-          ? cfg.mcp_server_ids
+        schedule.mcp_server_ids !== undefined
+          ? schedule.mcp_server_ids
           : branch.mcp_server_ids && branch.mcp_server_ids.length > 0
             ? branch.mcp_server_ids
             : [];

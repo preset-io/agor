@@ -220,10 +220,6 @@ const agenticConfigSchema = z
       .record(z.string(), z.unknown())
       .optional()
       .describe('Agent model configuration.'),
-    mcpServerIds: z
-      .array(z.string().min(1))
-      .optional()
-      .describe('MCP server IDs to attach to gateway-created sessions.'),
     codexSandboxMode: z
       .enum(['read-only', 'workspace-write', 'danger-full-access'])
       .optional()
@@ -260,6 +256,10 @@ const gatewayChannelCreateSchema = z
     enabled: z.boolean().optional().describe('Whether the channel is active. Defaults to true.'),
     config: configSchema,
     agenticConfig: agenticConfigSchema.optional(),
+    mcpServerIds: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('MCP server IDs to attach independently of the agentic configuration.'),
   })
   .superRefine((value, issue) => {
     const config = value.config ?? {};
@@ -661,6 +661,10 @@ const gatewayChannelUpdateSchema = z.strictObject({
     .nullable()
     .optional()
     .describe('Replace agent/session defaults. null clears the gateway agentic config.'),
+  mcpServerIds: z
+    .array(z.string().min(1))
+    .optional()
+    .describe('Replace the gateway channel MCP server selection.'),
 });
 
 type GatewayChannelSummary = Omit<
@@ -710,6 +714,7 @@ function toServiceCreateData(args: z.infer<typeof gatewayChannelCreateSchema>) {
     agor_user_id: args.agorUserId ?? '',
     enabled: args.enabled ?? true,
     config: args.config,
+    mcp_server_ids: args.mcpServerIds,
     agentic_config: args.agenticConfig
       ? {
           ...args.agenticConfig,
@@ -730,6 +735,7 @@ function toServiceUpdateData(args: z.infer<typeof gatewayChannelUpdateSchema>) {
   if (args.agorUserId !== undefined) updates.agor_user_id = args.agorUserId as never;
   if (args.enabled !== undefined) updates.enabled = args.enabled;
   if (args.config !== undefined) updates.config = args.config;
+  if (args.mcpServerIds !== undefined) updates.mcp_server_ids = args.mcpServerIds;
   if (args.agenticConfig !== undefined) {
     updates.agentic_config = args.agenticConfig
       ? ({

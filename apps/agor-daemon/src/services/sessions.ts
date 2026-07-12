@@ -5,7 +5,14 @@
  * Uses DrizzleService adapter with SessionRepository.
  */
 
-import { PAGINATION } from '@agor/core/config';
+import {
+  assertInlineAgenticConfigurationAllowed,
+  isTenantAgenticToolEnabled,
+  PAGINATION,
+  presetConfigurationToSessionPatch,
+  resolveAgenticConfigurationReference,
+  resolveAgenticToolPreset,
+} from '@agor/core/config';
 import {
   BranchRepository,
   SessionEnvSelectionRepository,
@@ -106,6 +113,8 @@ export type SessionParams = QueryParams<{
     _include_last_message?: boolean | 'true' | 'false';
     /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
     _agorSqlSessionAccessUserId?: UUID;
+    /** Internal task-start reconciliation of a live preset. */
+    _applyingAgenticToolPreset?: boolean;
   };
 
 /**
@@ -185,6 +194,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private sessionEnvSelectionRepo: SessionEnvSelectionRepository;
   private usersRepo: UsersRepository;
   private branchRepo: BranchRepository;
+  private db: TenantScopeAwareDatabase;
 
   private assertSupportedModelConfig(
     agenticTool: Session['agentic_tool'],
@@ -212,6 +222,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     });
 
     this.sessionRepo = sessionRepo;
+    this.db = db;
     this.app = app;
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
     this.sessionRelationshipRepo = new SessionRelationshipRepository(db);
@@ -221,6 +232,50 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // without going through app.service('users') — matches the convention used
     // by scheduler.ts / gateway.ts / terminals.ts.
     this.usersRepo = new UsersRepository(db);
+  }
+
+  async create(data: Partial<Session>, params?: SessionParams): Promise<Session | Session[]> {
+    const agenticTool = data.agentic_tool ?? 'claude-code';
+    if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
+      throw new BadRequest(`${agenticTool} is disabled for this workspace`);
+    }
+    let createData = data;
+    if (data.agentic_tool_preset_id) {
+      const resolved = await resolveAgenticConfigurationReference(
+        this.db,
+        agenticTool,
+        data.agentic_tool_preset_id,
+        params?.user?.user_id as import('@agor/core/types').UserID | undefined
+      );
+      const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
+      createData = {
+        ...data,
+        agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
+        ...presetConfigurationToSessionPatch(configuration),
+      };
+    } else {
+      await assertInlineAgenticConfigurationAllowed(this.db, agenticTool);
+    }
+    return super.create(createData, params);
+  }
+
+  /** Re-resolve a live preset immediately before a task starts. */
+  async materializeAgenticToolPreset(session: Session, params?: SessionParams): Promise<Session> {
+    if (!session.agentic_tool_preset_id) {
+      await assertInlineAgenticConfigurationAllowed(this.db, session.agentic_tool);
+      return session;
+    }
+    const preset = await resolveAgenticToolPreset(
+      this.db,
+      session.agentic_tool,
+      session.agentic_tool_preset_id
+    );
+    const updated = (await this.patch(
+      session.session_id,
+      presetConfigurationToSessionPatch(preset.configuration),
+      { ...params, _applyingAgenticToolPreset: true }
+    )) as Session;
+    return updated;
   }
 
   protected async fetchData(_query: Query, params?: SessionParams): Promise<Session[]> {
@@ -441,6 +496,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const forkedSession = await this.create(
       {
         agentic_tool: parent.agentic_tool,
+        agentic_tool_preset_id: parent.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
         title: data.prompt.substring(0, 100), // First 100 chars as title
         description: data.prompt,
@@ -468,11 +524,13 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const session = forkedSession as Session;
 
     // Copy MCP servers from parent session to forked session
-    await this.copyMCPServers(
-      parent.session_id as SessionID,
-      session.session_id as SessionID,
-      'fork'
-    );
+    if (!session.agentic_tool_preset_id) {
+      await this.copyMCPServers(
+        parent.session_id as SessionID,
+        session.session_id as SessionID,
+        'fork'
+      );
+    }
 
     // Copy parent's env var *names* to forked session.
     // Names resolve at execution time against the child session's owner's
@@ -539,6 +597,21 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     }
     const parent = await this.get(id, params);
     const targetTool = data.agent || parent.agentic_tool;
+    const hasAtomicOverride =
+      data.permissionMode !== undefined ||
+      data.modelConfig !== undefined ||
+      data.codexSandboxMode !== undefined ||
+      data.codexApprovalPolicy !== undefined ||
+      data.codexNetworkAccess !== undefined ||
+      data.mcpServerIds !== undefined;
+    const inheritedPresetId =
+      targetTool === parent.agentic_tool ? parent.agentic_tool_preset_id : undefined;
+    const presetId = data.presetId ?? inheritedPresetId ?? undefined;
+    if (inheritedPresetId && !data.presetId && hasAtomicOverride) {
+      throw new BadRequest(
+        'Preset-backed child sessions cannot override individual configuration fields'
+      );
+    }
 
     // Resolve identity first so per-tool defaults come from the resolved
     // child owner, not the parent owner. (For internal/provider-less calls,
@@ -614,6 +687,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const spawnedSession = await this.create(
       {
         agentic_tool: targetTool,
+        agentic_tool_preset_id: presetId,
         status: SessionStatus.IDLE,
         title: data.title || data.prompt.substring(0, 100), // Use provided title or first 100 chars
         description: finalPrompt, // Use final prompt with extra instructions if provided
@@ -1045,6 +1119,45 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     data: Partial<Session>,
     params?: SessionParams
   ): Promise<Session | Session[]> {
+    if (data.agentic_tool && !(await isTenantAgenticToolEnabled(data.agentic_tool, this.db))) {
+      throw new BadRequest(`${data.agentic_tool} is disabled for this workspace`);
+    }
+    if (id && !Array.isArray(id) && !params?._applyingAgenticToolPreset) {
+      const current = await this.get(String(id), params);
+      const mutatesAtomicConfig =
+        data.model_config !== undefined ||
+        data.permission_config !== undefined ||
+        data.agentic_tool !== undefined;
+      if (
+        current.agentic_tool_preset_id &&
+        mutatesAtomicConfig &&
+        data.agentic_tool_preset_id === undefined
+      ) {
+        throw new BadRequest(
+          'Preset-backed session configuration can only be changed by selecting a preset'
+        );
+      }
+      if (data.agentic_tool_preset_id) {
+        const tool = data.agentic_tool ?? current.agentic_tool;
+        const resolved = await resolveAgenticConfigurationReference(
+          this.db,
+          tool,
+          data.agentic_tool_preset_id,
+          params?.user?.user_id as import('@agor/core/types').UserID | undefined
+        );
+        const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
+        data = {
+          ...data,
+          agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
+          ...presetConfigurationToSessionPatch(configuration),
+        };
+      } else if (data.agentic_tool_preset_id === null && current.agentic_tool_preset_id) {
+        await assertInlineAgenticConfigurationAllowed(
+          this.db,
+          data.agentic_tool ?? current.agentic_tool
+        );
+      }
+    }
     const result = (await super.patch(id, data, params)) as Session | Session[];
 
     const callbackEnabled = data.callback_config?.enabled;

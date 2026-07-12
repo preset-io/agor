@@ -64,11 +64,6 @@ import { registerServices } from './register-services.js';
 import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
-import {
-  initializeAnthropicApiKey,
-  initializeAnthropicAuthToken,
-  initializeAnthropicBaseUrl,
-} from './setup/credentials.js';
 import { initializeDatabase } from './setup/database.js';
 import { warnDeprecatedAnonymousConfig } from './setup/first-run-admin.js';
 import { securityHeaders } from './setup/security-headers.js';
@@ -289,10 +284,6 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   // when execution.executor_command_template is unset (no behavior change
   // for existing deployments).
   configureExecutor(config.execution);
-
-  initializeAnthropicApiKey(config, process.env.ANTHROPIC_API_KEY);
-  initializeAnthropicAuthToken(config, process.env.ANTHROPIC_AUTH_TOKEN);
-  initializeAnthropicBaseUrl(config, process.env.ANTHROPIC_BASE_URL);
 
   // --------------------------------------------------------------------------
   // Create Feathers app + Express middleware

@@ -39,16 +39,6 @@ export default class ConfigIndex extends Command {
           `  color output:  ${chalk.gray(config.display.colorOutput ? 'enabled' : 'disabled')}`
         );
       }
-      // Credentials (only show keys that are set)
-      if (config.credentials && Object.keys(config.credentials).length > 0) {
-        this.log(chalk.bold('\nCredentials:'));
-        for (const [key, value] of Object.entries(config.credentials)) {
-          if (value) {
-            this.log(`  ${key.padEnd(20)}: ${chalk.gray(`***${value.slice(-4)}`)}`);
-          }
-        }
-      }
-
       // Database Settings
       // Use the same centralized database URL resolution as the daemon
       const databaseUrl = getDatabaseUrl();
@@ -102,11 +92,6 @@ export default class ConfigIndex extends Command {
       this.log('');
       this.log(chalk.cyan('  Display:'));
       this.log('    display.tableStyle, display.colorOutput');
-      this.log('');
-      this.log(chalk.cyan('  Credentials:'));
-      this.log('    credentials.ANTHROPIC_API_KEY');
-      this.log('    credentials.OPENAI_API_KEY');
-      this.log('    credentials.GEMINI_API_KEY');
       this.log('');
       this.log(chalk.cyan('  Daemon:'));
       this.log('    daemon.port, daemon.host');

@@ -2,6 +2,7 @@
 
 export type { PermissionDecision, PermissionRequest } from '../permissions';
 export * from './agentic-tool';
+export * from './agentic-tool-preset';
 export * from './artifact';
 export * from './artifact-grants';
 export * from './board';
@@ -26,6 +27,7 @@ export * from './session';
 export * from './task';
 export * from './template';
 export * from './tenant';
+export * from './tenant-agentic-tool';
 export * from './ui';
 export * from './user';
 export * from './utils';

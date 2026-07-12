@@ -75,7 +75,10 @@ import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
-import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import {
+  AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
+} from '../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
@@ -683,6 +686,7 @@ const SecretStatusTag: React.FC<{ stored: boolean }> = ({ stored }) =>
  * {@link requiredBotScopes}, so the user never adds a scope by hand.
  */
 const SlackSetupWizard: React.FC<{
+  client: AgorClient | null;
   form: FormInstance;
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
@@ -694,6 +698,7 @@ const SlackSetupWizard: React.FC<{
   testLoading: boolean;
   onTest: () => void;
 }> = ({
+  client,
   form,
   userById,
   mcpServerById,
@@ -1144,10 +1149,11 @@ const SlackSetupWizard: React.FC<{
                     showHelperText={false}
                     showComparisonLink={false}
                   />
-                  <AgenticToolConfigForm
-                    agenticTool={selectedAgent as AgenticToolName}
+                  <AgenticToolConfigurationPicker
+                    tool={selectedAgent as AgenticToolName}
                     mcpServerById={mcpServerById}
                     showHelpText={false}
+                    client={client}
                   />
                 </Space>
               ),
@@ -1185,6 +1191,7 @@ const SlackSetupWizard: React.FC<{
 
 /** Shared form fields for create and edit modals */
 const ChannelFormFields: React.FC<{
+  client: AgorClient | null;
   form: FormInstance;
   mode: 'create' | 'edit';
   channelType: ChannelType;
@@ -1205,6 +1212,7 @@ const ChannelFormFields: React.FC<{
   slackTestLoading: boolean;
   onSlackTest: () => void;
 }> = ({
+  client,
   form,
   mode,
   channelType,
@@ -1746,10 +1754,11 @@ const ChannelFormFields: React.FC<{
                           showHelperText={false}
                           showComparisonLink={false}
                         />
-                        <AgenticToolConfigForm
-                          agenticTool={selectedAgent as AgenticToolName}
+                        <AgenticToolConfigurationPicker
+                          tool={selectedAgent as AgenticToolName}
                           mcpServerById={mcpServerById}
                           showHelpText={false}
+                          client={client}
                         />
                       </Space>
                     ),
@@ -1970,10 +1979,11 @@ const ChannelFormFields: React.FC<{
                       showHelperText={false}
                       showComparisonLink={false}
                     />
-                    <AgenticToolConfigForm
-                      agenticTool={selectedAgent as AgenticToolName}
+                    <AgenticToolConfigurationPicker
+                      tool={selectedAgent as AgenticToolName}
                       mcpServerById={mcpServerById}
                       showHelpText={false}
+                      client={client}
                     />
                   </Space>
                 ),
@@ -2011,6 +2021,7 @@ const ChannelFormFields: React.FC<{
         {/* ── Slack guided setup wizard (create steps 1–3) ── */}
         {channelType === 'slack' && mode === 'create' && createStep >= 1 && (
           <SlackSetupWizard
+            client={client}
             form={form}
             userById={userById}
             mcpServerById={mcpServerById}
@@ -2418,10 +2429,11 @@ const ChannelFormFields: React.FC<{
                       showHelperText={false}
                       showComparisonLink={false}
                     />
-                    <AgenticToolConfigForm
-                      agenticTool={selectedAgent as AgenticToolName}
+                    <AgenticToolConfigurationPicker
+                      tool={selectedAgent as AgenticToolName}
                       mcpServerById={mcpServerById}
                       showHelpText={false}
+                      client={client}
                     />
                   </Space>
                 ),
@@ -2702,8 +2714,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // The initial edit-form hydration also flows through selectedAgent/editModalOpen,
   // so skip exactly that one run (consuming the one-shot ref set by handleEdit) —
   // otherwise applying the user's *global* defaults would stomp the channel's own
-  // saved config (e.g. silently wiping mcpServerIds that were just hydrated from
-  // channel.agentic_config). Every subsequent agent change — including switching
+  // saved config (including the independently hydrated MCP selection). Every subsequent
+  // agent change — including switching
   // back to the channel's original agent — legitimately re-applies that agent's
   // defaults, so the form never holds a silent mix of stale fields.
   useEffect(() => {
@@ -2717,7 +2729,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       activeForm.setFieldsValue({
         permissionMode: agentDefaults.permissionMode,
         modelConfig: agentDefaults.modelConfig,
-        mcpServerIds: agentDefaults.mcpServerIds,
         codexSandboxMode: agentDefaults.codexSandboxMode,
         codexApprovalPolicy: agentDefaults.codexApprovalPolicy,
         codexNetworkAccess: agentDefaults.codexNetworkAccess,
@@ -2806,23 +2817,29 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
 
     // Build agentic config from form values
+    const presetId =
+      values.agenticToolPresetId && values.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
+        ? (values.agenticToolPresetId as GatewayAgenticConfig['presetId'])
+        : undefined;
     const agenticConfig: GatewayAgenticConfig = {
       agent: (agent || 'claude-code') as AgenticToolName,
-      ...(values.permissionMode ? { permissionMode: values.permissionMode as PermissionMode } : {}),
-      ...(values.modelConfig
+      ...(presetId ? { presetId } : {}),
+      ...(!presetId && values.permissionMode
+        ? { permissionMode: values.permissionMode as PermissionMode }
+        : {}),
+      ...(!presetId && values.modelConfig
         ? { modelConfig: values.modelConfig as GatewayAgenticConfig['modelConfig'] }
         : {}),
-      ...(values.mcpServerIds ? { mcpServerIds: values.mcpServerIds as string[] } : {}),
-      ...(values.codexSandboxMode
+      ...(!presetId && values.codexSandboxMode
         ? { codexSandboxMode: values.codexSandboxMode as GatewayAgenticConfig['codexSandboxMode'] }
         : {}),
-      ...(values.codexApprovalPolicy
+      ...(!presetId && values.codexApprovalPolicy
         ? {
             codexApprovalPolicy:
               values.codexApprovalPolicy as GatewayAgenticConfig['codexApprovalPolicy'],
           }
         : {}),
-      ...(values.codexNetworkAccess !== undefined
+      ...(!presetId && values.codexNetworkAccess !== undefined
         ? { codexNetworkAccess: values.codexNetworkAccess as boolean }
         : {}),
       // Include env vars — filter out empty-key entries only.
@@ -2845,6 +2862,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       agor_user_id: values.agor_user_id as UUID,
       config,
       agentic_config: agenticConfig,
+      mcp_server_ids: (values.mcpServerIds as string[] | undefined) ?? [],
       enabled: (values.enabled as boolean) ?? true,
     };
   };
@@ -2942,10 +2960,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       // Agentic config fields
       permissionMode: channel.agentic_config?.permissionMode,
       modelConfig: channel.agentic_config?.modelConfig,
-      mcpServerIds: channel.agentic_config?.mcpServerIds,
+      mcpServerIds: channel.mcp_server_ids ?? [],
       codexSandboxMode: channel.agentic_config?.codexSandboxMode,
       codexApprovalPolicy: channel.agentic_config?.codexApprovalPolicy,
       codexNetworkAccess: channel.agentic_config?.codexNetworkAccess,
+      agenticToolPresetId: channel.agentic_config?.presetId ?? INLINE_AGENTIC_CONFIGURATION,
       // Env vars: values are masked by the API, so on edit we show the
       // existing keys with empty values — the user re-enters values to update.
       envVars: channel.agentic_config?.envVars ?? [],
@@ -3166,7 +3185,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 360 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
+              setCreateModalOpen(true);
+            }}
+          >
             Add Channel
           </Button>
         </Space>
@@ -3255,6 +3281,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           style={{ marginTop: 16 }}
         >
           <ChannelFormFields
+            client={client}
             form={createForm}
             mode="create"
             channelType={channelType}
@@ -3292,6 +3319,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       >
         <Form form={editForm} layout="vertical" preserve style={{ marginTop: 16 }}>
           <ChannelFormFields
+            client={client}
             form={editForm}
             mode="edit"
             channelType={channelType}
