@@ -182,12 +182,23 @@ describe('ingestInboundAttachments', () => {
 
   it('rejects redirects to non-allowlisted hosts and never sends the token there', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let bodyCancelled = false;
     const fetchImpl = vi.fn(
       async () =>
-        new Response(null, {
-          status: 302,
-          headers: { location: 'https://attacker.example/exfil.png' },
-        })
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([1]));
+            },
+            cancel() {
+              bodyCancelled = true;
+            },
+          }),
+          {
+            status: 302,
+            headers: { location: 'https://attacker.example/exfil.png' },
+          }
+        )
     );
 
     const result = await ingestInboundAttachments({
@@ -204,6 +215,7 @@ describe('ingestInboundAttachments', () => {
     for (const [calledUrl] of fetchImpl.mock.calls) {
       expect(isAllowedSlackFileUrl(calledUrl as string)).toBe(true);
     }
+    expect(bodyCancelled).toBe(true);
   });
 
   it('follows redirects between allowlisted Slack hosts with the token', async () => {
@@ -373,6 +385,57 @@ describe('ingestInboundAttachments', () => {
     });
 
     expect(result).toEqual({ paths: [], failed: 1 });
+  });
+
+  it('cancels response bodies rejected from headers', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let cancellations = 0;
+    const cases: Array<{
+      status: number;
+      headers: Record<string, string>;
+      maxTotalBytes?: number;
+    }> = [
+      { status: 500, headers: { 'content-type': 'image/png' } },
+      { status: 200, headers: { 'content-type': 'text/html' } },
+      {
+        status: 200,
+        headers: {
+          'content-type': 'image/png',
+          'content-length': String(MAX_UPLOAD_FILE_SIZE + 1),
+        },
+      },
+      {
+        status: 200,
+        headers: { 'content-type': 'image/png', 'content-length': '2' },
+        maxTotalBytes: 1,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]));
+          },
+          cancel() {
+            cancellations++;
+          },
+        }),
+        { status: testCase.status, headers: testCase.headers }
+      );
+      const result = await ingestInboundAttachments({
+        files: [makeFile()],
+        botToken: 'xoxb-test',
+        fetchImpl: vi.fn(async () => response) as unknown as typeof fetch,
+        uploadDir,
+        maxTotalBytes: testCase.maxTotalBytes,
+      });
+
+      expect(result).toEqual({ paths: [], failed: 1 });
+    }
+
+    expect(cancellations).toBe(cases.length);
+    expect(await fs.readdir(uploadDir)).toEqual([]);
   });
 
   it('continues past failures and still stores the remaining images', async () => {

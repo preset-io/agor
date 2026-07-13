@@ -42,6 +42,10 @@ describe('Knowledge path and URI helpers', () => {
       namespace_slug: 'global',
       path: 'guides/intro.md',
     });
+    expect(parseKnowledgeUri('  AGOR://KB/Team/Runbook.md  ')).toEqual({
+      namespace_slug: 'Team',
+      path: 'Runbook.md',
+    });
     expect(validateKnowledgePath('../bad.md')).toContain('must not contain');
     expect(validateKnowledgePath('bad:name.md')).toContain('cannot contain');
     expect(validateKnowledgePath('CON/readme.md')).toContain('reserved');

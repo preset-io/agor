@@ -305,11 +305,16 @@ export function buildKnowledgeUri(namespaceSlug: string, path: string): string {
   return `${KNOWLEDGE_URI_PREFIX}${namespaceSlug}/${normalizeKnowledgePath(path)}`;
 }
 
+function startsWithIgnoreCase(value: string, prefix: string): boolean {
+  return value.slice(0, prefix.length).toLowerCase() === prefix.toLowerCase();
+}
+
 export function parseKnowledgeUri(
   uri?: string | null
 ): { namespace_slug: string; path: string } | null {
-  if (!uri?.startsWith(KNOWLEDGE_URI_PREFIX)) return null;
-  const rest = uri.slice(KNOWLEDGE_URI_PREFIX.length);
+  const trimmed = uri?.trim();
+  if (!trimmed || !startsWithIgnoreCase(trimmed, KNOWLEDGE_URI_PREFIX)) return null;
+  const rest = trimmed.slice(KNOWLEDGE_URI_PREFIX.length);
   const slash = rest.indexOf('/');
   if (slash <= 0 || slash === rest.length - 1) return null;
   return {
@@ -338,10 +343,6 @@ export type KnowledgeLinkRef =
 // Path segments may be percent-encoded.
 const KNOWLEDGE_LINK_RE =
   /(?:agor:\/\/kb\/|kb:\/\/|\/(?:kb|knowledge)\/)([A-Za-z0-9._~%-]+)\/([^\s)"'<>]+)/gi;
-
-function startsWithIgnoreCase(value: string, prefix: string): boolean {
-  return value.slice(0, prefix.length).toLowerCase() === prefix;
-}
 
 const safeDecodeSegment = (segment: string): string => {
   try {

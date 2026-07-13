@@ -32,6 +32,16 @@ export interface AttachmentIngestResult {
 }
 
 const MAX_REDIRECT_HOPS = 3;
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
+async function rejectResponse(response: Response, message: string): Promise<never> {
+  await cancelResponseBody(response);
+  throw new Error(message);
+}
+
 /**
  * Whether a platform file URL may be downloaded with the channel's bot token.
  * Slack serves `url_private_download` from files.slack.com; anything outside
@@ -95,6 +105,7 @@ async function fetchFromAllowedHosts(
     const response = await fetchImpl(url, { headers, redirect: 'manual' });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
+      await cancelResponseBody(response);
       if (!location) {
         throw new Error(`redirect (HTTP ${response.status}) without Location header`);
       }
@@ -193,7 +204,7 @@ export async function ingestInboundAttachments(args: {
         fetchImpl
       );
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        await rejectResponse(response, `HTTP ${response.status}`);
       }
       // Slack answers with an HTML login/error page (status 200) when the
       // token lacks files:read or cannot see the file — only accept response
@@ -201,16 +212,20 @@ export async function ingestInboundAttachments(args: {
       // text/html and script-bearing types like image/svg+xml).
       const contentType = response.headers.get('content-type') ?? '';
       if (!isAllowedIngestMime(contentType)) {
-        throw new Error(
+        await rejectResponse(
+          response,
           `unexpected content-type ${contentType.split(';')[0].trim().toLowerCase() || 'unknown'}`
         );
       }
       const declaredLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
       if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_FILE_SIZE) {
-        throw new Error(`declared size ${declaredLength} exceeds per-file limit`);
+        await rejectResponse(response, `declared size ${declaredLength} exceeds per-file limit`);
       }
       if (Number.isFinite(declaredLength) && declaredLength > remainingBytes) {
-        throw new Error(`declared size ${declaredLength} exceeds remaining message limit`);
+        await rejectResponse(
+          response,
+          `declared size ${declaredLength} exceeds remaining message limit`
+        );
       }
       const body = await readBodyWithLimit(
         response,
