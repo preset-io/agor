@@ -37,8 +37,21 @@ export function queueTenantParams(
   source: TenantContext['source'] = 'explicit'
 ): QueueTenantParams {
   const currentTenant = (params as QueueTenantParams | undefined)?.tenant;
+  // Queue drains are new daemon-owned operations, not continuations of the
+  // request that completed the previous task. In particular, executor JWTs
+  // are task-scoped: forwarding the completed task's transport/auth params
+  // makes secret resolution for the next queued task fail with a task-scope
+  // mismatch. Preserve the resolved user and other internal context, but
+  // deliberately cross an authentication boundary here.
+  const {
+    authentication: _authentication,
+    connection: _connection,
+    provider: _provider,
+    headers: _headers,
+    ...internalParams
+  } = params ?? {};
   return {
-    ...(params ?? {}),
+    ...internalParams,
     tenant: {
       ...currentTenant,
       tenant_id: tenantId as TenantID,

@@ -19,6 +19,42 @@ function makePgDb() {
 }
 
 describe('session queue tenant scope', () => {
+  it('does not carry task-scoped transport authentication into a queue drain', async () => {
+    const { db } = makePgDb();
+    const user = { user_id: 'user-1' };
+
+    await runWithSessionQueueTenantScope(
+      {
+        db: db as never,
+        config: {
+          database: { dialect: 'postgresql' },
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        },
+        sessionId: 'session-1' as SessionID,
+        params: {
+          provider: 'socketio',
+          authentication: {
+            strategy: 'jwt',
+            accessToken: 'completed-task-executor-token',
+          },
+          connection: { id: 'executor-socket' },
+          headers: { authorization: 'Bearer completed-task-executor-token' },
+          user,
+          tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        } as never,
+        label: 'test authenticated drain',
+      },
+      async (params) => {
+        expect(params).not.toHaveProperty('provider');
+        expect(params).not.toHaveProperty('authentication');
+        expect(params).not.toHaveProperty('connection');
+        expect(params).not.toHaveProperty('headers');
+        expect(params.user).toBe(user);
+        expect(params.tenant?.tenant_id).toBe('tenant-a');
+      }
+    );
+  });
+
   it('uses params tenant before running queue work', async () => {
     const { db } = makePgDb();
     const seen: string[] = [];
