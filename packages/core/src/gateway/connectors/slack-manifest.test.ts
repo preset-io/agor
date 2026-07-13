@@ -5,6 +5,7 @@ import {
   requiredBotEvents,
   requiredBotScopes,
   type SlackWizardOptions,
+  slackAppManifestUrl,
 } from './slack-manifest';
 
 /**
@@ -471,5 +472,19 @@ describe('buildSlackManifest', () => {
         },
       }
     `);
+  });
+});
+
+describe('slackAppManifestUrl', () => {
+  it('deep-links to the app manifest editor when the app id is known', () => {
+    expect(slackAppManifestUrl('A0123ABC')).toBe(
+      'https://api.slack.com/apps/A0123ABC/app-manifest'
+    );
+  });
+
+  it('falls back to the generic app list when the app id is unresolved', () => {
+    expect(slackAppManifestUrl(null)).toBe('https://api.slack.com/apps');
+    expect(slackAppManifestUrl(undefined)).toBe('https://api.slack.com/apps');
+    expect(slackAppManifestUrl('')).toBe('https://api.slack.com/apps');
   });
 });

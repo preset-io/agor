@@ -59,6 +59,15 @@ export const SLACK_AGENT_TOOL_SCOPES: Record<SlackAgentToolCapability, string[]>
   file_download: ['files:read'],
 };
 
+/**
+ * URL of a Slack app's manifest editor when the app id is known, falling back
+ * to the generic app list when it isn't (e.g. the id could not be resolved
+ * from the stored bot token).
+ */
+export function slackAppManifestUrl(appId?: string | null): string {
+  return appId ? `https://api.slack.com/apps/${appId}/app-manifest` : 'https://api.slack.com/apps';
+}
+
 export interface SlackBotEventSubscriptions {
   bot_events: string[];
 }

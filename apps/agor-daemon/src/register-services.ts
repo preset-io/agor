@@ -87,6 +87,7 @@ import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
+import { createGatewayChannelsAppInfoService } from './services/gateway-channels-app-info.js';
 import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
@@ -487,6 +488,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.service('gateway-channels/test').hooks({
       before: {
         create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'test gateway channels')],
+      },
+    });
+
+    // Sub-path service resolving the Slack app id behind a channel's stored
+    // bot token (auth.test → bots.info). Same gating rationale as /test above:
+    // reads decrypted tokens via the repository, returns no token values.
+    app.use('/gateway-channels/app-info', createGatewayChannelsAppInfoService(db));
+    app.service('gateway-channels/app-info').hooks({
+      before: {
+        create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'read gateway app info')],
       },
     });
 
