@@ -144,6 +144,22 @@ export type ProcessedEvent =
       isUsingOverage?: boolean;
       agentSessionId?: string;
     }
+  /**
+   * Synthesized (not produced by the SDK) when a rate-limited turn is about to
+   * be automatically resumed after a wait. Surfaced as a system message.
+   */
+  | {
+      type: 'rate_limit_retry';
+      /** Wall-clock time the resume is scheduled for. */
+      retryAtMs: number;
+      attempt: number;
+      maxRetries: number;
+    }
+  /** Synthesized when the auto-resume cap is hit and the turn falls back to manual continue. */
+  | {
+      type: 'rate_limit_retry_exhausted';
+      attempts: number;
+    }
   | {
       type: 'sdk_event';
       sdkType: string;

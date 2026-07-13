@@ -57,6 +57,14 @@ import {
 } from './message-builder.js';
 import type { ProcessedEvent } from './message-processor.js';
 import { ClaudePromptService } from './prompt-service.js';
+import {
+  computeRateLimitRetryDelayMs,
+  MAX_RATE_LIMIT_RETRIES,
+  RATE_LIMIT_RESUME_PROMPT,
+  RATE_LIMIT_TERMINAL_REASON,
+  shouldAutoResumeAfterRateLimit,
+  sleepUnlessAborted,
+} from './rate-limit-retry.js';
 
 const DEBUG_CLAUDE_STREAMING =
   process.env.AGOR_DEBUG_CLAUDE_STREAMING === '1' ||
@@ -80,7 +88,7 @@ function formatRateLimitText(event: Extract<ProcessedEvent, { type: 'rate_limit'
   const resetsAtStr = event.resetsAt ? new Date(event.resetsAt * 1000).toLocaleString() : undefined;
 
   if (event.status === 'rejected') {
-    return `Rate limited (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Waiting for limit to reset...`;
+    return `Rate limited (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}. ` : ''}Auto-retrying when the limit resets…`;
   }
   if (event.status === 'allowed_warning') {
     return `Approaching rate limit (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Requests may be delayed.`;
@@ -237,6 +245,94 @@ export class ClaudeTool implements ITool {
   }
 
   /**
+   * Wrap {@link ClaudePromptService.promptSessionStreaming} so a turn cut short
+   * by a hard rate limit auto-waits and resumes instead of going idle.
+   *
+   * A hard limit ends the turn with `result.terminal_reason === 'blocking_limit'`
+   * (and a `rejected` rate_limit event); the SDK itself does not wait. On that
+   * signal we sleep until the limit resets (or back off when the reset time is
+   * unknown), then re-issue a continue prompt — up to {@link MAX_RATE_LIMIT_RETRIES}
+   * times, after which we fall back to today's manual-continue behavior. A user
+   * stop / session cancel interrupts the wait cleanly via `abortController`.
+   *
+   * The synthetic `rate_limit_retry` / `rate_limit_retry_exhausted` events are
+   * surfaced as system messages by the caller.
+   */
+  private async *promptWithRateLimitResume(
+    sessionId: SessionID,
+    prompt: string,
+    taskId: TaskID | undefined,
+    permissionMode: ClaudeSDKPermissionMode | undefined,
+    abortController?: AbortController
+  ): AsyncGenerator<ProcessedEvent> {
+    let currentPrompt = prompt;
+    let attempt = 0;
+
+    while (true) {
+      let sawRejectedRateLimit = false;
+      let rejectedResetsAt: number | undefined;
+      let terminalReason: string | undefined;
+
+      for await (const event of this.promptService!.promptSessionStreaming(
+        sessionId,
+        currentPrompt,
+        taskId,
+        permissionMode,
+        undefined, // chunkCallback (unused)
+        abortController
+      )) {
+        if (event.type === 'rate_limit' && event.status === 'rejected') {
+          sawRejectedRateLimit = true;
+          rejectedResetsAt = event.resetsAt;
+        }
+        if (event.type === 'result') {
+          terminalReason = (event.raw_sdk_message as { terminal_reason?: string })?.terminal_reason;
+        }
+        yield event;
+      }
+
+      if (
+        abortController?.signal.aborted ||
+        !shouldAutoResumeAfterRateLimit({ terminalReason, sawRejectedRateLimit, attempt })
+      ) {
+        // Only announce exhaustion when the turn actually ended on a rate limit.
+        const endedOnRateLimit =
+          terminalReason === RATE_LIMIT_TERMINAL_REASON || sawRejectedRateLimit;
+        if (
+          !abortController?.signal.aborted &&
+          endedOnRateLimit &&
+          terminalReason !== 'completed' &&
+          attempt >= MAX_RATE_LIMIT_RETRIES
+        ) {
+          yield { type: 'rate_limit_retry_exhausted', attempts: attempt };
+        }
+        return;
+      }
+
+      const delayMs = computeRateLimitRetryDelayMs({
+        resetsAt: rejectedResetsAt,
+        attempt,
+        nowMs: Date.now(),
+      });
+      yield {
+        type: 'rate_limit_retry',
+        retryAtMs: Date.now() + delayMs,
+        attempt: attempt + 1,
+        maxRetries: MAX_RATE_LIMIT_RETRIES,
+      };
+
+      const { aborted } = await sleepUnlessAborted(delayMs, abortController?.signal);
+      if (aborted) {
+        yield { type: 'stopped' };
+        return;
+      }
+
+      attempt += 1;
+      currentPrompt = RATE_LIMIT_RESUME_PROMPT;
+    }
+  }
+
+  /**
    * Execute a prompt against a session WITH real-time streaming
    *
    * Creates user message, streams response chunks from Claude, then creates complete assistant messages.
@@ -354,12 +450,11 @@ export class ClaudeTool implements ITool {
       ? (mapPermissionMode(permissionMode, 'claude-code') as ClaudeSDKPermissionMode)
       : undefined;
 
-    for await (const event of this.promptService.promptSessionStreaming(
+    for await (const event of this.promptWithRateLimitResume(
       sessionId,
       prompt,
       taskId,
       mappedPermissionMode,
-      undefined, // chunkCallback (unused)
       abortController
     )) {
       // Detect if execution was stopped early
@@ -611,6 +706,55 @@ export class ClaudeTool implements ITool {
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamEnd(rateLimitMessageId);
           }
+        });
+      }
+
+      // Auto-resume is about to wait then re-issue the turn — surface the plan
+      // and reset any stream left dangling by the throttled turn so the resumed
+      // turn's text lands on a fresh message.
+      if (event.type === 'rate_limit_retry') {
+        if (currentTextMessageId && streamingCallbacks) {
+          await streamingCallbacks.onStreamEnd(currentTextMessageId);
+        }
+        currentTextMessageId = null;
+        currentThinkingMessageId = null;
+        firstTokenTime = null;
+        firstActivityTime = null;
+        apiWaitMessageSent = false;
+        streamStartTime = Date.now();
+
+        const retryAt = new Date(event.retryAtMs).toLocaleTimeString();
+        const text = `Rate limited — auto-retrying at ${retryAt} (attempt ${event.attempt} of ${event.maxRetries})…`;
+        console.log(`⏳ ${text}`);
+        await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const retryMessageId = generateId() as MessageID;
+          await createSystemMessage(
+            sessionId,
+            retryMessageId,
+            [{ type: 'rate_limit', text, status: 'rejected', retryAt: event.retryAtMs }],
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
+        });
+      }
+
+      // Auto-resume gave up after the cap — tell the user how to continue.
+      if (event.type === 'rate_limit_retry_exhausted') {
+        const text = `Rate limit auto-retry gave up after ${event.attempts} attempts. Send a message to continue.`;
+        console.warn(`🚫 ${text}`);
+        await withFeathersSessionGuard(sessionId, this.sessionsRepo, async () => {
+          const exhaustedMessageId = generateId() as MessageID;
+          await createSystemMessage(
+            sessionId,
+            exhaustedMessageId,
+            [{ type: 'rate_limit', text, status: 'rejected' }],
+            taskId,
+            nextIndex++,
+            resolvedModel,
+            this.messagesService!
+          );
         });
       }
 
