@@ -1,5 +1,5 @@
 import type { Link, UUID } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { normalizeRefTargetKey, normalizeUrlTargetKey } from '../../types/link';
 import { insert } from '../database-wrapper';
@@ -237,6 +237,45 @@ describe('LinksRepository', () => {
     expect(created.revision).toBe(1);
     expect(first.revision).toBe(2);
     expect(second.revision).toBe(3);
+  });
+
+  dbTest('retries concurrent disjoint patches without losing either update', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const messageId = (await seedMessage(db, session.session_id)).message_id;
+    const created = await repo.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/concurrent-patches',
+    });
+
+    const findById = repo.findById.bind(repo);
+    let initialReads = 0;
+    let releaseInitialReads: () => void = () => {};
+    const bothInitialReadsComplete = new Promise<void>((resolve) => {
+      releaseInitialReads = resolve;
+    });
+    vi.spyOn(repo, 'findById').mockImplementation(async (id) => {
+      const link = await findById(id);
+      initialReads += 1;
+      if (initialReads === 2) releaseInitialReads();
+      if (initialReads <= 2) await bothInitialReadsComplete;
+      return link;
+    });
+
+    await Promise.all([
+      repo.update(created.link_id, { is_pinned: true }),
+      repo.update(created.link_id, { source_message_id: messageId }),
+    ]);
+
+    const updated = await findById(created.link_id);
+    expect(updated).toMatchObject({
+      is_pinned: true,
+      source_message_id: messageId,
+      revision: 3,
+    });
   });
 
   dbTest(

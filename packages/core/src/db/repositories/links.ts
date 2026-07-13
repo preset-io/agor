@@ -102,6 +102,8 @@ function preserveExistingSourceMessageOnDedupe(
   return { ...data, source_message_id: existing.source_message_id };
 }
 
+const MAX_LINK_UPDATE_ATTEMPTS = 5;
+
 function isDefinedCondition<T>(condition: T | undefined): condition is T {
   return condition !== undefined;
 }
@@ -395,60 +397,68 @@ export class LinksRepository {
 
   async update(id: string, data: LinkPatch): Promise<Link> {
     this.validatePatch(data);
-    const existing = await this.findById(id);
-    if (!existing) throw new RepositoryError(`Link ${id} not found`);
+    for (let attempt = 0; attempt < MAX_LINK_UPDATE_ATTEMPTS; attempt += 1) {
+      const existing = await this.findById(id);
+      if (!existing) throw new RepositoryError(`Link ${id} not found`);
 
-    const sourceMessageId = patchValue(data, existing.source_message_id, 'source_message_id');
-    const url = patchValue(data, existing.url, 'url');
-    const refUri = patchValue(data, existing.ref_uri, 'ref_uri');
-    const filePath = patchValue(data, existing.file_path, 'file_path');
-    const targetObjectType = patchValue(data, existing.target_object_type, 'target_object_type');
-    const targetObjectId = patchValue(data, existing.target_object_id, 'target_object_id');
-    const targetCount = countLinkTargets({ url, ref_uri: refUri, file_path: filePath });
-    if (targetCount !== 1) {
-      throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
-    }
+      const sourceMessageId = patchValue(data, existing.source_message_id, 'source_message_id');
+      const url = patchValue(data, existing.url, 'url');
+      const refUri = patchValue(data, existing.ref_uri, 'ref_uri');
+      const filePath = patchValue(data, existing.file_path, 'file_path');
+      const targetObjectType = patchValue(data, existing.target_object_type, 'target_object_type');
+      const targetObjectId = patchValue(data, existing.target_object_id, 'target_object_id');
+      const targetCount = countLinkTargets({ url, ref_uri: refUri, file_path: filePath });
+      if (targetCount !== 1) {
+        throw new RepositoryError('Link requires exactly one target: url, ref_uri, or file_path');
+      }
 
-    const nextKind = data.kind ?? existing.kind;
-    const nextSource = data.source ?? existing.source;
-    const next = {
-      source_message_id: sourceMessageId,
-      kind: nextKind,
-      source: nextSource,
-      url,
-      ref_uri: refUri,
-      file_path: filePath,
-      target_object_type: targetObjectType,
-      target_object_id: targetObjectId,
-      target_key: normalizeTargetKey({
+      const nextKind = data.kind ?? existing.kind;
+      const nextSource = data.source ?? existing.source;
+      const next = {
+        source_message_id: sourceMessageId,
+        kind: nextKind,
+        source: nextSource,
         url,
         ref_uri: refUri,
         file_path: filePath,
         target_object_type: targetObjectType,
         target_object_id: targetObjectId,
-      }),
-      is_pinned: patchValue(data, existing.is_pinned, 'is_pinned') ?? false,
-      title: patchValue(data, existing.title, 'title'),
-      mime_type: patchValue(data, existing.mime_type, 'mime_type'),
-      metadata: patchValue(data, existing.metadata, 'metadata'),
-      updated_at: new Date(),
-    } satisfies Partial<LinkInsert>;
-    validateLinkSemantics({
-      kind: nextKind,
-      source: nextSource,
-      url: next.url,
-      ref_uri: next.ref_uri,
-      file_path: next.file_path,
-      target_object_type: next.target_object_type,
-      target_object_id: next.target_object_id,
-    });
+        target_key: normalizeTargetKey({
+          url,
+          ref_uri: refUri,
+          file_path: filePath,
+          target_object_type: targetObjectType,
+          target_object_id: targetObjectId,
+        }),
+        is_pinned: patchValue(data, existing.is_pinned, 'is_pinned') ?? false,
+        title: patchValue(data, existing.title, 'title'),
+        mime_type: patchValue(data, existing.mime_type, 'mime_type'),
+        metadata: patchValue(data, existing.metadata, 'metadata'),
+        updated_at: new Date(),
+      } satisfies Partial<LinkInsert>;
+      validateLinkSemantics({
+        kind: nextKind,
+        source: nextSource,
+        url: next.url,
+        ref_uri: next.ref_uri,
+        file_path: next.file_path,
+        target_object_type: next.target_object_type,
+        target_object_id: next.target_object_id,
+      });
 
-    const updated = await update(this.db, links)
-      .set({ ...next, revision: sql`${links.revision} + 1` })
-      .where(eq(links.link_id, id))
-      .returning()
-      .one();
-    return this.rowToLink(updated as LinkRow);
+      // Compare-and-swap the full validated row. If another patch won after
+      // our read, rebuild from its result so disjoint fields are not restored
+      // from a stale snapshot and cross-field semantics are revalidated.
+      const expectedRevision = existing.revision ?? 1;
+      const updated = (await update(this.db, links)
+        .set({ ...next, revision: sql`${links.revision} + 1` })
+        .where(and(eq(links.link_id, id), eq(links.revision, expectedRevision)))
+        .returning()
+        .one()) as LinkRow | undefined;
+      if (updated) return this.rowToLink(updated);
+    }
+
+    throw new RepositoryError(`Link ${id} changed concurrently; retry update`);
   }
 
   async delete(id: string): Promise<void> {
