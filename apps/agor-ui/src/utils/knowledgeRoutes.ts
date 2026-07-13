@@ -1,5 +1,6 @@
 const KNOWLEDGE_URI_PREFIX = 'agor://kb/';
 const KNOWLEDGE_DOCUMENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const KNOWLEDGE_DOCUMENT_ID_ROUTE_NAMESPACE = '_document';
 
 export const safeDecodeURIComponent = (value: string) => {
   try {
@@ -16,7 +17,7 @@ export const knowledgeDocumentIdFromRoute = (
   namespaceSlug?: string | null,
   documentPath?: string | null
 ): string | null =>
-  namespaceSlug?.toLowerCase() === 'document' &&
+  namespaceSlug?.toLowerCase() === KNOWLEDGE_DOCUMENT_ID_ROUTE_NAMESPACE &&
   documentPath &&
   KNOWLEDGE_DOCUMENT_ID_RE.test(documentPath)
     ? documentPath.toLowerCase()

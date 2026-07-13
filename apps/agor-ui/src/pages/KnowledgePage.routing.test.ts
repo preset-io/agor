@@ -36,7 +36,8 @@ describe('KnowledgePage routing state helpers', () => {
   it('distinguishes canonical document IDs from document namespace paths', () => {
     const id = '0190a000-0000-7000-8000-0000000000aa';
 
-    expect(knowledgeDocumentIdFromRoute('DOCUMENT', id.toUpperCase())).toBe(id);
+    expect(knowledgeDocumentIdFromRoute('_DOCUMENT', id.toUpperCase())).toBe(id);
+    expect(knowledgeDocumentIdFromRoute('document', id)).toBeNull();
     expect(knowledgeDocumentIdFromRoute('document', 'notes.md')).toBeNull();
     expect(knowledgeDocumentIdFromRoute('document', 'pages/notes.md')).toBeNull();
   });

@@ -31,7 +31,7 @@ describe('link display helpers', () => {
       '/kb/team/runbooks/one%20two.md'
     );
     expect(routeForKnowledgeRefUri(`agor://kb/document/${KNOWLEDGE_DOCUMENT_ID}`)).toBe(
-      `/kb/document/${KNOWLEDGE_DOCUMENT_ID}`
+      `/kb/_document/${KNOWLEDGE_DOCUMENT_ID}`
     );
     expect(routeForKnowledgeRefUri('agor://kb/document/pages/notes')).toBeNull();
     expect(routeForKnowledgeRefUri('agor://kb/unit/0190a000')).toBeNull();
@@ -41,7 +41,7 @@ describe('link display helpers', () => {
     expect(routeForKnowledgeRefUri('  AGOR://KB/Team/Runbook.md  ')).toBe('/kb/Team/Runbook.md');
     expect(
       routeForKnowledgeRefUri(`AGOR://KB/DOCUMENT/${KNOWLEDGE_DOCUMENT_ID.toUpperCase()}`)
-    ).toBe(`/kb/document/${KNOWLEDGE_DOCUMENT_ID}`);
+    ).toBe(`/kb/_document/${KNOWLEDGE_DOCUMENT_ID}`);
     expect(routeForKnowledgeRefUri('AGOR://KB/UNIT/0190a000')).toBeNull();
   });
 
@@ -52,7 +52,7 @@ describe('link display helpers', () => {
     });
     expect(targetForLinkDisplay({ refUri: `agor://kb/document/${KNOWLEDGE_DOCUMENT_ID}` })).toEqual(
       {
-        href: `/kb/document/${KNOWLEDGE_DOCUMENT_ID}`,
+        href: `/kb/_document/${KNOWLEDGE_DOCUMENT_ID}`,
         navigation: 'spa',
       }
     );

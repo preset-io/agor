@@ -5,7 +5,11 @@ import {
   normalizeRefTargetKey,
   normalizeUrlTargetKey,
 } from '@agor-live/client';
-import { buildKnowledgeRoutePath, knowledgeDocumentIdFromRoute } from '../../utils/knowledgeRoutes';
+import {
+  buildKnowledgeRoutePath,
+  KNOWLEDGE_DOCUMENT_ID_ROUTE_NAMESPACE,
+  knowledgeDocumentIdFromRoute,
+} from '../../utils/knowledgeRoutes';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
 
 export type LinkDisplayCategory =
@@ -157,10 +161,12 @@ export function routeForKnowledgeRefUri(refUri?: string | null, basePath = '/kb'
   if (!trimmed || !startsWithIgnoreCase(trimmed, KB_URI_PREFIX)) return null;
   if (startsWithIgnoreCase(trimmed, KB_DOCUMENT_URI_PREFIX)) {
     const documentId = knowledgeDocumentIdFromRoute(
-      'document',
+      KNOWLEDGE_DOCUMENT_ID_ROUTE_NAMESPACE,
       trimmed.slice(KB_DOCUMENT_URI_PREFIX.length)
     );
-    return documentId ? buildKnowledgeRoutePath(basePath, 'document', documentId) : null;
+    return documentId
+      ? buildKnowledgeRoutePath(basePath, KNOWLEDGE_DOCUMENT_ID_ROUTE_NAMESPACE, documentId)
+      : null;
   }
   if (startsWithIgnoreCase(trimmed, KB_UNIT_URI_PREFIX)) return null;
 
