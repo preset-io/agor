@@ -155,12 +155,13 @@ function githubKindLabel(kind?: LinkKind): 'Issue' | 'PR' | null {
 export function routeForKnowledgeRefUri(refUri?: string | null, basePath = '/kb'): string | null {
   const trimmed = refUri?.trim();
   if (!trimmed || !startsWithIgnoreCase(trimmed, KB_URI_PREFIX)) return null;
-  if (
-    startsWithIgnoreCase(trimmed, KB_DOCUMENT_URI_PREFIX) ||
-    startsWithIgnoreCase(trimmed, KB_UNIT_URI_PREFIX)
-  ) {
-    return null;
+  if (startsWithIgnoreCase(trimmed, KB_DOCUMENT_URI_PREFIX)) {
+    const documentId = trimmed.slice(KB_DOCUMENT_URI_PREFIX.length);
+    return documentId && !documentId.includes('/')
+      ? buildKnowledgeRoutePath(basePath, 'document', documentId)
+      : null;
   }
+  if (startsWithIgnoreCase(trimmed, KB_UNIT_URI_PREFIX)) return null;
 
   const rest = trimmed.slice(KB_URI_PREFIX.length);
   const [namespaceSlug, ...pathParts] = rest.split('/').filter(Boolean).map(cleanSegment);

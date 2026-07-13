@@ -20,21 +20,27 @@ import {
 } from './linkOrganizer';
 import { makeTestLink as makeLink } from './testUtils';
 
+const KNOWLEDGE_DOCUMENT_ID = '0190a000-0000-7000-8000-0000000000aa';
+
 describe('link display helpers', () => {
-  it('routes path-addressed KB refs and rejects opaque document/unit refs', () => {
+  it('routes path-addressed and document-ID KB refs but rejects unit refs', () => {
     expect(routeForKnowledgeRefUri('agor://kb/global/guides/architecture.md')).toBe(
       '/kb/global/guides/architecture.md'
     );
     expect(routeForKnowledgeRefUri('agor://kb/team/runbooks/one%20two.md')).toBe(
       '/kb/team/runbooks/one%20two.md'
     );
-    expect(routeForKnowledgeRefUri('agor://kb/document/0190a000')).toBeNull();
+    expect(routeForKnowledgeRefUri(`agor://kb/document/${KNOWLEDGE_DOCUMENT_ID}`)).toBe(
+      `/kb/document/${KNOWLEDGE_DOCUMENT_ID}`
+    );
     expect(routeForKnowledgeRefUri('agor://kb/unit/0190a000')).toBeNull();
   });
 
   it('routes Knowledge URI grammar case-insensitively without folding path case', () => {
     expect(routeForKnowledgeRefUri('  AGOR://KB/Team/Runbook.md  ')).toBe('/kb/Team/Runbook.md');
-    expect(routeForKnowledgeRefUri('AGOR://KB/DOCUMENT/0190a000')).toBeNull();
+    expect(routeForKnowledgeRefUri(`AGOR://KB/DOCUMENT/${KNOWLEDGE_DOCUMENT_ID}`)).toBe(
+      `/kb/document/${KNOWLEDGE_DOCUMENT_ID}`
+    );
     expect(routeForKnowledgeRefUri('AGOR://KB/UNIT/0190a000')).toBeNull();
   });
 
@@ -43,6 +49,12 @@ describe('link display helpers', () => {
       href: '/kb/global/readme.md',
       navigation: 'spa',
     });
+    expect(targetForLinkDisplay({ refUri: `agor://kb/document/${KNOWLEDGE_DOCUMENT_ID}` })).toEqual(
+      {
+        href: `/kb/document/${KNOWLEDGE_DOCUMENT_ID}`,
+        navigation: 'spa',
+      }
+    );
     expect(targetForLinkDisplay({ url: 'https://example.com/docs?q=1#top' })).toEqual({
       href: 'https://example.com/docs?q=1#top',
       navigation: 'external',

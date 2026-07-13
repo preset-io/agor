@@ -252,12 +252,15 @@ export class LinksRepository {
     return (await this.upsertWithStatus(data)).link;
   }
 
-  async upsertWithStatus(data: Partial<LinkCreate>): Promise<{ link: Link; created: boolean }> {
+  async upsertWithStatus(
+    data: Partial<LinkCreate>,
+    options: { preserveExisting?: boolean } = {}
+  ): Promise<{ link: Link; created: boolean }> {
     this.validateCreate(data);
     const existing = await this.findByOwnerAndTarget(data);
     if (existing) {
       return {
-        link: await this.update(existing.link_id, data),
+        link: options.preserveExisting ? existing : await this.update(existing.link_id, data),
         created: false,
       };
     }
@@ -271,7 +274,9 @@ export class LinksRepository {
       const racedExisting = await this.findByOwnerAndTarget(data);
       if (!racedExisting) throw err;
       return {
-        link: await this.update(racedExisting.link_id, data),
+        link: options.preserveExisting
+          ? racedExisting
+          : await this.update(racedExisting.link_id, data),
         created: false,
       };
     }

@@ -36,7 +36,10 @@ interface LinkPromotionServiceOptions {
 
 type LinksCrudService = {
   get(id: string, params?: Params): Promise<Link>;
-  create(data: Partial<LinkCreate>, params?: Params): Promise<Link>;
+  create(
+    data: Partial<LinkCreate>,
+    params?: Params & { _agorPreserveExistingOnCreate?: boolean }
+  ): Promise<Link>;
 };
 
 function sourceLinkIdFromParams(params?: LinkPromotionRouteParams): string | null {
@@ -177,7 +180,11 @@ export class LinkPromotionService {
 
     // Promotion is an explicit user action, so the teammate-owned copy starts
     // with manual provenance and no metadata from the source ownership boundary.
-    return this.linksService().create(createData, { ...params, provider: undefined });
+    return this.linksService().create(createData, {
+      ...params,
+      provider: undefined,
+      _agorPreserveExistingOnCreate: true,
+    });
   }
 }
 

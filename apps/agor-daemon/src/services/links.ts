@@ -48,6 +48,7 @@ type LinkParams = QueryParams<{
 }> & {
   _agorSqlLinkAccessUserId?: UUID;
   _agorHideInternalLinks?: boolean;
+  _agorPreserveExistingOnCreate?: boolean;
 };
 
 export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams> {
@@ -149,7 +150,11 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
       return results.map((result) => result.link);
     }
 
-    return (await this.linksRepo.upsertWithStatus(data as Partial<LinkCreate>)).link;
+    return (
+      await this.linksRepo.upsertWithStatus(data as Partial<LinkCreate>, {
+        preserveExisting: params?._agorPreserveExistingOnCreate,
+      })
+    ).link;
   }
 
   async update(_id: Id, _data: Partial<Link>, _params?: LinkParams): Promise<Link> {

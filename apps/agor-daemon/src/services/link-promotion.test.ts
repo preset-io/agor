@@ -201,6 +201,34 @@ describe('LinkPromotionService', () => {
     expect(promoted.metadata).toEqual({ teammate_owned: true });
   });
 
+  dbTest('does not mutate a teammate-owned target created during promotion', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const teammate = await seedBranch(db, { teammate: true });
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/raced#source');
+    const existing = await createUrl(db, teammate.branch_id, 'https://example.com/raced#other', {
+      is_pinned: false,
+      title: 'Concurrent teammate title',
+      metadata: { teammate_owned: true },
+    });
+    const findTarget = vi
+      .spyOn(LinksRepository.prototype, 'findByOwnerAndTarget')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+
+    try {
+      const { service } = promotionService(db);
+      const promoted = await promote(service, source, teammate.branch_id);
+
+      expect(findTarget).toHaveBeenCalledTimes(3);
+      expect(promoted.link_id).toBe(existing.link_id);
+      expect(promoted.is_pinned).toBe(false);
+      expect(promoted.title).toBe('Concurrent teammate title');
+      expect(promoted.metadata).toEqual({ teammate_owned: true });
+    } finally {
+      findTarget.mockRestore();
+    }
+  });
+
   dbTest('removing teammate-owned copy leaves source link intact', async ({ db }) => {
     const branch = await seedBranch(db);
     const teammate = await seedBranch(db, { teammate: true });
@@ -266,7 +294,10 @@ describe('LinkPromotionService', () => {
       expect(get).toHaveBeenCalledWith(source.link_id, params);
       expect(create).toHaveBeenCalledWith(
         expect.objectContaining({ url: 'https://example.com/trusted-source', source: 'manual' }),
-        expect.objectContaining({ provider: undefined })
+        expect.objectContaining({
+          provider: undefined,
+          _agorPreserveExistingOnCreate: true,
+        })
       );
     }
   );

@@ -733,6 +733,12 @@ export function KnowledgePage({
     ? safeDecodeURIComponent(routeParams.namespaceSlug)
     : null;
   const routeDocumentPath = decodeKnowledgeRoutePath(routeParams['*']);
+  const routeDocumentId =
+    routeNamespaceSlug?.toLowerCase() === 'document' &&
+    routeDocumentPath &&
+    !routeDocumentPath.includes('/')
+      ? routeDocumentPath
+      : null;
   const routeDocumentKey =
     routeNamespaceSlug && routeDocumentPath ? `${routeNamespaceSlug}\n${routeDocumentPath}` : null;
   const routeBasePath = getKnowledgeRouteBase(location.pathname);
@@ -1735,6 +1741,7 @@ export function KnowledgePage({
 
   useEffect(() => {
     if (activeDocIdRef.current === DRAFT_DOCUMENT_ID) return;
+    if (routeDocumentId) return;
     if (!client || !routeNamespaceSlug || !routeDocumentPath) return;
     const currentRouteKey = routeDocumentKey;
     if (!currentRouteKey) return;
@@ -1826,12 +1833,64 @@ export function KnowledgePage({
     documents,
     namespaceSlugForDocument,
     routeDocumentKey,
+    routeDocumentId,
     routeDocumentPath,
     routeNamespaceSlug,
   ]);
 
   useEffect(() => {
+    if (!client || !routeDocumentId) return;
+    const currentRouteKey = routeDocumentKey;
+    let cancelled = false;
+
+    void client
+      .service('kb/documents')
+      .get(routeDocumentId)
+      .then((document) => {
+        if (cancelled) return;
+        const resolved = document as KnowledgeDocument;
+        const namespaceSlug =
+          namespaceSlugFromUri(resolved.uri) ?? namespaceSlugById.get(resolved.namespace_id);
+        if (!namespaceSlug) {
+          setRouteDocumentResolutionFailure({
+            key: currentRouteKey ?? routeDocumentId,
+            message: 'Knowledge page namespace not found.',
+          });
+          return;
+        }
+        const targetUrl = buildKnowledgeDocumentRouteUrl({
+          routeBasePath,
+          namespaceSlug,
+          documentPath: resolved.path,
+          currentSearch: location.search,
+        });
+        navigate(`${targetUrl}${location.hash}`, { replace: true });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setRouteDocumentResolutionFailure({
+          key: currentRouteKey ?? routeDocumentId,
+          message: err instanceof Error ? err.message : 'Failed to load Knowledge page.',
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    client,
+    location.hash,
+    location.search,
+    namespaceSlugById,
+    navigate,
+    routeBasePath,
+    routeDocumentId,
+    routeDocumentKey,
+  ]);
+
+  useEffect(() => {
     if (!client || loading || activeDocIdRef.current === DRAFT_DOCUMENT_ID) return;
+    if (routeDocumentId) return;
     if (!routeNamespaceSlug || !routeDocumentPath) return;
     const routedDocument = documents.find(
       (doc) =>
@@ -1877,6 +1936,7 @@ export function KnowledgePage({
     loading,
     namespaceSlugForDocument,
     routeDocumentKey,
+    routeDocumentId,
     routeDocumentPath,
     routeNamespaceSlug,
   ]);
