@@ -33,14 +33,15 @@ describe('link display helpers', () => {
     expect(routeForKnowledgeRefUri(`agor://kb/document/${KNOWLEDGE_DOCUMENT_ID}`)).toBe(
       `/kb/document/${KNOWLEDGE_DOCUMENT_ID}`
     );
+    expect(routeForKnowledgeRefUri('agor://kb/document/pages/notes')).toBeNull();
     expect(routeForKnowledgeRefUri('agor://kb/unit/0190a000')).toBeNull();
   });
 
   it('routes Knowledge URI grammar case-insensitively without folding path case', () => {
     expect(routeForKnowledgeRefUri('  AGOR://KB/Team/Runbook.md  ')).toBe('/kb/Team/Runbook.md');
-    expect(routeForKnowledgeRefUri(`AGOR://KB/DOCUMENT/${KNOWLEDGE_DOCUMENT_ID}`)).toBe(
-      `/kb/document/${KNOWLEDGE_DOCUMENT_ID}`
-    );
+    expect(
+      routeForKnowledgeRefUri(`AGOR://KB/DOCUMENT/${KNOWLEDGE_DOCUMENT_ID.toUpperCase()}`)
+    ).toBe(`/kb/document/${KNOWLEDGE_DOCUMENT_ID}`);
     expect(routeForKnowledgeRefUri('AGOR://KB/UNIT/0190a000')).toBeNull();
   });
 

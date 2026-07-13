@@ -107,6 +107,7 @@ import {
   buildKnowledgeRoutePath,
   decodeKnowledgeRoutePath,
   getKnowledgeRouteBase,
+  knowledgeDocumentIdFromRoute,
   namespaceSlugFromUri,
   safeDecodeURIComponent,
 } from '../utils/knowledgeRoutes';
@@ -733,12 +734,7 @@ export function KnowledgePage({
     ? safeDecodeURIComponent(routeParams.namespaceSlug)
     : null;
   const routeDocumentPath = decodeKnowledgeRoutePath(routeParams['*']);
-  const routeDocumentId =
-    routeNamespaceSlug?.toLowerCase() === 'document' &&
-    routeDocumentPath &&
-    !routeDocumentPath.includes('/')
-      ? routeDocumentPath
-      : null;
+  const routeDocumentId = knowledgeDocumentIdFromRoute(routeNamespaceSlug, routeDocumentPath);
   const routeDocumentKey =
     routeNamespaceSlug && routeDocumentPath ? `${routeNamespaceSlug}\n${routeDocumentPath}` : null;
   const routeBasePath = getKnowledgeRouteBase(location.pathname);
@@ -1849,8 +1845,7 @@ export function KnowledgePage({
       .then((document) => {
         if (cancelled) return;
         const resolved = document as KnowledgeDocument;
-        const namespaceSlug =
-          namespaceSlugFromUri(resolved.uri) ?? namespaceSlugById.get(resolved.namespace_id);
+        const namespaceSlug = namespaceSlugFromUri(resolved.uri);
         if (!namespaceSlug) {
           setRouteDocumentResolutionFailure({
             key: currentRouteKey ?? routeDocumentId,
@@ -1881,7 +1876,6 @@ export function KnowledgePage({
     client,
     location.hash,
     location.search,
-    namespaceSlugById,
     navigate,
     routeBasePath,
     routeDocumentId,

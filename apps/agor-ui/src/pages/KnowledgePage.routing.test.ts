@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { knowledgeDocumentIdFromRoute } from '../utils/knowledgeRoutes';
 import { filterSelectOptionBySearchText } from '../utils/selectSearch';
 import {
   areKnowledgeSearchResultsFresh,
@@ -32,6 +33,14 @@ const skillDoc: TestDoc = {
 };
 
 describe('KnowledgePage routing state helpers', () => {
+  it('distinguishes canonical document IDs from document namespace paths', () => {
+    const id = '0190a000-0000-7000-8000-0000000000aa';
+
+    expect(knowledgeDocumentIdFromRoute('DOCUMENT', id.toUpperCase())).toBe(id);
+    expect(knowledgeDocumentIdFromRoute('document', 'notes.md')).toBeNull();
+    expect(knowledgeDocumentIdFromRoute('document', 'pages/notes.md')).toBeNull();
+  });
+
   it('keeps the active document from the snapshot when the sidebar filter hides it', () => {
     expect(
       resolveActiveKnowledgeDocument({
