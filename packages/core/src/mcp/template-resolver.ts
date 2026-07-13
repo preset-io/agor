@@ -52,6 +52,9 @@
 import { AGOR_USER_ENV_KEYS_VAR } from '../config/env-resolver';
 import { renderTemplate } from '../templates/handlebars-helpers';
 import type { MCPAuth, MCPServer } from '../types';
+import { containsTemplate, isUserEnvPlaceholder } from './template-patterns';
+
+export { containsTemplate, isUserEnvPlaceholder };
 
 /**
  * Template context available for MCP configuration resolution.
@@ -111,13 +114,6 @@ export function buildMCPTemplateContextFromEnv(
       env: userEnv,
     },
   };
-}
-
-/**
- * Check if a string contains Handlebars template syntax
- */
-function containsTemplate(value: string): boolean {
-  return value.includes('{{') && value.includes('}}');
 }
 
 /**
@@ -213,6 +209,23 @@ export function resolveMcpServerEnv(
  * @param context - Template context
  * @returns Resolution result with server, validation status, and any errors
  */
+/**
+ * Auth-secret fields that `resolveMcpServerTemplates` substitutes from the
+ * template context. Redaction consults this set to leave `{{ }}` templates in
+ * these fields intact so resolution can run.
+ *
+ * MUST stay in sync with the auth-secret fields `resolveMcpServerTemplates`
+ * actually resolves below. Notably `oauth_access_token` / `oauth_refresh_token`
+ * are OAuth-flow runtime secrets the resolver never touches, so they are
+ * excluded here and always redacted.
+ */
+export const TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS = [
+  'token',
+  'api_token',
+  'api_secret',
+  'oauth_client_secret',
+] as const;
+
 export function resolveMcpServerTemplates(
   server: MCPServer,
   context: MCPTemplateContext

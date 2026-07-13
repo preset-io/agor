@@ -1,20 +1,37 @@
 import type { Board, Branch, Session } from '@agor-live/client';
-import { ClockCircleOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import {
+  ClockCircleOutlined,
+  LeftOutlined,
+  PlusOutlined,
+  RightOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import { Button, Empty, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import { selectBoardById, selectBranchById, selectSessionsByBranch } from '../../store/selectors';
+import { getTimeMs } from '../../utils/entityTime';
 import { formatRelativeTime } from '../../utils/time';
-import { glassCardStyle } from './homeStyles';
-import type { HomeSectionProps } from './types';
+import { glassSurfaceStyle } from './homeStyles';
+import type { HomePageProps } from './types';
 
 const { Text } = Typography;
 
 const HOME_BOARDS_LIMIT = 50;
+const BOARDS_PER_PAGE = 4;
 
+/**
+ * Everything below `board` is a primitive so the memo'd card bails out of
+ * re-renders unless ITS board's display data actually changed — passing the
+ * per-board branch/session arrays instead would defeat the memo (they're
+ * rebuilt fresh on every derivation pass).
+ */
 interface BoardHomeRow {
   board: Board;
-  branches: Branch[];
-  sessions: Session[];
+  branchCount: number;
+  activeCount: number;
+  latestSessionAt: Session['last_updated'] | null;
   latest: number;
   visitRank: number;
 }
@@ -30,12 +47,26 @@ const groupBranchesByBoard = (branchById: Map<string, Branch>): Map<string, Bran
   return grouped;
 };
 
+// Keyed by the per-branch session bucket array reference. The store preserves
+// untouched buckets by reference across patches, so a session:patched on one
+// branch leaves every other branch's filtered result cached — no re-filter of
+// the whole workspace on every notify.
+const visibleSessionsCache = new WeakMap<Session[], Session[]>();
+
+const filterVisibleSessions = (sessions: Session[]): Session[] => {
+  const cached = visibleSessionsCache.get(sessions);
+  if (cached) return cached;
+  const visible = sessions.filter((session) => !session.archived);
+  visibleSessionsCache.set(sessions, visible);
+  return visible;
+};
+
 const groupVisibleSessionsByBranch = (
   sessionsByBranch: Map<string, Session[]>
 ): Map<string, Session[]> => {
   const grouped = new Map<string, Session[]>();
   for (const [branchId, sessions] of sessionsByBranch) {
-    const visibleSessions = sessions.filter((session) => !session.archived);
+    const visibleSessions = filterVisibleSessions(sessions);
     if (visibleSessions.length > 0) grouped.set(branchId, visibleSessions);
   }
   return grouped;
@@ -47,130 +78,132 @@ const activeSessions = (sessions: Session[]) =>
       s.status === 'running' || s.status === 'awaiting_permission' || s.status === 'awaiting_input'
   );
 
-const BoardHomeCard: React.FC<{
+const BoardHomeCard = memo(function BoardHomeCard({
+  board,
+  branchCount,
+  activeCount,
+  latestSessionAt,
+  onBoardClick,
+}: {
   board: Board;
-  branches: Branch[];
-  sessions: Session[];
-  onClick: () => void;
-}> = ({ board, branches, sessions, onClick }) => {
+  branchCount: number;
+  activeCount: number;
+  latestSessionAt: Session['last_updated'] | null;
+  onBoardClick: (boardId: string) => void;
+}) {
   const { token } = theme.useToken();
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
-  const activeCount = activeSessions(sessions).length;
-  const latestSession = useMemo(
-    () =>
-      [...sessions].sort(
-        (a, b) => new Date(b.last_updated).getTime() - new Date(a.last_updated).getTime()
-      )[0],
-    [sessions]
-  );
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-      style={{
-        display: 'block',
-        width: '100%',
-        height: '100%',
-        textAlign: 'left',
-        border: `1px solid ${hovered ? token.colorPrimary : token.colorBorderSecondary}`,
-        borderRadius: token.borderRadiusLG,
-        padding: '12px 14px',
-        cursor: 'pointer',
-        ...glassCardStyle(token, 0.3),
-        boxShadow: hovered
-          ? `${token.boxShadowSecondary}, inset 0 1px 0 rgba(255, 255, 255, 0.12)`
-          : undefined,
-        outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
-        outlineOffset: focused ? 2 : undefined,
-        transition: 'border-color 0.2s, box-shadow 0.2s',
-        fontFamily: 'inherit',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-        {/* Board icon */}
-        <div
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 8,
-            background: token.colorFillTertiary,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 20,
-            flexShrink: 0,
-          }}
-        >
-          {board.icon || '📋'}
-        </div>
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* Static blurred glass fill on its own layer, painted behind the
+          interactive button. Hover/focus never touch this element, so its
+          expensive backdrop-filter is never re-blurred. */}
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          inset: 0,
+          borderRadius: token.borderRadiusLG,
+          ...glassSurfaceStyle(token, 0.3),
+          pointerEvents: 'none',
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => onBoardClick(board.board_id)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        style={{
+          position: 'relative',
+          display: 'block',
+          width: '100%',
+          height: '100%',
+          textAlign: 'left',
+          border: `1px solid ${hovered ? token.colorPrimary : token.colorBorderSecondary}`,
+          borderRadius: token.borderRadiusLG,
+          padding: '12px 14px',
+          cursor: 'pointer',
+          background: 'transparent',
+          boxShadow: hovered
+            ? `${token.boxShadowSecondary}, inset 0 1px 0 rgba(255, 255, 255, 0.12)`
+            : undefined,
+          outline: focused ? `2px solid ${token.colorPrimary}` : undefined,
+          outlineOffset: focused ? 2 : undefined,
+          transition: 'border-color 0.2s, box-shadow 0.2s',
+          fontFamily: 'inherit',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          {/* Board icon */}
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              background: token.colorFillTertiary,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 20,
+              flexShrink: 0,
+            }}
+          >
+            {board.icon || '📋'}
+          </div>
 
-        {/* Name + meta — all aligned under each other, to the right of the icon */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Tooltip title={board.name}>
-            <Text
-              strong
-              style={{
-                fontSize: 14,
-                display: 'block',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {board.name}
-            </Text>
-          </Tooltip>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {branches.length} branch{branches.length !== 1 ? 'es' : ''}
-            </Text>
-            {activeCount > 0 && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                <ThunderboltOutlined style={{ marginRight: 2 }} />
-                {activeCount} active
+          {/* Name + meta — all aligned under each other, to the right of the icon */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <Tooltip title={board.name}>
+              <Text
+                strong
+                style={{
+                  fontSize: 14,
+                  display: 'block',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {board.name}
               </Text>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <ClockCircleOutlined style={{ fontSize: 11, color: token.colorTextSecondary }} />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {latestSession
-                ? `Last session ${formatRelativeTime(latestSession.last_updated)}`
-                : 'No sessions yet'}
-            </Text>
+            </Tooltip>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {branchCount} branch{branchCount !== 1 ? 'es' : ''}
+              </Text>
+              {activeCount > 0 && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  <ThunderboltOutlined style={{ marginRight: 2 }} />
+                  {activeCount} active
+                </Text>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <ClockCircleOutlined style={{ fontSize: 11, color: token.colorTextSecondary }} />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {latestSessionAt
+                  ? `Last session ${formatRelativeTime(latestSessionAt)}`
+                  : 'No sessions yet'}
+              </Text>
+            </div>
           </div>
         </div>
-      </div>
-    </button>
+      </button>
+    </div>
   );
-};
+});
 
 export const HomeBoardsSection: React.FC<
-  Pick<
-    HomeSectionProps,
-    | 'boardById'
-    | 'recentBoardIds'
-    | 'branchById'
-    | 'sessionsByBranch'
-    | 'onBoardClick'
-    | 'onOpenCreateDialog'
-  >
-> = ({
-  boardById,
-  recentBoardIds = [],
-  branchById,
-  sessionsByBranch,
-  onBoardClick,
-  onOpenCreateDialog,
-}) => {
-  const gridRef = useRef<HTMLDivElement>(null);
-  const [columns, setColumns] = useState(4);
+  Pick<HomePageProps, 'recentBoardIds' | 'onBoardClick' | 'onOpenCreateDialog'>
+> = ({ recentBoardIds = [], onBoardClick, onOpenCreateDialog }) => {
+  const boardById = useAgorStore(selectBoardById);
+  const branchById = useAgorStore(selectBranchById);
+  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
+  const [page, setPage] = useState(0);
 
   const rows = useMemo(() => {
     const visitRank = new Map((recentBoardIds ?? []).map((boardId, index) => [boardId, index]));
@@ -184,15 +217,27 @@ export const HomeBoardsSection: React.FC<
         const sessions = branches.flatMap(
           (branch) => visibleSessionsByBranch.get(branch.branch_id) ?? []
         );
+        let latestSessionAt: BoardHomeRow['latestSessionAt'] = null;
+        let latestSessionTime = Number.NEGATIVE_INFINITY;
+        for (const session of sessions) {
+          const time = getTimeMs(session, 'last_updated');
+          if (time > latestSessionTime) {
+            latestSessionTime = time;
+            latestSessionAt = session.last_updated;
+          }
+        }
         const latest = Math.max(
-          new Date(board.last_updated).getTime(),
-          ...branches.map((branch) => new Date(branch.updated_at || branch.created_at).getTime()),
-          ...sessions.map((session) => new Date(session.last_updated).getTime())
+          getTimeMs(board, 'last_updated'),
+          ...branches.map((branch) =>
+            getTimeMs(branch, branch.updated_at ? 'updated_at' : 'created_at')
+          ),
+          latestSessionTime
         );
         return {
           board,
-          branches,
-          sessions,
+          branchCount: branches.length,
+          activeCount: activeSessions(sessions).length,
+          latestSessionAt,
           latest: Number.isFinite(latest) ? latest : 0,
           visitRank: visitRank.get(board.board_id) ?? Number.POSITIVE_INFINITY,
         };
@@ -206,18 +251,11 @@ export const HomeBoardsSection: React.FC<
       .slice(0, HOME_BOARDS_LIMIT);
   }, [boardById, recentBoardIds, branchById, sessionsByBranch]);
 
-  const hasBoards = rows.length > 0;
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: hasBoards is a sentinel dep — re-attaches observer when board count transitions between 0 and >0 (gridRef only mounts with boards)
-  useEffect(() => {
-    if (!gridRef.current) return;
-    const observer = new ResizeObserver(([entry]) => {
-      const w = entry.contentRect.width;
-      setColumns(w < 400 ? 1 : w < 700 ? 2 : 4);
-    });
-    observer.observe(gridRef.current);
-    return () => observer.disconnect();
-  }, [hasBoards]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / BOARDS_PER_PAGE));
+  const currentPage = Math.min(page, totalPages - 1);
+  const pageStart = currentPage * BOARDS_PER_PAGE;
+  const visibleRows = rows.slice(pageStart, pageStart + BOARDS_PER_PAGE);
+  const showPager = rows.length > BOARDS_PER_PAGE;
 
   return (
     <section aria-label="Boards" style={{ marginBottom: 24 }}>
@@ -232,15 +270,40 @@ export const HomeBoardsSection: React.FC<
         <Text strong style={{ fontSize: 14 }}>
           Boards
         </Text>
-        <Button
-          type="link"
-          size="small"
-          icon={<PlusOutlined />}
-          style={{ padding: 0 }}
-          onClick={() => onOpenCreateDialog('board')}
-        >
-          New board
-        </Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {showPager && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Button
+                type="text"
+                size="small"
+                icon={<LeftOutlined />}
+                aria-label="Previous boards"
+                disabled={currentPage === 0}
+                onClick={() => setPage(Math.max(0, currentPage - 1))}
+              />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {currentPage + 1} / {totalPages}
+              </Text>
+              <Button
+                type="text"
+                size="small"
+                icon={<RightOutlined />}
+                aria-label="Next boards"
+                disabled={currentPage >= totalPages - 1}
+                onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
+              />
+            </div>
+          )}
+          <Button
+            type="link"
+            size="small"
+            icon={<PlusOutlined />}
+            style={{ padding: 0 }}
+            onClick={() => onOpenCreateDialog('board')}
+          >
+            New board
+          </Button>
+        </div>
       </div>
 
       {rows.length === 0 ? (
@@ -255,20 +318,20 @@ export const HomeBoardsSection: React.FC<
         </Empty>
       ) : (
         <div
-          ref={gridRef}
           style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
             gap: 12,
           }}
         >
-          {rows.map(({ board, branches, sessions }) => (
+          {visibleRows.map(({ board, branchCount, activeCount, latestSessionAt }) => (
             <BoardHomeCard
               key={board.board_id}
               board={board}
-              branches={branches}
-              sessions={sessions}
-              onClick={() => onBoardClick(board.board_id)}
+              branchCount={branchCount}
+              activeCount={activeCount}
+              latestSessionAt={latestSessionAt}
+              onBoardClick={onBoardClick}
             />
           ))}
         </div>

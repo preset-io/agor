@@ -1,4 +1,4 @@
-import type { Board, Repo, User } from '@agor-live/client';
+import type { Board, Repo, Session, User } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -56,6 +56,16 @@ vi.mock('./GlobalPresenceFacepile', () => ({
 
 const board = { board_id: 'board-1', name: 'Board', slug: 'board' } as unknown as Board;
 const repo = { repo_id: 'repo-1', name: 'repo', slug: 'repo' } as unknown as Repo;
+const session = {
+  session_id: 'session-1',
+  status: 'running',
+  archived: false,
+  genealogy: {},
+  agentic_tool: 'claude',
+  branch_id: 'branch-1',
+  created_by: 'u1',
+  last_updated: '2026-07-01T10:00:00.000Z',
+} as unknown as Session;
 
 function renderHeader(node: React.ReactNode) {
   return render(
@@ -84,6 +94,30 @@ describe('AppHeader store-selector re-render isolation', () => {
     // so its subscriptions stay quiet and it does not re-render.
     act(() => {
       agorStore.setState({ repoById: new Map([[repo.repo_id, repo]]) });
+    });
+
+    expect(headerRenders).toBe(baseline);
+  });
+
+  it('a session patch does not re-render the header', async () => {
+    // Seed a session BEFORE the baseline so the patch below flips nothing the
+    // header derives. `sessionById` feeds ONLY GlobalSearch, which now owns that
+    // subscription in a memo'd leaf — so a streaming-style session patch (new
+    // object identity) must wake GlobalSearch, never the header chrome.
+    agorStore.setState({ sessionById: new Map([[session.session_id, session]]) });
+    renderHeader(<AppHeader />);
+
+    await waitFor(() => {
+      expect(headerRenders).toBeGreaterThanOrEqual(1);
+    });
+    const baseline = headerRenders;
+
+    act(() => {
+      agorStore.setState({
+        sessionById: new Map([
+          [session.session_id, { ...session, status: 'completed' } as Session],
+        ]),
+      });
     });
 
     expect(headerRenders).toBe(baseline);

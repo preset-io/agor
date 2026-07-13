@@ -1,5 +1,5 @@
 import type { Branch, Repo, Session } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { theme as antdTheme, ConfigProvider } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
@@ -62,7 +62,31 @@ describe('BranchCard drag handle', () => {
     expect(onOpenTerminal).toHaveBeenCalledWith([], 'branch-1');
   });
 
-  it('uses a darker primary background surface while a branch session is executing', () => {
+  it('mounts the archive modal on demand and removes it after close', async () => {
+    render(
+      <ConnectionProvider value={connected}>
+        <BranchCard
+          branch={branch}
+          repo={repo}
+          sessions={[]}
+          userById={new Map()}
+          client={null}
+          onArchiveOrDelete={vi.fn()}
+        />
+      </ConnectionProvider>
+    );
+
+    expect(screen.queryByText('Archive or Delete Branch')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Archive or delete branch'));
+    expect(await screen.findByText('Archive or Delete Branch')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.queryByText('Archive or Delete Branch')).not.toBeInTheDocument()
+    );
+  });
+
+  it('uses a darker primary background surface while a branch session is executing', async () => {
     const runningSession = {
       session_id: 'session-running',
       branch_id: 'branch-1',
@@ -97,8 +121,9 @@ describe('BranchCard drag handle', () => {
     expect(container.querySelector('.ant-card')?.getAttribute('style')).toContain(
       'background-color: color-mix(in srgb, rgb(1, 2, 3) 67%, rgb(10, 11, 12));'
     );
-    expect(container.querySelector('.ant-tree-title > div')).toHaveStyle({
-      width: '100%',
-    });
+    // Session sections hydrate a frame after mount (useProgressiveMount).
+    await waitFor(() =>
+      expect(container.querySelector('.ant-tree-title > div')).toHaveStyle({ width: '100%' })
+    );
   });
 });

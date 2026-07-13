@@ -63,6 +63,8 @@ export interface TextBoardObject {
   fontSize?: number;
   color?: string;
   background?: string;
+  /** Explicit stacking order. Falls back to the per-type default when unset. */
+  zIndex?: number;
 }
 
 /**
@@ -107,6 +109,10 @@ export interface ZoneBoardObject {
   locked?: boolean;
   /** Trigger configuration for sessions dropped into this zone */
   trigger?: ZoneTrigger;
+  /** Label/status font size in px. Falls back to the theme default when unset. */
+  fontSize?: number;
+  /** Explicit stacking order. Falls back to the per-type default when unset. */
+  zIndex?: number;
 }
 
 /**
@@ -122,6 +128,8 @@ export interface MarkdownBoardObject {
   // Optional future enhancements:
   fontSize?: number; // Font size multiplier (default: 1.0)
   backgroundColor?: string; // Background color with alpha (default: card background)
+  /** Explicit stacking order. Falls back to the per-type default when unset. */
+  zIndex?: number;
 }
 
 /**
@@ -167,6 +175,8 @@ export interface AppBoardObject {
   showEditor?: boolean;
   /** Whether to show the console output */
   showConsole?: boolean;
+  /** Explicit stacking order. Falls back to the per-type default when unset. */
+  zIndex?: number;
 }
 
 /**
@@ -185,6 +195,8 @@ export interface ArtifactBoardObject {
   artifact_id: ArtifactID;
   /** Lock artifact card to prevent dragging/resizing on the board */
   locked?: boolean;
+  /** Explicit stacking order. Falls back to the per-type default when unset. */
+  zIndex?: number;
 }
 
 /**
@@ -197,15 +209,15 @@ export type BoardObject =
   | AppBoardObject
   | ArtifactBoardObject;
 
-export interface AssistantWelcomeNoteRequest {
-  /** Board to create/update the bundled assistant welcome note on. */
+export interface TeammateWelcomeNoteRequest {
+  /** Board to create/update the bundled teammate welcome note on. */
   boardId?: BoardID | string;
   /** Alias accepted by Feathers custom method callers. */
   id?: BoardID | string;
-  /** User-provided assistant display name. */
-  assistantName: string;
-  /** Optional user-provided assistant emoji/icon. */
-  assistantEmoji?: string | null;
+  /** User-provided teammate display name. */
+  teammateName?: string;
+  /** Optional user-provided teammate emoji/icon. */
+  teammateEmoji?: string | null;
 }
 
 export type BoardAccessMode = 'private' | 'shared';
@@ -230,7 +242,7 @@ export interface Board {
   slug?: string;
 
   description?: string;
-  primary_assistant_id?: BranchID;
+  primary_teammate_id?: BranchID;
 
   /**
    * DEPRECATED: Sessions and layout are now tracked in board_objects table

@@ -113,7 +113,7 @@ describe('assertEnvCommandAllowed', () => {
   describe('realistic legitimate commands', () => {
     it.each([
       'docker compose up -d --build',
-      'SEED=true UID=$(id -u) docker compose -p agor up -d',
+      'env UID=$(id -u) SEED=true docker compose -p agor up -d',
       'docker compose down -v',
       'docker compose logs --tail=100',
       'pnpm --filter @agor/core test',

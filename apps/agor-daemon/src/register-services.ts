@@ -16,7 +16,9 @@ import {
   BoardRepository,
   BranchRepository,
   eq,
+  getCurrentTenantId,
   inArray,
+  isPostgresDatabase,
   MCPServerRepository,
   SessionMCPServerRepository,
   type SessionMCPServerRow,
@@ -56,6 +58,7 @@ import type {
   SessionsServiceImpl,
 } from './declarations.js';
 import { trackExecutorProcess, untrackExecutorProcess } from './executor-tracking.js';
+import { runInOAuthTenantScope } from './oauth-auth-helpers.js';
 import {
   cacheOAuth21Token,
   clearOAuth21Token,
@@ -111,6 +114,7 @@ import { createReposService } from './services/repos.js';
 import { createSchedulesService } from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
+import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
 import { createTemplatesService } from './services/templates.js';
@@ -219,6 +223,19 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     createExecuteHandler(ctx, sessionsService, sessionTokenService)
   );
 
+  // Realtime control-plane: browsers subscribe (create) / unsubscribe (remove)
+  // to a session's per-connection streaming channel so per-chunk streaming
+  // events reach only the tabs actively viewing that session. Access is gated
+  // by the session read inside the service. The create/remove events are
+  // control-plane only and must never broadcast, so publish to no connections.
+  app.use('/session-streams', createSessionStreamsService(app), {
+    methods: ['create', 'remove'],
+  });
+  app.service('/session-streams').hooks({
+    before: { all: [ctx.requireAuth] },
+  });
+  app.service('/session-streams').publish(() => []);
+
   app.use('/tasks', createTasksService(db, app), {
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
@@ -308,9 +325,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           'toYaml',
           'fromYaml',
           'clone',
-          'setPrimaryAssistant',
-          'clearPrimaryAssistant',
-          'ensureAssistantWelcomeNote',
+          'setPrimaryTeammate',
+          'clearPrimaryTeammate',
+          'ensureTeammateWelcomeNote',
         ],
       }
     );
@@ -351,7 +368,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'remove',
       'updateEnvironment',
       'initializeUnixGroup',
-      'ensureAssistantKnowledgeNamespace',
+      'ensureTeammateKnowledgeNamespace',
     ],
   });
 
@@ -1135,6 +1152,8 @@ async function registerMCPServices(
     mcpServerId?: string;
     userId?: string;
     oauthMode?: 'per_user' | 'shared';
+    /** Tenant captured when the flow starts; browser callbacks have no auth headers. */
+    tenantId?: string;
     socketId?: string;
     createdAt: number;
     /**
@@ -1227,6 +1246,7 @@ async function registerMCPServices(
     mcpServerId?: string;
     userId?: string;
     oauthMode?: 'per_user' | 'shared';
+    tenantId?: string;
     clientId?: string;
     clientSecret?: string;
     authorizationUrlOverride?: string;
@@ -1332,6 +1352,7 @@ async function registerMCPServices(
       mcpServerId: opts.mcpServerId,
       userId: opts.userId,
       oauthMode: opts.oauthMode,
+      tenantId: opts.tenantId ?? getCurrentTenantId(),
       socketId: opts.socketId,
       createdAt: Date.now(),
       tokenResolve,
@@ -1357,6 +1378,48 @@ async function registerMCPServices(
     }
     return base;
   }
+
+  const tenantIdFromParams = (params?: AuthenticatedParams): string | undefined =>
+    (params as (AuthenticatedParams & { tenant?: { tenant_id?: string } }) | undefined)?.tenant
+      ?.tenant_id ?? getCurrentTenantId();
+
+  const persistOAuthTokenForPendingFlow = async (
+    tokenResponse: OAuthTokenResponse,
+    pendingFlow: PendingOAuthFlow,
+    logPrefix: string
+  ): Promise<void> => {
+    const work = () =>
+      persistOAuthToken(
+        db,
+        tokenResponse,
+        pendingFlow.mcpUrl,
+        {
+          ...pendingFlow,
+          clientId: pendingFlow.context.clientId,
+          clientSecret: pendingFlow.context.clientSecret,
+          tokenEndpoint: pendingFlow.context.tokenEndpoint,
+        },
+        logPrefix
+      );
+
+    if (pendingFlow.tenantId) {
+      await runInOAuthTenantScope(db, pendingFlow.tenantId, work);
+      return;
+    }
+
+    // OAuth callbacks arrive as unauthenticated browser redirects, so they
+    // cannot re-resolve tenant scope from request auth. In Postgres/multitenant
+    // deployments, a flow without captured tenant metadata is unsafe to persist:
+    // fail closed and ask the user to restart the OAuth flow. SQLite/single-user
+    // installs do not have tenant DB scope, so they keep the legacy direct path.
+    if (isPostgresDatabase(db) && pendingFlow.mcpServerId) {
+      throw new Error(
+        'Missing tenant context for MCP OAuth callback. Please restart the OAuth flow.'
+      );
+    }
+
+    await work();
+  };
 
   // Set the OAuth callback handler
   const oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
@@ -1411,18 +1474,7 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
         pendingOAuthFlows.delete(state);
 
-        await persistOAuthToken(
-          db,
-          tokenResponse,
-          pendingFlow.mcpUrl,
-          {
-            ...pendingFlow,
-            clientId: pendingFlow.context.clientId,
-            clientSecret: pendingFlow.context.clientSecret,
-            tokenEndpoint: pendingFlow.context.tokenEndpoint,
-          },
-          'OAuth Callback'
-        );
+        await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback');
 
         if (app.io) {
           const oauthEvent = {
@@ -1617,6 +1669,7 @@ async function registerMCPServices(
                   // call (writes to the shared MCP server row, not per-user).
                   oauthMode: 'shared',
                   clientId: data.client_id,
+                  tenantId: tenantIdFromParams(params as AuthenticatedParams | undefined),
                   socketId: connection?.id,
                 });
               } catch (err) {
@@ -1871,6 +1924,7 @@ async function registerMCPServices(
       try {
         console.log('[OAuth Start] Starting two-phase OAuth flow for:', data.mcp_url);
         const userId = params?.user?.user_id;
+        const tenantId = tenantIdFromParams(params);
 
         let oauthMode: 'per_user' | 'shared' | undefined;
         let authorizationUrlOverride: string | undefined;
@@ -1879,8 +1933,10 @@ async function registerMCPServices(
         let clientIdFromConfig: string | undefined;
         let scopeOverride: string | undefined;
         if (data.mcp_server_id) {
-          const mcpServerRepo = new MCPServerRepository(db);
-          const server = await mcpServerRepo.findById(data.mcp_server_id);
+          const server = await runInOAuthTenantScope(db, tenantId, () => {
+            const mcpServerRepo = new MCPServerRepository(db);
+            return mcpServerRepo.findById(data.mcp_server_id as string);
+          });
           if (server?.auth?.type === 'oauth') {
             oauthMode = server.auth.oauth_mode || 'per_user';
             authorizationUrlOverride = server.auth.oauth_authorization_url;
@@ -1937,6 +1993,7 @@ async function registerMCPServices(
             authorizationUrlOverride,
             tokenUrlOverride,
             scope: scopeOverride,
+            tenantId,
             socketId,
           });
         } catch (err) {
@@ -1991,18 +2048,14 @@ async function registerMCPServices(
         const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state);
         pendingOAuthFlows.delete(state);
 
-        await persistOAuthToken(
-          db,
-          tokenResponse,
-          pendingFlow.mcpUrl,
-          {
-            ...pendingFlow,
-            clientId: pendingFlow.context.clientId,
-            clientSecret: pendingFlow.context.clientSecret,
-            tokenEndpoint: pendingFlow.context.tokenEndpoint,
-          },
-          'OAuth Complete'
-        );
+        const activeTenantId = getCurrentTenantId();
+        if (pendingFlow.tenantId && activeTenantId && pendingFlow.tenantId !== activeTenantId) {
+          throw new Error(
+            'OAuth flow belongs to a different tenant. Please restart the OAuth flow.'
+          );
+        }
+
+        await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
         return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
       } catch (error) {
         console.error('[OAuth Complete] Error:', error);
@@ -2078,7 +2131,7 @@ async function registerMCPServices(
   // --------------------------------------------------------------------------
   app.use('/mcp-servers/oauth-auth-headers', {
     async create(
-      data: { mcp_server_ids: string[] },
+      data: { mcp_server_ids: string[]; executorSessionToken?: string },
       params?: AuthenticatedParams
     ): Promise<{
       headers: Record<string, { authorization?: string; error?: string }>;
@@ -2098,9 +2151,30 @@ async function registerMCPServices(
       const sessionId = (params as (AuthenticatedParams & { session_id?: string }) | undefined)
         ?.session_id;
       const trustedInternalOrService = shouldExposeMCPServerSecrets(params);
-      const trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
+      let trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
         sessionId,
       });
+      let executorSessionId = sessionId;
+      if (!trustedSessionExecutor && params?.provider && data.executorSessionToken) {
+        const executorTokenService = (
+          app as unknown as {
+            sessionTokenService?: {
+              validateToken: (
+                token: string,
+                expected?: { sessionId?: string; taskId?: string; branchId?: string }
+              ) => Promise<{ session_id: string } | null>;
+            };
+          }
+        ).sessionTokenService;
+        const sessionInfo = await executorTokenService?.validateToken(
+          data.executorSessionToken,
+          {}
+        );
+        if (sessionInfo?.session_id) {
+          executorSessionId = sessionInfo.session_id;
+          trustedSessionExecutor = true;
+        }
+      }
       if (!trustedInternalOrService && !trustedSessionExecutor) {
         throw new Forbidden('oauth-auth-headers is only available to trusted executor paths');
       }
@@ -2108,8 +2182,14 @@ async function registerMCPServices(
       const userTokenRepo = new UserMCPOAuthTokenRepository(db);
       const mcpServerRepo = new MCPServerRepository(db);
       if (trustedSessionExecutor) {
+        if (!executorSessionId) {
+          throw new Forbidden('oauth-auth-headers requires executor session scope');
+        }
         const sessionMcpRepo = new SessionMCPServerRepository(db);
-        const attachedServers = await sessionMcpRepo.listServers(sessionId as SessionID, true);
+        const attachedServers = await sessionMcpRepo.listServers(
+          executorSessionId as SessionID,
+          true
+        );
         const globalServers = await mcpServerRepo.findAll({ scope: 'global', enabled: true });
         const allowedServerIds = new Set([
           ...globalServers.map((server) => server.mcp_server_id),
@@ -2532,6 +2612,7 @@ async function registerMCPServices(
               // call). Without a serverId nothing is persisted to the DB; the
               // daemon-level cache below carries the token for this request.
               oauthMode: 'shared',
+              tenantId: tenantIdFromParams(params),
               socketId: connection?.id,
             });
 

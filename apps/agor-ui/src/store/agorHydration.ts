@@ -110,6 +110,19 @@ let liveRevisions = makeZeroCounters();
 // from the quiet-window check against `liveRevisions`. Kept strictly monotonic.
 const hydrationGeneration = makeZeroCounters();
 
+// Per-collection high-water mark of the live-write revision that the most recent
+// wholesale hydration apply was proven quiet against. A hydration applies its
+// full-set server snapshot only when no live write raced the fetch, so the
+// applied rows reflect every write up to this revision. The frame-coalesced
+// session-patch queue reads this to DROP any queued patch whose enqueue-time
+// revision is at-or-below it: that patch's effect is already contained in the
+// fresher server snapshot, so replaying it would overwrite newer state with
+// older. Any patch enqueued AFTER a hydration snapshots its baseline bumps the
+// revision during the fetch and forces that hydration to discard — so a queued
+// patch can only ever be at-or-below (stale relative to), never ahead of, an
+// apply. Reset to zero with `liveRevisions` on (re)mount.
+let lastAppliedRevision = makeZeroCounters();
+
 /**
  * Bump the live-write revision for a collection. Called by every realtime entity
  * action (and the hook's deep-link heal / OAuth handlers) that mutates one of the
@@ -118,6 +131,38 @@ const hydrationGeneration = makeZeroCounters();
  */
 export const bumpRevision = (collection: HydratedCollection): void => {
   liveRevisions[collection] += 1;
+};
+
+/**
+ * Current live-write revision for a collection. The session-patch queue stamps
+ * each enqueued entry with this (captured right after the synchronous bump) so a
+ * later hydration apply can tell which queued patches it has already subsumed.
+ */
+export const getRevision = (collection: HydratedCollection): number => liveRevisions[collection];
+
+/**
+ * Revision that the last quiet-window hydration apply for a collection was
+ * proven against. The session-patch queue drops queued entries stamped at-or-
+ * below this — their effect already lives in the fresher applied snapshot.
+ */
+export const getLastAppliedRevision = (collection: HydratedCollection): number =>
+  lastAppliedRevision[collection];
+
+/**
+ * Record that a wholesale hydration apply for `collections` landed against the
+ * given per-collection baseline revisions (the counters snapshotted before the
+ * fetch, re-proven unchanged after). Monotonic — only advances the high-water
+ * mark. Called from `runHydration` at the moment it applies.
+ */
+export const recordHydrationApply = (
+  collections: readonly HydratedCollection[],
+  baselineRevisions: readonly number[]
+): void => {
+  collections.forEach((c, i) => {
+    if (baselineRevisions[i] > lastAppliedRevision[c]) {
+      lastAppliedRevision[c] = baselineRevisions[i];
+    }
+  });
 };
 
 /**
@@ -137,6 +182,7 @@ export const bumpFirstPaintMergeRevisions = (): void => {
  */
 export const resetHydrationRevisions = (): void => {
   liveRevisions = makeZeroCounters();
+  lastAppliedRevision = makeZeroCounters();
 };
 
 /**
@@ -225,6 +271,10 @@ export async function runHydration<T>(
     if (!isCurrent()) return; // superseded while fetching
     const raced = collections.some((c, i) => liveRevisions[c] !== before[i]);
     if (!raced) {
+      // The snapshot is provably quiet against `before` — record it as the
+      // high-water mark so the session-patch queue discards any queued patch it
+      // has already subsumed, THEN apply.
+      recordHydrationApply(collections, before);
       apply(result);
       return;
     }

@@ -31,7 +31,21 @@ vi.mock('./UserSelect', () => ({
 // edit collapse; they're heavy (agent cards + model/MCP selects) and irrelevant
 // to the gateway-wizard assertions. Stub them so step transitions stay fast.
 vi.mock('../AgentSelectionGrid', () => ({
-  AgentSelectionGrid: () => <div data-testid="agent-grid" />,
+  AgentSelectionGrid: ({
+    agents,
+    onSelect,
+  }: {
+    agents: { id: string }[];
+    onSelect: (agentId: string) => void;
+  }) => (
+    <div data-testid="agent-grid">
+      {agents.map((a) => (
+        <button key={a.id} type="button" onClick={() => onSelect(a.id)}>
+          {a.id}
+        </button>
+      ))}
+    </div>
+  ),
 }));
 vi.mock('../AgenticToolConfigForm', () => ({
   AgenticToolConfigForm: () => <div data-testid="agent-config" />,
@@ -139,10 +153,12 @@ async function advanceToOptions() {
   await flush();
 }
 
-/** Advance from "Options" (fills identity) to the "Create app" step (step 2). */
+/**
+ * Advance from "Options" to the "Create app" step (step 2). Slack defaults to
+ * aligning Slack users, so no run-as user is required and no user-select renders.
+ */
 async function advanceToCreateAppStep() {
   await advanceToOptions();
-  fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
   clickButton(/^Continue$/);
   await flush();
 }
@@ -195,8 +211,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.getByText('Surfaces')).toBeInTheDocument();
     expect(screen.getByText('Align Slack users')).toBeInTheDocument();
 
-    // Final step: primary becomes the submit verb, "Continue" is gone.
-    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
+    // Slack aligns users by default, so no run-as user is required to advance.
     clickButton(/^Continue$/);
     await flush();
     expect(getButton(/Copy manifest/)).toBeInTheDocument();
@@ -273,10 +288,21 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     clickButton(/Create channel/);
 
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
+    // Slack defaults to aligning users, so the channel is valid with no run-as
+    // user: align_slack_users is true and no agor_user_id was collected.
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'slack',
-      config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+      config: {
+        bot_token: 'xoxb-test',
+        app_token: 'xapp-test',
+        align_slack_users: true,
+        // The wizard only creates inbound/Socket-Mode Slack channels, so it
+        // records connection_mode:'socket' — this is what makes
+        // getRequiredSecretFields require app_token for UI-created channels.
+        connection_mode: 'socket',
+      },
     });
+    expect(channelCreate.mock.calls[0][0].agor_user_id).toBeFalsy();
   });
 
   it('invalidates a passing test result when a channel-scope option changes', async () => {
@@ -288,8 +314,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     await advanceToOptions();
     fireEvent.click(screen.getByText('Public channels'));
 
-    // Finish identity + walk to the final Tokens step.
-    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
+    // Slack aligns users by default — no run-as user needed. Walk to Tokens step.
     clickButton(/^Continue$/);
     await flush();
     clickButton(/^Continue$/);
@@ -308,22 +333,43 @@ describe('GatewayChannelsTable Slack create wizard', () => {
   });
 });
 
+/**
+ * Render the table with a single Slack channel and open its edit modal. The
+ * edit Collapse keeps inactive panels mounted (`destroyOnHidden={false}`), but
+ * children render lazily — call {@link expandPanel} to reveal a section's body.
+ */
+function renderEditTable(
+  client: AgorClient | null,
+  channel: GatewayChannel,
+  opts: {
+    currentUser?: User;
+    onUpdate?: (channelId: string, updates: Partial<GatewayChannel>) => void;
+  } = {}
+) {
+  const branch = makeBranch();
+  const user = makeUser();
+  renderWithProviders(
+    <GatewayChannelsTable
+      client={client}
+      gatewayChannelById={new Map([[channel.id, channel]])}
+      branchById={new Map([[branch.branch_id, branch]])}
+      userById={new Map([[user.user_id, user]])}
+      mcpServerById={new Map<string, MCPServer>()}
+      currentUser={opts.currentUser ?? user}
+      onUpdate={opts.onUpdate}
+    />
+  );
+  fireEvent.click(screen.getByTitle('Edit'));
+}
+
+/** Expand a Collapse section by clicking its header label. */
+function expandPanel(title: string) {
+  fireEvent.click(screen.getByText(title));
+}
+
 describe('GatewayChannelsTable Slack edit mode', () => {
   it('still renders the Collapse form (not the wizard) when editing', () => {
-    const branch = makeBranch();
-    const user = makeUser();
-    const channel = makeSlackChannel();
-    renderWithProviders(
-      <GatewayChannelsTable
-        client={null}
-        gatewayChannelById={new Map([[channel.id, channel]])}
-        branchById={new Map([[branch.branch_id, branch]])}
-        userById={new Map([[user.user_id, user]])}
-        mcpServerById={new Map<string, MCPServer>()}
-      />
-    );
-
-    fireEvent.click(screen.getByTitle('Edit'));
+    renderEditTable(null, makeSlackChannel());
 
     // Edit keeps the collapsible sections; the create-only wizard is absent.
     expect(screen.getByText('Credentials')).toBeInTheDocument();
@@ -331,6 +377,149 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     // No unified step indicator and no wizard footer in edit mode.
     expect(screen.queryByText('Tokens & test')).not.toBeInTheDocument();
     expect(queryButton(/^Continue$/)).toBeUndefined();
+  });
+
+  it('copies the recommended manifest derived from the channel options', async () => {
+    // Intercept the clipboard write robustly. Some jsdom builds ship a real
+    // `navigator.clipboard` whose method a `defineProperty({ value })` swap does
+    // not replace — the component then calls the real `writeText` and a fresh
+    // mock records 0 calls. Spy on whatever clipboard object exists (creating a
+    // minimal one only when the environment provides none) so OUR spy is always
+    // the function invoked. A secure context keeps the modern Clipboard path on.
+    Object.defineProperty(globalThis, 'isSecureContext', { value: true, configurable: true });
+    if (!navigator.clipboard?.writeText) {
+      Object.defineProperty(navigator, 'clipboard', {
+        value: { writeText: () => Promise.resolve() },
+        configurable: true,
+      });
+    }
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
+    // enable_channels: true ⇒ public-channel scopes + the app_mention event.
+    renderEditTable(null, makeSlackChannel());
+    expandPanel('App Manifest');
+
+    // The manifest derives from Form.useWatch, which propagates the edited
+    // values on the next tick — wait for the public-channel scope to appear.
+    await waitFor(() =>
+      expect(document.querySelector('pre')?.textContent ?? '').toContain('"channels:history"')
+    );
+    const manifest = document.querySelector('pre')?.textContent ?? '';
+    expect(manifest).toContain('"app_mention"');
+    // Channel surfaces trigger on app_mention, never message.* channel events.
+    expect(manifest).not.toContain('message.channels');
+
+    clickButton(/Copy app manifest/);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText.mock.calls[0][0]).toContain('"channels:history"');
+  });
+
+  it('tests an existing channel via gatewayChannelId (never form tokens)', async () => {
+    const result = {
+      ok: true,
+      team: { id: 'T123', name: 'Acme' },
+      appTokenValid: true,
+      failures: [],
+      notVerifiable: [],
+    };
+    const { client, testCreate } = makeClient(result);
+    renderEditTable(client, makeSlackChannel());
+    expandPanel('Credentials');
+
+    clickButton(/Test connection/);
+
+    await waitFor(() => expect(testCreate).toHaveBeenCalledTimes(1));
+    expect(testCreate.mock.calls[0][0]).toEqual({ gatewayChannelId: 'channel-1' });
+    expect(await screen.findByText('Connection succeeded')).toBeInTheDocument();
+    expect(screen.getByText('Acme')).toBeInTheDocument();
+  });
+
+  it('derives the Message Sources scope/event list (no stale message.* events)', async () => {
+    renderEditTable(null, makeSlackChannel());
+    expandPanel('Message Sources');
+
+    // Derived from requiredBotScopes/requiredBotEvents for public channels; the
+    // watched enable_channels value propagates on the next tick.
+    await waitFor(() =>
+      expect(screen.queryAllByText('channels:history').length).toBeGreaterThan(0)
+    );
+    expect(screen.queryAllByText('app_mentions:read').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('app_mention').length).toBeGreaterThan(0);
+    // Channel surfaces subscribe to app_mention, never message.* channel events.
+    expect(screen.queryByText('message.channels')).toBeNull();
+  });
+
+  it('shows stored vs not-set status for the token fields', () => {
+    // bot_token is stored (non-empty fixture value); app_token is absent.
+    renderEditTable(null, makeSlackChannel());
+    expandPanel('Credentials');
+
+    expect(screen.getByText('Stored')).toBeInTheDocument();
+    expect(screen.getByText('Not set')).toBeInTheDocument();
+    expect(
+      screen.getByText('A token is stored. Leave blank to keep it; enter a value to overwrite it.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('No token stored yet. Enter the app token (xapp-...).')
+    ).toBeInTheDocument();
+  });
+
+  it("preserves a channel's stored mcpServerIds on save, even when the current user has their own agent defaults", async () => {
+    // Regression test for #1730: opening the edit form used to re-run the
+    // "apply user's default agentic config" effect (it depends on
+    // editModalOpen), stomping the just-hydrated per-channel mcpServerIds
+    // with the current user's global defaults — silently wiping saved
+    // servers on save even though the user never touched the field.
+    const channel = {
+      ...makeSlackChannel(),
+      agentic_config: { agent: 'claude-code', mcpServerIds: ['mcp-server-1'] },
+    };
+    const currentUser = {
+      ...makeUser(),
+      default_agentic_config: { 'claude-code': { permissionMode: 'default' } },
+    } as unknown as User;
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { currentUser, onUpdate });
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      agentic_config: { mcpServerIds: ['mcp-server-1'] },
+    });
+  });
+
+  it("applies the target agent's defaults when switching agents and back, instead of silently keeping stale fields", async () => {
+    // A value-based guard (selectedAgent === persisted agent) would treat
+    // switching away and back as "no-op" and skip re-applying defaults,
+    // leaving whatever the other agent's switch left behind — the same
+    // silent-corruption class as #1730. Switching agents must always land on
+    // a defined state: that agent's own user defaults.
+    const channel = {
+      ...makeSlackChannel(),
+      agentic_config: { agent: 'claude-code', mcpServerIds: ['mcp-server-1'] },
+    };
+    const currentUser = {
+      ...makeUser(),
+      default_agentic_config: {
+        'claude-code': { mcpServerIds: ['default-claude-server'] },
+        codex: { mcpServerIds: ['default-codex-server'] },
+      },
+    } as unknown as User;
+    const onUpdate = vi.fn();
+
+    renderEditTable(null, channel, { currentUser, onUpdate });
+    expandPanel('Agent Configuration');
+
+    // Switch away to codex, then back to the channel's persisted agent.
+    clickButton(/^codex$/);
+    clickButton(/^claude-code$/);
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      agentic_config: { agent: 'claude-code', mcpServerIds: ['default-claude-server'] },
+    });
   });
 });
 

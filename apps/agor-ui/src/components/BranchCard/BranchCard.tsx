@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, Repo, Session, SpawnConfig, User } from '@agor-live/client';
-import { getAssistantConfig, isAssistant, isSessionExecuting } from '@agor-live/client';
+import { getTeammateConfig, isSessionExecuting, isTeammate } from '@agor-live/client';
 import {
   BranchesOutlined,
   CodeOutlined,
@@ -13,6 +13,7 @@ import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useProgressiveMount } from '../../hooks/useProgressiveMount';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
@@ -26,6 +27,7 @@ import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 import { BranchSessionPeekSection } from './BranchSessionPeekSection';
 import { BranchSessionSections } from './BranchSessionSections';
+import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
@@ -65,6 +67,7 @@ interface BranchCardProps {
   defaultExpanded?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
   panelMode?: boolean; // Render inside side panel instead of as a draggable canvas card
+  progressiveMountKey?: string | number | null;
   /** True when this branch is the deep-link target of the current URL
    *  (`/w/<branchShort>/`). Folded together with `isFocused` (a session
    *  is open in the drawer) into a unified "selected" state — rendered
@@ -100,14 +103,31 @@ const BranchCardComponent = ({
   defaultExpanded = true,
   inPopover = false,
   panelMode = false,
+  progressiveMountKey,
   isActiveUrlTarget = false,
   client,
 }: BranchCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
 
+  const branchBoardId = (branch as { board_id?: string | null }).board_id;
+
+  // Canvas cards hydrate their session sections in chunks after the board
+  // shell commits (#1768); panel/popover surfaces render a single card, so
+  // they mount immediately.
+  const sectionsReady = useProgressiveMount({
+    enabled: !inPopover && !panelMode,
+    priority: isActiveUrlTarget || sessions.some((s) => s.session_id === selectedSessionId) ? 2 : 0,
+    resetKey: progressiveMountKey ?? branchBoardId ?? 'unassigned',
+  });
+  const sessionShellMinHeight = useMemo(
+    () => estimateBranchSessionSectionsHeight(sessions, { defaultExpanded }),
+    [defaultExpanded, sessions]
+  );
+
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [archiveDeleteModalMounted, setArchiveDeleteModalMounted] = useState(false);
 
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
@@ -190,8 +210,8 @@ const BranchCardComponent = ({
   const isFailed = branch.filesystem_status === 'failed';
 
   // Check if this branch is a persisted agent
-  const assistantConfig = useMemo(() => getAssistantConfig(branch), [branch]);
-  const isAgent = isAssistant(branch);
+  const teammateConfig = useMemo(() => getTeammateConfig(branch), [branch]);
+  const isAgent = isTeammate(branch);
 
   // True when one of this branch's sessions is the currently opened
   // conversation. Drives the "focused" highlight on the canvas card and
@@ -246,7 +266,7 @@ const BranchCardComponent = ({
   // The two are deliberately unified: from the user's perspective both
   // answer "what am I looking at right now?". Rendered as a dashed
   // outline in `colorTextBase` so it reads as neutral against any zone /
-  // assistant accent and works in both dark and light modes. Dashed
+  // teammate accent and works in both dark and light modes. Dashed
   // because (per design discussion) it visually screams "selection"
   // without leaning on a colored ring that would compete with the white
   // attention halo. Dash length is the browser default — CSS doesn't
@@ -279,7 +299,7 @@ const BranchCardComponent = ({
   // states can stack cleanly:
   //   • `boxShadow` — attention halo for needs_attention / awaiting prompt
   //   • `outline`   — dashed selected state (focused OR active URL target)
-  //   • `borderLeft` — thick accent stripe for assistant branches
+  //   • `borderLeft` — thick accent stripe for teammate branches
   //   • `borderColor` — zone color when pinned (no other states use it)
   // outline + box-shadow are paint-only, so they don't disturb layout
   // and don't fight with each other or with `borderLeft`.
@@ -299,13 +319,13 @@ const BranchCardComponent = ({
       style.borderWidth = 1;
     }
     if (isAgent) {
-      // Assistant accent stripe: thick left border in `colorInfo`. Drops
+      // Teammate accent stripe: thick left border in `colorInfo`. Drops
       // the previous full `colorInfo` border (which collided with the
       // primary-color selected ring in the default theme where
       // colorInfo === colorPrimary). The stripe lives only on the left
       // edge so it doesn't compete with the dashed selected outline,
       // and composes with the zone-color border on the other three
-      // edges when an assistant is also pinned.
+      // edges when a teammate is also pinned.
       style.borderLeft = `4px solid ${token.colorInfo}`;
     }
     return style;
@@ -369,8 +389,8 @@ const BranchCardComponent = ({
             >
               {isCreating || hasRunningSession ? (
                 <Spin size="large" />
-              ) : isAgent && assistantConfig?.emoji ? (
-                <span style={{ fontSize: 32 }}>{assistantConfig.emoji}</span>
+              ) : isAgent && teammateConfig?.emoji ? (
+                <span style={{ fontSize: 32 }}>{teammateConfig.emoji}</span>
               ) : isAgent ? (
                 <RobotOutlined
                   style={{
@@ -390,16 +410,16 @@ const BranchCardComponent = ({
           )}
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
             {isAgent ? (
-              // Assistants are identified by their persona, not their git
+              // Teammates are identified by their persona, not their git
               // location — render the agent name in the prominent slot
               // and drop the repo/branch subtitle. Repo + branch are still
               // available in the branch settings modal for power users.
               <Typography.Title
                 level={4}
                 style={{ margin: 0, fontWeight: 600 }}
-                ellipsis={{ tooltip: assistantConfig?.displayName ?? branch.name }}
+                ellipsis={{ tooltip: teammateConfig?.displayName ?? branch.name }}
               >
-                {assistantConfig?.displayName ?? branch.name}
+                {teammateConfig?.displayName ?? branch.name}
               </Typography.Title>
             ) : (
               <>
@@ -485,7 +505,10 @@ const BranchCardComponent = ({
               <ArchiveActionButton
                 tooltip="Archive or delete branch"
                 disabled={connectionDisabled}
-                onClick={() => setArchiveDeleteModalOpen(true)}
+                onClick={() => {
+                  setArchiveDeleteModalMounted(true);
+                  setArchiveDeleteModalOpen(true);
+                }}
               />
             )}
           </div>
@@ -560,25 +583,39 @@ const BranchCardComponent = ({
         </div>
       )}
 
-      {/* Sessions & Scheduled Runs - composable content shared with the assistant panel */}
-      <div className={REACT_FLOW_NO_DRAG_CLASS}>
-        <BranchSessionSections
-          branch={branch}
-          sessions={sessions}
-          userById={userById}
-          currentUserId={currentUserId}
-          selectedSessionId={selectedSessionId}
-          onSessionClick={onSessionClick}
-          onCreateSession={onCreateSession}
-          onForkSession={onForkSession}
-          onSpawnSession={onSpawnSession}
-          onOpenSessionSettings={onOpenSessionSettings}
-          peekedSessionIds={peekedSessionIdSet}
-          onTogglePeekSession={!inPopover && !panelMode ? handleTogglePeekSession : undefined}
-          defaultExpanded={defaultExpanded}
-          mode="card"
-          client={client}
-        />
+      {/* Sessions & Scheduled Runs - composable content shared with the teammate panel */}
+      <div
+        className={REACT_FLOW_NO_DRAG_CLASS}
+        style={sectionsReady ? undefined : { minHeight: sessionShellMinHeight }}
+      >
+        {sectionsReady ? (
+          <BranchSessionSections
+            branch={branch}
+            sessions={sessions}
+            userById={userById}
+            currentUserId={currentUserId}
+            selectedSessionId={selectedSessionId}
+            onSessionClick={onSessionClick}
+            onCreateSession={onCreateSession}
+            onForkSession={onForkSession}
+            onSpawnSession={onSpawnSession}
+            onOpenSessionSettings={onOpenSessionSettings}
+            peekedSessionIds={peekedSessionIdSet}
+            onTogglePeekSession={!inPopover && !panelMode ? handleTogglePeekSession : undefined}
+            defaultExpanded={defaultExpanded}
+            mode="card"
+            client={client}
+          />
+        ) : (
+          // Truthful shell while this card waits for its hydration slot: real
+          // session count from data already in props, no fake placeholders.
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 12, display: 'block', padding: '4px 0' }}
+          >
+            Sessions ({peekableSessions.length})
+          </Typography.Text>
+        )}
       </div>
 
       {!inPopover && !panelMode && peekedSessions.length > 0 && (
@@ -592,18 +629,21 @@ const BranchCardComponent = ({
         />
       )}
 
-      {/* Archive/Delete Modal */}
-      <ArchiveDeleteBranchModal
-        open={archiveDeleteModalOpen}
-        branch={branch}
-        sessionCount={sessions.length}
-        environmentRunning={branch.environment_instance?.status === 'running'}
-        onConfirm={(options) => {
-          onArchiveOrDelete?.(branch.branch_id, options);
-          setArchiveDeleteModalOpen(false);
-        }}
-        onCancel={() => setArchiveDeleteModalOpen(false)}
-      />
+      {/* Branch cards are repeated across the canvas, so mount this only on demand. */}
+      {archiveDeleteModalMounted && (
+        <ArchiveDeleteBranchModal
+          open={archiveDeleteModalOpen}
+          branch={branch}
+          sessionCount={sessions.length}
+          environmentRunning={branch.environment_instance?.status === 'running'}
+          onConfirm={(options) => {
+            onArchiveOrDelete?.(branch.branch_id, options);
+            setArchiveDeleteModalOpen(false);
+          }}
+          onCancel={() => setArchiveDeleteModalOpen(false)}
+          afterClose={() => setArchiveDeleteModalMounted(false)}
+        />
+      )}
     </Card>
   );
 };

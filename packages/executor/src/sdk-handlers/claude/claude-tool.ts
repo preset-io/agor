@@ -15,6 +15,7 @@ import type { PermissionMode as ClaudeSDKPermissionMode } from '@agor/core/sdk';
 import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   BranchRepository,
+  MCPOAuthAuthHeadersRepository,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -147,7 +148,8 @@ export class ClaudeTool implements ITool {
     reposRepo?: RepoRepository,
     mcpEnabled?: boolean,
     _useNativeAuth?: boolean, // Claude supports `claude login` OAuth, but no special handling needed in tool
-    usersRepo?: import('../../db/feathers-repositories').UsersRepository
+    usersRepo?: import('../../db/feathers-repositories').UsersRepository,
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -163,7 +165,8 @@ export class ClaudeTool implements ITool {
         reposRepo,
         messagesService,
         mcpEnabled,
-        usersRepo
+        usersRepo,
+        mcpOAuthAuthHeadersRepo
       );
     }
   }

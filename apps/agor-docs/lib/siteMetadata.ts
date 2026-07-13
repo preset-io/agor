@@ -14,7 +14,7 @@ export const FAVICON_PATH = '/favicon.png';
 export const LOGO_PATH = '/logo.png';
 
 export const DEFAULT_DESCRIPTION =
-  'Team command center for all things agentic. A shared canvas for coding agents and long-lived assistants — Claude Code, Codex, Gemini — anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.';
+  'Team command center for all things agentic. A shared canvas for coding agents and long-lived AI teammates — Claude Code, Codex, Gemini — anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.';
 
 export const DEFAULT_SOCIAL_IMAGE = '/screenshots/board-hero.png';
 
@@ -23,6 +23,7 @@ export const SOCIAL_IMAGE_FIELDS = ['ogImage', 'socialImage', 'heroImage', 'imag
 export type FrontMatterLike = {
   canonical?: string;
   description?: string;
+  date?: string | number | Date;
   heroImage?: string;
   image?: string;
   imageHeight?: number | string;

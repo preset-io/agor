@@ -170,14 +170,17 @@ function makeFixtures(
   return { message, session, branch };
 }
 
+type TestWidgetEntry = WidgetRegistryEntry<
+  { names: string[]; reason: string },
+  { value: string; scope: 'global' | 'session' },
+  { names_submitted: string[]; scope: string }
+>;
+
 function registerTestWidget(
-  applySubmit = vi.fn(async (_ctx: unknown, _submit: unknown, _params: unknown) => {})
+  applySubmit = vi.fn(async (_ctx: unknown, _submit: unknown, _params: unknown) => {}),
+  authorizeDismiss?: TestWidgetEntry['authorizeDismiss']
 ) {
-  const entry: WidgetRegistryEntry<
-    { names: string[]; reason: string },
-    { value: string; scope: 'global' | 'session' },
-    { names_submitted: string[]; scope: string }
-  > = {
+  const entry: TestWidgetEntry = {
     type: 'env_vars',
     schemaVersion: 1,
     paramsSchema: z.object({
@@ -197,6 +200,7 @@ function registerTestWidget(
       `[Agor] User submitted ${rm.names_submitted.join(', ')} (scope: ${rm.scope}).`,
     buildDismissedPrompt: (params) =>
       `[Agor] User dismissed the request for ${params.names.join(', ')}.`,
+    ...(authorizeDismiss ? { authorizeDismiss } : {}),
   };
   registerWidget(entry);
   return { entry, applySubmit };
@@ -416,6 +420,71 @@ describe('resolveWidget', () => {
     );
     const promptData = promptCall?.data as { prompt: string };
     expect(promptData.prompt).toContain('dismissed');
+  });
+
+  it('rejects a dismissal that the widget authorizeDismiss denies, leaving it pending', async () => {
+    // A non-admin session creator passes the resolve-endpoint RBAC, but an
+    // admin-only widget's authorizeDismiss must still block the dismiss.
+    registerTestWidget(undefined, (ctx) => {
+      if (ctx.submitterRole !== 'admin') {
+        throw new Error('Only admins can decline this request');
+      }
+    });
+    const fixtures = makeFixtures();
+    const { app, calls } = makeApp(fixtures);
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'dismiss' },
+        { user_id: 'creator-user-id' as UserID, role: 'member' },
+        { app: app as never, isBranchOwner: async () => false }
+      )
+    ).rejects.toThrow(/admin/i);
+
+    // No status patch on a rejected dismiss — the widget stays pending.
+    expect(calls.find((c) => c.service === 'messages' && c.method === 'patch')).toBeUndefined();
+  });
+
+  it('rejects a dismissal from an undefined-role caller, leaving it pending', async () => {
+    // Same endpoint path, but the caller carries no role at all (fails closed).
+    registerTestWidget(undefined, (ctx) => {
+      if (ctx.submitterRole !== 'admin') {
+        throw new Error('Only admins can decline this request');
+      }
+    });
+    const fixtures = makeFixtures();
+    const { app, calls } = makeApp(fixtures);
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'dismiss' },
+        { user_id: 'creator-user-id' as UserID },
+        { app: app as never, isBranchOwner: async () => false }
+      )
+    ).rejects.toThrow(/admin/i);
+
+    expect(calls.find((c) => c.service === 'messages' && c.method === 'patch')).toBeUndefined();
+  });
+
+  it('allows a dismissal that the widget authorizeDismiss permits', async () => {
+    registerTestWidget(undefined, (ctx) => {
+      if (ctx.submitterRole !== 'admin') {
+        throw new Error('Only admins can decline this request');
+      }
+    });
+    const fixtures = makeFixtures();
+    const { app } = makeApp(fixtures);
+
+    const result = await resolveWidget(
+      'widget-msg-1',
+      { kind: 'dismiss' },
+      { user_id: 'creator-user-id' as UserID, role: 'admin' },
+      { app: app as never, isBranchOwner: async () => false }
+    );
+
+    expect(result.status).toBe('dismissed');
   });
 
   it('throws NotAuthenticated when caller is undefined', async () => {

@@ -26,9 +26,10 @@ describe('getMcpServersForSession', () => {
     const servers = await getMcpServersForSession('session-a' as SessionID, {
       mcpServerRepo: { findAll } as never,
       sessionMCPRepo: { listEffectiveServers, listServers } as never,
+      forUserId: 'user-a',
     });
 
-    expect(listEffectiveServers).toHaveBeenCalledWith('session-a', true);
+    expect(listEffectiveServers).toHaveBeenCalledWith('session-a', true, 'user-a');
     expect(findAll).not.toHaveBeenCalled();
     expect(listServers).not.toHaveBeenCalled();
     expect(servers).toEqual([
@@ -75,5 +76,68 @@ describe('getMcpServersForSession', () => {
       'session-a',
       'session-b',
     ]);
+  });
+
+  it('resolves an OAuth server whose only template is oauth_client_secret', async () => {
+    const prevKeys = process.env.AGOR_USER_ENV_KEYS;
+    const prevSecret = process.env.OAUTH_CLIENT_SECRET;
+    process.env.AGOR_USER_ENV_KEYS = 'OAUTH_CLIENT_SECRET';
+    process.env.OAUTH_CLIENT_SECRET = 'resolved-client-secret';
+
+    try {
+      const oauthServer = {
+        ...makeServer('oauth-server', 'session', 'oauth'),
+        auth: {
+          type: 'oauth',
+          oauth_client_id: 'public-client',
+          oauth_client_secret: '{{ user.env.OAUTH_CLIENT_SECRET }}',
+        },
+      } as MCPServer;
+      const listEffectiveServers = vi.fn().mockResolvedValue([oauthServer]);
+
+      const servers = await getMcpServersForSession('session-a' as SessionID, {
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: { listEffectiveServers } as never,
+      });
+
+      const resolved = servers.find(
+        ({ server }) => server.mcp_server_id === 'oauth-server'
+      )?.server;
+      expect(resolved?.auth?.oauth_client_secret).toBe('resolved-client-secret');
+    } finally {
+      if (prevKeys === undefined) delete process.env.AGOR_USER_ENV_KEYS;
+      else process.env.AGOR_USER_ENV_KEYS = prevKeys;
+      if (prevSecret === undefined) delete process.env.OAUTH_CLIENT_SECRET;
+      else process.env.OAUTH_CLIENT_SECRET = prevSecret;
+    }
+  });
+
+  it('hydrates OAuth access tokens through the trusted executor auth-header route', async () => {
+    const oauthServer = {
+      ...makeServer('oauth-server', 'session', 'oauth'),
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'per_user',
+        oauth_access_token: '••••••••',
+      },
+    } as MCPServer;
+    const tokenServer = makeServer('token-server', 'global', 'token');
+    const listEffectiveServers = vi.fn().mockResolvedValue([oauthServer, tokenServer]);
+    const getAuthHeaders = vi.fn().mockResolvedValue({
+      'oauth-server': { authorization: 'Bearer real-oauth-token' },
+    });
+
+    const servers = await getMcpServersForSession('session-a' as SessionID, {
+      mcpServerRepo: { findAll: vi.fn() } as never,
+      sessionMCPRepo: { listEffectiveServers } as never,
+      mcpOAuthAuthHeadersRepo: { getAuthHeaders } as never,
+    });
+
+    expect(getAuthHeaders).toHaveBeenCalledWith(['oauth-server']);
+    const hydrated = servers.find(({ server }) => server.mcp_server_id === 'oauth-server')?.server;
+    expect(hydrated?.auth).toMatchObject({
+      type: 'oauth',
+      oauth_access_token: 'real-oauth-token',
+    });
   });
 });

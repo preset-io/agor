@@ -21,6 +21,7 @@ import type {
   User,
   UUID,
 } from '@agor-live/client';
+import { GATEWAY_REDACTED_SENTINEL } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -439,6 +440,71 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 }
 
 /**
+ * Compact inline alert — the seed of a future shared `AgorAlert`. Keeps antd
+ * `Alert`'s type semantics + icon, but demotes the heading out of the large
+ * title font (small strong text at `fontSizeSM`) and renders the body as small
+ * muted text with tight padding. Verbose bodies fold behind a "show more"
+ * expander so the resting state stays short.
+ */
+const CompactAlert: React.FC<{
+  type?: 'success' | 'info' | 'warning' | 'error';
+  icon?: React.ReactNode;
+  showIcon?: boolean;
+  heading?: React.ReactNode;
+  description?: React.ReactNode;
+  /** Fold the body behind a `rows`-line "show more" expander. */
+  expandable?: boolean;
+  expandRows?: number;
+  style?: React.CSSProperties;
+}> = ({
+  type = 'info',
+  icon,
+  showIcon = true,
+  heading,
+  description,
+  expandable = false,
+  expandRows = 2,
+  style,
+}) => {
+  const { token } = theme.useToken();
+  const body =
+    description == null ? undefined : expandable ? (
+      <Typography.Paragraph
+        type="secondary"
+        style={{ fontSize: token.fontSizeSM, marginBottom: 0 }}
+        ellipsis={{ rows: expandRows, expandable: true, symbol: 'show more' }}
+      >
+        {description}
+      </Typography.Paragraph>
+    ) : (
+      <div style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>
+        {description}
+      </div>
+    );
+  return (
+    <Alert
+      type={type}
+      showIcon={showIcon}
+      icon={icon}
+      title={
+        heading == null ? undefined : (
+          <span style={{ fontSize: token.fontSizeSM, fontWeight: 600, lineHeight: 1.4 }}>
+            {heading}
+          </span>
+        )
+      }
+      description={body}
+      style={style}
+      styles={{
+        root: { padding: '6px 10px', alignItems: heading == null ? 'center' : 'flex-start' },
+        icon: { fontSize: token.fontSizeSM, marginInlineEnd: 8 },
+        title: { marginBottom: body == null ? 0 : 2 },
+      }}
+    />
+  );
+};
+
+/**
  * Honest rendering of a connection probe ({@link SlackTestResult}, shared by
  * the Slack and Shortcut connectors). A green result is advisory: `notVerifiable`
  * is surfaced as a warning so success is never read as "fully verified".
@@ -448,13 +514,12 @@ const ConnectionTestResultView: React.FC<{ result: SlackTestResult }> = ({ resul
   const hasFollowups = result.failures.length > 0 || result.notVerifiable.length > 0;
   return (
     <div style={{ marginBottom: 16 }}>
-      <Alert
+      <CompactAlert
         type={result.ok ? 'success' : 'error'}
-        showIcon
         icon={result.ok ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-        title={result.ok ? 'Connection succeeded' : 'Connection failed'}
+        heading={result.ok ? 'Connection succeeded' : 'Connection failed'}
         description={
-          <div style={{ fontSize: 12 }}>
+          <>
             {result.team && (
               <div>
                 Team: <strong>{result.team.name}</strong> ({result.team.id})
@@ -472,28 +537,31 @@ const ConnectionTestResultView: React.FC<{ result: SlackTestResult }> = ({ resul
               </div>
             )}
             {result.channelAccess && result.channelAccess.length > 0 && (
-              <div style={{ marginTop: 4 }}>
-                Sampled channel access:
-                <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-                  {result.channelAccess.map((c) => (
-                    <li key={c.channelId}>
-                      <code>{c.channelId}</code>: {c.ok ? 'ok' : 'no access'}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              <Typography.Paragraph
+                type="secondary"
+                style={{ fontSize: 'inherit', margin: '4px 0 0' }}
+                ellipsis={{ rows: 1, expandable: true, symbol: 'show more' }}
+              >
+                Sampled channel access:{' '}
+                {result.channelAccess.map((c, i) => (
+                  <span key={c.channelId}>
+                    {i > 0 ? ', ' : ''}
+                    <code>{c.channelId}</code>: {c.ok ? 'ok' : 'no access'}
+                  </span>
+                ))}
+              </Typography.Paragraph>
             )}
-          </div>
+          </>
         }
         style={{ marginBottom: hasFollowups ? 12 : 0 }}
       />
       {result.failures.length > 0 && (
-        <Alert
+        <CompactAlert
           type="error"
-          showIcon
-          title="Failures"
+          heading="Failures"
+          expandable
           description={
-            <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 12 }}>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
               {result.failures.map((f) => (
                 <li key={`${f.capability}:${f.reason}`}>
                   <strong>{f.capability}</strong>: {f.reason}
@@ -506,29 +574,111 @@ const ConnectionTestResultView: React.FC<{ result: SlackTestResult }> = ({ resul
         />
       )}
       {result.notVerifiable.length > 0 && (
-        <Alert
+        <CompactAlert
           type="warning"
-          showIcon
           icon={<ExclamationCircleOutlined />}
-          title="Not verifiable from here"
+          heading="Not verifiable from here"
+          expandable
           description={
-            <div style={{ fontSize: 12 }}>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                A green result does not guarantee these — confirm them on the platform:
-              </Typography.Text>
+            <>
+              A green result does not guarantee these — confirm them on the platform:
               <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
                 {result.notVerifiable.map((n) => (
                   <li key={n}>{n}</li>
                 ))}
               </ul>
-            </div>
+            </>
           }
-          style={{ fontSize: 12 }}
         />
       )}
     </div>
   );
 };
+
+/**
+ * Recommended Slack app manifest for an existing channel. Derived from the
+ * channel's current capability toggles via {@link buildSlackManifest}, so it
+ * always shows the manifest the app *should* have — not a readout of the app's
+ * live Slack configuration. Paste it back into Slack to align scopes/events.
+ */
+const SlackManifestPanel: React.FC<{ options: SlackWizardOptions }> = ({ options }) => {
+  const { token } = theme.useToken();
+  const { showError } = useThemedMessage();
+  const [copied, setCopied] = useState(false);
+
+  const manifestJson = useMemo(
+    () => JSON.stringify(buildSlackManifest(options), null, 2),
+    [options]
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: manifestJson is the change trigger, not a value read in the body.
+  useEffect(() => {
+    setCopied(false);
+  }, [manifestJson]);
+
+  const handleCopy = async () => {
+    const ok = await copyTextToClipboard(manifestJson);
+    if (ok) {
+      setCopied(true);
+    } else {
+      showError('Copy failed — select the manifest text and copy it manually.');
+    }
+  };
+
+  return (
+    <>
+      <Typography.Text
+        type="secondary"
+        style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
+      >
+        The recommended manifest for this channel&apos;s current options — the desired Slack app
+        configuration, not a readout of your app&apos;s live settings. Paste it into{' '}
+        <strong>App Manifest</strong> in your Slack app to align its scopes and events.
+      </Typography.Text>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <Button
+          size="small"
+          icon={copied ? <CheckCircleOutlined /> : <CopyOutlined />}
+          onClick={handleCopy}
+        >
+          {copied ? 'Copied' : 'Copy app manifest'}
+        </Button>
+      </div>
+      <pre
+        style={{
+          background: token.colorBgContainer,
+          border: `1px solid ${token.colorBorder}`,
+          borderRadius: token.borderRadius,
+          padding: 12,
+          margin: 0,
+          maxHeight: 280,
+          overflow: 'auto',
+          fontSize: 11,
+          lineHeight: 1.5,
+          fontFamily: 'monospace',
+        }}
+      >
+        {manifestJson}
+      </pre>
+    </>
+  );
+};
+
+/** Whether a sensitive config field is already stored (API redacts it to the sentinel). */
+function isSecretStored(config: Record<string, unknown> | undefined, field: string): boolean {
+  const value = config?.[field];
+  return value === GATEWAY_REDACTED_SENTINEL || (typeof value === 'string' && value.length > 0);
+}
+
+/** Inline "Stored" / "Not set" badge for an edit-form secret field. */
+const SecretStatusTag: React.FC<{ stored: boolean }> = ({ stored }) =>
+  stored ? (
+    <Tag color="green" icon={<CheckCircleOutlined />} style={{ marginInlineStart: 8 }}>
+      Stored
+    </Tag>
+  ) : (
+    <Tag style={{ marginInlineStart: 8 }}>Not set</Tag>
+  );
 
 /**
  * Guided Slack setup wizard shown on create. Step state is lifted to the parent
@@ -566,7 +716,7 @@ const SlackSetupWizard: React.FC<{
   const enableChannels = Form.useWatch('enable_channels', form) ?? false;
   const enableGroups = Form.useWatch('enable_groups', form) ?? false;
   const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
-  const alignUsers = Form.useWatch('align_slack_users', form) ?? false;
+  const alignUsers = Form.useWatch('align_slack_users', form) ?? true;
   const outbound = Form.useWatch('outbound_enabled', form) ?? false;
   const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
 
@@ -747,18 +897,17 @@ const SlackSetupWizard: React.FC<{
           label="Align Slack users"
           name="align_slack_users"
           valuePropName="checked"
-          initialValue={false}
+          initialValue={true}
           tooltip="Match each Slack profile email to an Agor user. Unmatched users are rejected."
         >
           <Switch />
         </Form.Item>
         {alignUsers ? (
-          <Alert
+          <CompactAlert
             type="info"
-            showIcon
-            title="Requires users:read.email scope"
+            heading="Requires users:read.email scope"
             description="Added to the manifest automatically so Agor can match Slack profiles by email."
-            style={{ fontSize: 12, marginBottom: 16 }}
+            style={{ marginBottom: 16 }}
           />
         ) : (
           <Form.Item
@@ -842,10 +991,9 @@ const SlackSetupWizard: React.FC<{
 
       {/* Step 2: Tokens + test */}
       <div style={{ display: step === 2 ? undefined : 'none' }}>
-        <Alert
+        <CompactAlert
           type="info"
-          showIcon
-          title="Where to find these tokens"
+          heading="Where to find these tokens"
           description={
             <span>
               <strong>Bot token (xoxb-)</strong>: OAuth &amp; Permissions → Bot User OAuth Token.
@@ -853,7 +1001,7 @@ const SlackSetupWizard: React.FC<{
               <strong>App token (xapp-)</strong>: Basic Information → App-Level Tokens.
             </span>
           }
-          style={{ marginBottom: 16, fontSize: 12 }}
+          style={{ marginBottom: 16 }}
         />
 
         <Form.Item
@@ -886,12 +1034,11 @@ const SlackSetupWizard: React.FC<{
         {testResult && <ConnectionTestResultView result={testResult} />}
 
         {!testResult?.ok && (
-          <Alert
+          <CompactAlert
             type="warning"
-            showIcon
-            title="Testing is optional"
-            description="Slack can't be fully verified up front. You can save now and confirm by sending the bot a message — but an untested channel may not work."
-            style={{ marginBottom: 16, fontSize: 12 }}
+            heading="Testing is optional"
+            description="Slack can't be fully verified up front. Save now and confirm by messaging the bot — but an untested channel may not work."
+            style={{ marginBottom: 16 }}
           />
         )}
 
@@ -1005,15 +1152,50 @@ const ChannelFormFields: React.FC<{
 }) => {
   const { showError } = useThemedMessage();
 
-  // Watch message source settings for showing warnings/scope requirements
-  const enableChannels = Form.useWatch('enable_channels', form) ?? false;
-  const enableGroups = Form.useWatch('enable_groups', form) ?? false;
-  const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
-  const alignSlackUsers = Form.useWatch('align_slack_users', form) ?? false;
+  // Watch message source settings for showing warnings/scope requirements. A
+  // watched value is `undefined` while its (lazily-rendered) Collapse panel is
+  // still collapsed, so on edit fall back to the channel's stored config —
+  // otherwise the manifest/scope sections would render as if every surface were
+  // off until the user first expands Message Sources.
+  const slackConfig = editingChannel?.config as Record<string, unknown> | undefined;
+  const enableChannels = Boolean(
+    Form.useWatch('enable_channels', form) ?? slackConfig?.enable_channels
+  );
+  const enableGroups = Boolean(Form.useWatch('enable_groups', form) ?? slackConfig?.enable_groups);
+  const enableMpim = Boolean(Form.useWatch('enable_mpim', form) ?? slackConfig?.enable_mpim);
+  const alignSlackUsers = Boolean(
+    Form.useWatch('align_slack_users', form) ?? slackConfig?.align_slack_users
+  );
+  const outboundEnabled = Boolean(
+    Form.useWatch('outbound_enabled', form) ?? slackConfig?.outbound_enabled
+  );
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
   const alignShortcutUsers = Form.useWatch('shortcut_align_users', form) ?? false;
+  // Track the live Name field so the manifest preview reflects in-progress edits,
+  // falling back to the stored channel name.
+  const channelName = (Form.useWatch('name', form) as string | undefined) ?? editingChannel?.name;
 
   const sourcesEnabled = enableChannels || enableGroups || enableMpim;
+
+  // Derive the recommended manifest + required scopes/events from the channel's
+  // live toggles so the edit form is a single source of truth that can never
+  // drift from the core generator.
+  const slackOptions: SlackWizardOptions = useMemo(
+    () => ({
+      appName: channelName || 'Agor',
+      publicChannels: enableChannels,
+      privateChannels: enableGroups,
+      groupDms: enableMpim,
+      alignUsers: alignSlackUsers,
+      outbound: outboundEnabled,
+    }),
+    [channelName, enableChannels, enableGroups, enableMpim, alignSlackUsers, outboundEnabled]
+  );
+  const slackScopes = useMemo(() => requiredBotScopes(slackOptions), [slackOptions]);
+  const slackEvents = useMemo(() => requiredBotEvents(slackOptions), [slackOptions]);
+
+  const botTokenStored = isSecretStored(slackConfig, 'bot_token');
+  const appTokenStored = isSecretStored(slackConfig, 'app_token');
 
   return (
     <>
@@ -1112,11 +1294,10 @@ const ChannelFormFields: React.FC<{
             channelType !== 'github' &&
             channelType !== 'teams' &&
             channelType !== 'shortcut' && (
-              <Alert
-                title={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
-                description="This platform integration is not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
+              <CompactAlert
                 type="info"
-                showIcon
+                heading={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
+                description="Not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
                 style={{ marginBottom: 16 }}
               />
             )}
@@ -1135,10 +1316,9 @@ const ChannelFormFields: React.FC<{
             )}
 
             {githubError && (
-              <Alert
+              <CompactAlert
                 type="error"
-                showIcon
-                title="GitHub Setup Error"
+                heading="GitHub Setup Error"
                 description={githubError}
                 style={{ marginBottom: 16 }}
               />
@@ -1234,10 +1414,10 @@ const ChannelFormFields: React.FC<{
             {/* Step 2 (Credentials): App ID + private key. */}
             {mode === 'create' && createStep === 2 && !githubLoading && (
               <div style={{ marginBottom: 16 }}>
-                <Alert
+                <CompactAlert
                   type="info"
-                  showIcon
-                  title="Enter your GitHub App credentials"
+                  heading="Enter your GitHub App credentials"
+                  expandable
                   description={
                     <span>
                       On your GitHub App&apos;s settings page:
@@ -1284,7 +1464,7 @@ const ChannelFormFields: React.FC<{
                 </Form.Item>
 
                 {githubError && (
-                  <Alert type="error" showIcon title={githubError} style={{ marginBottom: 12 }} />
+                  <CompactAlert type="error" heading={githubError} style={{ marginBottom: 12 }} />
                 )}
               </div>
             )}
@@ -1563,10 +1743,10 @@ const ChannelFormFields: React.FC<{
                       <Input placeholder="00000000-0000-0000-0000-000000000000" />
                     </Form.Item>
 
-                    <Alert
+                    <CompactAlert
                       type="info"
-                      showIcon
-                      message="Azure Bot Setup"
+                      heading="Azure Bot Setup"
+                      expandable
                       description={
                         <span>
                           Create an Azure Bot resource in the{' '}
@@ -1582,7 +1762,6 @@ const ChannelFormFields: React.FC<{
                           sideload the bot as a Teams app via a custom manifest.
                         </span>
                       }
-                      style={{ fontSize: 12 }}
                     />
                   </>
                 ),
@@ -2007,17 +2186,15 @@ const ChannelFormFields: React.FC<{
                     alignUsers={alignSlackUsers}
                     userById={userById}
                     alignedContent={
-                      <Alert
+                      <CompactAlert
                         type="info"
-                        showIcon
-                        title="Requires users:read.email scope"
+                        heading="Requires users:read.email scope"
                         description={
                           <span>
                             Add <code>users:read.email</code> to your Slack app so Agor can match
                             Slack profiles by email.
                           </span>
                         }
-                        style={{ fontSize: 12 }}
                       />
                     }
                   />
@@ -2030,36 +2207,82 @@ const ChannelFormFields: React.FC<{
                   <SectionLabel
                     icon={<KeyOutlined />}
                     title="Credentials"
-                    subtitle={mode === 'edit' ? 'leave blank to keep current' : undefined}
+                    subtitle="blank keeps stored values"
                   />
                 ),
                 children: (
                   <>
                     <Form.Item
-                      label="Bot Token"
+                      label={
+                        <span>
+                          Bot Token <SecretStatusTag stored={botTokenStored} />
+                        </span>
+                      }
                       name="bot_token"
                       tooltip="Slack Bot User OAuth Token (xoxb-...)"
+                      extra={
+                        botTokenStored
+                          ? 'A token is stored. Leave blank to keep it; enter a value to overwrite it.'
+                          : 'No token stored yet. Enter the bot token (xoxb-...).'
+                      }
                     >
-                      <Input.Password placeholder="••••••••" />
+                      <Input.Password placeholder={botTokenStored ? '••••••••' : 'xoxb-...'} />
                     </Form.Item>
 
                     <Form.Item
-                      label="App Token"
+                      label={
+                        <span>
+                          App Token <SecretStatusTag stored={appTokenStored} />
+                        </span>
+                      }
                       name="app_token"
                       tooltip="Slack App-Level Token for Socket Mode (xapp-...)"
+                      extra={
+                        appTokenStored
+                          ? 'A token is stored. Leave blank to keep it; enter a value to overwrite it.'
+                          : 'No token stored yet. Enter the app token (xapp-...).'
+                      }
                     >
-                      <Input.Password placeholder="••••••••" />
+                      <Input.Password placeholder={appTokenStored ? '••••••••' : 'xapp-...'} />
                     </Form.Item>
 
-                    <Alert
+                    <CompactAlert
                       type="info"
-                      showIcon
-                      title="Socket Mode Required"
-                      description="Enable Socket Mode in your Slack app settings and generate an app-level token with connections:write scope."
-                      style={{ fontSize: 12 }}
+                      heading="Socket Mode Required"
+                      description="Enable Socket Mode and generate an app-level token with connections:write scope."
+                      style={{ marginBottom: 12 }}
                     />
+
+                    <Button
+                      icon={<ThunderboltOutlined />}
+                      loading={connectionTestLoading}
+                      onClick={onSlackTest}
+                      style={{ marginBottom: 12 }}
+                    >
+                      Test connection
+                    </Button>
+                    <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                      Tests the stored credentials against your Slack workspace.
+                    </Typography.Text>
+
+                    {connectionTestResult && (
+                      <ConnectionTestResultView result={connectionTestResult} />
+                    )}
                   </>
                 ),
+              },
+
+              // ── App Manifest ──
+              {
+                key: 'manifest',
+                label: (
+                  <SectionLabel
+                    icon={<SlackOutlined />}
+                    title="App Manifest"
+                    subtitle="recommended scopes & events"
+                  />
+                ),
+                children: <SlackManifestPanel options={slackOptions} />,
               },
 
               // ── Message Sources ──
@@ -2112,50 +2335,61 @@ const ChannelFormFields: React.FC<{
                     </Form.Item>
 
                     {sourcesEnabled && (
-                      <Alert
+                      <CompactAlert
                         type="info"
-                        showIcon
-                        title="Slack mentions are always required"
+                        heading="Slack mentions are always required"
+                        expandable
                         description="Agor only starts or continues Slack channel threads when this bot is explicitly @mentioned. Missed thread replies are included as catch-up context on the next mention."
                         style={{ marginBottom: 12 }}
                       />
                     )}
 
-                    {sourcesEnabled && (
-                      <Alert
-                        type="info"
-                        showIcon
-                        title="Required Slack Scopes & Events"
-                        description={
-                          <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 12 }}>
-                            <li>
-                              <code>chat:write</code> (always required)
-                            </li>
-                            {enableChannels && (
-                              <>
-                                <li>
-                                  <code>channels:history</code> + <code>app_mentions:read</code>
-                                </li>
-                                <li>
-                                  Events: <code>message.channels</code>, <code>app_mention</code>
-                                </li>
-                              </>
-                            )}
-                            {enableGroups && (
-                              <li>
-                                <code>groups:history</code> + event: <code>message.groups</code>
-                              </li>
-                            )}
-                            {enableMpim && (
-                              <li>
-                                <code>mpim:history</code> + event: <code>message.mpim</code>
-                              </li>
-                            )}
-                          </ul>
-                        }
-                        style={{ fontSize: 12 }}
-                      />
-                    )}
+                    <CompactAlert
+                      type="info"
+                      heading={`Required Slack Scopes & Events (${slackScopes.length} scopes, ${slackEvents.length} events)`}
+                      expandable
+                      expandRows={1}
+                      description={
+                        <div>
+                          <Typography.Text type="secondary" style={{ fontSize: 'inherit' }}>
+                            Derived from the selected surfaces — channel-like surfaces trigger on{' '}
+                            <code>app_mention</code>, not <code>message.*</code> channel events.
+                            Copy the full manifest from the App Manifest section.
+                          </Typography.Text>
+                          <div style={{ marginTop: 8 }}>
+                            <Typography.Text strong style={{ fontSize: 'inherit' }}>
+                              Bot scopes ({slackScopes.length})
+                            </Typography.Text>
+                            <div style={{ marginTop: 6 }}>
+                              {slackScopes.map((s) => (
+                                <Tag
+                                  key={s}
+                                  style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}
+                                >
+                                  {s}
+                                </Tag>
+                              ))}
+                            </div>
+                          </div>
+                          <div style={{ marginTop: 8 }}>
+                            <Typography.Text strong style={{ fontSize: 'inherit' }}>
+                              Event subscriptions ({slackEvents.length})
+                            </Typography.Text>
+                            <div style={{ marginTop: 6 }}>
+                              {slackEvents.map((e) => (
+                                <Tag
+                                  key={e}
+                                  color="blue"
+                                  style={{ marginBottom: 4, fontFamily: 'monospace', fontSize: 11 }}
+                                >
+                                  {e}
+                                </Tag>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      }
+                    />
                   </>
                 ),
               },
@@ -2198,10 +2432,10 @@ const ChannelFormFields: React.FC<{
                       <Input placeholder="#project-updates, channel:C01ABC123, or user@example.com" />
                     </Form.Item>
 
-                    <Alert
+                    <CompactAlert
                       type="info"
-                      showIcon
-                      title="Slack scopes"
+                      heading="Slack scopes"
+                      expandable
                       description={
                         <span>
                           Channel-name targets require <code>channels:read</code> and, for private
@@ -2209,7 +2443,6 @@ const ChannelFormFields: React.FC<{
                           <code>users:read.email</code> and open a DM with that Slack user.
                         </span>
                       }
-                      style={{ fontSize: 12 }}
                     />
                   </>
                 ),
@@ -2333,6 +2566,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
   const [channelType, setChannelType] = useState<ChannelType>('slack');
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
+  // One-shot flag consumed by the "pre-populate agentic config" effect below —
+  // set whenever handleEdit hydrates the edit form from a channel's persisted
+  // config, so that hydration is never immediately overwritten by the user's
+  // global defaults. Value-based guards (e.g. comparing selectedAgent to the
+  // channel's persisted agent) can't distinguish "just opened" from "switched
+  // away and back", so a one-shot ref is used instead.
+  const skipAgentDefaultsAfterEditHydrationRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
@@ -2485,11 +2725,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       setConnectionTestLoading(true);
       setConnectionTestResult(null);
       try {
+        // In edit mode (gatewayChannelId) the backend resolves stored decrypted
+        // credentials; only forward config when the user entered overrides, so a
+        // stored-credential probe stays `{ gatewayChannelId }`.
+        const payload = gatewayChannelId
+          ? Object.keys(config).length > 0
+            ? { gatewayChannelId, config }
+            : { gatewayChannelId }
+          : { channelType, config };
         const result = (await client
           .service('gateway-channels/test')
-          .create(
-            gatewayChannelId ? { gatewayChannelId, config } : { channelType, config }
-          )) as SlackTestResult;
+          .create(payload)) as SlackTestResult;
         setConnectionTestResult(result);
       } catch (error) {
         setConnectionTestResult({
@@ -2544,8 +2790,27 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     );
   }, [editModalOpen, editForm, createForm, editingChannel, runConnectionProbe]);
 
-  // Pre-populate agentic config form with user defaults when agent changes
+  // Probe an existing Slack channel via the `gateway-channels/test` service. The
+  // backend resolves the stored decrypted tokens from `gatewayChannelId`, so the
+  // edit form never sends credentials.
+  const handleSlackEditTest = useCallback(async () => {
+    if (!editingChannel) return;
+    await runConnectionProbe('slack', {}, editingChannel.id);
+  }, [editingChannel, runConnectionProbe]);
+
+  // Pre-populate agentic config form with user defaults when agent changes.
+  // The initial edit-form hydration also flows through selectedAgent/editModalOpen,
+  // so skip exactly that one run (consuming the one-shot ref set by handleEdit) —
+  // otherwise applying the user's *global* defaults would stomp the channel's own
+  // saved config (e.g. silently wiping mcpServerIds that were just hydrated from
+  // channel.agentic_config). Every subsequent agent change — including switching
+  // back to the channel's original agent — legitimately re-applies that agent's
+  // defaults, so the form never holds a silent mix of stale fields.
   useEffect(() => {
+    if (skipAgentDefaultsAfterEditHydrationRef.current) {
+      skipAgentDefaultsAfterEditHydrationRef.current = false;
+      return;
+    }
     const agentDefaults = currentUser?.default_agentic_config?.[selectedAgent as AgenticToolName];
     if (agentDefaults) {
       const activeForm = editModalOpen ? editForm : createForm;
@@ -2643,7 +2908,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     } else if (values.channel_type === 'slack') {
       if (values.bot_token) config.bot_token = values.bot_token;
       if (values.app_token) config.app_token = values.app_token;
-      if (values.connection_mode) config.connection_mode = values.connection_mode;
+      // The Slack wizard only creates inbound/Socket-Mode channels (bot + app
+      // token, Socket Mode required), so record that intent by default. This
+      // makes getRequiredSecretFields require app_token for UI-created inbound
+      // channels; outbound is an added toggle on the same Socket-Mode channel,
+      // not a separate app_token-free create path.
+      config.connection_mode = (values.connection_mode as string) || 'socket';
 
       // Form has preserve={true}, so all values are available even from collapsed panels.
       config.enable_channels = values.enable_channels ?? false;
@@ -2778,7 +3048,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setEditingChannel(channel);
     setChannelType(channel.channel_type);
     const agent = channel.agentic_config?.agent || 'claude-code';
+    skipAgentDefaultsAfterEditHydrationRef.current = true;
     setSelectedAgent(agent);
+    resetConnectionTest();
     editForm.resetFields();
 
     const config = channel.config as Record<string, unknown>;
@@ -3034,11 +3306,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         </Space>
       </div>
 
-      <Alert
+      <CompactAlert
         type="warning"
-        showIcon
         style={{ marginBottom: 16 }}
-        title="Beta Feature — Security Notice"
+        heading="Beta Feature — Security Notice"
+        expandable
         description={
           <>
             The Message Gateway is a <strong>beta feature</strong>. Connecting external messaging
@@ -3148,6 +3420,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           setEditingChannel(null);
           setChannelType('slack');
           setSelectedAgent('claude-code');
+          resetConnectionTest();
         }}
         okText="Save"
         width={600}
@@ -3175,7 +3448,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             githubError={null}
             connectionTestResult={connectionTestResult}
             connectionTestLoading={connectionTestLoading}
-            onSlackTest={() => {}}
+            onSlackTest={handleSlackEditTest}
             onShortcutTest={handleShortcutTest}
           />
         </Form>

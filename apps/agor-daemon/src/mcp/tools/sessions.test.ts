@@ -323,7 +323,7 @@ describe('agor_sessions_create', () => {
         permissionMode: 'acceptEdits',
         modelConfig: {
           mode: 'alias',
-          model: 'claude-sonnet-4-6', // user default
+          model: 'claude-sonnet-5', // user default
           effort: 'medium',
         },
       },
@@ -389,7 +389,7 @@ describe('agor_sessions_create', () => {
     expect(sessionCreates).toHaveLength(1);
     const created = sessionCreates[0] as Record<string, any>;
     expect(created.model_config).toBeDefined();
-    // Explicit override wins over user default ('claude-sonnet-4-6').
+    // Explicit override wins over user default ('claude-sonnet-5').
     expect(created.model_config.model).toBe('claude-opus-4-6');
     expect(created.model_config.mode).toBe('alias');
     expect(created.model_config.effort).toBe('max');
@@ -431,7 +431,7 @@ describe('agor_sessions_create', () => {
     await agor_sessions_create({
       branchId: 'wt-1',
       agenticTool: 'claude-code',
-      modelConfig: { model: 'claude-sonnet-4-6', mode: 'alias', effort: 'xhigh' },
+      modelConfig: { model: 'claude-sonnet-5', mode: 'alias', effort: 'xhigh' },
     });
 
     expect(sessionCreates).toHaveLength(1);
@@ -452,7 +452,7 @@ describe('agor_sessions_create', () => {
       default_agentic_config: {
         'claude-code': {
           permissionMode: 'acceptEdits',
-          modelConfig: { model: 'claude-sonnet-4-6', mode: 'alias', effort: 'high' },
+          modelConfig: { model: 'claude-sonnet-5', mode: 'alias', effort: 'high' },
         },
       },
     };
@@ -504,7 +504,7 @@ describe('agor_sessions_create', () => {
     expect(created.created_by).toBe('user-b');
     expect(created.unix_username).toBe('bob');
     expect(created.permission_config.mode).toBe('acceptEdits');
-    expect(created.model_config.model).toBe('claude-sonnet-4-6');
+    expect(created.model_config.model).toBe('claude-sonnet-5');
     expect(created.model_config.effort).toBe('high');
     expect(created.model_config.model).not.toBe('claude-parent');
   });
@@ -541,7 +541,7 @@ describe('agor_sessions_create', () => {
     });
 
     const created = sessionCreates[0] as Record<string, any>;
-    expect(created.model_config.model).toBe('claude-sonnet-4-6'); // user default
+    expect(created.model_config.model).toBe('claude-sonnet-5'); // user default
     expect(created.model_config.effort).toBe('medium');
   });
 
@@ -1042,7 +1042,7 @@ describe('agor_sessions_spawn', () => {
 
     await agor_sessions_spawn({
       prompt: 'do the thing',
-      modelConfig: { model: 'claude-sonnet-4-6', provider: 'anthropic' },
+      modelConfig: { model: 'claude-sonnet-5', provider: 'anthropic' },
     });
 
     // Regression guard: without `provider` on SpawnConfig, Zod-validated input
@@ -1050,7 +1050,7 @@ describe('agor_sessions_spawn', () => {
     // would drop it (or TS would reject the field). This asserts the full
     // shape survives the MCP → service boundary.
     expect(spawnCalls[0].data.modelConfig).toEqual({
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       provider: 'anthropic',
     });
   });
@@ -1199,12 +1199,12 @@ describe('modelConfig schema (string shorthand coercion)', () => {
     const parsed = schema.parse({
       branchId: 'wt-1',
       agenticTool: 'claude-code',
-      modelConfig: { mode: 'alias', model: 'claude-sonnet-4-6', effort: 'high' },
+      modelConfig: { mode: 'alias', model: 'claude-sonnet-5', effort: 'high' },
     }) as Record<string, unknown>;
 
     expect(parsed.modelConfig).toEqual({
       mode: 'alias',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       effort: 'high',
     });
   });
@@ -1299,7 +1299,7 @@ describe('agor_models_list', () => {
     expect(parsed.codex).toBeDefined();
     expect(parsed.gemini).toBeDefined();
 
-    expect(parsed['claude-code'].default).toBe('claude-sonnet-4-6');
+    expect(parsed['claude-code'].default).toBe('claude-sonnet-5');
     expect(Array.isArray(parsed['claude-code'].models)).toBe(true);
     expect(parsed['claude-code'].models[0]).toMatchObject({
       id: expect.any(String),
@@ -1309,7 +1309,7 @@ describe('agor_models_list', () => {
     // Sanity: the canonical aliases an agent would want to pin should be discoverable
     const claudeIds = parsed['claude-code'].models.map((m: { id: string }) => m.id);
     expect(claudeIds).toContain('claude-opus-4-6');
-    expect(claudeIds).toContain('claude-sonnet-4-6');
+    expect(claudeIds).toContain('claude-sonnet-5');
   });
 
   it('filters to a single agenticTool when requested', async () => {
@@ -1331,8 +1331,9 @@ describe('agor_models_list', () => {
     expect(parsed.codex.note).toContain('omit modelConfig');
 
     const codexIds = parsed.codex.models.map((m: { id: string }) => m.id);
-    expect(codexIds).toContain('gpt-5.5');
-    expect(codexIds).toContain('gpt-5.4-mini');
+    expect(codexIds).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+    expect(codexIds).not.toContain('gpt-5.5');
+    expect(codexIds).not.toContain('gpt-5.4-mini');
     expect(codexIds).not.toContain('gpt-5.4');
     expect(codexIds).not.toContain('gpt-5-codex');
   });
@@ -1451,5 +1452,47 @@ describe('attached_mcp_servers in session-info tools', () => {
     expect(payload.attached_mcp_servers).toEqual([
       expect.objectContaining({ mcp_server_id: 'srv-x', auth_type: 'none' }),
     ]);
+  });
+});
+
+describe('agor_sessions_archive tools', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('delegates archive and unarchive to the shared sessions service operations', async () => {
+    const archive = vi.fn(async () => ({ count: 3 }));
+    const unarchive = vi.fn(async () => ({ count: 2 }));
+    const app = makeFakeApp({
+      sessions: { archive, unarchive },
+    });
+
+    const tools = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-current', baseServiceParams: { provider: 'mcp' } },
+      ['agor_sessions_archive', 'agor_sessions_unarchive']
+    );
+
+    const archiveResult = await tools.agor_sessions_archive({
+      sessionId: 'sess-parent',
+      includeChildren: true,
+    });
+    const unarchiveResult = await tools.agor_sessions_unarchive({
+      sessionId: 'sess-parent',
+      includeChildren: false,
+    });
+
+    expect(archive).toHaveBeenCalledWith(
+      'sess-parent',
+      { includeChildren: true },
+      { provider: 'mcp' }
+    );
+    expect(unarchive).toHaveBeenCalledWith(
+      'sess-parent',
+      { includeChildren: false },
+      { provider: 'mcp' }
+    );
+    expect(JSON.parse(archiveResult.content[0].text)).toMatchObject({ archivedCount: 3 });
+    expect(JSON.parse(unarchiveResult.content[0].text)).toMatchObject({ unarchivedCount: 2 });
   });
 });

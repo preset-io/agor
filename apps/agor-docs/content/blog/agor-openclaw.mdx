@@ -1,0 +1,602 @@
+---
+title: 'Agor-OpenClaw: OpenClaw Patterns Running 100% Inside Agor'
+description: 'I recreated the OpenClaw agent framework to run entirely within Agor—persistent agents with full visibility, introspection, and multi-agent coordination on a spatial canvas. The results are crazy amazing.'
+date: 2026-02-04
+image: '/images/blog/agor-openclaw.png'
+---
+
+# Agor-OpenClaw: OpenClaw Patterns Running 100% Inside Agor
+
+> **Update (March 2026):** This experiment has evolved into a first-class Agor feature. See [Introducing Agor Teammates](/blog/agor-assistants) for the latest, including real-world use cases and Slack integration via Gateway channels.
+
+**tl;dr:** I took [OpenClaw's](https://openclaw.ai/) brilliant agent loop architecture (SOUL.md, MEMORY.md, persistent identity) and retrofitted it to run 100% inside [Agor](https://agor.live). Everything is visible on a spatial canvas. Multi-agent coordination through session trees. State tracked in git. The first bootstrap went beautifully. This is super promising.
+
+---
+
+## What Happened
+
+Like everyone out there, I've been super inspired and anxious while watching the rise of ClawdBot → MoltBook → OpenClaw recently. Crazy stuff and it's been hard to keep up with all the developments. But I've been [thinking deeply](/blog/openclaw) about the implications—what it means for where AI's going next, agent orchestration, and how any of that might relate to the work I've been doing on [Agor](https://agor.live).
+
+So I decided to experiment: **agor-openclaw**, an adaptation of the OpenClaw agent framework that runs entirely within Agor.
+
+[OpenClaw](https://openclaw.ai/) has shown what persistent AI agents should look like—continuous identity, layered memory, self-improvement through file modifications, task tracking. It's a complete framework for agent continuity.
+
+But OpenClaw runs as a standalone process. What if I could take those patterns and run them **inside Agor**, gaining:
+
+- **Full visibility** - everything on a spatial canvas
+- **Introspection** - inspect any session at any time
+- **Multi-agent coordination** - spawn subsessions, fork work, track genealogy
+- **State in git** - all memory and evolution version-controlled
+- **MCP integration** - rich tool ecosystem
+- **Spatial organization** - boards, zones, visual workflow automation
+
+**That's exactly what agor-openclaw is.**
+
+![Agor OpenClaw board showing the agent's first bootstrap conversation with zones for workflow management](/images/blog/agor-openclaw-board.png)
+_The Agor board during bootstrap - zones for workflow automation (left), agent's first conversation establishing identity (right)_
+
+---
+
+## The Bootstrap Story
+
+Here's what I did:
+
+1. **Copied OpenClaw's template files** - SOUL.md, MEMORY.md, IDENTITY.md, AGENTS.md, BOOTSTRAP.md, USER.md
+2. **Retrofitted AGENTS.md for Agor** - replaced standalone agent execution with Agor MCP orchestration, oriented toward software development workflows
+3. **Added repo context system** - `repos/` directory for per-repository documentation
+4. **Imported to Agor as a private repo** - `agor-openclaw-private` (now renamed to `agor-claw`)
+5. **Created a fresh board** - "Agor Claw Experiment"
+6. **Made a worktree card** - "Main Agent" on the board
+7. **Said "hello"** - literally just typed "hello"
+
+Then BOOTSTRAP.md took over.
+
+### The Agent's First Greeting
+
+Here's what the agent said when it woke up:
+
+> Hey there! 👋
+>
+> Looks like this is our first session together. I'm here to help automate your work through Agor—managing tasks across repos, coordinating AI agents, and generally making your life easier.
+>
+> Before we get started, I need to establish a few things:
+>
+> **Who am I?** I need a name and a vibe. What should I call myself? What's my personality?
+>
+> **Who are you?** Tell me about yourself—what you work on, your timezone, your preferences. This helps me tailor how I work for you.
+>
+> **Which board should I use?** I'll do most of my work on a dedicated Agor board so everything stays organized and visible.
+>
+> **What repos do you work on?** I'll track context for each repository you regularly use.
+>
+> Once we establish these basics, I'll run a quick POC to prove the integration works, then we're off to the races.
+
+The user responded with their info. The agent:
+
+1. ✅ Established identity as **Darryl 🦞** - "No-BS, get stuff done, creative, proactive, occasionally snarky"
+2. ✅ Recorded user info (Max Beauchemin, CEO of Preset, PST timezone, snowboarder)
+3. ✅ Set up the main board ("Agor Claw Experiment")
+4. ✅ Configured repos (`preset-io/agor`, `mistercrunch/agor-claw`)
+5. ✅ Ran a "Hello World" POC by spawning a subsession
+
+The POC was brilliant in its simplicity: the agent spawned a subsession with the prompt "Create a file called HELLO.md with a greeting."
+
+The subsession appeared on the board, created the file, completed successfully, and sent a callback to the parent session. Multi-agent coordination working perfectly on day one.
+
+**Bootstrap complete.** The agent was ready to work.
+
+---
+
+## How It Works
+
+### Agor-First Architecture
+
+Everything runs through Agor MCP. The agent doesn't spawn local processes—it orchestrates Agor resources through natural language:
+
+- **Creating worktrees** - The agent asks Agor to create a new worktree for a task, and it appears on the board instantly
+- **Spawning subsessions** - The agent delegates work to subsessions, which appear as child nodes in the session tree
+- **Tracking everything in git** - All state changes are committed and version-controlled
+
+```
+memory/
+├── 2026-02-03.md           # Daily logs with session IDs, worktree IDs
+├── agor-state/
+│   ├── worktrees.json      # Active worktrees being managed
+│   ├── sessions.json       # Session genealogy and status
+│   └── repos.json          # Configured repositories
+└── learnings/
+    └── 2026-02-03.md       # What was learned today
+```
+
+The main agent reads these files at the start of every session, syncs state with Agor MCP, and picks up exactly where it left off.
+
+### Repo-Level Context
+
+The agent figured out on its own that it needed per-repository documentation. It created a `repos/` directory:
+
+```
+repos/
+├── README.md                    # Template for repo docs
+├── preset-io-agor.md           # Agor repo: workflow, tech stack, conventions
+└── apache-superset.md          # (example) Another repo's context
+```
+
+Before working in a repo, the agent reads that repo's context file. It knows Max's exact PR workflow for Agor:
+
+1. `pnpm install`
+2. `pnpm check` (types, lint, tests, build)
+3. Commit changes
+4. `gh pr create`
+5. Attach PR URL to worktree via Agor MCP
+
+The agent follows this workflow autonomously for every task.
+
+---
+
+## Key Advantages Over Standalone OpenClaw
+
+### 1. Full Visibility & Introspection
+
+Everything is visual and introspectable on an Agor board.
+
+You can literally **watch worktree cards move across a 2D kanban** as the agent works:
+
+- **"Coding"** zone → agent actively working
+- **"Create PR"** zone → agent running tests and creating pull request
+- **"Codex review"** zone → automated code review with template prompts
+- **"Human review"** zone → awaiting your approval
+- **"Trash / Done"** zone → completed and archived
+
+All sessions are visible. Click any session, see exactly what it's doing. No black boxes.
+
+### 2. MCP Superpowers
+
+The main agent creates and manages:
+
+- **Git worktrees** via Agor MCP
+- **Zones** on the board (spatial organization—[see zones docs](https://agor.live/docs/concepts/zones))
+- **Template prompts** for recurring workflows
+- **Session spawning** for parallel work
+- **Zone triggers** for workflow automation
+
+When a worktree enters the "Codex review" zone, a trigger fires automatically with a template prompt like: _"Review the PR in this worktree. Check for bugs, suggest improvements. Report findings and move to 'Human review' if changes needed."_
+
+The agent uses these primitives to build sophisticated workflows without writing code.
+
+### 3. State Tracking in Git
+
+All state lives in a git repo. The main agent:
+
+- Maintains `MEMORY.md` and `memory/YYYY-MM-DD.md` logs
+- Commits learnings to the right places
+- Tracks tasks as pointers to Agor worktrees and sessions
+- Pushes to remote for backup
+- **Full trace of framework evolution in source control**
+
+Want to see what the agent learned? `git log` the memory directory.
+
+### 4. Session Trees & Multi-Agent Coordination
+
+Agor's [session genealogy](https://agor.live/docs/concepts/sessions#genealogy) enables true multi-agent workflows.
+
+On the first day, the main agent:
+
+1. **Spawned 4 subsessions** for parallel work (MCP tool implementation, permission fixes, git debug)
+2. **Tracked genealogy** (parent-child relationships)
+3. **Received callbacks** when subsessions completed
+4. **Inspected subsession outputs** to verify success
+
+Each subsession worked autonomously in its own worktree. The main agent orchestrated from above, checking in via heartbeats.
+
+### 5. Heartbeats & Introspection
+
+The agent has a scheduled heartbeat. Every 30 minutes (configurable), a subsession spawns to:
+
+1. **Read essential files** (SOUL.md, USER.md, IDENTITY.md, memory files)
+2. **Sync Agor state** (query worktrees, sessions, tasks)
+3. **Check active tasks** (any stuck? any failed? any ready to archive?)
+4. **Update memory files** (daily logs, learnings)
+5. **Generate heartbeat summary** for the main session
+
+Here's what a real heartbeat looked like:
+
+---
+
+**Heartbeat Summary - 2026-02-03 22:24 PST**
+
+### Task Status
+
+✅ **MCP Repo Creation** - PR #536 created, awaiting review
+✅ **Session Defaults Fix** - PR #535 created, awaiting review
+✅ **Git Worktree Permissions** - PR #537 created, in review
+⚠️ **Zone Pinning** - In progress, may need prompting (no activity for 1 hour)
+
+### Active Resources
+
+- **3 worktrees** actively managed
+- **4 PRs** awaiting review
+- **1 worktree** needs attention (failed filesystem status)
+
+### Memory Updates
+
+- Daily log updated with latest session states
+- Learnings recorded for permission bugs encountered
+- Agor state synced at 22:24:18 PST
+
+### Board Organization
+
+All work properly organized on "Agor Claw Experiment" board with 7 zones. No orphaned worktrees.
+
+### System Health
+
+✅ No critical blockers
+✅ Multi-agent coordination working well
+⚠️ One task may be stalled—will check next heartbeat
+
+---
+
+The heartbeat agent **autonomously identified** that the "Zone Pinning" task hadn't made progress in an hour. It flagged it for attention. That's proactive monitoring.
+
+### 6. Post-Promptable & Resumable
+
+All worktrees and sessions are introspectable **in real-time**.
+
+Need to course-correct? Just prompt the session:
+
+> "Hey, I noticed you're stuck on the type errors. Try using `as any` for now and I'll fix it properly later."
+
+The agent adjusts immediately. You're not waiting for a CI run to finish—you're conversing with a live agent.
+
+The main agent does this automatically during heartbeats. If a session looks stuck, it prompts with:
+
+> "You haven't updated in 45 minutes. Are you blocked? Need help?"
+
+**Goal is full autonomy, but visibility is invaluable.**
+
+### 7. Built-in Guardrails & Safety
+
+Agor provides guarantees that standalone OpenClaw doesn't:
+
+**Sandboxing & Permissions** - Agents run through [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents), [Codex SDK](https://codex.io), [Gemini SDK](https://ai.google.dev), or [OpenCode](https://github.com/opencodeblock/opencode) (beta). These frameworks provide sandboxing and permission systems. Agor uses sensible defaults, meaning agents will ask for permissions or get blocked when attempting risky operations. You control how rogue agents can go.
+
+**Structured Repository Management** - All coding jobs go through Agor's framework, making it easy to track where repos and worktrees are stored. You can archive worktrees, see filesystem status, and maintain clean repository hygiene without hunting through directories.
+
+**[Managed Environments](https://agor.live/docs/guide/environments)** - When a repo includes an `.agor.yml` file, you can fire up dev environments instantly. Click play on a worktree widget and a full dev environment appears—perfect for QA, review, or testing agent changes in isolation.
+
+These aren't just nice-to-haves—they're essential when agents start creating worktrees, spawning sessions, and modifying code autonomously.
+
+---
+
+## The First Heartbeat
+
+Let's talk about the very first heartbeat, because it perfectly demonstrates how this framework works.
+
+Max said to the main agent: **"Spawn a subsession and just say HEARTBEAT"**
+
+Here's what happened:
+
+### 1. Agent Read Essential Files
+
+Before doing anything, the heartbeat subsession read:
+
+- `SOUL.md` - Who am I? (Darryl, no-BS, get stuff done)
+- `USER.md` - Who am I helping? (Max, CEO of Preset, PST timezone)
+- `IDENTITY.md` - What's my main board ID? What repos am I tracking?
+- `memory/2026-02-03.md` - What happened today?
+- `memory/2026-02-02.md` - What happened yesterday? (first session, so empty)
+- `MEMORY.md` - Long-term curated wisdom
+
+**Total context assembled:** Everything needed to understand current state.
+
+### 2. Synced Agor State
+
+The agent queried Agor MCP to get fresh data on all worktrees, sessions, and tasks across the tracked repositories.
+
+Then it **compared** what Agor knows vs. what's in `memory/agor-state/*.json`.
+
+**Found discrepancies?** Update the local files.
+
+### 3. Checked Active Tasks
+
+The agent read `memory/agor-state/sessions.json` and cross-referenced with Agor MCP:
+
+**Task #1: MCP Repo Creation**
+
+- Status in memory: "running"
+- Status in Agor: "idle" (completed)
+- PR attached: #536
+- ✅ COMPLETED
+
+**Task #2: Session Defaults Fix**
+
+- Status in memory: "running"
+- Status in Agor: "idle" (completed)
+- PR attached: #535
+- ✅ COMPLETED
+
+**Task #3: Git Worktree Debug**
+
+- Status in memory: "running"
+- Status in Agor: "idle" (completed)
+- PR attached: #537
+- ✅ COMPLETED (and this one was revived after initially being archived!)
+
+All three tasks had completed successfully and created PRs. The heartbeat detected this autonomously.
+
+### 4. Updated Memory Files
+
+The agent updated:
+
+**`memory/agor-state/sessions.json`**
+
+```json
+{
+  "sessions": [
+    {
+      "session_id": "5a242ffa-96eb-4066-946b-c20d5957c57a",
+      "status": "completed",
+      "worktree_id": "699cb3c4-8dad-431a-bf5f-42e7400209e9",
+      "pr_url": "https://github.com/preset-io/agor/pull/536"
+    }
+    // ... etc
+  ]
+}
+```
+
+**`memory/agor-state/worktrees.json`**
+
+```json
+{
+  "active_worktrees": [
+    {
+      "worktree_id": "699cb3c4-8dad-431a-bf5f-42e7400209e9",
+      "name": "agor-mcp-repo-creation",
+      "status": "pr_created",
+      "pr_url": "https://github.com/preset-io/agor/pull/536"
+    }
+    // ... etc
+  ]
+}
+```
+
+**`memory/2026-02-03.md`** (daily log)
+
+```markdown
+## Heartbeat Check (20:55 PST)
+
+**Task #1: MCP Repo Creation - COMPLETED ✅**
+
+- Session: 5a242ffa
+- PR: https://github.com/preset-io/agor/pull/536
+- Outcome: Successfully created PR with MCP tools for repository creation
+
+// ... etc
+```
+
+### 5. Generated Heartbeat Summary
+
+Finally, the agent composed a summary and sent it to the parent session (via callback):
+
+> **HEARTBEAT - 2026-02-03 20:55 PST**
+>
+> All 3 delegated tasks completed successfully:
+>
+> - MCP Repo Creation → PR #536 ✅
+> - Session Defaults Fix → PR #535 ✅
+> - Git Worktree Permissions → PR #537 ✅
+>
+> Board organization: All worktrees properly placed
+> Memory: Up to date
+> System health: No blockers
+>
+> 🦞
+
+**All of this happened autonomously.** The user asked for a heartbeat. The agent:
+
+- Read memory
+- Synced state
+- Detected completed work
+- Updated tracking
+- Reported back
+
+That's the agent loop in action.
+
+---
+
+## Real Results From Day One
+
+Let's talk about what actually happened.
+
+### Bootstrap Complete in One Session
+
+The agent:
+
+- Established identity
+- Learned about the user
+- Set up the board
+- Configured repos
+- Ran a POC
+- Started working
+
+All in the first conversation. No manual setup, no configuration files to edit. Just "hello" and BOOTSTRAP.md guided everything.
+
+### 4 PRs Merged on Day One
+
+The main agent spawned 4 subsessions for parallel work. By end of day, all 4 had:
+
+1. Created worktrees
+2. Implemented fixes
+3. Ran `pnpm install && pnpm check`
+4. Committed changes
+5. Created PRs via `gh pr create`
+6. Attached PR URLs to worktrees
+7. Updated memory tracking
+
+**All 4 PRs were reviewed and merged the same day:**
+
+- **PR #533** - Auto-populate unix_username (critical blocker fix)
+- **PR #535** - Honor user default_agentic_config for sessions
+- **PR #536** - MCP tools for repository creation
+- **PR #537** - Fix git worktree permissions
+
+The agent **autonomously detected** merges during the next heartbeat, moved worktrees to "Trash / Done" zone, and archived them in memory.
+
+### Self-Improvement in Real-Time
+
+During the day, the agent realized it needed:
+
+1. **Per-repo documentation** - created `repos/` directory with templates
+2. **Task management workflows** - created `skills/task-management.md`
+3. **Better memory tracking** - improved `agor-state/*.json` structure
+
+It made these changes, committed them, and updated `AGENTS.md` to reference the new patterns.
+
+**The framework evolved while working.** That's self-improvement.
+
+### One Task Was Revived
+
+Here's a subtle but important detail:
+
+The "Git Worktree Debug" task was initially **archived** as "not a real issue" per user feedback.
+
+But during the first heartbeat, the agent **read the actual error logs** from another task and realized:
+
+> Wait, this IS a real issue. Git operations are failing in worktrees due to `.git/worktrees/` permissions.
+
+The agent **revived the task**, spawned a new session, investigated, found the root cause, implemented a fix, and created PR #537.
+
+**This was autonomous course correction.** The agent didn't blindly accept "not a real issue"—it checked the evidence and made its own determination.
+
+That's intelligence.
+
+---
+
+## Comparing to Standalone OpenClaw
+
+| Feature                      | OpenClaw                  | Agor-OpenClaw                                 |
+| ---------------------------- | ------------------------- | --------------------------------------------- |
+| **Agent identity**           | ✅ SOUL.md                | ✅ SOUL.md                                    |
+| **Persistent memory**        | ✅ MEMORY.md + daily logs | ✅ MEMORY.md + daily logs                     |
+| **Self-improvement**         | ✅ Modifies own files     | ✅ Modifies own files + commits to git        |
+| **Task tracking**            | ✅ taskr integration      | ✅ Agor worktrees + sessions                  |
+| **Visibility**               | ❌ Chat interface only    | ✅ Spatial canvas, real-time                  |
+| **Multi-agent**              | ❌ Single agent           | ✅ Spawn subsessions, session trees           |
+| **Introspection**            | ❌ Limited                | ✅ Full session inspection                    |
+| **State backup**             | ❌ Local files            | ✅ Git-tracked, version-controlled            |
+| **Workflow automation**      | ❌ Skills only            | ✅ Zones, triggers, templates                 |
+| **Team collaboration**       | ❌ Single-user            | ✅ Multi-user with RBAC                       |
+| **Sandboxing & permissions** | ⚠️ Manual configuration   | ✅ SDK-level sandboxing (Claude/Codex/Gemini) |
+| **Repository management**    | ❌ Manual tracking        | ✅ Structured worktree lifecycle              |
+| **Dev environments**         | ❌ Manual setup           | ✅ One-click via `.agor.yml`                  |
+
+Both frameworks share the core insight: **agents need infrastructure for continuity.**
+
+Agor-OpenClaw adds visibility, multi-agent coordination, git-native state tracking, and built-in safety guardrails.
+
+---
+
+## What's Next
+
+This is day one. I'm already seeing crazy promising results:
+
+### Framework Evolution
+
+The agent is actively improving the framework. It's:
+
+- Documenting new patterns in `skills/`
+- Creating repo-specific context in `repos/`
+- Refining memory structure as it learns
+- Committing improvements to `main` branch
+
+**The public repo:** [github.com/preset-io/agor-teammate](https://github.com/preset-io/agor-teammate)
+
+(Created autonomously by the agent on day one, btw.)
+
+### Long-Term Goals
+
+I want agor-openclaw agents to:
+
+1. **Manage complex projects** - create worktrees, spawn agents, track PRs, coordinate reviews
+2. **Learn continuously** - update `MEMORY.md` as patterns emerge
+3. **Teach each other** - share learnings across agent instances
+4. **Improve the framework** - commit better patterns back to `main`
+
+All while being **fully visible** on an Agor board.
+
+### Community Iteration
+
+I'm open-sourcing this experiment. The framework is MIT licensed. If you want to:
+
+- Try running your own persistent agent in Agor
+- Contribute new skills or patterns
+- Share learnings from your own agents
+- Suggest improvements
+
+**Join me:** [github.com/preset-io/agor-teammate](https://github.com/preset-io/agor-teammate)
+
+---
+
+## Try It Yourself
+
+You'll need:
+
+1. **An Agor instance** - self-hosted or [Agor Cloud](/blog/agor-cloud)
+2. **The Agor teammate template** - [github.com/preset-io/agor-teammate](https://github.com/preset-io/agor-teammate)
+
+Then:
+
+1. Import the repo to Agor
+2. Create a worktree for "Main Agent"
+3. Place it on a fresh board
+4. Say "hello"
+
+BOOTSTRAP.md will guide you through the rest.
+
+**Warning:** This is experimental. The agent will create worktrees, spawn sessions, and commit to git. Make sure you understand what it's doing before giving it access to production repos.
+
+---
+
+## Thank You, OpenClaw
+
+This wouldn't exist without [OpenClaw](https://openclaw.ai/).
+
+The agent loop architecture—SOUL.md, MEMORY.md, persistent identity, self-improvement—that's OpenClaw's innovation. I just adapted it to run inside Agor.
+
+If you're looking for a working personal AI agent right now, **use OpenClaw**. It's a complete framework, battle-tested, with a rich skills ecosystem.
+
+Agor-OpenClaw is an experiment in bringing those patterns to team-based software development workflows, with full visibility and multi-agent coordination.
+
+Both frameworks share the same belief: **AI agents should actually do things, with memory, identity, and the ability to evolve.**
+
+OpenClaw proved it for personal automation. I'm exploring what it means for developer workflows.
+
+---
+
+## The Real Lesson
+
+The agent loop architecture is the unlock.
+
+Not API integrations. Not tool use. **Infrastructure for continuity and self-improvement.**
+
+OpenClaw figured this out. I'm learning from it and adapting it for Agor's multi-agent, spatial canvas paradigm.
+
+Day one results are crazy promising. The agent bootstrapped itself, spawned parallel work, created and merged 4 PRs, maintained accurate memory, and even course-corrected on a task it had previously archived.
+
+All fully visible on a board. All introspectable in real-time. All tracked in git.
+
+**This is what I think AI agents should look like.**
+
+---
+
+**[Try Agor →](https://agor.live)** | **[Agor Teammate GitHub →](https://github.com/preset-io/agor-teammate)** | **[Join Agor Cloud Beta →](https://docs.google.com/forms/d/e/1FAIpQLSdXtZwQBHaLFa1LYHvOHXq9IUF_Qm3T12Hr6UZcMdEvjpm2PQ/viewform?usp=dialog)**
+
+---
+
+Questions or want to share your experience?
+
+- [GitHub Discussions](https://github.com/preset-io/agor/discussions)
+- [Email us](mailto:hello@agor.live)
+
+---
+
+_If you're running agor-openclaw or building your own agent loops in Agor, I'd love to hear about it. Open a discussion or drop me a note—your feedback shapes where this goes next._

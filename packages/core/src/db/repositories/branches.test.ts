@@ -1247,9 +1247,205 @@ describe('BranchRepository findExplicitFsAccessUserIds', () => {
   );
 });
 
-describe('BranchRepository.findAssistantBranches', () => {
+describe('BranchRepository findExplicitFsAccessBranchIdsForGroup', () => {
   dbTest(
-    'finds marker assistants and enabled-schedule legacy assistants without scanning all branches',
+    'scopes membership-driven filesystem syncs to direct and board-aligned group grants',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const boardRepo = new BoardRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const groupRepo = new GroupRepository(db);
+      const usersRepo = new UsersRepository(db);
+      const repo = await repoRepo.create(createRepoData({ slug: 'group-fs-branches-repo' }));
+      const creatorId = generateId() as UUID;
+      await usersRepo.create({
+        user_id: creatorId,
+        email: 'creator-group-fs-branches@example.com',
+      });
+      const group = await groupRepo.create({ name: 'Group FS Branches', created_by: creatorId });
+
+      const direct = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'group-fs-direct',
+          branch_unique_id: 9401,
+          created_by: creatorId,
+        })
+      );
+      await groupRepo.upsertBranchGrant({
+        branch_id: direct.branch_id,
+        group_id: group.group_id,
+        can: 'session',
+        fs_access: 'write',
+        created_by: creatorId,
+      });
+      const defaultFsAccess = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'group-fs-default-read',
+          branch_unique_id: 9405,
+          created_by: creatorId,
+        })
+      );
+      await groupRepo.upsertBranchGrant({
+        branch_id: defaultFsAccess.branch_id,
+        group_id: group.group_id,
+        can: 'view',
+        created_by: creatorId,
+      });
+
+      const board = await boardRepo.create({
+        board_id: generateId(),
+        name: 'Group FS Board',
+        created_by: creatorId,
+        access_mode: 'shared',
+      });
+      await groupRepo.upsertBoardGrant({
+        board_id: board.board_id,
+        group_id: group.group_id,
+        can: 'view',
+        fs_access: 'read',
+        created_by: creatorId,
+      });
+      const aligned = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          name: 'group-fs-board-aligned',
+          branch_unique_id: 9402,
+          created_by: creatorId,
+          permission_source: 'board',
+        })
+      );
+      const override = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: board.board_id,
+          name: 'group-fs-board-override',
+          branch_unique_id: 9403,
+          created_by: creatorId,
+          permission_source: 'override',
+        })
+      );
+
+      const appOnly = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'group-app-only',
+          branch_unique_id: 9404,
+          created_by: creatorId,
+        })
+      );
+      await groupRepo.upsertBranchGrant({
+        branch_id: appOnly.branch_id,
+        group_id: group.group_id,
+        can: 'prompt',
+        fs_access: 'none',
+        created_by: creatorId,
+      });
+      const privateBoard = await boardRepo.create({
+        board_id: generateId(),
+        name: 'Private Group FS Board',
+        created_by: creatorId,
+        access_mode: 'private',
+      });
+      await groupRepo.upsertBoardGrant({
+        board_id: privateBoard.board_id,
+        group_id: group.group_id,
+        can: 'all',
+        fs_access: 'write',
+        created_by: creatorId,
+      });
+      const privateBoardBranch = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: privateBoard.board_id,
+          name: 'group-fs-private-board',
+          branch_unique_id: 9406,
+          created_by: creatorId,
+          permission_source: 'board',
+        })
+      );
+      const archivedBranch = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          name: 'group-fs-archived',
+          branch_unique_id: 9407,
+          created_by: creatorId,
+        })
+      );
+      await groupRepo.upsertBranchGrant({
+        branch_id: archivedBranch.branch_id,
+        group_id: group.group_id,
+        can: 'session',
+        fs_access: 'write',
+        created_by: creatorId,
+      });
+      await branchRepo.update(archivedBranch.branch_id, { archived: true });
+
+      const branchIds = await branchRepo.findExplicitFsAccessBranchIdsForGroup(group.group_id);
+      expect(branchIds).toEqual(
+        expect.arrayContaining([direct.branch_id, defaultFsAccess.branch_id, aligned.branch_id])
+      );
+      expect(branchIds).not.toEqual(
+        expect.arrayContaining([
+          override.branch_id,
+          appOnly.branch_id,
+          privateBoardBranch.branch_id,
+          archivedBranch.branch_id,
+        ])
+      );
+    }
+  );
+
+  dbTest('returns no branches for groups without filesystem grants', async ({ db }) => {
+    const branchRepo = new BranchRepository(db);
+    const groupRepo = new GroupRepository(db);
+    const group = await groupRepo.create({ name: 'No FS Grants' });
+
+    await expect(branchRepo.findExplicitFsAccessBranchIdsForGroup(group.group_id)).resolves.toEqual(
+      []
+    );
+  });
+
+  dbTest('returns no branches for archived groups', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const groupRepo = new GroupRepository(db);
+    const usersRepo = new UsersRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'archived-group-fs-branches-repo' }));
+    const creatorId = generateId() as UUID;
+    await usersRepo.create({
+      user_id: creatorId,
+      email: 'creator-archived-group-fs-branches@example.com',
+    });
+    const group = await groupRepo.create({ name: 'Archived Group FS', created_by: creatorId });
+    const branch = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'archived-group-fs-branch',
+        branch_unique_id: 9408,
+        created_by: creatorId,
+      })
+    );
+    await groupRepo.upsertBranchGrant({
+      branch_id: branch.branch_id,
+      group_id: group.group_id,
+      can: 'session',
+      fs_access: 'write',
+      created_by: creatorId,
+    });
+    await groupRepo.update(group.group_id, { archived: true });
+
+    await expect(branchRepo.findExplicitFsAccessBranchIdsForGroup(group.group_id)).resolves.toEqual(
+      []
+    );
+  });
+});
+
+describe('BranchRepository.findTeammateBranches', () => {
+  dbTest(
+    'finds marker teammates and enabled-schedule legacy teammates without scanning all branches',
     async ({ db }) => {
       const users = new UsersRepository(db);
       const repos = new RepoRepository(db);
@@ -1257,14 +1453,12 @@ describe('BranchRepository.findAssistantBranches', () => {
       const schedules = new ScheduleRepository(db);
 
       const user = await users.create({
-        email: `assistant-discovery-${Date.now()}@example.com`,
-        name: 'Assistant Discovery',
+        email: `teammate-discovery-${Date.now()}@example.com`,
+        name: 'Teammate Discovery',
       });
-      const repo = await repos.create(
-        createRepoData({ slug: `assistant-discovery-${Date.now()}` })
-      );
+      const repo = await repos.create(createRepoData({ slug: `teammate-discovery-${Date.now()}` }));
 
-      const markedCloneAssistant = await branches.create(
+      const markedCloneTeammate = await branches.create(
         createBranchData({
           repo_id: repo.repo_id as UUID,
           created_by: user.user_id as UUID,
@@ -1272,8 +1466,8 @@ describe('BranchRepository.findAssistantBranches', () => {
           name: 'private-hodor-like',
           storage_mode: 'clone',
           custom_context: {
-            assistant: {
-              kind: 'assistant',
+            teammate: {
+              kind: 'teammate',
               displayName: 'Hodor-like',
               kb: {
                 primary_namespace_id: generateId(),
@@ -1287,7 +1481,7 @@ describe('BranchRepository.findAssistantBranches', () => {
       );
       await schedules.create({
         schedule_id: generateId(),
-        branch_id: markedCloneAssistant.branch_id,
+        branch_id: markedCloneTeammate.branch_id,
         created_by: user.user_id as UUID,
         name: 'Daily brief',
         cron_expression: '0 15 * * 1-5',
@@ -1299,7 +1493,7 @@ describe('BranchRepository.findAssistantBranches', () => {
         retention: 5,
       });
 
-      const legacyScheduledAssistant = await branches.create(
+      const legacyScheduledTeammate = await branches.create(
         createBranchData({
           repo_id: repo.repo_id as UUID,
           created_by: user.user_id as UUID,
@@ -1310,7 +1504,7 @@ describe('BranchRepository.findAssistantBranches', () => {
       );
       await schedules.create({
         schedule_id: generateId(),
-        branch_id: legacyScheduledAssistant.branch_id,
+        branch_id: legacyScheduledTeammate.branch_id,
         created_by: user.user_id as UUID,
         name: 'Heartbeat',
         cron_expression: '0 * * * *',
@@ -1345,14 +1539,14 @@ describe('BranchRepository.findAssistantBranches', () => {
         retention: 5,
       });
 
-      const result = await branches.findAssistantBranches({
+      const result = await branches.findTeammateBranches({
         archived: false,
         repo_id: repo.repo_id as UUID,
         limit: 10,
       });
 
       expect(result.map((branch) => branch.branch_id)).toEqual(
-        expect.arrayContaining([markedCloneAssistant.branch_id, legacyScheduledAssistant.branch_id])
+        expect.arrayContaining([markedCloneTeammate.branch_id, legacyScheduledTeammate.branch_id])
       );
       expect(result.map((branch) => branch.branch_id)).not.toContain(
         disabledScheduledBranch.branch_id
@@ -1366,49 +1560,49 @@ describe('BranchRepository.findAssistantBranches', () => {
     const branches = new BranchRepository(db);
 
     const owner = await users.create({
-      email: `assistant-owner-${Date.now()}@example.com`,
-      name: 'Assistant Owner',
+      email: `teammate-owner-${Date.now()}@example.com`,
+      name: 'Teammate Owner',
     });
     const outsider = await users.create({
-      email: `assistant-outsider-${Date.now()}@example.com`,
-      name: 'Assistant Outsider',
+      email: `teammate-outsider-${Date.now()}@example.com`,
+      name: 'Teammate Outsider',
     });
-    const repo = await repos.create(createRepoData({ slug: `assistant-rbac-${Date.now()}` }));
+    const repo = await repos.create(createRepoData({ slug: `teammate-rbac-${Date.now()}` }));
 
-    const privateAssistant = await branches.create(
+    const privateTeammate = await branches.create(
       createBranchData({
         repo_id: repo.repo_id as UUID,
         created_by: owner.user_id as UUID,
         branch_unique_id: 4,
-        name: 'private-assistant',
+        name: 'private-teammate',
         permission_source: 'override',
         others_can: 'none',
         custom_context: {
-          assistant: {
-            kind: 'assistant',
-            displayName: 'Private Assistant',
+          teammate: {
+            kind: 'teammate',
+            displayName: 'Private Teammate',
           },
         },
       })
     );
-    await branches.addOwner(privateAssistant.branch_id, owner.user_id as UUID);
+    await branches.addOwner(privateTeammate.branch_id, owner.user_id as UUID);
 
-    const ownerResult = await branches.findAssistantBranches({
+    const ownerResult = await branches.findTeammateBranches({
       archived: false,
       repo_id: repo.repo_id as UUID,
       userId: owner.user_id as UUID,
       limit: 10,
     });
-    const outsiderResult = await branches.findAssistantBranches({
+    const outsiderResult = await branches.findTeammateBranches({
       archived: false,
       repo_id: repo.repo_id as UUID,
       userId: outsider.user_id as UUID,
       limit: 10,
     });
 
-    expect(ownerResult.map((branch) => branch.branch_id)).toContain(privateAssistant.branch_id);
+    expect(ownerResult.map((branch) => branch.branch_id)).toContain(privateTeammate.branch_id);
     expect(outsiderResult.map((branch) => branch.branch_id)).not.toContain(
-      privateAssistant.branch_id
+      privateTeammate.branch_id
     );
   });
 });

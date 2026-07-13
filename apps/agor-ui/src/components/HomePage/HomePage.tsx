@@ -1,20 +1,17 @@
-import type { SessionStatus } from '@agor-live/client';
 import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Dropdown, Layout, Modal, Segmented, Select, Typography, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
-import { useAgorStore } from '../../store/agorStore';
 import {
-  selectBoardById,
-  selectBranchById,
-  selectMcpServerById,
-  selectRepoById,
-  selectSessionById,
-  selectSessionsByBranch,
-  selectUserById,
-} from '../../store/selectors';
+  type AgorState,
+  agorStore,
+  shallow,
+  useAgorStore,
+  useStoreWithEqualityFn,
+} from '../../store/agorStore';
+import { selectBoardById } from '../../store/selectors';
 import { isDarkTheme } from '../../utils/theme';
 import { HomeActivitySection } from './HomeActivitySection';
 import { HomeBoardsSection } from './HomeBoardsSection';
@@ -35,32 +32,126 @@ const SIDEBAR_DEFAULT = 340;
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX_RATIO = 0.5;
 
-const AWAITING_STATUSES = new Set<SessionStatus>(['awaiting_permission', 'awaiting_input']);
+// Direct map-value iteration with an early exit — avoids materializing an array
+// of every session on each store notify just to test for one visible match.
+function hasVisibleSession(sessionById: AgorState['sessionById'], currentUserId?: string): boolean {
+  for (const s of sessionById.values()) {
+    if (!s.archived && (!currentUserId || s.created_by === currentUserId)) return true;
+  }
+  return false;
+}
 
 const NEW_MENU_ITEMS: MenuProps['items'] = [
-  { key: 'assistant', label: 'New assistant', icon: <RobotOutlined /> },
+  { key: 'teammate', label: 'New AI teammate', icon: <RobotOutlined /> },
   { key: 'branch', label: 'New branch', icon: <BranchesOutlined /> },
   { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
 ];
+
+/**
+ * Gate around OnboardingCard that owns the onboarding-progress subscription,
+ * so its per-notification cost (including a session scan for `hasSessions`)
+ * exists ONLY while the card can appear. HomePage unmounts this once the card
+ * is dismissed — the common case for established users — leaving the page
+ * with zero onboarding subscription cost; when every step is done it renders
+ * nothing while parked on the (rarely notified) shallow-equal booleans.
+ */
+const HomeOnboarding: React.FC<{
+  currentUserId?: string;
+  onNewSession: () => void;
+  onOpenCreateDialog: HomePageProps['onOpenCreateDialog'];
+  onOpenSettings: HomePageProps['onOpenSettings'];
+  onDismiss: () => void;
+}> = ({ currentUserId, onNewSession, onOpenCreateDialog, onOpenSettings, onDismiss }) => {
+  // Booleans with shallow equality: entity patches only re-render this gate
+  // when a step actually flips (e.g. first repo connected). `sessionById`
+  // keeps archived sessions around for deep links, so `hasSessions` must
+  // filter !archived (and scope to the current user when known); `.some`
+  // exits the scan at the first match.
+  const { hasBoards, hasRepos, hasMcp, hasTeammates, hasSessions } = useStoreWithEqualityFn(
+    agorStore,
+    (state) => ({
+      hasBoards: state.boardById.size > 0,
+      hasRepos: state.repoById.size > 0,
+      hasMcp: state.mcpServerById.size > 0,
+      hasTeammates: state.userById.size > 1,
+      hasSessions: hasVisibleSession(state.sessionById, currentUserId),
+    }),
+    shallow
+  );
+
+  const steps = useMemo(() => {
+    return [
+      {
+        id: 'repo',
+        label: 'Connect a repository',
+        done: hasRepos,
+        cta: 'Connect →',
+        onClick: () => onOpenSettings('repos'),
+      },
+      {
+        id: 'board',
+        label: 'Create your first board',
+        done: hasBoards,
+        cta: 'Create →',
+        onClick: () => onOpenCreateDialog('board'),
+      },
+      {
+        id: 'session',
+        label: 'Launch an AI session',
+        done: hasSessions,
+        cta: 'Start →',
+        onClick: onNewSession,
+      },
+      {
+        id: 'mcp',
+        label: 'Configure MCP tools',
+        done: hasMcp,
+        cta: 'Set up →',
+        onClick: () => onOpenSettings('mcp'),
+      },
+      {
+        id: 'invite',
+        label: 'Invite a teammate',
+        done: hasTeammates,
+        cta: 'Invite →',
+        onClick: () => onOpenSettings('users'),
+      },
+    ];
+  }, [
+    hasBoards,
+    hasRepos,
+    hasMcp,
+    hasTeammates,
+    hasSessions,
+    onOpenCreateDialog,
+    onOpenSettings,
+    onNewSession,
+  ]);
+
+  if (steps.every((s) => s.done)) return null;
+
+  return <OnboardingCard steps={steps} onDismiss={onDismiss} />;
+};
 
 export const HomePage = memo(function HomePage(props: HomePageProps) {
   const { token } = theme.useToken();
   const homeBackground = DEFAULT_BACKGROUNDS[isDarkTheme(token) ? 'dark' : 'light'];
 
+  // HomePage deliberately subscribes to NOTHING session-shaped: sections that
+  // display session data subscribe themselves, so a streaming session patch
+  // wakes only those sections — never this whole page. Boards are the one
+  // whole-map subscription left (board options + default board for the create
+  // modal); board patches are rare.
   const boardById = useAgorStore(selectBoardById);
-  const branchById = useAgorStore(selectBranchById);
-  const repoById = useAgorStore(selectRepoById);
-  const sessionById = useAgorStore(selectSessionById);
-  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
-  const userById = useAgorStore(selectUserById);
-  const mcpServerById = useAgorStore(selectMcpServerById);
 
   const [onboardingHidden, setOnboardingHidden] = useState(
     () => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === 'true'
   );
 
-  const currentUser = props.currentUserId ? userById.get(props.currentUserId) : null;
-  const username = currentUser?.name || 'there';
+  const currentUserName = useAgorStore((s) =>
+    props.currentUserId ? s.userById.get(props.currentUserId)?.name : undefined
+  );
+  const username = currentUserName || 'there';
 
   // Resizable sidebar
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -135,17 +226,6 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
   // Tear down an in-progress drag if the page unmounts mid-drag.
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
-  const waitingSessions = useMemo(
-    () =>
-      Array.from(sessionById.values()).filter(
-        (s) =>
-          !s.archived &&
-          AWAITING_STATUSES.has(s.status) &&
-          (!props.currentUserId || s.created_by === props.currentUserId)
-      ),
-    [sessionById, props.currentUserId]
-  );
-
   const defaultBoardId = useMemo(() => {
     const firstRecent = (props.recentBoardIds ?? []).find(
       (id) => boardById.get(id)?.archived === false
@@ -167,10 +247,10 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>();
-  const [createType, setCreateType] = useState<'assistant' | 'branch'>('assistant');
+  const [createType, setCreateType] = useState<'teammate' | 'branch'>('teammate');
 
   const handleNewSession = useCallback(
-    (defaultType: 'assistant' | 'branch' = 'assistant') => {
+    (defaultType: 'teammate' | 'branch' = 'teammate') => {
       setCreateType(defaultType);
       setSelectedBoardId(defaultBoardId);
       setCreateOpen(true);
@@ -183,65 +263,6 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
     props.onOpenCreateDialog(createType, selectedBoardId);
   }, [props.onOpenCreateDialog, createType, selectedBoardId]);
 
-  const onboardingSteps = useMemo(() => {
-    const hasBoards = boardById.size > 0;
-    const hasRepos = repoById.size > 0;
-    const hasMcp = (mcpServerById?.size ?? 0) > 0;
-    const hasTeammates = userById.size > 1;
-    const hasSessions = Array.from(sessionById.values()).some(
-      (s) => !s.archived && (!props.currentUserId || s.created_by === props.currentUserId)
-    );
-    return [
-      {
-        id: 'repo',
-        label: 'Connect a repository',
-        done: hasRepos,
-        cta: 'Connect →',
-        onClick: () => props.onOpenSettings('repos'),
-      },
-      {
-        id: 'board',
-        label: 'Create your first board',
-        done: hasBoards,
-        cta: 'Create →',
-        onClick: () => props.onOpenCreateDialog('board'),
-      },
-      {
-        id: 'session',
-        label: 'Launch an AI session',
-        done: hasSessions,
-        cta: 'Start →',
-        onClick: handleNewSession,
-      },
-      {
-        id: 'mcp',
-        label: 'Configure MCP tools',
-        done: hasMcp,
-        cta: 'Set up →',
-        onClick: () => props.onOpenSettings('mcp'),
-      },
-      {
-        id: 'invite',
-        label: 'Invite a teammate',
-        done: hasTeammates,
-        cta: 'Invite →',
-        onClick: () => props.onOpenSettings('users'),
-      },
-    ];
-  }, [
-    boardById,
-    sessionById,
-    repoById,
-    userById,
-    mcpServerById,
-    props.currentUserId,
-    props.onOpenCreateDialog,
-    props.onOpenSettings,
-    handleNewSession,
-  ]);
-
-  const showOnboardingCard = !onboardingHidden && onboardingSteps.some((s) => !s.done);
-
   return (
     <>
       <div style={{ height: '100%', overflow: 'hidden', background: homeBackground }}>
@@ -249,10 +270,19 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
           <Content
             style={{
               overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
               padding: 'clamp(16px, 3vw, 28px) clamp(16px, 3vw, 32px) 80px',
             }}
           >
-            <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                height: '100%',
+                minHeight: 0,
+              }}
+            >
               {/* Greeting */}
               <header
                 style={{
@@ -275,7 +305,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                   menu={{
                     items: NEW_MENU_ITEMS,
                     onClick: ({ key }) => {
-                      if (key === 'assistant' || key === 'branch') {
+                      if (key === 'teammate' || key === 'branch') {
                         handleNewSession(key);
                       } else {
                         props.onOpenCreateDialog(key as 'board');
@@ -290,10 +320,13 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                 </Dropdown>
               </header>
 
-              {/* Get started onboarding card */}
-              {showOnboardingCard && (
-                <OnboardingCard
-                  steps={onboardingSteps}
+              {/* Get started onboarding card — gate unmounted once dismissed */}
+              {!onboardingHidden && (
+                <HomeOnboarding
+                  currentUserId={props.currentUserId}
+                  onNewSession={handleNewSession}
+                  onOpenCreateDialog={props.onOpenCreateDialog}
+                  onOpenSettings={props.onOpenSettings}
                   onDismiss={() => {
                     localStorage.setItem(ONBOARDING_HIDDEN_KEY, 'true');
                     setOnboardingHidden(true);
@@ -301,26 +334,17 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                 />
               )}
 
-              {/* Jump back in — awaiting sessions */}
-              {waitingSessions.length > 0 && (
-                <JumpBackInSection
-                  sessions={waitingSessions}
-                  onSessionClick={props.onSessionClick}
-                />
-              )}
+              {/* Jump back in — awaiting sessions (renders nothing when none) */}
+              <JumpBackInSection
+                currentUserId={props.currentUserId}
+                onSessionClick={props.onSessionClick}
+              />
 
               {/* Workspace stats */}
-              <HomeStatsBar
-                sessionById={sessionById}
-                currentUserId={props.currentUserId}
-                teamSize={userById.size}
-              />
+              <HomeStatsBar currentUserId={props.currentUserId} />
 
               {/* My Sessions — flex: 1 fills remaining viewport height */}
               <HomeSessionsSection
-                sessionById={sessionById}
-                branchById={branchById}
-                boardById={boardById}
                 currentUserId={props.currentUserId}
                 onSessionClick={props.onSessionClick}
               />
@@ -328,10 +352,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
               {/* Boards grid */}
               <div style={{ marginTop: 24 }}>
                 <HomeBoardsSection
-                  boardById={boardById}
                   recentBoardIds={props.recentBoardIds}
-                  branchById={branchById}
-                  sessionsByBranch={sessionsByBranch}
                   onBoardClick={props.onBoardClick}
                   onOpenCreateDialog={props.onOpenCreateDialog}
                 />
@@ -412,10 +433,6 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                 }}
               >
                 <HomeActivitySection
-                  branchById={branchById}
-                  boardById={boardById}
-                  sessionById={sessionById}
-                  userById={userById}
                   onBoardClick={props.onBoardClick}
                   onBranchClick={props.onBranchClick}
                   onSessionClick={props.onSessionClick}
@@ -428,7 +445,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
       </div>
 
       <Modal
-        title={createType === 'branch' ? 'New branch' : 'New assistant'}
+        title={createType === 'branch' ? 'New branch' : 'New AI teammate'}
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         width={420}
@@ -459,7 +476,7 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                   disabled={!selectedBoardId}
                   onClick={handleConfirmCreate}
                 >
-                  {createType === 'assistant' ? 'Start assistant' : 'Create branch'}
+                  {createType === 'teammate' ? 'Start AI teammate' : 'Create branch'}
                 </Button>,
               ]
         }
@@ -474,10 +491,10 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
           <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Segmented
               value={createType}
-              onChange={(v) => setCreateType(v as 'assistant' | 'branch')}
+              onChange={(v) => setCreateType(v as 'teammate' | 'branch')}
               block
               options={[
-                { value: 'assistant', label: 'AI assistant', icon: <RobotOutlined /> },
+                { value: 'teammate', label: 'AI teammate', icon: <RobotOutlined /> },
                 { value: 'branch', label: 'Branch / Worktree', icon: <BranchesOutlined /> },
               ]}
             />

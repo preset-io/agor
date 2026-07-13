@@ -37,6 +37,38 @@ describe('RealtimeAccessCache', () => {
     expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(2);
   });
 
+  it('caches the session owner id and invalidates it with the session', async () => {
+    let now = 1_000;
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(),
+      findExplicitViewUserIds: vi.fn(),
+    } as unknown as RealtimeAccessBranchRepository;
+    const sessionsRepository = {
+      findBranchIdBySessionId: vi.fn(async () => 'b1'),
+      findCreatedByBySessionId: vi.fn(async () => 'owner-1'),
+    } as unknown as RealtimeAccessSessionRepository;
+    const cache = new RealtimeAccessCache({
+      branchRepository,
+      sessionsRepository,
+      sessionBranchTtlMs: 60_000,
+      now: () => now,
+    });
+
+    await expect(cache.getSessionOwnerId('s1')).resolves.toBe('owner-1');
+    await expect(cache.getSessionOwnerId('s1')).resolves.toBe('owner-1');
+    expect(sessionsRepository.findCreatedByBySessionId).toHaveBeenCalledTimes(1);
+
+    // Invalidation forces a fresh lookup on the next read.
+    cache.invalidateSession('s1');
+    await expect(cache.getSessionOwnerId('s1')).resolves.toBe('owner-1');
+    expect(sessionsRepository.findCreatedByBySessionId).toHaveBeenCalledTimes(2);
+
+    // And the ttl still applies.
+    now += 60_001;
+    await cache.getSessionOwnerId('s1');
+    expect(sessionsRepository.findCreatedByBySessionId).toHaveBeenCalledTimes(3);
+  });
+
   it('uses separate ttl values for session and branch caches', async () => {
     let now = 1_000;
     const branchRepository = {

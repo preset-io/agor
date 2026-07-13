@@ -15,6 +15,7 @@ import { ENVIRONMENT } from '@agor/core/config';
 import {
   BranchRepository,
   getHiddenTenantId,
+  runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   shortId,
@@ -161,21 +162,30 @@ export class HealthMonitor {
     this.stopMonitoring(branchId);
     if (params) this.branchParams.set(branchId, params);
 
-    // Wait grace period before first check
-    setTimeout(() => {
-      if (this.isShuttingDown) return;
-
-      // Perform first health check
-      this.checkHealth(branchId);
-
-      // Set up periodic health checks
-      const interval = setInterval(() => {
+    // Wait grace period before first check.
+    //
+    // Health monitoring is often started from inside tenant-scoped service
+    // hooks or startup discovery. Timers inherit AsyncLocalStorage, including
+    // the active tenant DB transaction; by the time the timer fires that
+    // transaction has usually committed. Schedule outside the current tenant
+    // DB scope so every check enters a fresh scope through the branches service
+    // hooks using the stored tenant params.
+    runWithoutTenantDatabaseScope(() => {
+      setTimeout(() => {
         if (this.isShuttingDown) return;
-        this.checkHealth(branchId);
-      }, ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS);
 
-      this.intervals.set(branchId, interval);
-    }, ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+        // Perform first health check
+        this.checkHealth(branchId);
+
+        // Set up periodic health checks
+        const interval = setInterval(() => {
+          if (this.isShuttingDown) return;
+          this.checkHealth(branchId);
+        }, ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS);
+
+        this.intervals.set(branchId, interval);
+      }, ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    });
   }
 
   /**
@@ -207,22 +217,33 @@ export class HealthMonitor {
         return;
       }
 
-      // Get current branch state
-      const branch = await branchesService.get(branchId, params as never);
+      const runCheck = async () => {
+        // Get current branch state
+        const branch = await branchesService.get(branchId, params as never);
 
-      // Only check if still running or starting
-      const status = branch.environment_instance?.status;
-      if (status !== 'running' && status !== 'starting') {
-        // Silently stop monitoring (not an error - expected when env stops)
-        // Start/stop logs are already handled in handleBranchUpdate()
-        this.stopMonitoring(branchId);
-        return;
+        // Only check if still running or starting
+        const status = branch.environment_instance?.status;
+        if (status !== 'running' && status !== 'starting') {
+          // Silently stop monitoring (not an error - expected when env stops)
+          // Start/stop logs are already handled in handleBranchUpdate()
+          this.stopMonitoring(branchId);
+          return;
+        }
+
+        // Perform health check via the service method. This direct custom
+        // service call bypasses Feathers around hooks, so when the monitor has
+        // a db handle and tenant params, enter the same tenant DB/ALS scope the
+        // scheduler uses before mutating branch environment state and emitting
+        // realtime patches.
+        await branchesService.checkHealth(branchId, params as never);
+      };
+
+      const tenantId = params?.tenant?.tenant_id;
+      if (this.db && tenantId) {
+        await runWithTenantDatabaseScope(this.db, tenantId, runCheck);
+      } else {
+        await runCheck();
       }
-
-      // Perform health check via the service method
-      // This will update environment_instance and broadcast via WebSocket
-      // Logging is handled in checkHealth() method - only logs on state changes
-      await branchesService.checkHealth(branchId, params as never);
     } catch (error) {
       // If branch was deleted or not found, stop monitoring silently
       // This is expected when branches are deleted while health checks are in progress

@@ -1,0 +1,156 @@
+---
+title: Extended Installation
+description: Alternative ways to install and run Agor — optional companions, authentication options, and custom config locations.
+---
+
+import InstallTabs from '../../components/InstallTabs.mdx';
+
+# Extended Installation
+
+The [Getting Started](/guide/getting-started) guide covers the recommended user path: `npm install -g agor-live`. This page covers everything else for **users and teams** running Agor — Homebrew, optional companions, deployment alternatives, authentication options, and edge-case configurations.
+
+> Want to **build, modify, or contribute to** Agor? Head to the [Development Guide](/guide/development) — it covers `docker compose up`, the `.agor.yml` variant system (SQLite / Postgres / RBAC / docs), and developing Agor with Agor itself.
+
+## Requirements
+
+- **Node.js ≥ 22.12** — see [nodejs.org](https://nodejs.org) for installation.
+
+That's the only hard requirement for npm installs. The Homebrew formula installs a compatible Node runtime for you. Everything below is either an alternative install method or an optional companion.
+
+## Install paths
+
+Use whichever install method fits your setup:
+
+<InstallTabs />
+
+Homebrew is a convenience path for macOS/Linux users; npm remains the canonical cross-platform install path used throughout the docs.
+
+---
+
+## Optional: Zellij (for the web terminal)
+
+Agor has a built-in web terminal that uses [Zellij](https://zellij.dev/) for persistent, multiplexed terminal sessions. The terminal is **optional** — Agor runs fine without it; if you don't have Zellij, terminal buttons in the UI will show a friendly message instead.
+
+If you want the terminal:
+
+1. Install Zellij from the [official installation guide](https://zellij.dev/documentation/installation).
+2. Restart the Agor daemon (`agor daemon restart`).
+
+The daemon detects Zellij at startup and logs whether it's available.
+
+---
+
+## Optional: pgvector (for Knowledge semantic search)
+
+Agor does **not** require pgvector to install, upgrade, or run. Knowledge text search works without it.
+
+If you want Knowledge semantic or hybrid search on PostgreSQL, install the `pgvector` package on the Postgres server and enable the extension in the Agor database:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+Run that as a database owner or another role with permission to create extensions. After pgvector is enabled, configure Knowledge semantic search in Agor and run a Knowledge reindex; the daemon creates the vector storage table and index idempotently when the feature is enabled.
+
+If pgvector is missing or the Agor DB user cannot enable it, semantic search returns a clear `semantic_unavailable` error and text search continues to work.
+
+---
+
+## Authentication
+
+Agor supports Claude Code, Codex, Gemini, OpenCode, and GitHub Copilot. The [onboarding wizard](/guide/getting-started#meet-your-first-ai-teammate) handles the simple case — paste an API key, done. This section covers the alternatives: subscription tokens, machine-level CLI auth, workspace-wide fallbacks, and how Agor resolves them when several are present.
+
+### Credential resolution order
+
+When a session starts, Agor looks for credentials in this order and uses the first one it finds:
+
+1. **Per-user credentials** — encrypted in the DB, scoped to the user. Set via the wizard or **Settings → Agentic Tools → _tool_**. Claude Code accepts either `ANTHROPIC_API_KEY` (pay-as-you-go) or `CLAUDE_CODE_OAUTH_TOKEN` (subscription token from `claude setup-token`). Codex accepts `OPENAI_API_KEY`.
+2. **Instance/global credentials** — `credentials.*` in `~/.agor/config.yaml`, or the admin **Settings → Agentic Tools** global fallback.
+3. **Daemon environment variables** — for example `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY` in the daemon process environment.
+4. **Machine-level CLI auth** — if no key is found, supported tools fall back to local CLI auth available to the Unix user running the session. For Codex this is `~/.codex/auth.json` from `codex login --device-auth`; for Claude Code this includes Claude CLI subscription login state.
+
+Agor uses these credentials only to authenticate the agent runtime with the provider SDK/CLI. Stored secrets are encrypted at rest and are not written into the prompt transcript or intentionally sent to the model as text.
+
+Mixing is fine: one user can run on a Claude subscription token while teammates use per-user API keys, and a self-hosted single-user instance can rely on machine-level CLI auth.
+
+<a id="claude-max-pro" />
+
+### Claude subscription auth (`claude setup-token`)
+
+Use this when you have Claude Pro, Max, Team, or Enterprise subscription access and want Agor to run Claude Code without an Anthropic Console API key. Run the command on the machine where Agor sessions execute. In `strict` Unix isolation, run it as the same Unix user that will own the sessions.
+
+**1. Install the Claude CLI** (skip if already installed):
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+**2. Generate a long-lived OAuth token:**
+
+```bash
+claude setup-token
+```
+
+Copy the printed token.
+
+**3. Paste it into Agor:** open **User Settings → Agentic Tools → Claude Code** and paste the token into **Claude Subscription Token**. Agor stores it as `CLAUDE_CODE_OAUTH_TOKEN` for your user.
+
+If you prefer ordinary interactive machine login for a solo/self-hosted setup, sign in with the Claude CLI as the daemon/session Unix user instead. For exact options and current behavior, see Anthropic's [Claude Code authentication docs](https://docs.anthropic.com/en/docs/claude-code/iam).
+
+### Codex account auth (`codex login --device-auth`)
+
+Use this when you want Codex to authenticate with a ChatGPT/Codex account on the machine instead of storing an `OPENAI_API_KEY` in Agor. This is especially useful on remote or headless hosts.
+
+Run this on the machine where Agor sessions execute. In `strict` Unix isolation, run it as the same Unix user that will own the sessions.
+
+```bash
+codex login --device-auth
+```
+
+Follow the browser/device-code flow. Codex writes auth state under `~/.codex/` for that Unix user; Agor's Codex sessions fall back to that auth when no `OPENAI_API_KEY` is configured. For exact setup steps, see OpenAI's [Codex authentication docs](https://developers.openai.com/codex/auth).
+
+### Per-user API keys (recommended for teams)
+
+The wizard's default. Each user pastes their own key in **Settings → Agentic Tools**. Keys are encrypted at rest, scoped per-user, and never exposed to other users on the instance. Get keys at:
+
+- Anthropic: [platform.claude.com/settings/keys](https://platform.claude.com/settings/keys)
+- OpenAI: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+- Google AI: [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+
+Choose raw API keys when you want explicit usage/billing through API-provider accounts, shared automation, or a setup that does not depend on local CLI login state.
+
+### Workspace env vars (global fallback)
+
+For instances where everyone intentionally shares one set of credentials:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+export GEMINI_API_KEY="..."
+```
+
+Or use the admin **Settings → Agentic Tools** global fallback fields. These credentials are available as a fallback for every user on the instance — pick this only if that's intentional.
+
+---
+
+## Custom config location
+
+By default Agor reads `~/.agor/config.yaml` and stores the database at `~/.agor/agor.db`.
+
+Override the config path with the `--config` flag or the `AGOR_CONFIG_PATH` environment variable:
+
+```bash
+agor daemon start --config /etc/agor/config.yaml
+# or
+AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
+```
+
+> **Heads-up:** custom config paths are not yet threaded through every code path (e.g. database URL resolution). If you hit issues, please [file an issue](https://github.com/preset-io/agor/issues).
+
+---
+
+## What's next?
+
+- [Getting Started](/guide/getting-started) — add your first repo and create a session.
+- [Branches](/guide/branches), [Sessions & Trees](/guide/sessions), [Boards & Zones](/guide/boards) — core primitives.
+- [Development Guide](/guide/development) — contributor workflow.

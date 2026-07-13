@@ -10,17 +10,17 @@ export interface BlogPost {
 export const blogPosts: BlogPost[] = [
   {
     slug: 'claude-tag-vs-agor-assistants',
-    title: 'Claude Tag Validates the Category. Now Model Your Assistants.',
+    title: 'Claude Tag Validates the Category. Now Model Your Teammates.',
     description:
-      'Claude Tag brings @Claude into Slack. Here is why teams will still need modeled, governed, observable, multi-specialist assistants — and why Agor is built for that next step.',
+      'Claude Tag brings @Claude into Slack. Here is why teams will still need modeled, governed, observable, multi-specialist teammates — and why Agor is built for that next step.',
     date: '2026-06-26',
-    image: '/images/blog/claude-tag-vs-agor-assistants.png',
+    image: '/images/blog/claude-tag-vs-agor-teammates.png',
   },
   {
     slug: 'raise-team-helper-agent',
     title: 'Raise a Team Helper Agent in an Afternoon',
     description:
-      'A practical recipe for turning an Agor Assistant into a PM-style teammate that remembers context, coordinates work, reports progress, and keeps a team aligned.',
+      'A practical recipe for turning an AI teammate into a PM-style helper that remembers context, coordinates work, reports progress, and keeps a team aligned.',
     date: '2026-06-17',
     image: '/images/blog/raise-team-helper-agent.png',
   },
@@ -34,11 +34,11 @@ export const blogPosts: BlogPost[] = [
   },
   {
     slug: 'agor-assistants',
-    title: 'Introducing Agor Assistants',
+    title: 'Introducing Agor Teammates',
     description:
-      'What started as an OpenClaw experiment is now a first-class Agor feature. Meet Assistants — persistent AI entities with memory, skills, and team-wide reach through Slack.',
+      'What started as an OpenClaw experiment is now a first-class Agor feature. Meet Teammates — persistent AI entities with memory, skills, and team-wide reach through Slack.',
     date: '2026-03-03',
-    image: '/images/blog/agor-assistants.png',
+    image: '/images/blog/agor-teammates.png',
   },
   {
     slug: 'agor-openclaw',

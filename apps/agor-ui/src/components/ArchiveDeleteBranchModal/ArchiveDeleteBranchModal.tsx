@@ -15,6 +15,7 @@ interface ArchiveDeleteBranchModalProps {
     filesystemAction: 'preserved' | 'cleaned' | 'deleted';
   }) => void;
   onCancel: () => void;
+  afterClose?: () => void;
 }
 
 export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> = ({
@@ -25,6 +26,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   initialMetadataAction = 'archive',
   onConfirm,
   onCancel,
+  afterClose,
 }) => {
   const [filesystemAction, setFilesystemAction] = useState<'preserved' | 'cleaned' | 'deleted'>(
     'cleaned'
@@ -51,6 +53,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
       open={open}
       onOk={handleOk}
       onCancel={onCancel}
+      afterClose={afterClose}
       okText={okText}
       okButtonProps={okButtonProps}
       cancelText="Cancel"

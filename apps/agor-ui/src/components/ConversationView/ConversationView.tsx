@@ -24,6 +24,9 @@ import { TaskBlock } from '../TaskBlock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
+// Default-param `= new Map()` would mint a fresh Map on every render and
+// defeat every TaskBlock's React.memo whenever the prop is omitted.
+const EMPTY_USER_MAP = new Map<string, User>();
 // Shared empty-array sentinel so TaskBlock's `taskMessages` prop keeps a stable
 // reference for tasks whose messages haven't been loaded — otherwise `|| []`
 // would mint a fresh array on every render and thrash TaskBlock's React.memo.
@@ -114,9 +117,14 @@ export interface ConversationViewProps {
   };
 
   /**
-   * Emoji override for assistant avatar in message bubbles
+   * Emoji override for teammate avatar in message bubbles
    */
-  assistantEmoji?: string;
+  teammateEmoji?: string;
+
+  /**
+   * When true, all task blocks are force-expanded (used by in-session search)
+   */
+  forceExpandAll?: boolean;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -125,7 +133,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     sessionId,
     agentic_tool,
     sessionModel,
-    userById = new Map(),
+    userById = EMPTY_USER_MAP,
     currentUserId,
     onScrollRef,
     onPermissionDecision,
@@ -135,7 +143,8 @@ export const ConversationView = React.memo<ConversationViewProps>(
     emptyStateMessage = 'No messages yet. Send a prompt to start the conversation.',
     isActive = true,
     genealogy,
-    assistantEmoji,
+    teammateEmoji,
+    forceExpandAll = false,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -197,7 +206,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
 
     // Queued tasks belong to the queue drawer, not the conversation. They
     // haven't run yet — there's no message_range, no user-message row, no
-    // assistant output to render — so showing them here as TaskBlocks just
+    // agent output to render — so showing them here as TaskBlocks just
     // duplicates what the queue panel already shows.
     //
     // Memoized so the filtered array's identity is stable across re-renders
@@ -479,7 +488,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               sessionModel={sessionModel}
               userById={userById}
               currentUserId={currentUserId}
-              isExpanded={expandedTaskIds.has(task.task_id)}
+              isExpanded={forceExpandAll || expandedTaskIds.has(task.task_id)}
               onExpandChange={handleTaskExpandChange}
               sessionId={sessionId}
               onPermissionDecision={onPermissionDecision}
@@ -493,7 +502,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
               onLoadTaskMessages={handleLoadTaskMessages}
               onUnloadTaskMessages={handleUnloadTaskMessages}
-              assistantEmoji={assistantEmoji}
+              teammateEmoji={teammateEmoji}
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}
             />

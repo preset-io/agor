@@ -14,15 +14,17 @@ vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
   ),
 }));
 
-vi.mock('../../utils/startAssistantBootstrapSession', () => ({
-  startAssistantBootstrapSession: vi.fn(async ({ onCreateSession, sessionConfig, boardId }) => {
+vi.mock('../../utils/startTeammateBootstrapSession', () => {
+  const start = vi.fn(async ({ onCreateSession, sessionConfig, boardId }) => {
     return (await onCreateSession(sessionConfig, boardId)) || 'session-1';
-  }),
-}));
+  });
+  return { startTeammateBootstrapSession: start };
+});
 
-vi.mock('../../utils/assistantWelcomeNote', () => ({
-  ensureAssistantWelcomeNote: vi.fn(async () => undefined),
-}));
+vi.mock('../../utils/teammateWelcomeNote', () => {
+  const ensure = vi.fn(async () => undefined);
+  return { ensureTeammateWelcomeNote: ensure };
+});
 
 function makeUser(overrides: Partial<User> = {}): User {
   return {
@@ -42,7 +44,7 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
   return {
     repo_id: 'repo-1',
     slug: FRAMEWORK_REPO_SLUG,
-    remote_url: 'https://github.com/preset-io/agor-assistant.git',
+    remote_url: 'https://github.com/preset-io/agor-teammate.git',
     clone_status: 'ready',
     default_branch: 'main',
     ...overrides,
@@ -53,8 +55,8 @@ function makeBranch(overrides: Partial<Branch> = {}): Branch {
   return {
     branch_id: 'branch-1',
     repo_id: 'repo-1',
-    name: 'private-my-assistant',
-    ref: 'private-my-assistant',
+    name: 'private-my-teammate',
+    ref: 'private-my-teammate',
     created_by: 'user-1',
     ...overrides,
   } as Branch;
@@ -81,8 +83,8 @@ function renderWizard(
 
   const boardsService = {
     create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
-    setPrimaryAssistant: vi.fn(async () => undefined),
-    ensureAssistantWelcomeNote: vi.fn(async () => undefined),
+    setPrimaryTeammate: vi.fn(async () => undefined),
+    ensureTeammateWelcomeNote: vi.fn(async () => undefined),
   };
   const reposService = {
     find: vi.fn(async () => ({ data: [] })),
@@ -111,23 +113,23 @@ function renderWizard(
 }
 
 describe('OnboardingWizard', () => {
-  it('starts on assistant name and emoji only, then advances to LLM setup', async () => {
+  it('starts on teammate name and emoji only, then advances to LLM setup', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ onUpdateUser });
 
     expect(screen.getByText(/Welcome to Agor/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Agor assistant/i })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Agor AI teammate/i })).toHaveAttribute(
       'href',
-      'https://agor.live/guide/assistants'
+      'https://agor.live/guide/teammates'
     );
-    expect(screen.getByText('Your assistant can help:')).toBeInTheDocument();
+    expect(screen.getByText('Your AI teammate can help:')).toBeInTheDocument();
     expect(screen.getByText(/Connect tools and credentials/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /emoji picker/i })).toBeInTheDocument();
-    expect(screen.getByDisplayValue('My Assistant')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('My Teammate')).toBeInTheDocument();
     expect(screen.queryByText(/Add Your Repository/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Branch name/i)).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByDisplayValue('My Assistant'), { target: { value: 'Scout' } });
+    fireEvent.change(screen.getByDisplayValue('My Teammate'), { target: { value: 'Scout' } });
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
 
     expect(await screen.findByText(/Choose your LLM/i)).toBeInTheDocument();
@@ -137,13 +139,29 @@ describe('OnboardingWizard', () => {
       expect.objectContaining({
         preferences: expect.objectContaining({
           onboarding: expect.objectContaining({
-            path: 'assistant',
-            assistantDisplayName: 'Scout',
-            assistantEmoji: '🤖',
+            path: 'teammate',
+            teammateDisplayName: 'Scout',
+            teammateEmoji: '🤖',
           }),
         }),
       })
     );
+  });
+
+  it('hydrates teammate identity from legacy assistant onboarding preferences', () => {
+    renderWizard({
+      user: makeUser({
+        preferences: {
+          onboarding: {
+            assistantDisplayName: 'Legacy Scout',
+            assistantEmoji: '🛰️',
+          },
+        },
+      } as Partial<User>),
+    });
+
+    expect(screen.getByDisplayValue('Legacy Scout')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /emoji picker/i })).toHaveTextContent('🛰️');
   });
 
   it('can skip setup after confirmation', async () => {
@@ -158,7 +176,7 @@ describe('OnboardingWizard', () => {
       branchId: '',
       sessionId: '',
       boardId: '',
-      path: 'assistant',
+      path: 'teammate',
     });
     expect(onCreateRepo).not.toHaveBeenCalled();
   });
@@ -190,10 +208,17 @@ describe('OnboardingWizard', () => {
     const claudeOption = providerOptions.find((option) => option.value === 'claude-code');
     const codexOption = providerOptions.find((option) => option.value === 'codex');
     expect(claudeOption).toBeChecked();
-    expect(screen.getAllByText(/ANTHROPIC_API_KEY/).length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByText('Subscription'));
+    expect(baseElement.querySelector('input[value="claude-subscription-token"]')).toBeChecked();
     expect(screen.getByText(/claude setup-token/)).toBeInTheDocument();
+    expect(screen.getByText(/terminal with Claude Code installed/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /install docs/i })).toHaveAttribute(
+      'href',
+      'https://docs.claude.com/en/docs/claude-code/setup'
+    );
+
+    fireEvent.click(screen.getByText('API key'));
+    expect(baseElement.querySelector('input[value="api-key"]')).toBeChecked();
+    expect(screen.getAllByText(/ANTHROPIC_API_KEY/).length).toBeGreaterThan(0);
 
     fireEvent.click(codexOption as HTMLInputElement);
     expect(codexOption).toBeChecked();
@@ -238,7 +263,7 @@ describe('OnboardingWizard', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
     expect(await screen.findByText(/Setting up Agor/i)).toBeInTheDocument();
-    expect(screen.getByText(/Cloning assistant framework/i)).toBeInTheDocument();
+    expect(screen.getByText(/Cloning AI teammate framework/i)).toBeInTheDocument();
     expect(document.querySelector('.ant-modal-body')).toBe(body);
     expect(body).toHaveStyle({ minHeight: '440px', maxHeight: '640px', overflowY: 'auto' });
   });
@@ -261,7 +286,7 @@ describe('OnboardingWizard', () => {
     fireEvent.click(await screen.findByRole('button', { name: /continue without key/i }));
 
     await waitFor(() => expect(onCreateRepo).toHaveBeenCalled());
-    expect(screen.getByText(/Cloning assistant framework/i)).toBeInTheDocument();
+    expect(screen.getByText(/Cloning AI teammate framework/i)).toBeInTheDocument();
     expect(screen.queryByText(/Setup failed/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/old failure/i)).not.toBeInTheDocument();
 
@@ -292,7 +317,7 @@ describe('OnboardingWizard', () => {
     };
     const boardsService = {
       create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
-      setPrimaryAssistant: vi.fn(async () => undefined),
+      setPrimaryTeammate: vi.fn(async () => undefined),
     };
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
@@ -335,7 +360,7 @@ describe('OnboardingWizard', () => {
     };
     const boardsService = {
       create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
-      setPrimaryAssistant: vi.fn(async () => undefined),
+      setPrimaryTeammate: vi.fn(async () => undefined),
     };
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
@@ -364,18 +389,18 @@ describe('OnboardingWizard', () => {
         expect.objectContaining({ sourceBranch: 'develop' })
       )
     );
-    expect(screen.queryByText(/Cloning assistant framework/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cloning AI teammate framework/i)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith({
         branchId: 'branch-1',
         sessionId: 'session-1',
         boardId: 'board-1',
-        path: 'assistant',
+        path: 'teammate',
       })
     );
   });
 
-  it('reuses an existing assistant branch and session when retrying setup', async () => {
+  it('reuses an existing teammate branch and session when retrying setup', async () => {
     const repoById = new Map<string, Repo>([['repo-1', makeRepo()]]);
     const existingBranch = makeBranch({ board_id: 'board-existing' } as Partial<Branch>);
     const branchesService = { find: vi.fn(async () => ({ data: [existingBranch] })) };
@@ -384,7 +409,7 @@ describe('OnboardingWizard', () => {
     };
     const boardsService = {
       create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
-      setPrimaryAssistant: vi.fn(async () => undefined),
+      setPrimaryTeammate: vi.fn(async () => undefined),
     };
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
@@ -412,7 +437,7 @@ describe('OnboardingWizard', () => {
         branchId: 'branch-1',
         sessionId: 'session-existing',
         boardId: 'board-existing',
-        path: 'assistant',
+        path: 'teammate',
       })
     );
   });
@@ -430,7 +455,7 @@ describe('OnboardingWizard', () => {
     expect(onCreateRepo).not.toHaveBeenCalled();
   });
 
-  it('creates setup resources with a user-suffixed assistant branch name and preserves model defaults', async () => {
+  it('creates setup resources with a user-suffixed teammate branch name and preserves model defaults', async () => {
     const repoById = new Map<string, Repo>();
     const onCreateBranch = vi.fn(async () =>
       makeBranch({ name: 'private-scout-user1', ref: 'private-scout-user1' })
@@ -452,7 +477,7 @@ describe('OnboardingWizard', () => {
 
     const view = renderWizard({ repoById, onCreateBranch, onCreateSession, onComplete, user });
 
-    fireEvent.change(screen.getByDisplayValue('My Assistant'), { target: { value: 'Scout' } });
+    fireEvent.change(screen.getByDisplayValue('My Teammate'), { target: { value: 'Scout' } });
     fireEvent.click(screen.getByRole('button', { name: /^continue$/i }));
     const codexOption = Array.from(
       view.baseElement.querySelectorAll<HTMLInputElement>('input[name="recommended-agent"]')
@@ -460,7 +485,7 @@ describe('OnboardingWizard', () => {
     fireEvent.click(codexOption as HTMLInputElement);
     fireEvent.click(await screen.findByRole('button', { name: /continue with codex cli auth/i }));
 
-    expect(await screen.findByText(/Cloning assistant framework/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Cloning AI teammate framework/i)).toBeInTheDocument();
     const readyRepoById = new Map(repoById).set('repo-1', makeRepo());
     act(() => {
       agorStore.setState({ repoById: readyRepoById });
@@ -500,7 +525,7 @@ describe('OnboardingWizard', () => {
       branchId: 'branch-1',
       sessionId: 'session-1',
       boardId: 'board-1',
-      path: 'assistant',
+      path: 'teammate',
     });
   });
 

@@ -5,7 +5,7 @@
  * - Text content (string or TextBlock)
  * - Tool use blocks
  * - Tool result blocks
- * - User vs Assistant styling
+ * - User vs agent-message styling
  * - User emoji avatars
  */
 
@@ -22,9 +22,9 @@ import {
 } from '@agor-live/client';
 import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
-import { Tooltip, theme } from 'antd';
+import { Button, Tooltip, theme } from 'antd';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { BRAND, brandMarkHref } from '../../branding/brand';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
@@ -90,7 +90,7 @@ interface MessageBlockProps {
   taskId?: string;
   isFirstPendingPermission?: boolean; // For sequencing permission requests
   isLatestMessage?: boolean; // Whether this is the most recent message (don't collapse by default)
-  assistantEmoji?: string; // Emoji override for assistant avatar (replaces tool icon)
+  teammateEmoji?: string; // Emoji override for teammate avatar (replaces tool icon)
   /** Authenticated Feathers client, forwarded to WidgetBlock for inline-form submission. */
   client?: AgorClient | null;
   onPermissionDecision?: (
@@ -200,16 +200,16 @@ function isTaskToolResult(message: Message): boolean {
 }
 
 /**
- * Compute the avatar element for an agent/assistant message.
- * Centralizes the priority: callback logo > assistant emoji > agentic tool icon > robot fallback.
+ * Compute the avatar element for an agent message.
+ * Centralizes the priority: callback logo > teammate emoji > agentic tool icon > robot fallback.
  */
 function getAgentAvatar({
-  assistantEmoji,
+  teammateEmoji,
   agentic_tool,
   isCallback,
   token,
 }: {
-  assistantEmoji?: string;
+  teammateEmoji?: string;
   agentic_tool?: string;
   isCallback?: boolean;
   token: ReturnType<typeof theme.useToken>['token'];
@@ -223,14 +223,85 @@ function getAgentAvatar({
       />
     );
   }
-  if (assistantEmoji) {
-    return <AgorAvatar>{assistantEmoji}</AgorAvatar>;
+  if (teammateEmoji) {
+    return <AgorAvatar>{teammateEmoji}</AgorAvatar>;
   }
   if (agentic_tool) {
     return <ToolIcon tool={agentic_tool} size={32} />;
   }
   return (
     <AgorAvatar icon={<RobotOutlined />} style={{ backgroundColor: token.colorBgContainer }} />
+  );
+}
+
+interface DaemonRestartNoticeProps {
+  isGraceful: boolean;
+  text: string;
+  sessionId?: string | null;
+  client?: AgorClient | null;
+  isTaskRunning?: boolean;
+}
+
+function DaemonRestartNotice({
+  isGraceful,
+  text,
+  sessionId,
+  client,
+  isTaskRunning = false,
+}: DaemonRestartNoticeProps) {
+  const { token } = theme.useToken();
+  const [loading, setLoading] = useState(false);
+  const [resumed, setResumed] = useState(false);
+
+  const handleResume = async () => {
+    if (!client || !sessionId) return;
+    setLoading(true);
+    try {
+      await client.sessions.prompt(
+        sessionId,
+        'Please resume where you left off before the daemon restarted.',
+        { messageSource: 'agor' }
+      );
+      setResumed(true);
+    } catch (err) {
+      console.error('Failed to send resume prompt:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const showButton = !!client && !!sessionId && !resumed && !isTaskRunning;
+
+  return (
+    <SystemMessage
+      content={
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+          <span
+            style={{
+              color: isGraceful ? token.colorInfo : token.colorWarning,
+              flexShrink: 0,
+              marginTop: 2,
+            }}
+          >
+            {isGraceful ? <SyncOutlined /> : <WarningOutlined />}
+          </span>
+          <div style={{ fontSize: 13, flex: 1 }}>
+            <MarkdownRenderer content={text} />
+            {showButton && (
+              <Button
+                size="small"
+                type="primary"
+                loading={loading}
+                onClick={handleResume}
+                style={{ marginTop: 6 }}
+              >
+                Resume
+              </Button>
+            )}
+          </div>
+        </div>
+      }
+    />
   );
 }
 
@@ -241,7 +312,7 @@ function getAgentAvatar({
 //   - `message`: stable per message_id (only the actively streaming message
 //     gets a new ref each chunk — correct: it should re-render)
 //   - `userById`: from AppUserDataContext (stable across session patches)
-//   - `currentUserId`, `agentic_tool`, `sessionId`, `taskId`, `assistantEmoji`,
+//   - `currentUserId`, `agentic_tool`, `sessionId`, `taskId`, `teammateEmoji`,
 //     `isTaskRunning`, `isLatestMessage`, `isFirstPending*`: primitives or
 //     stable derived values
 //   - `onPermissionDecision`, `onInputResponse`: useCallback-wrapped in App.tsx
@@ -257,7 +328,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   isFirstPendingPermission = false,
   isLatestMessage = false,
   onPermissionDecision,
-  assistantEmoji,
+  teammateEmoji,
   client = null,
 }) => {
   const { token } = theme.useToken();
@@ -428,23 +499,12 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     const isGraceful = message.type === 'daemon_restart';
     const text = typeof message.content === 'string' ? message.content : '';
     return (
-      <SystemMessage
-        content={
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-            <span
-              style={{
-                color: isGraceful ? token.colorInfo : token.colorWarning,
-                flexShrink: 0,
-                marginTop: 2,
-              }}
-            >
-              {isGraceful ? <SyncOutlined /> : <WarningOutlined />}
-            </span>
-            <div style={{ fontSize: 13 }}>
-              <MarkdownRenderer content={text} />
-            </div>
-          </div>
-        }
+      <DaemonRestartNotice
+        isGraceful={isGraceful}
+        text={text}
+        sessionId={sessionId}
+        client={client}
+        isTaskRunning={isTaskRunning}
       />
     );
   }
@@ -593,7 +653,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           const avatar = isUser ? (
             <UserIdentityAvatar user={currentUser} />
           ) : (
-            getAgentAvatar({ assistantEmoji, agentic_tool, isCallback, token })
+            getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token })
           );
 
           return (
@@ -730,7 +790,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       {/* Response text after tools */}
       {hasTextAfter &&
         (() => {
-          const avatar = getAgentAvatar({ assistantEmoji, agentic_tool, isCallback, token });
+          const avatar = getAgentAvatar({ teammateEmoji, agentic_tool, isCallback, token });
 
           return (
             <div style={{ margin: `${token.sizeUnit}px 0` }}>

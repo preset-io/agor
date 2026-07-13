@@ -11,7 +11,7 @@ For external/prospect readers, the docs should first answer:
 1. What is the unit of work?
 2. Where do agent conversations live?
 3. How does the team see and coordinate that work?
-4. How do persistent assistants and shared context fit in?
+4. How do persistent teammates and shared context fit in?
 
 ## Current inventory
 
@@ -21,7 +21,7 @@ Before this review, the Features block included:
 - Branches
 - Sessions & Trees
 - Boards & Zones
-- Assistants
+- Teammates
 - Knowledge
 - Agor MCP Server
 - Rich Chat UX
@@ -55,11 +55,11 @@ These should remain prominent because they explain Agor's product model. If a re
 
 Top-level visibility, but after the primitives:
 
-- **Assistants** — durable coworkers; long-lived identity and memory.
+- **Teammates** — durable coworkers; long-lived identity and memory.
 - **Knowledge** — shared context layer for humans and agents.
 - **Agor MCP Server** — agent self-awareness and control surface.
 
-Positioning: Assistants are the durable “who”; Knowledge is the workspace memory; MCP is the tool layer that lets sessions and assistants operate Agor.
+Positioning: Teammates are the durable “who”; Knowledge is the workspace memory; MCP is the tool layer that lets sessions and teammates operate Agor.
 
 ### 4. Team workflow
 
@@ -100,7 +100,7 @@ This review intentionally preserves existing URLs. If we later want a deeper IA 
 2. **Bundle thin or highly technical pages into broader pages.** Candidate bundles:
    - `rich-chat-ux` + `in-conversation-widgets` → “Conversation Experience”.
    - `artifacts` + `api-proxies` → “Artifacts” with API proxy details as a subsection.
-   - `scheduler` + assistant heartbeat material → cross-link or merge into an “Automation” story.
+   - `scheduler` + teammate heartbeat material → cross-link or merge into an “Automation” story.
    - `message-gateway` + launch auth → “External Channels & Launch” if launch handoff becomes user-facing.
 3. **Only move/rename routes with redirects.** Existing URLs likely appear in screenshots, changelogs, and external links; avoid breaking them unless Next redirects are added.
 4. **Revisit sidebar after category pages exist.** At that point, the sidebar can expose 4–6 category pages by default and tuck leaf pages under folder routes.
@@ -113,7 +113,7 @@ Near term, keep the stock Nextra sidebar layout and avoid adding custom spacing 
 - Branches
 - Sessions & Trees
 - Boards & Zones
-- Assistants
+- Teammates
 - Knowledge
 - Agor MCP Server
 - Multiplayer & Social

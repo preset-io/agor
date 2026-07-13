@@ -1,5 +1,5 @@
 /**
- * Modal for confirming zone deletion with options for handling associated sessions
+ * Modal for confirming zone deletion with options for handling associated pinned items
  */
 
 import { Modal, Radio, theme } from 'antd';
@@ -11,7 +11,7 @@ interface DeleteZoneModalProps {
   onCancel: () => void;
   onConfirm: (deleteAssociatedSessions: boolean) => void;
   zoneName: string;
-  sessionCount: number;
+  pinnedItemCount: number;
 }
 
 export const DeleteZoneModal = ({
@@ -19,7 +19,7 @@ export const DeleteZoneModal = ({
   onCancel,
   onConfirm,
   zoneName,
-  sessionCount,
+  pinnedItemCount,
 }: DeleteZoneModalProps) => {
   const { token } = theme.useToken();
   const [deleteAssociatedSessions, setDeleteAssociatedSessions] = useState(false);
@@ -47,10 +47,10 @@ export const DeleteZoneModal = ({
       <div style={{ marginBottom: 16 }}>
         <p style={{ margin: 0, marginBottom: 16 }}>Are you sure you want to delete this zone?</p>
 
-        {sessionCount > 0 && (
+        {pinnedItemCount > 0 && (
           <>
             <p style={{ margin: 0, marginBottom: 16, color: token.colorTextSecondary }}>
-              This zone has {sessionCount} pinned session{sessionCount !== 1 ? 's' : ''}.
+              This zone has {pinnedItemCount} pinned item{pinnedItemCount !== 1 ? 's' : ''}.
             </p>
 
             <Radio.Group
@@ -60,22 +60,22 @@ export const DeleteZoneModal = ({
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Radio value={false}>
                   <div>
-                    <div style={{ fontWeight: 500 }}>Unpin sessions (keep on board)</div>
+                    <div style={{ fontWeight: 500 }}>Unpin items (keep on board)</div>
                     <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                      Sessions will remain on the board at their current positions
+                      Pinned items will remain on the board at their current positions
                     </div>
                   </div>
                 </Radio>
                 <Radio value={true} disabled>
                   <div>
                     <div style={{ fontWeight: 500 }}>
-                      Delete pinned sessions too{' '}
+                      Delete pinned items too{' '}
                       <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
                         [coming soon]
                       </span>
                     </div>
                     <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                      Remove sessions from board entirely
+                      Remove pinned items from board entirely
                     </div>
                   </div>
                 </Radio>
@@ -84,9 +84,9 @@ export const DeleteZoneModal = ({
           </>
         )}
 
-        {sessionCount === 0 && (
+        {pinnedItemCount === 0 && (
           <p style={{ margin: 0, color: token.colorTextSecondary }}>
-            This zone has no pinned sessions.
+            This zone has no pinned items.
           </p>
         )}
       </div>

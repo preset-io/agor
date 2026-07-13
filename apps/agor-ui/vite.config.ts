@@ -49,6 +49,12 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+    // Guard against @codemirror/state being duplicated across async chunks.
+    // manualChunks forces CM6 packages into the 'editor' chunk, but a nested
+    // dynamic import() inside that chunk can still cause Rollup to emit a
+    // second copy of @codemirror/state (breaking instanceof checks). Dedupe
+    // pins all resolutions to the same singleton regardless of chunk layout.
+    dedupe: ['@codemirror/state', '@codemirror/view'],
   },
 
   // Mark Node.js-only packages as external so they're not bundled
@@ -64,7 +70,14 @@ export default defineConfig({
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('@ant-design') || /\/antd\//.test(id)) return 'antd';
           if (id.includes('reactflow')) return 'reactflow';
-          if (id.includes('@uiw/react-codemirror') || id.includes('@codemirror/')) return 'editor';
+          // Keep the entire CM6 + lezer graph together so @codemirror/state
+          // is never split across chunks (lezer packages are CM6 peer deps).
+          if (
+            id.includes('@uiw/react-codemirror') ||
+            id.includes('@codemirror/') ||
+            id.includes('@lezer/')
+          )
+            return 'editor';
           if (id.includes('react-syntax-highlighter')) return 'syntax';
           if (id.includes('emoji-picker-react') || id.includes('emojibase')) return 'emoji';
           if (id.includes('@tsparticles/')) return 'particles';

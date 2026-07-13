@@ -1,4 +1,4 @@
-import type { MCPServer } from '@agor-live/client';
+import { type MCPServer, shortId } from '@agor-live/client';
 import { Select, type SelectProps } from 'antd';
 
 export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {
@@ -7,6 +7,42 @@ export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {
   onChange?: (value: string[]) => void;
   placeholder?: string;
   filterByScope?: 'global' | 'repo' | 'session';
+}
+
+export function buildMcpServerOptions(mcpServers: MCPServer[], selectedIds: string[] = []) {
+  const selected = new Set(selectedIds);
+  const options: Array<{ label: string; value: string; disabled: boolean }> = mcpServers
+    // Disabled servers cannot be newly attached, but must remain an option when
+    // already selected. Otherwise Ant Select falls back to rendering the UUID.
+    .filter((server) => server.enabled || selected.has(server.mcp_server_id))
+    .map((server) => {
+      const name =
+        server.display_name || server.name || `MCP server ${shortId(server.mcp_server_id)}`;
+      const authSuffix =
+        server.auth?.type === 'oauth'
+          ? ` · OAuth ${server.auth.oauth_mode === 'shared' ? '(shared)' : '(per-user)'}`
+          : server.auth?.type === 'bearer' || server.auth?.token
+            ? ' · Token'
+            : '';
+      return {
+        label: `${name} (${server.transport})${authSuffix}`,
+        value: server.mcp_server_id,
+        disabled: !server.enabled,
+      };
+    });
+
+  const knownIds = new Set<string>(mcpServers.map((server) => server.mcp_server_id));
+  for (const id of selectedIds) {
+    if (!knownIds.has(id)) {
+      options.push({
+        label: `Unavailable MCP server (${shortId(id)})`,
+        value: id,
+        disabled: true,
+      });
+    }
+  }
+
+  return options.sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /**
@@ -31,25 +67,7 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
     ? mcpServers.filter((server) => server.scope === filterByScope)
     : mcpServers;
 
-  // Only show enabled servers
-  const enabledServers = filteredServers.filter((server) => server.enabled);
-
-  const options = enabledServers
-    .map((server) => {
-      const name = server.display_name || server.name;
-      const authSuffix =
-        server.auth?.type === 'oauth'
-          ? ` · OAuth ${server.auth.oauth_mode === 'shared' ? '(shared)' : '(per-user)'}`
-          : server.auth?.type === 'bearer' || server.auth?.token
-            ? ' · Token'
-            : '';
-      return {
-        label: `${name} (${server.transport})${authSuffix}`,
-        value: server.mcp_server_id,
-        disabled: !server.enabled,
-      };
-    })
-    .sort((a, b) => a.label.localeCompare(b.label));
+  const options = buildMcpServerOptions(filteredServers, value);
 
   return (
     <Select
@@ -58,6 +76,7 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
       allowClear
       showSearch
       optionFilterProp="label"
+      notFoundContent={mcpServers.length === 0 ? 'No MCP servers available' : 'No matching servers'}
       value={value}
       onChange={onChange}
       options={options}

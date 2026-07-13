@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { ENVIRONMENT } from '@agor/core/config';
+import { getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
 import type { Branch } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HealthMonitor } from './health-monitor';
@@ -139,6 +140,7 @@ describe('HealthMonitor tenant context', () => {
     const branches = new BranchServiceMock();
     const monitor = new HealthMonitor(makeApp(branches) as never, {
       defaultParams: { tenant: { tenant_id: 'default', source: 'static' } },
+      db: { run: vi.fn() } as never,
     });
 
     branches.emit(
@@ -159,6 +161,44 @@ describe('HealthMonitor tenant context', () => {
     expect(branches.checkHealth).toHaveBeenCalledWith('branch-tenant-a', {
       tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
     });
+    monitor.cleanup();
+  });
+
+  it('enters the branch tenant DB scope instead of inheriting stale timer scope', async () => {
+    const branches = new BranchServiceMock();
+    const ambientTenantIds: Array<string | undefined> = [];
+    branches.get.mockImplementation(async (branchId: string) => {
+      ambientTenantIds.push(getCurrentTenantId());
+      return makeBranch({
+        branch_id: branchId,
+        tenant_id: 'tenant-a',
+        environment_instance: { status: 'running' },
+      });
+    });
+    branches.checkHealth.mockImplementation(async () => {
+      ambientTenantIds.push(getCurrentTenantId());
+    });
+
+    const monitor = new HealthMonitor(makeApp(branches) as never, {
+      defaultParams: { tenant: { tenant_id: 'default', source: 'static' } },
+      db: { run: vi.fn() } as never,
+    });
+
+    await runWithTenantDatabaseScope({ run: vi.fn() } as never, 'stale-transaction', async () => {
+      branches.emit(
+        'patched',
+        makeBranch({
+          branch_id: 'branch-tenant-a',
+          tenant_id: 'tenant-a',
+          environment_instance: { status: 'running' },
+        })
+      );
+    });
+
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(1));
+
+    expect(ambientTenantIds).toEqual(['tenant-a', 'tenant-a']);
     monitor.cleanup();
   });
 });
