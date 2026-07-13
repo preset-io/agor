@@ -305,6 +305,20 @@ describe('LinksRepository', () => {
       return link;
     });
 
+    const findById = repo.findById.bind(repo);
+    let updateReads = 0;
+    let releaseUpdateReads: () => void = () => {};
+    const bothUpdateReadsComplete = new Promise<void>((resolve) => {
+      releaseUpdateReads = resolve;
+    });
+    vi.spyOn(repo, 'findById').mockImplementation(async (id) => {
+      const link = await findById(id);
+      updateReads += 1;
+      if (updateReads === 2) releaseUpdateReads();
+      if (updateReads <= 2) await bothUpdateReadsComplete;
+      return link;
+    });
+
     const results = await Promise.all([
       repo.upsertWithStatus({
         session_id: session.session_id,
@@ -322,8 +336,9 @@ describe('LinksRepository', () => {
       }),
     ]);
 
-    const updated = await repo.findById(created.link_id);
+    const updated = await findById(created.link_id);
     const firstApplied = results.find((result) => result.link.revision === 2)?.link;
+    expect(updateReads).toBe(3);
     expect(firstApplied?.source_message_id).toBeTruthy();
     expect(
       results.every((result) => result.link.source_message_id === firstApplied?.source_message_id)
