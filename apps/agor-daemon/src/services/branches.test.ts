@@ -561,13 +561,28 @@ describe('BranchesService environment start async behavior', () => {
       vi.spyOn(service, 'get').mockImplementation(
         async () => ({ ...branch, environment_instance: currentEnv }) as never
       );
+      const observationUpdateSpy = vi
+        .spyOn(
+          (
+            service as unknown as {
+              branchRepo: {
+                update: BranchRepository['update'];
+              };
+            }
+          ).branchRepo,
+          'update'
+        )
+        .mockImplementation(async (_id, data) => {
+          currentEnv = data.environment_instance as Record<string, unknown>;
+          return { ...branch, environment_instance: currentEnv } as never;
+        });
       const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
         const next = { ...branch, ...(data as object) };
         currentEnv = (next as { environment_instance: Record<string, unknown> })
           .environment_instance;
         return next as never;
       });
-      return { service, branch, patchSpy, emit: branchesService.emit };
+      return { service, branch, patchSpy, observationUpdateSpy, emit: branchesService.emit };
     }
 
     const healthyEnv = () => ({
@@ -582,7 +597,9 @@ describe('BranchesService environment start async behavior', () => {
     });
 
     it('persists but does not emit when the re-probe only advances the timestamp', async () => {
-      const { service, branch, patchSpy, emit } = createGateHarness(healthyEnv());
+      const { service, branch, patchSpy, observationUpdateSpy, emit } = createGateHarness(
+        healthyEnv()
+      );
 
       await service.updateEnvironment(branch.branch_id, {
         status: 'running',
@@ -593,8 +610,8 @@ describe('BranchesService environment start async behavior', () => {
         },
       });
 
-      expect(patchSpy).toHaveBeenCalledTimes(1);
-      expect(patchSpy).toHaveBeenCalledWith(
+      expect(patchSpy).not.toHaveBeenCalled();
+      expect(observationUpdateSpy).toHaveBeenCalledWith(
         branch.branch_id,
         {
           environment_instance: expect.objectContaining({
@@ -603,13 +620,15 @@ describe('BranchesService environment start async behavior', () => {
             }),
           }),
         },
-        undefined
+        { preserveUpdatedAt: true }
       );
       expect(emit).not.toHaveBeenCalled();
     });
 
     it('does not broadcast timestamp bookkeeping', async () => {
-      const { service, branch, patchSpy, emit } = createGateHarness(healthyEnv());
+      const { service, branch, patchSpy, observationUpdateSpy, emit } = createGateHarness(
+        healthyEnv()
+      );
 
       // Same status + health status + message; only the bookkeeping timestamp
       // moved. A timestamp must never defeat the change gate.
@@ -621,12 +640,15 @@ describe('BranchesService environment start async behavior', () => {
         },
       });
 
-      expect(patchSpy).toHaveBeenCalledTimes(1);
+      expect(patchSpy).not.toHaveBeenCalled();
+      expect(observationUpdateSpy).toHaveBeenCalledTimes(1);
       expect(emit).not.toHaveBeenCalled();
     });
 
     it('does not write or emit an exactly identical observation', async () => {
-      const { service, branch, patchSpy, emit } = createGateHarness(healthyEnv());
+      const { service, branch, patchSpy, observationUpdateSpy, emit } = createGateHarness(
+        healthyEnv()
+      );
 
       await service.updateEnvironment(branch.branch_id, {
         status: 'running',
@@ -638,6 +660,7 @@ describe('BranchesService environment start async behavior', () => {
       });
 
       expect(patchSpy).not.toHaveBeenCalled();
+      expect(observationUpdateSpy).not.toHaveBeenCalled();
       expect(emit).not.toHaveBeenCalled();
     });
 

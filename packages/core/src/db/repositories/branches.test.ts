@@ -750,6 +750,45 @@ describe('BranchRepository.findByRepoAndName', () => {
 // ============================================================================
 
 describe('BranchRepository.update', () => {
+  dbTest('can preserve updated_at for observation-only bookkeeping', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const created = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        environment_instance: {
+          status: 'running',
+          last_health_check: {
+            timestamp: '2026-01-01T00:00:00.000Z',
+            status: 'healthy',
+            message: 'HTTP 200',
+          },
+        },
+      })
+    );
+
+    const updated = await branchRepo.update(
+      created.branch_id,
+      {
+        environment_instance: {
+          status: created.environment_instance?.status ?? 'running',
+          last_health_check: {
+            timestamp: '2026-01-01T00:00:05.000Z',
+            status: 'healthy',
+            message: 'HTTP 200',
+          },
+        },
+      },
+      { preserveUpdatedAt: true }
+    );
+
+    expect(updated.environment_instance?.last_health_check?.timestamp).toBe(
+      '2026-01-01T00:00:05.000Z'
+    );
+    expect(updated.updated_at).toBe(created.updated_at);
+  });
+
   dbTest('should update by full UUID and short ID', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);

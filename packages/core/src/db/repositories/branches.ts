@@ -518,7 +518,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * Uses a transaction to ensure read-merge-write is atomic, preventing race conditions
    * when multiple updates happen concurrently (e.g., schedule config + environment updates).
    */
-  async update(id: string, updates: Partial<Branch>): Promise<Branch> {
+  async update(
+    id: string,
+    updates: Partial<Branch>,
+    options?: { preserveUpdatedAt?: boolean }
+  ): Promise<Branch> {
     // STEP 1: Read current branch (outside transaction for short ID resolution)
     const existing = await this.findById(id);
     if (!existing) {
@@ -556,10 +560,13 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         branch_id: current.branch_id, // Never change ID
         repo_id: current.repo_id, // Never change repo
         created_at: current.created_at, // Never change created timestamp
-        updated_at: new Date().toISOString(), // Always update timestamp
+        updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });
 
       const insertData = this.branchToInsert(merged);
+      if (options?.preserveUpdatedAt) {
+        insertData.updated_at = new Date(current.updated_at);
+      }
 
       // STEP 4: Write merged branch (within same transaction)
       const row = await update(txAsDb(tx), branches)

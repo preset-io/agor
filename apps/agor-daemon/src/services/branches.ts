@@ -1896,24 +1896,29 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const hasChanged = JSON.stringify(oldState) !== JSON.stringify(newState);
 
+    // Observation-only persistence deliberately bypasses Feathers publication.
+    // It also preserves branch.updated_at so health bookkeeping does not affect
+    // branch ordering or modification semantics every five seconds.
+    if (!hasChanged) {
+      return this.withTenantDatabase(resolvedParams, () =>
+        this.branchRepo.update(
+          id,
+          { environment_instance: updatedEnvironment },
+          { preserveUpdatedAt: true }
+        )
+      );
+    }
+
     const branch = await this.withTenantDatabase(resolvedParams, () =>
       this.patch(
         id,
         {
           environment_instance: updatedEnvironment,
-          ...(hasChanged ? { updated_at: new Date().toISOString() } : {}),
+          updated_at: new Date().toISOString(),
         },
         resolvedParams
       )
     );
-
-    // Observation-only persistence deliberately bypasses Feathers publication.
-    // The custom method calls the raw service implementation, so simply
-    // returning here keeps the database timestamp accurate without generating
-    // a realtime branch patch.
-    if (!hasChanged) {
-      return branch;
-    }
 
     // this.patch() calls the raw implementation and bypasses Feathers event
     // dispatch, so the patched event is not automatically emitted. Emit it
