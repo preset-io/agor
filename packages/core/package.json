@@ -22,6 +22,12 @@
       "import": "./dist/types/index.js",
       "require": "./dist/types/index.cjs"
     },
+    "./design/board-backgrounds": {
+      "source": "./src/design/board-backgrounds.ts",
+      "types": "./dist/design/board-backgrounds.d.ts",
+      "import": "./dist/design/board-backgrounds.js",
+      "require": "./dist/design/board-backgrounds.cjs"
+    },
     "./db": {
       "source": "./src/db/index.ts",
       "types": "./dist/db/index.d.ts",

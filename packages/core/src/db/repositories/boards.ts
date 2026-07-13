@@ -18,6 +18,7 @@ import { isTeammate } from '@agor/core/types';
 import { and, eq, inArray, isNull, like, ne, type SQL } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
+import { DEFAULT_BOARD_BACKGROUND } from '../../design/board-backgrounds';
 import { generateId } from '../../lib/ids';
 import { generateSlug } from '../../lib/slugs';
 import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
@@ -165,7 +166,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
           board.default_dangerously_allow_session_sharing ?? false,
         color: board.color,
         icon: normalizeExactEmojiShortcode(board.icon),
-        background_color: board.background_color,
+        background_color: Object.hasOwn(board, 'background_color')
+          ? board.background_color
+          : DEFAULT_BOARD_BACKGROUND,
         custom_css: board.custom_css,
         objects: board.objects,
         custom_context: board.custom_context,

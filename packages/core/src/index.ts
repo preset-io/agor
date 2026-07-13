@@ -8,6 +8,7 @@ export * from './api/index.js';
 export * from './config/index.js';
 export { getBranchesDir, getBranchPath, getReposDir } from './config/index.js';
 export * from './db/index.js';
+export * from './design/board-backgrounds.js';
 export * from './environment/render-snapshot.js';
 export * from './git/index.js';
 export * from './knowledge/index.js';

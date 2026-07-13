@@ -1,5 +1,7 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: centralized user-selectable board background palette stores exact persisted gradients
 
+import { GOLD_SHIMMER_BOARD_BACKGROUND_PRESET } from '@agor/core/design/board-backgrounds';
+
 export const BACKGROUND_PRESETS = [
   {
     label: 'Rainbow (7 colors)',
@@ -16,10 +18,7 @@ export const BACKGROUND_PRESETS = [
     value:
       'linear-gradient(180deg, #f093fb 0%, #f5576c 25%, #4facfe 50%, #00f2fe 75%, #43e97b 100%)',
   },
-  {
-    label: 'Gold shimmer',
-    value: 'linear-gradient(135deg, #f5af19 0%, #f12711 30%, #f5af19 60%, #f12711 100%)',
-  },
+  GOLD_SHIMMER_BOARD_BACKGROUND_PRESET,
   {
     label: 'Cyan/magenta grid',
     value:

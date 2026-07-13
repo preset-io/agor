@@ -147,6 +147,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   allGroups = [],
 }) => {
   const [useCustomCSS, setUseCustomCSS] = useState(initialCustomCSS);
+  const backgroundColor = Form.useWatch('background_color', { form, preserve: true });
 
   const generalFields = (
     <>
@@ -266,6 +267,11 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
               allowClear
               showSearch
               options={BACKGROUND_PRESETS}
+              value={
+                BACKGROUND_PRESETS.some((preset) => preset.value === backgroundColor)
+                  ? backgroundColor
+                  : undefined
+              }
               onChange={(value) => {
                 if (value) form.setFieldsValue({ background_color: value });
               }}
