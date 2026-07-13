@@ -278,6 +278,63 @@ describe('LinksRepository', () => {
     });
   });
 
+  dbTest('preserves the first source message when parsed-link dedupes race', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const firstMessageId = (await seedMessage(db, session.session_id)).message_id;
+    const secondMessageId = (await seedMessage(db, session.session_id)).message_id;
+    const created = await repo.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/concurrent-dedupe',
+    });
+
+    const findByOwnerAndTarget = repo.findByOwnerAndTarget.bind(repo);
+    let initialReads = 0;
+    let releaseInitialReads: () => void = () => {};
+    const bothInitialReadsComplete = new Promise<void>((resolve) => {
+      releaseInitialReads = resolve;
+    });
+    vi.spyOn(repo, 'findByOwnerAndTarget').mockImplementation(async (data) => {
+      const link = await findByOwnerAndTarget(data);
+      initialReads += 1;
+      if (initialReads === 2) releaseInitialReads();
+      if (initialReads <= 2) await bothInitialReadsComplete;
+      return link;
+    });
+
+    const results = await Promise.all([
+      repo.upsertWithStatus({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'parsed',
+        url: created.url,
+        source_message_id: firstMessageId,
+      }),
+      repo.upsertWithStatus({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'parsed',
+        url: created.url,
+        source_message_id: secondMessageId,
+      }),
+    ]);
+
+    const updated = await repo.findById(created.link_id);
+    const firstApplied = results.find((result) => result.link.revision === 2)?.link;
+    expect(firstApplied?.source_message_id).toBeTruthy();
+    expect(
+      results.every((result) => result.link.source_message_id === firstApplied?.source_message_id)
+    ).toBe(true);
+    expect(updated).toMatchObject({
+      source: 'parsed',
+      source_message_id: firstApplied?.source_message_id,
+      revision: 3,
+    });
+  });
+
   dbTest(
     'preserves first source message attribution when deduping parsed links',
     async ({ db }) => {

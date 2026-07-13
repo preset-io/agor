@@ -94,14 +94,6 @@ function validateLinkSemantics(data: {
   if (error) throw new RepositoryError(error);
 }
 
-function preserveExistingSourceMessageOnDedupe(
-  existing: Link,
-  data: Partial<LinkCreate>
-): Partial<LinkCreate> {
-  if (!existing.source_message_id || data.source_message_id === undefined) return data;
-  return { ...data, source_message_id: existing.source_message_id };
-}
-
 const MAX_LINK_UPDATE_ATTEMPTS = 5;
 
 function isDefinedCondition<T>(condition: T | undefined): condition is T {
@@ -265,10 +257,7 @@ export class LinksRepository {
     const existing = await this.findByOwnerAndTarget(data);
     if (existing) {
       return {
-        link: await this.update(
-          existing.link_id,
-          preserveExistingSourceMessageOnDedupe(existing, data)
-        ),
+        link: await this.update(existing.link_id, data),
         created: false,
       };
     }
@@ -282,10 +271,7 @@ export class LinksRepository {
       const racedExisting = await this.findByOwnerAndTarget(data);
       if (!racedExisting) throw err;
       return {
-        link: await this.update(
-          racedExisting.link_id,
-          preserveExistingSourceMessageOnDedupe(racedExisting, data)
-        ),
+        link: await this.update(racedExisting.link_id, data),
         created: false,
       };
     }
@@ -401,7 +387,12 @@ export class LinksRepository {
       const existing = await this.findById(id);
       if (!existing) throw new RepositoryError(`Link ${id} not found`);
 
-      const sourceMessageId = patchValue(data, existing.source_message_id, 'source_message_id');
+      // Provenance is write-once: retries and concurrent association flows
+      // keep the first committed source message while still filling a null one.
+      const sourceMessageId =
+        hasOwn(data, 'source_message_id') && existing.source_message_id
+          ? existing.source_message_id
+          : patchValue(data, existing.source_message_id, 'source_message_id');
       const url = patchValue(data, existing.url, 'url');
       const refUri = patchValue(data, existing.ref_uri, 'ref_uri');
       const filePath = patchValue(data, existing.file_path, 'file_path');
