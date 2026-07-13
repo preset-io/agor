@@ -21,7 +21,6 @@ import {
   type LinkDisplayTarget,
   targetForLinkDisplay,
 } from './linkDisplay';
-import styles from './linkUi.module.css';
 
 export type LinkAttachmentTarget = LinkDisplayTarget;
 
@@ -67,9 +66,15 @@ export const LinkAttachmentGlyph: React.FC<{
   const dimension = size === 'sm' ? 28 : 38;
   return (
     <span
-      className={`${styles.glyph} ${styles.glyphStacked} ${onDark ? styles.onDarkGlyph : ''}`}
       aria-hidden
       style={{
+        display: 'inline-flex',
+        flex: '0 0 auto',
+        alignItems: 'center',
+        justifyContent: 'center',
+        lineHeight: 1,
+        flexDirection: 'column',
+        opacity: onDark ? 0.78 : undefined,
         width: dimension,
         height: dimension,
         borderRadius: token.borderRadiusLG,
@@ -86,11 +91,15 @@ export const LinkAttachmentGlyph: React.FC<{
       }}
     >
       {size === 'sm' ? (
-        <span className={styles.glyphLabelSmall}>{getLinkDisplayGlyphLabel(category)}</span>
+        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.2 }}>
+          {getLinkDisplayGlyphLabel(category)}
+        </span>
       ) : (
         <>
-          <span className={styles.glyphIcon}>{getLinkCategoryIcon(category, disabled)}</span>
-          <span className={styles.glyphLabel}>{getLinkDisplayGlyphLabel(category)}</span>
+          <span style={{ fontSize: 15 }}>{getLinkCategoryIcon(category, disabled)}</span>
+          <span style={{ marginTop: 3, fontSize: 9, fontWeight: 700 }}>
+            {getLinkDisplayGlyphLabel(category)}
+          </span>
         </>
       )}
     </span>
@@ -174,13 +183,19 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
   return (
     <Tooltip title={reason ?? description ?? title} mouseEnterDelay={0.6}>
       <Button
-        className={styles.attachmentButton}
         type="text"
         block
         disabled={disabled}
         aria-label={disabled ? `${title}: ${reason}` : `Open ${title}`}
         onClick={open}
         style={{
+          display: 'flex',
+          height: 'auto',
+          maxWidth: '100%',
+          alignItems: 'center',
+          justifyContent: 'flex-start',
+          font: 'inherit',
+          textAlign: 'left',
           width: compact ? '100%' : 'min(100%, 360px)',
           border: `1px solid ${borderColor}`,
           borderRadius: token.borderRadiusLG,
@@ -190,7 +205,7 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
           padding: compact ? `${token.paddingXXS + 2}px ${token.paddingXS}px` : token.paddingSM,
         }}
       >
-        <Flex component="span" className={styles.fullWidth} align="center" gap="small">
+        <Flex component="span" align="center" gap="small" style={{ width: '100%' }}>
           <LinkAttachmentGlyph
             kind={kind}
             mimeType={mimeType}
@@ -201,12 +216,19 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
             onDark={onDark}
             size={compact ? 'sm' : 'md'}
           />
-          <span className={styles.attachmentContent}>
+          <span
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr)',
+              minWidth: 0,
+              flex: 1,
+            }}
+          >
             <Typography.Text
-              className={styles.blockText}
               strong={!compact}
               ellipsis
               style={{
+                display: 'block',
                 color: disabled ? token.colorTextSecondary : textColor,
                 fontSize: compact ? token.fontSizeSM : undefined,
               }}
@@ -215,9 +237,10 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
             </Typography.Text>
             {description && (
               <Typography.Text
-                className={`${styles.blockText} ${onDark ? styles.onDarkSecondary : ''}`}
                 ellipsis
                 style={{
+                  display: 'block',
+                  opacity: onDark ? 0.68 : undefined,
                   color: onDark ? textColor : token.colorTextSecondary,
                   fontSize: token.fontSizeSM,
                 }}
@@ -227,9 +250,10 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
             )}
             {reason && (
               <Typography.Text
-                className={`${styles.blockText} ${onDark ? styles.onDarkTertiary : ''}`}
                 ellipsis
                 style={{
+                  display: 'block',
+                  opacity: onDark ? 0.58 : undefined,
                   marginTop: compact ? 0 : token.sizeXXS,
                   color: onDark ? textColor : token.colorTextTertiary,
                   fontSize: token.fontSizeSM,
@@ -242,9 +266,12 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
           {canDownload && linkId && (
             <Tooltip title="Download file">
               <span
-                className={styles.downloadIndicator}
                 aria-hidden
                 style={{
+                  display: 'inline-flex',
+                  flex: '0 0 auto',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                   width: token.controlHeightSM,
                   height: token.controlHeightSM,
                   color: onDark ? textColor : token.colorTextSecondary,

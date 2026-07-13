@@ -18,7 +18,6 @@ import {
   type LinkDisplayCategory,
   type LinkDisplayItem,
 } from './linkDisplay';
-import styles from './linkUi.module.css';
 
 export function getLinkCategoryIcon(
   category: LinkDisplayCategory,
@@ -94,11 +93,18 @@ export function LinkRowGlyph({
   return (
     <Flex
       component="span"
-      className={`${styles.glyph} ${compact ? styles.compactRowGlyph : styles.rowGlyph}`}
       align="center"
       justify="center"
       aria-hidden="true"
       style={{
+        display: 'inline-flex',
+        flex: '0 0 auto',
+        lineHeight: 1,
+        width: compact ? 34 : 28,
+        height: compact ? 24 : 28,
+        fontSize: 10,
+        fontWeight: compact ? 700 : 800,
+        letterSpacing: 0.2,
         borderRadius: compact ? token.borderRadiusSM : token.borderRadiusLG,
         background: token.colorFillTertiary,
         color: disabled ? token.colorTextDisabled : token.colorTextTertiary,

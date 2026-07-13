@@ -6,7 +6,6 @@ import {
   type LinkContentTarget,
   type LinkPreviewKind,
 } from './linkContent';
-import styles from './linkUi.module.css';
 import { useLinkPreviewResource } from './useLinkPreviewResource';
 
 export type LinkPreviewTarget = LinkContentTarget;
@@ -44,15 +43,21 @@ export const LinkContentPreviewModal: React.FC<LinkContentPreviewModalProps> = (
     >
       <div data-testid="link-content-preview-modal">
         {safeSubtitle && (
-          <Typography.Text className={styles.previewSubtitle} type="secondary" ellipsis>
+          <Typography.Text
+            type="secondary"
+            ellipsis
+            style={{ display: 'block', marginBottom: token.marginSM }}
+          >
             {safeSubtitle}
           </Typography.Text>
         )}
         {loading && (
           <div
-            className={`${styles.previewCenter} ${
-              kind === 'image' ? styles.imagePreviewLoading : styles.markdownPreviewLoading
-            }`}
+            style={{
+              display: 'grid',
+              placeItems: 'center',
+              minHeight: kind === 'image' ? 260 : 220,
+            }}
           >
             <Spin tip={`Loading ${kind === 'image' ? 'image' : 'text'} preview…`} />
           </div>
@@ -60,25 +65,28 @@ export const LinkContentPreviewModal: React.FC<LinkContentPreviewModalProps> = (
         {error && <Alert type="warning" showIcon message={error} />}
         {image && !error && (
           <div
-            className={styles.previewSurface}
             style={{
+              display: 'grid',
+              maxHeight: '72vh',
+              overflow: 'auto',
+              placeItems: 'center',
               background: token.colorFillQuaternary,
               borderRadius: token.borderRadiusLG,
               padding: token.paddingSM,
             }}
           >
             <img
-              className={styles.previewImage}
               data-testid="link-image-preview-image"
               src={image}
               alt={target?.title ?? 'Uploaded image preview'}
+              style={{ maxWidth: '100%', maxHeight: '68vh', objectFit: 'contain' }}
             />
           </div>
         )}
         {text &&
           !error &&
           (resource?.kind === 'text' ? (
-            <pre className={styles.plainTextPreview}>{text}</pre>
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text}</pre>
           ) : (
             <MarkdownRenderer content={text} />
           ))}

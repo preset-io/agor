@@ -43,13 +43,20 @@ export function ActionLinkRow({
         aria-label={ariaLabel}
         to={href}
         onClick={onActivate}
-        style={{ padding: primaryPadding }}
+        style={{
+          display: 'flex',
+          minWidth: 0,
+          flex: 1,
+          alignItems: 'stretch',
+          color: 'inherit',
+          textDecoration: 'none',
+          padding: primaryPadding,
+        }}
       >
         {children}
       </RouterLink>
     ) : (
       <Button
-        className={styles.actionRowPrimary}
         type="text"
         block
         href={href && !disabled ? href : undefined}
@@ -58,7 +65,16 @@ export function ActionLinkRow({
         disabled={disabled}
         aria-label={ariaLabel}
         onClick={onActivate}
-        style={{ padding: primaryPadding }}
+        style={{
+          height: 'auto',
+          minWidth: 0,
+          flex: 1,
+          alignItems: 'stretch',
+          justifyContent: 'flex-start',
+          whiteSpace: 'normal',
+          textAlign: 'left',
+          padding: primaryPadding,
+        }}
       >
         {children}
       </Button>
@@ -66,17 +82,18 @@ export function ActionLinkRow({
 
   return (
     <Flex
-      className={styles.actionRow}
       align="center"
       gap={token.sizeXS}
       style={{
+        width: '100%',
+        minWidth: 0,
         borderBottom: bordered ? `1px solid ${token.colorBorderSecondary}` : undefined,
         borderRadius: token.borderRadius,
       }}
     >
       {primary}
       {actions && (
-        <Flex className={styles.actionRowActions} align="center" gap={token.sizeXXS}>
+        <Flex align="center" gap={token.sizeXXS} style={{ flex: '0 0 auto' }}>
           {actions}
         </Flex>
       )}

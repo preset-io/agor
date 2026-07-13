@@ -18,7 +18,6 @@ import {
   type LinkDisplayItem,
 } from './linkDisplay';
 import { getLinkPinActionLabel } from './linkPinning';
-import styles from './linkUi.module.css';
 
 type PreviewState = {
   item: LinkDisplayItem;
@@ -74,14 +73,18 @@ export function LinkRow({
         ) : undefined
       }
     >
-      <Flex component="span" align="center" gap="small" className={styles.rowContent}>
+      <Flex component="span" align="center" gap="small" style={{ minWidth: 0, flex: 1 }}>
         <LinkRowGlyph category={item.category} compact />
-        <Flex component="span" vertical className={styles.rowContent}>
-          <Flex component="span" align="center" gap="small" className={styles.minWidthZero}>
+        <Flex component="span" vertical style={{ minWidth: 0, flex: 1 }}>
+          <Flex component="span" align="center" gap="small" style={{ minWidth: 0 }}>
             <Typography.Text
-              className={styles.rowTitle}
               ellipsis
-              style={{ color: isActionable ? token.colorText : token.colorTextSecondary }}
+              style={{
+                minWidth: 0,
+                flex: 1,
+                lineHeight: 1.25,
+                color: isActionable ? token.colorText : token.colorTextSecondary,
+              }}
             >
               {title}
             </Typography.Text>
@@ -95,7 +98,7 @@ export function LinkRow({
             <Typography.Text
               type="secondary"
               ellipsis
-              className={`${styles.rowTarget} ${styles.smallText}`}
+              style={{ lineHeight: 1.2, fontSize: token.fontSizeSM }}
             >
               {targetLabel}
             </Typography.Text>

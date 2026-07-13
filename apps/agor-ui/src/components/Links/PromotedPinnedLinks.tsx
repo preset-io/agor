@@ -7,7 +7,6 @@ import {
   getLinkDisplaySecondaryLabel,
   type LinkDisplayItem,
 } from './linkDisplay';
-import styles from './linkUi.module.css';
 import { PinnedLinkButton } from './PinnedLinkButton';
 import { LinkPreviewModal, useLinkFileActions } from './SessionLinksControl';
 
@@ -41,10 +40,10 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
   return (
     <>
       <Flex
-        className={styles.pinnedStrip}
         align="center"
         gap={token.sizeXXS}
         data-testid={dataTestId}
+        style={{ minWidth: 0, maxWidth: 500, flexWrap: 'nowrap', overflow: 'hidden' }}
       >
         {visibleItems.map((item) => {
           const disabledReason = getLinkUnavailableReason(item);
@@ -70,7 +69,6 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
         {hiddenCount > 0 && (
           <Tooltip title={`${hiddenCount} more pinned link${hiddenCount === 1 ? '' : 's'}`}>
             <Button
-              className={styles.pinnedOverflow}
               size="small"
               shape="round"
               type="text"
@@ -79,6 +77,8 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                 onOverflow?.();
               }}
               style={{
+                minWidth: 34,
+                flex: '0 0 auto',
                 height: chipHeight,
                 padding: `0 ${token.paddingXXS}px`,
                 color: token.colorPrimary,

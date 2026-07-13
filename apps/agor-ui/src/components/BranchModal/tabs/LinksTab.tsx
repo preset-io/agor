@@ -22,7 +22,6 @@ import {
   useLinkMutations,
 } from '../../Links';
 import { LinkCollectionControls } from '../../Links/LinkCollectionControls';
-import styles from '../../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../../Links/SessionLinksControl';
 import { BranchLinkListItem } from './BranchLinkListItem';
 
@@ -131,21 +130,24 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   return (
     <>
       <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
-      <div className={styles.linkListViewport} data-testid="branch-links-tab">
-        <Space className={styles.fullWidth} direction="vertical" size={token.sizeMD}>
+      <div
+        data-testid="branch-links-tab"
+        style={{ width: '100%', height: '70vh', overflowY: 'auto' }}
+      >
+        <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
           {error && (
-            <div className={styles.linkListInset}>
+            <div style={{ paddingInline: token.paddingLG }}>
               <Alert message="Error" description={error} type="error" showIcon />
             </div>
           )}
 
           {loading ? (
-            <Flex className={styles.linkListLoading} align="center" justify="center">
+            <Flex align="center" justify="center" style={{ minHeight: 180 }}>
               <Spin />
             </Flex>
           ) : items.length > 0 ? (
-            <Space className={styles.fullWidth} direction="vertical" size={token.sizeMD}>
-              <div className={styles.linkListInset}>
+            <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
+              <div style={{ paddingInline: token.paddingLG }}>
                 <LinkCollectionControls
                   categoryCounts={categoryCounts}
                   activeCategory={activeCategory}
@@ -158,7 +160,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
               </div>
               {visibleItems.length > 0 ? (
                 <List
-                  className={styles.linkListInset}
+                  style={{ paddingInline: token.paddingLG }}
                   dataSource={visibleItems}
                   renderItem={(item) => (
                     <BranchLinkListItem

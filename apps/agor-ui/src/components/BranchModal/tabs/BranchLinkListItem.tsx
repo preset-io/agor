@@ -14,7 +14,6 @@ import {
 } from '../../Links';
 import { LinkRowGlyph } from '../../Links/LinkVisual';
 import { getLinkUnavailableReason } from '../../Links/linkContent';
-import styles from '../../Links/linkUi.module.css';
 
 interface BranchLinkListItemProps {
   item: LinkDisplayItem;
@@ -66,7 +65,7 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
   const targetLabel = getLinkDisplaySecondaryLabel(props.item);
 
   return (
-    <List.Item className={styles.listItemFlush}>
+    <List.Item style={{ paddingBlock: 0 }}>
       <ActionLinkRow
         disabled={disabled}
         ariaLabel={disabledReason ? `${title}: ${disabledReason}` : `Open ${title}`}
@@ -86,15 +85,10 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
           </>
         }
       >
-        <Flex component="span" align="flex-start" gap="small" className={styles.minWidthZero}>
+        <Flex component="span" align="flex-start" gap="small" style={{ minWidth: 0 }}>
           <LinkRowGlyph category={props.item.category} disabled={disabled} />
-          <Flex component="span" vertical gap={token.sizeXXS} className={styles.rowContent}>
-            <Typography.Text
-              className={styles.compactLineHeight}
-              strong
-              ellipsis
-              disabled={disabled}
-            >
+          <Flex component="span" vertical gap={token.sizeXXS} style={{ minWidth: 0, flex: 1 }}>
+            <Typography.Text strong ellipsis disabled={disabled} style={{ lineHeight: 1.25 }}>
               {title}
             </Typography.Text>
             {targetLabel && (
@@ -103,12 +97,12 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
               </Typography.Text>
             )}
             {props.sourceSessionLabel && (
-              <Typography.Text className={styles.smallText} type="secondary" ellipsis>
+              <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
                 From {props.sourceSessionLabel}
               </Typography.Text>
             )}
             {disabledReason && (
-              <Typography.Text className={styles.smallText} type="warning">
+              <Typography.Text type="warning" style={{ fontSize: token.fontSizeSM }}>
                 {disabledReason}
               </Typography.Text>
             )}

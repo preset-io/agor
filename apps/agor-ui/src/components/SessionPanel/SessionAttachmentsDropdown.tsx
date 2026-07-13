@@ -26,7 +26,6 @@ import {
 } from '../Links';
 import { LinkCollectionControls } from '../Links/LinkCollectionControls';
 import { getLinkUnavailableReason, getSafeLinkContentLabel } from '../Links/linkContent';
-import styles from '../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../Links/SessionLinksControl';
 import {
   SessionAttachmentDrawerRow,
@@ -104,9 +103,9 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     .sort((a, b) => compareLinkDisplayItemsBySort(a, b, sortOrder));
 
   const quickContent = (
-    <div className={styles.organizerPopover} data-testid="links-organizer-popover">
+    <div data-testid="links-organizer-popover" style={{ width: 312 }}>
       <Flex align="flex-start" justify="space-between" gap="small">
-        <div className={styles.minWidthZero}>
+        <div style={{ minWidth: 0 }}>
           <Typography.Text strong>Links</Typography.Text>
         </div>
         <Tooltip title="Manage links">
@@ -126,11 +125,11 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
       {error && (
         <div style={{ marginTop: token.sizeSM }}>
-          <Typography.Text type="danger" className={`${styles.blockText} ${styles.smallText}`}>
+          <Typography.Text type="danger" style={{ display: 'block', fontSize: token.fontSizeSM }}>
             {error}
           </Typography.Text>
           {onRetry && (
-            <Button className={styles.noInlinePadding} type="link" size="small" onClick={onRetry}>
+            <Button type="link" size="small" onClick={onRetry} style={{ paddingInline: 0 }}>
               Retry
             </Button>
           )}
@@ -145,9 +144,14 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
         />
       ) : (
         <Flex
-          className={`${styles.organizerScroll} ${styles.organizerQuickList}`}
           vertical
           gap={token.sizeXXS}
+          style={{
+            overflowY: 'auto',
+            maxHeight: 308,
+            marginTop: token.marginSM,
+            paddingRight: token.paddingXXS,
+          }}
         >
           {quickItems.map((item) => (
             <SessionAttachmentQuickRow
@@ -165,7 +169,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
 
   return (
     <>
-      <Space className={styles.minWidthZero} size={4} align="center">
+      <Space size={4} align="center" style={{ minWidth: 0 }}>
         <Popover
           open={popoverOpen}
           onOpenChange={setPopoverOpen}
@@ -198,7 +202,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
         onClose={() => setDrawerOpen(false)}
       >
         <div data-testid="links-organizer-manage">
-          <Space className={styles.fullWidth} direction="vertical" size={token.sizeMD}>
+          <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
             <LinkCollectionControls
               categoryCounts={categoryCounts}
               activeCategory={activeCategory}
@@ -212,7 +216,11 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links in this view." />
             ) : (
               <div
-                className={`${styles.organizerScroll} ${styles.organizerDrawerList} ${styles.drawerListPadding}`}
+                style={{
+                  overflowY: 'auto',
+                  maxHeight: 'min(58vh, 560px)',
+                  paddingRight: token.paddingXS,
+                }}
               >
                 {drawerItems.map((item) => (
                   <SessionAttachmentDrawerRow

@@ -2,7 +2,6 @@ import { PushpinFilled } from '@ant-design/icons';
 import { Button, Flex, Space, Spin, Typography, theme } from 'antd';
 import { useMemo } from 'react';
 import type { LinkDisplayItem } from './linkDisplay';
-import styles from './linkUi.module.css';
 import { LinkPreviewModal, LinkRow, useLinkFileActions } from './SessionLinksControl';
 
 interface PinnedLinkListProps {
@@ -57,28 +56,28 @@ export function PinnedLinkList({
           style={{ marginBottom: pinnedItems.length > 0 || loading || error ? token.sizeXS : 0 }}
         >
           <PushpinFilled style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }} />
-          <Typography.Text className={styles.smallText} type="secondary" strong>
+          <Typography.Text type="secondary" strong style={{ fontSize: token.fontSizeSM }}>
             Pinned links
           </Typography.Text>
           {pinnedItems.length > 0 && countMode === 'total' && (
-            <Typography.Text className={styles.smallText} type="secondary">
+            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               {pinnedItems.length}
             </Typography.Text>
           )}
           {hiddenCount > 0 && countMode === 'hidden' && (
-            <Typography.Text className={styles.smallText} type="secondary">
+            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               +{hiddenCount} more
             </Typography.Text>
           )}
-          {loading && <Spin className={styles.marginLeftAuto} size="small" />}
+          {loading && <Spin size="small" style={{ marginLeft: 'auto' }} />}
         </Flex>
 
         {error ? (
-          <Typography.Text className={styles.smallText} type="danger">
+          <Typography.Text type="danger" style={{ fontSize: token.fontSizeSM }}>
             {error}
           </Typography.Text>
         ) : inlineItems.length > 0 ? (
-          <Space className={styles.fullWidth} direction="vertical" size={token.sizeXS}>
+          <Space direction="vertical" size={token.sizeXS} style={{ width: '100%' }}>
             {inlineItems.map((item) => (
               <LinkRow
                 key={item.key}
@@ -97,7 +96,7 @@ export function PinnedLinkList({
             )}
           </Space>
         ) : loading ? (
-          <Typography.Text className={styles.smallText} type="secondary">
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             {loadingLabel}
           </Typography.Text>
         ) : null}

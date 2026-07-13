@@ -3,7 +3,6 @@ import { Button, Flex, Spin, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import type { LinkPreviewTarget } from './LinkContentPreviewModal';
 import { getSafeLinkContentLabel } from './linkContent';
-import styles from './linkUi.module.css';
 import { useLinkPreviewResource } from './useLinkPreviewResource';
 
 interface LinkImageThumbnailProps {
@@ -60,11 +59,18 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
   return (
     <div ref={thumbnailRef} style={{ marginTop: token.sizeUnit }}>
       <Button
-        className={styles.thumbnailButton}
         type="text"
         aria-label={`Open image preview for ${title}`}
         onClick={handleOpen}
         style={{
+          display: 'block',
+          height: 'auto',
+          width: 260,
+          maxWidth: '100%',
+          padding: 0,
+          overflow: 'hidden',
+          font: 'inherit',
+          textAlign: 'left',
           border: `1px solid ${token.colorBorderSecondary}`,
           borderRadius: token.borderRadiusLG,
           background: token.colorBgContainer,
@@ -72,14 +78,23 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
           color: token.colorText,
         }}
       >
-        <span className={styles.thumbnailCanvas} style={{ background: token.colorFillQuaternary }}>
+        <span
+          style={{
+            display: 'grid',
+            width: '100%',
+            maxWidth: '100%',
+            height: 146,
+            placeItems: 'center',
+            background: token.colorFillQuaternary,
+          }}
+        >
           {objectUrl && !failed ? (
             <img
-              className={styles.thumbnailImage}
               src={objectUrl}
               alt={title}
               decoding="async"
               onError={() => setFailedUrl(objectUrl ?? null)}
+              style={{ display: 'block', width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
             <Flex
@@ -94,7 +109,7 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
               ) : (
                 <FileImageOutlined style={{ fontSize: token.fontSizeHeading2 }} />
               )}
-              <Typography.Text className={styles.smallText} type="secondary">
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 {loading ? 'Loading preview…' : 'Click to preview'}
               </Typography.Text>
             </Flex>
@@ -103,13 +118,12 @@ export const LinkImageThumbnail: React.FC<LinkImageThumbnailProps> = ({
         <Tooltip title={safeSubtitle || title} mouseEnterDelay={0.6}>
           <Flex
             component="span"
-            className={styles.thumbnailFooter}
             align="center"
             gap="small"
-            style={{ padding: `${token.paddingXXS}px ${token.paddingXS}px` }}
+            style={{ minWidth: 0, padding: `${token.paddingXXS}px ${token.paddingXS}px` }}
           >
             <FileImageOutlined style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
-            <Typography.Text className={styles.smallText} ellipsis style={{ maxWidth: 230 }}>
+            <Typography.Text ellipsis style={{ maxWidth: 230, fontSize: token.fontSizeSM }}>
               {title}
             </Typography.Text>
           </Flex>

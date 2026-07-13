@@ -5,7 +5,6 @@ import {
   type LinkCategoryTabKey,
   type LinkSortKey,
 } from './linkOrganizer';
-import styles from './linkUi.module.css';
 
 const CATEGORY_KEYS: LinkCategoryTabKey[] = ['all', 'files', 'links', 'knowledge', 'issues'];
 
@@ -38,32 +37,32 @@ export function LinkCollectionControls({
   const { token } = theme.useToken();
 
   return (
-    <Flex vertical gap="middle" className={styles.fullWidth}>
-      <div className={styles.segmentedScroll}>
+    <Flex vertical gap="middle" style={{ width: '100%' }}>
+      <div style={{ width: '100%', overflowX: 'auto' }}>
         <Segmented<LinkCategoryTabKey>
-          className={styles.segmented}
           block
+          style={{ minWidth: 520 }}
           value={activeCategory}
           options={getLinkCategoryOptions(categoryCounts)}
           onChange={onCategoryChange}
         />
       </div>
-      <Flex className={styles.collectionToolbar} align="center" gap="small" wrap>
+      <Flex align="center" gap="small" wrap style={{ width: '100%' }}>
         <Input.Search
-          className={styles.collectionSearch}
           allowClear
+          style={{ minWidth: 220, flex: '1 1 320px' }}
           value={searchQuery}
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder="Search links"
           aria-label="Search links"
         />
-        <Space className={styles.collectionSort} size={token.sizeXS}>
-          <Typography.Text className={styles.smallText} type="secondary">
+        <Space size={token.sizeXS} style={{ flex: '0 0 auto' }}>
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             Sort
           </Typography.Text>
           <Select<LinkSortKey>
-            className={styles.collectionSortSelect}
             size="small"
+            style={{ width: 128 }}
             value={sortOrder}
             options={(Object.keys(LINK_SORT_LABELS) as LinkSortKey[]).map((value) => ({
               value,

@@ -19,7 +19,6 @@ import {
   getLinkUnavailableReason,
   getSafeLinkContentLabel,
 } from '../Links/linkContent';
-import styles from '../Links/linkUi.module.css';
 
 type SessionAttachmentItem = LinkDisplayItem;
 
@@ -142,39 +141,44 @@ function SessionAttachmentRow({ drawer, ...props }: DrawerProps & { drawer: bool
       }
     >
       {drawer ? (
-        <Flex component="span" align="flex-start" gap="small" className={styles.minWidthZero}>
+        <Flex component="span" align="flex-start" gap="small" style={{ minWidth: 0 }}>
           <Flex
             component="span"
-            className={styles.drawerGlyph}
             align="center"
             justify="center"
             aria-hidden="true"
+            style={{ width: 28, minHeight: 28, flex: '0 0 28px' }}
           >
             {attachmentIcon(props.item, disabled)}
           </Flex>
-          <Flex component="span" vertical gap={token.sizeXXS} className={styles.rowContent}>
+          <Flex component="span" vertical gap={token.sizeXXS} style={{ minWidth: 0, flex: 1 }}>
             <Typography.Text strong ellipsis disabled={disabled}>
               {props.item.name}
             </Typography.Text>
-            <Typography.Text className={styles.smallText} type="secondary" ellipsis>
+            <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
               {getTargetDisplay(props.item)}
             </Typography.Text>
             {disabledReason && (
-              <Typography.Text className={styles.smallText} type="warning">
+              <Typography.Text type="warning" style={{ fontSize: token.fontSizeSM }}>
                 {disabledReason}
               </Typography.Text>
             )}
           </Flex>
         </Flex>
       ) : (
-        <Flex component="span" align="center" gap="small" className={styles.minWidthZero}>
-          <Flex component="span" className={styles.quickGlyph} align="center" justify="center">
+        <Flex component="span" align="center" gap="small" style={{ minWidth: 0 }}>
+          <Flex
+            component="span"
+            align="center"
+            justify="center"
+            style={{ width: 26, flex: '0 0 auto' }}
+          >
             {attachmentIcon(props.item, disabled)}
           </Flex>
           <Typography.Text
             ellipsis
             disabled={disabled}
-            className={`${styles.minWidthZero} ${styles.smallText}`}
+            style={{ minWidth: 0, fontSize: token.fontSizeSM }}
           >
             {props.item.name}
           </Typography.Text>
