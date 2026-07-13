@@ -19,6 +19,12 @@ import {
  * session's live text than to its stored messages. Feathers drops connections
  * from channels automatically on disconnect, so unsubscribe on refresh /
  * navigation is best-effort; the socket teardown is the real cleanup.
+ *
+ * `create` also accepts a session-less capability announce (`{ capability:
+ * true }`) that only marks the CONNECTION session-streams aware, joining no
+ * room and reading no session. A modern client announces once per connection so
+ * the publish-time owner fallback (which bridges only stale clients) skips its
+ * idle tabs — see `markConnectionSessionStreamsAware` in `realtime-publish`.
  */
 export interface SessionStreamSubscription {
   session_id: string;
