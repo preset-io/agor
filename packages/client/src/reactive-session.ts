@@ -1118,7 +1118,53 @@ export function attachReactiveSessionApi(client: AgorClient): ReactiveAgorClient
     return new ReactiveSessionHandle(client, sessionId, options);
   };
 
+  // Announce session-streams capability once per connection, independent of
+  // opening any transcript, so idle home/board tabs are excluded from the
+  // publish-time owner fallback too (the power-user idle-firehose fix).
+  ensureSessionStreamsCapabilityAnnounce(client);
+
   return reactiveClient;
+}
+
+const CAPABILITY_ANNOUNCED_CLIENTS = new WeakSet<AgorClient>();
+
+/**
+ * Tell the daemon this connection speaks the session-streams room protocol so
+ * the publish-time owner fallback skips it. Distinct from
+ * {@link retainSessionStream}: it joins NO room and requires NO open transcript,
+ * so an idle home/board tab — which never constructs a ReactiveSessionHandle and
+ * so never subscribes to any session — still gets flagged. Without it, such a
+ * tab owned by a power user keeps receiving the whole owner-fallback streaming
+ * firehose for every session they own.
+ *
+ * Fires on the initial connect and on every reconnect (a reconnect is a fresh
+ * connection with no aware flag on the daemon side). Idempotent per client: the
+ * `connect` listener is wired at most once, and each fire is a single cheap
+ * `create({ capability: true })` that the daemon treats as a no-room marker.
+ */
+export function ensureSessionStreamsCapabilityAnnounce(client: AgorClient): void {
+  const io = client.io;
+  if (!io || CAPABILITY_ANNOUNCED_CLIENTS.has(client)) return;
+  CAPABILITY_ANNOUNCED_CLIENTS.add(client);
+
+  const announce = () => {
+    // Best-effort: a stale daemon that doesn't understand the capability marker
+    // (or a transient auth refresh mid-connect) just leaves this connection on
+    // the owner fallback — correct, if slightly chattier, behavior. The
+    // around-hook retries the underlying call on a recoverable auth error.
+    void (
+      client.service('session-streams') as {
+        create: (data: unknown) => Promise<unknown>;
+      }
+    )
+      .create({ capability: true })
+      .catch(() => {});
+  };
+
+  io.on('connect', announce);
+  // The socket may already be connected by the time the reactive API is
+  // attached (autoConnect clients), in which case 'connect' won't fire again.
+  if (io.connected) announce();
 }
 
 // --- Per-connection stream subscription registry ---------------------------

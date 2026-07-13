@@ -1,7 +1,11 @@
 import type { Application } from '@agor/core/feathers';
 import { BadRequest } from '@agor/core/feathers';
 import type { Params } from '@agor/core/types';
-import { joinSessionStreamChannel, leaveSessionStreamChannel } from '../utils/realtime-publish.js';
+import {
+  joinSessionStreamChannel,
+  leaveSessionStreamChannel,
+  markConnectionSessionStreamsAware,
+} from '../utils/realtime-publish.js';
 
 /**
  * `session-streams` — a realtime control-plane service that lets a browser
@@ -24,6 +28,14 @@ export interface SessionStreamSubscription {
 interface SubscribeData {
   session_id?: string;
   sessionId?: string;
+  /**
+   * Capability announce: a modern client sends `{ capability: true }` (no
+   * session_id) once per connection to mark this connection session-streams
+   * aware WITHOUT joining any room. It carries no session id, reads no session,
+   * and joins nothing — so it needs no access check (it can only ever REMOVE
+   * this connection from the publish-time owner fallback, never widen delivery).
+   */
+  capability?: boolean;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -61,12 +73,26 @@ export function createSessionStreamsService(app: Application) {
       }
       const sessionId = data?.session_id ?? data?.sessionId;
       if (!sessionId || typeof sessionId !== 'string') {
+        // Capability announce (no session_id): mark the connection aware and
+        // return without touching any room or reading any session. Idle home /
+        // board tabs that never open a transcript announce here so the publish-
+        // time owner fallback skips them too. Access-safe: joins no room, so it
+        // cannot leak streaming — it only ever removes this connection from the
+        // fallback firehose.
+        if (data?.capability === true) {
+          markConnectionSessionStreamsAware(connection);
+          return { session_id: '', subscribed: false };
+        }
         throw new BadRequest('session_id is required');
       }
       // Join the CANONICAL room id so short-id / alias callers land in the same
       // room publishers emit to (they carry the full UUID).
       const canonicalId = (await resolveAccessibleSessionId(sessionId, params)) ?? sessionId;
       joinSessionStreamChannel(app, canonicalId, connection);
+      // A real subscribe is itself proof of a modern client: mark the connection
+      // aware so the owner fallback stops bridging it (the room now delivers this
+      // session's streaming, and idle sessions need nothing).
+      markConnectionSessionStreamsAware(connection);
       return { session_id: canonicalId, subscribed: true };
     },
 
