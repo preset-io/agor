@@ -141,6 +141,33 @@ describe('Claude CLI Agor MCP config', () => {
     );
   });
 
+  it('keeps token issuance best-effort after tenant scope entry succeeds', async () => {
+    vi.mocked(generateSessionToken).mockRejectedValueOnce(new Error('temporary token store error'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(
+      runWithTenantContext('tenant-x', () =>
+        writeClaudeCliMcpConfigForSession(makeApp(), makeSession(), {
+          actor: { user_id: 'user-1', role: 'member' },
+        })
+      )
+    ).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to issue MCP token'),
+      'temporary token store error'
+    );
+  });
+
+  it('fails fast before token issuance without tenant identity', async () => {
+    await expect(
+      writeClaudeCliMcpConfigForSession(makeApp(), makeSession(), {
+        actor: { user_id: 'user-1', role: 'member' },
+      })
+    ).rejects.toThrow('Missing active tenant context for Claude CLI MCP config generation');
+    expect(generateSessionToken).not.toHaveBeenCalled();
+  });
+
   it('resolves the MCP config file owner from Unix isolation mode', () => {
     expect(resolveClaudeCliMcpConfigTargetUnixUser(undefined, makeSession())).toBeUndefined();
 
