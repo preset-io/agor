@@ -391,6 +391,7 @@ describe('SessionPanel session links', () => {
       branch_id: 'teammate-1' as Link['branch_id'],
       session_id: null,
       is_pinned: true,
+      metadata: { teammate_promotion: true },
     });
     seedPrimaryTeammate();
     const { client, calls } = makePromotionClient({
@@ -424,6 +425,7 @@ describe('SessionPanel session links', () => {
       branch_id: 'teammate-1' as Link['branch_id'],
       session_id: null,
       is_pinned: true,
+      metadata: { teammate_promotion: true },
     });
     seedPrimaryTeammate({
       linksByBranch: new Map([['teammate-1', [promoted]]]),

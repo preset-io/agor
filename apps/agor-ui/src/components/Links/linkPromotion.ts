@@ -1,5 +1,9 @@
 import type { AgorClient, Link } from '@agor-live/client';
-import { normalizeRefTargetKey, normalizeUrlTargetKey } from '@agor-live/client';
+import {
+  isTeammatePromotionLink,
+  normalizeRefTargetKey,
+  normalizeUrlTargetKey,
+} from '@agor-live/client';
 import type { LinkDisplayItem } from './linkDisplay';
 
 type TeammatePromotionState =
@@ -10,6 +14,7 @@ type TeammatePromotionState =
       reason:
         | 'no-teammate'
         | 'same-owner'
+        | 'existing-target'
         | 'missing-source-link'
         | 'missing-target'
         | 'file-target-lifetime'
@@ -37,6 +42,8 @@ export function getTeammatePromotionUnavailableReason(
       return 'No teammate configured';
     case 'same-owner':
       return 'Already on teammate branch';
+    case 'existing-target':
+      return 'Teammate already owns this link';
     case 'missing-source-link':
       return 'Cannot promote generated branch metadata';
     case 'missing-target':
@@ -93,8 +100,16 @@ export function getTeammatePromotionState(args: {
     const ownedLink = args.item.linkId
       ? (args.teammateLinks.find((link) => link.link_id === args.item.linkId) ?? null)
       : null;
-    if (ownedLink) {
+    if (ownedLink && isTeammatePromotionLink(ownedLink)) {
       return { canPromote: true, isPromoted: true, teammateLink: ownedLink, reason: null };
+    }
+    if (ownedLink) {
+      return {
+        canPromote: false,
+        isPromoted: false,
+        teammateLink: null,
+        reason: 'existing-target',
+      };
     }
     return { canPromote: false, isPromoted: false, teammateLink: null, reason: 'same-owner' };
   }
@@ -111,7 +126,17 @@ export function getTeammatePromotionState(args: {
   }
 
   const teammateLink = findTeammateLinkForTarget(args.item, args.teammateLinks);
-  if (teammateLink) return { canPromote: true, isPromoted: true, teammateLink, reason: null };
+  if (teammateLink && isTeammatePromotionLink(teammateLink)) {
+    return { canPromote: true, isPromoted: true, teammateLink, reason: null };
+  }
+  if (teammateLink) {
+    return {
+      canPromote: false,
+      isPromoted: false,
+      teammateLink: null,
+      reason: 'existing-target',
+    };
+  }
   if (
     args.item.filePath ||
     args.item.source === 'upload' ||

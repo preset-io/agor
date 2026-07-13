@@ -86,6 +86,7 @@ describe('LinksTab teammate promotion actions', () => {
       link_id: 'teammate-link' as Link['link_id'],
       branch_id: 'teammate-1' as Link['branch_id'],
       is_pinned: true,
+      metadata: { teammate_promotion: true },
     });
     seedStore([source]);
     const { client, calls } = makeClient({ branchLinks: [source], teammateLinks: [], promoted });
@@ -164,6 +165,7 @@ describe('LinksTab teammate promotion actions', () => {
       link_id: 'teammate-link' as Link['link_id'],
       branch_id: 'teammate-1' as Link['branch_id'],
       is_pinned: true,
+      metadata: { teammate_promotion: true },
     });
     seedStore([source], [promoted]);
     const { client, calls } = makeClient({
@@ -189,7 +191,7 @@ describe('LinksTab teammate promotion actions', () => {
     expect(agorStore.getState().linkById.has('link-1')).toBe(true);
   });
 
-  it("removes a link directly from the teammate branch's own Links tab", async () => {
+  it("does not expose promotion removal for a teammate branch's unmarked link", async () => {
     const teammateBranch = { ...branch, branch_id: 'teammate-1' } as Branch;
     const ownedLink = makeLink({
       link_id: 'teammate-link' as Link['link_id'],
@@ -205,17 +207,9 @@ describe('LinksTab teammate promotion actions', () => {
     renderLinksTab(client, teammateBranch);
 
     await screen.findByText('Runbook');
-    fireEvent.click(screen.getByLabelText('Teammate actions for Runbook'));
-    fireEvent.click(await screen.findByText('Remove from teammate'));
-
-    await waitFor(() => {
-      expect(calls).toContainEqual({
-        service: 'links',
-        method: 'remove',
-        args: ['teammate-link'],
-      });
-    });
-    expect(agorStore.getState().linkById.has('teammate-link')).toBe(false);
+    expect(screen.queryByLabelText('Teammate actions for Runbook')).not.toBeInTheDocument();
+    expect(calls.some((call) => call.method === 'remove')).toBe(false);
+    expect(agorStore.getState().linkById.has('teammate-link')).toBe(true);
   });
 
   it('searches links and shows source session attribution from the centralized store', async () => {

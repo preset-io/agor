@@ -14,6 +14,7 @@ const link = (overrides: Partial<Link> = {}) =>
     session_id: null,
     url: 'https://example.com',
     is_pinned: true,
+    metadata: { teammate_promotion: true },
     ...overrides,
   });
 
@@ -118,6 +119,19 @@ describe('linkPromotion', () => {
     ).toMatchObject({ canPromote: true, isPromoted: true, teammateLink: link() });
   });
 
+  it('does not expose removal for a matching teammate-owned link without promotion provenance', () => {
+    const existing = link({ metadata: null });
+
+    expect(
+      getTeammatePromotionState({
+        item: item(),
+        teammateBranchId: 'teammate-1',
+        sourceBranchId: 'branch-1',
+        teammateLinks: [existing],
+      })
+    ).toMatchObject({ canPromote: false, isPromoted: false, reason: 'existing-target' });
+  });
+
   it('does not promote missing source links, missing teammates, or teammate-owned links', () => {
     expect(
       getTeammatePromotionState({
@@ -215,13 +229,14 @@ describe('linkPromotion', () => {
     ).toMatchObject({ canPromote: false, reason: 'internal-target-access' });
   });
 
-  it('allows an existing legacy teammate copy to be removed', () => {
+  it('does not remove an unmarked legacy teammate copy', () => {
     const teammateFile = link({
       kind: 'document',
       source: 'upload',
       url: null,
       file_path: '/uploads/report.pdf',
       target_key: 'file:/uploads/report.pdf',
+      metadata: null,
     });
     expect(
       getTeammatePromotionState({
@@ -236,7 +251,7 @@ describe('linkPromotion', () => {
         sourceBranchId: 'branch-1',
         teammateLinks: [teammateFile],
       })
-    ).toMatchObject({ canPromote: true, isPromoted: true, teammateLink: teammateFile });
+    ).toMatchObject({ canPromote: false, isPromoted: false, reason: 'existing-target' });
   });
 
   it('calls the promotion service path with only teammate target payload', async () => {

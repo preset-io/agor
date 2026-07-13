@@ -153,26 +153,82 @@ export interface ParsedLinkDraft {
   metadata?: LinkMetadata | null;
 }
 
-const HTTP_URL_RE = /https?:\/\/[^\s<>"')]+/gi;
+const HTTP_URL_RE = /https?:\/\/[^\s<>"']+/gi;
 const TRAILING_PUNCTUATION_RE = /[.,;:!?\]}]+$/;
 const GITHUB_ISSUE_RE = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+(?:[/?#].*)?$/i;
 const GITHUB_PR_RE = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+(?:[/?#].*)?$/i;
 
-function stripMarkdownCode(text: string): string {
-  let fence: string | null = null;
+function stripUnmatchedTrailingParentheses(value: string): string {
+  let result = value.replace(TRAILING_PUNCTUATION_RE, '');
+  let openingCount = 0;
+  let closingCount = 0;
+  for (const character of result) {
+    if (character === '(') openingCount += 1;
+    else if (character === ')') closingCount += 1;
+  }
+  while (result.endsWith(')') && closingCount > openingCount) {
+    result = result.slice(0, -1);
+    closingCount -= 1;
+  }
+  return result;
+}
+
+function stripMarkdownFencedCode(text: string): string {
+  let fence: { character: string; length: number } | null = null;
   return text
     .split(/\r?\n/)
     .map((line) => {
-      const marker = line.trimStart().match(/^(`{3,}|~{3,})/)?.[1] ?? null;
-      if (marker) {
-        if (!fence) fence = marker[0];
-        else if (marker[0] === fence) fence = null;
+      const trimmed = line.trimStart();
+      const marker = trimmed.match(/^(`{3,}|~{3,})/)?.[1] ?? null;
+      if (fence) {
+        if (
+          marker?.[0] === fence.character &&
+          marker.length >= fence.length &&
+          trimmed.slice(marker.length).trim() === ''
+        ) {
+          fence = null;
+        }
         return '';
       }
-      if (fence) return '';
-      return line.replace(/(`+)(.*?)\1/g, '');
+      if (marker) {
+        fence = { character: marker[0], length: marker.length };
+        return '';
+      }
+      return line;
     })
     .join('\n');
+}
+
+function stripMarkdownInlineCode(text: string): string {
+  const runs = Array.from(text.matchAll(/`+/g), (match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+    length: match[0].length,
+  }));
+  const nextRunWithLength = new Array<number>(runs.length).fill(-1);
+  const nextByLength = new Map<number, number>();
+  for (let index = runs.length - 1; index >= 0; index -= 1) {
+    nextRunWithLength[index] = nextByLength.get(runs[index].length) ?? -1;
+    nextByLength.set(runs[index].length, index);
+  }
+
+  let result = '';
+  let cursor = 0;
+  for (let index = 0; index < runs.length; index += 1) {
+    const closingIndex = nextRunWithLength[index];
+    if (closingIndex === -1) continue;
+    const opener = runs[index];
+    const closer = runs[closingIndex];
+    result += text.slice(cursor, opener.start);
+    result += text.slice(opener.start, closer.end).replace(/[^\r\n]/g, ' ');
+    cursor = closer.end;
+    index = closingIndex;
+  }
+  return result + text.slice(cursor);
+}
+
+function stripMarkdownCode(text: string): string {
+  return stripMarkdownInlineCode(stripMarkdownFencedCode(text));
 }
 
 export function isLinkKind(value: unknown): value is LinkKind {
@@ -202,9 +258,9 @@ export function getLinkTargetField(data: {
   ref_uri?: string | null;
   file_path?: string | null;
 }): LinkTargetField | null {
-  if (data.url) return 'url';
-  if (data.ref_uri) return 'ref_uri';
-  if (data.file_path) return 'file_path';
+  if (data.url?.trim()) return 'url';
+  if (data.ref_uri?.trim()) return 'ref_uri';
+  if (data.file_path?.trim()) return 'file_path';
   return null;
 }
 
@@ -215,7 +271,7 @@ export function countLinkTargets(data: {
 }): number {
   return LINK_TARGET_FIELDS.filter((field) => {
     const value = data[field];
-    return value !== undefined && value !== null && value !== '';
+    return typeof value === 'string' && value.trim() !== '';
   }).length;
 }
 
@@ -282,7 +338,7 @@ export function normalizeUrlTargetKey(url: string): string {
     }
     return `url:${parsed.toString()}`;
   } catch {
-    return `url:${url.trim().replace(TRAILING_PUNCTUATION_RE, '')}`;
+    return `url:${stripUnmatchedTrailingParentheses(url.trim())}`;
   }
 }
 
@@ -297,6 +353,17 @@ export function normalizeRefTargetKey(refUri: string): string {
 
 export function normalizeFileTargetKey(filePath: string): string {
   return `file:${filePath.trim()}`;
+}
+
+export const TEAMMATE_PROMOTION_METADATA_KEY = 'teammate_promotion';
+
+export function isTeammatePromotionLink(link: Pick<Link, 'metadata'>): boolean {
+  const metadata = link.metadata;
+  return Boolean(
+    metadata &&
+      (metadata[TEAMMATE_PROMOTION_METADATA_KEY] === true ||
+        (metadata.promoted_from_owner && typeof metadata.promoted_from_owner === 'object'))
+  );
 }
 
 export function normalizeLinkTargetKey(data: {
@@ -355,7 +422,7 @@ export function extractLinksFromMessage(message: Pick<Message, 'content'>): Pars
     }
 
     for (const match of text.matchAll(HTTP_URL_RE)) {
-      const url = match[0].replace(TRAILING_PUNCTUATION_RE, '');
+      const url = stripUnmatchedTrailingParentheses(match[0]);
       const targetKey = normalizeUrlTargetKey(url);
       if (seen.has(targetKey)) continue;
       seen.add(targetKey);

@@ -1,4 +1,4 @@
-import type { AgorClient, Link } from '@agor-live/client';
+import { type AgorClient, isTeammatePromotionLink, type Link } from '@agor-live/client';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { agorStore } from '../../store/agorStore';
@@ -87,7 +87,11 @@ export function useLinkMutations({
           teammateBranchId,
         });
         agorStore.getState().applyKnownLinkCreatedResult(promoted);
-        showSuccess('Promoted to teammate');
+        showSuccess(
+          isTeammatePromotionLink(promoted)
+            ? 'Promoted to teammate'
+            : 'Already available on teammate'
+        );
       } catch (error) {
         showError(
           `Failed to promote link: ${error instanceof Error ? error.message : String(error)}`
@@ -102,6 +106,11 @@ export function useLinkMutations({
   const removeFromTeammate = useCallback(
     async (item: LinkDisplayItem, teammateLinkId: string) => {
       const key = item.linkId ?? item.key;
+      const teammateLink = agorStore.getState().linkById.get(teammateLinkId);
+      if (!teammateLink || !isTeammatePromotionLink(teammateLink)) {
+        showError('Only links created by teammate promotion can be removed');
+        return;
+      }
       if (!client || !startBusy(teammateBusyRef, setTeammateBusyKeys, key)) return;
       try {
         const removed = (await client.service('links').remove(teammateLinkId)) as Link;

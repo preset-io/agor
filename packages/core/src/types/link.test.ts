@@ -5,6 +5,7 @@ import {
   getLinkTargetCompatibilityError,
   getLinkTargetField,
   isInternalLinkData,
+  isTeammatePromotionLink,
   LINK_KIND_TARGET_FIELD,
   LINK_SOURCE_TARGET_FIELDS,
   normalizeLinkTargetKey,
@@ -82,6 +83,40 @@ describe('extractLinksFromMessage', () => {
     ]);
   });
 
+  it('honors fence lengths and multiline inline code spans', () => {
+    const links = extractLinksFromMessage(
+      message(
+        [
+          '````markdown',
+          '```',
+          'https://example.com/still-fenced',
+          '````',
+          '`multiline',
+          'https://example.com/still-inline',
+          'span`',
+          'https://example.com/visible',
+        ].join('\n')
+      )
+    );
+
+    expect(links).toEqual([
+      expect.objectContaining({ kind: 'url', url: 'https://example.com/visible' }),
+    ]);
+  });
+
+  it('preserves balanced parentheses in URLs while trimming unmatched closers', () => {
+    const links = extractLinksFromMessage(
+      message(
+        'Read https://en.wikipedia.org/wiki/Function_(mathematics) and (https://example.com/docs).'
+      )
+    );
+
+    expect(links.map((link) => link.url)).toEqual([
+      'https://en.wikipedia.org/wiki/Function_(mathematics)',
+      'https://example.com/docs',
+    ]);
+  });
+
   it('ignores non-text structured message payloads', () => {
     const links = extractLinksFromMessage(
       message({
@@ -119,6 +154,8 @@ describe('link target semantics', () => {
     expect(getLinkTargetField({ ref_uri: 'agor://kb/team/runbook.md' })).toBe('ref_uri');
     expect(getLinkTargetField({ file_path: '/uploads/image.png' })).toBe('file_path');
     expect(getLinkTargetField({})).toBeNull();
+    expect(getLinkTargetField({ url: '   ' })).toBeNull();
+    expect(countLinkTargets({ url: '   ', ref_uri: '\t' })).toBe(0);
     expect(countLinkTargets({ url: 'https://example.com', ref_uri: 'agor://kb/team/a.md' })).toBe(
       2
     );
@@ -136,6 +173,15 @@ describe('link target semantics', () => {
       false
     );
     expect(isInternalLinkData({ title: 'Updated title' })).toBe(false);
+  });
+
+  it('recognizes current and legacy teammate promotion provenance', () => {
+    expect(isTeammatePromotionLink({ metadata: { teammate_promotion: true } })).toBe(true);
+    expect(
+      isTeammatePromotionLink({ metadata: { promoted_from_owner: { session_id: 's1' } } })
+    ).toBe(true);
+    expect(isTeammatePromotionLink({ metadata: { teammate_owned: true } })).toBe(false);
+    expect(isTeammatePromotionLink({ metadata: null })).toBe(false);
   });
 
   it('normalizes the populated target key', () => {
@@ -156,9 +202,13 @@ describe('link target semantics', () => {
       })
     ).toBe('object:session:01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f');
     expect(normalizeLinkTargetKey({})).toBeNull();
+    expect(normalizeLinkTargetKey({ url: '   ' })).toBeNull();
   });
 
   it('describes incompatible kind/source/target combinations', () => {
+    expect(getLinkTargetCompatibilityError({ kind: 'url', source: 'manual', url: '   ' })).toBe(
+      'Link requires a target: url, ref_uri, or file_path'
+    );
     expect(
       getLinkTargetCompatibilityError({
         kind: 'image',

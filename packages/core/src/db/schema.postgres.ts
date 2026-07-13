@@ -557,7 +557,7 @@ export const links = pgTable(
     ),
     targetXorCheck: check(
       'links_target_xor_check',
-      sql`(case when ${table.url} is not null and ${table.url} <> '' then 1 else 0 end + case when ${table.ref_uri} is not null and ${table.ref_uri} <> '' then 1 else 0 end + case when ${table.file_path} is not null and ${table.file_path} <> '' then 1 else 0 end) = 1`
+      sql`(case when ${table.url} is not null and trim(${table.url}) <> '' then 1 else 0 end + case when ${table.ref_uri} is not null and trim(${table.ref_uri}) <> '' then 1 else 0 end + case when ${table.file_path} is not null and trim(${table.file_path}) <> '' then 1 else 0 end) = 1`
     ),
     targetObjectPairCheck: check(
       'links_target_object_pair_check',

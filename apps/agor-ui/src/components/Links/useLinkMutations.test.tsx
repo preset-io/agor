@@ -1,6 +1,7 @@
 import type { AgorClient, Link } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import { deferred } from '../../testUtils';
 import type { LinkDisplayItem } from './linkDisplay';
 import { useLinkMutations } from './useLinkMutations';
@@ -27,7 +28,10 @@ function resultLink(linkId: string): Link {
 }
 
 describe('useLinkMutations concurrency', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    agorStore.getState().resetMaps();
+  });
 
   it('runs different pin rows concurrently while suppressing a duplicate row action', async () => {
     const first = deferred<Link>();
@@ -64,6 +68,10 @@ describe('useLinkMutations concurrency', () => {
     mocks.promote.mockReturnValue(promotion.promise);
     const remove = vi.fn(() => removal.promise);
     const client = { service: vi.fn(() => ({ remove })) } as unknown as AgorClient;
+    agorStore.getState().applyKnownLinkCreatedResult({
+      ...resultLink('teammate-copy'),
+      metadata: { teammate_promotion: true },
+    });
     const { result } = renderHook(() =>
       useLinkMutations({ client, branchId: 'b1', teammateBranchId: 'teammate' })
     );
@@ -89,5 +97,29 @@ describe('useLinkMutations concurrency', () => {
     removal.resolve(resultLink('teammate-copy'));
     await act(async () => removeAction);
     expect(result.current.teammateBusyKeys.size).toBe(0);
+  });
+
+  it('refuses to remove a teammate-owned link without promotion provenance', async () => {
+    const remove = vi.fn();
+    const client = { service: vi.fn(() => ({ remove })) } as unknown as AgorClient;
+    agorStore.getState().applyKnownLinkCreatedResult(resultLink('teammate-copy'));
+    const { result } = renderHook(() => useLinkMutations({ client }));
+
+    await act(() => result.current.removeFromTeammate(item('source'), 'teammate-copy'));
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(mocks.showError).toHaveBeenCalledWith(
+      'Only links created by teammate promotion can be removed'
+    );
+  });
+
+  it('reports a promotion race as already available without claiming creation', async () => {
+    mocks.promote.mockResolvedValue(resultLink('existing-teammate-link'));
+    const client = { service: vi.fn() } as unknown as AgorClient;
+    const { result } = renderHook(() => useLinkMutations({ client, teammateBranchId: 'teammate' }));
+
+    await act(() => result.current.promoteToTeammate(item('source')));
+
+    expect(mocks.showSuccess).toHaveBeenCalledWith('Already available on teammate');
   });
 });

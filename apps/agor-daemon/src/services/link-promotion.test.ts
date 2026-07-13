@@ -80,7 +80,7 @@ describe('LinkPromotionService', () => {
       url: 'https://example.com/promote-me',
       is_pinned: true,
       title: 'Promote me',
-      metadata: null,
+      metadata: { teammate_promotion: true },
     });
   });
 
@@ -104,7 +104,7 @@ describe('LinkPromotionService', () => {
       source: 'manual',
       ref_uri: 'agor://kb/team/runbook.md',
       is_pinned: true,
-      metadata: null,
+      metadata: { teammate_promotion: true },
     });
   });
 
@@ -182,7 +182,7 @@ describe('LinkPromotionService', () => {
     expect(promoted.branch_id).toBe(teammate.branch_id);
   });
 
-  dbTest('dedupes by teammate owner and target key and re-pins existing copy', async ({ db }) => {
+  dbTest('does not mutate an existing teammate-owned target during dedupe', async ({ db }) => {
     const branch = await seedBranch(db);
     const teammate = await seedBranch(db, { teammate: true });
     const source = await createUrl(db, branch.branch_id, 'https://example.com/dedupe#source');
@@ -196,7 +196,7 @@ describe('LinkPromotionService', () => {
     const promoted = await promote(service, source, teammate.branch_id);
 
     expect(promoted.link_id).toBe(existing.link_id);
-    expect(promoted.is_pinned).toBe(true);
+    expect(promoted.is_pinned).toBe(false);
     expect(promoted.title).toBe('Teammate title');
     expect(promoted.metadata).toEqual({ teammate_owned: true });
   });

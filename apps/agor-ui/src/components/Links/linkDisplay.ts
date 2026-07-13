@@ -1,5 +1,6 @@
 import type { Branch, Link, LinkKind, LinkSource } from '@agor-live/client';
 import {
+  isTeammatePromotionLink,
   normalizeFileTargetKey,
   normalizeRefTargetKey,
   normalizeUrlTargetKey,
@@ -287,7 +288,7 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
     source: link.source,
     ownerScope: link.session_id ? 'session' : 'branch',
     isPinned: Boolean(link.is_pinned),
-    isPromoted: Boolean(promotedFromSessionId),
+    isPromoted: isTeammatePromotionLink(link),
     linkId: String(link.link_id),
     sessionId: link.session_id ?? undefined,
     sourceSessionId: link.session_id ?? promotedFromSessionId,

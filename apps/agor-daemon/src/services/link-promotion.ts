@@ -10,7 +10,7 @@ import type {
   Params,
   UUID,
 } from '@agor/core/types';
-import { isTeammate } from '@agor/core/types';
+import { isTeammate, TEAMMATE_PROMOTION_METADATA_KEY } from '@agor/core/types';
 import {
   isSuperAdmin,
   PERMISSION_RANK,
@@ -37,7 +37,6 @@ interface LinkPromotionServiceOptions {
 type LinksCrudService = {
   get(id: string, params?: Params): Promise<Link>;
   create(data: Partial<LinkCreate>, params?: Params): Promise<Link>;
-  patch(id: string, data: Partial<Link>, params?: Params): Promise<Link>;
 };
 
 function sourceLinkIdFromParams(params?: LinkPromotionRouteParams): string | null {
@@ -160,11 +159,7 @@ export class LinkPromotionService {
       ...targetFields,
     });
     if (existing) {
-      return this.linksService().patch(
-        existing.link_id,
-        { is_pinned: true },
-        { ...params, provider: undefined }
-      );
+      return existing;
     }
 
     const createData = {
@@ -176,6 +171,7 @@ export class LinkPromotionService {
       is_pinned: true,
       title: source.title ?? null,
       mime_type: null,
+      metadata: { [TEAMMATE_PROMOTION_METADATA_KEY]: true },
       created_by: callerId,
     } satisfies LinkCreate;
 

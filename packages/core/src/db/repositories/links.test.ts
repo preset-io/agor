@@ -66,6 +66,7 @@ describe('LinksRepository', () => {
 
     await expectConstraint({ branch_id: branch.branch_id }, 'links_owner_xor_check');
     await expectConstraint({ url: null }, 'links_target_xor_check');
+    await expectConstraint({ url: '   ' }, 'links_target_xor_check');
     await expectConstraint({ ref_uri: 'agor://kb/team/runbook.md' }, 'links_target_xor_check');
     await expectConstraint({ target_object_type: 'session' }, 'links_target_object_pair_check');
   });
@@ -442,6 +443,14 @@ describe('LinksRepository', () => {
         url: 'https://example.com/two',
         ref_uri: 'agor://kb/team/runbook.md',
       } as never)
+    ).rejects.toThrow(/exactly one target/);
+    await expect(
+      repo.create({
+        session_id: session.session_id,
+        kind: 'url',
+        source: 'manual',
+        url: '   ',
+      })
     ).rejects.toThrow(/exactly one target/);
     await expect(repo.update(created.link_id, { url: null })).rejects.toThrow(/exactly one target/);
     await expect(
