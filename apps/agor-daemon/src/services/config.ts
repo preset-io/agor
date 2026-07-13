@@ -5,7 +5,7 @@
  * Wraps @agor/core/config functions for UI access.
  */
 
-import { type AgorConfig, type ApiKeyName, loadConfig, resolveApiKey } from '@agor/core/config';
+import { type ApiKeyName, loadConfig, resolveApiKey } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
@@ -31,19 +31,6 @@ const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
 
 function isResolvableApiKeyName(value: string): value is ApiKeyName {
   return Object.hasOwn(RESOLVABLE_API_KEY_NAMES, value);
-}
-
-/** Keep retired upgrade-only keys out of the tenant-facing config API. */
-function publicConfig(config: AgorConfig): AgorConfig {
-  const result = structuredClone(config) as AgorConfig & {
-    defaults?: Record<string, unknown>;
-    display?: Record<string, unknown>;
-    onboarding?: Record<string, unknown>;
-  };
-  delete result.defaults;
-  delete result.display;
-  delete result.onboarding;
-  return result;
 }
 
 type ExecutorTokenPayload = {
@@ -108,34 +95,6 @@ export class ConfigService {
 
   constructor(db: TenantScopeAwareDatabase) {
     this.db = db;
-  }
-
-  /**
-   * Get full config (masked)
-   */
-  async find(_params?: Params): Promise<AgorConfig> {
-    return publicConfig(await loadConfig());
-  }
-
-  /**
-   * Get specific config section or value
-   */
-  async get(id: string, _params?: Params): Promise<unknown> {
-    const config = publicConfig(await loadConfig());
-
-    // Support dot notation for the remaining bootstrap configuration.
-    const parts = id.split('.');
-    let value: unknown = config;
-
-    for (const part of parts) {
-      if (value && typeof value === 'object' && part in value) {
-        value = (value as Record<string, unknown>)[part];
-      } else {
-        return undefined;
-      }
-    }
-
-    return value;
   }
 
   /**

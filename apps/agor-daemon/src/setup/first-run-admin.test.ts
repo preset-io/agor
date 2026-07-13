@@ -116,6 +116,7 @@ describe('warnDeprecatedConfig', () => {
     expect(written).toContain('defaults.agent: claude-code');
     expect(written).toContain('onboarding.teammatePending: true');
     expect(written).toContain('onboarding.frameworkRepoUrl: https://example.test/repo.git');
+    expect(written).toContain('teammates.framework_repo_url');
     expect(written).toContain('Onboarding progress is stored');
   });
 });

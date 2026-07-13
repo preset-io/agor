@@ -31,6 +31,7 @@ import {
   requirePublicBaseUrl,
   resolveBranchStorageConfig,
   resolveExecutionSecurityMode,
+  resolveTeammateFrameworkRepoUrl,
   saveConfig,
   setConfigValue,
   unsetConfigValue,
@@ -87,6 +88,33 @@ describe('getDefaultConfig', () => {
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
     expect(defaults.analytics?.enabled).toBe(false);
+  });
+});
+
+describe('resolveTeammateFrameworkRepoUrl', () => {
+  it('uses the operator-owned teammate setting', () => {
+    expect(
+      resolveTeammateFrameworkRepoUrl({
+        teammates: { framework_repo_url: 'https://example.test/canonical.git' },
+      })
+    ).toBe('https://example.test/canonical.git');
+  });
+
+  it('keeps the legacy onboarding key as a compatibility fallback', () => {
+    expect(
+      resolveTeammateFrameworkRepoUrl({
+        onboarding: { frameworkRepoUrl: 'https://example.test/legacy.git' },
+      } as unknown as AgorConfig)
+    ).toBe('https://example.test/legacy.git');
+  });
+
+  it('prefers the canonical setting over the legacy fallback', () => {
+    expect(
+      resolveTeammateFrameworkRepoUrl({
+        teammates: { framework_repo_url: 'https://example.test/canonical.git' },
+        onboarding: { frameworkRepoUrl: 'https://example.test/legacy.git' },
+      } as unknown as AgorConfig)
+    ).toBe('https://example.test/canonical.git');
   });
 });
 
@@ -809,8 +837,12 @@ describe('setConfigValue', () => {
     vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
   });
 
-  it('rejects newly setting retired display keys', async () => {
-    await expect(setConfigValue('display.tableStyle', 'ascii')).rejects.toThrow(/has been retired/);
+  it.each([
+    'display.tableStyle',
+    'display.colorOutput',
+    'display.shortIdLength',
+  ])('rejects newly setting retired key %s', async (key) => {
+    await expect(setConfigValue(key, 'legacy')).rejects.toThrow(/has been retired/);
   });
 
   afterEach(async () => {

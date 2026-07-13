@@ -1763,6 +1763,7 @@ function AppContent() {
           handleUpdateBranch(branchId, updates, { silent: true })
         }
         onCheckAuth={handleCheckAuth}
+        frameworkRepoUrl={featuresConfig?.teammateFrameworkRepoUrl}
       />
 
       <DeviceRouter />

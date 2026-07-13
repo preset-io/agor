@@ -18,7 +18,7 @@ import { close, open, unlink, write } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { AgorConfig } from '@agor/core/config';
+import { type AgorConfig, RETIRED_CONFIG_KEYS } from '@agor/core/config';
 import {
   type AdminBootstrapResult,
   assertUsableBootstrapAdminPassword,
@@ -288,19 +288,23 @@ export function warnDeprecatedConfig(config: AgorConfig): void {
   const present = daemon
     ? DEPRECATED_ANONYMOUS_KEYS.filter((key) => Object.hasOwn(daemon, key))
     : [];
-  const hasShortIdLength = !!display && Object.hasOwn(display, 'shortIdLength');
-  const retiredDisplayKeys = ['tableStyle', 'colorOutput'] as const;
   const presentDisplay = display
-    ? retiredDisplayKeys.filter((key) => Object.hasOwn(display, key))
+    ? RETIRED_CONFIG_KEYS.display.filter((key) => Object.hasOwn(display, key))
     : [];
-  const presentDefaults = legacy.defaults ? Object.keys(legacy.defaults) : [];
-  const presentOnboarding = legacy.onboarding ? Object.keys(legacy.onboarding) : [];
+  const presentDefaults = legacy.defaults
+    ? RETIRED_CONFIG_KEYS.defaults.filter((key) => Object.hasOwn(legacy.defaults!, key))
+    : [];
+  const presentOnboarding = legacy.onboarding
+    ? RETIRED_CONFIG_KEYS.onboarding.filter((key) => Object.hasOwn(legacy.onboarding!, key))
+    : [];
+  const hasLegacyFrameworkRepoUrl =
+    !!legacy.onboarding && Object.hasOwn(legacy.onboarding, 'frameworkRepoUrl');
   if (
     present.length === 0 &&
-    !hasShortIdLength &&
     presentDisplay.length === 0 &&
     presentDefaults.length === 0 &&
-    presentOnboarding.length === 0
+    presentOnboarding.length === 0 &&
+    !hasLegacyFrameworkRepoUrl
   )
     return;
 
@@ -314,7 +318,6 @@ export function warnDeprecatedConfig(config: AgorConfig): void {
   for (const key of present) {
     lines.push(`    daemon.${key}: ${String(daemon?.[key])}`);
   }
-  if (hasShortIdLength) lines.push(`    display.shortIdLength: ${String(display?.shortIdLength)}`);
   for (const key of presentDisplay) {
     lines.push(`    display.${key}: ${String(display?.[key])}`);
   }
@@ -324,11 +327,17 @@ export function warnDeprecatedConfig(config: AgorConfig): void {
   for (const key of presentOnboarding) {
     lines.push(`    onboarding.${key}: ${String(legacy.onboarding?.[key])}`);
   }
+  if (hasLegacyFrameworkRepoUrl) {
+    lines.push(
+      `    onboarding.frameworkRepoUrl: ${String(legacy.onboarding?.frameworkRepoUrl)}`,
+      '      renamed to teammates.framework_repo_url (the legacy value still works)'
+    );
+  }
   lines.push(
     '',
-    '  These keys no longer have any effect. Onboarding progress is stored',
-    '  per user, and product defaults and terminal presentation are managed',
-    '  by Agor and its clients.',
+    '  Retired keys no longer have any effect. Onboarding progress is stored',
+    '  per user. The renamed framework repository key remains a compatibility',
+    '  fallback, but new configuration should use the replacement shown above.',
     '',
     '  Action: remove these keys from your config.yaml at your convenience.'
   );

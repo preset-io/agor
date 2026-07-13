@@ -507,10 +507,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   configService.app = app;
   app.use('/admin/local-actions', createLocalActionsService());
 
-  // Operator configuration is file-owned. The browser API is deliberately
-  // read-only; tenant/user product state uses typed services instead.
-  app.use('/config', configService, { methods: ['find', 'get'] });
-
   app.use('/agentic-tool-settings', createTenantAgenticToolSettingsService(db));
   app.service('/agentic-tool-settings').hooks({ before: { all: [ctx.requireAuth] } });
   app.use('/agentic-tool-presets', createAgenticToolPresetsService(db));

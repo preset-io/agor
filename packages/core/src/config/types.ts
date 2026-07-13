@@ -942,6 +942,12 @@ export interface AgorBranchesSettings {
   others_fs_access_default?: 'none' | 'read' | 'write';
 }
 
+/** Operator-owned defaults for creating AI teammates. */
+export interface AgorTeammateSettings {
+  /** Repository cloned by the onboarding wizard when creating the first teammate. */
+  framework_repo_url?: string;
+}
+
 /**
  * Per-vendor HTTP proxy configuration.
  *
@@ -1050,6 +1056,9 @@ export interface AgorConfig {
   /** Branch-level defaults (others_can_default, others_fs_access_default) */
   branches?: AgorBranchesSettings;
 
+  /** Operator-owned teammate bootstrap settings. */
+  teammates?: AgorTeammateSettings;
+
   /** Path configuration (data_home for repos/branches separation) */
   paths?: AgorPathSettings;
 
@@ -1087,6 +1096,7 @@ export type ConfigKey =
   | `execution.${keyof AgorExecutionSettings}`
   | `security.${keyof AgorSecuritySettings}`
   | `branches.${keyof AgorBranchesSettings}`
+  | `teammates.${keyof AgorTeammateSettings}`
   | `paths.${keyof AgorPathSettings}`
   | `analytics.${keyof AgorAnalyticsSettings}`
   | `telemetry.${keyof AgorTelemetrySettings}`

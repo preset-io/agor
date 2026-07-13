@@ -24,6 +24,8 @@ interface InstanceConfig {
 }
 
 export interface FeaturesConfig {
+  /** Operator-selected repository used to bootstrap the first teammate. */
+  teammateFrameworkRepoUrl?: string;
   /**
    * Whether the web terminal is enabled for members (execution.allow_web_terminal).
    * Defaults to true when the daemon config key is unset.

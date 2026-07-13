@@ -22,6 +22,32 @@ import {
   type UnknownJson,
 } from './types';
 
+export const RETIRED_CONFIG_KEYS = {
+  defaults: ['board', 'agent'],
+  display: ['tableStyle', 'colorOutput', 'shortIdLength'],
+  onboarding: ['teammatePending', 'assistantPending', 'persistedAgentPending'],
+} as const;
+
+export const RETIRED_CONFIG_PATHS = new Set<string>(
+  Object.entries(RETIRED_CONFIG_KEYS).flatMap(([section, keys]) =>
+    keys.map((key) => `${section}.${key}`)
+  )
+);
+
+type LegacyConfig = AgorConfig & {
+  defaults?: Record<string, unknown>;
+  display?: Record<string, unknown>;
+  onboarding?: Record<string, unknown>;
+};
+
+/** Resolve the renamed operator setting while keeping old YAML loadable. */
+export function resolveTeammateFrameworkRepoUrl(config: AgorConfig): string | undefined {
+  const legacyUrl = (config as LegacyConfig).onboarding?.frameworkRepoUrl;
+  return (
+    config.teammates?.framework_repo_url ?? (typeof legacyUrl === 'string' ? legacyUrl : undefined)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // In-memory cache for the default-path config
 //
@@ -224,6 +250,7 @@ function validateConfig(config: AgorConfig): void {
     'execution',
     'security',
     'branches',
+    'teammates',
     'paths',
     'analytics',
     'telemetry',
@@ -246,16 +273,12 @@ function validateConfig(config: AgorConfig): void {
       if (!allowed.includes(key)) unknownPaths.push(`${path}.${key}`);
     }
   };
-  const legacyConfig = config as AgorConfig & {
-    defaults?: unknown;
-    display?: unknown;
-    onboarding?: unknown;
-  };
-  only(legacyConfig.defaults, 'defaults', ['board', 'agent']);
+  const legacyConfig = config as LegacyConfig;
+  only(legacyConfig.defaults, 'defaults', RETIRED_CONFIG_KEYS.defaults);
   // Known upgrade-only keys remain loadable so the daemon can print its
   // dedicated deprecation guidance before ignoring them. `display` is not
   // part of AgorConfig anymore: all three settings were retired.
-  only(legacyConfig.display, 'display', ['tableStyle', 'colorOutput', 'shortIdLength']);
+  only(legacyConfig.display, 'display', RETIRED_CONFIG_KEYS.display);
   only(config.daemon, 'daemon', [
     'port',
     'host',
@@ -379,6 +402,7 @@ function validateConfig(config: AgorConfig): void {
     'override',
   ]);
   only(config.branches, 'branches', ['others_can_default', 'others_fs_access_default']);
+  only(config.teammates, 'teammates', ['framework_repo_url']);
   only(config.paths, 'paths', ['data_home']);
   only(config.analytics, 'analytics', ['enabled', 'client', 'filters', 'plugins']);
   only(config.analytics?.client, 'analytics.client', ['app', 'version', 'debug']);
@@ -408,9 +432,7 @@ function validateConfig(config: AgorConfig): void {
     'last_reported_version',
   ]);
   only(legacyConfig.onboarding, 'onboarding', [
-    'teammatePending',
-    'assistantPending',
-    'persistedAgentPending',
+    ...RETIRED_CONFIG_KEYS.onboarding,
     'frameworkRepoUrl',
   ]);
   only(config.knowledge, 'knowledge', ['semantic_search']);
@@ -722,12 +744,7 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
  * @param value - Value to set
  */
 export async function setConfigValue(key: string, value: string | boolean | number): Promise<void> {
-  if (
-    key.startsWith('defaults.') ||
-    key.startsWith('onboarding.') ||
-    key === 'display.tableStyle' ||
-    key === 'display.colorOutput'
-  ) {
+  if (RETIRED_CONFIG_PATHS.has(key)) {
     throw new Error(`Configuration key ${key} has been retired and no longer has any effect`);
   }
   const config = await loadConfig();
