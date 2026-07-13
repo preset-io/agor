@@ -816,7 +816,7 @@ describe('ReactiveSessionHandle stream subscription', () => {
 describe('session-streams capability announce', () => {
   function makeAnnounceClient(startConnected: boolean) {
     const ioHandlers: Record<string, Array<(...a: unknown[]) => void>> = {};
-    const create = vi.fn(async () => ({ session_id: '', subscribed: false }));
+    const create = vi.fn(async (_data: unknown) => ({ session_id: '', subscribed: false }));
     const client = {
       io: {
         connected: startConnected,
