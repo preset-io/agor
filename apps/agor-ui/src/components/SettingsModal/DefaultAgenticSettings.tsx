@@ -5,7 +5,7 @@
  * that will be used to prepopulate session creation forms.
  */
 
-import type { AgenticToolName, DefaultAgenticConfig, MCPServer } from '@agor-live/client';
+import type { AgenticToolName, DefaultAgenticConfig } from '@agor-live/client';
 import { Button, Form, Space, Tabs, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '../../utils/message';
@@ -19,15 +19,12 @@ import {
 interface DefaultAgenticSettingsProps {
   /** Current default agentic config */
   defaultConfig?: DefaultAgenticConfig;
-  /** Available MCP servers */
-  mcpServerById: Map<string, MCPServer>;
   /** Callback when settings are saved */
   onSave: (config: DefaultAgenticConfig) => Promise<void>;
 }
 
 export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
   defaultConfig,
-  mcpServerById,
   onSave,
 }) => {
   const { showSuccess, showError } = useThemedMessage();
@@ -168,11 +165,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
               initialValues={getInitialValues(tool)}
               style={{ paddingTop: 16 }}
             >
-              <AgenticToolConfigForm
-                agenticTool={tool}
-                mcpServerById={mcpServerById}
-                showHelpText={false}
-              />
+              <AgenticToolConfigForm agenticTool={tool} showHelpText={false} />
 
               <Space style={{ marginTop: 16 }}>
                 <Button onClick={() => handleClear(tool)}>Clear Defaults</Button>

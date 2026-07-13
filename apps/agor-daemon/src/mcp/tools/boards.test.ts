@@ -2,6 +2,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 import { registerBoardTools } from './boards.js';
 
+vi.mock('@agor/core/db', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/db')>()),
+  runWithTenantDatabaseScope: vi.fn((_db, _tenantId, work) => work()),
+}));
+
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
@@ -461,6 +466,50 @@ describe('agor_boards_create schema', () => {
     if (result?.success === false) {
       expect(result.error.issues[0]?.message).toMatch(/name cannot be empty/i);
     }
+  });
+});
+
+describe('agor_boards_update realtime events', () => {
+  it('emits custom object mutations with a correctly-shaped HookContext', async () => {
+    const params = {
+      authenticated: true,
+      provider: 'mcp',
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      user: { user_id: 'user-1', role: 'member' },
+    };
+    const updatedBoard = { board_id: 'board-1', name: 'Board', objects: {} };
+    const emit = vi.fn();
+    const batchUpsertBoardObjects = vi.fn(async () => updatedBoard);
+    const get = vi.fn(async () => updatedBoard);
+    const app = {
+      service(name: string) {
+        if (name === 'boards') return { batchUpsertBoardObjects, get, emit };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const updateBoard = registerAndCaptureHandler('agor_boards_update', {
+      app,
+      userId: 'user-1',
+      baseServiceParams: params,
+    });
+
+    await updateBoard({
+      boardId: 'board-1',
+      upsertObjects: { 'zone-1': { type: 'zone', x: 0, y: 0, width: 100, height: 100 } },
+    });
+
+    expect(batchUpsertBoardObjects).toHaveBeenCalledWith('board-1', expect.any(Object), params);
+    expect(emit).toHaveBeenCalledWith(
+      'patched',
+      updatedBoard,
+      expect.objectContaining({
+        path: 'boards',
+        method: 'patch',
+        id: 'board-1',
+        params: {},
+        result: updatedBoard,
+      })
+    );
   });
 });
 

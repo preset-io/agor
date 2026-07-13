@@ -7,6 +7,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useState } from 'react';
+import { ClaudeSubscriptionTokenInstructions } from './ClaudeSubscriptionTokenInstructions';
 import { Tag } from './Tag';
 
 const { Text, Link } = Typography;
@@ -311,15 +312,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
           {/* Built-in per-field helpers retained from the legacy component. */}
           {field === 'CLAUDE_CODE_OAUTH_TOKEN' && !isSet && (
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              In any terminal with Claude Code installed, run{' '}
-              <Text code style={{ fontSize: token.fontSizeSM }}>
-                claude setup-token
-              </Text>{' '}
-              and paste the printed token here. Need Claude Code?{' '}
-              <Link href="https://docs.claude.com/en/docs/claude-code/setup" target="_blank">
-                Install docs
-              </Link>
-              .
+              <ClaudeSubscriptionTokenInstructions />
             </Text>
           )}
           {field === 'ANTHROPIC_AUTH_TOKEN' && (

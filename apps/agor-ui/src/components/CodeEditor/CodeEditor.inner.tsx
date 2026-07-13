@@ -18,6 +18,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import { yaml } from '@codemirror/lang-yaml';
 import { oneDark } from '@codemirror/theme-one-dark';
 import CodeMirror from '@uiw/react-codemirror';
+import { theme } from 'antd';
 import type React from 'react';
 import { useMemo } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -76,6 +77,7 @@ const CodeEditorInner: React.FC<CodeEditorInnerProps> = ({
   // `isDark` is the canonical dark/light signal from ThemeContext — already
   // accounts for `themeMode === 'custom'` rendering dark.
   const { isDark } = useTheme();
+  const { token } = theme.useToken();
 
   const extensions = useMemo(() => {
     const extensionFactory = LANGUAGE_EXTENSIONS[language];
@@ -118,8 +120,8 @@ const CodeEditorInner: React.FC<CodeEditorInnerProps> = ({
         style={{
           height,
           fontSize: 12,
-          border: '1px solid var(--ant-color-border, #424242)',
-          borderRadius: 6,
+          border: `${token.lineWidth}px ${token.lineType} ${token.colorBorder}`,
+          borderRadius: token.borderRadius,
           overflow: 'hidden',
         }}
         minHeight={height ? undefined : computedMinHeight}

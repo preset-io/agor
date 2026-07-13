@@ -1,3 +1,4 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: global resets, accessibility motion, keyframes, and third-party semantic integrations require selectors */
 /* Import Inter font from Bunny Fonts CDN (privacy-friendly, GDPR compliant) */
 /* Weights: 400 (regular), 500 (medium), 600 (semibold) */
 /* Total size: ~75KB for Latin subset, cached across sites */
@@ -142,17 +143,10 @@
 
 /* Code blocks - use Ant Design's neutral colors */
 [data-streamdown="inline-code"] {
-  background-color: rgba(0, 0, 0, 0.06);
+  background-color: var(--ant-color-fill-tertiary);
   padding: 0.2em 0.4em;
   border-radius: 3px;
   font-family: "Consolas", "Monaco", "Courier New", monospace;
-}
-
-/* Dark mode adjustments for inline code */
-@media (prefers-color-scheme: dark) {
-  [data-streamdown="inline-code"] {
-    background-color: rgba(255, 255, 255, 0.08);
-  }
 }
 
 /* Tables - match Ant Design table styling */

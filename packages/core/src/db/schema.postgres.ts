@@ -91,6 +91,10 @@ export const sessions = pgTable(
     agentic_tool: text('agentic_tool', {
       enum: ['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'],
     }).notNull(),
+    agentic_tool_preset_id: varchar('agentic_tool_preset_id', { length: 36 }).references(
+      (): AnyPgColumn => agenticToolPresets.preset_id,
+      { onDelete: 'restrict' }
+    ),
     board_id: varchar('board_id', { length: 36 }), // NULL = no board
 
     // Genealogy (materialized for tree queries)
@@ -159,7 +163,7 @@ export const sessions = pgTable(
             sandboxMode: CodexSandboxMode;
             approvalPolicy: CodexApprovalPolicy;
           };
-        };
+        } | null;
 
         // Model config (session-level model selection)
         model_config?: Session['model_config'];
@@ -220,6 +224,9 @@ export const sessions = pgTable(
   },
   (table) => ({
     tenantIdx: index('sessions_tenant_id_idx').on(table.tenant_id),
+    agenticToolPresetIdx: index('sessions_agentic_tool_preset_idx').on(
+      table.agentic_tool_preset_id
+    ),
     statusIdx: index('sessions_status_idx').on(table.status),
     statusReadyIdx: index('sessions_status_ready_idx').on(table.status, table.ready_for_prompt),
     agenticToolIdx: index('sessions_agentic_tool_idx').on(table.agentic_tool),
@@ -866,7 +873,6 @@ export const schedules = pgTable(
 
     name: text('name').notNull(),
     description: text('description'),
-
     cron_expression: text('cron_expression').notNull(),
     timezone_mode: text('timezone_mode', { enum: ['local', 'utc'] })
       .notNull()
@@ -876,6 +882,11 @@ export const schedules = pgTable(
     prompt: text('prompt').notNull(),
 
     agentic_tool_config: t.json<unknown>('agentic_tool_config').notNull(),
+    agentic_tool_preset_id: varchar('agentic_tool_preset_id', { length: 36 }).references(
+      (): AnyPgColumn => agenticToolPresets.preset_id,
+      { onDelete: 'restrict' }
+    ),
+    mcp_server_ids: t.json<string[]>('mcp_server_ids'),
 
     enabled: t.bool('enabled').notNull().default(true),
     allow_concurrent_runs: t.bool('allow_concurrent_runs').notNull().default(false),
@@ -896,6 +907,9 @@ export const schedules = pgTable(
   },
   (table) => ({
     tenantIdx: index('schedules_tenant_id_idx').on(table.tenant_id),
+    agenticToolPresetIdx: index('schedules_agentic_tool_preset_idx').on(
+      table.agentic_tool_preset_id
+    ),
     enabledNextRunIdx: index('schedules_enabled_next_run_idx').on(table.enabled, table.next_run_at),
     branchIdx: index('schedules_branch_idx').on(table.branch_id),
     createdByIdx: index('schedules_created_by_idx').on(table.created_by),
@@ -996,6 +1010,7 @@ export const users = pgTable(
           };
           opencode?: Record<string, never>;
         };
+        agentic_auth_methods?: import('../types/user').AgenticAuthMethods;
         // Encrypted environment variables with scope metadata.
         //
         // Two stored value shapes are tolerated on read:
@@ -1025,7 +1040,6 @@ export const users = pgTable(
               advisorModel?: string;
             };
             permissionMode?: string;
-            mcpServerIds?: string[];
           };
           'claude-code-cli'?: {
             modelConfig?: {
@@ -1035,7 +1049,6 @@ export const users = pgTable(
               advisorModel?: string;
             };
             permissionMode?: string;
-            mcpServerIds?: string[];
           };
           codex?: {
             modelConfig?: {
@@ -1044,7 +1057,6 @@ export const users = pgTable(
               effort?: EffortLevel;
             };
             permissionMode?: string;
-            mcpServerIds?: string[];
             codexSandboxMode?: string;
             codexApprovalPolicy?: string;
             codexNetworkAccess?: boolean;
@@ -1056,7 +1068,6 @@ export const users = pgTable(
               effort?: EffortLevel;
             };
             permissionMode?: string;
-            mcpServerIds?: string[];
           };
           opencode?: {
             modelConfig?: {
@@ -1073,9 +1084,10 @@ export const users = pgTable(
               effort?: EffortLevel;
             };
             permissionMode?: string;
-            mcpServerIds?: string[];
           };
         };
+        default_mcp_server_ids?: string[];
+        default_agentic_selection?: import('../types/user').UserAgenticDefaultSelections;
       }>()
       .notNull(),
   },
@@ -1236,6 +1248,37 @@ export const appVariables = pgTable(
       table.key
     ),
     namespaceIdx: index('app_variables_namespace_idx').on(table.namespace),
+  })
+);
+
+/** Tenant-owned, live agentic-tool runtime configuration presets. */
+export const agenticToolPresets = pgTable(
+  'agentic_tool_presets',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    preset_id: varchar('preset_id', { length: 36 }).primaryKey(),
+    tool: text('tool', {
+      enum: ['claude-code', 'codex', 'gemini', 'copilot', 'cursor', 'opencode'],
+    }).notNull(),
+    name: text('name').notNull(),
+    description: text('description'),
+    is_default: t.bool('is_default').notNull().default(false),
+    configuration: t.json<unknown>('configuration').notNull(),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
+    updated_by: varchar('updated_by', { length: 36 }).notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    tenantIdx: index('agentic_tool_presets_tenant_id_idx').on(table.tenant_id),
+    tenantToolNameUnique: uniqueIndex('agentic_tool_presets_tenant_tool_name_unique').on(
+      table.tenant_id,
+      table.tool,
+      table.name
+    ),
+    tenantToolDefaultUnique: uniqueIndex('agentic_tool_presets_tenant_tool_default_unique')
+      .on(table.tenant_id, table.tool)
+      .where(sql`${table.is_default} = true`),
   })
 );
 
@@ -1771,9 +1814,17 @@ export const gatewayChannels = pgTable(
 
     // JSON blob for agentic tool configuration (agent, model, permission mode, etc.)
     agentic_config: t.json<Record<string, unknown> | null>('agentic_config'),
+    agentic_tool_preset_id: varchar('agentic_tool_preset_id', { length: 36 }).references(
+      () => agenticToolPresets.preset_id,
+      { onDelete: 'restrict' }
+    ),
+    mcp_server_ids: t.json<string[]>('mcp_server_ids'),
   },
   (table) => ({
     tenantIdx: index('gateway_channels_tenant_id_idx').on(table.tenant_id),
+    agenticToolPresetIdx: index('gateway_channels_agentic_tool_preset_idx').on(
+      table.agentic_tool_preset_id
+    ),
     channelKeyIdx: index('idx_gateway_channel_key').on(table.channel_key),
     channelKeyTenantUnique: uniqueIndex('gateway_channels_tenant_channel_key_unique').on(
       table.tenant_id,
@@ -2387,6 +2438,8 @@ export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
 export type AppVariableRow = typeof appVariables.$inferSelect;
 export type AppVariableInsert = typeof appVariables.$inferInsert;
+export type AgenticToolPresetRow = typeof agenticToolPresets.$inferSelect;
+export type AgenticToolPresetInsert = typeof agenticToolPresets.$inferInsert;
 export type GroupRow = typeof groups.$inferSelect;
 export type GroupInsert = typeof groups.$inferInsert;
 export type GroupMembershipRow = typeof groupMemberships.$inferSelect;

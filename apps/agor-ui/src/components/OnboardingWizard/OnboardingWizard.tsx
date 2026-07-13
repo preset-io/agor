@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: intentional dark-glass first-run surface — bespoke gradient/particle/glass values with no semantic-token equivalent; semantic text/primary/border already use theme tokens
 /**
  * OnboardingWizard — redesigned 5-step first-run flow.
  *
@@ -469,8 +470,6 @@ export interface OnboardingWizardProps {
   onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => Promise<void>;
 
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
-
-  teammatePending?: boolean;
 
   /** Re-open wizard starting at a specific step (used by persistent banners). */
   initialStep?: WizardStep;
@@ -994,7 +993,11 @@ export function OnboardingWizard({
                   justifyContent: 'center',
                   fontSize: 10,
                   fontWeight: 700,
-                  color: isCompleted ? '#fff' : isCurrent ? PRIMARY : 'rgba(255,255,255,0.2)',
+                  color: isCompleted
+                    ? token.colorTextLightSolid
+                    : isCurrent
+                      ? PRIMARY
+                      : 'rgba(255,255,255,0.2)',
                   transition: 'all 0.25s ease',
                   flexShrink: 0,
                 }}
@@ -1212,7 +1215,7 @@ export function OnboardingWizard({
                         justifyContent: 'center',
                       }}
                     >
-                      <CheckOutlined style={{ color: '#fff', fontSize: 9 }} />
+                      <CheckOutlined style={{ color: token.colorTextLightSolid, fontSize: 9 }} />
                     </div>
                   ) : (
                     <div

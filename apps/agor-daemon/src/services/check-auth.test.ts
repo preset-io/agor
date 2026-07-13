@@ -1,5 +1,4 @@
-import { promises as fsPromises } from 'node:fs';
-import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
+import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import { Claude } from '@agor/core/sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCheckAuthService } from './check-auth';
@@ -9,7 +8,7 @@ vi.mock('@agor/core/config', async () => {
   return {
     ...actual,
     resolveApiKey: vi.fn(),
-    resolveUserEnvironment: vi.fn(),
+    isTenantAgenticToolEnabled: vi.fn(),
   };
 });
 
@@ -19,27 +18,13 @@ vi.mock('@agor/core/sdk', () => ({
   },
 }));
 
-vi.mock('node:fs', () => ({
-  promises: { readFile: vi.fn() },
-}));
-
 const resolveApiKeyMock = vi.mocked(resolveApiKey);
-const resolveUserEnvironmentMock = vi.mocked(resolveUserEnvironment);
+const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const claudeQueryMock = vi.mocked(Claude.query);
-const readFileMock = vi.mocked(fsPromises.readFile);
 
 function mockClaudeAccount(account: Record<string, unknown> | null) {
   claudeQueryMock.mockReturnValue({
     accountInfo: vi.fn(async () => account),
-    close: vi.fn(),
-  } as never);
-}
-
-function mockClaudeAccountThrows() {
-  claudeQueryMock.mockReturnValue({
-    accountInfo: vi.fn(async () => {
-      throw new Error('probe timed out');
-    }),
     close: vi.fn(),
   } as never);
 }
@@ -50,9 +35,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   delete process.env.ANTHROPIC_API_KEY;
-  resolveUserEnvironmentMock.mockResolvedValue({});
-  resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'none', useNativeAuth: true });
-  readFileMock.mockRejectedValue(new Error('ENOENT'));
+  isTenantAgenticToolEnabledMock.mockResolvedValue(true);
+  resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'none', useNativeAuth: false });
 });
 
 // #1867 — Claude subscription-token handling (kept verbatim; `authenticated`
@@ -78,7 +62,7 @@ describe('check-auth Claude subscription tokens', () => {
 
   it('checks stored CLAUDE_CODE_OAUTH_TOKEN when no Anthropic API key is configured', async () => {
     resolveApiKeyMock
-      .mockResolvedValueOnce({ apiKey: undefined, source: 'none', useNativeAuth: true })
+      .mockResolvedValueOnce({ apiKey: undefined, source: 'none', useNativeAuth: false })
       .mockResolvedValueOnce({
         apiKey: 'sk-ant-oat01-stored',
         source: 'user',
@@ -111,49 +95,21 @@ describe('check-auth Claude subscription tokens', () => {
     });
   });
 
-  it('validates an Anthropic API key stored as a user env var', async () => {
-    resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'none', useNativeAuth: true });
-    resolveUserEnvironmentMock.mockResolvedValue({ ANTHROPIC_API_KEY: 'sk-ant-api03-env' });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response);
-
-    const result = await service().create({ tool: 'claude-code' }, {
-      user: { user_id: 'user-1' },
-    } as never);
-
-    expect(result).toMatchObject({ authenticated: true, method: 'api-key' });
-    expect(resolveUserEnvironmentMock).toHaveBeenCalledWith('user-1', {}, { tool: 'claude-code' });
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.anthropic.com/v1/models',
-      expect.objectContaining({
-        headers: expect.objectContaining({ 'x-api-key': 'sk-ant-api03-env' }),
-      })
-    );
-    fetchMock.mockRestore();
-  });
-
-  it('validates a Claude subscription token stored as a user env var', async () => {
+  it('treats missing subscription account metadata as unknown, not rejected', async () => {
     resolveApiKeyMock
-      .mockResolvedValueOnce({ apiKey: undefined, source: 'none', useNativeAuth: true })
-      .mockResolvedValueOnce({ apiKey: undefined, source: 'none', useNativeAuth: true });
-    resolveUserEnvironmentMock.mockResolvedValue({
-      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-env',
-    });
-    mockClaudeAccount({ tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN' });
+      .mockResolvedValueOnce({ apiKey: undefined, source: 'none', useNativeAuth: false })
+      .mockResolvedValueOnce({
+        apiKey: 'sk-ant-oat01-stored',
+        source: 'user',
+        useNativeAuth: false,
+      });
+    mockClaudeAccount(null);
 
     const result = await service().create({ tool: 'claude-code' }, {
       user: { user_id: 'user-1' },
     } as never);
 
-    expect(result).toMatchObject({ authenticated: true, method: 'oauth' });
-    expect(claudeQueryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: expect.objectContaining({
-          env: expect.objectContaining({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-env' }),
-        }),
-      })
-    );
-    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-    expect(resolveUserEnvironmentMock).toHaveBeenCalledWith('user-1', {}, { tool: 'claude-code' });
+    expect(result.status).toBe('unknown');
   });
 });
 
@@ -200,21 +156,9 @@ describe('check-auth tri-state', () => {
     fetchMock.mockRestore();
   });
 
-  it('claude native probe with no auth signal → unauthenticated', async () => {
-    mockClaudeAccount({});
-    const result = await service().create({ tool: 'claude-code' }, params);
-    expect(result.status).toBe('unauthenticated');
-  });
-
-  it('claude native probe that throws (timeout) → unknown', async () => {
-    mockClaudeAccountThrows();
-    const result = await service().create({ tool: 'claude-code' }, params);
-    expect(result.status).toBe('unknown');
-  });
-
-  it('gemini with no API key → unknown (native login not server-probeable)', async () => {
+  it('gemini with no scoped API key → unauthenticated', async () => {
     const result = await service().create({ tool: 'gemini' }, params);
-    expect(result.status).toBe('unknown');
+    expect(result.status).toBe('unauthenticated');
   });
 
   it('gemini with a valid API key → authenticated', async () => {
@@ -228,7 +172,7 @@ describe('check-auth tri-state', () => {
     fetchMock.mockRestore();
   });
 
-  it('codex with no auth.json → unauthenticated', async () => {
+  it('codex with no scoped credential → unauthenticated', async () => {
     const result = await service().create({ tool: 'codex' }, params);
     expect(result.status).toBe('unauthenticated');
   });

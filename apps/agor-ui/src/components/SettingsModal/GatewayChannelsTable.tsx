@@ -21,7 +21,11 @@ import type {
   User,
   UUID,
 } from '@agor-live/client';
-import { GATEWAY_REDACTED_SENTINEL } from '@agor-live/client';
+import {
+  GATEWAY_REDACTED_SENTINEL,
+  resolveSlackAgentTools,
+  SLACK_AGENT_TOOL_DEFAULTS,
+} from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -71,7 +75,10 @@ import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
-import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
+import {
+  AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
+} from '../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
@@ -218,6 +225,7 @@ const GatewayEnvVarsEditor: React.FC<{
   value?: GatewayEnvVar[];
   onChange?: (vars: GatewayEnvVar[]) => void;
 }> = ({ value = [], onChange }) => {
+  const { token } = theme.useToken();
   // Stable row IDs so React doesn't remount inputs on every keystroke.
   // Each row gets a monotonically increasing ID that persists across re-renders.
   const nextId = useRef(0);
@@ -274,7 +282,7 @@ const GatewayEnvVarsEditor: React.FC<{
                 fontFamily: 'monospace',
                 fontSize: 12,
                 color: 'transparent',
-                textShadow: '0 0 6px rgba(255,255,255,0.5)',
+                textShadow: `0 0 6px ${token.colorTextDisabled}`,
               }}
             />
           ) : (
@@ -394,6 +402,12 @@ const SLACK_PROBE_FIELDS = new Set<string>([
   'enable_mpim',
   'align_slack_users',
   'outbound_enabled',
+  'ingest_files',
+  'agent_thread_history',
+  'agent_channel_history',
+  'agent_reactions',
+  'agent_file_upload',
+  'agent_file_download',
   'slack_public_scope',
   'allowed_channel_ids',
 ]);
@@ -673,6 +687,7 @@ const SecretStatusTag: React.FC<{ stored: boolean }> = ({ stored }) =>
  * {@link requiredBotScopes}, so the user never adds a scope by hand.
  */
 const SlackSetupWizard: React.FC<{
+  client: AgorClient | null;
   form: FormInstance;
   userById: Map<string, User>;
   mcpServerById: Map<string, MCPServer>;
@@ -684,6 +699,7 @@ const SlackSetupWizard: React.FC<{
   testLoading: boolean;
   onTest: () => void;
 }> = ({
+  client,
   form,
   userById,
   mcpServerById,
@@ -704,6 +720,17 @@ const SlackSetupWizard: React.FC<{
   const enableMpim = Form.useWatch('enable_mpim', form) ?? false;
   const alignUsers = Form.useWatch('align_slack_users', form) ?? true;
   const outbound = Form.useWatch('outbound_enabled', form) ?? false;
+  const ingestFiles = Form.useWatch('ingest_files', form) ?? false;
+  const agentThreadHistory =
+    Form.useWatch('agent_thread_history', form) ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history;
+  const agentChannelHistory =
+    Form.useWatch('agent_channel_history', form) ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history;
+  const agentReactions =
+    Form.useWatch('agent_reactions', form) ?? SLACK_AGENT_TOOL_DEFAULTS.reactions;
+  const agentFileUpload =
+    Form.useWatch('agent_file_upload', form) ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload;
+  const agentFileDownload =
+    Form.useWatch('agent_file_download', form) ?? SLACK_AGENT_TOOL_DEFAULTS.file_download;
   const publicScope = (Form.useWatch('slack_public_scope', form) as string) ?? 'all';
 
   const wizardOptions: SlackWizardOptions = useMemo(
@@ -714,8 +741,29 @@ const SlackSetupWizard: React.FC<{
       groupDms: enableMpim,
       alignUsers,
       outbound,
+      ingestFiles,
+      agentTools: {
+        thread_history: agentThreadHistory,
+        channel_history: agentChannelHistory,
+        reactions: agentReactions,
+        file_upload: agentFileUpload,
+        file_download: agentFileDownload,
+      },
     }),
-    [appName, enableChannels, enableGroups, enableMpim, alignUsers, outbound]
+    [
+      appName,
+      enableChannels,
+      enableGroups,
+      enableMpim,
+      alignUsers,
+      outbound,
+      ingestFiles,
+      agentThreadHistory,
+      agentChannelHistory,
+      agentReactions,
+      agentFileUpload,
+      agentFileDownload,
+    ]
   );
 
   const manifestJson = useMemo(
@@ -907,6 +955,66 @@ const SlackSetupWizard: React.FC<{
         )}
 
         <Form.Item
+          label="Ingest attached files"
+          name="ingest_files"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Download images and text files (screenshots, logs, CSV, JSON) attached to inbound messages so session agents can read them. Adds the files:read scope."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          label="Agents can read thread history"
+          name="agent_thread_history"
+          valuePropName="checked"
+          initialValue={SLACK_AGENT_TOOL_DEFAULTS.thread_history}
+          tooltip="Let session agents fetch their own Slack thread's history through the gateway MCP tool. No extra scopes."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          label="Agents can read channel history"
+          name="agent_channel_history"
+          valuePropName="checked"
+          initialValue={SLACK_AGENT_TOOL_DEFAULTS.channel_history}
+          tooltip="Let session agents fetch recent whole-channel history through the gateway MCP tool. Adds the channels:history, groups:history, and mpim:history scopes."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          label="Agents can add/remove reactions"
+          name="agent_reactions"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Let session agents add/remove emoji reactions on Slack messages through the gateway MCP tools. Adds the reactions:write scope."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          label="Agents can upload files"
+          name="agent_file_upload"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Let session agents upload files/images to a channel or thread through the gateway MCP tool. Adds the files:write scope."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          label="Agents can download files"
+          name="agent_file_download"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="Let session agents download image/text files referenced in Slack history through the gateway MCP tool. Adds the files:read scope."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
           label="Enable outbound sends"
           name="outbound_enabled"
           valuePropName="checked"
@@ -1056,10 +1164,11 @@ const SlackSetupWizard: React.FC<{
                     showHelperText={false}
                     showComparisonLink={false}
                   />
-                  <AgenticToolConfigForm
-                    agenticTool={selectedAgent as AgenticToolName}
+                  <AgenticToolConfigurationPicker
+                    tool={selectedAgent as AgenticToolName}
                     mcpServerById={mcpServerById}
                     showHelpText={false}
+                    client={client}
                   />
                 </Space>
               ),
@@ -1097,6 +1206,7 @@ const SlackSetupWizard: React.FC<{
 
 /** Shared form fields for create and edit modals */
 const ChannelFormFields: React.FC<{
+  client: AgorClient | null;
   form: FormInstance;
   mode: 'create' | 'edit';
   channelType: ChannelType;
@@ -1117,6 +1227,7 @@ const ChannelFormFields: React.FC<{
   slackTestLoading: boolean;
   onSlackTest: () => void;
 }> = ({
+  client,
   form,
   mode,
   channelType,
@@ -1153,6 +1264,26 @@ const ChannelFormFields: React.FC<{
   const outboundEnabled = Boolean(
     Form.useWatch('outbound_enabled', form) ?? slackConfig?.outbound_enabled
   );
+  const ingestFiles = Boolean(Form.useWatch('ingest_files', form) ?? slackConfig?.ingest_files);
+  const storedAgentTools = useMemo(
+    () => resolveSlackAgentTools(slackConfig?.agent_tools),
+    [slackConfig]
+  );
+  const agentThreadHistory = Boolean(
+    Form.useWatch('agent_thread_history', form) ?? storedAgentTools.thread_history
+  );
+  const agentChannelHistory = Boolean(
+    Form.useWatch('agent_channel_history', form) ?? storedAgentTools.channel_history
+  );
+  const agentReactions = Boolean(
+    Form.useWatch('agent_reactions', form) ?? storedAgentTools.reactions
+  );
+  const agentFileUpload = Boolean(
+    Form.useWatch('agent_file_upload', form) ?? storedAgentTools.file_upload
+  );
+  const agentFileDownload = Boolean(
+    Form.useWatch('agent_file_download', form) ?? storedAgentTools.file_download
+  );
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
   // Track the live Name field so the manifest preview reflects in-progress edits,
   // falling back to the stored channel name.
@@ -1171,8 +1302,29 @@ const ChannelFormFields: React.FC<{
       groupDms: enableMpim,
       alignUsers: alignSlackUsers,
       outbound: outboundEnabled,
+      ingestFiles,
+      agentTools: {
+        thread_history: agentThreadHistory,
+        channel_history: agentChannelHistory,
+        reactions: agentReactions,
+        file_upload: agentFileUpload,
+        file_download: agentFileDownload,
+      },
     }),
-    [channelName, enableChannels, enableGroups, enableMpim, alignSlackUsers, outboundEnabled]
+    [
+      channelName,
+      enableChannels,
+      enableGroups,
+      enableMpim,
+      alignSlackUsers,
+      outboundEnabled,
+      ingestFiles,
+      agentThreadHistory,
+      agentChannelHistory,
+      agentReactions,
+      agentFileUpload,
+      agentFileDownload,
+    ]
   );
   const slackScopes = useMemo(() => requiredBotScopes(slackOptions), [slackOptions]);
   const slackEvents = useMemo(() => requiredBotEvents(slackOptions), [slackOptions]);
@@ -1622,10 +1774,11 @@ const ChannelFormFields: React.FC<{
                           showHelperText={false}
                           showComparisonLink={false}
                         />
-                        <AgenticToolConfigForm
-                          agenticTool={selectedAgent as AgenticToolName}
+                        <AgenticToolConfigurationPicker
+                          tool={selectedAgent as AgenticToolName}
                           mcpServerById={mcpServerById}
                           showHelpText={false}
+                          client={client}
                         />
                       </Space>
                     ),
@@ -1846,10 +1999,11 @@ const ChannelFormFields: React.FC<{
                       showHelperText={false}
                       showComparisonLink={false}
                     />
-                    <AgenticToolConfigForm
-                      agenticTool={selectedAgent as AgenticToolName}
+                    <AgenticToolConfigurationPicker
+                      tool={selectedAgent as AgenticToolName}
                       mcpServerById={mcpServerById}
                       showHelpText={false}
+                      client={client}
                     />
                   </Space>
                 ),
@@ -1887,6 +2041,7 @@ const ChannelFormFields: React.FC<{
         {/* ── Slack guided setup wizard (create steps 1–3) ── */}
         {channelType === 'slack' && mode === 'create' && createStep >= 1 && (
           <SlackSetupWizard
+            client={client}
             form={form}
             userById={userById}
             mcpServerById={mcpServerById}
@@ -2071,6 +2226,66 @@ const ChannelFormFields: React.FC<{
                       <Switch />
                     </Form.Item>
 
+                    <Form.Item
+                      label="Ingest attached files"
+                      name="ingest_files"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Download images and text files (screenshots, logs, CSV, JSON) attached to inbound messages so session agents can read them. Requires the files:read scope."
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Agents can read thread history"
+                      name="agent_thread_history"
+                      valuePropName="checked"
+                      initialValue={SLACK_AGENT_TOOL_DEFAULTS.thread_history}
+                      tooltip="Let session agents fetch their own Slack thread's history through the gateway MCP tool. No extra scopes."
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Agents can read channel history"
+                      name="agent_channel_history"
+                      valuePropName="checked"
+                      initialValue={SLACK_AGENT_TOOL_DEFAULTS.channel_history}
+                      tooltip="Let session agents fetch recent whole-channel history through the gateway MCP tool. Requires the channels:history, groups:history, and mpim:history scopes."
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Agents can add/remove reactions"
+                      name="agent_reactions"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Let session agents add/remove emoji reactions on Slack messages through the gateway MCP tools. Requires the reactions:write scope."
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Agents can upload files"
+                      name="agent_file_upload"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Let session agents upload files/images to a channel or thread through the gateway MCP tool. Requires the files:write scope."
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Agents can download files"
+                      name="agent_file_download"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="Let session agents download image/text files referenced in Slack history through the gateway MCP tool. Requires the files:read scope."
+                    >
+                      <Switch />
+                    </Form.Item>
+
                     {sourcesEnabled && (
                       <CompactAlert
                         type="info"
@@ -2244,10 +2459,11 @@ const ChannelFormFields: React.FC<{
                       showHelperText={false}
                       showComparisonLink={false}
                     />
-                    <AgenticToolConfigForm
-                      agenticTool={selectedAgent as AgenticToolName}
+                    <AgenticToolConfigurationPicker
+                      tool={selectedAgent as AgenticToolName}
                       mcpServerById={mcpServerById}
                       showHelpText={false}
+                      client={client}
                     />
                   </Space>
                 ),
@@ -2461,6 +2677,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       align_slack_users: values.align_slack_users ?? false,
       allowed_channel_ids: values.allowed_channel_ids ?? [],
       outbound_enabled: values.outbound_enabled ?? false,
+      ingest_files: values.ingest_files ?? false,
+      agent_tools: {
+        thread_history: values.agent_thread_history ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history,
+        channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
+        reactions: values.agent_reactions ?? SLACK_AGENT_TOOL_DEFAULTS.reactions,
+        file_upload: values.agent_file_upload ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload,
+        file_download: values.agent_file_download ?? SLACK_AGENT_TOOL_DEFAULTS.file_download,
+      },
     };
     setSlackTestLoading(true);
     setSlackTestResult(null);
@@ -2521,8 +2745,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // The initial edit-form hydration also flows through selectedAgent/editModalOpen,
   // so skip exactly that one run (consuming the one-shot ref set by handleEdit) —
   // otherwise applying the user's *global* defaults would stomp the channel's own
-  // saved config (e.g. silently wiping mcpServerIds that were just hydrated from
-  // channel.agentic_config). Every subsequent agent change — including switching
+  // saved config (including the independently hydrated MCP selection). Every subsequent
+  // agent change — including switching
   // back to the channel's original agent — legitimately re-applies that agent's
   // defaults, so the form never holds a silent mix of stale fields.
   useEffect(() => {
@@ -2536,7 +2760,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       activeForm.setFieldsValue({
         permissionMode: agentDefaults.permissionMode,
         modelConfig: agentDefaults.modelConfig,
-        mcpServerIds: agentDefaults.mcpServerIds,
         codexSandboxMode: agentDefaults.codexSandboxMode,
         codexApprovalPolicy: agentDefaults.codexApprovalPolicy,
         codexNetworkAccess: agentDefaults.codexNetworkAccess,
@@ -2615,26 +2838,40 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.allowed_channel_ids = values.allowed_channel_ids ?? [];
       config.outbound_enabled = values.outbound_enabled ?? false;
       config.default_outbound_target = values.default_outbound_target || null;
+      config.ingest_files = values.ingest_files ?? false;
+      config.agent_tools = {
+        thread_history: values.agent_thread_history ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history,
+        channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
+        reactions: values.agent_reactions ?? SLACK_AGENT_TOOL_DEFAULTS.reactions,
+        file_upload: values.agent_file_upload ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload,
+        file_download: values.agent_file_download ?? SLACK_AGENT_TOOL_DEFAULTS.file_download,
+      };
     }
 
     // Build agentic config from form values
+    const presetId =
+      values.agenticToolPresetId && values.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
+        ? (values.agenticToolPresetId as GatewayAgenticConfig['presetId'])
+        : undefined;
     const agenticConfig: GatewayAgenticConfig = {
       agent: (agent || 'claude-code') as AgenticToolName,
-      ...(values.permissionMode ? { permissionMode: values.permissionMode as PermissionMode } : {}),
-      ...(values.modelConfig
+      ...(presetId ? { presetId } : {}),
+      ...(!presetId && values.permissionMode
+        ? { permissionMode: values.permissionMode as PermissionMode }
+        : {}),
+      ...(!presetId && values.modelConfig
         ? { modelConfig: values.modelConfig as GatewayAgenticConfig['modelConfig'] }
         : {}),
-      ...(values.mcpServerIds ? { mcpServerIds: values.mcpServerIds as string[] } : {}),
-      ...(values.codexSandboxMode
+      ...(!presetId && values.codexSandboxMode
         ? { codexSandboxMode: values.codexSandboxMode as GatewayAgenticConfig['codexSandboxMode'] }
         : {}),
-      ...(values.codexApprovalPolicy
+      ...(!presetId && values.codexApprovalPolicy
         ? {
             codexApprovalPolicy:
               values.codexApprovalPolicy as GatewayAgenticConfig['codexApprovalPolicy'],
           }
         : {}),
-      ...(values.codexNetworkAccess !== undefined
+      ...(!presetId && values.codexNetworkAccess !== undefined
         ? { codexNetworkAccess: values.codexNetworkAccess as boolean }
         : {}),
       // Include env vars — filter out empty-key entries only.
@@ -2657,6 +2894,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       agor_user_id: values.agor_user_id as UUID,
       config,
       agentic_config: agenticConfig,
+      mcp_server_ids: (values.mcpServerIds as string[] | undefined) ?? [],
       enabled: (values.enabled as boolean) ?? true,
     };
   };
@@ -2754,10 +2992,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       // Agentic config fields
       permissionMode: channel.agentic_config?.permissionMode,
       modelConfig: channel.agentic_config?.modelConfig,
-      mcpServerIds: channel.agentic_config?.mcpServerIds,
+      mcpServerIds: channel.mcp_server_ids ?? [],
       codexSandboxMode: channel.agentic_config?.codexSandboxMode,
       codexApprovalPolicy: channel.agentic_config?.codexApprovalPolicy,
       codexNetworkAccess: channel.agentic_config?.codexNetworkAccess,
+      agenticToolPresetId: channel.agentic_config?.presetId ?? INLINE_AGENTIC_CONFIGURATION,
       // Env vars: values are masked by the API, so on edit we show the
       // existing keys with empty values — the user re-enters values to update.
       envVars: channel.agentic_config?.envVars ?? [],
@@ -2773,6 +3012,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.allowed_channel_ids = (config?.allowed_channel_ids as string[]) ?? [];
       formValues.outbound_enabled = config?.outbound_enabled ?? false;
       formValues.default_outbound_target = config?.default_outbound_target;
+      formValues.ingest_files = config?.ingest_files ?? false;
+      const agentTools = resolveSlackAgentTools(config?.agent_tools);
+      formValues.agent_thread_history = agentTools.thread_history;
+      formValues.agent_channel_history = agentTools.channel_history;
+      formValues.agent_reactions = agentTools.reactions;
+      formValues.agent_file_upload = agentTools.file_upload;
+      formValues.agent_file_download = agentTools.file_download;
     } else if (channel.channel_type === 'github') {
       formValues.github_app_id = config?.app_id;
       formValues.github_installation_id = config?.installation_id;
@@ -2972,7 +3218,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             onChange={(event) => setSearchTerm(event.target.value)}
             style={{ width: 360 }}
           />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
+              setCreateModalOpen(true);
+            }}
+          >
             Add Channel
           </Button>
         </Space>
@@ -3061,6 +3314,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           style={{ marginTop: 16 }}
         >
           <ChannelFormFields
+            client={client}
             form={createForm}
             mode="create"
             channelType={channelType}
@@ -3098,6 +3352,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       >
         <Form form={editForm} layout="vertical" preserve style={{ marginTop: 16 }}>
           <ChannelFormFields
+            client={client}
             form={editForm}
             mode="edit"
             channelType={channelType}

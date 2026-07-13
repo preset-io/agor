@@ -1,3 +1,4 @@
+import { GOLD_SHIMMER_BOARD_BACKGROUND } from '@agor/core/design/board-backgrounds';
 import type {
   AgorClient,
   Board,
@@ -484,7 +485,15 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
           <Button icon={<UploadOutlined />} onClick={handleImportClick}>
             Import Board
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              form.resetFields();
+              form.setFieldsValue({ background_color: GOLD_SHIMMER_BOARD_BACKGROUND });
+              setCreateModalOpen(true);
+            }}
+          >
             New Board
           </Button>
         </Space>
@@ -514,7 +523,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         okText="Create"
       >
         <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
-          <BoardFormFields form={form} extra={customContextField} />
+          <BoardFormFields form={form} extra={customContextField} initialCustomCSS />
         </Form>
       </Modal>
 

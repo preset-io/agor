@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  extractSlackInboundFiles,
   isChannelAllowedByWhitelist,
+  isSlackDirectMessageId,
+  isSlackFileSourceAllowed,
+  isSlackWriteTargetAllowed,
   markdownToMrkdwn,
   markdownToSlackPayload,
   SlackConnector,
@@ -628,6 +632,234 @@ describe('SlackConnector.fetchThreadHistory', () => {
     expect(history.messages.map((message) => message.text)).toEqual(['human one', 'human two']);
     expect(history.has_more).toBe(false);
   });
+
+  it('surfaces attached-file metadata without url_private_download', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        replies: async () => ({
+          ok: true,
+          has_more: false,
+          messages: [
+            {
+              ts: '1700000000.000000',
+              user: 'U1',
+              text: 'here is the log',
+              files: [
+                {
+                  id: 'F123',
+                  name: 'error.log',
+                  mimetype: 'text/plain',
+                  size: 512,
+                  url_private_download:
+                    'https://files.slack.com/files-pri/T1-F123/download/error.log',
+                  permalink: 'https://x.slack.com/p',
+                },
+                // Malformed entry (no url) is dropped, matching inbound ingestion.
+                { id: 'F999', name: 'ghost.txt' },
+              ],
+            },
+            { ts: '1700000001.000000', user: 'U2', text: 'no attachments here' },
+          ],
+        }),
+      },
+      users: {
+        info: async ({ user }: { user: string }) => ({
+          ok: true,
+          user: { profile: { display_name: user } },
+        }),
+      },
+    };
+
+    const history = await connector.fetchThreadHistory({
+      threadId: 'C123-1700000000.000000',
+      limit: 10,
+    });
+
+    expect(history.messages[0].files).toEqual([
+      { id: 'F123', name: 'error.log', mimetype: 'text/plain', size: 512 },
+    ]);
+    expect(history.messages[1].files).toBeUndefined();
+    expect(JSON.stringify(history)).not.toContain('url_private_download');
+    expect(JSON.stringify(history)).not.toContain('files.slack.com');
+  });
+});
+
+describe('SlackConnector.getFileInfo', () => {
+  const slackFile = {
+    id: 'F123',
+    name: 'error.log',
+    mimetype: 'text/plain',
+    size: 512,
+    url_private_download: 'https://files.slack.com/files-pri/T1-F123/download/error.log',
+  };
+
+  it('returns the normalized file and its source conversations from files.info', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        info: async (args: unknown) => {
+          calls.push(args);
+          return {
+            ok: true,
+            file: {
+              ...slackFile,
+              permalink: 'https://x.slack.com/p',
+              channels: ['C123', 'C456'],
+              groups: ['G789'],
+              ims: ['D999'],
+            },
+          };
+        },
+      },
+    };
+
+    await expect(connector.getFileInfo('F123')).resolves.toEqual({
+      file: slackFile,
+      sourceConversationIds: ['C123', 'C456', 'G789', 'D999'],
+    });
+    expect(calls).toEqual([{ file: 'F123' }]);
+  });
+
+  it('returns empty source conversations when files.info omits or malforms them', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: { info: async () => ({ ok: true, file: { ...slackFile, channels: 'C123' } }) },
+    };
+
+    await expect(connector.getFileInfo('F123')).resolves.toEqual({
+      file: slackFile,
+      sourceConversationIds: [],
+    });
+  });
+
+  it('throws a Slack API error on a non-ok files.info response', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: { info: async () => ({ ok: false, error: 'file_not_found' }) },
+    };
+
+    await expect(connector.getFileInfo('F123')).rejects.toThrow('Slack API error: file_not_found');
+  });
+
+  it('throws when files.info returns a malformed file object', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: { info: async () => ({ ok: true, file: { id: 'F123', name: 'error.log' } }) },
+    };
+
+    await expect(connector.getFileInfo('F123')).rejects.toThrow('no downloadable file for F123');
+  });
+});
+
+describe('SlackConnector.fetchChannelHistory', () => {
+  it('normalizes newest-first channel history into chronological order and filters bots', async () => {
+    const calls: Array<{ method: string; args: unknown }> = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { botUserId: string }).botUserId = 'U_BOT';
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        history: async (args: unknown) => {
+          calls.push({ method: 'history', args });
+          return {
+            ok: true,
+            has_more: false,
+            messages: [
+              { ts: '1700000002.000000', user: 'U2', text: '<@U_BOT> newest' },
+              { ts: '1700000001.000000', bot_id: 'B1', text: 'bot output' },
+              { ts: '1700000000.000000', user: 'U1', text: 'oldest' },
+            ],
+          };
+        },
+      },
+      users: {
+        info: async ({ user }: { user: string }) => ({
+          ok: true,
+          user: { profile: { display_name: user === 'U1' ? 'Alice' : 'Bob' } },
+        }),
+      },
+    };
+
+    const history = await connector.fetchChannelHistory({
+      channelId: 'C123',
+      oldestTs: '1699999999.000000',
+      latestTs: '1700000002.000000',
+      inclusive: true,
+      limit: 50,
+    });
+
+    expect(calls[0]).toEqual({
+      method: 'history',
+      args: {
+        channel: 'C123',
+        limit: 200,
+        oldest: '1699999999.000000',
+        latest: '1700000002.000000',
+        inclusive: true,
+      },
+    });
+    expect(history.channel).toBe('C123');
+    expect(history.has_more).toBe(false);
+    expect(history.messages.map((message) => message.text)).toEqual(['oldest', '<@U_BOT> newest']);
+    expect(history.messages[1]).toMatchObject({
+      user_id: 'U2',
+      user_name: 'Bob',
+      is_bot: false,
+      is_mention: true,
+      is_trigger: false,
+    });
+  });
+
+  it('keeps the most recent matches when the limit truncates', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        history: async () => ({
+          ok: true,
+          has_more: false,
+          messages: [
+            { ts: '1700000002.000000', user: 'U1', text: 'newest' },
+            { ts: '1700000001.000000', user: 'U1', text: 'middle' },
+            { ts: '1700000000.000000', user: 'U1', text: 'oldest' },
+          ],
+        }),
+      },
+      users: {
+        info: async () => ({ ok: true, user: { profile: { display_name: 'Alice' } } }),
+      },
+    };
+
+    const history = await connector.fetchChannelHistory({ channelId: 'C123', limit: 2 });
+
+    expect(history.messages.map((message) => message.text)).toEqual(['middle', 'newest']);
+    expect(history.has_more).toBe(true);
+  });
+
+  it('enforces the allowed_channel_ids whitelist', async () => {
+    const connector = new SlackConnector({
+      bot_token: 'xoxb-test',
+      allowed_channel_ids: ['C_ALLOWED'],
+    });
+    let apiCalled = false;
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        history: async () => {
+          apiCalled = true;
+          return { ok: true, messages: [] };
+        },
+      },
+    };
+
+    await expect(connector.fetchChannelHistory({ channelId: 'C_OTHER' })).rejects.toThrow(
+      /allowed_channel_ids/
+    );
+    expect(apiCalled).toBe(false);
+
+    const allowed = await connector.fetchChannelHistory({ channelId: 'C_ALLOWED' });
+    expect(allowed.messages).toEqual([]);
+    expect(apiCalled).toBe(true);
+  });
 });
 
 // Mirrors SECTION_MAX_CHARS in slack.ts; kept in the test as a lower-bound
@@ -838,6 +1070,147 @@ describe('SlackConnector.sendMessage', () => {
   });
 });
 
+describe('SlackConnector.addReaction / removeReaction', () => {
+  it('adds a reaction via reactions.add', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      reactions: {
+        add: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      },
+    };
+
+    await connector.addReaction({ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' });
+
+    expect(calls).toEqual([{ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' }]);
+  });
+
+  it('removes a reaction via reactions.remove', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      reactions: {
+        remove: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true };
+        },
+      },
+    };
+
+    await connector.removeReaction({
+      channel: 'C123',
+      timestamp: '1700000000.000001',
+      name: 'eyes',
+    });
+
+    expect(calls).toEqual([{ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' }]);
+  });
+
+  it('throws a Slack API error when reactions.add fails', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      reactions: {
+        add: async () => ({ ok: false, error: 'already_reacted' }),
+      },
+    };
+
+    await expect(
+      connector.addReaction({ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' })
+    ).rejects.toThrow('already_reacted');
+  });
+
+  it('throws a Slack API error when reactions.remove fails', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      reactions: {
+        remove: async () => ({ ok: false, error: 'no_reaction' }),
+      },
+    };
+
+    await expect(
+      connector.removeReaction({ channel: 'C123', timestamp: '1700000000.000001', name: 'eyes' })
+    ).rejects.toThrow('no_reaction');
+  });
+});
+
+describe('SlackConnector.uploadFile', () => {
+  it('uploads a file via files.uploadV2', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        uploadV2: async (args: unknown) => {
+          calls.push(args);
+          return {
+            ok: true,
+            files: [{ id: 'F123', permalink: 'https://slack.example/files/F123', name: 'a.png' }],
+          };
+        },
+      },
+    };
+
+    const result = await connector.uploadFile({
+      channel: 'C123',
+      file: Buffer.from('bytes'),
+      filename: 'a.png',
+    });
+
+    expect(calls).toEqual([{ channel_id: 'C123', file: Buffer.from('bytes'), filename: 'a.png' }]);
+    expect(result).toEqual({
+      id: 'F123',
+      permalink: 'https://slack.example/files/F123',
+      name: 'a.png',
+    });
+  });
+
+  it('passes thread_ts and initial_comment when provided', async () => {
+    const calls: unknown[] = [];
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        uploadV2: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true, files: [{ id: 'F456', name: 'b.png' }] };
+        },
+      },
+    };
+
+    await connector.uploadFile({
+      channel: 'C123',
+      threadTs: '1700000000.000001',
+      file: Buffer.from('bytes'),
+      filename: 'b.png',
+      comment: 'here you go',
+    });
+
+    expect(calls).toEqual([
+      {
+        channel_id: 'C123',
+        thread_ts: '1700000000.000001',
+        file: Buffer.from('bytes'),
+        filename: 'b.png',
+        initial_comment: 'here you go',
+      },
+    ]);
+  });
+
+  it('throws a Slack API error when the upload fails', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      files: {
+        uploadV2: async () => ({ ok: false, error: 'invalid_channel' }),
+      },
+    };
+
+    await expect(
+      connector.uploadFile({ channel: 'C123', file: Buffer.from('x'), filename: 'a.png' })
+    ).rejects.toThrow('invalid_channel');
+  });
+});
+
 describe('SlackConnector.lookupUserAvatarByEmail', () => {
   it('treats Slack users_not_found platform errors as a skipped lookup', async () => {
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });
@@ -878,6 +1251,62 @@ describe('isChannelAllowedByWhitelist', () => {
   it('accepts everything when no whitelist is configured', () => {
     expect(isChannelAllowedByWhitelist('channel', 'C999', undefined)).toBe(true);
     expect(isChannelAllowedByWhitelist('channel', 'C999', [])).toBe(true);
+  });
+});
+
+describe('isSlackDirectMessageId', () => {
+  it('treats D-prefixed ids as direct messages', () => {
+    expect(isSlackDirectMessageId('D123ABC')).toBe(true);
+  });
+
+  it('treats C/G-prefixed and other ids as not a direct message', () => {
+    expect(isSlackDirectMessageId('C123ABC')).toBe(false);
+    expect(isSlackDirectMessageId('G123ABC')).toBe(false);
+  });
+});
+
+describe('isSlackWriteTargetAllowed', () => {
+  it('always allows DMs even when a channel whitelist is configured', () => {
+    expect(isSlackWriteTargetAllowed({ allowed_channel_ids: ['C123'] }, 'D999')).toBe(true);
+  });
+
+  it('denies a channel-like target not in the whitelist', () => {
+    expect(isSlackWriteTargetAllowed({ allowed_channel_ids: ['C123'] }, 'C999')).toBe(false);
+  });
+
+  it('allows a channel-like target that is in the whitelist', () => {
+    expect(isSlackWriteTargetAllowed({ allowed_channel_ids: ['C123'] }, 'C123')).toBe(true);
+  });
+
+  it('allows everything when no whitelist is configured', () => {
+    expect(isSlackWriteTargetAllowed({}, 'C999')).toBe(true);
+    expect(isSlackWriteTargetAllowed({ allowed_channel_ids: [] }, 'C999')).toBe(true);
+  });
+});
+
+describe('isSlackFileSourceAllowed', () => {
+  const restricted = { allowed_channel_ids: ['C123'] };
+
+  it('allows a file shared in a whitelisted channel', () => {
+    expect(isSlackFileSourceAllowed(restricted, ['C999', 'C123'])).toBe(true);
+  });
+
+  it('denies a file whose only sources are non-whitelisted channels', () => {
+    expect(isSlackFileSourceAllowed(restricted, ['C999', 'G777'])).toBe(false);
+  });
+
+  it('allows a file shared in a DM even when a whitelist is configured', () => {
+    expect(isSlackFileSourceAllowed(restricted, ['D999'])).toBe(true);
+  });
+
+  it('denies a file with no visible source conversations when a whitelist is configured', () => {
+    expect(isSlackFileSourceAllowed(restricted, [])).toBe(false);
+  });
+
+  it('allows everything, including source-less files, when no whitelist is configured', () => {
+    expect(isSlackFileSourceAllowed({}, ['C999'])).toBe(true);
+    expect(isSlackFileSourceAllowed({}, [])).toBe(true);
+    expect(isSlackFileSourceAllowed({ allowed_channel_ids: [] }, [])).toBe(true);
   });
 });
 
@@ -1019,5 +1448,38 @@ describe('SlackConnector.testConnection', () => {
     const failure = result.failures.find((f) => f.capability === 'channel_access');
     expect(failure?.slackError).toBe('not_in_channel');
     expect(failure?.reason).toMatch(/not a member/i);
+  });
+});
+
+describe('extractSlackInboundFiles', () => {
+  const slackFile = {
+    id: 'F123',
+    name: 'screenshot.png',
+    mimetype: 'image/png',
+    size: 2048,
+    url_private_download: 'https://files.slack.com/files-pri/T1-F123/download/screenshot.png',
+  };
+
+  it('maps well-formed Slack file objects and drops extra fields', () => {
+    const raw = [{ ...slackFile, permalink: 'https://x.slack.com/p', user: 'U1' }];
+    expect(extractSlackInboundFiles(raw)).toEqual([slackFile]);
+  });
+
+  it('drops malformed entries but keeps valid ones', () => {
+    const raw = [
+      null,
+      'not-an-object',
+      { ...slackFile, id: undefined },
+      { ...slackFile, size: '2048' },
+      { ...slackFile, url_private_download: undefined },
+      slackFile,
+    ];
+    expect(extractSlackInboundFiles(raw)).toEqual([slackFile]);
+  });
+
+  it('returns an empty array for non-array input', () => {
+    expect(extractSlackInboundFiles(undefined)).toEqual([]);
+    expect(extractSlackInboundFiles({})).toEqual([]);
+    expect(extractSlackInboundFiles('files')).toEqual([]);
   });
 });

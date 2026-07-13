@@ -18,7 +18,6 @@ export * from './useMessages';
 export * from './usePermissions';
 export * from './useRecentBoards';
 export * from './useServerVersion';
-export * from './useServicesConfig';
 export * from './useSessionActions';
 export * from './useSettingsRoute';
 export * from './useSharedReactiveSession';

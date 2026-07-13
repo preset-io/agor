@@ -1,7 +1,7 @@
 import type { Repo } from '@agor-live/client';
 import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
-import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
+import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
 import { FormEmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 
 export interface TeammateFormFieldsProps {
@@ -33,6 +33,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
   onCustomRepoChange,
   extraBeforeAdvanced,
 }) => {
+  const { token } = theme.useToken();
   const repoPlaceholder = frameworkRepo
     ? `${frameworkRepo.name || frameworkRepo.slug} (default)`
     : isCloning
@@ -110,7 +111,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
               <Space size={6}>
                 <Typography.Text type="secondary">Advanced Teammate Settings</Typography.Text>
                 <Tooltip title="Teammates live in an Agor branch. These settings control the framework repository, branch name, and source branch used to create that teammate branch.">
-                  <InfoCircleOutlined style={{ color: 'var(--ant-color-text-tertiary)' }} />
+                  <InfoCircleOutlined style={{ color: token.colorTextTertiary }} />
                 </Tooltip>
               </Space>
             ),

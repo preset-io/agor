@@ -6,9 +6,10 @@
  * Vite code-splits it into its own chunk. The first render of any `<CodeEditor>`
  * triggers the async import; subsequent renders are synchronous.
  *
- * The fallback is a monospace `<pre>` with the current value so the layout
+ * The fallback is an AntD `Input.TextArea` with the current value so the layout
  * doesn't jump while the CM6 chunk downloads.
  */
+import { Input, theme } from 'antd';
 import type React from 'react';
 import { lazy, Suspense } from 'react';
 import type { CodeEditorInnerProps, CodeEditorLanguage } from './CodeEditor.inner';
@@ -25,32 +26,32 @@ const PlainTextEditor: React.FC<CodeEditorProps> = ({
   height,
   minHeight,
   maxHeight,
-}) => (
-  <textarea
-    value={value}
-    onChange={(event) => onChange?.(event.target.value)}
-    readOnly={readOnly}
-    placeholder={placeholder}
-    rows={rows}
-    style={{
-      width: '100%',
-      boxSizing: 'border-box',
-      fontFamily: 'monospace',
-      fontSize: 12,
-      height,
-      minHeight: minHeight ?? `${rows * 20}px`,
-      maxHeight,
-      padding: 8,
-      margin: 0,
-      border: '1px solid var(--ant-color-border, #424242)',
-      borderRadius: 6,
-      background: 'var(--ant-color-fill-alter, transparent)',
-      color: 'var(--ant-color-text)',
-      overflow: 'auto',
-      resize: maxHeight ? 'none' : 'vertical',
-    }}
-  />
-);
+}) => {
+  const { token } = theme.useToken();
+
+  return (
+    <Input.TextArea
+      value={value}
+      onChange={(event) => onChange?.(event.target.value)}
+      readOnly={readOnly}
+      placeholder={placeholder}
+      rows={rows}
+      style={{
+        width: '100%',
+        boxSizing: 'border-box',
+        fontFamily: token.fontFamilyCode,
+        fontSize: token.fontSizeSM,
+        height,
+        minHeight: minHeight ?? `${rows * 20}px`,
+        maxHeight,
+        padding: token.paddingXS,
+        margin: 0,
+        overflow: 'auto',
+        resize: maxHeight ? 'none' : 'vertical',
+      }}
+    />
+  );
+};
 
 const CodeEditorInner = lazy(async () => {
   try {

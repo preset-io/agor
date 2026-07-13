@@ -33,7 +33,6 @@ import { Layout, Menu, Modal, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
-import { useServiceEnabled } from '../../hooks/useServicesConfig';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -209,12 +208,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const { token } = theme.useToken();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
-  // Service tier gates — hide tabs for disabled services
-  const gatewayEnabled = useServiceEnabled('gateway');
-  const mcpEnabled = useServiceEnabled('mcp_servers');
-  const artifactsEnabled = useServiceEnabled('artifacts');
-  const cardsEnabled = useServiceEnabled('cards');
-
   // Role gate — MCP Servers and Gateway Channels are global admin-managed
   // configuration (credentials, webhook URLs, env vars). The daemon enforces
   // ADMIN role on writes for both services (see register-hooks.ts); hiding
@@ -250,42 +243,34 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             label: 'Teammates',
             icon: <RobotOutlined />,
           },
-          ...(cardsEnabled
-            ? [
-                {
-                  key: 'cards',
-                  label: (
-                    <span>
-                      Cards{' '}
-                      <span
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 600,
-                          padding: '0 4px',
-                          borderRadius: 3,
-                          background: token.colorWarningBg,
-                          color: token.colorWarningText,
-                          border: `1px solid ${token.colorWarningBorder}`,
-                          marginLeft: 4,
-                        }}
-                      >
-                        Beta
-                      </span>
-                    </span>
-                  ),
-                  icon: <CreditCardOutlined />,
-                },
-              ]
-            : []),
-          ...(artifactsEnabled
-            ? [
-                {
-                  key: 'artifacts',
-                  label: 'Artifacts',
-                  icon: <ExperimentOutlined />,
-                },
-              ]
-            : []),
+          {
+            key: 'cards',
+            label: (
+              <span>
+                Cards{' '}
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    padding: '0 4px',
+                    borderRadius: 3,
+                    background: token.colorWarningBg,
+                    color: token.colorWarningText,
+                    border: `1px solid ${token.colorWarningBorder}`,
+                    marginLeft: 4,
+                  }}
+                >
+                  Beta
+                </span>
+              </span>
+            ),
+            icon: <CreditCardOutlined />,
+          },
+          {
+            key: 'artifacts',
+            label: 'Artifacts',
+            icon: <ExperimentOutlined />,
+          },
         ],
       },
       {
@@ -293,12 +278,16 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         label: 'Integrations',
         type: 'group' as const,
         children: [
-          {
-            key: 'agentic-tools',
-            label: 'Agentic Tools',
-            icon: <ThunderboltOutlined />,
-          },
-          ...(mcpEnabled && isAdmin
+          ...(isAdmin
+            ? [
+                {
+                  key: 'agentic-tools',
+                  label: 'Agentic Tools',
+                  icon: <ThunderboltOutlined />,
+                },
+              ]
+            : []),
+          ...(isAdmin
             ? [
                 {
                   key: 'mcp',
@@ -307,7 +296,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                 },
               ]
             : []),
-          ...(gatewayEnabled && isAdmin
+          ...(isAdmin
             ? [
                 {
                   key: 'gateway',
@@ -352,7 +341,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         ],
       },
     ],
-    [gatewayEnabled, mcpEnabled, artifactsEnabled, cardsEnabled, isAdmin, token]
+    [isAdmin, token]
   );
 
   // Render content based on active section

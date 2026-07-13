@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configMocks = vi.hoisted(() => ({
+  isTenantAgenticToolEnabled: vi.fn().mockResolvedValue(true),
   resolveApiKey: vi.fn(),
 }));
 

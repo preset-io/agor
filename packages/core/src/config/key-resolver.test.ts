@@ -5,8 +5,7 @@
  *   - When `tool` is provided, ONLY consults `data.agentic_tools[tool][keyName]`
  *     (so a Codex executor never picks up an ANTHROPIC_API_KEY stored under
  *     claude-code, and vice versa).
- *   - When `tool` is omitted, falls back to a cross-bucket sweep (legacy
- *     behavior, preserved for non-SDK callers).
+ *   - When `tool` is omitted, infers the owning provider from the field.
  */
 
 import type { UserID } from '@agor/core/types';
@@ -14,6 +13,7 @@ import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect } from 'vitest';
 import { select, update } from '../db/database-wrapper';
 import { encryptApiKey } from '../db/encryption';
+import { TenantAgenticToolSettingsRepository } from '../db/repositories/tenant-agentic-tools';
 import { UsersRepository } from '../db/repositories/users';
 import { users } from '../db/schema';
 import { dbTest } from '../db/test-helpers';
@@ -29,7 +29,8 @@ beforeAll(() => {
 
 async function createUserWithToolCreds(
   db: any,
-  agenticTools: Record<string, Record<string, string>>
+  agenticTools: Record<string, Record<string, string>>,
+  agenticAuthMethods?: Record<string, string>
 ): Promise<UserID> {
   const usersRepo = new UsersRepository(db);
   const user = await usersRepo.create({
@@ -40,7 +41,13 @@ async function createUserWithToolCreds(
   const currentData =
     (row?.data as Record<string, unknown> | undefined) ?? ({} as Record<string, unknown>);
   await update(db, users)
-    .set({ data: { ...currentData, agentic_tools: agenticTools } })
+    .set({
+      data: {
+        ...currentData,
+        agentic_tools: agenticTools,
+        agentic_auth_methods: agenticAuthMethods,
+      },
+    })
     .where(eq(users.user_id, user.user_id))
     .run();
   return user.user_id;
@@ -59,24 +66,26 @@ describe('resolveApiKey — per-tool credential scoping', () => {
     expect(codexResult.source).toBe('user');
 
     // Codex asking for ANTHROPIC_API_KEY: scoped to its own bucket → NOT found
-    // even though the user has one stored under claude-code. (Falls through to
-    // env/native auth → useNativeAuth=true since no env/config is set in this test.)
+    // even though the user has one stored under claude-code. No cross-tool or
+    // native/environment fallback is allowed.
     const codexAnthropic = await resolveApiKey('ANTHROPIC_API_KEY', {
       userId,
       db,
       tool: 'codex',
     });
     expect(codexAnthropic.apiKey).toBeUndefined();
-    expect(codexAnthropic.source).toBe('none');
-    expect(codexAnthropic.useNativeAuth).toBe(true);
+    // The complete Codex connection came from the user scope even though the
+    // caller requested a field that does not belong to that connection.
+    expect(codexAnthropic.source).toBe('user');
+    expect(codexAnthropic.useNativeAuth).toBe(false);
   });
 
-  dbTest('omitting tool falls back to cross-bucket sweep (back-compat)', async ({ db }) => {
+  dbTest('omitting tool infers the owning provider', async ({ db }) => {
     const userId = await createUserWithToolCreds(db, {
       'claude-code': { ANTHROPIC_API_KEY: encryptApiKey('claude-key') },
     });
 
-    // No `tool` provided — legacy CLI/non-SDK behavior should still find the key.
+    // No `tool` provided — the field identifies its typed provider bucket.
     const result = await resolveApiKey('ANTHROPIC_API_KEY', { userId, db });
     expect(result.apiKey).toBe('claude-key');
     expect(result.source).toBe('user');
@@ -107,4 +116,87 @@ describe('resolveApiKey — per-tool credential scoping', () => {
     expect(result.apiKey).toBe('cursor-key');
     expect(result.source).toBe('user');
   });
+
+  dbTest('tenant-preferred selects the complete tenant connection atomically', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db, {
+      codex: {
+        OPENAI_API_KEY: encryptApiKey('user-key'),
+        OPENAI_BASE_URL: encryptApiKey('https://user.invalid/v1'),
+      },
+    });
+    await new TenantAgenticToolSettingsRepository(db).patch('codex', {
+      resolution_policy: 'tenant_preferred',
+      connection: {
+        OPENAI_API_KEY: 'tenant-key',
+        OPENAI_BASE_URL: 'https://tenant.invalid/v1',
+      },
+    });
+
+    const result = await resolveApiKey('OPENAI_API_KEY', { userId, db, tool: 'codex' });
+    expect(result).toMatchObject({
+      apiKey: 'tenant-key',
+      source: 'tenant',
+      connection: {
+        OPENAI_API_KEY: 'tenant-key',
+        OPENAI_BASE_URL: 'https://tenant.invalid/v1',
+      },
+    });
+  });
+
+  dbTest('required policies fail closed instead of using the other scope', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db, {
+      codex: { OPENAI_API_KEY: encryptApiKey('user-key') },
+    });
+    const repository = new TenantAgenticToolSettingsRepository(db);
+    await repository.patch('codex', { resolution_policy: 'tenant_required' });
+    await expect(
+      resolveApiKey('OPENAI_API_KEY', { userId, db, tool: 'codex' })
+    ).resolves.toMatchObject({
+      apiKey: undefined,
+      source: 'none',
+    });
+
+    await repository.patch('codex', {
+      resolution_policy: 'user_required',
+      connection: { OPENAI_API_KEY: 'tenant-key' },
+    });
+    const noUser = await resolveApiKey('OPENAI_API_KEY', { db, tool: 'codex' });
+    expect(noUser).toMatchObject({ apiKey: undefined, source: 'none' });
+  });
+
+  dbTest(
+    'Codex subscription is available only after the user explicitly selects it',
+    async ({ db }) => {
+      const userId = await createUserWithToolCreds(db, {}, { codex: 'subscription' });
+      const result = await resolveApiKey('OPENAI_API_KEY', { userId, db, tool: 'codex' });
+      expect(result).toMatchObject({
+        apiKey: undefined,
+        source: 'user',
+        useNativeAuth: true,
+        connection: {},
+      });
+    }
+  );
+
+  dbTest(
+    'Claude authentication method selects one credential family atomically',
+    async ({ db }) => {
+      const credentials = {
+        'claude-code': {
+          ANTHROPIC_API_KEY: encryptApiKey('api-key'),
+          CLAUDE_CODE_OAUTH_TOKEN: encryptApiKey('subscription-token'),
+        },
+      };
+      const userId = await createUserWithToolCreds(db, credentials, {
+        'claude-code': 'subscription',
+      });
+      const result = await resolveApiKey('CLAUDE_CODE_OAUTH_TOKEN', {
+        userId,
+        db,
+        tool: 'claude-code',
+      });
+      expect(result.connection).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'subscription-token' });
+      expect(result.apiKey).toBe('subscription-token');
+    }
+  );
 });

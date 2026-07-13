@@ -3,6 +3,7 @@ import type { Card, ZoneBoardObject } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { CardsService } from '../../services/cards.js';
+import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveBoardId, resolveCardId } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -15,6 +16,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 export function registerCardTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_cards_create
@@ -49,28 +51,38 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }
 
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
-      const { card, boardObject } = await cardsService.createWithPlacement(
-        {
-          board_id: board.board_id,
-          title,
-          card_type_id: coerceString(args.cardTypeId) as never,
-          url: coerceString(args.url),
-          description: coerceString(args.description),
-          note: coerceString(args.note),
-          data:
-            args.data && typeof args.data === 'object'
-              ? (args.data as Record<string, unknown>)
-              : undefined,
-          color_override: coerceString(args.colorOverride),
-          emoji_override: coerceString(args.emojiOverride),
-          zoneId,
-          zoneData,
-        } as never,
-        { user: { user_id: ctx.userId } } as never
+      const { card, boardObject } = await runWithMcpTenantDatabaseScope(ctx, () =>
+        cardsService.createWithPlacement(
+          {
+            board_id: board.board_id,
+            title,
+            card_type_id: coerceString(args.cardTypeId) as never,
+            url: coerceString(args.url),
+            description: coerceString(args.description),
+            note: coerceString(args.note),
+            data:
+              args.data && typeof args.data === 'object'
+                ? (args.data as Record<string, unknown>)
+                : undefined,
+            color_override: coerceString(args.colorOverride),
+            emoji_override: coerceString(args.emojiOverride),
+            zoneId,
+            zoneData,
+          } as never,
+          ctx.baseServiceParams
+        )
       );
 
-      ctx.app.service('cards').emit('created', card);
-      ctx.app.service('board-objects').emit('created', boardObject);
+      emitServiceEvent(ctx.app, {
+        path: 'cards',
+        event: 'created',
+        data: card,
+      });
+      emitServiceEvent(ctx.app, {
+        path: 'board-objects',
+        event: 'created',
+        data: boardObject,
+      });
       return textResult({ card, boardObject });
     }
   );
@@ -225,8 +237,15 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
-      const archivedCard = await cardsService.archive(args.cardId);
-      ctx.app.service('cards').emit('patched', archivedCard);
+      const archivedCard = await runWithMcpTenantDatabaseScope(ctx, () =>
+        cardsService.archive(args.cardId)
+      );
+      emitServiceEvent(ctx.app, {
+        path: 'cards',
+        event: 'patched',
+        data: archivedCard,
+        id: args.cardId,
+      });
       return textResult(archivedCard);
     }
   );
@@ -242,8 +261,15 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
-      const unarchivedCard = await cardsService.unarchive(args.cardId);
-      ctx.app.service('cards').emit('patched', unarchivedCard);
+      const unarchivedCard = await runWithMcpTenantDatabaseScope(ctx, () =>
+        cardsService.unarchive(args.cardId)
+      );
+      emitServiceEvent(ctx.app, {
+        path: 'cards',
+        event: 'patched',
+        data: unarchivedCard,
+        id: args.cardId,
+      });
       return textResult(unarchivedCard);
     }
   );
@@ -276,8 +302,14 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         zoneData = zone;
       }
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
-      const boardObject = await cardsService.moveToZone(cardId as never, zoneId, zoneData);
-      ctx.app.service('board-objects').emit('patched', boardObject);
+      const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
+        cardsService.moveToZone(cardId as never, zoneId, zoneData)
+      );
+      emitServiceEvent(ctx.app, {
+        path: 'board-objects',
+        event: 'patched',
+        data: boardObject,
+      });
       return textResult(boardObject);
     }
   );
@@ -296,15 +328,17 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const cardId = await resolveCardId(ctx, args.cardId);
-      const boardObjectRepo = new BoardObjectRepository(ctx.db);
-      const boardObj = await boardObjectRepo.findByCardId(cardId as never);
-      if (!boardObj) throw new Error(`Card ${cardId} has no board placement`);
-      const boardObjectsService = ctx.app.service(
-        'board-objects'
-      ) as unknown as import('../../services/board-objects.js').BoardObjectsService;
-      const updatedBoardObject = await boardObjectsService.updatePosition(boardObj.object_id, {
-        x: args.x,
-        y: args.y,
+      const updatedBoardObject = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+        const boardObjectRepo = new BoardObjectRepository(db);
+        const boardObj = await boardObjectRepo.findByCardId(cardId as never);
+        if (!boardObj) throw new Error(`Card ${cardId} has no board placement`);
+        const boardObjectsService = ctx.app.service(
+          'board-objects'
+        ) as unknown as import('../../services/board-objects.js').BoardObjectsService;
+        return boardObjectsService.updatePosition(boardObj.object_id, {
+          x: args.x,
+          y: args.y,
+        });
       });
       return textResult(updatedBoardObject);
     }
@@ -354,25 +388,35 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
           if (zone?.type === 'zone') zoneData = zone;
         }
 
-        const { card, boardObject } = await cardsService.createWithPlacement(
-          {
-            board_id: board.board_id,
-            title: c.title,
-            card_type_id: coerceString(c.cardTypeId) as never,
-            url: coerceString(c.url),
-            description: coerceString(c.description),
-            note: coerceString(c.note),
-            data: c.data && typeof c.data === 'object' ? c.data : undefined,
-            color_override: coerceString(c.colorOverride),
-            emoji_override: coerceString(c.emojiOverride),
-            zoneId,
-            zoneData,
-          },
-          { user: { user_id: ctx.userId } } as never
+        const { card, boardObject } = await runWithMcpTenantDatabaseScope(ctx, () =>
+          cardsService.createWithPlacement(
+            {
+              board_id: board.board_id,
+              title: c.title,
+              card_type_id: coerceString(c.cardTypeId) as never,
+              url: coerceString(c.url),
+              description: coerceString(c.description),
+              note: coerceString(c.note),
+              data: c.data && typeof c.data === 'object' ? c.data : undefined,
+              color_override: coerceString(c.colorOverride),
+              emoji_override: coerceString(c.emojiOverride),
+              zoneId,
+              zoneData,
+            },
+            ctx.baseServiceParams
+          )
         );
         results.push(card);
-        ctx.app.service('cards').emit('created', card);
-        ctx.app.service('board-objects').emit('created', boardObject);
+        emitServiceEvent(ctx.app, {
+          path: 'cards',
+          event: 'created',
+          data: card,
+        });
+        emitServiceEvent(ctx.app, {
+          path: 'board-objects',
+          event: 'created',
+          data: boardObject,
+        });
       }
 
       return textResult({ created: results.length, cards: results });
@@ -477,8 +521,14 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
           const zone = board.objects?.[zoneId];
           if (zone?.type === 'zone') zoneData = zone;
         }
-        const boardObject = await cardsService.moveToZone(cardId as never, zoneId, zoneData);
-        ctx.app.service('board-objects').emit('patched', boardObject);
+        const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
+          cardsService.moveToZone(cardId as never, zoneId, zoneData)
+        );
+        emitServiceEvent(ctx.app, {
+          path: 'board-objects',
+          event: 'patched',
+          data: boardObject,
+        });
         results.push({ cardId, boardObject });
       }
 

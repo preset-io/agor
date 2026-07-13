@@ -1,5 +1,5 @@
 import { PlusOutlined } from '@ant-design/icons';
-import { Button, Tooltip } from 'antd';
+import { Button, Tooltip, theme } from 'antd';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 
 export interface NewSessionButtonProps {
@@ -8,6 +8,7 @@ export interface NewSessionButtonProps {
 
 export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick }) => {
   const connectionDisabled = useConnectionDisabled();
+  const { token } = theme.useToken();
   const tooltip = connectionDisabled ? 'Disconnected from daemon' : 'Create new...';
 
   return (
@@ -25,7 +26,7 @@ export const NewSessionButton: React.FC<NewSessionButtonProps> = ({ onClick }) =
           top: 24,
           width: 56,
           height: 56,
-          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+          boxShadow: token.boxShadowSecondary,
           zIndex: 100,
         }}
       />

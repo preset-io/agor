@@ -3,14 +3,73 @@ import type { Database } from './client';
 import { insert } from './database-wrapper';
 import {
   createTenantScopedDatabaseProxy,
+  enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   MissingTenantDatabaseScopeError,
   requireCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
 } from './tenant-scope';
+
+describe('tenant operation context', () => {
+  it('keeps tenant identity ambient without opening a database transaction', async () => {
+    const db = { transaction: vi.fn() };
+
+    await runWithTenantContext('tenant-a', async () => {
+      expect(getCurrentTenantId()).toBe('tenant-a');
+      await Promise.resolve();
+      expect(getCurrentTenantId()).toBe('tenant-a');
+    });
+
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(getCurrentTenantId()).toBeUndefined();
+  });
+
+  it('runs after-commit callbacks outside the DB scope while retaining identity', async () => {
+    const db = { run: vi.fn() } as unknown as Database;
+    const seen: Array<{ dbScoped: boolean; tenantId?: string }> = [];
+
+    await runWithTenantContext('tenant-a', () =>
+      runWithTenantDatabaseScope(db, undefined, async () => {
+        expect(
+          enqueueAfterTenantDatabaseCommit(() => {
+            seen.push({
+              dbScoped: !!getCurrentTenantDatabaseScope(),
+              tenantId: getCurrentTenantId(),
+            });
+          })
+        ).toBe(true);
+      })
+    );
+
+    expect(seen).toEqual([{ dbScoped: false, tenantId: 'tenant-a' }]);
+  });
+
+  it('lets database scopes inherit operation identity and rejects conflicts', async () => {
+    const db = { run: vi.fn() } as unknown as Database;
+
+    await runWithTenantContext('tenant-a', async () => {
+      await runWithTenantDatabaseScope(db, undefined, async () => {
+        expect(getCurrentTenantId()).toBe('tenant-a');
+      });
+      await expect(
+        runWithTenantDatabaseScope(db, 'tenant-b', async () => undefined)
+      ).rejects.toThrow('active tenant context tenant-a');
+    });
+  });
+
+  it('rejects nested operation identity changes', async () => {
+    await runWithTenantContext('tenant-a', async () => {
+      expect(() => runWithTenantContext('tenant-b', () => undefined)).toThrow(
+        'active tenant context tenant-a'
+      );
+    });
+  });
+});
 
 describe('tenant-scoped database proxy', () => {
   it('routes repository-style calls to the active tenant transaction', async () => {

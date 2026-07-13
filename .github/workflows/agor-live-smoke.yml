@@ -197,11 +197,12 @@ jobs:
           # Actually fetch the JS asset to confirm static-file serving works end-to-end.
           ASSET_PATH=$(grep -oE '/ui/assets/index-[A-Za-z0-9_-]+\.js' /tmp/ui.html | head -1)
           echo "=== GET $ASSET_PATH ==="
-          SIZE=$(curl -fsS -o /dev/null -w "%{size_download}" "http://localhost:3030$ASSET_PATH")
-          echo "JS asset size: $SIZE bytes"
-          # The UI bundle is multi-MB. <100KB means we're getting an error page or empty body.
-          if [ "$SIZE" -lt 100000 ]; then
-            echo "::error::/ui/ JS asset is suspiciously small (${SIZE} bytes) — static serving broken"
+          read -r SIZE CTYPE < <(curl -fsS -o /dev/null -w "%{size_download} %{content_type}\n" "http://localhost:3030$ASSET_PATH")
+          echo "JS asset size: $SIZE bytes; content-type: $CTYPE"
+          # Vite may split most application code out of the entry chunk. Verify that the
+          # referenced asset is non-empty JavaScript rather than relying on bundle size.
+          if [ "$SIZE" -lt 1000 ] || [[ "$CTYPE" != *javascript* ]]; then
+            echo "::error::/ui/ JS asset response is invalid (${SIZE} bytes, ${CTYPE}) — static serving broken"
             exit 1
           fi
           echo "✓ Smoke test passed"

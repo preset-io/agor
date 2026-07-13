@@ -61,15 +61,6 @@ describe('coerceJsonRecord', () => {
 });
 
 describe('MCP tool registry', () => {
-  it('mirrors runtime read-only service tier filtering', () => {
-    const registry = buildRegistry({ boards: 'readonly' });
-
-    expect(registry.get('agor_boards_get')).toBeDefined();
-    expect(registry.get('agor_boards_list')).toBeDefined();
-    expect(registry.get('agor_boards_update')).toBeUndefined();
-    expect(registry.get('agor_boards_create')).toBeUndefined();
-  });
-
   it('keeps representative tool detail schemas from degrading to bare object schemas', () => {
     const registry = buildRegistry();
     const expectedPropertiesByTool: Record<string, string[]> = {

@@ -113,7 +113,8 @@ export function highlightMentionsInMarkdown(text: string): string {
 
     // Use inline HTML with background color and bold
     // The background uses a semi-transparent color that works in both light and dark modes
-    return `<span style="background-color: rgba(22, 119, 255, 0.15); border-radius: 3px; padding: 0 2px; font-weight: 600;">${escapedMatch}</span>`;
+    // biome-ignore lint/plugin/noDirectAntCssVar: sanitized HTML-string boundary cannot consume a React token object
+    return `<span style="background-color: var(--ant-color-primary-bg); border-radius: 3px; padding: 0 2px; font-weight: 600;">${escapedMatch}</span>`;
   });
 }
 

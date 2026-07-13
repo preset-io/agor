@@ -22,6 +22,8 @@
  *   (per-collection revision counters, generation tokens, `runHydration`) lives
  *   in `agorHydration.ts`.
  */
+
+import type { TenantAgenticToolName, TenantAgenticToolSettings } from '@agor-live/client';
 import { enableMapSet } from 'immer';
 import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
@@ -49,6 +51,7 @@ interface AgorMeta {
   mcpServersHydrated: boolean;
   /** Set once the background gateway-channels hydration first applies (empty result included). */
   gatewayChannelsHydrated: boolean;
+  agenticToolSettingsByName: Map<TenantAgenticToolName, TenantAgenticToolSettings>;
 }
 
 /** Store actions: foundational primitives + the one immer cascade. */
@@ -68,6 +71,7 @@ interface AgorActions {
   setItemCounts: (value: ItemCounts | ((prev: ItemCounts) => ItemCounts)) => void;
   /** Mark a gated background collection as first-hydrated (idempotent). */
   markHydrated: (flag: GatedHydrationFlag) => void;
+  setAgenticToolSettings: (settings: TenantAgenticToolSettings[]) => void;
   /**
    * Replace a single data map: accepts a value or a functional updater, and
    * short-circuits on `Object.is` equality so
@@ -108,6 +112,7 @@ const INITIAL_META: AgorMeta = {
   itemCounts: {},
   mcpServersHydrated: false,
   gatewayChannelsHydrated: false,
+  agenticToolSettingsByName: new Map(),
 };
 
 export const agorStore = createStore<AgorState>()(
@@ -140,6 +145,9 @@ export const agorStore = createStore<AgorState>()(
     },
     markHydrated: (flag) => {
       if (!get()[flag]) set({ [flag]: true } as Partial<AgorState>);
+    },
+    setAgenticToolSettings: (settings) => {
+      set({ agenticToolSettingsByName: new Map(settings.map((item) => [item.tool, item])) });
     },
 
     setMap: (key, value) => {

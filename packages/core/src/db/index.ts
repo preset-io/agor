@@ -51,5 +51,6 @@ export * from './schema';
 // Session guard utilities (defensive programming for deleted sessions)
 export * from './session-guard';
 export * from './tenant-scope';
+export * from './tenant-unit-of-work';
 // User utilities
 export * from './user-utils';

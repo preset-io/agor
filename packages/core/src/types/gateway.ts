@@ -87,6 +87,77 @@ export function getRequiredSecretFields(
 }
 
 // ============================================================================
+// Agent Tool Capabilities
+// ============================================================================
+
+/**
+ * Per-channel toggles for agent-callable gateway MCP tools, stored at
+ * `config.agent_tools` on Slack gateway channels.
+ *
+ * Each key is one capability that maps 1:1 to an MCP tool: the toggle gates
+ * the tool at call time AND drives the Slack OAuth scopes the manifest
+ * requests (see `SLACK_AGENT_TOOL_SCOPES` in the manifest generator), so
+ * tool-gating and scopes can never drift. Extending the model is one seam:
+ * add a key here, a default below, and its scope list in the manifest map.
+ *
+ * Browser-safe and dependency-free so both the UI and the daemon can import it.
+ */
+export interface SlackAgentToolsConfig {
+  /** Read mapped Slack thread history (agor_gateway_slack_thread_history_get). */
+  thread_history?: boolean;
+  /** Read whole-channel Slack history (agor_gateway_slack_channel_history_get). */
+  channel_history?: boolean;
+  /** Add/remove emoji reactions (agor_gateway_slack_reaction_add / _remove). */
+  reactions?: boolean;
+  /** Upload a file/image to a channel or thread (agor_gateway_slack_file_upload). */
+  file_upload?: boolean;
+  /** Download a Slack file into the upload area by id (agor_gateway_slack_file_download). */
+  file_download?: boolean;
+}
+
+export type SlackAgentToolCapability = keyof SlackAgentToolsConfig;
+
+/**
+ * Defaults applied when a capability is absent from `config.agent_tools`
+ * (including channels created before the capability model existed):
+ *
+ * - `thread_history` defaults ON — the thread-history tool shipped ungated,
+ *   so absent config must keep it working on existing channels.
+ * - `channel_history` defaults OFF — reading arbitrary channel history is a
+ *   broader data surface than the mapped thread and needs Slack scopes the
+ *   installed app may not hold, so it requires explicit opt-in.
+ * - `reactions` and `file_upload` default OFF — both add write scopes
+ *   (`reactions:write`, `files:write`) the installed app may not hold, so
+ *   they require explicit opt-in.
+ * - `file_download` defaults OFF — it lets agents pull workspace file content
+ *   on demand and adds the `files:read` scope the installed app may not hold,
+ *   so it requires explicit opt-in.
+ */
+export const SLACK_AGENT_TOOL_DEFAULTS: Record<SlackAgentToolCapability, boolean> = {
+  thread_history: true,
+  channel_history: false,
+  reactions: false,
+  file_upload: false,
+  file_download: false,
+};
+
+/**
+ * Resolve a channel's `config.agent_tools` value (possibly absent or
+ * malformed) into a fully-populated capability map with defaults applied.
+ */
+export function resolveSlackAgentTools(raw: unknown): Record<SlackAgentToolCapability, boolean> {
+  const config =
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const resolved = { ...SLACK_AGENT_TOOL_DEFAULTS };
+  for (const capability of Object.keys(resolved) as SlackAgentToolCapability[]) {
+    if (typeof config[capability] === 'boolean') {
+      resolved[capability] = config[capability] as boolean;
+    }
+  }
+  return resolved;
+}
+
+// ============================================================================
 // Connection Probe Results
 // ============================================================================
 
@@ -150,9 +221,10 @@ export interface GatewayEnvVar {
 
 export interface GatewayAgenticConfig {
   agent: AgenticToolName;
+  /** Live preset reference. Remaining runtime fields are ignored when present. */
+  presetId?: import('./agentic-tool-preset').AgenticToolPresetID;
   modelConfig?: DefaultModelConfig;
   permissionMode?: PermissionMode;
-  mcpServerIds?: string[];
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
@@ -189,6 +261,8 @@ export interface GatewayChannel {
   channel_key: string; // UUID — the auth secret for inbound webhooks
   config: Record<string, unknown>; // Platform credentials (encrypted at rest)
   agentic_config: GatewayAgenticConfig | null; // Session creation settings
+  /** MCP servers attached independently of the agentic-tool configuration. */
+  mcp_server_ids?: string[];
   enabled: boolean;
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601

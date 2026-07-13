@@ -29,7 +29,6 @@ export interface AgenticFormValues {
   modelConfig?: DefaultModelConfig;
   effort?: EffortLevel;
   permissionMode?: string;
-  mcpServerIds?: string[];
   codexSandboxMode?: string;
   codexApprovalPolicy?: string;
   codexNetworkAccess?: boolean;
@@ -46,7 +45,6 @@ export function getFormValuesFromConfig(
   if (!config) {
     return {
       permissionMode: getDefaultPermissionMode(tool),
-      mcpServerIds: [],
     };
   }
 
@@ -54,7 +52,6 @@ export function getFormValuesFromConfig(
     modelConfig: config.modelConfig,
     effort: config.modelConfig?.effort,
     permissionMode: config.permissionMode || getDefaultPermissionMode(tool),
-    mcpServerIds: config.mcpServerIds || [],
     ...(tool === 'codex' && {
       codexSandboxMode: config.codexSandboxMode,
       codexApprovalPolicy: config.codexApprovalPolicy,
@@ -81,7 +78,6 @@ export function buildConfigFromFormValues(
   return {
     modelConfig,
     permissionMode: values.permissionMode as DefaultAgenticToolConfig['permissionMode'],
-    mcpServerIds: values.mcpServerIds,
     ...(tool === 'codex' && {
       codexSandboxMode: values.codexSandboxMode as DefaultAgenticToolConfig['codexSandboxMode'],
       codexApprovalPolicy:
@@ -105,7 +101,6 @@ export function scheduleConfigToDefaultConfig(
   return {
     modelConfig: cfg.model_config,
     permissionMode: cfg.permission_mode,
-    mcpServerIds: cfg.mcp_server_ids,
     ...(cfg.agentic_tool === 'codex' && {
       codexSandboxMode: cfg.codex_sandbox_mode,
       codexApprovalPolicy: cfg.codex_approval_policy,
@@ -127,10 +122,12 @@ export function buildScheduleConfigFromFormValues(
   const builtDefault = buildConfigFromFormValues(tool, values);
   return {
     ...previous,
+    // Selecting inline configuration must detach any previously selected
+    // live preset; otherwise the daemon correctly rejects the mixed payload.
+    preset_id: undefined,
     agentic_tool: tool,
     permission_mode: builtDefault.permissionMode,
     model_config: builtDefault.modelConfig,
-    mcp_server_ids: builtDefault.mcpServerIds,
     context_files: previous?.context_files,
     // Codex fields: set when tool is codex, clear when switching away
     // (prevents stale values lingering from a previous codex config).
@@ -148,7 +145,6 @@ export function getClearedFormValues(tool: AgenticToolName): AgenticFormValues {
     modelConfig: undefined,
     effort: undefined,
     permissionMode: getDefaultPermissionMode(tool),
-    mcpServerIds: [],
     ...(tool === 'codex' && {
       codexSandboxMode: undefined,
       codexApprovalPolicy: undefined,

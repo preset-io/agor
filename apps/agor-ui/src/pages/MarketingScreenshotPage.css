@@ -1,3 +1,5 @@
+/* biome-ignore-all lint/plugin/noHardcodedCssColor: demo-only marketing screenshot palette */
+/* biome-ignore-all lint/plugin/noFirstPartyCss: demo-only screenshot capture overrides require page and third-party selectors */
 .marketing-product-page {
   min-height: 100vh;
   overflow: hidden;

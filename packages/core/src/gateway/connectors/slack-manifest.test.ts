@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveSlackAgentTools } from '../../types/gateway';
 import {
   buildSlackManifest,
   requiredBotEvents,
@@ -19,6 +20,8 @@ const baseOptions: SlackWizardOptions = {
   groupDms: false,
   alignUsers: false,
   outbound: false,
+  ingestFiles: false,
+  agentTools: {},
 };
 
 function withOptions(overrides: Partial<SlackWizardOptions>): SlackWizardOptions {
@@ -71,6 +74,84 @@ describe('requiredBotScopes', () => {
     ]);
   });
 
+  it('adds files:read for file ingestion and omits it otherwise', () => {
+    expect(requiredBotScopes(withOptions({ ingestFiles: true }))).toEqual([
+      'chat:write',
+      'files:read',
+      'im:history',
+      'im:read',
+      'users:read',
+    ]);
+    expect(requiredBotScopes(baseOptions)).not.toContain('files:read');
+  });
+
+  it('adds all history scopes for agent channel history and omits them otherwise', () => {
+    expect(requiredBotScopes(withOptions({ agentTools: { channel_history: true } }))).toEqual([
+      'channels:history',
+      'chat:write',
+      'groups:history',
+      'im:history',
+      'im:read',
+      'mpim:history',
+      'users:read',
+    ]);
+    const withoutChannelHistory = requiredBotScopes(baseOptions);
+    expect(withoutChannelHistory).not.toContain('channels:history');
+    expect(withoutChannelHistory).not.toContain('groups:history');
+    expect(withoutChannelHistory).not.toContain('mpim:history');
+    expect(
+      requiredBotScopes(withOptions({ agentTools: { channel_history: false } }))
+    ).not.toContain('channels:history');
+  });
+
+  it('agent thread history adds no scopes — thread reads are covered by surface scopes', () => {
+    expect(requiredBotScopes(withOptions({ agentTools: { thread_history: true } }))).toEqual(
+      requiredBotScopes(withOptions({ agentTools: { thread_history: false } }))
+    );
+  });
+
+  it('adds reactions:write for the reactions capability and omits it otherwise', () => {
+    expect(requiredBotScopes(withOptions({ agentTools: { reactions: true } }))).toEqual([
+      'chat:write',
+      'im:history',
+      'im:read',
+      'reactions:write',
+      'users:read',
+    ]);
+    expect(requiredBotScopes(baseOptions)).not.toContain('reactions:write');
+    expect(requiredBotScopes(withOptions({ agentTools: { reactions: false } }))).not.toContain(
+      'reactions:write'
+    );
+  });
+
+  it('adds files:write for the file_upload capability and omits it otherwise', () => {
+    expect(requiredBotScopes(withOptions({ agentTools: { file_upload: true } }))).toEqual([
+      'chat:write',
+      'files:write',
+      'im:history',
+      'im:read',
+      'users:read',
+    ]);
+    expect(requiredBotScopes(baseOptions)).not.toContain('files:write');
+    expect(requiredBotScopes(withOptions({ agentTools: { file_upload: false } }))).not.toContain(
+      'files:write'
+    );
+  });
+
+  it('adds files:read for the file_download capability and omits it otherwise', () => {
+    expect(requiredBotScopes(withOptions({ agentTools: { file_download: true } }))).toEqual([
+      'chat:write',
+      'files:read',
+      'im:history',
+      'im:read',
+      'users:read',
+    ]);
+    expect(requiredBotScopes(baseOptions)).not.toContain('files:read');
+    expect(requiredBotScopes(withOptions({ agentTools: { file_download: false } }))).not.toContain(
+      'files:read'
+    );
+  });
+
   it('all capabilities on — de-duplicated and sorted', () => {
     const allOn = withOptions({
       publicChannels: true,
@@ -78,6 +159,14 @@ describe('requiredBotScopes', () => {
       groupDms: true,
       alignUsers: true,
       outbound: true,
+      ingestFiles: true,
+      agentTools: {
+        thread_history: true,
+        channel_history: true,
+        reactions: true,
+        file_upload: true,
+        file_download: true,
+      },
     });
     expect(requiredBotScopes(allOn)).toEqual([
       'app_mentions:read',
@@ -85,6 +174,8 @@ describe('requiredBotScopes', () => {
       'channels:read',
       'chat:write',
       'chat:write.public',
+      'files:read',
+      'files:write',
       'groups:history',
       'groups:read',
       'im:history',
@@ -92,6 +183,7 @@ describe('requiredBotScopes', () => {
       'im:write',
       'mpim:history',
       'mpim:read',
+      'reactions:write',
       'users:read',
       'users:read.email',
     ]);
@@ -116,6 +208,75 @@ describe('requiredBotScopes', () => {
       'mpim:read',
       'users:read',
     ]);
+  });
+});
+
+describe('resolveSlackAgentTools', () => {
+  it('defaults thread_history ON and channel_history/reactions/file_upload/file_download OFF for absent config', () => {
+    expect(resolveSlackAgentTools(undefined)).toEqual({
+      thread_history: true,
+      channel_history: false,
+      reactions: false,
+      file_upload: false,
+      file_download: false,
+    });
+    expect(resolveSlackAgentTools({})).toEqual({
+      thread_history: true,
+      channel_history: false,
+      reactions: false,
+      file_upload: false,
+      file_download: false,
+    });
+  });
+
+  it('honors explicit values', () => {
+    expect(
+      resolveSlackAgentTools({
+        thread_history: false,
+        channel_history: true,
+        reactions: true,
+        file_upload: true,
+        file_download: true,
+      })
+    ).toEqual({
+      thread_history: false,
+      channel_history: true,
+      reactions: true,
+      file_upload: true,
+      file_download: true,
+    });
+  });
+
+  it('falls back to defaults for malformed config', () => {
+    expect(resolveSlackAgentTools('yes')).toEqual({
+      thread_history: true,
+      channel_history: false,
+      reactions: false,
+      file_upload: false,
+      file_download: false,
+    });
+    expect(
+      resolveSlackAgentTools({
+        thread_history: 'yes',
+        channel_history: 1,
+        reactions: 'true',
+        file_upload: 0,
+        file_download: 'on',
+      })
+    ).toEqual({
+      thread_history: true,
+      channel_history: false,
+      reactions: false,
+      file_upload: false,
+      file_download: false,
+    });
+    expect(resolveSlackAgentTools([true])).toEqual({
+      thread_history: true,
+      channel_history: false,
+      reactions: false,
+      file_upload: false,
+      file_download: false,
+    });
   });
 });
 

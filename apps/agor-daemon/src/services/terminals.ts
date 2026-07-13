@@ -51,6 +51,7 @@ import { generateScopedServiceToken, spawnExecutorFireAndForget } from '../utils
 import {
   buildSpawnConfigForSession,
   isClaudeRunningFor,
+  resolveClaudeCliProviderSpawn,
   writeClaudeCliMcpConfigForSession,
 } from './claude-cli-integration.js';
 
@@ -509,7 +510,12 @@ export class TerminalsService {
         actor: params?.user ?? null,
       });
       const spawnCfg = buildSpawnConfigForSession(session, branch.path, { mcpConfigPath });
-      const built = buildClaudeCliSpawn(spawnCfg);
+      const built = await resolveClaudeCliProviderSpawn(
+        this.app,
+        session,
+        buildClaudeCliSpawn(spawnCfg)
+      );
+      if (!built) return null;
       const tabName =
         session.cli_state?.zellij_tab_name ??
         spawnCfg.displayName ??

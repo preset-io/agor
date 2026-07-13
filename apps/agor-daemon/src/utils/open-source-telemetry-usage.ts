@@ -6,6 +6,7 @@ import {
   eq,
   gte,
   lt,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   select,
   sessions,
@@ -99,19 +100,23 @@ export async function flushOpenSourceTelemetryUsageSummary(
   const config = await loadConfig();
   if (config.telemetry?.last_usage_summary_day === day) return;
 
-  const [promptCount, branchCreatedCount, sessionCreatedCount, taskRows] = await Promise.all([
-    countCreatedRows(db, tasks, start, end),
-    countCreatedRows(db, branches, start, end),
-    countCreatedRows(db, sessions, start, end),
-    getTaskUsageRows(db, start, end),
-  ]);
+  const { activeUsers, branchCreatedCount, promptCount, sessionCreatedCount, taskRows } =
+    await runWithTenantDatabaseScope(db, undefined, async () => {
+      const [promptCount, branchCreatedCount, sessionCreatedCount, taskRows] = await Promise.all([
+        countCreatedRows(db, tasks, start, end),
+        countCreatedRows(db, branches, start, end),
+        countCreatedRows(db, sessions, start, end),
+        getTaskUsageRows(db, start, end),
+      ]);
 
-  const activeUsers = new Set<string>();
-  await Promise.all([
-    addDistinctCreatedBy(db, tasks, start, end, activeUsers),
-    addDistinctCreatedBy(db, sessions, start, end, activeUsers),
-    addDistinctCreatedBy(db, branches, start, end, activeUsers),
-  ]);
+      const activeUsers = new Set<string>();
+      await Promise.all([
+        addDistinctCreatedBy(db, tasks, start, end, activeUsers),
+        addDistinctCreatedBy(db, sessions, start, end, activeUsers),
+        addDistinctCreatedBy(db, branches, start, end, activeUsers),
+      ]);
+      return { activeUsers, branchCreatedCount, promptCount, sessionCreatedCount, taskRows };
+    });
 
   const taskCountByAgenticTool: Record<string, number> = {};
   const taskCountByProvider: Record<string, number> = {};
@@ -164,14 +169,14 @@ export function startOpenSourceTelemetryUsageSummaryInterval(
   // when the previous day has not yet been reported, keeping steady-state
   // overhead to one config read per hour.
   const run = (): void => {
-    runWithTenantDatabaseScope(db, options.tenantId, () =>
-      flushOpenSourceTelemetryUsageSummary(db)
-    ).catch((error) => {
-      console.warn(
-        '[telemetry] failed to emit usage summary:',
-        error instanceof Error ? error.message : String(error)
-      );
-    });
+    runWithTenantContext(options.tenantId, () => flushOpenSourceTelemetryUsageSummary(db)).catch(
+      (error) => {
+        console.warn(
+          '[telemetry] failed to emit usage summary:',
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    );
   };
 
   const startupTimer = setTimeout(run, 30_000);

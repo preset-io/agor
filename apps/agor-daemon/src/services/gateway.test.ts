@@ -1,6 +1,7 @@
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   attachHiddenTenant,
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   shortId,
@@ -9,6 +10,7 @@ import { getConnector } from '@agor/core/gateway';
 import type { GatewayChannel, SessionID, ThreadSessionMap, User, UserID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
 
 vi.mock('@agor/core/gateway', async (importOriginal) => {
@@ -16,6 +18,22 @@ vi.mock('@agor/core/gateway', async (importOriginal) => {
   return {
     ...actual,
     getConnector: vi.fn(),
+  };
+});
+
+vi.mock('@agor/core/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/config')>();
+  return {
+    ...actual,
+    assertInlineAgenticConfigurationAllowed: vi.fn(async () => undefined),
+  };
+});
+
+vi.mock('../utils/gateway-attachments.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/gateway-attachments.js')>();
+  return {
+    ...actual,
+    ingestInboundAttachments: vi.fn(),
   };
 });
 
@@ -95,7 +113,13 @@ function makeGatewayHarness(args: {
       throw new Error(`Unexpected service: ${name}`);
     },
   };
-  const service = new GatewayService(args.db ?? ({} as TenantScopeAwareDatabase), app as never);
+  const db = args.db ?? ({ run: vi.fn() } as unknown as TenantScopeAwareDatabase);
+  const service = new GatewayService(db, app as never);
+  const create = service.create.bind(service);
+  service.create = (data) => {
+    if (getCurrentTenantDatabaseScope()) return create(data);
+    return runWithTenantDatabaseScope(db, 'tenant-channel', () => create(data));
+  };
   const channelRepo = {
     findByKey: vi.fn(async () => channel),
     findById: vi.fn(async () => channel),
@@ -138,6 +162,7 @@ function makeGatewayHarness(args: {
 
 afterEach(() => {
   vi.mocked(getConnector).mockReset();
+  vi.mocked(ingestInboundAttachments).mockReset();
 });
 
 describe('gateway tenant metadata helpers', () => {
@@ -467,18 +492,15 @@ describe('GatewayService outbound routing tenant scope', () => {
     const tx = {
       execute: vi.fn(async () => []),
     };
-    let transactionCount = 0;
     let resolveRouted!: () => void;
     const routed = new Promise<void>((resolve) => {
       resolveRouted = resolve;
     });
     const db = {
       transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
-        transactionCount += 1;
         events.push('tx:start');
         const result = await callback(tx);
         events.push('tx:commit');
-        if (transactionCount === 3) resolveRouted();
         return result;
       }),
     } as TenantScopeAwareDatabase;
@@ -486,7 +508,9 @@ describe('GatewayService outbound routing tenant scope', () => {
     const seenTenants: Array<string | undefined> = [];
     const sendMessage = vi.fn(async () => {
       events.push('send');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       seenTenants.push(getCurrentTenantId() as string | undefined);
+      resolveRouted();
       return '104.000000';
     });
 
@@ -512,16 +536,7 @@ describe('GatewayService outbound routing tenant scope', () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(seenTenants).toEqual(['tenant-channel']);
-    expect(events).toEqual([
-      'tx:start',
-      'scheduled',
-      'tx:commit',
-      'tx:start',
-      'tx:commit',
-      'tx:start',
-      'send',
-      'tx:commit',
-    ]);
+    expect(events.indexOf('tx:commit')).toBeLessThan(events.indexOf('send'));
   });
 });
 
@@ -531,18 +546,15 @@ describe('GatewayService Slack progress tenant scope', () => {
     const tx = {
       execute: vi.fn(async () => []),
     };
-    let transactionCount = 0;
     let resolveUpdated!: () => void;
     const updated = new Promise<void>((resolve) => {
       resolveUpdated = resolve;
     });
     const db = {
       transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
-        transactionCount += 1;
         events.push('tx:start');
         const result = await callback(tx);
         events.push('tx:commit');
-        if (transactionCount === 3) resolveUpdated();
         return result;
       }),
     } as TenantScopeAwareDatabase;
@@ -550,7 +562,9 @@ describe('GatewayService Slack progress tenant scope', () => {
     const seenTenants: Array<string | undefined> = [];
     const setThreadStatus = vi.fn(async () => {
       events.push('status');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       seenTenants.push(getCurrentTenantId() as string | undefined);
+      resolveUpdated();
     });
 
     const { service } = makeGatewayHarness({
@@ -582,16 +596,7 @@ describe('GatewayService Slack progress tenant scope', () => {
       })
     );
     expect(seenTenants).toEqual(['tenant-channel']);
-    expect(events).toEqual([
-      'tx:start',
-      'scheduled',
-      'tx:commit',
-      'tx:start',
-      'tx:commit',
-      'tx:start',
-      'status',
-      'tx:commit',
-    ]);
+    expect(events.indexOf('tx:commit')).toBeLessThan(events.indexOf('status'));
   });
 });
 
@@ -792,5 +797,250 @@ describe('GatewayService outbound emit session branch binding', () => {
     );
     expect(branchRepo.resolveUserPermission).toHaveBeenCalled();
     expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it('plumbs threadTs through to the connector as thread_ts', async () => {
+    const { service, sendSlackMessage } = makeEmitHarness({});
+
+    await service.emitMessage(emitData({ threadTs: '171234.000100' }));
+
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ thread_ts: '171234.000100' })
+    );
+  });
+
+  it('omits thread_ts from the connector call when threadTs is not provided', async () => {
+    const { service, sendSlackMessage } = makeEmitHarness({});
+
+    await service.emitMessage(emitData());
+
+    expect(sendSlackMessage).toHaveBeenCalledWith(
+      expect.not.objectContaining({ thread_ts: expect.anything() })
+    );
+  });
+});
+
+describe('GatewayService outbound emit allowed_channel_ids enforcement', () => {
+  function makeAllowlistHarness(
+    args: { config?: Record<string, unknown>; connectorExtras?: Record<string, unknown> } = {}
+  ) {
+    const channel = {
+      ...slackChannel,
+      id: 'chan-outbound',
+      config: {
+        bot_token: 'xoxb-test',
+        outbound_enabled: true,
+        ...args.config,
+      },
+    } as unknown as GatewayChannel;
+    const { service } = makeGatewayHarness({ channel });
+    const sendSlackMessage = vi.fn(async (req: { channel: string }) => ({
+      ts: '200.000100',
+      channel: req.channel,
+      thread_ts: '200.000100',
+      permalink: null,
+    }));
+    vi.mocked(getConnector).mockReturnValue({
+      sendSlackMessage,
+      ...args.connectorExtras,
+    } as never);
+    const outboundRepo = {
+      create: vi.fn(async (data: Record<string, unknown>) => ({ id: 'out-1', ...data })),
+      findUnconsumedByChannelAndThread: vi.fn(async () => null),
+    };
+    (service as unknown as { outboundRepo: unknown }).outboundRepo = outboundRepo;
+    return { service, sendSlackMessage, outboundRepo };
+  }
+
+  type EmitData = Parameters<GatewayService['emitMessage']>[0];
+
+  function emitData(overrides: Partial<EmitData> = {}): EmitData {
+    return {
+      gatewayChannelId: 'chan-outbound',
+      message: 'ship update',
+      emittedByUserId: 'user-1' as UserID,
+      userRole: 'admin',
+      ...overrides,
+    };
+  }
+
+  it('denies a channel-id target outside the allowlist before any Slack send', async () => {
+    const { service, sendSlackMessage, outboundRepo } = makeAllowlistHarness({
+      config: { allowed_channel_ids: ['C123'] },
+    });
+
+    await expect(service.emitMessage(emitData({ target: 'channel:C999' }))).rejects.toThrow(
+      /allowed_channel_ids/
+    );
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+    expect(outboundRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('denies a channel-name target that resolves to an id outside the allowlist', async () => {
+    const resolveChannelByName = vi.fn(async () => ({ channel: 'C999', name: 'general' }));
+    const { service, sendSlackMessage } = makeAllowlistHarness({
+      config: { allowed_channel_ids: ['C123'] },
+      connectorExtras: { resolveChannelByName },
+    });
+
+    await expect(service.emitMessage(emitData({ target: '#general' }))).rejects.toThrow(
+      /allowed_channel_ids/
+    );
+    expect(resolveChannelByName).toHaveBeenCalledWith('general');
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it('allows an email target resolved to a DM even with an allowlist configured', async () => {
+    const openDmByEmail = vi.fn(async () => ({ channel: 'D777', user_id: 'U42' }));
+    const { service, sendSlackMessage } = makeAllowlistHarness({
+      config: { allowed_channel_ids: ['C123'] },
+      connectorExtras: { openDmByEmail },
+    });
+
+    const result = await service.emitMessage(emitData({ target: 'user@example.com' }));
+
+    expect(result).toMatchObject({ success: true, platform_channel_id: 'D777' });
+    expect(openDmByEmail).toHaveBeenCalledWith('user@example.com');
+    expect(sendSlackMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'D777' }));
+  });
+
+  it('allows an allowlisted channel target', async () => {
+    const { service, sendSlackMessage } = makeAllowlistHarness({
+      config: { allowed_channel_ids: ['C123'] },
+    });
+
+    const result = await service.emitMessage(emitData({ target: 'channel:C123' }));
+
+    expect(result).toMatchObject({ success: true, platform_channel_id: 'C123' });
+    expect(sendSlackMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C123' }));
+  });
+
+  it('allows any channel target when no allowlist is configured', async () => {
+    const { service, sendSlackMessage } = makeAllowlistHarness();
+
+    const result = await service.emitMessage(emitData({ target: 'channel:C999' }));
+
+    expect(result).toMatchObject({ success: true, platform_channel_id: 'C999' });
+    expect(sendSlackMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C999' }));
+  });
+});
+
+describe('GatewayService Slack attachment ingestion', () => {
+  const ingestChannel = {
+    ...slackChannel,
+    config: { bot_token: 'xoxb-test', ingest_files: true },
+  } as GatewayChannel;
+
+  const inboundFiles = [
+    {
+      id: 'F123',
+      name: 'screenshot.png',
+      mimetype: 'image/png',
+      size: 2048,
+      url_private_download: 'https://files.slack.com/files-pri/T1-F123/download/screenshot.png',
+    },
+  ];
+
+  const dmMetadata = {
+    channel: 'D123',
+    channel_type: 'im',
+    slack_message_ts: '103.000000',
+  };
+
+  it('downloads image attachments and folds the stored paths into the prompt', async () => {
+    vi.mocked(ingestInboundAttachments).mockResolvedValue({
+      paths: ['/home/agor/.agor/uploads/screenshot_1.png'],
+      failed: 0,
+    });
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: ingestChannel,
+      existingMapping: makeMapping({ thread_id: 'D123-100.000000' }),
+      connector: {},
+    });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'D123-100.000000',
+      text: 'what does this screenshot show?',
+      files: inboundFiles,
+      metadata: dmMetadata,
+    });
+
+    expect(result).toMatchObject({ success: true, sessionId: 'sess-1' });
+    expect(ingestInboundAttachments).toHaveBeenCalledWith({
+      files: inboundFiles,
+      botToken: 'xoxb-test',
+    });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('Attached files:\n- /home/agor/.agor/uploads/screenshot_1.png');
+    expect(prompt).toContain('what does this screenshot show?');
+    expect(prompt).not.toContain('an attachment could not be fetched');
+  });
+
+  it('never attempts downloads when the channel does not enable ingest_files', async () => {
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: makeMapping({ thread_id: 'D123-100.000000' }),
+      connector: {},
+    });
+
+    await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'D123-100.000000',
+      text: 'what does this screenshot show?',
+      files: inboundFiles,
+      metadata: dmMetadata,
+    });
+
+    expect(ingestInboundAttachments).not.toHaveBeenCalled();
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('what does this screenshot show?');
+    expect(prompt).not.toContain('Attached files:');
+  });
+
+  it('delivers the prompt with a degradation note when downloads fail', async () => {
+    vi.mocked(ingestInboundAttachments).mockResolvedValue({ paths: [], failed: 1 });
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: ingestChannel,
+      existingMapping: makeMapping({ thread_id: 'D123-100.000000' }),
+      connector: {},
+    });
+
+    const result = await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'D123-100.000000',
+      text: 'what does this screenshot show?',
+      files: inboundFiles,
+      metadata: dmMetadata,
+    });
+
+    expect(result).toMatchObject({ success: true, sessionId: 'sess-1' });
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('what does this screenshot show?');
+    expect(prompt).toContain('(an attachment could not be fetched)');
+    expect(prompt).not.toContain('Attached files:');
+  });
+
+  it('folds successful paths and appends the note when only some downloads fail', async () => {
+    vi.mocked(ingestInboundAttachments).mockResolvedValue({
+      paths: ['/home/agor/.agor/uploads/ok_1.png'],
+      failed: 1,
+    });
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: ingestChannel,
+      existingMapping: makeMapping({ thread_id: 'D123-100.000000' }),
+      connector: {},
+    });
+
+    await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'D123-100.000000',
+      text: 'compare these',
+      files: inboundFiles,
+      metadata: dmMetadata,
+    });
+
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('Attached files:\n- /home/agor/.agor/uploads/ok_1.png');
+    expect(prompt).toContain('(an attachment could not be fetched)');
   });
 });

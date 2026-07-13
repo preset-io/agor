@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: distinctive ConfigProvider colors verify semantic tool states
 import { CloseCircleOutlined } from '@ant-design/icons';
 import { render, screen } from '@testing-library/react';
 import { ConfigProvider } from 'antd';

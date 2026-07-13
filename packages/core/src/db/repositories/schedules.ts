@@ -59,10 +59,15 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
    * already an object (jsonb); on SQLite it's a string we parse here.
    */
   private rowToSchedule(row: ScheduleRow): Schedule {
-    const config =
+    const storedConfig =
       typeof row.agentic_tool_config === 'string'
         ? (JSON.parse(row.agentic_tool_config) as ScheduleAgenticToolConfig)
         : (row.agentic_tool_config as ScheduleAgenticToolConfig);
+    const config: ScheduleAgenticToolConfig = {
+      ...storedConfig,
+      preset_id:
+        (row.agentic_tool_preset_id as ScheduleAgenticToolConfig['preset_id']) ?? undefined,
+    };
 
     return attachHiddenTenant(
       {
@@ -75,6 +80,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         timezone: row.timezone ?? undefined,
         prompt: row.prompt,
         agentic_tool_config: config,
+        mcp_server_ids: row.mcp_server_ids ?? undefined,
         enabled: Boolean(row.enabled),
         allow_concurrent_runs: Boolean(row.allow_concurrent_runs),
         retention: row.retention,
@@ -102,6 +108,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       throw new RepositoryError('Schedule must have an agentic_tool_config');
     }
 
+    const { preset_id, ...storedAgenticToolConfig } = s.agentic_tool_config;
     return {
       schedule_id: scheduleId,
       branch_id: s.branch_id,
@@ -113,7 +120,9 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       prompt: s.prompt,
       // Drizzle's jsonb / text-with-json roundtrip handles this for us;
       // pass the object through.
-      agentic_tool_config: s.agentic_tool_config as unknown,
+      agentic_tool_config: storedAgenticToolConfig as unknown,
+      agentic_tool_preset_id: preset_id ?? null,
+      mcp_server_ids: s.mcp_server_ids ?? null,
       enabled: s.enabled ?? true,
       allow_concurrent_runs: s.allow_concurrent_runs ?? false,
       retention: s.retention ?? 5,
@@ -331,6 +340,9 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         created_by: current.created_by,
         updated_at: new Date().toISOString(),
       });
+      if (updates.agentic_tool_config !== undefined) {
+        merged.agentic_tool_config = updates.agentic_tool_config;
+      }
 
       const insertData = this.scheduleToInsert(merged);
       insertData.updated_at = new Date();

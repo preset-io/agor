@@ -47,7 +47,8 @@ The Message Gateway connects external messaging platforms to Agor's agent sessio
 A **Channel** is a portal into a branch. It defines:
 
 - **A home branch** — the persistent branch where every session spawned by this channel will operate. Think of it as a command center, like an [teammate](/guide/teammates) branch that supervises a project.
-- **An agentic tool configuration** — which coding agent to use (Claude Code, Codex, Gemini, OpenCode), which model, permission mode, and which MCP servers to attach.
+- **An agentic tool configuration** — which coding agent to use (Claude Code, Codex, Gemini, OpenCode), its preset or inline model and permission settings.
+- **An MCP server selection** — which external capabilities to attach, independently of the agentic-tool preset.
 - **Platform credentials** — bot token, app token, and other secrets needed to send and receive messages (encrypted at rest).
 
 You can create multiple channels for the same or different branches. For example:

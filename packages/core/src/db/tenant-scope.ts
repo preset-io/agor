@@ -1,14 +1,22 @@
 import { sql } from 'drizzle-orm';
 import type { TenantID } from '../types/tenant';
-import { tenantDatabaseScope } from './tenant-context';
+import {
+  runWithoutTenantDatabaseScope,
+  tenantContextScope,
+  tenantDatabaseScope,
+} from './tenant-context';
 
 export {
+  enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabase,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   requireCurrentTenantId,
+  runWithoutTenantContext,
   runWithoutTenantDatabaseScope,
+  runWithTenantContext,
+  tenantContextScope,
   tenantDatabaseScope,
 } from './tenant-context';
 
@@ -101,19 +109,30 @@ export async function runWithTenantDatabaseScope<T>(
   tenantId: TenantID | string | undefined,
   work: (db: TenantScopedDatabase) => Promise<T>
 ): Promise<T> {
+  const operationTenantId = tenantContextScope.getStore()?.tenantId;
+  if (tenantId && operationTenantId && tenantId !== operationTenantId) {
+    throw new Error(
+      `Cannot enter tenant database scope ${tenantId} from active tenant context ${operationTenantId}`
+    );
+  }
+  const effectiveTenantId = tenantId ?? operationTenantId;
   const existingScope = tenantDatabaseScope.getStore();
   if (existingScope) {
     if (existingScope.kind === 'system') {
-      if (tenantId) {
+      if (effectiveTenantId) {
         throw new Error(
-          `Cannot enter tenant scope ${tenantId} from active system database scope (${existingScope.systemReason})`
+          `Cannot enter tenant scope ${effectiveTenantId} from active system database scope (${existingScope.systemReason})`
         );
       }
       return work(existingScope.db as TenantScopedDatabase);
     }
-    if (tenantId && existingScope.tenantId && tenantId !== existingScope.tenantId) {
+    if (
+      effectiveTenantId &&
+      existingScope.tenantId &&
+      effectiveTenantId !== existingScope.tenantId
+    ) {
       throw new Error(
-        `Cannot enter tenant scope ${tenantId} from active tenant scope ${existingScope.tenantId}`
+        `Cannot enter tenant scope ${effectiveTenantId} from active tenant scope ${existingScope.tenantId}`
       );
     }
     return work(existingScope.db as TenantScopedDatabase);
@@ -121,28 +140,51 @@ export async function runWithTenantDatabaseScope<T>(
 
   const baseDb = unwrapTenantScopedDatabaseProxy(db);
   const postCommitCallbacks: Array<() => Promise<void>> = [];
+  const afterCommitCallbacks: Array<() => Promise<void> | void> = [];
 
-  if (!isPostgresDatabase(baseDb) || !tenantId) {
+  if (!isPostgresDatabase(baseDb) || !effectiveTenantId) {
     const result = await tenantDatabaseScope.run(
-      { db: baseDb, kind: 'tenant', tenantId, postCommitCallbacks },
+      {
+        db: baseDb,
+        kind: 'tenant',
+        tenantId: effectiveTenantId,
+        postCommitCallbacks,
+        afterCommitCallbacks,
+      },
       () => work(baseDb as TenantScopedDatabase)
     );
-    await drainTenantDatabasePostCommitCallbacks(baseDb, tenantId, postCommitCallbacks);
+    await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
+    await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
     return result;
   }
 
   const result = await baseDb.transaction(async (tx) => {
     const scopedDb = tx as unknown as Database;
     await (scopedDb as unknown as { execute(query: unknown): Promise<unknown> }).execute(
-      sql`SELECT set_config('agor.tenant_id', ${tenantId}, true)`
+      sql`SELECT set_config('agor.tenant_id', ${effectiveTenantId}, true)`
     );
     return tenantDatabaseScope.run(
-      { db: scopedDb, kind: 'tenant', tenantId, postCommitCallbacks },
+      {
+        db: scopedDb,
+        kind: 'tenant',
+        tenantId: effectiveTenantId,
+        postCommitCallbacks,
+        afterCommitCallbacks,
+      },
       () => work(scopedDb as TenantScopedDatabase)
     );
   });
-  await drainTenantDatabasePostCommitCallbacks(baseDb, tenantId, postCommitCallbacks);
+  await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
+  await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
   return result;
+}
+
+async function drainAfterTenantDatabaseCommitCallbacks(
+  callbacks: Array<() => Promise<void> | void>
+): Promise<void> {
+  for (const callback of callbacks) {
+    await runWithoutTenantDatabaseScope(callback);
+  }
 }
 
 /**
@@ -155,6 +197,12 @@ export async function runWithSystemDatabaseScope<T>(
   reason: string,
   work: (db: SystemDatabase) => Promise<T>
 ): Promise<T> {
+  const operationTenantId = tenantContextScope.getStore()?.tenantId;
+  if (operationTenantId) {
+    throw new Error(
+      `Cannot enter system database scope (${reason}) from active tenant context ${operationTenantId}`
+    );
+  }
   const existingScope = tenantDatabaseScope.getStore();
   if (existingScope) {
     if (existingScope.kind === 'tenant') {

@@ -59,7 +59,7 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
       defaultActiveKey={defaultExpanded ? ['thinking'] : []}
       expandIcon={({ isActive }) => (isActive ? <DownOutlined /> : <RightOutlined />)}
       style={{
-        background: 'rgba(250, 173, 20, 0.05)', // Soft yellow/amber background
+        background: token.colorWarningBg,
         border: `1px solid ${token.colorWarningBorder}`,
         borderRadius: token.borderRadius,
         marginBottom: token.sizeUnit * 1.5,

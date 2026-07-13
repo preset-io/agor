@@ -50,6 +50,10 @@ vi.mock('../AgentSelectionGrid', () => ({
 vi.mock('../AgenticToolConfigForm', () => ({
   AgenticToolConfigForm: () => <div data-testid="agent-config" />,
 }));
+vi.mock('../AgenticToolConfigurationPicker', () => ({
+  INLINE_AGENTIC_CONFIGURATION: '__inline__',
+  AgenticToolConfigurationPicker: () => <div data-testid="agent-config" />,
+}));
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(
@@ -150,7 +154,7 @@ async function advanceToOptions() {
   });
   fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
   clickButton(/^Continue$/);
-  await flush();
+  await waitFor(() => expect(getButton(/^Back$/).disabled).toBe(false));
 }
 
 /**
@@ -472,7 +476,8 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     // servers on save even though the user never touched the field.
     const channel = {
       ...makeSlackChannel(),
-      agentic_config: { agent: 'claude-code', mcpServerIds: ['mcp-server-1'] },
+      agentic_config: { agent: 'claude-code' },
+      mcp_server_ids: ['mcp-server-1'],
     };
     const currentUser = {
       ...makeUser(),
@@ -485,7 +490,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
 
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(onUpdate.mock.calls[0][1]).toMatchObject({
-      agentic_config: { mcpServerIds: ['mcp-server-1'] },
+      mcp_server_ids: ['mcp-server-1'],
     });
   });
 
@@ -497,14 +502,12 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     // a defined state: that agent's own user defaults.
     const channel = {
       ...makeSlackChannel(),
-      agentic_config: { agent: 'claude-code', mcpServerIds: ['mcp-server-1'] },
+      agentic_config: { agent: 'claude-code' },
+      mcp_server_ids: ['mcp-server-1'],
     };
     const currentUser = {
       ...makeUser(),
-      default_agentic_config: {
-        'claude-code': { mcpServerIds: ['default-claude-server'] },
-        codex: { mcpServerIds: ['default-codex-server'] },
-      },
+      default_mcp_server_ids: ['default-server'],
     } as unknown as User;
     const onUpdate = vi.fn();
 
@@ -518,7 +521,8 @@ describe('GatewayChannelsTable Slack edit mode', () => {
 
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(onUpdate.mock.calls[0][1]).toMatchObject({
-      agentic_config: { agent: 'claude-code', mcpServerIds: ['default-claude-server'] },
+      agentic_config: { agent: 'claude-code' },
+      mcp_server_ids: ['mcp-server-1'],
     });
   });
 });

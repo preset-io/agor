@@ -4,6 +4,7 @@
  * Exports configuration management, repo reference parsing utilities.
  */
 
+export * from './agentic-tool-preset-resolver';
 export * from './agor-yml';
 export * from './config-manager';
 export * from './constants';
@@ -20,8 +21,6 @@ export { resolveProxies } from './proxies-resolver';
 export * from './repo-list';
 export * from './repo-reference';
 export * from './resolved-config-slice';
-export * from './resource-schemas';
-export * from './resource-sync';
 export type {
   AgorGitConfigParametersSettings,
   ResolvedCors,
@@ -39,5 +38,6 @@ export {
   SANDPACK_CSP_FRAME_SRC,
   SANDPACK_CSP_WORKER_SRC,
 } from './security-resolver';
+export * from './tenant-agentic-tool-resolver';
 export * from './types';
 export * from './variant-resolver';

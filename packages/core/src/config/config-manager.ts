@@ -22,6 +22,32 @@ import {
   type UnknownJson,
 } from './types';
 
+export const RETIRED_CONFIG_KEYS = {
+  defaults: ['board', 'agent'],
+  display: ['tableStyle', 'colorOutput', 'shortIdLength'],
+  onboarding: ['teammatePending', 'assistantPending', 'persistedAgentPending'],
+} as const;
+
+export const RETIRED_CONFIG_PATHS = new Set<string>(
+  Object.entries(RETIRED_CONFIG_KEYS).flatMap(([section, keys]) =>
+    keys.map((key) => `${section}.${key}`)
+  )
+);
+
+type LegacyConfig = AgorConfig & {
+  defaults?: Record<string, unknown>;
+  display?: Record<string, unknown>;
+  onboarding?: Record<string, unknown>;
+};
+
+/** Resolve the renamed operator setting while keeping old YAML loadable. */
+export function resolveTeammateFrameworkRepoUrl(config: AgorConfig): string | undefined {
+  const legacyUrl = (config as LegacyConfig).onboarding?.frameworkRepoUrl;
+  return (
+    config.teammates?.framework_repo_url ?? (typeof legacyUrl === 'string' ? legacyUrl : undefined)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // In-memory cache for the default-path config
 //
@@ -179,6 +205,279 @@ async function ensureAgorHome(): Promise<void> {
  * Validate config and throw helpful errors for deprecated/invalid settings
  */
 function validateConfig(config: AgorConfig): void {
+  const removedConfig = config as AgorConfig & {
+    resources?: unknown;
+    services?: unknown;
+  };
+  if (removedConfig.resources !== undefined) {
+    throw new Error(
+      "Config error: 'resources' has been removed. Create users, repositories, and branches through their typed APIs instead."
+    );
+  }
+  if (removedConfig.services !== undefined) {
+    throw new Error(
+      "Config error: 'services' has been removed. Agor services are registered consistently for every tenant."
+    );
+  }
+  const removedProviderConfig = config as AgorConfig & {
+    credentials?: unknown;
+    opencode?: unknown;
+    codex?: unknown;
+    execution?: AgorConfig['execution'] & { cursor_sdk_enabled?: unknown };
+  };
+  if (removedProviderConfig.credentials !== undefined) {
+    throw new Error(
+      "Config error: 'credentials' has been removed. Configure workspace agentic tools in Settings."
+    );
+  }
+  if (removedProviderConfig.opencode !== undefined) {
+    throw new Error(
+      "Config error: 'opencode' has been removed. Configure OpenCode availability in workspace agentic-tool settings."
+    );
+  }
+  // Stale since #1136 (per-session CODEX_HOME removal); flagged here so
+  // upgrading installs get guidance instead of a generic unrecognized-key error.
+  if (removedProviderConfig.codex !== undefined) {
+    throw new Error(
+      "Config error: 'codex' has been removed. Codex home directories are managed per-session automatically."
+    );
+  }
+  if (removedProviderConfig.execution?.cursor_sdk_enabled !== undefined) {
+    throw new Error(
+      "Config error: 'execution.cursor_sdk_enabled' has been removed. Configure Cursor availability in workspace agentic-tool settings."
+    );
+  }
+
+  const knownTopLevelKeys = new Set([
+    'defaults',
+    'display',
+    'daemon',
+    'ui',
+    'database',
+    'external_launch',
+    'execution',
+    'security',
+    'branches',
+    'teammates',
+    'paths',
+    'analytics',
+    'telemetry',
+    'knowledge',
+    'onboarding',
+    'multi_tenancy',
+    'proxies',
+  ]);
+  const unknownTopLevelKeys = Object.keys(config).filter((key) => !knownTopLevelKeys.has(key));
+  if (unknownTopLevelKeys.length > 0) {
+    throw new Error(
+      `Config error: unrecognized top-level key${unknownTopLevelKeys.length === 1 ? '' : 's'}: ${unknownTopLevelKeys.join(', ')}`
+    );
+  }
+
+  const unknownPaths: string[] = [];
+  const only = (value: unknown, path: string, allowed: readonly string[]) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    for (const key of Object.keys(value)) {
+      if (!allowed.includes(key)) unknownPaths.push(`${path}.${key}`);
+    }
+  };
+  const legacyConfig = config as LegacyConfig;
+  only(legacyConfig.defaults, 'defaults', RETIRED_CONFIG_KEYS.defaults);
+  // Known upgrade-only keys remain loadable so the daemon can print its
+  // dedicated deprecation guidance before ignoring them. `display` is not
+  // part of AgorConfig anymore: all three settings were retired.
+  only(legacyConfig.display, 'display', RETIRED_CONFIG_KEYS.display);
+  only(config.daemon, 'daemon', [
+    'port',
+    'host',
+    'host_ip_address',
+    'public_url',
+    'base_url',
+    'jwtSecret',
+    'masterSecret',
+    'mcpEnabled',
+    'mcpToolSearch',
+    'unix_user',
+    'instanceLabel',
+    'instanceDescription',
+    'impersonation_token_expiry_ms',
+    'cors_allow_sandpack',
+    'cors_origins',
+    'trust_proxy_hops',
+    'allowAnonymous',
+    'requireAuth',
+  ]);
+  only(config.ui, 'ui', ['base_url', 'port', 'host']);
+  only(config.external_launch, 'external_launch', [
+    'enabled',
+    'exchange_url',
+    'issuer',
+    'audience',
+    'instance_id',
+    'provider_id',
+    'jwks_url',
+    'public_key',
+    'dev_shared_secret',
+    'dev_shared_secret_env',
+    'service_credential',
+    'service_credential_env',
+    'request_timeout_ms',
+    'algorithms',
+    'allow_admin_roles',
+    'trust_verified_email_for_linking',
+    'login_redirect_url',
+  ]);
+  only(config.database, 'database', ['dialect', 'sqlite', 'postgresql']);
+  only(config.database?.sqlite, 'database.sqlite', ['path', 'walMode', 'busyTimeout']);
+  only(config.database?.postgresql, 'database.postgresql', [
+    'url',
+    'host',
+    'port',
+    'database',
+    'user',
+    'password',
+    'pool',
+    'ssl',
+    'schema',
+  ]);
+  only(config.database?.postgresql?.pool, 'database.postgresql.pool', [
+    'min',
+    'max',
+    'idleTimeout',
+  ]);
+  if (typeof config.database?.postgresql?.ssl === 'object') {
+    only(config.database.postgresql.ssl, 'database.postgresql.ssl', [
+      'rejectUnauthorized',
+      'ca',
+      'cert',
+      'key',
+    ]);
+  }
+  only(config.execution, 'execution', [
+    'executor_heartbeat',
+    'executor_unix_user',
+    'unix_user_mode',
+    'branch_rbac',
+    'allow_web_terminal',
+    'allow_superadmin',
+    'bootstrap_superadmin_users',
+    'session_token_expiration_ms',
+    'session_token_max_uses',
+    'mcp_token_expiration_ms',
+    'sync_unix_passwords',
+    'daemon_writes_user_message',
+    'permission_timeout_ms',
+    'stateless_fs_mode',
+    'executor_command_template',
+    'required_user_env_vars',
+    'managed_envs_minimum_role',
+    'managed_envs_execution_mode',
+    'branch_storage',
+  ]);
+  only(config.execution?.executor_heartbeat, 'execution.executor_heartbeat', [
+    'enabled',
+    'interval_ms',
+    'stale_after_ms',
+    'callback',
+  ]);
+  only(config.execution?.executor_heartbeat?.callback, 'execution.executor_heartbeat.callback', [
+    'command_template',
+    'timeout_ms',
+  ]);
+  only(config.execution?.branch_storage, 'execution.branch_storage', [
+    'default_mode',
+    'allowed_modes',
+  ]);
+  only(config.security, 'security', ['csp', 'cors', 'git_config_parameters']);
+  only(config.security?.csp, 'security.csp', [
+    'extras',
+    'override',
+    'report_uri',
+    'report_only',
+    'disabled',
+  ]);
+  only(config.security?.cors, 'security.cors', [
+    'mode',
+    'origins',
+    'credentials',
+    'methods',
+    'allowed_headers',
+    'max_age_seconds',
+    'allow_sandpack',
+  ]);
+  only(config.security?.git_config_parameters, 'security.git_config_parameters', [
+    'extras',
+    'override',
+  ]);
+  only(config.branches, 'branches', ['others_can_default', 'others_fs_access_default']);
+  only(config.teammates, 'teammates', ['framework_repo_url']);
+  only(config.paths, 'paths', ['data_home']);
+  only(config.analytics, 'analytics', ['enabled', 'client', 'filters', 'plugins']);
+  only(config.analytics?.client, 'analytics.client', ['app', 'version', 'debug']);
+  only(config.analytics?.filters, 'analytics.filters', ['exclude_events']);
+  for (const [index, plugin] of (config.analytics?.plugins ?? []).entries()) {
+    only(plugin, `analytics.plugins[${index}]`, ['type', 'enabled', 'options']);
+    const optionKeys =
+      plugin.type === 'stdout'
+        ? ['pretty']
+        : plugin.type === 'http_batch'
+          ? ['url', 'flush_interval_ms', 'max_batch_size', 'timeout_ms', 'headers']
+          : ['module_path', 'export_name', 'plugin_options'];
+    only(plugin.options, `analytics.plugins[${index}].options`, optionKeys);
+  }
+  only(config.telemetry, 'telemetry', [
+    'enabled',
+    'instance_id',
+    'endpoint',
+    'write_key',
+    'debug',
+    'timeout_ms',
+    'flush_interval_ms',
+    'max_batch_size',
+    'install_ping_sent_at',
+    'last_daemon_active_day',
+    'last_usage_summary_day',
+    'last_reported_version',
+  ]);
+  only(legacyConfig.onboarding, 'onboarding', [
+    ...RETIRED_CONFIG_KEYS.onboarding,
+    'frameworkRepoUrl',
+  ]);
+  only(config.knowledge, 'knowledge', ['semantic_search']);
+  only(config.knowledge?.semantic_search, 'knowledge.semantic_search', [
+    'enabled',
+    'provider',
+    'model',
+    'dimensions',
+    'chunking',
+    'indexing',
+  ]);
+  only(config.knowledge?.semantic_search?.chunking, 'knowledge.semantic_search.chunking', [
+    'target_tokens',
+    'max_tokens',
+    'overlap_tokens',
+    'min_tokens',
+  ]);
+  only(config.knowledge?.semantic_search?.indexing, 'knowledge.semantic_search.indexing', [
+    'paused',
+    'batch_size',
+    'concurrency',
+  ]);
+  only(config.multi_tenancy, 'multi_tenancy', [
+    'mode',
+    'static_tenant_id',
+    'auth_claim',
+    'trusted_header',
+  ]);
+  for (const [name, proxy] of Object.entries(config.proxies ?? {})) {
+    only(proxy, `proxies.${name}`, ['upstream', 'description', 'docs_url', 'allowed_methods']);
+  }
+  if (unknownPaths.length > 0) {
+    throw new Error(
+      `Config error: unrecognized ${unknownPaths.length === 1 ? 'key' : 'keys'}: ${unknownPaths.join(', ')}`
+    );
+  }
+
   // Check for deprecated 'opportunistic' unix_user_mode
   const mode = config.execution?.unix_user_mode;
   if (mode === ('opportunistic' as never)) {
@@ -345,14 +644,6 @@ export async function saveConfig(config: AgorConfig): Promise<void> {
  */
 export function getDefaultConfig(): AgorConfig {
   return {
-    defaults: {
-      board: 'main',
-      agent: 'claude-code',
-    },
-    display: {
-      tableStyle: 'unicode',
-      colorOutput: true,
-    },
     daemon: {
       port: DAEMON.DEFAULT_PORT,
       host: DAEMON.DEFAULT_HOST,
@@ -411,19 +702,27 @@ export async function initConfig(): Promise<void> {
  *
  * Merges with default config to return effective values.
  *
- * @param key - Config key (e.g., "credentials.ANTHROPIC_API_KEY")
+ * @param key - Config key (e.g., "daemon.port")
  * @returns Value or undefined if not set
  */
 export async function getConfigValue(key: string): Promise<string | boolean | number | undefined> {
   const config = await loadConfig();
   const defaults = getDefaultConfig();
+  const {
+    defaults: _retiredDefaults,
+    display: _retiredDisplay,
+    onboarding: _retiredOnboarding,
+    ...activeConfig
+  } = config as AgorConfig & {
+    defaults?: unknown;
+    display?: unknown;
+    onboarding?: unknown;
+  };
 
   // Merge config with defaults (deep merge for sections)
   const merged = {
     ...defaults,
-    ...config,
-    defaults: { ...defaults.defaults, ...config.defaults },
-    display: { ...defaults.display, ...config.display },
+    ...activeConfig,
     daemon: { ...defaults.daemon, ...config.daemon },
     ui: { ...defaults.ui, ...config.ui },
     execution: { ...defaults.execution, ...config.execution },
@@ -449,10 +748,18 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
 /**
  * Set a nested config value using dot notation
  *
- * @param key - Config key (e.g., "credentials.ANTHROPIC_API_KEY")
+ * @param key - Config key (e.g., "daemon.port")
  * @param value - Value to set
  */
 export async function setConfigValue(key: string, value: string | boolean | number): Promise<void> {
+  if (key === 'onboarding.frameworkRepoUrl') {
+    throw new Error(
+      'Configuration key onboarding.frameworkRepoUrl is deprecated; set teammates.framework_repo_url instead'
+    );
+  }
+  if (RETIRED_CONFIG_PATHS.has(key)) {
+    throw new Error(`Configuration key ${key} has been retired and no longer has any effect`);
+  }
   const config = await loadConfig();
   const parts = key.split('.');
 
@@ -463,7 +770,7 @@ export async function setConfigValue(key: string, value: string | boolean | numb
     );
   }
 
-  // Nested key (e.g., "credentials.ANTHROPIC_API_KEY")
+  // Nested key (e.g., "daemon.port")
   const section = parts[0];
 
   if (!(config as UnknownJson)[section]) {
@@ -702,54 +1009,6 @@ export function loadConfigSync(): AgorConfig {
     writeCachedConfig(configPath, finalConfig, beforeKey);
   }
   return finalConfig;
-}
-
-/**
- * Credential keys that are valid in `config.yaml`'s `credentials` section
- * (i.e., keys that have a meaningful global / app-level value). User-only
- * tokens like `CLAUDE_CODE_OAUTH_TOKEN` (Pro/Max subscription) and
- * `COPILOT_GITHUB_TOKEN` are intentionally excluded — they don't make sense
- * as a global default.
- */
-export type ConfigCredentialKey =
-  | 'ANTHROPIC_API_KEY'
-  | 'ANTHROPIC_AUTH_TOKEN'
-  | 'ANTHROPIC_BASE_URL'
-  | 'OPENAI_API_KEY'
-  | 'GEMINI_API_KEY'
-  | 'CURSOR_API_KEY';
-
-const CONFIG_CREDENTIAL_KEYS: ReadonlySet<string> = new Set<ConfigCredentialKey>([
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_BASE_URL',
-  'OPENAI_API_KEY',
-  'GEMINI_API_KEY',
-  'CURSOR_API_KEY',
-]);
-
-export function isConfigCredentialKey(key: string): key is ConfigCredentialKey {
-  return CONFIG_CREDENTIAL_KEYS.has(key);
-}
-
-/**
- * Get credential with precedence: config.yaml > process.env
- *
- * This implements the rule that UI-set credentials (in config.yaml) take precedence
- * over environment variables. This allows users to override env vars via Settings UI.
- *
- * @param key - Credential key from CredentialKey enum
- * @returns API key or undefined
- */
-export function getCredential(key: ConfigCredentialKey): string | undefined {
-  try {
-    const config = loadConfigSync();
-    // Precedence: config.yaml > process.env
-    return config.credentials?.[key] || process.env[key];
-  } catch {
-    // If config load fails, fall back to env var only
-    return process.env[key];
-  }
 }
 
 /**

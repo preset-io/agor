@@ -719,7 +719,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                       : isUser
                         ? token.colorPrimaryBg
                         : undefined,
-                    color: isUser ? '#fff' : undefined,
+                    color: isUser ? token.colorText : undefined,
                   },
                 }}
               />

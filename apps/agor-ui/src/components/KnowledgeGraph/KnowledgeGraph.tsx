@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: centralized categorical data-visualization palette
 /**
  * Whole-namespace Knowledge graph view: documents as nodes, `references` edges
  * as links, laid out with a `d3-force` simulation (see `useForceLayout`).

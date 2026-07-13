@@ -23,7 +23,6 @@ import {
   boardPath,
   ENTITY_PATH_SEGMENTS,
   hasMinimumRole,
-  isServiceEnabled,
   ROLES,
   sessionPath,
 } from '@agor-live/client';
@@ -43,7 +42,6 @@ import { buildPromptWithAttachments } from './components/SessionPanel/composerAt
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
-import { ServicesConfigContext } from './contexts/ServicesConfigContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import {
   useAgorClient,
@@ -251,8 +249,6 @@ function AppContent() {
   const {
     config: authConfig,
     instanceConfig,
-    onboardingConfig,
-    servicesConfig,
     featuresConfig,
     loading: authConfigLoading,
     error: authConfigError,
@@ -447,9 +443,7 @@ function AppContent() {
   // Whether this user can actually reach the MCP settings tab. Mirrors the tab's
   // own gate in SettingsModal (`mcpEnabled && isAdmin`), so the "Connect tools"
   // banner is never a dead-end for users who can't open it.
-  const canManageMcp =
-    isServiceEnabled(servicesConfig, 'mcp_servers') &&
-    hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const canManageMcp = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
@@ -509,6 +503,7 @@ function AppContent() {
           ...currentUser.preferences,
           mainBoardId: result.boardId || currentUser.preferences?.mainBoardId,
           onboarding: {
+            ...currentUser.preferences?.onboarding,
             path: result.path,
             branchId: result.branchId,
             boardId: result.boardId,
@@ -517,15 +512,6 @@ function AppContent() {
       },
       { silent: true }
     ).catch(() => {});
-
-    // Clear the AI teammate pending flag if applicable
-    if (result.path === 'teammate' && client) {
-      try {
-        await client.service('config').patch(null, { onboarding: { teammatePending: false } });
-      } catch {
-        // Non-critical — ignore
-      }
-    }
 
     // Navigate to the user's board + session, or to the boards list if they
     // skipped. Use the centralized path builders — the old
@@ -1730,99 +1716,97 @@ function AppContent() {
 
   // Render main app
   return (
-    <ServicesConfigContext.Provider value={servicesConfig}>
-      <ConnectionProvider value={connectionContextValue}>
-        {/* Force Password Change Modal - shown when user.must_change_password is true */}
-        <ForcePasswordChangeModal
-          open={!!currentUser?.must_change_password}
-          user={currentUser}
-          onChangePassword={handleForcePasswordChange}
-          onLogout={logout}
-        />
+    <ConnectionProvider value={connectionContextValue}>
+      {/* Force Password Change Modal - shown when user.must_change_password is true */}
+      <ForcePasswordChangeModal
+        open={!!currentUser?.must_change_password}
+        user={currentUser}
+        onChangePassword={handleForcePasswordChange}
+        onLogout={logout}
+      />
 
-        {/* Shared/current-user settings for lightweight surfaces. The full
+      {/* Shared/current-user settings for lightweight surfaces. The full
             Workspace App still owns its existing settings stack; this wrapper
             lets Knowledge expose the user menu without mounting Workspace. */}
-        {sharedSurfaceOwnsUserSettings && (
-          <SharedUserSettingsModal
-            open={openUserSettings}
-            onClose={() => {
-              setOpenUserSettings(false);
-              setUserSettingsInitialTab(undefined);
-            }}
-            user={currentUser}
-            client={client}
-            onUpdateUser={handleUpdateUser}
-            onRefreshCurrentUser={reAuthenticate}
-            onRestartOnboarding={handleRestartOnboarding}
-            initialTab={userSettingsInitialTab}
-          />
-        )}
+      {sharedSurfaceOwnsUserSettings && (
+        <SharedUserSettingsModal
+          open={openUserSettings}
+          onClose={() => {
+            setOpenUserSettings(false);
+            setUserSettingsInitialTab(undefined);
+          }}
+          user={currentUser}
+          client={client}
+          onUpdateUser={handleUpdateUser}
+          onRefreshCurrentUser={reAuthenticate}
+          onRestartOnboarding={handleRestartOnboarding}
+          initialTab={userSettingsInitialTab}
+        />
+      )}
 
-        {/* Onboarding Wizard - shown for new users.
+      {/* Onboarding Wizard - shown for new users.
             Key by user identity so the wizard's local React state (currentStep,
             resumedRef, createdRepoId, etc.) is bound to the signed-in user.
             On any user change (logout → login as someone else, or admin
             impersonate), React tears down + remounts the wizard with fresh
             state, eliminating any chance of one user's onboarding progress
             leaking into another user's session. */}
-        <OnboardingWizard
-          key={`${currentUser?.user_id ?? '__anon__'}:${onboardingWizardInstance}`}
-          open={onboardingWizardOpen}
-          onComplete={handleOnboardingComplete}
-          user={currentUser}
-          client={client}
-          onCreateRepo={handleCreateRepo}
-          onCreateBranch={handleCreateBranch}
-          onCreateSession={handleCreateSession}
-          onUpdateUser={(userId, updates) => handleUpdateUser(userId, updates, { silent: true })}
-          onUpdateBranch={(branchId, updates) =>
-            handleUpdateBranch(branchId, updates, { silent: true })
-          }
-          onCheckAuth={handleCheckAuth}
-          teammatePending={onboardingConfig?.teammatePending}
-          initialStep={onboardingStartStep}
-        />
+      <OnboardingWizard
+        key={`${currentUser?.user_id ?? '__anon__'}:${onboardingWizardInstance}`}
+        open={onboardingWizardOpen}
+        onComplete={handleOnboardingComplete}
+        user={currentUser}
+        client={client}
+        onCreateRepo={handleCreateRepo}
+        onCreateBranch={handleCreateBranch}
+        onCreateSession={handleCreateSession}
+        onUpdateUser={(userId, updates) => handleUpdateUser(userId, updates, { silent: true })}
+        onUpdateBranch={(branchId, updates) =>
+          handleUpdateBranch(branchId, updates, { silent: true })
+        }
+        onCheckAuth={handleCheckAuth}
+        initialStep={onboardingStartStep}
+      />
 
-        <DeviceRouter />
-        <Suspense fallback={routeFallback}>
-          <Routes>
-            {/* Demo routes */}
-            <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
-            <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />
+      <DeviceRouter />
+      <Suspense fallback={routeFallback}>
+        <Routes>
+          {/* Demo routes */}
+          <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
+          <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />
 
-            {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
-            {KNOWLEDGE_ROUTE_PATHS.map((path) => (
-              <Route key={path} path={path} element={knowledgePageElement} />
-            ))}
+          {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
+          {KNOWLEDGE_ROUTE_PATHS.map((path) => (
+            <Route key={path} path={path} element={knowledgePageElement} />
+          ))}
 
-            {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,
+          {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,
                 but does not start the Workspace board/session store on fresh loads. */}
-            {ARTIFACT_FULLSCREEN_ROUTE_PATHS.map((path) => (
-              <Route key={path} path={path} element={artifactFullscreenElement} />
-            ))}
+          {ARTIFACT_FULLSCREEN_ROUTE_PATHS.map((path) => (
+            <Route key={path} path={path} element={artifactFullscreenElement} />
+          ))}
 
-            {/* Mobile routes */}
-            <Route
-              path="/m/*"
-              element={
-                <MobileApp
-                  client={client}
-                  user={user}
-                  onSendPrompt={handleSendPrompt}
-                  onSendComment={handleSendComment}
-                  onReplyComment={handleReplyComment}
-                  onResolveComment={handleResolveComment}
-                  onToggleReaction={handleToggleReaction}
-                  onDeleteComment={handleDeleteComment}
-                  onLogout={logout}
-                  promptDrafts={promptDrafts}
-                  onUpdateDraft={handleUpdateDraft}
-                />
-              }
-            />
+          {/* Mobile routes */}
+          <Route
+            path="/m/*"
+            element={
+              <MobileApp
+                client={client}
+                user={user}
+                onSendPrompt={handleSendPrompt}
+                onSendComment={handleSendComment}
+                onReplyComment={handleReplyComment}
+                onResolveComment={handleResolveComment}
+                onToggleReaction={handleToggleReaction}
+                onDeleteComment={handleDeleteComment}
+                onLogout={logout}
+                promptDrafts={promptDrafts}
+                onUpdateDraft={handleUpdateDraft}
+              />
+            }
+          />
 
-            {/* Desktop routes — flat entity URLs. Boards have their own
+          {/* Desktop routes — flat entity URLs. Boards have their own
                 path because they're a destination; sub-entities (session,
                 branch, artifact) get top-level paths keyed by short ID
                 so they're stable across board moves. The app resolves the
@@ -1831,29 +1815,25 @@ function AppContent() {
                 `ENTITY_PATH_SEGMENTS` constant so this list and the
                 URL/path builders can't drift. See
                 `packages/core/src/utils/url.ts`. */}
-            <Route
-              path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`}
-              element={desktopAppElement}
-            />
-            <Route
-              path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
-              element={desktopAppElement}
-            />
-            <Route
-              path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
-              element={desktopAppElement}
-            />
-            <Route
-              path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
-              element={desktopAppElement}
-            />
+          <Route path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`} element={desktopAppElement} />
+          <Route
+            path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
+            element={desktopAppElement}
+          />
+          <Route
+            path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
+            element={desktopAppElement}
+          />
+          <Route
+            path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
+            element={desktopAppElement}
+          />
 
-            {/* Fallback for unknown / root paths */}
-            <Route path="/*" element={desktopAppElement} />
-          </Routes>
-        </Suspense>
-      </ConnectionProvider>
-    </ServicesConfigContext.Provider>
+          {/* Fallback for unknown / root paths */}
+          <Route path="/*" element={desktopAppElement} />
+        </Routes>
+      </Suspense>
+    </ConnectionProvider>
   );
 }
 

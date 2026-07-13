@@ -7,11 +7,15 @@ import { UserSettingsModal } from './UserSettingsModal';
 
 vi.mock('../ApiKeyFields', () => ({
   ApiKeyFields: () => null,
-  TOOL_FIELD_CONFIGS: Object.fromEntries(
-    ['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'].map(
-      (tool) => [tool, []]
-    )
-  ),
+  TOOL_FIELD_CONFIGS: {
+    'claude-code': [],
+    'claude-code-cli': [],
+    codex: [{ field: 'OPENAI_API_KEY', label: 'OpenAI API Key' }],
+    gemini: [],
+    opencode: [],
+    copilot: [],
+    cursor: [],
+  },
 }));
 
 vi.mock('../AgenticToolConfigForm', async () => {
@@ -56,25 +60,21 @@ vi.mock('../AgenticToolConfigForm', async () => {
       _tool: AgenticToolName,
       values: {
         permissionMode?: string;
-        mcpServerIds?: string[];
         modelConfig?: { mode?: string; model?: string };
       }
     ) => ({
       permissionMode: values.permissionMode,
-      mcpServerIds: values.mcpServerIds ?? [],
       ...(values.modelConfig ? { modelConfig: values.modelConfig } : {}),
     }),
-    getClearedFormValues: () => ({ permissionMode: 'default', mcpServerIds: [] }),
+    getClearedFormValues: () => ({ permissionMode: 'default' }),
     getFormValuesFromConfig: (
       _tool: AgenticToolName,
       config?: {
         permissionMode?: string;
-        mcpServerIds?: string[];
         modelConfig?: { mode?: string; model?: string };
       }
     ) => ({
       permissionMode: config?.permissionMode ?? 'default',
-      mcpServerIds: config?.mcpServerIds ?? [],
       modelConfig: config?.modelConfig,
     }),
   };
@@ -105,8 +105,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   it('saves dirty agentic defaults across tabs and closes from the footer', async () => {
     const user = makeUser({
       default_agentic_config: {
-        'claude-code': { permissionMode: 'default', mcpServerIds: [] },
-        codex: { permissionMode: 'ask', mcpServerIds: [] },
+        'claude-code': { permissionMode: 'default' },
+        codex: { permissionMode: 'ask' },
       },
     });
     const onUpdate = vi.fn();
@@ -131,6 +131,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
     await screen.findByRole('heading', { name: 'Codex' });
+    fireEvent.click(screen.getByText('Session Defaults'));
     fireEvent.click(screen.getByLabelText('codex allow-all'));
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -138,12 +139,36 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledWith('user-1', {
         default_agentic_config: {
-          'claude-code': { permissionMode: 'acceptEdits', mcpServerIds: [] },
-          codex: { permissionMode: 'allow-all', mcpServerIds: [] },
+          'claude-code': { permissionMode: 'acceptEdits' },
+          codex: { permissionMode: 'allow-all' },
         },
+        default_agentic_selection: {
+          'claude-code': { source: 'inline' },
+          codex: { source: 'inline' },
+        },
+        default_mcp_server_ids: [],
       });
     }, ASYNC);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows Codex authentication choices when subscription mode hides API-key fields', async () => {
+    const user = makeUser({ agentic_auth_methods: { codex: 'subscription' } });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
+    await screen.findByRole('heading', { name: 'Codex' });
+    expect(screen.getByText('ChatGPT subscription')).toBeInTheDocument();
+    expect(screen.getByText('Use Codex CLI subscription authentication')).toBeInTheDocument();
   });
 
   it('saves a Claude model alias before closing', async () => {
@@ -155,7 +180,6 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       default_agentic_config: {
         'claude-code': {
           permissionMode: 'default',
-          mcpServerIds: [],
           modelConfig: { mode: 'alias', model: 'claude-sonnet-5' },
         },
       },
@@ -189,10 +213,13 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         default_agentic_config: {
           'claude-code': {
             permissionMode: 'default',
-            mcpServerIds: [],
             modelConfig: { mode: 'alias', model: 'claude-opus-4-8' },
           },
         },
+        default_agentic_selection: {
+          'claude-code': { source: 'inline' },
+        },
+        default_mcp_server_ids: [],
       });
     }, ASYNC);
 

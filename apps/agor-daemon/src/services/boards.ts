@@ -27,6 +27,7 @@ import type {
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import type { ManualServiceEvent } from '../utils/emit-service-event.js';
 import {
   type BoardObjectPatchedEventPayload,
   toBoardObjectPatchedEventPayload,
@@ -53,11 +54,19 @@ export interface BoardParams
 export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardParams> {
   private boardRepo: BoardRepository;
   private boardObjectRepo: BoardObjectRepository;
-  private emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void;
+  private emitBoardObjectPatched?: (
+    boardObject: BoardObjectPatchedEventPayload,
+    params?: BoardParams
+  ) => void;
+  private emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void;
 
   constructor(
     db: TenantScopeAwareDatabase,
-    emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void
+    emitBoardObjectPatched?: (
+      boardObject: BoardObjectPatchedEventPayload,
+      params?: BoardParams
+    ) => void,
+    emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void
   ) {
     const boardRepo = new BoardRepository(db);
     super(boardRepo, {
@@ -72,6 +81,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     this.boardRepo = boardRepo;
     this.boardObjectRepo = new BoardObjectRepository(db);
     this.emitBoardObjectPatched = emitBoardObjectPatched;
+    this.emitBoardEvent = emitBoardEvent;
   }
 
   /**
@@ -208,7 +218,9 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       });
 
       for (const boardObject of cleared) {
-        this.emitBoardObjectPatched?.(toBoardObjectPatchedEventPayload(boardObject));
+        const payload = toBoardObjectPatchedEventPayload(boardObject);
+        if (_params) this.emitBoardObjectPatched?.(payload, _params);
+        else this.emitBoardObjectPatched?.(payload);
       }
     }
 
@@ -427,7 +439,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 
     // Hook chain enforces auth before we get here.
     const currentUserId = params!.user!.user_id;
-    const archivedBoard = await this.patch(
+    const archivedBoard = (await this.patch(
       id,
       {
         archived: true,
@@ -435,7 +447,15 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
         archived_by: currentUserId,
       } as Partial<Board>,
       params
-    );
+    )) as Board;
+    // Custom methods call the raw implementation, bypassing Feathers'
+    // standard patch event hook. Emit the transition for connected clients.
+    this.emitBoardEvent?.({
+      event: 'patched',
+      data: archivedBoard,
+      params,
+      id: archivedBoard.board_id,
+    });
 
     console.log(`✅ Archived board ${board.name}`);
     return archivedBoard as Board;
@@ -453,7 +473,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 
     console.log(`📦 Unarchiving board: ${board.name}`);
 
-    const unarchivedBoard = await this.patch(
+    const unarchivedBoard = (await this.patch(
       id,
       {
         archived: false,
@@ -461,7 +481,13 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
         archived_by: undefined,
       } as Partial<Board>,
       params
-    );
+    )) as Board;
+    this.emitBoardEvent?.({
+      event: 'patched',
+      data: unarchivedBoard,
+      params,
+      id: unarchivedBoard.board_id,
+    });
 
     console.log(`✅ Unarchived board ${board.name}`);
     return unarchivedBoard as Board;
@@ -512,7 +538,11 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
  */
 export function createBoardsService(
   db: TenantScopeAwareDatabase,
-  emitBoardObjectPatched?: (boardObject: BoardObjectPatchedEventPayload) => void
+  emitBoardObjectPatched?: (
+    boardObject: BoardObjectPatchedEventPayload,
+    params?: BoardParams
+  ) => void,
+  emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void
 ): BoardsService {
-  return new BoardsService(db, emitBoardObjectPatched);
+  return new BoardsService(db, emitBoardObjectPatched, emitBoardEvent);
 }

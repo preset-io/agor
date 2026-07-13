@@ -20,6 +20,7 @@ import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
+import { getContrastingTextColor } from '../../../utils/theme';
 import { DeleteZoneModal } from './DeleteZoneModal';
 import { ZoneConfigModal } from './ZoneConfigModal';
 import type { LayerOp } from './zOrder';
@@ -339,6 +340,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       const rgb = color.toRgb();
       // If the color already has alpha, multiply it with the requested alpha
       const finalAlpha = rgb.a * alpha;
+      // biome-ignore lint/plugin/noHardcodedColorLiteral: persisted user color resolver emits CSS syntax from parsed channels
       return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${finalAlpha})`;
     } catch {
       // Fallback to token if parsing fails
@@ -355,28 +357,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
         ? colorToRgba(data.color, ZONE_CONTENT_OPACITY) // Old behavior for backwards compat
         : `${token.colorBgContainer}40`);
 
-  // Calculate text color based on background color luminance for readability
-  const getTextColor = (bgColor: string): string => {
-    try {
-      // Use Ant Design's Color class to parse any color format
-      const color = new AggregationColor(bgColor);
-      const rgb = color.toRgb();
-
-      // For very transparent backgrounds, use theme text color (text will be over board background)
-      if (rgb.a < 0.3) {
-        return token.colorText;
-      }
-
-      // Calculate relative luminance (WCAG formula)
-      const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
-
-      // Use white text for dark backgrounds, black for light backgrounds
-      return luminance > 0.5 ? '#000000' : '#ffffff';
-    } catch {
-      // Fallback to theme text for invalid colors
-      return token.colorText;
-    }
-  };
+  const getTextColor = (background: string): string => getContrastingTextColor(background, token);
 
   const textColor = getTextColor(backgroundColor);
 

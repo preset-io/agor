@@ -247,19 +247,11 @@ const BranchCardComponent = ({
 
   // Memoize glow shadow string to avoid recomputing color normalization on every render
   const attentionGlowShadow = useMemo(() => {
-    const rawGlowColor = token.colorTextBase || (isDarkMode ? '#ffffff' : '#000000');
-
-    let glowColor: string;
-    try {
-      const color = new AggregationColor(rawGlowColor);
-      glowColor = color.toHexString();
-    } catch {
-      glowColor = isDarkMode ? '#ffffff' : '#000000';
-    }
+    const glowColor = new AggregationColor(token.colorTextBase).toHexString();
 
     // 2-layer glow: tight solid ring + soft halo (reduced from 4 layers for less paint work)
     return `0 0 0 3px ${glowColor}, 0 0 24px 6px ${glowColor}99`;
-  }, [token.colorTextBase, isDarkMode]);
+  }, [token.colorTextBase]);
 
   // "Selected" state — branch is either focused (one of its sessions is
   // open in the drawer) or it's the deep-link target of the current URL.

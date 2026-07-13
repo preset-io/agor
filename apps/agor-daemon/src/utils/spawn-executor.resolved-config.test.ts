@@ -67,14 +67,6 @@ describe('buildResolvedConfigSlice', () => {
     expect(slice.execution?.executor_heartbeat).not.toHaveProperty('callback');
   });
 
-  it('surfaces opencode.serverUrl', async () => {
-    await writeConfigYaml('opencode:\n  serverUrl: http://opencode.internal:4096\n');
-    const slice = buildResolvedConfigSlice();
-    expect(slice).toMatchObject({
-      opencode: { serverUrl: 'http://opencode.internal:4096' },
-    });
-  });
-
   it('surfaces daemon.host_ip_address', async () => {
     await writeConfigYaml('daemon:\n  host_ip_address: 10.0.0.5\n');
     const slice = buildResolvedConfigSlice();
@@ -95,8 +87,6 @@ describe('buildResolvedConfigSlice', () => {
       [
         'execution:',
         '  permission_timeout_ms: 60000',
-        'opencode:',
-        '  serverUrl: http://opencode.internal:4096',
         'daemon:',
         '  host_ip_address: 10.0.0.5',
         '',
@@ -119,8 +109,8 @@ describe('buildResolvedConfigSlice', () => {
         '  host_ip_address: 10.0.0.5',
         '  port: 4040',
         '  base_url: https://example.com',
-        'credentials:',
-        '  ANTHROPIC_API_KEY: sk-should-not-appear',
+        'analytics:',
+        '  enabled: true',
         'security:',
         '  csp:',
         '    extras:',
@@ -134,7 +124,7 @@ describe('buildResolvedConfigSlice', () => {
     expect(slice.execution?.executor_heartbeat).toEqual({ enabled: true, interval_ms: 10_000 });
     expect(slice.daemon?.host_ip_address).toBe('10.0.0.5');
     // Non-allowed top-level sections are absent — slice is a strict subset.
-    expect(slice).not.toHaveProperty('credentials');
+    expect(slice).not.toHaveProperty('analytics');
     expect(slice).not.toHaveProperty('security');
     // Non-allowed fields within an allowed section are also absent.
     expect(slice.execution).not.toHaveProperty('unix_user_mode');
@@ -148,8 +138,6 @@ describe('buildResolvedConfigSlice', () => {
       [
         'execution:',
         '  permission_timeout_ms: 60000',
-        'opencode:',
-        '  serverUrl: http://opencode.internal:4096',
         'daemon:',
         '  host_ip_address: 10.0.0.5',
         '',

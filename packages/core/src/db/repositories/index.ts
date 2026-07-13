@@ -2,6 +2,7 @@
  * Repository Exports
  */
 
+export * from './agentic-tool-presets';
 export * from './app-variables';
 export * from './artifact-trust';
 export * from './artifacts';
@@ -27,6 +28,7 @@ export * from './session-mcp-servers';
 export * from './session-relationships';
 export * from './sessions';
 export * from './tasks';
+export * from './tenant-agentic-tools';
 export * from './thread-session-map';
 export * from './user-api-keys';
 export * from './user-mcp-oauth-tokens';

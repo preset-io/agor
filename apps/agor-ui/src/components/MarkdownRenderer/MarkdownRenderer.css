@@ -1,3 +1,4 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: rendered markdown semantics and heading hover anchors require descendant and pseudo selectors */
 /**
  * Compact markdown styling for constrained contexts (cards, small containers)
  * Reduces heading sizes, margins, and ensures content doesn't blow up layout
