@@ -26,7 +26,7 @@ import {
   ROLES,
   sessionPath,
 } from '@agor-live/client';
-import { Alert, App as AntApp, ConfigProvider } from 'antd';
+import { Alert, App as AntApp, ConfigProvider, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
@@ -37,7 +37,7 @@ import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal'
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { OnboardingBanners } from './components/OnboardingBanners';
-import { OnboardingWizard, type WizardStep } from './components/OnboardingWizard';
+import { OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
@@ -459,7 +459,6 @@ function AppContent() {
   // Onboarding wizard state
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
   const [onboardingWizardInstance, setOnboardingWizardInstance] = useState(0);
-  const [onboardingStartStep, setOnboardingStartStep] = useState<WizardStep | undefined>(undefined);
 
   // Trigger wizard when user is loaded and hasn't completed onboarding
   useEffect(() => {
@@ -942,7 +941,6 @@ function AppContent() {
     }
 
     setOpenUserSettings(false);
-    setOnboardingStartStep(undefined);
     setOnboardingWizardInstance((value) => value + 1);
     setOnboardingWizardOpen(true);
   };
@@ -1751,22 +1749,20 @@ function AppContent() {
             impersonate), React tears down + remounts the wizard with fresh
             state, eliminating any chance of one user's onboarding progress
             leaking into another user's session. */}
-      <OnboardingWizard
-        key={`${currentUser?.user_id ?? '__anon__'}:${onboardingWizardInstance}`}
-        open={onboardingWizardOpen}
-        onComplete={handleOnboardingComplete}
-        user={currentUser}
-        client={client}
-        onCreateRepo={handleCreateRepo}
-        onCreateBranch={handleCreateBranch}
-        onCreateSession={handleCreateSession}
-        onUpdateUser={(userId, updates) => handleUpdateUser(userId, updates, { silent: true })}
-        onUpdateBranch={(branchId, updates) =>
-          handleUpdateBranch(branchId, updates, { silent: true })
-        }
-        onCheckAuth={handleCheckAuth}
-        initialStep={onboardingStartStep}
-      />
+      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+        <OnboardingWizard
+          key={`${currentUser?.user_id ?? '__anon__'}:${onboardingWizardInstance}`}
+          open={onboardingWizardOpen}
+          onComplete={handleOnboardingComplete}
+          user={currentUser}
+          client={client}
+          onUpdateUser={(userId, updates) => handleUpdateUser(userId, updates, { silent: true })}
+          onUpdateBranch={(branchId, updates) =>
+            handleUpdateBranch(branchId, updates, { silent: true })
+          }
+          onCheckAuth={handleCheckAuth}
+        />
+      </ConfigProvider>
 
       <DeviceRouter />
       <Suspense fallback={routeFallback}>

@@ -227,6 +227,47 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
   });
 
+  it('proceeds to save on an unknown auth result (transient) rather than rejecting the key', async () => {
+    const onUpdateUser = vi.fn(async () => undefined);
+    const onCheckAuth = vi.fn(async () => ({ status: 'unknown' as const, authenticated: false }));
+    renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
+
+    clickButton('Claude');
+    const validKey = `sk-ant-api03-${'x'.repeat(40)}`;
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: validKey } });
+    clickButton(/^connect →/i);
+
+    // 'unknown' is not a definitive rejection: the key is still saved and we advance.
+    await waitFor(() => {
+      expect(onUpdateUser).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: validKey } },
+        })
+      );
+    });
+    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+  });
+
+  it('blocks with the provider hint on a definitive unauthenticated result', async () => {
+    const onUpdateUser = vi.fn(async () => undefined);
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'unauthenticated' as const,
+      authenticated: false,
+      hint: 'Key rejected by provider.',
+    }));
+    renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
+
+    clickButton('Claude');
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), {
+      target: { value: `sk-ant-api03-${'x'.repeat(40)}` },
+    });
+    clickButton(/^connect →/i);
+
+    expect(await screen.findByText('Key rejected by provider.')).toBeInTheDocument();
+    expect(onUpdateUser).not.toHaveBeenCalled();
+  });
+
   it('can save a Claude subscription token instead of an API key', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     renderWizard({ initialStep: 'llm', onUpdateUser });

@@ -7,10 +7,9 @@
 
 import type {
   AgenticToolName,
+  AgorClient,
   AuthCheckResult,
   Branch,
-  CloneRepositoryResult,
-  CreateRepoRequest,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -27,10 +26,8 @@ import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } fr
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById } from '../../store/selectors';
-import type { CreateRepoOptions } from '../../types';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
-import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
@@ -414,6 +411,17 @@ const ONB_ANIM_CSS = `
   button.onb-skip.ant-btn:focus-visible {
     background: transparent !important;
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    .onb-step,
+    .onb-check,
+    .onb-draw,
+    .onb-orb1,
+    .onb-orb2,
+    .onb-particle {
+      animation: none !important;
+    }
+  }
 `;
 
 // On-brand teal palette only
@@ -443,35 +451,14 @@ export interface OnboardingWizardProps {
   onDismiss?: () => void;
 
   user?: User | null;
-  // biome-ignore lint/suspicious/noExplicitAny: AgorClient type varies across package boundaries.
-  client: any;
+  client: AgorClient | null;
 
-  onCreateRepo: (
-    data: CreateRepoRequest,
-    options?: CreateRepoOptions
-  ) => Promise<CloneRepositoryResult | undefined>;
-  onCreateBranch: (
-    repoId: string,
-    data: {
-      name: string;
-      ref: string;
-      refType?: 'branch' | 'tag';
-      createBranch: boolean;
-      sourceBranch: string;
-      pullLatest: boolean;
-      boardId?: string;
-      custom_context?: Record<string, unknown>;
-      notes?: string | null;
-      position?: { x: number; y: number };
-    }
-  ) => Promise<Branch | null>;
-  onCreateSession: (config: NewSessionConfig, boardId: string) => Promise<string | null>;
   onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => Promise<void>;
 
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
-  /** Re-open wizard starting at a specific step (used by persistent banners). */
+  /** Re-open wizard starting at a specific step (used by tests / future callers). */
   initialStep?: WizardStep;
 }
 
@@ -503,17 +490,10 @@ export function OnboardingWizard({
   onDismiss,
   user,
   client,
-  onCreateRepo: _onCreateRepo,
-  onCreateBranch: _onCreateBranch,
-  onCreateSession: _onCreateSession,
   onUpdateUser,
   onCheckAuth,
   initialStep,
 }: OnboardingWizardProps) {
-  void _onCreateRepo;
-  void _onCreateBranch;
-  void _onCreateSession;
-
   // Self-subscribe to the board entity map this wizard reads (needed to detect
   // whether the user already has a board). Subscribing here — rather than
   // receiving it as a prop from the outer App shell — keeps the shell from
@@ -675,10 +655,13 @@ export function OnboardingWizard({
       setLlmAuthChecking(agent);
       onCheckAuth(agent)
         .then((result) => {
+          // 'unknown' = couldn't verify (transient/transport). Never downgrade a
+          // stored key to "broken" — only a definitive verdict updates the flag.
+          if (result.status === 'unknown') return;
           setLlmAuthVerified((prev) => ({ ...prev, [agent]: result.authenticated }));
         })
         .catch(() => {
-          setLlmAuthVerified((prev) => ({ ...prev, [agent]: false }));
+          // A thrown check is itself unknown — leave prior verification state intact.
         })
         .finally(() => {
           authCheckInFlightRef.current.delete(agent);
@@ -855,7 +838,9 @@ export function OnboardingWizard({
         if (onCheckAuth) {
           try {
             const authResult = await onCheckAuth(selectedAgent, apiKey.trim());
-            if (!authResult.authenticated) {
+            // Only block on a definitive rejection; 'unknown' (transient/transport
+            // failure) proceeds to save rather than rejecting a possibly-valid key.
+            if (authResult.status === 'unauthenticated') {
               setLlmError(
                 authResult.hint ||
                   'API key rejected - check it is correct and has the right permissions.'
@@ -1057,6 +1042,7 @@ export function OnboardingWizard({
               <button
                 key={persona.id}
                 type="button"
+                aria-pressed={isSelected}
                 className="onb-card"
                 onClick={() => setSelectedPersona(persona.id)}
                 style={{
@@ -1706,6 +1692,7 @@ export function OnboardingWizard({
             <div
               key={`${px}:${py}`}
               aria-hidden="true"
+              className="onb-particle"
               style={{
                 position: 'absolute',
                 width: 7,
@@ -1972,7 +1959,10 @@ export function OnboardingWizard({
             className="onb-step"
             style={{
               padding: '16px 32px 20px',
+              // Fixed height keeps the modal from jumping between steps; the viewport
+              // cap + scroll keeps it usable on short/mobile viewports.
               height: 460,
+              maxHeight: '62vh',
               overflowY: 'auto',
               position: 'relative',
               zIndex: 1,
