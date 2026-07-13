@@ -432,20 +432,33 @@ export class ReactiveSessionHandle {
         }
       }
 
-      this.updateState((prev) => ({
-        ...prev,
-        session,
-        tasks,
-        messagesByTask,
-        loadedTaskIds,
-        // Repair task_id on any stream initialized from a chunk that arrived
-        // before tasks were hydrated (task_id was undefined then).
-        streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
-        queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
-        loading: false,
-        error: null,
-        lastSyncedAt: new Date().toISOString(),
-      }));
+      this.updateState((prev) => {
+        // Merge with anything socket-delivered during hydration instead of a
+        // straight replace: `messages.created` events for the just-created
+        // task can land on the client between attachListeners() and the end
+        // of this bootstrap, populating prev.messagesByTask ahead of us.
+        // Overwriting them with the fetch result would lose the initial
+        // user-message row when the daemon's REST read races the row's
+        // commit (or when the `messages.findAll` result set trailed the
+        // socket event). Dedup by message_id across both sources.
+        const mergedMessagesByTask = mergeMessagesByTask(prev.messagesByTask, messagesByTask);
+        const mergedLoadedTaskIds = new Set<string>(loadedTaskIds);
+        for (const taskId of prev.loadedTaskIds) mergedLoadedTaskIds.add(taskId);
+        return {
+          ...prev,
+          session,
+          tasks,
+          messagesByTask: mergedMessagesByTask,
+          loadedTaskIds: mergedLoadedTaskIds,
+          // Repair task_id on any stream initialized from a chunk that arrived
+          // before tasks were hydrated (task_id was undefined then).
+          streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
+          queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
+          loading: false,
+          error: null,
+          lastSyncedAt: new Date().toISOString(),
+        };
+      });
     } catch (error) {
       // Mirror doResync()'s terminal classification — a 403/404 on the
       // initial mount is just as "doomed to retry" as on reconnect, and
@@ -664,26 +677,42 @@ export class ReactiveSessionHandle {
           };
         }
 
-        const shouldTrackMessages =
-          this.options.taskHydration === 'eager' || prev.loadedTaskIds.has(message.task_id);
-
-        if (!shouldTrackMessages) {
-          return {
-            ...prev,
-            streamingMessages: nextStreaming,
-            lastSyncedAt: new Date().toISOString(),
-          };
-        }
-
+        // Store every task-scoped message the socket delivers, even for a
+        // task that hasn't landed in `tasks` / `loadedTaskIds` yet. This
+        // closes the race that made the initial user-message row for a
+        // freshly-created session disappear: `messages.created` fires from
+        // the daemon's `/prompt` route and, on a real network, can land on
+        // the client BEFORE bootstrap's `messages.findAll` returns (and even
+        // before bootstrap's `tasks.findAll` has committed `tasks` into
+        // state). Dropping it left the transcript blank until manual
+        // reload. Storing eagerly is safe: TaskBlock replaces the array
+        // wholesale on lazy-load, so if we accumulated partial state for a
+        // task the user later expands, the DB read is authoritative. The
+        // dedup guard makes storing idempotent under duplicate deliveries.
         const nextByTask = new Map(prev.messagesByTask);
         const current = nextByTask.get(message.task_id) || [];
         if (!current.some((m) => m.message_id === message.message_id)) {
           nextByTask.set(message.task_id, sortMessagesByIndex([...current, message]));
         }
 
+        // Mark the task loaded only when it is the latest hydratable task —
+        // i.e. the one the conversation view expands and scrolls to. That is
+        // the case where "partial" state actually renders and must beat any
+        // subsequent lazy-load fetch that might race the daemon commit. For
+        // older tasks we deliberately leave `loadedTaskIds` alone so a later
+        // `TaskBlock` expand still fetches the full history from the DB
+        // instead of showing just the socket-delivered messages.
+        const latestTaskId = findLatestHydratableTask(prev.tasks)?.task_id;
+        const isForLatestTask = latestTaskId === message.task_id;
+        const nextLoaded =
+          isForLatestTask && !prev.loadedTaskIds.has(message.task_id)
+            ? new Set(prev.loadedTaskIds).add(message.task_id)
+            : prev.loadedTaskIds;
+
         return {
           ...prev,
           messagesByTask: nextByTask,
+          loadedTaskIds: nextLoaded,
           streamingMessages: nextStreaming,
           lastSyncedAt: new Date().toISOString(),
         };
@@ -1055,18 +1084,26 @@ export class ReactiveSessionHandle {
       }
 
       if (this.disposed) return;
-      this.updateState((prev) => ({
-        ...prev,
-        session,
-        tasks,
-        queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
-        messagesByTask,
-        loadedTaskIds,
-        streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
-        error: null,
-        terminal: false,
-        lastSyncedAt: new Date().toISOString(),
-      }));
+      this.updateState((prev) => {
+        // Same reason as bootstrap: merge with anything socket-delivered
+        // during resync so `messages.created` events that arrived mid-fetch
+        // survive the state update.
+        const mergedMessagesByTask = mergeMessagesByTask(prev.messagesByTask, messagesByTask);
+        const mergedLoadedTaskIds = new Set<string>(loadedTaskIds);
+        for (const taskId of prev.loadedTaskIds) mergedLoadedTaskIds.add(taskId);
+        return {
+          ...prev,
+          session,
+          tasks,
+          queuedTasks: sortTasksByQueuePosition((queueResult as QueueFindResult).data || []),
+          messagesByTask: mergedMessagesByTask,
+          loadedTaskIds: mergedLoadedTaskIds,
+          streamingMessages: restampStreamingTaskIds(prev.streamingMessages, tasks),
+          error: null,
+          terminal: false,
+          lastSyncedAt: new Date().toISOString(),
+        };
+      });
     } catch (error) {
       if (this.disposed) return;
       const status = errorStatusCode(error);
@@ -1505,6 +1542,33 @@ function restampStreamingTaskIds(
 
 function sortMessagesByIndex(messages: Message[]): Message[] {
   return [...messages].sort((a, b) => a.index - b.index);
+}
+
+/**
+ * Merge two messagesByTask maps, deduping by `message_id` per task. Prefers
+ * the entry from `next` (typically a fresh DB fetch) but retains any entries
+ * from `prev` (typically socket-delivered messages that arrived while the
+ * fetch was in flight). Used by bootstrap/resync so an initial `messages.created`
+ * event racing the hydration read cannot vanish from state.
+ */
+function mergeMessagesByTask(
+  prev: ReactiveMessagesByTask,
+  next: ReactiveMessagesByTask
+): ReactiveMessagesByTask {
+  if (prev.size === 0) return next;
+  const merged: ReactiveMessagesByTask = new Map(next);
+  for (const [taskId, prevMessages] of prev) {
+    const nextMessages = merged.get(taskId);
+    if (!nextMessages) {
+      merged.set(taskId, prevMessages);
+      continue;
+    }
+    const byId = new Map<string, Message>();
+    for (const m of nextMessages) byId.set(m.message_id, m);
+    for (const m of prevMessages) if (!byId.has(m.message_id)) byId.set(m.message_id, m);
+    merged.set(taskId, sortMessagesByIndex(Array.from(byId.values())));
+  }
+  return merged;
 }
 
 function sortTasksByQueuePosition(tasks: Task[]): Task[] {

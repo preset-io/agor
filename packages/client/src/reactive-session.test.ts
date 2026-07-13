@@ -238,6 +238,138 @@ describe('ReactiveSessionHandle bootstrap hydration', () => {
   });
 });
 
+describe('ReactiveSessionHandle initial-prompt regression', () => {
+  // A newly-created session's initial user-message row can arrive via the
+  // `messages.created` socket event before bootstrap's `messages.findAll`
+  // has finished populating `loadedTaskIds`. Historically the event was
+  // dropped because the message's task_id wasn't in loadedTaskIds yet, and
+  // then bootstrap either read empty (DB read raced the commit) or replaced
+  // the socket-delivered message with the empty read. Either way the initial
+  // prompt vanished from the transcript until the session was manually
+  // reloaded. These tests pin the two invariants that close that race.
+
+  it('tracks a messages.created for the latest hydratable task even without loadedTaskIds', async () => {
+    // No messages in the DB yet (simulates the messages.findAll returning
+    // empty because the daemon's write raced the client's read).
+    const newTask = makeTask('task-new', TaskStatus.RUNNING);
+    const opts: MockClientOptions = { tasks: [newTask], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    // Bootstrap saw an empty message set for the latest task.
+    expect(handle.getTaskMessages('task-new')).toEqual([]);
+
+    // A `messages.created` for the initial user-message row lands after
+    // bootstrap. The task IS the latest hydratable task, so the message
+    // must be tracked even though loadedTaskIds was empty before this fired.
+    const initialUserMessage: Message = {
+      ...makeMessage('task-new', 0),
+      role: 'user',
+    } as Message;
+    mock.emitServiceEvent('messages', 'created', initialUserMessage);
+
+    expect(handle.getTaskMessages('task-new').map((m) => m.message_id)).toEqual([
+      initialUserMessage.message_id,
+    ]);
+    // The task should be flipped to "loaded" so subsequent lazy-loads (e.g.
+    // from TaskBlock expand) don't overwrite the socket-delivered message
+    // with a possibly-stale DB read.
+    expect(handle.isTaskLoaded('task-new')).toBe(true);
+
+    handle.dispose();
+  });
+
+  it('stores a messages.created for an unloaded non-latest task without marking it loaded', async () => {
+    // Storing the message survives the race (any socket event carrying a
+    // task_id is retained), but the task is NOT flipped to "loaded" so a
+    // later TaskBlock expand still fetches the full history from the DB.
+    // Only the latest hydratable task earns the "loaded" flag from a
+    // socket message, because that's the one the conversation view expands
+    // by default and must render immediately without a DB race.
+    const oldTask = makeTask('task-old', TaskStatus.COMPLETED);
+    const latestTask = makeTask('task-latest', TaskStatus.RUNNING);
+    const opts: MockClientOptions = {
+      tasks: [oldTask, latestTask],
+      messagesByTask: { 'task-latest': [] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+
+    const oldMessage = { ...makeMessage('task-old', 0), role: 'user' } as Message;
+    mock.emitServiceEvent('messages', 'created', oldMessage);
+
+    // Message IS stored (dedup / lazy-load will reconcile later).
+    expect(handle.getTaskMessages('task-old').map((m) => m.message_id)).toEqual([
+      oldMessage.message_id,
+    ]);
+    // But the task stays "unloaded" so `TaskBlock`'s expand still triggers
+    // a full DB fetch that replaces this partial state authoritatively.
+    expect(handle.isTaskLoaded('task-old')).toBe(false);
+
+    handle.dispose();
+  });
+
+  it('bootstrap merges socket-delivered messages with the fetched result', async () => {
+    // Simulates the tight race: a `messages.created` event lands after
+    // attachListeners but before bootstrap's state update commits. Without
+    // the merge, bootstrap's REPLACE overwrites the socket-delivered
+    // message; the initial prompt then vanishes from the transcript.
+    const latestTask = makeTask('task-new', TaskStatus.RUNNING);
+    let releaseBootstrap: () => void = () => {};
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    const opts: MockClientOptions = { tasks: [latestTask], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    // Wrap messages.findAll so we can inject a socket event mid-flight —
+    // between the fetch returning and bootstrap's updateState landing.
+    const originalMessages = (mock.client.service as unknown as (name: string) => unknown)(
+      'messages'
+    ) as {
+      findAll: (arg: unknown) => Promise<Message[]>;
+    };
+    const originalFindAll = originalMessages.findAll;
+    originalMessages.findAll = vi.fn(async (arg: unknown) => {
+      // Return empty, but block bootstrap on `bootstrapGate` so the test
+      // has a deterministic window to emit the socket event before the
+      // state-update commit.
+      await originalFindAll(arg);
+      await bootstrapGate;
+      return [];
+    });
+
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+
+    // Wait for bootstrap to reach the gate.
+    await vi.waitFor(() => {
+      expect((originalMessages.findAll as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    });
+
+    // Emit the socket-delivered initial user message before we release the
+    // bootstrap. With the fix in place, onMessageCreated stores it into
+    // prev.messagesByTask because task-new is the latest hydratable task.
+    const initialUserMessage: Message = {
+      ...makeMessage('task-new', 0),
+      role: 'user',
+    } as Message;
+    mock.emitServiceEvent('messages', 'created', initialUserMessage);
+
+    // Release bootstrap. Its updateState now must MERGE prev.messagesByTask
+    // with the (empty) fetch result — not REPLACE — so the initial user
+    // message survives.
+    releaseBootstrap();
+    await handle.ready();
+
+    expect(handle.getTaskMessages('task-new').map((m) => m.message_id)).toEqual([
+      initialUserMessage.message_id,
+    ]);
+
+    handle.dispose();
+  });
+});
+
 describe('ReactiveSessionHandle resync hydration parity', () => {
   it('lazy: keeps the latest task hydrated and adopts a new latest task on resync', async () => {
     const opts: MockClientOptions = {
