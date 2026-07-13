@@ -122,6 +122,9 @@ export function buildScheduleConfigFromFormValues(
   const builtDefault = buildConfigFromFormValues(tool, values);
   return {
     ...previous,
+    // Selecting inline configuration must detach any previously selected
+    // live preset; otherwise the daemon correctly rejects the mixed payload.
+    preset_id: undefined,
     agentic_tool: tool,
     permission_mode: builtDefault.permissionMode,
     model_config: builtDefault.modelConfig,

@@ -145,12 +145,18 @@ export async function resolveClaudeCliProviderSpawn(
     }
     try {
       const envDir = path.dirname(envPath);
-      childProcess.execFileSync('sudo', ['-n', 'mkdir', '-p', envDir], {
-        stdio: 'pipe',
-        timeout: 2000,
-      });
+      childProcess.execFileSync(
+        'sudo',
+        ['-n', '-u', session.unix_username, 'mkdir', '-p', envDir],
+        {
+          stdio: 'pipe',
+          timeout: 2000,
+        }
+      );
+      // Create an empty file first. It may briefly inherit a permissive umask,
+      // but contains no secret until after ownership and mode are locked down.
       childProcess.execFileSync('sudo', ['-n', 'tee', envPath], {
-        input: contents,
+        input: '',
         stdio: 'pipe',
         timeout: 2000,
       });
@@ -159,6 +165,11 @@ export async function resolveClaudeCliProviderSpawn(
         timeout: 2000,
       });
       childProcess.execFileSync('sudo', ['-n', 'chmod', '600', envPath], {
+        stdio: 'pipe',
+        timeout: 2000,
+      });
+      childProcess.execFileSync('sudo', ['-n', 'tee', envPath], {
+        input: contents,
         stdio: 'pipe',
         timeout: 2000,
       });

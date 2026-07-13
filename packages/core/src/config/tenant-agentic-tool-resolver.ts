@@ -176,6 +176,8 @@ export function stripProviderCredentialEnvironment<T extends Record<string, stri
     const isCloudProviderState =
       key.startsWith('AWS_') ||
       key.startsWith('ANTHROPIC_VERTEX_') ||
+      key === 'CLAUDE_CODE_USE_BEDROCK' ||
+      key === 'CLAUDE_CODE_USE_VERTEX' ||
       key === 'GOOGLE_APPLICATION_CREDENTIALS' ||
       key === 'CLOUD_ML_REGION' ||
       key === 'VERTEX_REGION_CLAUDE_3_5_HAIKU';
