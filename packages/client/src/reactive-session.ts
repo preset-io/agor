@@ -1129,7 +1129,8 @@ const CAPABILITY_ANNOUNCED_CLIENTS = new WeakSet<AgorClient>();
 /**
  * Mark this connection session-streams aware so the owner fallback skips it —
  * even idle tabs that never open a transcript (unlike {@link retainSessionStream},
- * this joins no room). Fires on connect and every reconnect; idempotent per client.
+ * this joins no room). Fires after authentication (initial and every reconnect
+ * re-auth); idempotent per client.
  */
 export function ensureSessionStreamsCapabilityAnnounce(client: AgorClient): void {
   const io = client.io;
@@ -1147,10 +1148,12 @@ export function ensureSessionStreamsCapabilityAnnounce(client: AgorClient): void
       .catch(() => {});
   };
 
-  // Never removed: one per client, lifetime equals the client's — re-announcing on every reconnect is intended.
-  io.on('connect', announce);
-  // Socket may already be connected (autoConnect), so 'connect' won't fire again.
-  if (io.connected) announce();
+  // Announce post-auth, not on raw `connect`: `session-streams.create` requires
+  // auth, so a pre-auth call would 401 and trigger a needless refresh + retry on
+  // every tab's first connect. Feathers emits `authenticated` after every
+  // `authenticate()` — initial, reconnect re-auth, and token-refresh re-auth.
+  // Never removed: one per client, its lifetime equals the client's.
+  client.on('authenticated', announce);
 }
 
 // --- Per-connection stream subscription registry ---------------------------
