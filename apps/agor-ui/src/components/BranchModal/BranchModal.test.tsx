@@ -73,6 +73,25 @@ describe('BranchModal — permissions tab visibility', () => {
     expect(await screen.findByRole('tab', { name: /permissions/i })).toBeInTheDocument();
   });
 
+  it('orders branch tabs by primary workflow before configuration', async () => {
+    const seb = makeUser({ user_id: 'seb', role: 'admin' });
+    renderBranchModal({
+      currentUser: seb,
+      client: makeStubClient({ owners: [seb], users: [seb] }).client,
+    });
+
+    await screen.findByRole('tab', { name: /permissions/i });
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent?.trim())).toEqual([
+      'General',
+      'Sessions 0',
+      'Links',
+      'Files',
+      'Environment',
+      'Schedules',
+      'Permissions',
+    ]);
+  });
+
   it('shows Permissions for an admin even when owner/group metadata is incomplete', async () => {
     const seb = makeUser({ user_id: 'seb', role: 'admin' });
 
@@ -109,6 +128,33 @@ describe('BranchModal — permissions tab visibility', () => {
 
     expect(await screen.findByRole('tab', { name: /^teammate$/i })).toBeInTheDocument();
     expect(await screen.findByRole('tab', { name: /permissions/i })).toBeInTheDocument();
+  });
+
+  it('orders teammate tabs by primary workflow and selects Teammate first', async () => {
+    const seb = makeUser({ user_id: 'seb', role: 'admin' });
+
+    renderBranchModal({
+      branch: makeTeammateBranch(),
+      currentUser: seb,
+      client: makeStubClient({ owners: [seb], users: [seb] }).client,
+    });
+
+    await screen.findByRole('tab', { name: /permissions/i });
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent?.trim())).toEqual([
+      'Teammate',
+      'Sessions 0',
+      'Links',
+      'Knowledge',
+      'General',
+      'Files',
+      'Environment',
+      'Schedules',
+      'Permissions',
+    ]);
+    expect(screen.getByRole('tab', { name: /^teammate$/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
   });
 
   it('builds Knowledge patches against modern custom_context.teammate storage', () => {

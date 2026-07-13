@@ -1,5 +1,5 @@
 import { shortId } from '@agor-live/client';
-import { LinkOutlined, SettingOutlined } from '@ant-design/icons';
+import { LinkOutlined, PlusOutlined, SettingOutlined } from '@ant-design/icons';
 import {
   Badge,
   Button,
@@ -15,20 +15,28 @@ import {
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  canEditLinkTarget,
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
+  LINK_ACTION_LABEL,
+  LINK_MANAGER_COPY,
   type LinkCategoryTabKey,
   type LinkDisplayItem,
+  LinkEditorModal,
   type LinkSortKey,
+  type ManualLinkDraft,
   matchesLinkCategoryTab,
   matchesLinkDisplaySearch,
   selectQuickLinkDisplayItems,
 } from '../Links';
 import { LinkCollectionControls } from '../Links/LinkCollectionControls';
 import { getLinkUnavailableReason, getSafeLinkContentLabel } from '../Links/linkContent';
+import linkStyles from '../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../Links/SessionLinksControl';
 import {
+  type SessionAttachmentBranchActions,
   SessionAttachmentDrawerRow,
+  type SessionAttachmentLifecycleActions,
   SessionAttachmentQuickRow,
   type SessionAttachmentTeammateActions,
 } from './SessionAttachmentRows';
@@ -42,7 +50,10 @@ function matchesAttachmentSearch(item: LinkDisplayItem, query: string): boolean 
   ]);
 }
 
-interface Props extends SessionAttachmentTeammateActions {
+interface Props
+  extends SessionAttachmentTeammateActions,
+    SessionAttachmentBranchActions,
+    Omit<SessionAttachmentLifecycleActions, 'onEditLink'> {
   items: SessionAttachmentItem[];
   loading?: boolean;
   error?: string | null;
@@ -50,6 +61,11 @@ interface Props extends SessionAttachmentTeammateActions {
   pinningKeys?: ReadonlySet<string>;
   onTogglePinned?: (item: SessionAttachmentItem) => void | Promise<void>;
   onRegisterOpenPinnedManager?: (openPinnedManager: (() => void) | null) => void;
+  onCreateLink?: (draft: ManualLinkDraft) => Promise<boolean>;
+  onUpdateLink?: (
+    item: SessionAttachmentItem,
+    changes: { title?: string | null; target?: string }
+  ) => Promise<boolean>;
 }
 
 export const SessionAttachmentsDropdown: React.FC<Props> = ({
@@ -64,6 +80,12 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   onPromoteToTeammate,
   onRemoveFromTeammate,
   teammatePromotionBusyKeys,
+  getBranchActionState,
+  onSaveToBranch,
+  lifecycleBusyKeys,
+  onDeleteLink,
+  onCreateLink,
+  onUpdateLink,
 }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
@@ -73,12 +95,21 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   const [activeCategory, setActiveCategory] = React.useState<LinkCategoryTabKey>('all');
   const [sortOrder, setSortOrder] = React.useState<LinkSortKey>('az');
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [pinnedOnly, setPinnedOnly] = React.useState(false);
+  const [editorOpen, setEditorOpen] = React.useState(false);
+  const [editorItem, setEditorItem] = React.useState<SessionAttachmentItem | null>(null);
 
   const hasItems = items.length > 0;
-  const categoryCounts = React.useMemo(() => getLinkCategoryCounts(items), [items]);
+  const managerItems = React.useMemo(
+    () => (pinnedOnly ? items.filter((item) => item.isPinned) : items),
+    [items, pinnedOnly]
+  );
+  const categoryCounts = React.useMemo(() => getLinkCategoryCounts(managerItems), [managerItems]);
 
   const openPinnedManager = React.useCallback(() => {
     setActiveCategory('all');
+    setSearchQuery('');
+    setPinnedOnly(true);
     setDrawerOpen(true);
   }, []);
 
@@ -86,8 +117,6 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     onRegisterOpenPinnedManager?.(openPinnedManager);
     return () => onRegisterOpenPinnedManager?.(null);
   }, [onRegisterOpenPinnedManager, openPinnedManager]);
-
-  if (!hasItems && !loading && !error) return null;
 
   const quickItems = selectQuickLinkDisplayItems(items);
 
@@ -97,10 +126,30 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
     openItem(item);
   };
 
-  const drawerItems = items
+  const drawerItems = managerItems
     .filter((item) => matchesLinkCategoryTab(item, activeCategory))
     .filter((item) => matchesAttachmentSearch(item, searchQuery))
     .sort((a, b) => compareLinkDisplayItemsBySort(a, b, sortOrder));
+
+  const openAddLink = () => {
+    setEditorItem(null);
+    setEditorOpen(true);
+  };
+
+  const openEditLink = (item: SessionAttachmentItem) => {
+    setEditorItem(item);
+    setEditorOpen(true);
+  };
+
+  const submitEditor = (draft: ManualLinkDraft) => {
+    if (!editorItem) return onCreateLink?.(draft) ?? Promise.resolve(false);
+    return (
+      onUpdateLink?.(editorItem, {
+        title: draft.title,
+        ...(canEditLinkTarget(editorItem) ? { target: draft.target } : {}),
+      }) ?? Promise.resolve(false)
+    );
+  };
 
   const quickContent = (
     <div data-testid="links-organizer-popover" style={{ width: 312 }}>
@@ -116,6 +165,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             icon={<SettingOutlined />}
             onClick={() => {
               setPopoverOpen(false);
+              setPinnedOnly(false);
               setDrawerOpen(true);
             }}
             style={{ color: token.colorTextTertiary }}
@@ -194,15 +244,29 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
       </Space>
 
       <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
+      <LinkEditorModal
+        open={editorOpen}
+        item={editorItem}
+        onCancel={() => setEditorOpen(false)}
+        onSubmit={submitEditor}
+      />
 
       <Drawer
-        title="Manage links"
+        title={pinnedOnly ? LINK_MANAGER_COPY.pinnedTitle : LINK_MANAGER_COPY.title}
         open={drawerOpen}
+        rootClassName={linkStyles.linkManagerDrawer}
         size={720}
         onClose={() => setDrawerOpen(false)}
+        extra={
+          onCreateLink ? (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openAddLink}>
+              {LINK_ACTION_LABEL.add}
+            </Button>
+          ) : undefined
+        }
       >
-        <div data-testid="links-organizer-manage">
-          <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
+        <div data-testid="links-organizer-manage" className={linkStyles.linkManagerBody}>
+          <Flex vertical gap={token.sizeMD} className={linkStyles.linkManagerStack}>
             <LinkCollectionControls
               categoryCounts={categoryCounts}
               activeCategory={activeCategory}
@@ -215,13 +279,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
             {drawerItems.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links in this view." />
             ) : (
-              <div
-                style={{
-                  overflowY: 'auto',
-                  maxHeight: 'min(58vh, 560px)',
-                  paddingRight: token.paddingXS,
-                }}
-              >
+              <div className={linkStyles.linkManagerList}>
                 {drawerItems.map((item) => (
                   <SessionAttachmentDrawerRow
                     key={item.key}
@@ -233,11 +291,16 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
                     onPromoteToTeammate={onPromoteToTeammate}
                     onRemoveFromTeammate={onRemoveFromTeammate}
                     teammatePromotionBusyKeys={teammatePromotionBusyKeys}
+                    getBranchActionState={getBranchActionState}
+                    onSaveToBranch={onSaveToBranch}
+                    lifecycleBusyKeys={lifecycleBusyKeys}
+                    onEditLink={openEditLink}
+                    onDeleteLink={onDeleteLink}
                   />
                 ))}
               </div>
             )}
-          </Space>
+          </Flex>
         </div>
       </Drawer>
     </>

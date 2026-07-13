@@ -132,7 +132,7 @@ describe('linkPromotion', () => {
     ).toMatchObject({ canPromote: false, isPromoted: false, reason: 'existing-target' });
   });
 
-  it('does not promote missing source links, missing teammates, or teammate-owned links', () => {
+  it('materializes safe display-only links but still rejects missing teammates and same-owner links', () => {
     expect(
       getTeammatePromotionState({
         item: item({ linkId: undefined }),
@@ -140,7 +140,7 @@ describe('linkPromotion', () => {
         sourceBranchId: 'branch-1',
         teammateLinks: [],
       })
-    ).toMatchObject({ canPromote: false, reason: 'missing-source-link' });
+    ).toMatchObject({ canPromote: true, reason: null });
 
     expect(
       getTeammatePromotionState({

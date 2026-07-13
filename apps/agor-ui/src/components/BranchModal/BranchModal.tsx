@@ -17,16 +17,55 @@ import { SessionsTab } from './tabs/SessionsTab';
 import { TeammateTab } from './tabs/TeammateTab';
 import { type BranchUpdate, useBranchModalForm } from './useBranchModalForm';
 
-export type BranchModalTab =
-  | 'general'
-  | 'teammate'
-  | 'knowledge'
-  | 'links'
-  | 'sessions'
-  | 'environment'
-  | 'files'
-  | 'permissions'
-  | 'schedule';
+export const BRANCH_MODAL_TAB = {
+  general: 'general',
+  teammate: 'teammate',
+  knowledge: 'knowledge',
+  links: 'links',
+  sessions: 'sessions',
+  environment: 'environment',
+  files: 'files',
+  permissions: 'permissions',
+  schedule: 'schedule',
+} as const;
+
+export type BranchModalTab = (typeof BRANCH_MODAL_TAB)[keyof typeof BRANCH_MODAL_TAB];
+
+const BRANCH_TAB_ORDER: readonly BranchModalTab[] = [
+  BRANCH_MODAL_TAB.general,
+  BRANCH_MODAL_TAB.sessions,
+  BRANCH_MODAL_TAB.links,
+  BRANCH_MODAL_TAB.files,
+  BRANCH_MODAL_TAB.environment,
+  BRANCH_MODAL_TAB.schedule,
+  BRANCH_MODAL_TAB.permissions,
+];
+
+const TEAMMATE_TAB_ORDER: readonly BranchModalTab[] = [
+  BRANCH_MODAL_TAB.teammate,
+  BRANCH_MODAL_TAB.sessions,
+  BRANCH_MODAL_TAB.links,
+  BRANCH_MODAL_TAB.knowledge,
+  BRANCH_MODAL_TAB.general,
+  BRANCH_MODAL_TAB.files,
+  BRANCH_MODAL_TAB.environment,
+  BRANCH_MODAL_TAB.schedule,
+  BRANCH_MODAL_TAB.permissions,
+];
+
+const BRANCH_MODAL_TAB_LABEL: Record<
+  Exclude<BranchModalTab, typeof BRANCH_MODAL_TAB.sessions>,
+  string
+> = {
+  [BRANCH_MODAL_TAB.general]: 'General',
+  [BRANCH_MODAL_TAB.teammate]: 'Teammate',
+  [BRANCH_MODAL_TAB.knowledge]: 'Knowledge',
+  [BRANCH_MODAL_TAB.links]: 'Links',
+  [BRANCH_MODAL_TAB.environment]: 'Environment',
+  [BRANCH_MODAL_TAB.files]: 'Files',
+  [BRANCH_MODAL_TAB.permissions]: 'Permissions',
+  [BRANCH_MODAL_TAB.schedule]: 'Schedules',
+};
 
 export interface BranchModalProps {
   open: boolean;
@@ -78,7 +117,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const mcpServerById = useAgorStore(selectMcpServerById);
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
-  const [activeTab, setActiveTab] = useState<BranchModalTab>('general');
+  const [activeTab, setActiveTab] = useState<BranchModalTab>(BRANCH_MODAL_TAB.general);
 
   const form = useBranchModalForm({
     branch,
@@ -91,13 +130,18 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     [form.allUsers]
   );
   const branchBoard = boardById.get(form.general.boardId || branch?.board_id || '');
+  const isATeammate = branch ? isTeammate(branch) : false;
+  const teammateConfig = useMemo(() => (branch ? getTeammateConfig(branch) : null), [branch]);
 
-  // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
+  // Sync active tab when the modal opens. Teammates lead with their identity
+  // controls; regular branches lead with general branch settings.
   useEffect(() => {
     if (open) {
-      setActiveTab(defaultTab || 'general');
+      setActiveTab(
+        defaultTab ?? (isATeammate ? BRANCH_MODAL_TAB.teammate : BRANCH_MODAL_TAB.general)
+      );
     }
-  }, [open, defaultTab]);
+  }, [defaultTab, isATeammate, open]);
 
   // Surface owners-load failures to the user. Without this, a non-admin owner
   // hitting a network/server error would see canEdit silently flip false with
@@ -107,9 +151,6 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       showError(`Failed to load branch permissions: ${form.ownersLoadError.message}`);
     }
   }, [form.ownersLoadError, showError]);
-
-  const isATeammate = branch ? isTeammate(branch) : false;
-  const teammateConfig = useMemo(() => (branch ? getTeammateConfig(branch) : null), [branch]);
 
   if (!branch || !repo) {
     return null;
@@ -134,8 +175,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     ...(isATeammate
       ? [
           {
-            key: 'teammate',
-            label: 'Teammate',
+            key: BRANCH_MODAL_TAB.teammate,
+            label: BRANCH_MODAL_TAB_LABEL.teammate,
             children: (
               <TeammateTab
                 branch={branch}
@@ -148,8 +189,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
         ]
       : []),
     {
-      key: 'general',
-      label: 'General',
+      key: BRANCH_MODAL_TAB.general,
+      label: BRANCH_MODAL_TAB_LABEL.general,
       children: (
         <GeneralTab
           branch={branch}
@@ -165,14 +206,19 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       ),
     },
     {
-      key: 'links',
-      label: 'Links',
+      key: BRANCH_MODAL_TAB.links,
+      label: BRANCH_MODAL_TAB_LABEL.links,
       children: (
-        <LinksTab branch={branch} client={client} active={activeTab === 'links'} open={open} />
+        <LinksTab
+          branch={branch}
+          client={client}
+          active={activeTab === BRANCH_MODAL_TAB.links}
+          open={open}
+        />
       ),
     },
     {
-      key: 'sessions',
+      key: BRANCH_MODAL_TAB.sessions,
       label: (
         <span>
           Sessions{' '}
@@ -197,8 +243,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       ),
     },
     {
-      key: 'environment',
-      label: 'Environment',
+      key: BRANCH_MODAL_TAB.environment,
+      label: BRANCH_MODAL_TAB_LABEL.environment,
       children: (
         <EnvironmentTab
           branch={branch}
@@ -211,8 +257,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       ),
     },
     {
-      key: 'files',
-      label: 'Files',
+      key: BRANCH_MODAL_TAB.files,
+      label: BRANCH_MODAL_TAB_LABEL.files,
       children: <FilesTab branch={branch} client={client} />,
     },
     // Permissions tab — shown for RBAC-capable admins/owners. Keep it visible
@@ -221,8 +267,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     ...(form.canViewPermissions
       ? [
           {
-            key: 'permissions',
-            label: 'Permissions',
+            key: BRANCH_MODAL_TAB.permissions,
+            label: BRANCH_MODAL_TAB_LABEL.permissions,
             children: (
               <PermissionsTab
                 loadingOwners={form.loadingOwners}
@@ -243,8 +289,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
         ]
       : []),
     {
-      key: 'schedule',
-      label: 'Schedules',
+      key: BRANCH_MODAL_TAB.schedule,
+      label: BRANCH_MODAL_TAB_LABEL.schedule,
       children: (
         <ScheduleTab
           branch={branch}
@@ -259,20 +305,23 @@ export const BranchModal: React.FC<BranchModalProps> = ({
         />
       ),
     },
-    // Knowledge is teammate-only and intentionally last for now: it is
-    // configuration-adjacent but less central than the primary branch/session tabs.
+    // Knowledge is teammate-only; the order array keeps it near Links while
+    // leaving the primary teammate/session controls first.
     ...(isATeammate
       ? [
           {
-            key: 'knowledge',
-            label: 'Teammate Knowledge',
+            key: BRANCH_MODAL_TAB.knowledge,
+            label: BRANCH_MODAL_TAB_LABEL.knowledge,
             children: (
               <KnowledgeTab branch={branch} client={client} canEdit={form.canEditGeneral} />
             ),
           },
         ]
       : []),
-  ];
+  ].sort((left, right) => {
+    const order = isATeammate ? TEAMMATE_TAB_ORDER : BRANCH_TAB_ORDER;
+    return order.indexOf(left.key as BranchModalTab) - order.indexOf(right.key as BranchModalTab);
+  });
 
   // Modal-level footer: one Save action for all form-contributing tabs
   // (General, Teammate, Permissions). Tabs like Environment / Sessions /

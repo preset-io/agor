@@ -1,5 +1,6 @@
 import { type AgorClient, type Branch, type Session, shortId } from '@agor-live/client';
-import { Alert, Empty, Flex, List, Space, Spin, theme } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
+import { Alert, Button, Empty, Flex, List, Space, Spin, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -12,16 +13,22 @@ import {
 } from '../../../store/selectors';
 import {
   buildLinkDisplayItems,
+  canEditLinkTarget,
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
+  LINK_ACTION_LABEL,
+  LINK_OWNER_SCOPE,
   type LinkCategoryTabKey,
   type LinkDisplayItem,
+  LinkEditorModal,
   type LinkSortKey,
+  type ManualLinkDraft,
   matchesLinkCategoryTab,
   matchesLinkDisplaySearch,
   useLinkMutations,
 } from '../../Links';
 import { LinkCollectionControls } from '../../Links/LinkCollectionControls';
+import linkStyles from '../../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../../Links/SessionLinksControl';
 import { BranchLinkListItem } from './BranchLinkListItem';
 
@@ -80,7 +87,11 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   const {
     pinningKeys,
     teammateBusyKeys,
+    lifecycleBusyKeys,
     togglePinned: handleTogglePinned,
+    createLink,
+    updateLink,
+    removeLink,
     promoteToTeammate: handlePromoteToTeammate,
     removeFromTeammate: handleRemoveFromTeammate,
   } = useLinkMutations({
@@ -92,6 +103,8 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   const [activeCategory, setActiveCategory] = useState<LinkCategoryTabKey>('all');
   const [sortOrder, setSortOrder] = useState<LinkSortKey>('az');
   const [searchQuery, setSearchQuery] = useState('');
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorItem, setEditorItem] = useState<LinkDisplayItem | null>(null);
 
   const hydrate = useCallback(async () => {
     if (!client) return;
@@ -127,27 +140,56 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
     [activeCategory, items, searchQuery, sessionById, sortOrder]
   );
 
+  const openAddLink = () => {
+    setEditorItem(null);
+    setEditorOpen(true);
+  };
+
+  const openEditLink = (item: LinkDisplayItem) => {
+    setEditorItem(item);
+    setEditorOpen(true);
+  };
+
+  const submitEditor = (draft: ManualLinkDraft) => {
+    if (!editorItem) return createLink(draft, LINK_OWNER_SCOPE.branch);
+    return updateLink(editorItem, {
+      title: draft.title,
+      ...(canEditLinkTarget(editorItem) ? { target: draft.target } : {}),
+    });
+  };
+
   return (
     <>
       <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
-      <div
-        data-testid="branch-links-tab"
-        style={{ width: '100%', height: '70vh', overflowY: 'auto' }}
-      >
-        <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
+      <LinkEditorModal
+        open={editorOpen}
+        item={editorItem}
+        onCancel={() => setEditorOpen(false)}
+        onSubmit={submitEditor}
+      />
+      <div data-testid="branch-links-tab" className={linkStyles.branchLinksTab}>
+        <Space direction="vertical" size={token.sizeMD} className={linkStyles.branchLinksStack}>
           {error && (
-            <div style={{ paddingInline: token.paddingLG }}>
+            <div className={linkStyles.branchLinksSection}>
               <Alert message="Error" description={error} type="error" showIcon />
             </div>
           )}
 
+          <div className={linkStyles.branchLinksSection}>
+            <Flex justify="flex-end">
+              <Button type="primary" icon={<PlusOutlined />} onClick={openAddLink}>
+                {LINK_ACTION_LABEL.add}
+              </Button>
+            </Flex>
+          </div>
+
           {loading ? (
-            <Flex align="center" justify="center" style={{ minHeight: 180 }}>
+            <Flex align="center" justify="center" className={linkStyles.branchLinksLoading}>
               <Spin />
             </Flex>
           ) : items.length > 0 ? (
-            <Space direction="vertical" size={token.sizeMD} style={{ width: '100%' }}>
-              <div style={{ paddingInline: token.paddingLG }}>
+            <Space direction="vertical" size={token.sizeMD} className={linkStyles.branchLinksStack}>
+              <div className={linkStyles.branchLinksSection}>
                 <LinkCollectionControls
                   categoryCounts={categoryCounts}
                   activeCategory={activeCategory}
@@ -160,7 +202,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
               </div>
               {visibleItems.length > 0 ? (
                 <List
-                  style={{ paddingInline: token.paddingLG }}
+                  className={linkStyles.branchLinksSection}
                   dataSource={visibleItems}
                   renderItem={(item) => (
                     <BranchLinkListItem
@@ -171,11 +213,14 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       teammateLinks={teammatePromotionLinks}
                       sourceBranchId={branch.branch_id}
                       teammateBusyKeys={teammateBusyKeys}
+                      lifecycleBusy={lifecycleBusyKeys.has(item.linkId ?? item.key)}
                       pinning={pinningKeys.has(item.linkId ?? item.key)}
                       onOpen={openItem}
                       onTogglePinned={handleTogglePinned}
                       onPromote={handlePromoteToTeammate}
                       onRemove={handleRemoveFromTeammate}
+                      onEdit={openEditLink}
+                      onDelete={removeLink}
                     />
                   )}
                 />

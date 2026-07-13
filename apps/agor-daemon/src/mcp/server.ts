@@ -37,6 +37,7 @@ import { registerCardTools } from './tools/cards.js';
 import { registerEnvironmentTools } from './tools/environment.js';
 import { registerGatewayChannelTools } from './tools/gateway-channels.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
+import { registerLinkTools } from './tools/links.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
 import { registerMessageTools } from './tools/messages.js';
 import { registerProxyTools } from './tools/proxies.js';
@@ -218,6 +219,7 @@ const DOMAIN_TOOL_REGISTRARS: DomainToolRegistrar[] = [
   { domain: 'mcp-servers', register: registerMcpServerTools },
   { domain: 'gateway', register: registerGatewayChannelTools },
   { domain: 'knowledge', register: registerKnowledgeTools },
+  { domain: 'links', register: registerLinkTools },
   { domain: 'schedules', register: registerScheduleTools },
 ];
 

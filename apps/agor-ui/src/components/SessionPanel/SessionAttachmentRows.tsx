@@ -7,8 +7,9 @@ import {
   getLinkPinActionLabel,
   isFileLinkDisplayItem,
   isKnowledgeLinkDisplayItem,
+  LINK_ACTION_LABEL,
+  LinkActionsMenu,
   type LinkDisplayItem,
-  LinkOverflowAction,
   LinkPinAction,
 } from '../Links';
 import { getLinkItemIcon, LinkCategoryGlyph } from '../Links/LinkVisual';
@@ -39,6 +40,19 @@ export interface SessionAttachmentTeammateActions {
   teammatePromotionBusyKeys?: ReadonlySet<string>;
 }
 
+export interface SessionAttachmentBranchActions {
+  getBranchActionState?: (
+    item: SessionAttachmentItem
+  ) => { disabled: boolean; unavailableReason?: string | null } | null;
+  onSaveToBranch?: (item: SessionAttachmentItem) => Promise<unknown>;
+}
+
+export interface SessionAttachmentLifecycleActions {
+  lifecycleBusyKeys?: ReadonlySet<string>;
+  onEditLink?: (item: SessionAttachmentItem) => void;
+  onDeleteLink?: (item: SessionAttachmentItem) => Promise<unknown>;
+}
+
 interface SharedProps {
   item: SessionAttachmentItem;
   pinningKeys?: ReadonlySet<string>;
@@ -46,7 +60,11 @@ interface SharedProps {
   onTogglePinned?: (item: SessionAttachmentItem) => void | Promise<void>;
 }
 
-interface DrawerProps extends SharedProps, SessionAttachmentTeammateActions {}
+interface DrawerProps
+  extends SharedProps,
+    SessionAttachmentTeammateActions,
+    SessionAttachmentBranchActions,
+    SessionAttachmentLifecycleActions {}
 
 function attachmentIcon(item: SessionAttachmentItem, disabled: boolean): React.ReactNode {
   if (isFileLinkDisplayItem(item) || isKnowledgeLinkDisplayItem(item)) {
@@ -78,27 +96,53 @@ function pinAction(props: SharedProps) {
   );
 }
 
-function promotionAction(props: DrawerProps) {
+function actionsMenu(props: DrawerProps) {
   const state = props.getTeammateActionState?.(props.item);
-  if (!state || state.disabled) return null;
+  const branchState = props.getBranchActionState?.(props.item);
   const busyKey = props.item.linkId ?? props.item.key;
-  const busy = state.loading || Boolean(props.teammatePromotionBusyKeys?.has(busyKey));
-  const disabled = busy || (state.isPromoted && !state.teammateLinkId);
-  const label = state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
+  const busy =
+    Boolean(state?.loading) ||
+    Boolean(props.teammatePromotionBusyKeys?.has(busyKey)) ||
+    Boolean(props.lifecycleBusyKeys?.has(busyKey));
 
   return (
-    <LinkOverflowAction
-      ariaLabel={`Teammate actions for ${props.item.name}`}
-      actionLabel={label}
-      tooltip="Teammate link actions"
-      disabled={disabled}
-      loading={busy}
-      onAction={() => {
-        if (state.isPromoted && state.teammateLinkId) {
-          return props.onRemoveFromTeammate?.(props.item, state.teammateLinkId);
-        }
-        return props.onPromoteToTeammate?.(props.item);
-      }}
+    <LinkActionsMenu
+      item={props.item}
+      busy={busy}
+      onEdit={() => props.onEditLink?.(props.item)}
+      onDelete={
+        props.item.linkId && props.onDeleteLink
+          ? async () => props.onDeleteLink?.(props.item)
+          : undefined
+      }
+      branchSave={
+        branchState && props.onSaveToBranch
+          ? {
+              disabled: branchState.disabled,
+              reason: branchState.unavailableReason,
+              onSave: async () => props.onSaveToBranch?.(props.item),
+            }
+          : undefined
+      }
+      teammateAction={
+        state
+          ? {
+              label: state.isPromoted
+                ? LINK_ACTION_LABEL.removeFromTeammate
+                : LINK_ACTION_LABEL.saveToTeammate,
+              disabled: Boolean(state.disabled || (state.isPromoted && !state.teammateLinkId)),
+              reason: state.unavailableReason,
+              removal: state.isPromoted,
+              onAction: async () => {
+                if (state.isPromoted && state.teammateLinkId) {
+                  await props.onRemoveFromTeammate?.(props.item, state.teammateLinkId);
+                  return;
+                }
+                await props.onPromoteToTeammate?.(props.item);
+              },
+            }
+          : undefined
+      }
     />
   );
 }
@@ -126,8 +170,8 @@ function SessionAttachmentRow({ drawer, ...props }: DrawerProps & { drawer: bool
       onActivate={() => props.onOpen(props.item)}
       actions={
         <>
-          {pinAction(props)}
-          {drawer && promotionAction(props)}
+          {drawer && pinAction(props)}
+          {drawer && actionsMenu(props)}
         </>
       }
     >

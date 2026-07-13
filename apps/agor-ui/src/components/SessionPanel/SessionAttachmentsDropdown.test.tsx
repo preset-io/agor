@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
@@ -7,7 +7,7 @@ describe('SessionAttachmentsDropdown', () => {
   it.each([
     ['Pin', false],
     ['Unpin', true],
-  ])('shows a concise %s action for an organizer link', async (action, isPinned) => {
+  ])('keeps the concise %s action in the manager, not the header popover', async (action, isPinned) => {
     const onTogglePinned = vi.fn();
     const item = {
       key: 'branch:issue',
@@ -29,6 +29,10 @@ describe('SessionAttachmentsDropdown', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Open links organizer' }));
+    expect(
+      screen.queryByRole('button', { name: `${action} preset-io/agor#154` })
+    ).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage links' }));
     const pinButton = await screen.findByRole('button', {
       name: `${action} preset-io/agor#154`,
     });
@@ -67,7 +71,58 @@ describe('SessionAttachmentsDropdown', () => {
     expect(await screen.findByText('Loading links…')).toBeInTheDocument();
   });
 
-  it('does not show an overflow action for an unsupported uploaded-file promotion', async () => {
+  it('scopes pinned-manager counts to pinned links', async () => {
+    let openPinnedManager: (() => void) | null = null;
+    const shared = {
+      source: 'manual' as const,
+      ownerScope: 'session' as const,
+      navigation: 'external' as const,
+    };
+    const pinned = {
+      ...shared,
+      key: 'link:pinned',
+      linkId: 'pinned',
+      name: 'Pinned runbook',
+      targetKey: 'url:https://example.com/pinned',
+      category: 'url' as const,
+      kind: 'url' as const,
+      isPinned: true,
+      url: 'https://example.com/pinned',
+      href: 'https://example.com/pinned',
+    };
+    const unpinned = {
+      ...shared,
+      key: 'link:issue',
+      linkId: 'issue',
+      name: 'Issue: example/repo#1',
+      targetKey: 'url:https://github.com/example/repo/issues/1',
+      category: 'issue' as const,
+      kind: 'issue' as const,
+      isPinned: false,
+      url: 'https://github.com/example/repo/issues/1',
+      href: 'https://github.com/example/repo/issues/1',
+    };
+
+    render(
+      <MemoryRouter>
+        <SessionAttachmentsDropdown
+          items={[pinned, unpinned]}
+          onRegisterOpenPinnedManager={(openManager) => {
+            openPinnedManager = openManager;
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    act(() => openPinnedManager?.());
+
+    expect(await screen.findByRole('dialog', { name: 'Pinned links' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'All 1' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Links 1' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Issues/PRs 0' })).toBeInTheDocument();
+  });
+
+  it('keeps the action menu visible and explains unsupported uploaded-file saves', async () => {
     const item = {
       key: 'link:file-1',
       linkId: 'file-1',
@@ -98,7 +153,7 @@ describe('SessionAttachmentsDropdown', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open links organizer' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Manage links' }));
 
-    expect(screen.queryByRole('button', { name: /teammate actions/i })).toBeNull();
-    expect(screen.queryByText(/upload retention/i)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for report.pdf' }));
+    expect(await screen.findByText(/upload retention/i)).toBeInTheDocument();
   });
 });

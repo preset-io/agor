@@ -71,9 +71,12 @@ import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import {
   buildLinkDisplayItems,
+  getBranchSaveState,
   getTeammatePromotionState,
   getTeammatePromotionUnavailableReason,
   groupRenderableLinksByMessageId,
+  LINK_OWNER_SCOPE,
+  LINK_UNAVAILABLE_REASON,
   type LinkDisplayItem,
   selectPinnedLinkDisplayItems,
   useLinkMutations,
@@ -360,7 +363,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const {
     pinningKeys,
     teammateBusyKeys,
+    lifecycleBusyKeys,
     togglePinned: handleToggleSessionLinkPinned,
+    createLink: handleCreateSessionLink,
+    updateLink: handleUpdateSessionLink,
+    removeLink: handleDeleteSessionLink,
+    saveToBranch: handleSaveSessionLinkToBranch,
     promoteToTeammate: handlePromoteSessionLinkToTeammate,
     removeFromTeammate: handleRemoveSessionLinkFromTeammate,
   } = useLinkMutations({
@@ -1161,10 +1169,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       loading: teammateBusyKeys.has(actionKey),
       unavailableReason:
         unavailableReason ??
-        (!client || connectionDisabled
-          ? 'Teammate link actions unavailable while disconnected'
-          : null),
+        (!client || connectionDisabled ? LINK_UNAVAILABLE_REASON.disconnected : null),
     };
+  };
+
+  const branchStateForSessionLink = (item: LinkDisplayItem) => {
+    if (item.ownerScope !== LINK_OWNER_SCOPE.session) return null;
+    const state = getBranchSaveState({
+      item,
+      branchLinks: currentBranchLinks,
+      available: Boolean(client && branch && !connectionDisabled),
+    });
+    return { disabled: !state.canSave, unavailableReason: state.reason };
   };
 
   const handleFork = async () => {
@@ -1517,6 +1533,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               onPromoteToTeammate={handlePromoteSessionLinkToTeammate}
               onRemoveFromTeammate={handleRemoveSessionLinkFromTeammate}
               teammatePromotionBusyKeys={teammateBusyKeys}
+              getBranchActionState={branchStateForSessionLink}
+              onSaveToBranch={handleSaveSessionLinkToBranch}
+              lifecycleBusyKeys={lifecycleBusyKeys}
+              onCreateLink={(draft) => handleCreateSessionLink(draft, LINK_OWNER_SCOPE.session)}
+              onUpdateLink={handleUpdateSessionLink}
+              onDeleteLink={handleDeleteSessionLink}
             />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">

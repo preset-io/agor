@@ -4,3 +4,89 @@
 .actionRowLink:focus-visible {
   --agor-action-row-link-color: var(--ant-color-primary);
 }
+
+.branchLinksTab {
+  width: 100%;
+  min-height: 240px;
+}
+
+.branchLinksStack {
+  width: 100%;
+}
+
+.branchLinksSection {
+  padding-inline: var(--ant-padding-lg);
+}
+
+.branchLinksLoading {
+  min-height: 180px;
+}
+
+.linkManagerDrawer :global(.ant-drawer-body) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.linkManagerBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.linkManagerStack {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.linkManagerList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pinnedLinkButton {
+  min-width: 0;
+  max-width: 156px;
+  height: 22px;
+  flex: 0 1 auto;
+}
+
+.pinnedLinksRow {
+  min-width: 0;
+  max-width: 500px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.pinnedLinksOverflow {
+  min-width: 34px;
+  height: 22px;
+  padding-inline: var(--ant-padding-xxs);
+  flex: 0 0 auto;
+  color: var(--ant-color-primary);
+}
+
+.pinnedLinkContent,
+.pinnedLinkLabel {
+  min-width: 0;
+}
+
+.pinnedLinkIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.activePinIcon {
+  color: var(--ant-color-primary);
+  font-size: var(--ant-font-size-sm);
+}
+
+.activePinButton {
+  color: var(--ant-color-primary);
+}
+
+.inactivePinButton {
+  color: var(--ant-color-text-tertiary);
+}

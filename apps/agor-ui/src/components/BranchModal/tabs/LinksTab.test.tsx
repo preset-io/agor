@@ -41,7 +41,12 @@ function seedStore(branchLinks: Link[], teammateLinks: Link[] = []) {
   });
 }
 
-function makeClient(args: { branchLinks: Link[]; teammateLinks: Link[]; promoted: Link }) {
+function makeClient(args: {
+  branchLinks: Link[];
+  teammateLinks: Link[];
+  promoted: Link;
+  materialized?: Link;
+}) {
   const calls: Array<{ service: string; method: string; args: unknown[] }> = [];
   const client = {
     service(path: string) {
@@ -53,7 +58,15 @@ function makeClient(args: { branchLinks: Link[]; teammateLinks: Link[]; promoted
         },
         async create(body: unknown) {
           calls.push({ service: path, method: 'create', args: [body] });
+          if (path === 'links' && args.materialized) return args.materialized;
           return args.promoted;
+        },
+        async patch(id: string, body: Record<string, unknown>) {
+          calls.push({ service: path, method: 'patch', args: [id, body] });
+          const existing = [...args.branchLinks, ...args.teammateLinks].find(
+            (link) => link.link_id === id
+          );
+          return { ...existing, ...body };
         },
         async remove(id: string) {
           calls.push({ service: path, method: 'remove', args: [id] });
@@ -106,8 +119,8 @@ describe('LinksTab teammate promotion actions', () => {
       ).toBe(true)
     );
 
-    fireEvent.click(screen.getByLabelText('Teammate actions for Runbook'));
-    fireEvent.click(await screen.findByText('Promote to teammate'));
+    fireEvent.click(screen.getByLabelText('Actions for Runbook'));
+    fireEvent.click(await screen.findByText('Save to teammate'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
@@ -159,6 +172,54 @@ describe('LinksTab teammate promotion actions', () => {
     ).toBe(true);
   });
 
+  it('materializes generated branch metadata before saving it to a teammate', async () => {
+    const branchWithIssue = {
+      ...branch,
+      issue_url: 'https://github.com/preset-io/agor/issues/154',
+    } as Branch;
+    const materialized = makeLink({
+      link_id: 'issue-source' as Link['link_id'],
+      kind: 'issue',
+      url: branchWithIssue.issue_url,
+      target_key: 'url:https://github.com/preset-io/agor/issues/154',
+    });
+    const promoted = makeLink({
+      link_id: 'issue-teammate' as Link['link_id'],
+      branch_id: 'teammate-1' as Link['branch_id'],
+      session_id: null,
+      kind: 'issue',
+      url: branchWithIssue.issue_url,
+      target_key: 'url:https://github.com/preset-io/agor/issues/154',
+      is_pinned: true,
+      metadata: { teammate_promotion: true },
+    });
+    seedStore([]);
+    const { client, calls } = makeClient({
+      branchLinks: [],
+      teammateLinks: [],
+      materialized,
+      promoted,
+    });
+
+    renderLinksTab(client, branchWithIssue);
+
+    fireEvent.click(await screen.findByLabelText('Actions for Issue: preset-io/agor#154'));
+    fireEvent.click(await screen.findByText('Save to teammate'));
+
+    await waitFor(() => {
+      expect(calls).toContainEqual({
+        service: 'links',
+        method: 'create',
+        args: [expect.objectContaining({ url: branchWithIssue.issue_url, is_pinned: false })],
+      });
+      expect(calls).toContainEqual({
+        service: 'links/issue-source/promote',
+        method: 'create',
+        args: [{ target: 'teammate', teammate_branch_id: 'teammate-1' }],
+      });
+    });
+  });
+
   it('removes the teammate-owned copy without removing the source link', async () => {
     const source = makeLink();
     const promoted = makeLink({
@@ -177,7 +238,7 @@ describe('LinksTab teammate promotion actions', () => {
     renderLinksTab(client);
 
     await screen.findByText('Runbook');
-    fireEvent.click(screen.getByLabelText('Teammate actions for Runbook'));
+    fireEvent.click(screen.getByLabelText('Actions for Runbook'));
     fireEvent.click(await screen.findByText('Remove from teammate'));
 
     await waitFor(() => {
@@ -207,7 +268,8 @@ describe('LinksTab teammate promotion actions', () => {
     renderLinksTab(client, teammateBranch);
 
     await screen.findByText('Runbook');
-    expect(screen.queryByLabelText('Teammate actions for Runbook')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Actions for Runbook'));
+    expect(await screen.findAllByText('Already saved to teammate')).not.toHaveLength(0);
     expect(calls.some((call) => call.method === 'remove')).toBe(false);
     expect(agorStore.getState().linkById.has('teammate-link')).toBe(true);
   });
@@ -247,9 +309,9 @@ describe('LinksTab teammate promotion actions', () => {
     expect(screen.getByText('API notes')).toBeTruthy();
   });
 
-  it('does not expose manual add-link controls in the branch links tab', async () => {
+  it('opens the shared manual add-link editor from an empty branch', async () => {
     seedStore([]);
-    const { client } = makeClient({
+    const { client, calls } = makeClient({
       branchLinks: [],
       teammateLinks: [],
       promoted: makeLink(),
@@ -257,10 +319,33 @@ describe('LinksTab teammate promotion actions', () => {
 
     renderLinksTab(client);
 
-    expect(screen.queryByRole('button', { name: /add link/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /add link/i }));
+    expect(await screen.findByRole('dialog', { name: 'Add link' })).toBeInTheDocument();
     expect(
-      screen.queryByPlaceholderText('https://example.com or agor://kb/team/doc.md')
-    ).toBeNull();
+      screen.getByPlaceholderText('https://example.com or agor://kb/team/document.md')
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('Optional display label'), {
+      target: { value: 'Architecture' },
+    });
+    fireEvent.change(
+      screen.getByPlaceholderText('https://example.com or agor://kb/team/document.md'),
+      { target: { value: 'https://example.com/architecture' } }
+    );
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add link' }).at(-1)!);
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        service: 'links',
+        method: 'create',
+        args: [
+          expect.objectContaining({
+            branch_id: 'branch-1',
+            title: 'Architecture',
+            url: 'https://example.com/architecture',
+          }),
+        ],
+      })
+    );
     expect(screen.queryByLabelText(/file path/i)).toBeNull();
   });
 });

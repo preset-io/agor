@@ -7,6 +7,7 @@ import {
   getLinkDisplayCategory,
   getLinkDisplayGlyphLabel,
   getLinkDisplaySecondaryLabel,
+  getPinnedLinkDisplayName,
   type LinkDisplayItem,
   linkToDisplayItem,
   routeForKnowledgeRefUri,
@@ -23,6 +24,23 @@ import { makeTestLink as makeLink } from './testUtils';
 const KNOWLEDGE_DOCUMENT_ID = '0190a000-0000-7000-8000-0000000000aa';
 
 describe('link display helpers', () => {
+  it('keeps GitHub issue numbers visible in compact pinned labels', () => {
+    expect(
+      getPinnedLinkDisplayName({
+        name: 'Issue: openai/codex#21295',
+        category: 'issue',
+        url: 'https://github.com/openai/codex/issues/21295',
+      })
+    ).toBe('codex#21295');
+    expect(
+      getPinnedLinkDisplayName({
+        name: 'Issue: openai/codex#22354',
+        category: 'issue',
+        url: 'https://github.com/openai/codex/issues/22354',
+      })
+    ).toBe('codex#22354');
+  });
+
   it('routes path-addressed and document-ID KB refs but rejects unit refs', () => {
     expect(routeForKnowledgeRefUri('agor://kb/global/guides/architecture.md')).toBe(
       '/kb/global/guides/architecture.md'

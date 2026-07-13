@@ -1,6 +1,6 @@
-import { PushpinFilled } from '@ant-design/icons';
 import { Button, Flex, Typography, theme } from 'antd';
 import type React from 'react';
+import styles from './linkUi.module.css';
 
 interface PinnedLinkButtonProps {
   label: string;
@@ -25,22 +25,17 @@ export function PinnedLinkButton({
       shape="round"
       disabled={disabled}
       aria-label={disabled ? `${label}: ${disabledReason}` : `Open pinned ${label}`}
-      style={{ minWidth: 0, maxWidth: 156, height: 26, flex: '0 1 auto' }}
+      className={styles.pinnedLinkButton}
       onClick={(event) => {
         event.stopPropagation();
         onOpen();
       }}
     >
-      <Flex align="center" gap={token.sizeXXS} style={{ minWidth: 0 }}>
-        <PushpinFilled style={{ color: token.colorWarning, fontSize: token.fontSizeSM }} />
-        <span aria-hidden="true" style={{ display: 'inline-flex', flex: '0 0 auto' }}>
+      <Flex align="center" gap={token.sizeXXS} className={styles.pinnedLinkContent}>
+        <span aria-hidden="true" className={styles.pinnedLinkIcon}>
           {icon}
         </span>
-        <Typography.Text
-          ellipsis
-          disabled={disabled}
-          style={{ minWidth: 0, fontSize: token.fontSizeSM }}
-        >
+        <Typography.Text ellipsis disabled={disabled} className={styles.pinnedLinkLabel}>
           {label}
         </Typography.Text>
       </Flex>

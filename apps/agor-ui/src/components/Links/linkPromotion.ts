@@ -5,20 +5,25 @@ import {
   normalizeUrlTargetKey,
 } from '@agor-live/client';
 import type { LinkDisplayItem } from './linkDisplay';
+import {
+  LINK_ACTION_LABEL,
+  LINK_KIND,
+  LINK_OWNER_SCOPE,
+  LINK_PROMOTION_REASON,
+  LINK_PROMOTION_TARGET,
+  LINK_ROUTE,
+  LINK_SOURCE,
+  LINK_TARGET,
+  LINK_UNAVAILABLE_REASON,
+  type LinkPromotionReason,
+} from './linkUiConstants';
 
-type TeammatePromotionState =
+export type TeammatePromotionState =
   | {
       canPromote: false;
       isPromoted: false;
       teammateLink: null;
-      reason:
-        | 'no-teammate'
-        | 'same-owner'
-        | 'existing-target'
-        | 'missing-source-link'
-        | 'missing-target'
-        | 'file-target-lifetime'
-        | 'internal-target-access';
+      reason: LinkPromotionReason;
     }
   | {
       canPromote: true;
@@ -38,26 +43,28 @@ export function getTeammatePromotionUnavailableReason(
 ): string | null {
   if (state.canPromote) return null;
   switch (state.reason) {
-    case 'no-teammate':
-      return 'No teammate configured';
-    case 'same-owner':
-      return 'Already on teammate branch';
-    case 'existing-target':
-      return 'Teammate already owns this link';
-    case 'missing-source-link':
-      return 'Cannot promote generated branch metadata';
-    case 'missing-target':
-      return 'Cannot promote a link without a target';
-    case 'file-target-lifetime':
-      return 'File promotion awaits retention and cleanup rules';
-    case 'internal-target-access':
-      return 'Internal promotion awaits target access checks';
+    case LINK_PROMOTION_REASON.noTeammate:
+      return LINK_UNAVAILABLE_REASON.noTeammate;
+    case LINK_PROMOTION_REASON.sameOwner:
+      return LINK_UNAVAILABLE_REASON.sameOwner;
+    case LINK_PROMOTION_REASON.existingTarget:
+      return LINK_UNAVAILABLE_REASON.existingTarget;
+    case LINK_PROMOTION_REASON.missingTarget:
+      return LINK_UNAVAILABLE_REASON.missingTarget;
+    case LINK_PROMOTION_REASON.fileLifetime:
+      return LINK_UNAVAILABLE_REASON.fileLifetime;
+    case LINK_PROMOTION_REASON.internalAccess:
+      return LINK_UNAVAILABLE_REASON.internalAccess;
   }
 }
 
 export function getTeammatePromotionActionLabel(state: TeammatePromotionState): string {
-  if (state.canPromote) return state.isPromoted ? 'Remove from teammate' : 'Promote to teammate';
-  return getTeammatePromotionUnavailableReason(state) ?? 'Cannot promote this link';
+  if (state.canPromote) {
+    return state.isPromoted
+      ? LINK_ACTION_LABEL.removeFromTeammate
+      : LINK_ACTION_LABEL.saveToTeammate;
+  }
+  return getTeammatePromotionUnavailableReason(state) ?? LINK_ACTION_LABEL.promotionUnavailable;
 }
 
 export function findTeammateLinkForTarget(
@@ -73,12 +80,12 @@ export function findTeammateLinkForTarget(
 }
 
 function normalizePromotionTargetKey(targetKey: string): string {
-  if (targetKey.startsWith('file:')) return targetKey;
-  if (targetKey.toLowerCase().startsWith('url:')) {
-    return normalizeUrlTargetKey(targetKey.slice(4));
+  if (targetKey.startsWith(LINK_TARGET.fileKeyPrefix)) return targetKey;
+  if (targetKey.toLowerCase().startsWith(LINK_TARGET.urlKeyPrefix)) {
+    return normalizeUrlTargetKey(targetKey.slice(LINK_TARGET.urlKeyPrefix.length));
   }
-  if (targetKey.toLowerCase().startsWith('ref:')) {
-    return normalizeRefTargetKey(targetKey.slice(4));
+  if (targetKey.toLowerCase().startsWith(LINK_TARGET.refKeyPrefix)) {
+    return normalizeRefTargetKey(targetKey.slice(LINK_TARGET.refKeyPrefix.length));
   }
   return targetKey.toLowerCase();
 }
@@ -90,10 +97,15 @@ export function getTeammatePromotionState(args: {
   teammateLinks: readonly Link[];
 }): TeammatePromotionState {
   if (!args.teammateBranchId) {
-    return { canPromote: false, isPromoted: false, teammateLink: null, reason: 'no-teammate' };
+    return {
+      canPromote: false,
+      isPromoted: false,
+      teammateLink: null,
+      reason: LINK_PROMOTION_REASON.noTeammate,
+    };
   }
   if (
-    args.item.ownerScope === 'branch' &&
+    args.item.ownerScope === LINK_OWNER_SCOPE.branch &&
     args.sourceBranchId &&
     args.sourceBranchId === args.teammateBranchId
   ) {
@@ -108,21 +120,23 @@ export function getTeammatePromotionState(args: {
         canPromote: false,
         isPromoted: false,
         teammateLink: null,
-        reason: 'existing-target',
+        reason: LINK_PROMOTION_REASON.existingTarget,
       };
     }
-    return { canPromote: false, isPromoted: false, teammateLink: null, reason: 'same-owner' };
-  }
-  if (!args.item.linkId) {
     return {
       canPromote: false,
       isPromoted: false,
       teammateLink: null,
-      reason: 'missing-source-link',
+      reason: LINK_PROMOTION_REASON.sameOwner,
     };
   }
   if (!args.item.targetKey) {
-    return { canPromote: false, isPromoted: false, teammateLink: null, reason: 'missing-target' };
+    return {
+      canPromote: false,
+      isPromoted: false,
+      teammateLink: null,
+      reason: LINK_PROMOTION_REASON.missingTarget,
+    };
   }
 
   const teammateLink = findTeammateLinkForTarget(args.item, args.teammateLinks);
@@ -134,29 +148,32 @@ export function getTeammatePromotionState(args: {
       canPromote: false,
       isPromoted: false,
       teammateLink: null,
-      reason: 'existing-target',
+      reason: LINK_PROMOTION_REASON.existingTarget,
     };
   }
   if (
     args.item.filePath ||
-    args.item.source === 'upload' ||
-    args.item.targetKey.startsWith('file:')
+    args.item.source === LINK_SOURCE.upload ||
+    args.item.targetKey.startsWith(LINK_TARGET.fileKeyPrefix)
   ) {
     return {
       canPromote: false,
       isPromoted: false,
       teammateLink: null,
-      reason: 'file-target-lifetime',
+      reason: LINK_PROMOTION_REASON.fileLifetime,
     };
   }
-  if (args.item.kind === 'internal') {
+  if (args.item.kind === LINK_KIND.internal) {
     return {
       canPromote: false,
       isPromoted: false,
       teammateLink: null,
-      reason: 'internal-target-access',
+      reason: LINK_PROMOTION_REASON.internalAccess,
     };
   }
+  // Display-only branch issue/PR metadata is safe to materialize as a manual
+  // source link when the user chooses Save to teammate. The mutation helper
+  // performs that step before calling the promotion service.
   return { canPromote: true, isPromoted: false, teammateLink: null, reason: null };
 }
 
@@ -165,8 +182,8 @@ export async function promoteLinkToTeammate(args: {
   sourceLinkId: string;
   teammateBranchId: string;
 }): Promise<Link> {
-  return args.client.service(`links/${args.sourceLinkId}/promote`).create({
-    target: 'teammate',
+  return args.client.service(LINK_ROUTE.promote(args.sourceLinkId)).create({
+    target: LINK_PROMOTION_TARGET.teammate,
     teammate_branch_id: args.teammateBranchId,
   });
 }

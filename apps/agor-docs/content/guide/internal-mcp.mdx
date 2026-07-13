@@ -38,10 +38,26 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 | **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards spatially  |
 | **Board Zones**        | Create zones on boards, update zone properties (position, size, color), manage zone triggers            |
 | **Tasks & Reports**    | Fetch task history, create follow-up tasks, log progress, generate reports                              |
+| **Links**              | List, create, label, pin, save to branches or teammates, and delete visible links                       |
 | **Users & Teams**      | Create users, update profiles or avatars, assign roles, invite collaborators                            |
 | **Context Resources**  | Enumerate context files, load concept docs, ingest repo metadata                                        |
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to—real-time updates appear instantly for everyone watching the board.
+
+### Link tools
+
+Agents can manage the same persisted link properties exposed in the UI:
+
+| Tool | Purpose |
+| ---- | ------- |
+| `agor_links_list` | List visible session and branch links, optionally filtered by owner or pin state |
+| `agor_links_get` | Read a link's owner, target, label, pin state, provenance, and metadata |
+| `agor_links_create` | Create a manual HTTP(S) or knowledge link on a session or branch |
+| `agor_links_update` | Change a label, pin state, metadata, or the target of a manual link |
+| `agor_links_save` | Save a link to the current branch or through the guarded teammate-promotion flow |
+| `agor_links_delete` | Remove the saved link without changing its target or source message |
+
+Parsed and uploaded links keep their source-owned targets read-only. Their label and pin state remain editable after the link is persisted. File and internal links cannot be copied across ownership boundaries until their lifetime and access rules are defined.
 
 ## Self-Aware Agents Inside Agor
 

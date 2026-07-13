@@ -11,6 +11,7 @@ import {
   knowledgeDocumentIdFromRoute,
 } from '../../utils/knowledgeRoutes';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
+import { LINK_KIND } from './linkUiConstants';
 
 export type LinkDisplayCategory =
   | 'knowledge'
@@ -52,6 +53,7 @@ export interface LinkDisplayItem {
   refUri?: string;
   filePath?: string;
   mimeType?: string;
+  title?: string;
   linkId?: string;
   sessionId?: string;
   sourceSessionId?: string;
@@ -270,6 +272,24 @@ export function getCompactLinkDisplayName(
   return item.name;
 }
 
+export function getPinnedLinkDisplayName(
+  item: Pick<LinkDisplayItem, 'name' | 'title' | 'url' | 'category'>
+): string {
+  const explicitTitle = item.title?.trim();
+  if (explicitTitle) return explicitTitle;
+
+  if (item.url && (item.category === LINK_KIND.issue || item.category === LINK_KIND.pullRequest)) {
+    try {
+      const parsed = new URL(item.url);
+      const match = parsed.pathname.match(/^\/[^/]+\/([^/]+)\/(?:issues|pull)\/(\d+)(?:\/|$)/i);
+      if (match) return `${match[1]}#${match[2]}`;
+    } catch {
+      // Fall through to the shared compact display name for malformed targets.
+    }
+  }
+  return getCompactLinkDisplayName(item);
+}
+
 function getPromotedFromSessionId(metadata?: Link['metadata'] | null): string | undefined {
   if (!metadata || typeof metadata !== 'object') return undefined;
   const promotedFromOwner = metadata.promoted_from_owner;
@@ -316,6 +336,7 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
     sessionId: link.session_id ?? undefined,
     sourceSessionId: link.session_id ?? promotedFromSessionId,
     mimeType: link.mime_type ?? undefined,
+    title: titleOrNull(link.title) ?? undefined,
     href: displayTarget?.href,
     navigation: displayTarget?.navigation,
     createdAt: link.created_at,

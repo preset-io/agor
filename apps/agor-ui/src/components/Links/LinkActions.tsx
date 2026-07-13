@@ -1,5 +1,7 @@
 import { EllipsisOutlined, PushpinFilled, PushpinOutlined } from '@ant-design/icons';
-import { Button, Dropdown, Tooltip, theme } from 'antd';
+import { Button, Dropdown, type MenuProps, Tooltip } from 'antd';
+import styles from './linkUi.module.css';
+import { LINK_ACTION_KEY, LINK_ACTION_LABEL, LINK_MANAGER_COPY } from './linkUiConstants';
 
 interface LinkPinActionProps {
   pinned: boolean;
@@ -16,9 +18,8 @@ export function LinkPinAction({
   disabled = false,
   loading = false,
 }: LinkPinActionProps) {
-  const { token } = theme.useToken();
   return (
-    <Tooltip title={pinned ? 'Unpin' : 'Pin'}>
+    <Tooltip title={pinned ? LINK_ACTION_LABEL.unpin : LINK_ACTION_LABEL.pin}>
       <Button
         type="text"
         size="small"
@@ -28,26 +29,42 @@ export function LinkPinAction({
         aria-label={ariaLabel}
         icon={pinned ? <PushpinFilled /> : <PushpinOutlined />}
         onClick={() => void onToggle()}
-        style={{ color: pinned ? token.colorWarning : token.colorTextTertiary }}
+        className={pinned ? styles.activePinButton : styles.inactivePinButton}
       />
     </Tooltip>
   );
 }
 
-interface LinkOverflowActionProps {
+interface LinkOverflowActionBaseProps {
   ariaLabel: string;
-  actionLabel: string;
-  onAction: () => void | Promise<void>;
   tooltip?: string;
   disabled?: boolean;
   loading?: boolean;
 }
 
+type LinkOverflowActionProps = LinkOverflowActionBaseProps &
+  (
+    | {
+        actionLabel: string;
+        onAction: () => unknown;
+        items?: never;
+        onMenuClick?: never;
+      }
+    | {
+        actionLabel?: never;
+        onAction?: never;
+        items: NonNullable<MenuProps['items']>;
+        onMenuClick: NonNullable<MenuProps['onClick']>;
+      }
+  );
+
 export function LinkOverflowAction({
   ariaLabel,
   actionLabel,
   onAction,
-  tooltip = 'Link actions',
+  items,
+  onMenuClick,
+  tooltip = LINK_MANAGER_COPY.actionsTooltip,
   disabled = false,
   loading = false,
 }: LinkOverflowActionProps) {
@@ -57,10 +74,12 @@ export function LinkOverflowAction({
         trigger={['click']}
         disabled={disabled}
         menu={{
-          items: [{ key: 'action', label: actionLabel, disabled }],
-          onClick: () => {
-            if (!disabled) void onAction();
-          },
+          items: items ?? [{ key: LINK_ACTION_KEY.default, label: actionLabel, disabled }],
+          onClick:
+            onMenuClick ??
+            (() => {
+              if (!disabled) void onAction?.();
+            }),
         }}
       >
         <Button

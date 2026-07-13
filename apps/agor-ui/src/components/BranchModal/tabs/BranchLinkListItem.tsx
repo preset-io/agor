@@ -8,8 +8,9 @@ import {
   getLinkPinActionLabel,
   getTeammatePromotionActionLabel,
   getTeammatePromotionState,
+  getTeammatePromotionUnavailableReason,
+  LinkActionsMenu,
   type LinkDisplayItem,
-  LinkOverflowAction,
   LinkPinAction,
 } from '../../Links';
 import { LinkCategoryGlyph } from '../../Links/LinkVisual';
@@ -23,38 +24,13 @@ interface BranchLinkListItemProps {
   sourceBranchId: string;
   teammateBusyKeys?: ReadonlySet<string>;
   pinning: boolean;
+  lifecycleBusy: boolean;
   onOpen: (item: LinkDisplayItem) => void;
   onTogglePinned: (item: LinkDisplayItem) => void | Promise<void>;
   onPromote: (item: LinkDisplayItem) => void | Promise<void>;
   onRemove: (item: LinkDisplayItem, teammateLinkId: string) => void | Promise<void>;
-}
-
-function PromotionAction(props: BranchLinkListItemProps) {
-  const state = getTeammatePromotionState({
-    item: props.item,
-    teammateBranchId: props.teammateBranchId,
-    teammateLinks: props.teammateLinks,
-    sourceBranchId: props.sourceBranchId,
-  });
-  if (!state.canPromote) return null;
-  const busy = props.teammateBusyKeys?.has(props.item.linkId ?? props.item.key) ?? false;
-  const label = getTeammatePromotionActionLabel(state);
-
-  return (
-    <LinkOverflowAction
-      ariaLabel={`Teammate actions for ${getCompactLinkDisplayName(props.item)}`}
-      actionLabel={label}
-      tooltip="Teammate link actions"
-      disabled={busy}
-      loading={busy}
-      onAction={() => {
-        if (state.isPromoted && state.teammateLink) {
-          return props.onRemove(props.item, state.teammateLink.link_id);
-        }
-        return props.onPromote(props.item);
-      }}
-    />
-  );
+  onEdit: (item: LinkDisplayItem) => void;
+  onDelete: (item: LinkDisplayItem) => Promise<unknown>;
 }
 
 export function BranchLinkListItem(props: BranchLinkListItemProps) {
@@ -63,6 +39,13 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
   const disabled = Boolean(disabledReason);
   const title = getCompactLinkDisplayName(props.item);
   const targetLabel = getLinkDisplaySecondaryLabel(props.item);
+  const promotionState = getTeammatePromotionState({
+    item: props.item,
+    teammateBranchId: props.teammateBranchId,
+    teammateLinks: props.teammateLinks,
+    sourceBranchId: props.sourceBranchId,
+  });
+  const teammateBusy = props.teammateBusyKeys?.has(props.item.linkId ?? props.item.key) ?? false;
 
   return (
     <List.Item style={{ paddingBlock: 0 }}>
@@ -81,7 +64,25 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
               loading={props.pinning}
               onToggle={() => props.onTogglePinned(props.item)}
             />
-            <PromotionAction {...props} />
+            <LinkActionsMenu
+              item={props.item}
+              busy={props.lifecycleBusy || teammateBusy}
+              onEdit={() => props.onEdit(props.item)}
+              onDelete={props.item.linkId ? () => props.onDelete(props.item) : undefined}
+              teammateAction={{
+                label: getTeammatePromotionActionLabel(promotionState),
+                disabled: !promotionState.canPromote,
+                reason: getTeammatePromotionUnavailableReason(promotionState),
+                removal: promotionState.isPromoted,
+                onAction: async () => {
+                  if (promotionState.isPromoted && promotionState.teammateLink) {
+                    await props.onRemove(props.item, promotionState.teammateLink.link_id);
+                    return;
+                  }
+                  await props.onPromote(props.item);
+                },
+              }}
+            />
           </>
         }
       >

@@ -173,10 +173,8 @@ describe('BranchHeaderPill', () => {
       flex: '1 1 auto',
       minWidth: '0',
     });
-    expect(identity.parentElement).toHaveStyle({
-      width: '100%',
-      minWidth: '0',
-    });
+    expect(identity.parentElement).not.toHaveStyle({ width: '100%' });
+    expect(identity.parentElement?.className).toContain('constrained');
 
     expect(screen.getByText(repo.slug)).toHaveStyle({
       overflow: 'hidden',

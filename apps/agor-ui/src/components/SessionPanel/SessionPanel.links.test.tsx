@@ -295,6 +295,7 @@ describe('SessionPanel session links', () => {
     renderPanel(client, branchWithIssue);
 
     fireEvent.click(await screen.findByLabelText('Open links organizer'));
+    fireEvent.click(await screen.findByLabelText('Manage links'));
     fireEvent.click(await screen.findByRole('button', { name: 'Pin preset-io/agor#154' }));
 
     await waitFor(() =>
@@ -337,8 +338,8 @@ describe('SessionPanel session links', () => {
 
     fireEvent.click(await screen.findByLabelText('Open links organizer'));
     fireEvent.click(await screen.findByLabelText('Manage links'));
-    fireEvent.click(await screen.findByLabelText('Teammate actions for preset-io/agor#154'));
-    fireEvent.click(await screen.findByText('Promote to teammate'));
+    fireEvent.click(await screen.findByLabelText('Actions for preset-io/agor#154'));
+    fireEvent.click(await screen.findByText('Save to teammate'));
 
     await waitFor(() =>
       expect(calls).toContainEqual({
@@ -371,6 +372,7 @@ describe('SessionPanel session links', () => {
     renderPanel(client, branchWithIssue);
 
     fireEvent.click(await screen.findByLabelText('Open links organizer'));
+    fireEvent.click(await screen.findByLabelText('Manage links'));
     fireEvent.click(await screen.findByRole('button', { name: 'Pin preset-io/agor#154' }));
 
     await waitFor(() =>
@@ -405,8 +407,8 @@ describe('SessionPanel session links', () => {
     await screen.findByText('Session Runbook');
     fireEvent.click(screen.getByLabelText('Open links organizer'));
     fireEvent.click(await screen.findByLabelText('Manage links'));
-    fireEvent.click(await screen.findByLabelText('Teammate actions for Session Runbook'));
-    fireEvent.click(await screen.findByText('Promote to teammate'));
+    fireEvent.click(await screen.findByLabelText('Actions for Session Runbook'));
+    fireEvent.click(await screen.findByText('Save to teammate'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
@@ -442,7 +444,7 @@ describe('SessionPanel session links', () => {
     await screen.findByText('Session Runbook');
     fireEvent.click(screen.getByLabelText('Open links organizer'));
     fireEvent.click(await screen.findByLabelText('Manage links'));
-    fireEvent.click(await screen.findByLabelText('Teammate actions for Session Runbook'));
+    fireEvent.click(await screen.findByLabelText('Actions for Session Runbook'));
     fireEvent.click(await screen.findByText('Remove from teammate'));
 
     await waitFor(() => {

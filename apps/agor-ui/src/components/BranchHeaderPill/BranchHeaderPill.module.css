@@ -1,0 +1,8 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: intrinsic sizing and flex shrink are layout-only. */
+
+.constrained {
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  align-self: flex-start;
+}
