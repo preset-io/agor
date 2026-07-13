@@ -207,12 +207,13 @@ RUN pnpm install --frozen-lockfile \
 
 # `pnpm deploy` runs agor-live's postinstall against the workspace copy, not the
 # deploy output — so the @agor/{core,git} → dist symlinks it creates never land
-# in /opt/agor-live. Recreate them here (same relative targets as
-# packages/agor-live/scripts/postinstall.js) so bare `@agor/core` / `@agor/git`
-# imports in the bundled daemon/cli resolve.
-RUN mkdir -p /opt/agor-live/node_modules/@agor \
-  && ln -sfn ../../dist/core /opt/agor-live/node_modules/@agor/core \
-  && ln -sfn ../../dist/git  /opt/agor-live/node_modules/@agor/git
+# in /opt/agor-live. Re-run the packaged postinstall (shipped via the package's
+# `files` allowlist) against the deployed tree so the symlink layout stays
+# defined in exactly one place. The script warns instead of failing, so assert
+# the links resolve — a broken image must fail the build, not the smoke test.
+RUN node /opt/agor-live/scripts/postinstall.js \
+  && test -e /opt/agor-live/node_modules/@agor/core \
+  && test -e /opt/agor-live/node_modules/@agor/git
 
 # ============================================================================
 # Stage 4b: Production from source (slim runtime — pinned to its git SHA)
