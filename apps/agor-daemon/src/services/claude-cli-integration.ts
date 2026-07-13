@@ -174,7 +174,12 @@ export async function resolveClaudeCliProviderSpawn(
         timeout: 2000,
       });
     } catch (error) {
-      fs.rmSync(envPath, { force: true });
+      try {
+        fs.rmSync(envPath, { force: true });
+      } catch {
+        // The file may already be owned by the isolated session user. Preserve
+        // the original preparation error rather than masking it with EACCES.
+      }
       throw new Error(
         `Failed to prepare scoped Claude CLI credentials for ${session.unix_username}: ${error instanceof Error ? error.message : String(error)}`
       );
