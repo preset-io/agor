@@ -55,6 +55,7 @@ export function LinkOverflowAction({
     <Tooltip title={tooltip}>
       <Dropdown
         trigger={['click']}
+        disabled={disabled}
         menu={{
           items: [{ key: 'action', label: actionLabel, disabled }],
           onClick: () => {
@@ -66,6 +67,7 @@ export function LinkOverflowAction({
           type="text"
           size="small"
           shape="circle"
+          disabled={disabled}
           loading={loading}
           aria-label={ariaLabel}
           icon={<EllipsisOutlined />}

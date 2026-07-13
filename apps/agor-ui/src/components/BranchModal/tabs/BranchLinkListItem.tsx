@@ -12,7 +12,7 @@ import {
   LinkOverflowAction,
   LinkPinAction,
 } from '../../Links';
-import { LinkRowGlyph } from '../../Links/LinkVisual';
+import { LinkCategoryGlyph } from '../../Links/LinkVisual';
 import { getLinkUnavailableReason } from '../../Links/linkContent';
 
 interface BranchLinkListItemProps {
@@ -86,7 +86,7 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
         }
       >
         <Flex component="span" align="flex-start" gap="small" style={{ minWidth: 0 }}>
-          <LinkRowGlyph category={props.item.category} disabled={disabled} />
+          <LinkCategoryGlyph category={props.item.category} disabled={disabled} variant="row" />
           <Flex component="span" vertical gap={token.sizeXXS} style={{ minWidth: 0, flex: 1 }}>
             <Typography.Text strong ellipsis disabled={disabled} style={{ lineHeight: 1.25 }}>
               {title}

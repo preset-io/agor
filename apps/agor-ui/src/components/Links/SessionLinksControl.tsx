@@ -5,7 +5,7 @@ import { useThemedMessage } from '../../utils/message';
 import { ActionLinkRow } from './ActionLinkRow';
 import { LinkPinAction } from './LinkActions';
 import { LinkContentPreviewModal } from './LinkContentPreviewModal';
-import { LinkRowGlyph } from './LinkVisual';
+import { LinkCategoryGlyph } from './LinkVisual';
 import {
   downloadLinkContent,
   getLinkContentAction,
@@ -74,7 +74,7 @@ export function LinkRow({
       }
     >
       <Flex component="span" align="center" gap="small" style={{ minWidth: 0, flex: 1 }}>
-        <LinkRowGlyph category={item.category} compact />
+        <LinkCategoryGlyph category={item.category} variant="row-compact" />
         <Flex component="span" vertical style={{ minWidth: 0, flex: 1 }}>
           <Flex component="span" align="center" gap="small" style={{ minWidth: 0 }}>
             <Typography.Text

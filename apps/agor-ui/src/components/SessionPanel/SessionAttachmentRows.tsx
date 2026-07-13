@@ -11,8 +11,7 @@ import {
   LinkOverflowAction,
   LinkPinAction,
 } from '../Links';
-import { LinkAttachmentGlyph } from '../Links/LinkAttachmentCard';
-import { getLinkItemIcon } from '../Links/LinkVisual';
+import { getLinkItemIcon, LinkCategoryGlyph } from '../Links/LinkVisual';
 import {
   getLinkContentAction,
   getLinkPreviewKind,
@@ -52,15 +51,7 @@ interface DrawerProps extends SharedProps, SessionAttachmentTeammateActions {}
 function attachmentIcon(item: SessionAttachmentItem, disabled: boolean): React.ReactNode {
   if (isFileLinkDisplayItem(item) || isKnowledgeLinkDisplayItem(item)) {
     return (
-      <LinkAttachmentGlyph
-        kind={item.kind}
-        mimeType={item.mimeType}
-        title={item.name}
-        filePath={item.filePath}
-        refUri={item.refUri}
-        disabled={disabled}
-        size="sm"
-      />
+      <LinkCategoryGlyph category={item.category} disabled={disabled} variant="attachment-small" />
     );
   }
   return getLinkItemIcon(item, disabled);

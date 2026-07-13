@@ -19,6 +19,8 @@ import {
   type LinkDisplayItem,
 } from './linkDisplay';
 
+type LinkCategoryGlyphVariant = 'attachment-medium' | 'attachment-small' | 'row' | 'row-compact';
+
 export function getLinkCategoryIcon(
   category: LinkDisplayCategory,
   disabled = false
@@ -80,19 +82,29 @@ export function getLinkItemIcon(
   return getLinkCategoryIcon(item.category);
 }
 
-export function LinkRowGlyph({
+export function LinkCategoryGlyph({
   category,
+  variant,
   disabled = false,
-  compact = false,
+  onDark = false,
 }: {
   category: LinkDisplayCategory;
+  variant: LinkCategoryGlyphVariant;
   disabled?: boolean;
-  compact?: boolean;
+  onDark?: boolean;
 }) {
   const { token } = theme.useToken();
+  const isAttachment = variant === 'attachment-medium' || variant === 'attachment-small';
+  const isAttachmentMedium = variant === 'attachment-medium';
+  const isCompactRow = variant === 'row-compact';
+  const borderColor = onDark
+    ? `color-mix(in srgb, ${token.colorTextLightSolid} 26%, transparent)`
+    : token.colorBorderSecondary;
+
   return (
     <Flex
       component="span"
+      vertical={isAttachmentMedium}
       align="center"
       justify="center"
       aria-hidden="true"
@@ -100,18 +112,44 @@ export function LinkRowGlyph({
         display: 'inline-flex',
         flex: '0 0 auto',
         lineHeight: 1,
-        width: compact ? 34 : 28,
-        height: compact ? 24 : 28,
-        fontSize: 10,
-        fontWeight: compact ? 700 : 800,
-        letterSpacing: 0.2,
-        borderRadius: compact ? token.borderRadiusSM : token.borderRadiusLG,
-        background: token.colorFillTertiary,
-        color: disabled ? token.colorTextDisabled : token.colorTextTertiary,
-        border: compact ? `1px solid ${token.colorBorderSecondary}` : undefined,
+        width:
+          isAttachmentMedium || isAttachment || isCompactRow
+            ? isAttachmentMedium
+              ? token.controlHeightLG
+              : token.controlHeight
+            : token.controlHeightSM,
+        height: isAttachmentMedium
+          ? token.controlHeightLG
+          : isAttachment
+            ? token.controlHeight
+            : token.controlHeightSM,
+        fontSize: token.fontSizeIcon,
+        fontWeight: token.fontWeightStrong,
+        opacity: onDark ? 0.78 : undefined,
+        borderRadius: isCompactRow ? token.borderRadiusSM : token.borderRadiusLG,
+        background: isAttachment ? undefined : token.colorFillTertiary,
+        color: onDark
+          ? token.colorTextLightSolid
+          : disabled
+            ? isAttachment
+              ? token.colorTextSecondary
+              : token.colorTextDisabled
+            : token.colorTextTertiary,
+        border: isAttachment || isCompactRow ? `1px solid ${borderColor}` : undefined,
       }}
     >
-      {getLinkCompactGlyph(category, disabled)}
+      {isAttachmentMedium ? (
+        <>
+          <span style={{ fontSize: token.fontSizeLG }}>
+            {getLinkCategoryIcon(category, disabled)}
+          </span>
+          <span style={{ marginTop: token.sizeXXS }}>{getLinkDisplayGlyphLabel(category)}</span>
+        </>
+      ) : isAttachment ? (
+        getLinkDisplayGlyphLabel(category)
+      ) : (
+        getLinkCompactGlyph(category, disabled)
+      )}
     </Flex>
   );
 }

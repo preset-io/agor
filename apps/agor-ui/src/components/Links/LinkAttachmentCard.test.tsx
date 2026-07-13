@@ -37,10 +37,25 @@ describe('LinkAttachmentCard', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open notes.txt' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview notes.txt' }));
     expect(onOpenPreview).toHaveBeenCalledWith(
       { linkId: 'link-1', title: 'notes.txt', subtitle: 'notes.txt' },
       'text'
     );
+  });
+
+  it('names uploaded binary actions as downloads', () => {
+    render(
+      <LinkAttachmentCard
+        kind="document"
+        source="upload"
+        linkId="link-2"
+        title="report.pdf"
+        filePath="report.pdf"
+        mimeType="application/pdf"
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Download report.pdf' })).toBeInTheDocument();
   });
 });

@@ -5,7 +5,7 @@ import type React from 'react';
 import { useThemedMessage } from '../../utils/message';
 import type { LinkPreviewTarget } from './LinkContentPreviewModal';
 import { LinkImageThumbnail } from './LinkImageThumbnail';
-import { getLinkCategoryIcon } from './LinkVisual';
+import { LinkCategoryGlyph } from './LinkVisual';
 import {
   downloadLinkContent,
   getLinkContentAction,
@@ -17,7 +17,6 @@ import {
 } from './linkContent';
 import {
   getLinkDisplayCategory,
-  getLinkDisplayGlyphLabel,
   type LinkDisplayTarget,
   targetForLinkDisplay,
 } from './linkDisplay';
@@ -41,70 +40,6 @@ export interface LinkAttachmentCardProps {
   onOpenPreview?: (target: LinkPreviewTarget, kind: LinkPreviewKind) => void;
   onOpenTarget?: (target: LinkAttachmentTarget) => void;
 }
-
-export const LinkAttachmentGlyph: React.FC<{
-  kind?: LinkKind | string | null;
-  mimeType?: string | null;
-  title?: string | null;
-  filePath?: string | null;
-  refUri?: string | null;
-  disabled?: boolean;
-  onDark?: boolean;
-  size?: 'sm' | 'md';
-}> = ({
-  kind,
-  mimeType,
-  title,
-  filePath,
-  refUri,
-  disabled = false,
-  onDark = false,
-  size = 'md',
-}) => {
-  const { token } = theme.useToken();
-  const category = getLinkDisplayCategory({ kind, mimeType, title, filePath, refUri });
-  const dimension = size === 'sm' ? 28 : 38;
-  return (
-    <span
-      aria-hidden
-      style={{
-        display: 'inline-flex',
-        flex: '0 0 auto',
-        alignItems: 'center',
-        justifyContent: 'center',
-        lineHeight: 1,
-        flexDirection: 'column',
-        opacity: onDark ? 0.78 : undefined,
-        width: dimension,
-        height: dimension,
-        borderRadius: token.borderRadiusLG,
-        color: onDark
-          ? token.colorTextLightSolid
-          : disabled
-            ? token.colorTextSecondary
-            : token.colorTextTertiary,
-        border: `1px solid ${
-          onDark
-            ? `color-mix(in srgb, ${token.colorTextLightSolid} 26%, transparent)`
-            : token.colorBorderSecondary
-        }`,
-      }}
-    >
-      {size === 'sm' ? (
-        <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.2 }}>
-          {getLinkDisplayGlyphLabel(category)}
-        </span>
-      ) : (
-        <>
-          <span style={{ fontSize: 15 }}>{getLinkCategoryIcon(category, disabled)}</span>
-          <span style={{ marginTop: 3, fontSize: 9, fontWeight: 700 }}>
-            {getLinkDisplayGlyphLabel(category)}
-          </span>
-        </>
-      )}
-    </span>
-  );
-};
 
 export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
   kind,
@@ -142,6 +77,11 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
   const reason = disabledReason ?? getLinkUnavailableReason(contentItem);
   const disabled = Boolean(reason);
   const description = getSafeLinkContentLabel(subtitle ?? refUri ?? url ?? filePath);
+  const actionLabel = canDownload
+    ? `Download ${title}`
+    : previewKind
+      ? `Preview ${title}`
+      : `Open ${title}`;
 
   if (imageThumbnail && canPreviewImage && linkId && onOpenPreview) {
     return (
@@ -186,7 +126,7 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
         type="text"
         block
         disabled={disabled}
-        aria-label={disabled ? `${title}: ${reason}` : `Open ${title}`}
+        aria-label={disabled ? `${title}: ${reason}` : actionLabel}
         onClick={open}
         style={{
           display: 'flex',
@@ -206,15 +146,11 @@ export const LinkAttachmentCard: React.FC<LinkAttachmentCardProps> = ({
         }}
       >
         <Flex component="span" align="center" gap="small" style={{ width: '100%' }}>
-          <LinkAttachmentGlyph
-            kind={kind}
-            mimeType={mimeType}
-            title={title}
-            filePath={filePath}
-            refUri={refUri}
+          <LinkCategoryGlyph
+            category={contentItem.category}
             disabled={disabled}
             onDark={onDark}
-            size={compact ? 'sm' : 'md'}
+            variant={compact ? 'attachment-small' : 'attachment-medium'}
           />
           <span
             style={{
