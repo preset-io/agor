@@ -5,11 +5,7 @@
  * Claude, Codex, Gemini, and OpenCode executors.
  */
 
-import {
-  type ApiKeyName,
-  resolveApiKey,
-  stripProviderCredentialEnvironment,
-} from '@agor/core/config';
+import { type ApiKeyName, stripProviderCredentialEnvironment } from '@agor/core/config';
 import { generateId, shortId } from '@agor/core/db';
 import type {
   AgenticToolName,
@@ -329,24 +325,6 @@ export async function stampGitStateAtTaskStart(
  *
  * Returns resolution result with key, source, and useNativeAuth flag
  */
-function shouldFallbackToLocalApiKeyResolution(err: unknown): boolean {
-  const code = (err as { code?: number })?.code;
-  if (code === 400 || code === 401 || code === 403) {
-    return false;
-  }
-
-  const message = err instanceof Error ? err.message : String(err);
-  if (
-    message.includes('Executor token is not valid') ||
-    message.includes('not authorized') ||
-    message.includes('Forbidden')
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
 export async function resolveApiKeyForTask(
   keyName: ApiKeyName,
   client: AgorClient,
@@ -357,28 +335,16 @@ export async function resolveApiKeyForTask(
   // This allows executors to run as different Unix users without needing database access.
   // `tool` scopes the per-user lookup to the calling SDK's bucket so a Codex spawn
   // never resolves a key stored under `agentic_tools['claude-code']`, and vice versa.
-  try {
-    const executorSessionToken = (client as AgorClient & { executorSessionToken?: string })
-      .executorSessionToken;
-    const result = (await client.service('config/resolve-api-key').create({
-      taskId,
-      keyName,
-      tool,
-      ...(executorSessionToken ? { executorSessionToken } : {}),
-    })) as import('@agor/core/config').KeyResolutionResult;
-    sdkDebug(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
-    return result;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!shouldFallbackToLocalApiKeyResolution(err)) {
-      sdkDebug(`[API Key Resolution] Daemon rejected API key resolution: ${message}`);
-      throw err;
-    }
-
-    console.warn(`[API Key Resolution] Falling back to local resolution: ${message}`);
-    // Fall back to sync resolution (config + env only, no per-user keys)
-    return resolveApiKey(keyName, {});
-  }
+  const executorSessionToken = (client as AgorClient & { executorSessionToken?: string })
+    .executorSessionToken;
+  const result = (await client.service('config/resolve-api-key').create({
+    taskId,
+    keyName,
+    tool,
+    ...(executorSessionToken ? { executorSessionToken } : {}),
+  })) as import('@agor/core/config').KeyResolutionResult;
+  sdkDebug(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
+  return result;
 }
 
 function installProviderConnection(connection: Record<string, string | undefined>): void {

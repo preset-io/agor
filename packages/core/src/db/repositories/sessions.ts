@@ -711,7 +711,11 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * when multiple updates happen concurrently (e.g., user changes settings while permission
    * hook is saving allowedTools).
    */
-  async update(id: string, updates: Partial<Session>): Promise<Session> {
+  async update(
+    id: string,
+    updates: Partial<Session>,
+    options: { replaceAgenticConfig?: boolean } = {}
+  ): Promise<Session> {
     try {
       const fullId = await this.resolveId(id);
       const baseUrl = await getBaseUrl();
@@ -750,6 +754,14 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         // This prevents partial updates from losing existing nested fields.
         // Strategy: Objects = deep merge, Arrays = replace, Primitives = replace
         const merged = deepMerge(current, updates);
+        if (options.replaceAgenticConfig) {
+          if (Object.hasOwn(updates, 'model_config')) {
+            merged.model_config = updates.model_config;
+          }
+          if (Object.hasOwn(updates, 'permission_config')) {
+            merged.permission_config = updates.permission_config;
+          }
+        }
 
         const insertData = this.sessionToInsert(merged);
 

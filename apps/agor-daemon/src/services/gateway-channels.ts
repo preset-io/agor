@@ -64,27 +64,37 @@ export class GatewayChannelsService extends DrizzleService<
         ?.user_id
     );
     const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
+    if (resolved.preset) {
+      return {
+        agent: config.agent,
+        presetId: resolved.preset.preset_id,
+        ...(config.envVars ? { envVars: config.envVars } : {}),
+      };
+    }
     return {
       agent: config.agent,
-      ...(resolved.preset ? { presetId: resolved.preset.preset_id } : {}),
       ...configuration,
       ...(config.envVars ? { envVars: config.envVars } : {}),
     };
   }
 
   async create(data: Partial<GatewayChannel>, params?: Params) {
+    await this.validateConfig(data.agentic_config ?? null);
     const agenticConfig = await this.normalizeConfig(data.agentic_config ?? null, params);
     data = { ...data, agentic_config: agenticConfig };
-    await this.validateConfig(agenticConfig);
     return super.create(data, params);
   }
 
   async patch(id: NullableId, data: Partial<GatewayChannel>, params?: Params) {
     if (data.agentic_config !== undefined) {
+      await this.validateConfig(data.agentic_config);
       data = { ...data, agentic_config: await this.normalizeConfig(data.agentic_config, params) };
     }
-    if (data.agentic_config !== undefined) await this.validateConfig(data.agentic_config);
     return super.patch(id, data, params);
+  }
+
+  async update(id: string, data: Partial<GatewayChannel>, params?: Params) {
+    return this.patch(id, data, params) as Promise<GatewayChannel>;
   }
 }
 

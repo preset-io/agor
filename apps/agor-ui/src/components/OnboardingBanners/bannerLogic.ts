@@ -115,24 +115,34 @@ export function resolveProbeAgent(user: User | null | undefined): AgenticToolNam
   );
 }
 
-const BANNER_AUTH_TOOLS = ['claude-code', 'codex'] as const;
-
 /** Pick one enabled, policy-governed provider for the persistent auth banner. */
 export function resolveGovernedProbeAgent(
+  user: User | null | undefined,
   settings: Map<TenantAgenticToolName, TenantAgenticToolSettings>
-): (typeof BANNER_AUTH_TOOLS)[number] {
-  return BANNER_AUTH_TOOLS.find((tool) => settings.get(tool)?.enabled !== false) ?? 'claude-code';
+): AgenticToolName {
+  const preferred = resolveProbeAgent(user);
+  const canonical = preferred === 'claude-code-cli' ? 'claude-code' : preferred;
+  if (settings.get(canonical as TenantAgenticToolName)?.enabled !== false) return preferred;
+  const fallback = SUPPORTED_AGENTIC_TOOLS.find(
+    ({ tool }) =>
+      settings.get((tool === 'claude-code-cli' ? 'claude-code' : tool) as TenantAgenticToolName)
+        ?.enabled !== false
+  );
+  return fallback ? probeTargetFor(fallback.tool) : 'claude-code';
 }
 
 export function hasConfiguredCredentialFor(
   user: User | null | undefined,
-  tool: 'claude-code' | 'codex',
+  tool: AgenticToolName,
   settings?: TenantAgenticToolSettings
 ): boolean {
   const spec = SUPPORTED_AGENTIC_TOOLS.find((candidate) => candidate.tool === tool);
   const hasUserCredential = !!user && !!spec && hasStoredKeyFor(user, tool, spec.credentialFields);
-  const hasTenantCredential = PROVIDER_CREDENTIAL_FIELDS[tool].some(
-    (field) => settings?.connection[field]?.configured
+  const fields: readonly string[] = Object.hasOwn(PROVIDER_CREDENTIAL_FIELDS, tool)
+    ? PROVIDER_CREDENTIAL_FIELDS[tool as keyof typeof PROVIDER_CREDENTIAL_FIELDS]
+    : [];
+  const hasTenantCredential = fields.some(
+    (field) => settings?.connection[field as keyof typeof settings.connection]?.configured
   );
   return hasUserCredential || hasTenantCredential;
 }

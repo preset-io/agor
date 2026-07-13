@@ -133,6 +133,16 @@ export async function resolveProviderConnection(
     if (!candidate) continue;
     const { connection, source } = candidate;
     const useNativeAuth = 'useNativeAuth' in candidate && candidate.useNativeAuth;
+    if ('decryptionFailed' in candidate && candidate.decryptionFailed) {
+      return {
+        tool: canonical,
+        connection: {},
+        source,
+        policy,
+        useNativeAuth: false,
+        decryptionFailed: true,
+      };
+    }
     if ((connection && hasCredential(canonical, connection)) || useNativeAuth) {
       return {
         tool: canonical,
@@ -163,7 +173,15 @@ export function stripProviderCredentialEnvironment<T extends Record<string, stri
 ): Record<string, string> {
   const output: Record<string, string> = {};
   for (const [key, value] of Object.entries(input)) {
-    if (value !== undefined && !PROVIDER_ENV_KEYS.has(key)) output[key] = value;
+    const isCloudProviderState =
+      key.startsWith('AWS_') ||
+      key.startsWith('ANTHROPIC_VERTEX_') ||
+      key === 'GOOGLE_APPLICATION_CREDENTIALS' ||
+      key === 'CLOUD_ML_REGION' ||
+      key === 'VERTEX_REGION_CLAUDE_3_5_HAIKU';
+    if (value !== undefined && !PROVIDER_ENV_KEYS.has(key) && !isCloudProviderState) {
+      output[key] = value;
+    }
   }
   return output;
 }

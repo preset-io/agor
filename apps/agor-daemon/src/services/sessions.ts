@@ -260,7 +260,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   }
 
   /** Re-resolve a live preset immediately before a task starts. */
-  async materializeAgenticToolPreset(session: Session, params?: SessionParams): Promise<Session> {
+  async materializeAgenticToolPreset(session: Session, _params?: SessionParams): Promise<Session> {
     if (!session.agentic_tool_preset_id) {
       await assertInlineAgenticConfigurationAllowed(this.db, session.agentic_tool);
       return session;
@@ -270,11 +270,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       session.agentic_tool,
       session.agentic_tool_preset_id
     );
-    const updated = (await this.patch(
+    const updated = await this.sessionRepo.update(
       session.session_id,
       presetConfigurationToSessionPatch(session.agentic_tool, preset.configuration),
-      { ...params, _applyingAgenticToolPreset: true }
-    )) as Session;
+      { replaceAgenticConfig: true }
+    );
     return updated;
   }
 
@@ -1117,6 +1117,16 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     data: Partial<Session>,
     params?: SessionParams
   ): Promise<Session | Session[]> {
+    let replaceAgenticConfig = false;
+    if (
+      (id === null || Array.isArray(id)) &&
+      (data.agentic_tool !== undefined ||
+        data.agentic_tool_preset_id !== undefined ||
+        data.model_config !== undefined ||
+        data.permission_config !== undefined)
+    ) {
+      throw new BadRequest('Agentic configuration cannot be changed with a multi-session patch');
+    }
     if (data.agentic_tool && !(await isTenantAgenticToolEnabled(data.agentic_tool, this.db))) {
       throw new BadRequest(`${data.agentic_tool} is disabled for this workspace`);
     }
@@ -1149,6 +1159,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
           agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
           ...presetConfigurationToSessionPatch(tool, configuration),
         };
+        replaceAgenticConfig = true;
       } else if (data.agentic_tool_preset_id === null && current.agentic_tool_preset_id) {
         await assertInlineAgenticConfigurationAllowed(
           this.db,
@@ -1156,7 +1167,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         );
       }
     }
-    const result = (await super.patch(id, data, params)) as Session | Session[];
+    const result = (
+      replaceAgenticConfig && id && !Array.isArray(id)
+        ? await this.sessionRepo.update(String(id), data, { replaceAgenticConfig: true })
+        : await super.patch(id, data, params)
+    ) as Session | Session[];
 
     const callbackEnabled = data.callback_config?.enabled;
     if (
@@ -1174,6 +1189,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     }
 
     return result;
+  }
+
+  async update(id: string, data: Partial<Session>, params?: SessionParams): Promise<Session> {
+    return (await this.patch(id, data, params)) as Session;
   }
 
   /**

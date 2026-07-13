@@ -43,6 +43,13 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
    * decrypted credentials never leave this repository.
    */
   private rowToUser(row: UserRow): InternalUser {
+    const legacyDefaultMcpServerIds = Object.values(
+      (row.data.default_agentic_config ?? {}) as Record<string, { mcpServerIds?: unknown }>
+    ).flatMap((config) =>
+      Array.isArray(config?.mcpServerIds)
+        ? config.mcpServerIds.filter((id): id is string => typeof id === 'string')
+        : []
+    );
     return {
       user_id: row.user_id as UUID,
       created_at: new Date(row.created_at),
@@ -81,7 +88,9 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       })(),
       default_agentic_config: row.data.default_agentic_config as User['default_agentic_config'],
       default_agentic_selection: row.data.default_agentic_selection,
-      default_mcp_server_ids: row.data.default_mcp_server_ids,
+      default_mcp_server_ids: row.data.default_mcp_server_ids ?? [
+        ...new Set(legacyDefaultMcpServerIds),
+      ],
     };
   }
 

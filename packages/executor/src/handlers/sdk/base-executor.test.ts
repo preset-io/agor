@@ -1,14 +1,5 @@
-import { resolveApiKey } from '@agor/core/config';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { resolveApiKeyForTask } from './base-executor.js';
-
-vi.mock('@agor/core/config', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@agor/core/config')>();
-  return {
-    ...actual,
-    resolveApiKey: vi.fn(),
-  };
-});
 
 function makeClient(error: unknown) {
   return {
@@ -43,10 +34,6 @@ function makeSuccessfulClient(capture: { data?: unknown }) {
 }
 
 describe('resolveApiKeyForTask', () => {
-  beforeEach(() => {
-    vi.mocked(resolveApiKey).mockReset();
-  });
-
   it('sends the executor session token as explicit task-scoped proof', async () => {
     const capture: { data?: unknown } = {};
 
@@ -80,17 +67,9 @@ describe('resolveApiKeyForTask', () => {
         'codex' as never
       )
     ).rejects.toThrow('Executor token is not valid for this task');
-
-    expect(resolveApiKey).not.toHaveBeenCalled();
   });
 
-  it('keeps unavailable daemon fallback fail-closed', async () => {
-    vi.mocked(resolveApiKey).mockReturnValue({
-      apiKey: undefined,
-      source: 'none',
-      useNativeAuth: false,
-    });
-
+  it('does not consult local config when the daemon is unavailable', async () => {
     await expect(
       resolveApiKeyForTask(
         'OPENAI_API_KEY',
@@ -98,8 +77,6 @@ describe('resolveApiKeyForTask', () => {
         'task-1' as never,
         'codex' as never
       )
-    ).resolves.toMatchObject({ apiKey: undefined, source: 'none' });
-
-    expect(resolveApiKey).toHaveBeenCalledWith('OPENAI_API_KEY', {});
+    ).rejects.toThrow('fetch failed');
   });
 });

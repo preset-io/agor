@@ -1233,7 +1233,6 @@ export const appVariables = sqliteTable(
 export const agenticToolPresets = sqliteTable(
   'agentic_tool_presets',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
     preset_id: text('preset_id').primaryKey(),
     tool: text('tool', {
       enum: ['claude-code', 'codex', 'gemini', 'copilot', 'cursor', 'opencode'],
@@ -1248,14 +1247,9 @@ export const agenticToolPresets = sqliteTable(
     updated_at: t.timestamp('updated_at').notNull(),
   },
   (table) => ({
-    tenantIdx: index('agentic_tool_presets_tenant_id_idx').on(table.tenant_id),
-    tenantToolNameUnique: uniqueIndex('agentic_tool_presets_tenant_tool_name_unique').on(
-      table.tenant_id,
-      table.tool,
-      table.name
-    ),
+    toolNameUnique: uniqueIndex('agentic_tool_presets_tool_name_unique').on(table.tool, table.name),
     tenantToolDefaultUnique: uniqueIndex('agentic_tool_presets_tenant_tool_default_unique')
-      .on(table.tenant_id, table.tool)
+      .on(table.tool)
       .where(sql`${table.is_default} = 1`),
   })
 );

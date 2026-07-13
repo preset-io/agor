@@ -126,6 +126,7 @@ describe('OnboardingBanners probe effect', () => {
     render(
       <OnboardingBanners
         {...baseProps({
+          user: onboardedUser('admin-1', { role: 'admin' }),
           onOpenUserSettings,
           onOpenWorkspaceSettings,
           onCheckAuth: async () => result('unauthenticated'),
@@ -135,6 +136,33 @@ describe('OnboardingBanners probe effect', () => {
     fireEvent.click((await screen.findByText('Reconnect AI')).closest('button')!);
     expect(onOpenWorkspaceSettings).toHaveBeenCalledWith('agentic-tools');
     expect(onOpenUserSettings).not.toHaveBeenCalled();
+  });
+
+  it('routes members to user settings when tenant credentials are preferred', async () => {
+    agorStore.getState().setAgenticToolSettings([
+      {
+        tool: 'claude-code',
+        enabled: true,
+        resolution_policy: 'tenant_preferred',
+        inline_configuration_allowed: true,
+        connection: { ANTHROPIC_API_KEY: { configured: true } },
+      },
+    ]);
+    const onOpenUserSettings = vi.fn();
+    const onOpenWorkspaceSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('member-1', { role: 'member' }),
+          onOpenUserSettings,
+          onOpenWorkspaceSettings,
+          onCheckAuth: async () => result('unauthenticated'),
+        })}
+      />
+    );
+    fireEvent.click((await screen.findByText('Reconnect AI')).closest('button')!);
+    expect(onOpenUserSettings).toHaveBeenCalledWith('claude-code');
+    expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
   });
 
   it('routes user-preferred credential failures to the selected user tool tab', async () => {

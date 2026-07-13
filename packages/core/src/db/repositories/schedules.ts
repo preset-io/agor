@@ -340,6 +340,9 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         created_by: current.created_by,
         updated_at: new Date().toISOString(),
       });
+      if (updates.agentic_tool_config !== undefined) {
+        merged.agentic_tool_config = updates.agentic_tool_config;
+      }
 
       const insertData = this.scheduleToInsert(merged);
       insertData.updated_at = new Date();

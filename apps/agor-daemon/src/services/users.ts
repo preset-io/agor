@@ -625,7 +625,10 @@ export class UsersService {
             : (data.avatar_synced_at ?? current.avatar_synced_at),
         preferences: data.preferences ?? current.preferences,
         agentic_tools: Object.keys(nextAgenticTools).length > 0 ? nextAgenticTools : undefined,
-        agentic_auth_methods: data.agentic_auth_methods ?? current.agentic_auth_methods,
+        agentic_auth_methods:
+          data.agentic_auth_methods !== undefined
+            ? { ...current.agentic_auth_methods, ...data.agentic_auth_methods }
+            : current.agentic_auth_methods,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
         default_agentic_config: data.default_agentic_config ?? current.default_agentic_config,
         default_agentic_selection:

@@ -1097,7 +1097,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     params: RouteParams
   ): Promise<Task> {
-    const { messageStartIndex, session } = await runWithTenantDatabaseScope(
+    const { messageStartIndex, session: loadedSession } = await runWithTenantDatabaseScope(
       db,
       getCurrentTenantId(),
       async () => ({
@@ -1106,6 +1106,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         messageStartIndex: await sessionsRepository.countMessages(task.session_id),
       })
     );
+    if (!(await isTenantAgenticToolEnabled(loadedSession.agentic_tool, db))) {
+      throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
+    }
+    const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
     const startTimestamp = new Date().toISOString();
 
     // The daemon transitions the task to RUNNING and writes required sentinel

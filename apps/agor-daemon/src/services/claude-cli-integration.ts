@@ -107,7 +107,7 @@ function getDb(app: Application): TenantScopeAwareDatabase | null {
 }
 
 function claudeCliProviderEnvPath(sessionId: SessionID): string {
-  return path.join(os.tmpdir(), `agor-claude-cli-provider-${sessionId}.sh`);
+  return path.join(os.homedir(), '.agor', 'runtime', `claude-cli-provider-${sessionId}.sh`);
 }
 
 /** Overlay the session owner's scoped connection without exposing it to generic terminals. */
@@ -130,15 +130,35 @@ export async function resolveClaudeCliProviderSpawn(
   ].some((field) => connection[field]?.trim());
   if (resolved.decryptionFailed || !hasCredential) return null;
 
-  const envPath = claudeCliProviderEnvPath(session.session_id);
+  const homeDir = resolveHomeDirForCliSession(session);
+  const envPath = session.unix_username
+    ? path.join(homeDir, '.agor', 'runtime', `claude-cli-provider-${session.session_id}.sh`)
+    : claudeCliProviderEnvPath(session.session_id);
   const exports = Object.entries(connection).map(([key, value]) => {
     const escaped = (value ?? '').replace(/'/g, "'\\''");
     return `export ${key}='${escaped}'`;
   });
-  fs.writeFileSync(envPath, `#!/bin/sh\n${exports.join('\n')}\n`, { mode: 0o600 });
+  const contents = `#!/bin/sh\n${exports.join('\n')}\n`;
   if (session.unix_username) {
+    if (!isValidUnixUsername(session.unix_username)) {
+      throw new Error('Invalid Unix username for scoped Claude CLI credentials');
+    }
     try {
+      const envDir = path.dirname(envPath);
+      childProcess.execFileSync('sudo', ['-n', 'mkdir', '-p', envDir], {
+        stdio: 'pipe',
+        timeout: 2000,
+      });
+      childProcess.execFileSync('sudo', ['-n', 'tee', envPath], {
+        input: contents,
+        stdio: 'pipe',
+        timeout: 2000,
+      });
       childProcess.execFileSync('sudo', ['-n', 'chown', session.unix_username, envPath], {
+        stdio: 'pipe',
+        timeout: 2000,
+      });
+      childProcess.execFileSync('sudo', ['-n', 'chmod', '600', envPath], {
         stdio: 'pipe',
         timeout: 2000,
       });
@@ -148,10 +168,20 @@ export async function resolveClaudeCliProviderSpawn(
         `Failed to prepare scoped Claude CLI credentials for ${session.unix_username}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
+  } else {
+    fs.mkdirSync(path.dirname(envPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(envPath, contents, { mode: 0o600 });
   }
   return {
     bin: '/bin/sh',
-    args: ['-c', '. "$1"; shift; exec "$@"', 'agor-claude-cli', envPath, built.bin, ...built.args],
+    args: [
+      '-c',
+      '. "$1"; rm -f "$1"; shift; exec "$@"',
+      'agor-claude-cli',
+      envPath,
+      built.bin,
+      ...built.args,
+    ],
   };
 }
 

@@ -1,5 +1,4 @@
 CREATE TABLE `agentic_tool_presets` (
-	`tenant_id` text DEFAULT 'default' NOT NULL,
 	`preset_id` text PRIMARY KEY NOT NULL,
 	`tool` text NOT NULL,
 	`name` text NOT NULL,
@@ -11,9 +10,7 @@ CREATE TABLE `agentic_tool_presets` (
 	`updated_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `agentic_tool_presets_tenant_id_idx` ON `agentic_tool_presets` (`tenant_id`);
---> statement-breakpoint
-CREATE UNIQUE INDEX `agentic_tool_presets_tenant_tool_name_unique` ON `agentic_tool_presets` (`tenant_id`,`tool`,`name`);
+CREATE UNIQUE INDEX `agentic_tool_presets_tool_name_unique` ON `agentic_tool_presets` (`tool`,`name`);
 --> statement-breakpoint
 ALTER TABLE `sessions` ADD `agentic_tool_preset_id` text(36) REFERENCES agentic_tool_presets(preset_id) ON DELETE restrict;
 --> statement-breakpoint

@@ -75,38 +75,47 @@ export class SchedulesService extends DrizzleService<Schedule, Partial<Schedule>
       params?.user?.user_id as import('@agor/core/types').UserID | undefined
     );
     const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
+    if (resolved.preset) {
+      return {
+        agentic_tool: config.agentic_tool,
+        preset_id: resolved.preset.preset_id,
+      };
+    }
     const normalized = presetConfigurationToScheduleConfig(
       config.agentic_tool,
-      resolved.preset?.preset_id ?? config.preset_id,
+      config.preset_id,
       configuration
     );
-    if (resolved.preset) return normalized;
     const { preset_id: _presetId, ...inline } = normalized;
     return inline;
   }
 
   async create(data: Partial<Schedule>, params?: ScheduleParams) {
     if (data.agentic_tool_config) {
+      await this.validateConfig(data.agentic_tool_config);
       const agenticToolConfig = await this.normalizeConfig(data.agentic_tool_config, params);
       data = {
         ...data,
         agentic_tool_config: agenticToolConfig,
       };
-      await this.validateConfig(agenticToolConfig);
     }
     return super.create(data, params);
   }
 
   async patch(id: string | null, data: Partial<Schedule>, params?: ScheduleParams) {
     if (data.agentic_tool_config) {
+      await this.validateConfig(data.agentic_tool_config);
       const agenticToolConfig = await this.normalizeConfig(data.agentic_tool_config, params);
       data = {
         ...data,
         agentic_tool_config: agenticToolConfig,
       };
-      await this.validateConfig(agenticToolConfig);
     }
     return super.patch(id, data, params);
+  }
+
+  async update(id: string, data: Partial<Schedule>, params?: ScheduleParams) {
+    return this.patch(id, data, params) as Promise<Schedule>;
   }
 }
 

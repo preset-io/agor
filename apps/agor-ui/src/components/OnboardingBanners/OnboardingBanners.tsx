@@ -101,10 +101,12 @@ export function OnboardingBanners({
   // Pre-compute user-derived values so the effect captures primitives, not the full user object.
   const userId = user?.user_id;
   const onboardingCompleted = !!user?.onboarding_completed;
-  const probeAgent = resolveGovernedProbeAgent(agenticToolSettings);
-  const probeSettings = agenticToolSettings.get(probeAgent);
+  const probeAgent = resolveGovernedProbeAgent(user, agenticToolSettings);
+  const canonicalProbeAgent = probeAgent === 'claude-code-cli' ? 'claude-code' : probeAgent;
+  const probeSettings = agenticToolSettings.get(canonicalProbeAgent as never);
   const hasLlm = hasConfiguredCredentialFor(user, probeAgent, probeSettings);
   const credentialOwner = preferredCredentialOwner(probeSettings);
+  const canManageWorkspaceCredentials = user?.role === 'admin' || user?.role === 'superadmin';
 
   // One probe (plus a bounded fallback) per identity/credential change. Deps are
   // primitives/stable so the effect never re-fires on board navigation or
@@ -155,7 +157,7 @@ export function OnboardingBanners({
           message="⚡ No AI connected - sessions will open but nothing will run."
           buttonLabel="Connect AI"
           onClick={() =>
-            credentialOwner === 'tenant'
+            credentialOwner === 'tenant' && canManageWorkspaceCredentials
               ? onOpenWorkspaceSettings('agentic-tools')
               : onOpenUserSettings(probeAgent)
           }
@@ -168,7 +170,7 @@ export function OnboardingBanners({
           message="Your AI credentials aren't working. Sessions will fail until you reconnect."
           buttonLabel="Reconnect AI"
           onClick={() =>
-            credentialOwner === 'tenant'
+            credentialOwner === 'tenant' && canManageWorkspaceCredentials
               ? onOpenWorkspaceSettings('agentic-tools')
               : onOpenUserSettings(probeAgent)
           }

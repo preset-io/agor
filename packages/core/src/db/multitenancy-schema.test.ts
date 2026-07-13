@@ -21,17 +21,24 @@ function postgresSchemaTenantTables(): string[] {
 
 function migrationTenantTables(): string[] {
   const migration = readRepoFile('packages/core/drizzle/postgres/0054_app_level_multitenancy.sql');
+  const presetsMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'
+  );
   return [
     ...new Set(
-      [...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g)].map((m) => m[1])
+      [
+        ...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g),
+        ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+      ].map((m) => m[1])
     ),
   ].sort();
 }
 
 function rlsPolicyTables(): string[] {
-  const migration = readRepoFile(
-    'packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'
-  );
+  const migration = [
+    readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
+  ].join('\n');
   return [
     ...new Set(
       [...migration.matchAll(/CREATE POLICY "tenant_isolation_([^"]+)" ON "([^"]+)"/g)].map(
