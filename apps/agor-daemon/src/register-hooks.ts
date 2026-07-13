@@ -1602,19 +1602,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Also starts/stops Socket Mode listeners for created/updated/deleted channels.
   const refreshGatewayChannelState = async (context: HookContext) => {
     const gw = context.app.service('gateway') as unknown as GatewayService;
-
-    // Refresh the hasActiveChannels flag
-    gw.refreshChannelState().catch((err: unknown) =>
-      console.warn('[gateway] Failed to refresh channel state:', err)
-    );
-
-    // Start/stop listener for created/updated channel
     const channel = context.result as { id: string } | undefined;
-    if (channel?.id) {
-      gw.startListenerForChannel(channel.id).catch((err: unknown) =>
-        console.warn(`[gateway] Failed to manage listener for channel ${channel.id}:`, err)
-      );
-    }
+    deferWithTenantContext(
+      context.params,
+      async () => {
+        await gw.refreshChannelState();
+        if (channel?.id) await gw.startListenerForChannel(channel.id);
+      },
+      (err) => console.warn('[gateway] Failed to refresh channel/listener state:', err)
+    );
 
     return context;
   };
@@ -1626,8 +1622,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     // Stop listener for deleted channel (use id from route params)
     const channelId = context.id as string | undefined;
     if (channelId) {
-      gw.stopChannelListener(channelId).catch((err: unknown) =>
-        console.warn(`[gateway] Failed to stop listener for channel ${channelId}:`, err)
+      deferWithTenantContext(
+        context.params,
+        () => gw.stopChannelListener(channelId),
+        (err) => console.warn(`[gateway] Failed to stop listener for channel ${channelId}:`, err)
       );
     }
 

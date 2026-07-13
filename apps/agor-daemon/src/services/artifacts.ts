@@ -30,6 +30,7 @@ import {
   ArtifactTrustGrantRepository,
   BoardRepository,
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -340,7 +341,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
-    const artifactRepo = new ArtifactRepository(db);
+    const artifactRepo = bindRepositoryToTenantUnitOfWork(db, new ArtifactRepository(db));
     super(artifactRepo, {
       id: 'artifact_id',
       resourceType: 'Artifact',
@@ -350,9 +351,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
     });
     this.artifactRepo = artifactRepo;
-    this.trustRepo = new ArtifactTrustGrantRepository(db);
-    this.branchRepo = new BranchRepository(db);
-    this.boardRepo = new BoardRepository(db);
+    this.trustRepo = bindRepositoryToTenantUnitOfWork(db, new ArtifactTrustGrantRepository(db));
+    this.branchRepo = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
+    this.boardRepo = bindRepositoryToTenantUnitOfWork(db, new BoardRepository(db));
     this.app = app;
     this.dbRef = db;
   }

@@ -224,30 +224,28 @@ IMPORTANT:
           'Provide either legacy folderPath or branchId + subpath to publish artifacts.'
         );
       }
-      const artifact = await runWithMcpTenantDatabaseScope(ctx, () =>
-        service.publishArtifact(
-          {
-            folderPath,
-            branch_id: resolvedBranchId,
-            source_session_id: ctx.sessionId,
-            subpath,
-            board_id: resolvedBoardId,
-            name: coerceString(args.name),
-            artifact_id: resolvedArtifactId,
-            template: args.template,
-            public: args.public,
-            sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
-            required_env_vars: args.requiredEnvVars,
-            agor_grants: args.agorGrants as AgorGrants | undefined,
-            agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
-            x: args.x,
-            y: args.y,
-            width: args.width,
-            height: args.height,
-          },
-          ctx.userId,
-          ctx.authenticatedUser.role as UserRole
-        )
+      const artifact = await service.publishArtifact(
+        {
+          folderPath,
+          branch_id: resolvedBranchId,
+          source_session_id: ctx.sessionId,
+          subpath,
+          board_id: resolvedBoardId,
+          name: coerceString(args.name),
+          artifact_id: resolvedArtifactId,
+          template: args.template,
+          public: args.public,
+          sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
+          required_env_vars: args.requiredEnvVars,
+          agor_grants: args.agorGrants as AgorGrants | undefined,
+          agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
+          x: args.x,
+          y: args.y,
+          width: args.width,
+          height: args.height,
+        },
+        ctx.userId,
+        ctx.authenticatedUser.role as UserRole
       );
 
       const publishValidation = args.waitForStatus

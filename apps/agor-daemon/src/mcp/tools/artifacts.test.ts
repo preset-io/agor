@@ -143,9 +143,9 @@ describe('artifact MCP tool input schemas', () => {
 });
 
 describe('artifact MCP transaction boundaries', () => {
-  it('commits publish work before waiting for browser runtime status', async () => {
+  it('leaves publish filesystem work and browser waiting outside the DB scope', async () => {
     const publishArtifact = vi.fn(async () => {
-      expect(insideTenantDatabaseScope).toBe(true);
+      expect(insideTenantDatabaseScope).toBe(false);
       return { artifact_id: 'artifact-1', name: 'Artifact', files: {} };
     });
     const waitForRuntimeStatus = vi.fn(async () => {

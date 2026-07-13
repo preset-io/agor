@@ -15,6 +15,7 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   generateId,
   MCPServerRepository,
   MessagesRepository,
@@ -149,7 +150,7 @@ import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
   createTenantDatabaseScopeAroundHook,
-  deferWithTenantDatabaseScope,
+  deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
 import {
   createUploadMiddleware,
@@ -310,14 +311,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ) as Promise<Awaited<T>>;
     };
 
-  /**
-   * Schedule fn in a new event-loop tick with a fresh tenant DB scope.
-   * Always use this instead of bare setImmediate inside route/service code —
-   * bare setImmediate inherits the active transaction ALS store, while a plain
-   * ALS exit loses Postgres RLS tenant context for session/task lookups.
-   */
+  /** Schedule orchestration after commit with tenant identity but no open transaction. */
   function deferInFreshTenantScope(params: RouteParams, fn: () => Promise<void>): void {
-    deferWithTenantDatabaseScope(db, params, fn);
+    deferWithTenantContext(params, fn);
   }
 
   const registerAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (
@@ -2397,7 +2393,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionId: SessionID,
     params: RouteParams
   ): Promise<void> {
-    const taskRepo = new TaskRepository(db);
+    const taskRepo = bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db));
     const nextTask = await taskRepo.getNextQueued(sessionId);
 
     if (!nextTask) {
@@ -2406,7 +2402,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     }
 
     const userId = nextTask.metadata?.queued_by_user_id;
-    const userRepo = new UsersRepository(db);
+    const userRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
     const queuedByUser = userId ? await userRepo.findById(userId) : undefined;
 
     const taskParams: RouteParams = queuedByUser

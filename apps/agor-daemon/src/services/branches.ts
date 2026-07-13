@@ -75,7 +75,7 @@ import {
   runExecutorCommand,
   spawnExecutor,
 } from '../utils/spawn-executor.js';
-import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
+import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import type { InternalEnrichmentParams } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
@@ -144,8 +144,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
-    findByBranchId: (branchId: BranchID) => Promise<{ object_id: string; zone_id?: string } | null>;
-    create: (data: unknown) => Promise<unknown>;
+    findByBranchId: (
+      branchId: BranchID,
+      params?: unknown
+    ) => Promise<{ object_id: string; zone_id?: string } | null>;
+    create: (data: unknown, params?: unknown) => Promise<unknown>;
     remove: (id: string) => Promise<unknown>;
     patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
   };
@@ -464,7 +467,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     };
 
-    deferWithTenantDatabaseScope(this.db, params, spawnLifecycleExecutor, (error) => {
+    deferWithTenantContext(params, spawnLifecycleExecutor, (error) => {
       console.error(`${logPrefix} Failed to dispatch executor:`, error);
     });
   }
@@ -577,15 +580,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   private getBoardObjectsService() {
     if (!this.boardObjectsService) {
-      this.boardObjectsService = this.app.service('board-objects') as unknown as {
-        find: (params?: unknown) => Promise<unknown>;
-        findByBranchId: (
-          branchId: BranchID
-        ) => Promise<{ object_id: string; zone_id?: string } | null>;
-        create: (data: unknown) => Promise<unknown>;
-        remove: (id: string) => Promise<unknown>;
-        patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
-      };
+      this.boardObjectsService = this.app.service('board-objects') as unknown as NonNullable<
+        BranchesService['boardObjectsService']
+      >;
     }
     return this.boardObjectsService;
   }
@@ -1687,10 +1684,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
         // Mark as failed so the UI can show the error state
         const errMsg = error instanceof Error ? error.message : String(error);
-        await this.patch(
-          id,
-          { filesystem_status: 'failed', error_message: `Failed to spawn executor: ${errMsg}` },
-          { provider: undefined }
+        await this.withTenantDatabase(params, () =>
+          this.patch(
+            id,
+            { filesystem_status: 'failed', error_message: `Failed to spawn executor: ${errMsg}` },
+            { ...params, provider: undefined }
+          )
         );
       }
     }
@@ -1700,21 +1699,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (targetBoardId) {
       const boardObjectsService = this.getBoardObjectsService();
       try {
-        const existingObject = (await boardObjectsService.findByBranchId(id)) as {
-          object_id: string;
-        } | null;
-        if (!existingObject) {
-          const position = await this.computeDefaultBoardPositionForBranch(
-            targetBoardId,
-            id,
-            params
-          );
-          await boardObjectsService.create({
-            board_id: targetBoardId,
-            branch_id: id,
-            position,
-          });
-        }
+        await this.withTenantDatabase(params, async () => {
+          const existingObject = (await boardObjectsService.findByBranchId(id)) as {
+            object_id: string;
+          } | null;
+          if (!existingObject) {
+            const position = await this.computeDefaultBoardPositionForBranch(
+              targetBoardId,
+              id,
+              params
+            );
+            await boardObjectsService.create({ board_id: targetBoardId, branch_id: id, position });
+          }
+        });
       } catch (error) {
         console.error(
           `⚠️ Failed to restore board object for unarchived branch ${id}:`,
