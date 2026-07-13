@@ -15,7 +15,10 @@
  * - ScheduleModal (select)
  */
 
+import type { TenantAgenticToolName } from '@agor-live/client';
 import { Select, Space, Typography } from 'antd';
+import { useEffect } from 'react';
+import { useAgorStore } from '../../store/agorStore';
 import type { AgenticToolOption } from '../../types';
 import { AgentSelectionCard } from '../AgentSelectionCard';
 import { Tag } from '../Tag';
@@ -55,6 +58,20 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
   helperText = 'Click on an agent card to select it',
   showComparisonLink = false,
 }) => {
+  const settings = useAgorStore((state) => state.agenticToolSettingsByName);
+  const visibleAgents = agents.filter((agent) => {
+    const canonical = agent.id === 'claude-code-cli' ? 'claude-code' : agent.id;
+    return settings.get(canonical as TenantAgenticToolName)?.enabled !== false;
+  });
+  useEffect(() => {
+    if (
+      selectedAgentId &&
+      !visibleAgents.some((agent) => agent.id === selectedAgentId) &&
+      visibleAgents[0]
+    ) {
+      onSelect(visibleAgents[0].id);
+    }
+  }, [onSelect, selectedAgentId, visibleAgents]);
   if (variant === 'select') {
     return (
       <>
@@ -62,7 +79,7 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
           value={selectedAgentId ?? undefined}
           onChange={(id) => onSelect(id)}
           style={{ width: '100%' }}
-          options={agents.map((agent) => ({
+          options={visibleAgents.map((agent) => ({
             value: agent.id,
             label: (
               <Space size={8}>
@@ -93,7 +110,7 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
           marginTop: 8,
         }}
       >
-        {agents.map((agent) => (
+        {visibleAgents.map((agent) => (
           <AgentSelectionCard
             key={agent.id}
             agent={agent}

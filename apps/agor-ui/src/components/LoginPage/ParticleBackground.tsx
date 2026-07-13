@@ -7,11 +7,17 @@
 import type { Container } from '@tsparticles/engine';
 import Particles, { initParticlesEngine } from '@tsparticles/react';
 import { loadSlim } from '@tsparticles/slim';
-import { memo, useEffect, useId, useState } from 'react';
-import { mellowParticleOptions } from '../../utils/particleConfig';
+import { theme } from 'antd';
+import { memo, useEffect, useId, useMemo, useState } from 'react';
+import { getMellowParticleOptions } from '../../utils/particleConfig';
 
 export const ParticleBackground = memo(function ParticleBackground() {
   const particlesId = useId();
+  const { token } = theme.useToken();
+  const particleOptions = useMemo(
+    () => getMellowParticleOptions(token.colorPrimary),
+    [token.colorPrimary]
+  );
   const [init, setInit] = useState(false);
 
   useEffect(() => {
@@ -34,7 +40,7 @@ export const ParticleBackground = memo(function ParticleBackground() {
     <Particles
       id={particlesId}
       particlesLoaded={particlesLoaded}
-      options={mellowParticleOptions}
+      options={particleOptions}
       style={{
         position: 'absolute',
         width: '100%',

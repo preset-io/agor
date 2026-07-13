@@ -70,6 +70,11 @@ vi.mock('../AgenticToolConfigForm', async () => {
   return { ...actual, AgenticToolConfigForm: () => <div data-testid="agentic-tool-config" /> };
 });
 
+vi.mock('../AgenticToolConfigurationPicker', () => ({
+  INLINE_AGENTIC_CONFIGURATION: '__inline__',
+  AgenticToolConfigurationPicker: () => <div data-testid="agentic-tool-config" />,
+}));
+
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (selector: (state: unknown) => unknown) =>
     selector({ userById: new Map(), mcpServerById: new Map() }),

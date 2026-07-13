@@ -63,10 +63,6 @@ export function buildResolvedConfigSlice(): ResolvedConfigSlice {
     if (Object.keys(executionSlice).length > 0) {
       slice.execution = executionSlice;
     }
-    const opencodeServerUrl = config.opencode?.serverUrl;
-    if (opencodeServerUrl !== undefined) {
-      slice.opencode = { serverUrl: opencodeServerUrl };
-    }
     const hostIpAddress = config.daemon?.host_ip_address;
     if (hostIpAddress !== undefined) {
       slice.daemon = { host_ip_address: hostIpAddress };

@@ -14,6 +14,18 @@ import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
 import { makeBoardSessionActivitySelector } from '../store/selectors';
 import { createFaviconWithDot } from '../utils/faviconDot';
 
+// Favicon pixels render outside the themed application and need fixed contrast.
+// biome-ignore lint/plugin/noHardcodedColorLiteral: absolute favicon status color
+const FAVICON_RUNNING_COLOR = '#ffffff';
+// biome-ignore lint/plugin/noHardcodedColorLiteral: absolute favicon outline color
+const FAVICON_OUTLINE_COLOR = '#000000';
+
+export const getFaviconStatusColors = (readyColor: string) => ({
+  running: FAVICON_RUNNING_COLOR,
+  ready: readyColor,
+  border: FAVICON_OUTLINE_COLOR,
+});
+
 export function useFaviconStatus(currentBoardId: string | null) {
   const [baseFaviconUrl] = useState(brandMarkHref());
   const { token } = theme.useToken();
@@ -45,9 +57,12 @@ export function useFaviconStatus(currentBoardId: string | null) {
     // Update favicon with appropriate dots (both false with no board —
     // the selector reports no activity — restoring the default favicon).
     // White dot (lower-left) for running, green dot (lower-right) for ready
-    createFaviconWithDot(baseFaviconUrl, hasRunning, hasReady, token.colorSuccessText).then(
-      applyFavicon
-    );
+    createFaviconWithDot(
+      baseFaviconUrl,
+      hasRunning,
+      hasReady,
+      getFaviconStatusColors(token.colorSuccessText)
+    ).then(applyFavicon);
 
     return () => {
       cancelled = true;

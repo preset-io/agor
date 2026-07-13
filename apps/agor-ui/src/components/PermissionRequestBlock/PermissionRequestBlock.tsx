@@ -65,32 +65,32 @@ export const PermissionRequestBlock: React.FC<PermissionRequestBlockProps> = ({
   const getStateStyle = () => {
     if (isWaiting) {
       return {
-        background: 'rgba(0, 0, 0, 0.02)',
+        background: token.colorFillSecondary,
         border: `1px solid ${token.colorBorder}`,
         opacity: 0.7,
       };
     }
     if (isTimedOut) {
       return {
-        background: 'rgba(250, 173, 20, 0.06)',
+        background: token.colorWarningBg,
         border: `1px solid ${token.colorWarningBorder}`,
       };
     }
     if (isActive) {
       return {
-        background: 'rgba(255, 193, 7, 0.05)',
+        background: token.colorWarningBg,
         border: `1px solid ${token.colorWarningBorder}`,
       };
     }
     if (isApproved) {
       return {
-        background: 'rgba(82, 196, 26, 0.03)',
+        background: token.colorSuccessBg,
         border: `1px solid ${token.colorSuccessBorder}`,
       };
     }
     if (isDenied) {
       return {
-        background: 'rgba(255, 77, 79, 0.03)',
+        background: token.colorErrorBg,
         border: `1px solid ${token.colorErrorBorder}`,
       };
     }

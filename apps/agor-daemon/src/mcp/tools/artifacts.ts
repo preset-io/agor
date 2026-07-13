@@ -27,6 +27,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ArtifactsService } from '../../services/artifacts.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
+import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveArtifactId, resolveBoardId, resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -39,6 +40,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 const SANDPACK_TEMPLATES = [
   'react',
@@ -445,12 +447,15 @@ NOTE: sandpack_error and console_logs require a browser to be viewing the artifa
       // without a redundant pre-delete fetch. role on AuthenticatedUser is
       // loosely typed as `string`; auth strategies enforce a valid value
       // upstream so the cast to UserRole is honest.
-      const artifact = await service.deleteArtifact(
-        artifactId,
-        ctx.userId,
-        ctx.authenticatedUser.role as UserRole
+      const artifact = await runWithMcpTenantDatabaseScope(ctx, () =>
+        service.deleteArtifact(artifactId, ctx.userId, ctx.authenticatedUser.role as UserRole)
       );
-      ctx.app.service('artifacts').emit('removed', artifact);
+      emitServiceEvent(ctx.app, {
+        path: 'artifacts',
+        event: 'removed',
+        data: artifact,
+        id: artifact.artifact_id,
+      });
 
       return textResult({ success: true, artifactId });
     }
@@ -556,25 +561,27 @@ Caller must own the artifact (or be an admin).`,
       const boardIdInput = coerceString(args.boardId);
       const resolvedBoardId = boardIdInput ? await resolveBoardId(ctx, boardIdInput) : undefined;
 
-      const updated = await service.updateMetadata(
-        artifactId,
-        {
-          name: coerceString(args.name),
-          description: coerceString(args.description),
-          public: args.public,
-          archived: args.archived,
-          board_id: resolvedBoardId as BoardID | undefined,
-          x: args.x,
-          y: args.y,
-          width: args.width,
-          height: args.height,
-          sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
-          required_env_vars: args.requiredEnvVars,
-          agor_grants: args.agorGrants as AgorGrants | undefined,
-          agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
-        },
-        ctx.userId,
-        ctx.authenticatedUser.role as UserRole
+      const updated = await runWithMcpTenantDatabaseScope(ctx, () =>
+        service.updateMetadata(
+          artifactId,
+          {
+            name: coerceString(args.name),
+            description: coerceString(args.description),
+            public: args.public,
+            archived: args.archived,
+            board_id: resolvedBoardId as BoardID | undefined,
+            x: args.x,
+            y: args.y,
+            width: args.width,
+            height: args.height,
+            sandpack_config: args.sandpackConfig as SandpackConfig | undefined,
+            required_env_vars: args.requiredEnvVars,
+            agor_grants: args.agorGrants as AgorGrants | undefined,
+            agor_runtime: args.agorRuntime as AgorRuntimeConfig | undefined,
+          },
+          ctx.userId,
+          ctx.authenticatedUser.role as UserRole
+        )
       );
 
       const updateValidation = args.waitForStatus
@@ -671,15 +678,20 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
       };
 
-      const branchRepo = new BranchRepository(ctx.db);
       const branchIdBranded = branch.branch_id as BranchID;
       const userIdBranded = ctx.userId as UUID;
-      const isOwner = await branchRepo.isOwner(branchIdBranded, userIdBranded);
-      const fullBranch = await branchRepo.findById(branchIdBranded);
-      if (!fullBranch) {
+      const permission = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+        const branchRepo = new BranchRepository(db);
+        const isOwner = await branchRepo.isOwner(branchIdBranded, userIdBranded);
+        const fullBranch = await branchRepo.findById(branchIdBranded);
+        if (!fullBranch) return null;
+        const effective = await branchRepo.resolveUserPermission(fullBranch, userIdBranded);
+        return { effective, fullBranch, isOwner };
+      });
+      if (!permission) {
         return textResult({ error: `Branch ${branchId} not found` });
       }
-      const effective = await branchRepo.resolveUserPermission(fullBranch, userIdBranded);
+      const { effective, fullBranch, isOwner } = permission;
       const canWrite = hasBranchPermission(
         fullBranch,
         userIdBranded,

@@ -1,3 +1,4 @@
+import { shortId } from '@agor-live/client';
 import { LinkOutlined, SettingOutlined } from '@ant-design/icons';
 import {
   Badge,
@@ -38,7 +39,7 @@ type SessionAttachmentItem = LinkDisplayItem;
 function matchesAttachmentSearch(item: LinkDisplayItem, query: string): boolean {
   return matchesLinkDisplaySearch(item, query, [
     item.filePath ? getSafeLinkContentLabel(item.filePath) : null,
-    item.sourceSessionId?.slice(0, 8),
+    item.sourceSessionId ? shortId(item.sourceSessionId) : null,
   ]);
 }
 

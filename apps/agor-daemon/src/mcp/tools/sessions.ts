@@ -52,6 +52,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { sessionContextRequiredResult, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 import { listAttachedMcpServers } from './mcp-servers.js';
 
 /**
@@ -839,8 +840,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // Validate normal session access/RBAC before returning links.
       await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
 
-      const relationships = await new SessionRelationshipRepository(ctx.db).findForSession(
-        sessionId
+      const relationships = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        new SessionRelationshipRepository(db).findForSession(sessionId)
       );
       return textResult({ relationships });
     }
@@ -861,10 +862,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const repo = new SessionRelationshipRepository(ctx.db);
       const relationshipId =
         args.relationshipId as import('@agor/core/types').SessionRelationshipID;
-      const existingRelationship = await repo.get(relationshipId);
+      const existingRelationship = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        new SessionRelationshipRepository(db).get(relationshipId)
+      );
 
       // Authorize visibility/access before mutating the durable relationship.
       // Reading both sides through the sessions service keeps this tool aligned
@@ -877,7 +879,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         .service('sessions')
         .get(existingRelationship.target_session_id, ctx.baseServiceParams);
 
-      const relationship = await repo.setCallbackEnabled(relationshipId, args.callbackEnabled);
+      const relationship = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        new SessionRelationshipRepository(db).setCallbackEnabled(
+          relationshipId,
+          args.callbackEnabled
+        )
+      );
       const callbackSessionId = relationship.callback_session_id ?? relationship.source_session_id;
       await ctx.app.service('sessions').patch(
         relationship.target_session_id,
@@ -976,8 +983,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
 
       // Get current git state via executor so the daemon does not run git in the branch checkout.
+      const asUser = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        resolveExecutorReadAsUser(db, user)
+      );
       const { currentSha, currentRef } = await inspectBranchViaExecutor(ctx.app, branch.branch_id, {
-        asUser: await resolveExecutorReadAsUser(ctx.db, user),
+        asUser,
         logPrefix: `[mcp.sessions.create ${branch.name}]`,
         serviceTokenScope: serviceTokenScopeForParams(ctx.baseServiceParams),
       });
@@ -1024,8 +1034,14 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
 
       // Validate user has prompt permission on the callback target session's branch
       if (wantsCallback && args.callbackSessionId) {
-        const branchRepo = new BranchRepository(ctx.db);
-        await ensureCanPromptTargetSession(args.callbackSessionId, ctx.userId, ctx.app, branchRepo);
+        await runWithMcpTenantDatabaseScope(ctx, (db) =>
+          ensureCanPromptTargetSession(
+            args.callbackSessionId!,
+            ctx.userId,
+            ctx.app,
+            new BranchRepository(db)
+          )
+        );
       }
 
       if (args.enableCallback !== undefined) {
@@ -1128,23 +1144,25 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);
 
       const remoteRelationship = remoteRelationshipSourceSessionId
-        ? await new SessionRelationshipRepository(ctx.db).create({
-            source_session_id: remoteRelationshipSourceSessionId as Session['session_id'],
-            target_session_id: session.session_id,
-            relationship_type: 'remote_create',
-            created_by: ctx.userId,
-            callback_enabled: Boolean(wantsCallback),
-            // Keep the durable relationship target even when callbacks are
-            // muted. callback_enabled/callback_config.enabled are the delivery
-            // switches; callback_session_id is the stable endpoint to re-enable.
-            callback_session_id: effectiveCallbackSessionId
-              ? (effectiveCallbackSessionId as Session['session_id'])
-              : null,
-            data: {
-              source_branch_id: remoteRelationshipSourceBranchId,
-              target_branch_id: branch.branch_id,
-            },
-          })
+        ? await runWithMcpTenantDatabaseScope(ctx, (db) =>
+            new SessionRelationshipRepository(db).create({
+              source_session_id: remoteRelationshipSourceSessionId as Session['session_id'],
+              target_session_id: session.session_id,
+              relationship_type: 'remote_create',
+              created_by: ctx.userId,
+              callback_enabled: Boolean(wantsCallback),
+              // Keep the durable relationship target even when callbacks are
+              // muted. callback_enabled/callback_config.enabled are the delivery
+              // switches; callback_session_id is the stable endpoint to re-enable.
+              callback_session_id: effectiveCallbackSessionId
+                ? (effectiveCallbackSessionId as Session['session_id'])
+                : null,
+              data: {
+                source_branch_id: remoteRelationshipSourceBranchId,
+                target_branch_id: branch.branch_id,
+              },
+            })
+          )
         : null;
 
       if (remoteRelationship && remoteRelationshipSourceSessionId) {

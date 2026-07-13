@@ -121,6 +121,7 @@ import {
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
 import { inspectBranchViaExecutor } from './utils/branch-inspect.js';
+import { emitServiceEvent } from './utils/emit-service-event.js';
 import { resolveExecutorReadAsUser } from './utils/executor-read-impersonation.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
@@ -154,7 +155,7 @@ import {
 } from './utils/spawn-executor.js';
 import {
   createTenantDatabaseScopeAroundHook,
-  deferWithTenantDatabaseScope,
+  deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
 
 const DEBUG_MCP_TOKENS =
@@ -375,7 +376,6 @@ export interface RegisterHooksContext {
   db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
-  svcEnabled: (group: string) => boolean;
   jwtSecret: string;
   branchRbacEnabled: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
@@ -401,6 +401,8 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'messages',
   'links',
   'boards',
+  'boards/:id/archive',
+  'boards/:id/unarchive',
   'repos',
   'branches',
   'branches/:id/owners',
@@ -412,6 +414,8 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'branches/:id/group-grants',
   'boards/:id/group-grants',
   'app-variables',
+  'agentic-tool-settings',
+  'agentic-tool-presets',
   'mcp-servers',
   'mcp-servers/discover',
   'mcp-servers/oauth-auth-headers',
@@ -450,7 +454,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     db,
     app,
     config,
-    svcEnabled,
     jwtSecret,
     branchRbacEnabled,
     requireAuth,
@@ -506,6 +509,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     config,
     jwtSecret,
   });
+  const tenantIdentityAround = createTenantDatabaseScopeAroundHook({
+    db,
+    config,
+    jwtSecret,
+    transaction: false,
+  });
 
   const ensureTenantContext = async (context: HookContext): Promise<HookContext> => {
     try {
@@ -551,7 +560,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const service = safeService(path);
       if (!service) continue;
       service.hooks({
-        around: { all: [tenantDatabaseScopeAround] },
+        around: { all: [path === 'gateway' ? tenantIdentityAround : tenantDatabaseScopeAround] },
         before: { all: [scopeTenantBefore] },
         after: { all: [assertTenantAfter] },
       });
@@ -580,6 +589,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     await invalidateRealtimeBranchAccess(branchId);
     return context;
   };
+
+  safeService('agentic-tool-settings')?.hooks({
+    before: {
+      patch: [requireMinimumRole(ROLES.ADMIN, 'manage workspace agentic tools')],
+    },
+  });
+
+  safeService('agentic-tool-presets')?.hooks({
+    before: {
+      create: [requireMinimumRole(ROLES.ADMIN, 'manage agentic tool presets')],
+      patch: [requireMinimumRole(ROLES.ADMIN, 'manage agentic tool presets')],
+      remove: [requireMinimumRole(ROLES.ADMIN, 'manage agentic tool presets')],
+    },
+  });
 
   const invalidateRealtimeBranchFromRoute = async (context: HookContext): Promise<HookContext> => {
     await invalidateRealtimeBranchAccess(context.params.route?.id);
@@ -911,7 +934,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   });
 
   // Custom REST routes for artifact payload and console
-  if (svcEnabled('artifacts')) {
+  {
     registerAuthenticatedRoute(
       app,
       '/artifacts/:id/payload',
@@ -1609,19 +1632,15 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Also starts/stops Socket Mode listeners for created/updated/deleted channels.
   const refreshGatewayChannelState = async (context: HookContext) => {
     const gw = context.app.service('gateway') as unknown as GatewayService;
-
-    // Refresh the hasActiveChannels flag
-    gw.refreshChannelState().catch((err: unknown) =>
-      console.warn('[gateway] Failed to refresh channel state:', err)
-    );
-
-    // Start/stop listener for created/updated channel
     const channel = context.result as { id: string } | undefined;
-    if (channel?.id) {
-      gw.startListenerForChannel(channel.id).catch((err: unknown) =>
-        console.warn(`[gateway] Failed to manage listener for channel ${channel.id}:`, err)
-      );
-    }
+    deferWithTenantContext(
+      context.params,
+      async () => {
+        await gw.refreshChannelState();
+        if (channel?.id) await gw.startListenerForChannel(channel.id);
+      },
+      (err) => console.warn('[gateway] Failed to refresh channel/listener state:', err)
+    );
 
     return context;
   };
@@ -1633,8 +1652,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     // Stop listener for deleted channel (use id from route params)
     const channelId = context.id as string | undefined;
     if (channelId) {
-      gw.stopChannelListener(channelId).catch((err: unknown) =>
-        console.warn(`[gateway] Failed to stop listener for channel ${channelId}:`, err)
+      deferWithTenantContext(
+        context.params,
+        () => gw.stopChannelListener(channelId),
+        (err) => console.warn(`[gateway] Failed to stop listener for channel ${channelId}:`, err)
       );
     }
 
@@ -1810,15 +1831,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   safeService('admin/local-actions')?.hooks({
     before: {
       create: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'run local admin actions')],
-    },
-  });
-
-  app.service('config').hooks({
-    before: {
-      all: [requireAuth],
-      find: [requireMinimumRole(ROLES.ADMIN, 'view configuration')],
-      get: [requireMinimumRole(ROLES.ADMIN, 'view configuration')],
-      patch: [requireMinimumRole(ROLES.ADMIN, 'update configuration')],
     },
   });
 
@@ -2311,6 +2323,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   configureRealtimePublish({
     app,
+    db,
     branchRbacEnabled,
     branchRepository,
     sessionsRepository,
@@ -2729,7 +2742,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             // Defer outside the just-finished transaction, then re-enter a fresh
             // tenant scope so gateway DB work keeps Cloud RLS context without
             // inheriting a committed transaction object.
-            deferWithTenantDatabaseScope(db, context.params, async () => {
+            deferWithTenantContext(context.params, async () => {
               try {
                 const gatewayService = context.app.service('gateway') as unknown as GatewayService;
                 await gatewayService.flushGitHubBuffer(session.session_id);
@@ -2789,18 +2802,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
   });
-
-  // ============================================================================
-  // Leaderboard hooks
-  // ============================================================================
-
-  if (svcEnabled('leaderboard')) {
-    app.service('leaderboard').hooks({
-      before: {
-        all: [requireAuth],
-      },
-    });
-  }
+  app.service('leaderboard').hooks({
+    before: {
+      all: [requireAuth],
+    },
+  });
 
   // ============================================================================
   // Schedules hooks
@@ -2977,8 +2983,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   const ensureCanViewBoard = (action: string) => ensureBoardAccess('view', action);
   const ensureCanMutateBoard = (action: string) => ensureBoardAccess('mutate', action);
 
-  const emitBoardPatched = (board?: Board) => {
-    if (board) app.service('boards').emit('patched', board);
+  const emitBoardPatched = (board: Board | undefined, context: HookContext<Board>) => {
+    if (board) {
+      emitServiceEvent(app, {
+        path: 'boards',
+        event: 'patched',
+        data: board,
+        params: context.params,
+        id: context.id,
+      });
+    }
   };
 
   safeService('boards')?.hooks({
@@ -3026,7 +3040,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               objects: result.objects,
             });
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
-            app.service('boards').emit('patched', result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result,
+              params: context.params,
+              id: context.id,
+            });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
             return context;
@@ -3040,7 +3060,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
-            app.service('boards').emit('patched', result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result,
+              params: context.params,
+              id: context.id,
+            });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
             return context;
@@ -3054,7 +3080,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
-            app.service('boards').emit('patched', result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result,
+              params: context.params,
+              id: context.id,
+            });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
             return context;
@@ -3068,7 +3100,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
-            app.service('boards').emit('patched', result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result,
+              params: context.params,
+              id: context.id,
+            });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
             return context;
@@ -3083,7 +3121,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result.board;
             // Manually emit 'patched' event for WebSocket broadcasting
-            app.service('boards').emit('patched', result.board);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: result.board,
+              params: context.params,
+              id: context.id,
+            });
             return context;
           }
 
@@ -3195,7 +3239,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
-            app.service('boards').emit('created', context.result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'created',
+              data: context.result,
+              params: context.params,
+            });
           }
           return context;
         },
@@ -3204,7 +3253,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
-            app.service('boards').emit('created', context.result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'created',
+              data: context.result,
+              params: context.params,
+            });
           }
           return context;
         },
@@ -3213,7 +3267,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
           if (context.result) {
-            app.service('boards').emit('created', context.result);
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'created',
+              data: context.result,
+              params: context.params,
+            });
           }
           return context;
         },
@@ -3221,14 +3280,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       setPrimaryTeammate: [
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
-          emitBoardPatched(context.result);
+          emitBoardPatched(context.result, context);
           return context;
         },
       ],
       clearPrimaryTeammate: [
         clearRealtimeBranchVisibility,
         async (context: HookContext<Board>) => {
-          emitBoardPatched(context.result);
+          emitBoardPatched(context.result, context);
           return context;
         },
       ],
@@ -3239,7 +3298,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             teammateWelcomeNoteMutated?: boolean;
           };
           if (context.result && teammateWelcomeNoteMutated.teammateWelcomeNoteMutated) {
-            emitBoardPatched(context.result);
+            emitBoardPatched(context.result, context);
           }
           return context;
         },

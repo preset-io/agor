@@ -7,17 +7,16 @@
  * - Primary fields top: name, description, prompt, cron + timezone, agent,
  *   MCP servers.
  * - Ghost `<Collapse>` with two panels for the secondary zone:
- *     1. "Agentic Tool Configuration" — same `AgenticToolConfigForm`
- *        component the session modal uses, with `hideMcpServers` (the
- *        MCP field is promoted to the primary zone above). Full mode
- *        (not compact) so Codex-specific fields render.
+ *     1. "Agentic Tool Configuration" — the same preset-or-inline picker
+ *        the session modal uses. MCP selection remains a sibling field and
+ *        is never persisted inside a preset.
  *     2. "Schedule Settings" — retention + concurrency (schedule-specific).
  *
  * Reuses the same building blocks as `NewSessionModal`:
  * - `AgentSelectionGrid` (with `variant="select"` here vs `cards` there —
  *   schedules don't need to merchandise the agent choice).
  * - `SessionMcpServersField` as a top-level form field.
- * - `AgenticToolConfigForm` with `hideMcpServers`.
+ * - `AgenticToolConfigurationPicker` plus independent MCP selection.
  * - `getFormValuesFromConfig` / `buildConfigFromFormValues` to translate
  *   between form values and the schedule's `agentic_tool_config` jsonb.
  *
@@ -48,13 +47,15 @@ import 'react-js-cron/dist/styles.css';
 import { useThemedMessage } from '../../utils/message';
 import {
   type AgenticFormValues,
-  AgenticToolConfigForm,
   buildScheduleConfigFromFormValues,
   getFormValuesFromConfig,
   scheduleConfigToDefaultConfig,
 } from '../AgenticToolConfigForm';
+import {
+  AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
+} from '../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
-import { SessionMcpServersField } from '../MCPServerSelect';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -109,6 +110,8 @@ const DEFAULT_CRON = '0 * * * *';
 // its helpers read/write. Spreading the shared interface keeps the field
 // names in lockstep with NewSessionModal and the agenticConfigHelpers.
 interface ScheduleFormValues extends AgenticFormValues {
+  mcpServerIds?: string[];
+  agenticToolPresetId?: string;
   name?: string;
   description?: string;
   prompt?: string;
@@ -164,10 +167,12 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
       timezone_mode: schedule?.timezone_mode ?? 'local',
       timezone: schedule?.timezone ?? detectBrowserTz(),
       agenticTool: tool,
+      agenticToolPresetId: schedule?.agentic_tool_config?.preset_id ?? INLINE_AGENTIC_CONFIGURATION,
       enabled: schedule?.enabled ?? true,
       retention: schedule?.retention ?? 5,
       allow_concurrent_runs: schedule?.allow_concurrent_runs ?? false,
       ...configValues,
+      mcpServerIds: schedule?.mcp_server_ids ?? [],
     });
   }, [open, schedule, form]);
 
@@ -182,6 +187,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     form.setFieldsValue({
       ...defaults,
       agenticTool: next,
+      agenticToolPresetId: undefined,
       ...(next !== 'codex' && {
         codexSandboxMode: undefined,
         codexApprovalPolicy: undefined,
@@ -230,19 +236,25 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         cron_expression: all.cron_expression ?? DEFAULT_CRON,
         timezone_mode: all.timezone_mode ?? 'local',
         timezone: all.timezone_mode === 'local' ? all.timezone : undefined,
-        agentic_tool_config: buildScheduleConfigFromFormValues(
-          agentTool,
-          {
-            modelConfig: all.modelConfig,
-            effort: all.effort,
-            permissionMode: all.permissionMode,
-            mcpServerIds: all.mcpServerIds,
-            codexSandboxMode: all.codexSandboxMode,
-            codexApprovalPolicy: all.codexApprovalPolicy,
-            codexNetworkAccess: all.codexNetworkAccess,
-          },
-          schedule?.agentic_tool_config
-        ),
+        agentic_tool_config:
+          all.agenticToolPresetId && all.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
+            ? {
+                agentic_tool: agentTool,
+                preset_id: all.agenticToolPresetId as Schedule['agentic_tool_config']['preset_id'],
+              }
+            : buildScheduleConfigFromFormValues(
+                agentTool,
+                {
+                  modelConfig: all.modelConfig,
+                  effort: all.effort,
+                  permissionMode: all.permissionMode,
+                  codexSandboxMode: all.codexSandboxMode,
+                  codexApprovalPolicy: all.codexApprovalPolicy,
+                  codexNetworkAccess: all.codexNetworkAccess,
+                },
+                schedule?.agentic_tool_config
+              ),
+        mcp_server_ids: all.mcpServerIds ?? [],
         enabled: all.enabled ?? true,
         retention: all.retention ?? 5,
         allow_concurrent_runs: all.allow_concurrent_runs ?? false,
@@ -385,26 +397,17 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           />
         </Form.Item>
 
-        {/* MCP Servers — promoted to the primary zone (mirrors NewSessionModal:252). */}
-        <SessionMcpServersField mcpServerById={mcpServerById} />
+        <AgenticToolConfigurationPicker
+          tool={agentTool}
+          mcpServerById={mcpServerById}
+          client={client}
+        />
 
         <Collapse
           ghost
           destroyOnHidden={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={[
-            {
-              key: 'agentic-tool-config',
-              label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
-              children: (
-                <AgenticToolConfigForm
-                  agenticTool={agentTool}
-                  mcpServerById={mcpServerById}
-                  hideMcpServers
-                  client={client}
-                />
-              ),
-            },
             {
               key: 'schedule-settings',
               label: <Typography.Text strong>Schedule Settings</Typography.Text>,

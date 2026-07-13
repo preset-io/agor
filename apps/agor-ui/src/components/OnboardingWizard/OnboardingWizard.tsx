@@ -64,6 +64,7 @@ import { slugify } from '../../utils/repoSlug';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import { buildTeammateBootstrapPrompt } from '../../utils/teammateBootstrapPrompt';
 import { ensureTeammateWelcomeNote } from '../../utils/teammateWelcomeNote';
+import { ClaudeSubscriptionTokenInstructions } from '../ClaudeSubscriptionTokenInstructions';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 import { ToolIcon } from '../ToolIcon';
@@ -115,8 +116,6 @@ export interface OnboardingWizardProps {
   onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => Promise<void>;
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
-
-  teammatePending?: boolean;
   frameworkRepoUrl?: string;
 }
 
@@ -276,8 +275,6 @@ export function OnboardingWizard({
   const clonePollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completingRepoRef = useRef<string | null>(null);
   const knownFailedRepoIdsRef = useRef<Set<string>>(new Set());
-  const effectiveFrameworkUrl = frameworkRepoUrl || FRAMEWORK_REPO_URL;
-
   const defaultBranchName = useMemo(
     () => defaultTeammateBranchName(teammateDisplayName),
     [teammateDisplayName]
@@ -389,7 +386,7 @@ export function OnboardingWizard({
         }),
         modelConfig: toSessionModelConfig(agentDefaults?.modelConfig),
         effort: agentDefaults?.modelConfig?.effort,
-        mcpServerIds: agentDefaults?.mcpServerIds,
+        mcpServerIds: user?.default_mcp_server_ids,
         permissionMode,
       };
 
@@ -695,7 +692,7 @@ export function OnboardingWizard({
     try {
       const cloneResult = await onCreateRepo(
         {
-          url: effectiveFrameworkUrl,
+          url: frameworkRepoUrl || FRAMEWORK_REPO_URL,
           slug: FRAMEWORK_REPO_SLUG,
           default_branch: 'main',
         },
@@ -741,9 +738,9 @@ export function OnboardingWizard({
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [
-    effectiveFrameworkUrl,
     fetchExistingFrameworkRepo,
     finishSetupFromRepo,
+    frameworkRepoUrl,
     onCreateRepo,
     pollRepoUntilReady,
     repoById,
@@ -914,19 +911,7 @@ export function OnboardingWizard({
             type="info"
             showIcon
             style={{ marginBottom: 16, textAlign: 'left' }}
-            description={
-              <span>
-                In any terminal with Claude Code installed, run <Text code>claude setup-token</Text>
-                , then paste the printed token below. Need Claude Code?{' '}
-                <Typography.Link
-                  href="https://docs.claude.com/en/docs/claude-code/setup"
-                  target="_blank"
-                >
-                  Install docs
-                </Typography.Link>
-                .
-              </span>
-            }
+            description={<ClaudeSubscriptionTokenInstructions />}
           />
         );
       }

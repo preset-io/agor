@@ -175,7 +175,7 @@ async function resolveCursorApiKey(client: AgorClient, taskId: TaskID): Promise<
     );
   }
 
-  const key = result.apiKey || process.env.CURSOR_API_KEY;
+  const key = result.apiKey;
   if (!key) {
     throw new Error(
       'No CURSOR_API_KEY configured. Add one in Settings → Agent Setup → Cursor SDK.'

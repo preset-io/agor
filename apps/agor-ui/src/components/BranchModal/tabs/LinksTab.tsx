@@ -1,4 +1,4 @@
-import type { AgorClient, Branch, Session } from '@agor-live/client';
+import { type AgorClient, type Branch, type Session, shortId } from '@agor-live/client';
 import { Alert, Empty, Flex, List, Space, Spin, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
@@ -35,7 +35,7 @@ interface LinksTabProps {
 
 function getSessionLabel(session: Session | undefined, sessionId: string): string {
   const title = typeof session?.title === 'string' ? session.title.trim() : '';
-  return title || sessionId.slice(0, 8);
+  return title || shortId(sessionId);
 }
 
 function getSourceSessionLabel(

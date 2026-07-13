@@ -6,16 +6,23 @@
  * since it orchestrates across multiple repositories and services.
  */
 
-import { PublicBaseUrlNotConfiguredError, requirePublicBaseUrl } from '@agor/core/config';
+import {
+  assertInlineAgenticConfigurationAllowed,
+  PublicBaseUrlNotConfiguredError,
+  requirePublicBaseUrl,
+  resolveAgenticToolPreset,
+} from '@agor/core/config';
 import {
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   GatewayChannelRepository,
   GatewayOutboundMessageRepository,
+  getCurrentTenantDatabase,
   getCurrentTenantId,
   getHiddenTenantId,
   MCPServerRepository,
   runWithoutTenantDatabaseScope,
-  runWithTenantDatabaseScope,
+  runWithTenantContext,
   SessionRepository,
   shortId,
   type TenantScopeAwareDatabase,
@@ -39,6 +46,7 @@ import {
   formatGatewaySystemPayload,
   getConnector,
   hasConnector,
+  isSlackWriteTargetAllowed,
   normalizeOutbound,
   parseGitHubThreadId,
 } from '@agor/core/gateway';
@@ -65,9 +73,9 @@ import { getSessionUrl } from '@agor/core/utils/url';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
 import {
   buildPromptWithAttachments,
-  ingestInboundImageAttachments,
+  ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
-import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
+import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 
 /**
  * Inbound message data (platform → session)
@@ -556,7 +564,6 @@ function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): Ga
  * Gateway routing service
  */
 export class GatewayService {
-  private db: TenantScopeAwareDatabase;
   private channelRepo: GatewayChannelRepository;
   private threadMapRepo: ThreadSessionMapRepository;
   private outboundRepo: GatewayOutboundMessageRepository;
@@ -605,16 +612,18 @@ export class GatewayService {
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
-    this.db = db;
-    this.channelRepo = new GatewayChannelRepository(db);
-    this.threadMapRepo = new ThreadSessionMapRepository(db);
-    this.outboundRepo = new GatewayOutboundMessageRepository(db);
-    this.branchRepo = new BranchRepository(db);
-    this.sessionRepo = new SessionRepository(db);
-    this.usersRepo = new UsersRepository(db);
+    this.channelRepo = bindRepositoryToTenantUnitOfWork(db, new GatewayChannelRepository(db));
+    this.threadMapRepo = bindRepositoryToTenantUnitOfWork(db, new ThreadSessionMapRepository(db));
+    this.outboundRepo = bindRepositoryToTenantUnitOfWork(
+      db,
+      new GatewayOutboundMessageRepository(db)
+    );
+    this.branchRepo = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
+    this.sessionRepo = bindRepositoryToTenantUnitOfWork(db, new SessionRepository(db));
+    this.usersRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
 
-    this.mcpServerRepo = new MCPServerRepository(db);
-    this.userTokenRepo = new UserMCPOAuthTokenRepository(db);
+    this.mcpServerRepo = bindRepositoryToTenantUnitOfWork(db, new MCPServerRepository(db));
+    this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
     this.app = app;
   }
 
@@ -1025,8 +1034,7 @@ export class GatewayService {
    * routes whose enclosing transaction is about to close.
    */
   updateProgressAfterCommit(data: GatewayProgressData, params?: unknown): void {
-    deferWithTenantDatabaseScope(
-      this.db,
+    deferWithTenantContext(
       params,
       async () => {
         await this.updateProgress(data);
@@ -1473,6 +1481,16 @@ export class GatewayService {
       resolvedTargetMetadata.resolved_user_id = resolved.user_id;
     }
 
+    // The allowed_channel_ids whitelist works on concrete conversation ids,
+    // while `target` may be a channel name or user email — so enforcement
+    // happens only after resolution. isSlackWriteTargetAllowed exempts DMs,
+    // so email→DM and D-prefixed targets always pass.
+    if (!isSlackWriteTargetAllowed(config, resolvedChannel)) {
+      throw new Error(
+        `Gateway outbound denied: target ${target} resolves to Slack conversation ${resolvedChannel}, which is not in this gateway channel's allowed_channel_ids whitelist.`
+      );
+    }
+
     let sent: Awaited<ReturnType<SlackDirectConnector['sendSlackMessage']>>;
     try {
       sent = await connector.sendSlackMessage({
@@ -1842,34 +1860,52 @@ export class GatewayService {
 
     // Resolve agentic config: channel config > user defaults > system defaults.
     // Channel-level agentic_config maps to the helper's `overrides` (it's the
-    // gateway's analogue of an MCP tool's explicit args). Codex sub-config and
-    // MCP server lists are first-class fields on `GatewayAgenticConfig`, so
-    // thread them all through the helper — otherwise the executor's per-tool
+    // gateway's analogue of an MCP tool's explicit args). Codex sub-config is
+    // first-class on `GatewayAgenticConfig`, so thread it through the helper —
+    // otherwise the executor's per-tool
     // settings (which Codex reads from `permission_config.codex`, not `mode`)
     // get silently dropped.
     const agenticConfig = channel.agentic_config;
     const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
+    const tenantDb = getCurrentTenantDatabase();
+    if (!tenantDb) throw new Error('Missing tenant database scope for gateway agent resolution');
+    const preset = agenticConfig?.presetId
+      ? await resolveAgenticToolPreset(tenantDb, agenticTool, agenticConfig.presetId)
+      : null;
+    if (!preset) await assertInlineAgenticConfigurationAllowed(tenantDb, agenticTool);
+    const runtimeConfig = preset?.configuration ?? agenticConfig;
     const {
       permission_config: gatewayPermissionConfig,
       model_config: gatewayModelConfig,
-      mcp_server_ids: gatewayMcpServerIds,
+      mcp_server_ids: defaultMcpServerIds,
     } = resolveSessionDefaults({
       agenticTool,
       user,
       overrides: {
-        permissionMode: agenticConfig?.permissionMode,
-        modelConfig: agenticConfig?.modelConfig,
-        codexSandboxMode: agenticConfig?.codexSandboxMode,
-        codexApprovalPolicy: agenticConfig?.codexApprovalPolicy,
-        codexNetworkAccess: agenticConfig?.codexNetworkAccess,
-        mcpServerIds: agenticConfig?.mcpServerIds,
+        permissionMode: runtimeConfig?.permissionMode,
+        modelConfig: runtimeConfig?.modelConfig,
+        codexSandboxMode: runtimeConfig?.codexSandboxMode,
+        codexApprovalPolicy: runtimeConfig?.codexApprovalPolicy,
+        codexNetworkAccess: runtimeConfig?.codexNetworkAccess,
       },
     });
+    const gatewayMcpServerIds = channel.mcp_server_ids ?? defaultMcpServerIds;
     const permissionMode = gatewayPermissionConfig.mode;
 
     if (existingMapping) {
       // Existing thread → existing session
       sessionId = existingMapping.session_id;
+      if (agenticConfig?.presetId) {
+        await this.app.service('sessions').patch(sessionId, {
+          agentic_tool_preset_id: agenticConfig.presetId,
+        });
+      } else if (agenticConfig) {
+        await this.app.service('sessions').patch(sessionId, {
+          agentic_tool_preset_id: null,
+          model_config: gatewayModelConfig,
+          permission_config: gatewayPermissionConfig,
+        });
+      }
 
       // Touch timestamps
       await this.threadMapRepo.updateLastMessage(existingMapping.id);
@@ -1993,6 +2029,7 @@ export class GatewayService {
         unix_username: user.unix_username ?? null,
         status: SessionStatus.IDLE,
         agentic_tool: agenticTool,
+        agentic_tool_preset_id: agenticConfig?.presetId,
         permission_config: gatewayPermissionConfig,
         model_config: gatewayModelConfig,
         tasks: [],
@@ -2196,8 +2233,8 @@ export class GatewayService {
         promptText = buildGitHubInitialPrompt(data.thread_id, data.text, data.metadata);
       }
 
-      // Download Slack image attachments server-side and fold their stored
-      // paths into the prompt so the agent can Read them. Gated on the
+      // Download Slack image and text attachments server-side and fold their
+      // stored paths into the prompt so the agent can Read them. Gated on the
       // channel's ingest_files flag — channels without the files:read scope
       // never attempt downloads. Any failure degrades to a short note; the
       // prompt is always delivered.
@@ -2211,7 +2248,7 @@ export class GatewayService {
           typeof channelConfig.bot_token === 'string' ? channelConfig.bot_token : undefined;
         let failedAttachments = 0;
         if (botToken) {
-          const { paths, failed } = await ingestInboundImageAttachments({
+          const { paths, failed } = await ingestInboundAttachments({
             files: data.files,
             botToken,
           });
@@ -2433,8 +2470,7 @@ export class GatewayService {
    * graph is visible on a new scoped connection.
    */
   routeMessageAfterCommit(data: RouteMessageData, params?: unknown): void {
-    deferWithTenantDatabaseScope(
-      this.db,
+    deferWithTenantContext(
       params,
       async () => {
         await this.routeMessage(data);
@@ -2656,7 +2692,7 @@ export class GatewayService {
       throw new Error(`Missing tenant context for gateway listener channel ${channel.id}`);
     }
 
-    await runWithTenantDatabaseScope(this.db, tenantId, async () => {
+    await runWithTenantContext(tenantId, async () => {
       await this.create({
         channel_key: channel.channel_key,
         thread_id: msg.threadId,

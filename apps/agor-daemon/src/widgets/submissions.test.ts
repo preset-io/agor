@@ -302,7 +302,7 @@ describe('resolveWidget', () => {
     // WebSocket event fired.
     const event = events.find((e) => e.event === 'widget:resolved');
     expect(event).toBeDefined();
-    expect((event?.payload as { status: string }).status).toBe('submitted');
+    expect((event!.payload as { status: string }).status).toBe('submitted');
   });
 
   it('rejects a submission from a non-creator without prompt-tier RBAC', async () => {

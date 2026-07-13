@@ -138,6 +138,20 @@ describe('requiredBotScopes', () => {
     );
   });
 
+  it('adds files:read for the file_download capability and omits it otherwise', () => {
+    expect(requiredBotScopes(withOptions({ agentTools: { file_download: true } }))).toEqual([
+      'chat:write',
+      'files:read',
+      'im:history',
+      'im:read',
+      'users:read',
+    ]);
+    expect(requiredBotScopes(baseOptions)).not.toContain('files:read');
+    expect(requiredBotScopes(withOptions({ agentTools: { file_download: false } }))).not.toContain(
+      'files:read'
+    );
+  });
+
   it('all capabilities on — de-duplicated and sorted', () => {
     const allOn = withOptions({
       publicChannels: true,
@@ -151,6 +165,7 @@ describe('requiredBotScopes', () => {
         channel_history: true,
         reactions: true,
         file_upload: true,
+        file_download: true,
       },
     });
     expect(requiredBotScopes(allOn)).toEqual([
@@ -197,18 +212,20 @@ describe('requiredBotScopes', () => {
 });
 
 describe('resolveSlackAgentTools', () => {
-  it('defaults thread_history ON and channel_history/reactions/file_upload OFF for absent config', () => {
+  it('defaults thread_history ON and channel_history/reactions/file_upload/file_download OFF for absent config', () => {
     expect(resolveSlackAgentTools(undefined)).toEqual({
       thread_history: true,
       channel_history: false,
       reactions: false,
       file_upload: false,
+      file_download: false,
     });
     expect(resolveSlackAgentTools({})).toEqual({
       thread_history: true,
       channel_history: false,
       reactions: false,
       file_upload: false,
+      file_download: false,
     });
   });
 
@@ -219,12 +236,14 @@ describe('resolveSlackAgentTools', () => {
         channel_history: true,
         reactions: true,
         file_upload: true,
+        file_download: true,
       })
     ).toEqual({
       thread_history: false,
       channel_history: true,
       reactions: true,
       file_upload: true,
+      file_download: true,
     });
   });
 
@@ -234,6 +253,7 @@ describe('resolveSlackAgentTools', () => {
       channel_history: false,
       reactions: false,
       file_upload: false,
+      file_download: false,
     });
     expect(
       resolveSlackAgentTools({
@@ -241,18 +261,21 @@ describe('resolveSlackAgentTools', () => {
         channel_history: 1,
         reactions: 'true',
         file_upload: 0,
+        file_download: 'on',
       })
     ).toEqual({
       thread_history: true,
       channel_history: false,
       reactions: false,
       file_upload: false,
+      file_download: false,
     });
     expect(resolveSlackAgentTools([true])).toEqual({
       thread_history: true,
       channel_history: false,
       reactions: false,
       file_upload: false,
+      file_download: false,
     });
   });
 });

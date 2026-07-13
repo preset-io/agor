@@ -44,7 +44,9 @@ export const TEXT_TRUNCATION = {
  * Used when a board doesn't have a custom background configured.
  */
 export const DEFAULT_BACKGROUNDS = {
+  // biome-ignore lint/plugin/noHardcodedColorLiteral: centralized theme-keyed default for persisted board backgrounds
   dark: 'radial-gradient(ellipse at top, #1b2735 0%, #090a0f 100%), radial-gradient(circle at 20% 50%, rgba(120, 0, 255, 0.3) 0%, transparent 50%), radial-gradient(circle at 80% 80%, rgba(255, 0, 120, 0.3) 0%, transparent 50%)',
   light:
+    // biome-ignore lint/plugin/noHardcodedColorLiteral: centralized theme-keyed default for persisted board backgrounds
     'radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0) 45%), radial-gradient(circle at 50% 50%, rgba(210, 216, 224, 0.35) 35%, rgba(210, 216, 224, 0) 80%), linear-gradient(90deg, #d9dde3 0%, #ffffff 45%, #ffffff 55%, #d9dde3 100%)',
 } as const;

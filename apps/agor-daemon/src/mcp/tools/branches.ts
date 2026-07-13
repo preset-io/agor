@@ -36,6 +36,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, sessionContextRequiredResult, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 import { assertValidVariant } from './_environment-helpers.js';
 
 const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
@@ -606,8 +607,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // Auto-suffix: resolve name conflicts by appending -2, -3, etc.
       // Uses direct DB query to bypass Feathers pagination limits
       if (autoSuffix) {
-        const branchRepo = new BranchRepository(ctx.db);
-        const activeNames = await branchRepo.getActiveNamesByRepo(repoId as UUID);
+        const activeNames = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+          new BranchRepository(db).getActiveNamesByRepo(repoId as UUID)
+        );
         const existingNames = new Set(activeNames);
 
         if (existingNames.has(branchName)) {
@@ -1360,13 +1362,15 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     const limit = args.limit || 200;
     const repoId = args.repoId ? await resolveRepoId(ctx, args.repoId) : undefined;
 
-    const branchRepo = new BranchRepository(ctx.db);
-    const teammates = await branchRepo.findTeammateBranches({
-      archived: false,
-      ...(repoId ? { repo_id: repoId as UUID } : {}),
-      ...((await shouldScopeTeammateDiscoveryToUser(ctx)) ? { userId: ctx.userId as UUID } : {}),
-      limit,
-    });
+    const userScoped = await shouldScopeTeammateDiscoveryToUser(ctx);
+    const teammates = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+      new BranchRepository(db).findTeammateBranches({
+        archived: false,
+        ...(repoId ? { repo_id: repoId as UUID } : {}),
+        ...(userScoped ? { userId: ctx.userId as UUID } : {}),
+        limit,
+      })
+    );
 
     const shaped = teammates.map((w) => {
       const config = getTeammateConfig(w);

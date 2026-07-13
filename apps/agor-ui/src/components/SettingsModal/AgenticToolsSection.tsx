@@ -1,291 +1,130 @@
-/**
- * Agentic Tools Section
- *
- * Top-level tab containing nested tabs for each agentic tool (Claude Code, Codex, Gemini, OpenCode).
- * Each tool tab displays its API key configuration and tool-specific settings.
- */
-
 import type {
   AgenticToolConfigField,
   AgenticToolName,
   AgorClient,
-  AgorConfig,
+  ProviderResolutionPolicy,
+  TenantAgenticToolName,
+  TenantAgenticToolSettings,
 } from '@agor-live/client';
-import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  InfoCircleOutlined,
-  LoadingOutlined,
-  WarningOutlined,
-} from '@ant-design/icons';
-import { Alert, Button, Form, Input, Space, Spin, Switch, Tabs, Tooltip, theme } from 'antd';
-import { useEffect, useState } from 'react';
-import { useThemedMessage } from '../../utils/message';
+import { Alert, Select, Space, Spin, Switch, Tabs, Typography, theme } from 'antd';
+import { useCallback, useEffect, useState } from 'react';
+import { agorStore } from '../../store/agorStore';
 import {
   type AgenticToolFieldConfig,
   ApiKeyFields,
   type FieldStatus,
   TOOL_FIELD_CONFIGS,
 } from '../ApiKeyFields';
+import { ToolIcon } from '../ToolIcon';
+import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
 
 export interface AgenticToolsSectionProps {
   client: AgorClient | null;
 }
 
-/**
- * Field set rendered at the global/admin config level. This is a strict
- * subset of the per-user `TOOL_FIELD_CONFIGS` — fields that don't make sense
- * globally (e.g. `CLAUDE_CODE_OAUTH_TOKEN` is a per-user Pro/Max subscription
- * token) are filtered out.
- */
-const GLOBAL_TOOL_FIELDS: Record<AgenticToolName, AgenticToolFieldConfig[]> = {
+const TOOL_LABELS: Record<TenantAgenticToolName, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex',
+  gemini: 'Gemini',
+  copilot: 'GitHub Copilot',
+  cursor: 'Cursor SDK',
+  opencode: 'OpenCode',
+};
+
+const TENANT_TOOL_FIELDS: Record<TenantAgenticToolName, AgenticToolFieldConfig[]> = {
   'claude-code': TOOL_FIELD_CONFIGS['claude-code'].filter(
-    (f) => f.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
+    (field) => field.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
   ),
-  // Claude Code CLI shares credentials with the SDK path. Same filter
-  // (OAUTH_TOKEN is per-user only).
-  'claude-code-cli': TOOL_FIELD_CONFIGS['claude-code-cli'].filter(
-    (f) => f.field !== 'CLAUDE_CODE_OAUTH_TOKEN'
-  ),
-  // OPENAI_BASE_URL is per-user only: in multiplayer Agor instances hosting
-  // multiple companies, a global override would silently route every user's
-  // Codex traffic through one tenant's endpoint. Each user sets their own.
-  codex: TOOL_FIELD_CONFIGS.codex.filter((f) => f.field !== 'OPENAI_BASE_URL'),
+  codex: TOOL_FIELD_CONFIGS.codex,
   gemini: TOOL_FIELD_CONFIGS.gemini,
   copilot: TOOL_FIELD_CONFIGS.copilot,
   cursor: TOOL_FIELD_CONFIGS.cursor,
-  opencode: TOOL_FIELD_CONFIGS.opencode,
+  opencode: [],
 };
 
-/** Per-tool global-config tab body. */
-const ApiKeyTabContent: React.FC<{
-  tool: AgenticToolName;
-  fieldStatus: FieldStatus;
-  keysError: string | null;
-  savingKeys: Partial<Record<AgenticToolConfigField, boolean>>;
-  onSave: (field: AgenticToolConfigField, value: string) => Promise<void>;
-  onClear: (field: AgenticToolConfigField) => Promise<void>;
-  onClearError: () => void;
-}> = ({ tool, fieldStatus, keysError, savingKeys, onSave, onClear, onClearError }) => {
-  const { token } = theme.useToken();
-
-  return (
-    <div style={{ paddingTop: token.paddingMD }}>
-      <Alert
-        title={
-          <span>
-            This is the <strong>global API key</strong> fallback for users without their own
-            credentials. CLI login alternatives are configured on the machine Agor runs sessions on.{' '}
-            <a
-              href="https://agor.live/guide/extended-install#authentication"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learn more →
-            </a>
-          </span>
-        }
-        type="info"
-        showIcon
-        style={{ marginBottom: token.marginLG }}
-      />
-
-      {keysError && (
-        <Alert
-          title={keysError}
-          type="error"
-          icon={<WarningOutlined />}
-          showIcon
-          closable
-          onClose={onClearError}
-          style={{ marginBottom: token.marginLG }}
-        />
-      )}
-
-      <ApiKeyFields
-        tool={tool}
-        fields={GLOBAL_TOOL_FIELDS[tool]}
-        fieldStatus={fieldStatus}
-        onSave={onSave}
-        onClear={onClear}
-        saving={savingKeys}
-      />
-    </div>
-  );
-};
+const RESOLUTION_POLICIES: Array<{
+  value: ProviderResolutionPolicy;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'user_required',
+    label: 'Require personal',
+    description: 'Use personal configuration only.',
+  },
+  {
+    value: 'user_preferred',
+    label: 'Prefer personal',
+    description: 'Use personal configuration, then workspace configuration.',
+  },
+  {
+    value: 'tenant_preferred',
+    label: 'Prefer workspace',
+    description: 'Use workspace configuration, then personal configuration.',
+  },
+  {
+    value: 'tenant_required',
+    label: 'Require workspace',
+    description: 'Use workspace configuration only.',
+  },
+];
 
 export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client }) => {
   const { token } = theme.useToken();
-  const { showSuccess, showError } = useThemedMessage();
+  const [settings, setSettings] = useState<
+    Partial<Record<TenantAgenticToolName, TenantAgenticToolSettings>>
+  >({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState<Partial<Record<AgenticToolConfigField, boolean>>>({});
 
-  // Shared API keys state. `fieldStatus` is a flat env-var → set/unset map;
-  // each per-tool tab projects out only the fields it owns via
-  // `GLOBAL_TOOL_FIELDS[tool]`.
-  const [loadingKeys, setLoadingKeys] = useState(true);
-  const [savingKeys, setSavingKeys] = useState<Partial<Record<AgenticToolConfigField, boolean>>>(
-    {}
-  );
-  const [keysError, setKeysError] = useState<string | null>(null);
-  const [fieldStatus, setFieldStatus] = useState<FieldStatus>({});
-
-  // OpenCode state
-  const [opencodeForm] = Form.useForm();
-  const [opencodeEnabled, setOpencodeEnabled] = useState(false);
-  const [opencodeServerUrl, setOpencodeServerUrl] = useState('http://localhost:4096');
-  const [opencodeConnected, setOpencodeConnected] = useState<boolean | null>(null);
-  const [opencodeTesting, setOpencodeTesting] = useState(false);
-  const [loadingOpencode, setLoadingOpencode] = useState(true);
-
-  // Load API keys configuration
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!client) return;
-
-    const loadKeys = async () => {
-      try {
-        setLoadingKeys(true);
-        setKeysError(null);
-
-        const config = (await client.service('config').get('credentials')) as
-          | AgorConfig['credentials']
-          | undefined;
-
-        // Project the YAML credentials blob into a flat env-var → boolean
-        // map. We deliberately walk the union of all global tool fields
-        // (rather than enumerating each one inline) so adding a new field
-        // to GLOBAL_TOOL_FIELDS auto-propagates here.
-        const next: FieldStatus = {};
-        for (const fields of Object.values(GLOBAL_TOOL_FIELDS)) {
-          for (const { field } of fields) {
-            next[field] = !!(config as Record<string, unknown> | undefined)?.[field];
-          }
-        }
-        setFieldStatus(next);
-      } catch (err) {
-        console.error('Failed to load API keys:', err);
-        setKeysError(err instanceof Error ? err.message : 'Failed to load API keys');
-      } finally {
-        setLoadingKeys(false);
-      }
-    };
-
-    loadKeys();
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await client.service('agentic-tool-settings').find();
+      const rows = Array.isArray(result) ? result : result.data;
+      setSettings(
+        Object.fromEntries(rows.map((row) => [row.tool, row])) as Partial<
+          Record<TenantAgenticToolName, TenantAgenticToolSettings>
+        >
+      );
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Failed to load agentic tools');
+    } finally {
+      setLoading(false);
+    }
   }, [client]);
 
-  // Load OpenCode configuration
   useEffect(() => {
+    void load();
+  }, [load]);
+
+  const patch = async (
+    tool: TenantAgenticToolName,
+    data: {
+      enabled?: boolean;
+      resolution_policy?: ProviderResolutionPolicy;
+      inline_configuration_allowed?: boolean;
+      connection?: Partial<Record<AgenticToolConfigField, string | null>>;
+    }
+  ) => {
     if (!client) return;
-
-    const loadOpenCode = async () => {
-      try {
-        setLoadingOpencode(true);
-
-        const config = (await client.service('config').get('opencode')) as unknown as {
-          enabled?: boolean;
-          serverUrl?: string;
-        };
-
-        if (config) {
-          setOpencodeEnabled(config.enabled || false);
-          setOpencodeServerUrl(config.serverUrl || 'http://localhost:4096');
-        }
-      } catch (err) {
-        console.error('Failed to load OpenCode config:', err);
-      } finally {
-        setLoadingOpencode(false);
-      }
-    };
-
-    loadOpenCode();
-  }, [client]);
-
-  // Save API key
-  const handleSaveKey = async (field: AgenticToolConfigField, value: string) => {
-    if (!client) return;
-
     try {
-      setSavingKeys((prev) => ({ ...prev, [field]: true }));
-      setKeysError(null);
-
-      await client.service('config').patch(null, {
-        credentials: {
-          [field]: value,
-        },
-      });
-
-      setFieldStatus((prev) => ({ ...prev, [field]: true }));
-    } catch (err) {
-      console.error(`Failed to save ${field}:`, err);
-      setKeysError(err instanceof Error ? err.message : `Failed to save ${field}`);
-      throw err;
-    } finally {
-      setSavingKeys((prev) => ({ ...prev, [field]: false }));
+      setError(null);
+      const updated = await client.service('agentic-tool-settings').patch(tool, data);
+      setSettings((current) => ({ ...current, [tool]: updated }));
+      const currentStore = agorStore.getState().agenticToolSettingsByName;
+      agorStore
+        .getState()
+        .setAgenticToolSettings(
+          [...currentStore.values()].filter((item) => item.tool !== tool).concat(updated)
+        );
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to save agentic tool');
     }
   };
-
-  // Clear API key
-  const handleClearKey = async (field: AgenticToolConfigField) => {
-    if (!client) return;
-
-    try {
-      setSavingKeys((prev) => ({ ...prev, [field]: true }));
-      setKeysError(null);
-
-      await client.service('config').patch(null, {
-        credentials: {
-          [field]: null,
-        },
-      });
-
-      setFieldStatus((prev) => ({ ...prev, [field]: false }));
-    } catch (err) {
-      console.error(`Failed to clear ${field}:`, err);
-      setKeysError(err instanceof Error ? err.message : `Failed to clear ${field}`);
-      throw err;
-    } finally {
-      setSavingKeys((prev) => ({ ...prev, [field]: false }));
-    }
-  };
-
-  // Test OpenCode connection
-  const handleTestOpenCodeConnection = async () => {
-    if (!client) return;
-
-    setOpencodeTesting(true);
-
-    try {
-      const result = (await client.service('opencode/health').find()) as unknown as {
-        connected?: boolean;
-      };
-      setOpencodeConnected(result.connected === true);
-    } catch (error) {
-      console.error('[OpenCode] Health check error:', error);
-      setOpencodeConnected(false);
-    } finally {
-      setOpencodeTesting(false);
-    }
-  };
-
-  // Save OpenCode configuration
-  const handleSaveOpenCode = async () => {
-    if (!client) return;
-
-    try {
-      await client.service('config').patch(null, {
-        opencode: {
-          enabled: opencodeEnabled,
-          serverUrl: opencodeServerUrl,
-        },
-      });
-
-      showSuccess('OpenCode settings saved successfully');
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to save OpenCode settings';
-      showError(errorMsg);
-      console.error('Failed to save OpenCode settings:', err);
-    }
-  };
-
-  const loading = loadingKeys || loadingOpencode;
 
   if (loading) {
     return (
@@ -297,267 +136,158 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
 
   return (
     <div style={{ padding: token.paddingMD }}>
-      {/* Nested tabs for each tool */}
+      {error && (
+        <Alert
+          title={error}
+          type="error"
+          closable
+          onClose={() => setError(null)}
+          style={{ marginBottom: token.marginLG }}
+        />
+      )}
+      <Alert
+        title="Workspace agentic tools"
+        description="Control tool availability, choose explicit personal/workspace credential precedence, and manage workspace connections."
+        type="info"
+        showIcon
+        style={{ marginBottom: token.marginLG }}
+      />
       <Tabs
-        defaultActiveKey="claude-code"
-        items={[
-          {
-            key: 'claude-code',
-            label: 'Claude Code',
-            children: (
-              <ApiKeyTabContent
-                tool="claude-code"
-                fieldStatus={fieldStatus}
-                keysError={keysError}
-                savingKeys={savingKeys}
-                onSave={handleSaveKey}
-                onClear={handleClearKey}
-                onClearError={() => setKeysError(null)}
-              />
+        defaultActiveKey={
+          (Object.keys(TOOL_LABELS) as TenantAgenticToolName[]).find(
+            (tool) => settings[tool]?.enabled !== false
+          ) ?? 'claude-code'
+        }
+        items={(Object.keys(TOOL_LABELS) as TenantAgenticToolName[]).map((tool) => {
+          const current = settings[tool] ?? {
+            tool,
+            enabled: true,
+            resolution_policy: 'user_preferred' as const,
+            inline_configuration_allowed: true,
+            connection: {},
+          };
+          const fieldStatus: FieldStatus = Object.fromEntries(
+            Object.entries(current.connection).map(([field, status]) => [field, status?.configured])
+          );
+          return {
+            key: tool,
+            label: (
+              <Space size={6}>
+                <ToolIcon tool={tool} size={18} />
+                <span>{TOOL_LABELS[tool]}</span>
+              </Space>
             ),
-          },
-          {
-            key: 'codex',
-            label: 'Codex',
             children: (
-              <ApiKeyTabContent
-                tool="codex"
-                fieldStatus={fieldStatus}
-                keysError={keysError}
-                savingKeys={savingKeys}
-                onSave={handleSaveKey}
-                onClear={handleClearKey}
-                onClearError={() => setKeysError(null)}
-              />
-            ),
-          },
-          {
-            key: 'gemini',
-            label: 'Gemini',
-            children: (
-              <ApiKeyTabContent
-                tool="gemini"
-                fieldStatus={fieldStatus}
-                keysError={keysError}
-                savingKeys={savingKeys}
-                onSave={handleSaveKey}
-                onClear={handleClearKey}
-                onClearError={() => setKeysError(null)}
-              />
-            ),
-          },
-          {
-            key: 'copilot',
-            label: 'GitHub Copilot',
-            children: (
-              <ApiKeyTabContent
-                tool="copilot"
-                fieldStatus={fieldStatus}
-                keysError={keysError}
-                savingKeys={savingKeys}
-                onSave={handleSaveKey}
-                onClear={handleClearKey}
-                onClearError={() => setKeysError(null)}
-              />
-            ),
-          },
-          {
-            key: 'cursor',
-            label: 'Cursor SDK',
-            children: (
-              <ApiKeyTabContent
-                tool="cursor"
-                fieldStatus={fieldStatus}
-                keysError={keysError}
-                savingKeys={savingKeys}
-                onSave={handleSaveKey}
-                onClear={handleClearKey}
-                onClearError={() => setKeysError(null)}
-              />
-            ),
-          },
-          {
-            key: 'opencode',
-            label: 'OpenCode',
-            children: (
-              <div style={{ paddingTop: token.paddingMD }}>
-                {/* OpenCode Info */}
-                <Alert
-                  title="OpenCode.ai Integration"
-                  description={
-                    <div>
-                      <p style={{ marginBottom: token.marginXS }}>
-                        OpenCode provides access to <strong>75+ LLM providers</strong> including
-                        local models, custom endpoints, and privacy-focused options.
-                      </p>
-                      <p style={{ marginBottom: 0 }}>
-                        To use OpenCode sessions, you must run the OpenCode server separately.{' '}
-                        <a
-                          href="https://agor.live/guide/opencode-setup"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          Setup Guide →
-                        </a>
-                      </p>
-                    </div>
-                  }
-                  type="info"
-                  icon={<InfoCircleOutlined />}
-                  showIcon
-                  style={{ marginBottom: token.marginLG }}
-                />
-
-                {/* Configuration Form */}
-                <Form form={opencodeForm} layout="vertical">
-                  {/* Enable Toggle */}
-                  <Form.Item label="Enable OpenCode Integration">
-                    <Space>
-                      <Switch
-                        checked={opencodeEnabled}
-                        onChange={setOpencodeEnabled}
-                        checkedChildren="Enabled"
-                        unCheckedChildren="Disabled"
-                      />
-                      <span style={{ color: token.colorTextSecondary, fontSize: 12 }}>
-                        Enable OpenCode as an agentic tool option in Agor
-                      </span>
-                    </Space>
-                  </Form.Item>
-
-                  {opencodeEnabled && (
-                    <>
-                      {/* Server URL */}
-                      <Form.Item
-                        label="OpenCode Server URL"
-                        help="URL where OpenCode server is running (started with 'opencode serve')"
-                      >
-                        <Space.Compact style={{ width: '100%' }}>
-                          <Input
-                            placeholder="http://localhost:4096"
-                            value={opencodeServerUrl}
-                            onChange={(e) => setOpencodeServerUrl(e.target.value)}
+              <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                <Space>
+                  <Switch
+                    checked={current.enabled}
+                    onChange={(enabled) => void patch(tool, { enabled })}
+                  />
+                  <Typography.Text>
+                    {current.enabled ? 'Available in this workspace' : 'Disabled in this workspace'}
+                  </Typography.Text>
+                </Space>
+                <Tabs
+                  defaultActiveKey="authentication"
+                  items={[
+                    {
+                      key: 'authentication',
+                      label: 'Authentication',
+                      children:
+                        TENANT_TOOL_FIELDS[tool].length > 0 ? (
+                          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                            <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                              <Typography.Text strong>Credential resolution</Typography.Text>
+                              <Select
+                                value={current.resolution_policy}
+                                style={{ width: '100%', maxWidth: 420 }}
+                                options={RESOLUTION_POLICIES.map((policy) => ({
+                                  value: policy.value,
+                                  label: policy.label,
+                                  title: policy.description,
+                                }))}
+                                onChange={(resolution_policy) =>
+                                  void patch(tool, { resolution_policy })
+                                }
+                              />
+                              <Typography.Text type="secondary">
+                                {
+                                  RESOLUTION_POLICIES.find(
+                                    (policy) => policy.value === current.resolution_policy
+                                  )?.description
+                                }
+                              </Typography.Text>
+                            </Space>
+                            <ApiKeyFields
+                              tool={tool as AgenticToolName}
+                              fields={TENANT_TOOL_FIELDS[tool]}
+                              fieldStatus={fieldStatus}
+                              onSave={async (field, value) => {
+                                setSaving((state) => ({ ...state, [field]: true }));
+                                try {
+                                  await patch(tool, { connection: { [field]: value } });
+                                } finally {
+                                  setSaving((state) => ({ ...state, [field]: false }));
+                                }
+                              }}
+                              onClear={async (field) => {
+                                setSaving((state) => ({ ...state, [field]: true }));
+                                try {
+                                  await patch(tool, { connection: { [field]: null } });
+                                } finally {
+                                  setSaving((state) => ({ ...state, [field]: false }));
+                                }
+                              }}
+                              saving={saving}
+                            />
+                          </Space>
+                        ) : (
+                          <Alert
+                            type="info"
+                            showIcon
+                            title="No workspace authentication settings"
+                            description={`${TOOL_LABELS[tool]} does not currently expose a centrally managed connection.`}
                           />
-                          <Tooltip title="Test connection to OpenCode server">
-                            <Button
-                              loading={opencodeTesting}
-                              icon={opencodeTesting ? <LoadingOutlined /> : undefined}
-                              onClick={handleTestOpenCodeConnection}
-                            >
-                              Test
-                            </Button>
-                          </Tooltip>
-                        </Space.Compact>
-                      </Form.Item>
-
-                      {/* Connection Status */}
-                      {opencodeConnected !== null && (
-                        <Alert
-                          title={
-                            opencodeConnected ? (
-                              <Space>
-                                <CheckCircleOutlined style={{ color: token.colorSuccess }} />
-                                <span>Connected to OpenCode server</span>
-                              </Space>
-                            ) : (
-                              <Space>
-                                <CloseCircleOutlined style={{ color: token.colorError }} />
-                                <span>Cannot connect to OpenCode server</span>
-                              </Space>
-                            )
-                          }
-                          type={opencodeConnected ? 'success' : 'error'}
-                          showIcon={false}
-                          style={{ marginBottom: token.marginLG }}
-                        />
-                      )}
-
-                      {/* Setup Instructions (shown if not connected) */}
-                      {opencodeConnected === false && (
-                        <Alert
-                          title="Server Not Running"
-                          description={
-                            <div>
-                              <p style={{ marginBottom: token.marginXS }}>
-                                Start OpenCode server in a separate terminal:
-                              </p>
-                              <pre
-                                style={{
-                                  background: token.colorBgContainer,
-                                  padding: token.paddingXS,
-                                  borderRadius: token.borderRadius,
-                                  border: `1px solid ${token.colorBorder}`,
-                                  overflowX: 'auto',
-                                  marginBottom: token.marginXS,
-                                  fontSize: 12,
-                                }}
-                              >
-                                opencode serve --port 4096
-                              </pre>
-                              <p style={{ marginBottom: 0, fontSize: 12 }}>
-                                Don't have OpenCode?{' '}
-                                <a
-                                  href="https://opencode.ai/docs"
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                >
-                                  Installation Guide →
-                                </a>
-                              </p>
-                            </div>
-                          }
-                          type="warning"
-                          showIcon
-                          style={{ marginBottom: token.marginLG }}
-                        />
-                      )}
-
-                      {/* Success Status */}
-                      {opencodeConnected === true && (
-                        <Alert
-                          title="Ready to use!"
-                          description="You can now create sessions with OpenCode as the agentic tool."
-                          type="success"
-                          showIcon
-                          style={{ marginBottom: token.marginLG }}
-                        />
-                      )}
-                    </>
-                  )}
-
-                  {/* Save Button */}
-                  <Form.Item>
-                    <Button type="primary" onClick={handleSaveOpenCode}>
-                      Save OpenCode Settings
-                    </Button>
-                  </Form.Item>
-                </Form>
-
-                {/* Information Section */}
-                <div style={{ marginTop: token.marginLG }}>
-                  <h4>About OpenCode</h4>
-                  <ul style={{ fontSize: 12, lineHeight: 1.8, color: token.colorTextSecondary }}>
-                    <li>
-                      <strong>Multi-Provider Support:</strong> Access Claude, GPT-4, Gemini, and 70+
-                      other models
-                    </li>
-                    <li>
-                      <strong>Privacy-First:</strong> All code and context stays local - no cloud
-                      storage
-                    </li>
-                    <li>
-                      <strong>Local Models:</strong> Support for Ollama, LM Studio, and custom
-                      endpoints
-                    </li>
-                    <li>
-                      <strong>Open Source:</strong> 30K+ GitHub stars, active community
-                    </li>
-                  </ul>
-                </div>
-              </div>
+                        ),
+                    },
+                    {
+                      key: 'presets',
+                      label: 'Presets',
+                      children: (
+                        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                          <Space direction="vertical" size="small">
+                            <Space>
+                              <Switch
+                                checked={current.inline_configuration_allowed}
+                                onChange={(inline_configuration_allowed) =>
+                                  void patch(tool, { inline_configuration_allowed })
+                                }
+                              />
+                              <Typography.Text strong>Allow inline configuration</Typography.Text>
+                            </Space>
+                            <Typography.Text type="secondary">
+                              {current.inline_configuration_allowed
+                                ? 'Members may choose a preset or define configuration directly.'
+                                : 'Members must choose an administrator-managed preset.'}
+                            </Typography.Text>
+                          </Space>
+                          {client && (
+                            <AgenticToolPresetsManager
+                              client={client}
+                              tool={tool}
+                              onError={setError}
+                            />
+                          )}
+                        </Space>
+                      ),
+                    },
+                  ]}
+                />
+              </Space>
             ),
-          },
-        ]}
+          };
+        })}
       />
     </div>
   );

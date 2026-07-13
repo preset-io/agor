@@ -135,7 +135,7 @@ The settings panel is split into two surfaces:
 
 **Agentic Tools**
 
-- **Claude Code / Codex / Gemini / OpenCode / Copilot** — per-runtime config: provider credentials, default model, permission mode, extra arguments. Each tool screen carries its own auth field(s) (e.g. Claude Code accepts either an Anthropic API key or a subscription token from `claude setup-token`; Codex can also use machine-level `codex login --device-auth`). Each user authenticates the SDKs they actually use; no shared "agor-bot" credentials.
+- **Claude Code / Codex / Gemini / OpenCode / Copilot** — per-runtime config: provider credentials, default model, permission mode, extra arguments. Workspace policy determines whether personal or workspace authentication is required or preferred. Shared machine CLI login state is not used implicitly.
 
 ### Why per-user matters in multiplayer
 

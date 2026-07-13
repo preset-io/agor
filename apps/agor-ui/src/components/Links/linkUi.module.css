@@ -1,3 +1,4 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: Links preview/chip surfaces need CSS-module pseudo focus/hover, preformatted text, overflow, and image object-fit selectors around AntD components. */
 .fullWidth {
   width: 100%;
 }

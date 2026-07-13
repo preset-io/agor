@@ -1,3 +1,5 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: xterm requires an exact ANSI terminal palette
+// biome-ignore-all lint/plugin/noHardcodedColorProperty: xterm requires compound terminal overlay colors
 /**
  * EmbeddedTerminal — an xterm.js terminal rendered INLINE inside a session
  * pane (not in a modal), bound to the user's existing Zellij terminal

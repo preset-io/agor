@@ -6,7 +6,7 @@
  * AVAILABLE_CLAUDE_MODEL_ALIASES when no API key is configured or the call fails.
  */
 
-import { resolveApiKey } from '@agor/core/config';
+import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import { shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { AVAILABLE_CLAUDE_MODEL_ALIASES, DEFAULT_CLAUDE_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
@@ -113,6 +113,9 @@ export class ClaudeModelsService {
   constructor(private db: TenantScopeAwareDatabase) {}
 
   async find(params?: AuthenticatedParams): Promise<ClaudeModelsResult> {
+    if (!(await isTenantAgenticToolEnabled('claude-code', this.db))) {
+      throw new Error('Claude Code is disabled for this workspace');
+    }
     const userId = params?.user?.user_id;
     const resolution = await resolveApiKey('ANTHROPIC_API_KEY', {
       userId,
@@ -128,7 +131,11 @@ export class ClaudeModelsService {
     }
 
     try {
-      const client = new Anthropic({ apiKey: resolution.apiKey });
+      const client = new Anthropic({
+        apiKey: resolution.apiKey,
+        baseURL: (resolution.connection as { ANTHROPIC_BASE_URL?: string } | undefined)
+          ?.ANTHROPIC_BASE_URL,
+      });
       // Pass the 1M beta so eligible models report their extended
       // max_input_tokens — used to derive [1m] variants dynamically.
       const page = await withTimeout(

@@ -58,20 +58,34 @@ If pgvector is missing or the Agor DB user cannot enable it, semantic search ret
 
 ## Authentication
 
-Agor supports Claude Code, Codex, Gemini, OpenCode, and GitHub Copilot. The [onboarding wizard](/guide/getting-started#meet-your-first-ai-teammate) handles the simple case — paste an API key, done. This section covers the alternatives: subscription tokens, machine-level CLI auth, workspace-wide fallbacks, and how Agor resolves them when several are present.
+Agor supports Claude Code, Codex, Gemini, OpenCode, GitHub Copilot, and Cursor. The [onboarding wizard](/guide/getting-started#meet-your-first-ai-teammate) handles the simple case — paste an API key, done.
 
-### Credential resolution order
+### Credential resolution policy
 
-When a session starts, Agor looks for credentials in this order and uses the first one it finds:
+Workspace admins choose an explicit policy per tool:
 
-1. **Per-user credentials** — encrypted in the DB, scoped to the user. Set via the wizard or **Settings → Agentic Tools → _tool_**. Claude Code accepts either `ANTHROPIC_API_KEY` (pay-as-you-go) or `CLAUDE_CODE_OAUTH_TOKEN` (subscription token from `claude setup-token`). Codex accepts `OPENAI_API_KEY`.
-2. **Instance/global credentials** — `credentials.*` in `~/.agor/config.yaml`, or the admin **Settings → Agentic Tools** global fallback.
-3. **Daemon environment variables** — for example `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY` in the daemon process environment.
-4. **Machine-level CLI auth** — if no key is found, supported tools fall back to local CLI auth available to the Unix user running the session. For Codex this is `~/.codex/auth.json` from `codex login --device-auth`; for Claude Code this includes Claude CLI subscription login state.
+- **Require personal** — personal configuration only.
+- **Prefer personal** — personal configuration, then workspace configuration. This is the default.
+- **Prefer workspace** — workspace configuration, then personal configuration.
+- **Require workspace** — workspace configuration only.
+
+Personal credentials are encrypted in the DB and set through **User Settings → Agentic Tools**. Workspace credentials are encrypted in the tenant-scoped DB and managed through **Workspace Settings → Agentic Tools**. Policy changes do not delete dormant personal credentials.
+
+The complete provider connection always comes from one scope. Agor does not combine a credential from one scope with an endpoint from another, and does not fall back to `config.yaml` or daemon environment variables. Claude users explicitly choose a subscription token or API-key connection. Codex users explicitly choose an API key or declare that they authenticated the Codex CLI with `codex login`; native Codex login is never inferred merely because no key exists. Shared-machine Codex subscription authentication is rejected in hosted `required_from_auth` mode.
+
+> **Upgrading from implicit CLI or environment authentication:** Agor intentionally does not migrate or infer shared-machine native login state. Each affected user must select their authentication method in **User Settings → Agentic Tools**; Claude subscription users must save a `claude setup-token` token, while Codex subscription users explicitly declare their existing `codex login`. Until then, Agor reports the provider as unavailable instead of silently borrowing ambient credentials.
+
+### Agentic-tool configuration governance
+
+Workspace administrators can define live, tool-specific presets under **Workspace Settings → Agentic Tools**. Configuration surfaces always ask for the tool first and then show only presets for that tool. When inline configuration is allowed, members may instead choose **Define configuration here**.
+
+Administrators can require presets independently for each tool. Presets contain runtime behavior—model, permissions, and sandbox policy—but never provider credentials or MCP attachments. MCP servers are selected independently on sessions, schedules, and gateway channels. Referenced presets cannot be deleted. Editing a preset affects the next task started by every session, schedule, or gateway channel that references it; a running task keeps the configuration resolved when it started.
+
+Each tool may have one workspace default preset. Users can choose that moving workspace default, a specific preset, or—when policy permits—an inline personal default. Creation forms also offer **Use my default**. These default references are resolved when a session, schedule, or gateway channel is saved; the resource then stores the concrete preset reference or inline configuration. Later changes to a user's default do not silently rewrite existing resources.
 
 Agor uses these credentials only to authenticate the agent runtime with the provider SDK/CLI. Stored secrets are encrypted at rest and are not written into the prompt transcript or intentionally sent to the model as text.
 
-Mixing is fine: one user can run on a Claude subscription token while teammates use per-user API keys, and a self-hosted single-user instance can rely on machine-level CLI auth.
+Mixing is fine: one user can run on a Claude subscription token while teammates use a workspace API key.
 
 <a id="claude-max-pro" />
 
@@ -95,20 +109,6 @@ Copy the printed token.
 
 **3. Paste it into Agor:** open **User Settings → Agentic Tools → Claude Code** and paste the token into **Claude Subscription Token**. Agor stores it as `CLAUDE_CODE_OAUTH_TOKEN` for your user.
 
-If you prefer ordinary interactive machine login for a solo/self-hosted setup, sign in with the Claude CLI as the daemon/session Unix user instead. For exact options and current behavior, see Anthropic's [Claude Code authentication docs](https://docs.anthropic.com/en/docs/claude-code/iam).
-
-### Codex account auth (`codex login --device-auth`)
-
-Use this when you want Codex to authenticate with a ChatGPT/Codex account on the machine instead of storing an `OPENAI_API_KEY` in Agor. This is especially useful on remote or headless hosts.
-
-Run this on the machine where Agor sessions execute. In `strict` Unix isolation, run it as the same Unix user that will own the sessions.
-
-```bash
-codex login --device-auth
-```
-
-Follow the browser/device-code flow. Codex writes auth state under `~/.codex/` for that Unix user; Agor's Codex sessions fall back to that auth when no `OPENAI_API_KEY` is configured. For exact setup steps, see OpenAI's [Codex authentication docs](https://developers.openai.com/codex/auth).
-
 ### Per-user API keys (recommended for teams)
 
 The wizard's default. Each user pastes their own key in **Settings → Agentic Tools**. Keys are encrypted at rest, scoped per-user, and never exposed to other users on the instance. Get keys at:
@@ -117,19 +117,7 @@ The wizard's default. Each user pastes their own key in **Settings → Agentic T
 - OpenAI: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 - Google AI: [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
 
-Choose raw API keys when you want explicit usage/billing through API-provider accounts, shared automation, or a setup that does not depend on local CLI login state.
-
-### Workspace env vars (global fallback)
-
-For instances where everyone intentionally shares one set of credentials:
-
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-export GEMINI_API_KEY="..."
-```
-
-Or use the admin **Settings → Agentic Tools** global fallback fields. These credentials are available as a fallback for every user on the instance — pick this only if that's intentional.
+Choose raw API keys when you want explicit usage and billing through API-provider accounts. Workspace admins can provide a shared fallback without exposing it to members.
 
 ---
 

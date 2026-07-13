@@ -19,6 +19,7 @@ describe('buildAgenticToolCredentialPatch', () => {
       agentic_tools: {
         'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-test' },
       },
+      agentic_auth_methods: { 'claude-code': 'subscription' },
     });
   });
 

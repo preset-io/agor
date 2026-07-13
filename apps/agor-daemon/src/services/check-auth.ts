@@ -7,28 +7,16 @@
  *
  * Returns a tri-state `status`:
  * - `authenticated`: a working credential was positively confirmed.
- * - `unauthenticated`: positively proven to have NO working credential (empty
- *   native auth, absent/invalid auth file, provider 401/403 on a present key).
+ * - `unauthenticated`: no usable scoped credential, or provider rejection.
  * - `unknown`: could NOT determine — transport error, provider timeout/5xx, or a
- *   credential class with no server-probeable path (gemini Google-login, cursor,
- *   copilot native). Callers must FAIL SAFE and treat this as "possibly connected".
+ *   credential class with no reliable probe. Callers must fail safe.
  *
- * Credential resolution mirrors what the executor sees at session-start: the
- * primary per-tool credential (DB `agentic_tools` > config.yaml > OS env, via
- * `resolveApiKey`), then the tool's user `env_vars` and a Claude subscription
- * token, then the native filesystem path (claude via the SDK's `accountInfo()`
- * reading `~/.claude/.credentials.json`; codex reading `~/.codex/auth.json`).
- *
- * Residual: in insulated/strict Unix modes the probe runs as the DAEMON Unix user,
- * whose `~/.claude` / `~/.codex` may diverge from the executor user's. The full
- * `sudo -u <session user>` probe is a follow-up; here we still FAIL SAFE (a
- * divergence surfaces as `unknown`, never a false "not connected").
+ * Resolution follows the tenant's explicit policy and selects one complete
+ * user or workspace connection. Native CLI state, YAML, and environment
+ * variables are not credential fallbacks.
  */
 
-import { promises as fs } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { resolveApiKey, resolveUserEnvironment } from '@agor/core/config';
+import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
 import { Claude } from '@agor/core/sdk';
@@ -41,13 +29,8 @@ import type {
 } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
 
-/** Tools where no API key is required — native CLI/OAuth auth is a real, usable path. */
-const NATIVE_AUTH_TOOLS = new Set<string>(['claude-code', 'codex']);
-
 const FETCH_TIMEOUT_MS = 8_000;
 const SDK_AUTH_PROBE_TIMEOUT_MS = 10_000;
-// Codex treats the OAuth session as stale after ~8 days (per OpenAI docs).
-const CODEX_SESSION_STALE_MS = 8 * 24 * 60 * 60 * 1000;
 
 const authed = (method: AuthCheckResult['method'], hint?: string): AuthCheckResult => ({
   status: 'authenticated',
@@ -77,9 +60,8 @@ const unknown = (hint?: string): AuthCheckResult => ({
  * credential on a minimal safe env — used to inject a resolved subscription/OAuth
  * token so the probe sees it exactly as a real session would.
  *
- * `ok: false` means the probe itself failed (CLI missing, timeout, exception) —
- * an inconclusive `unknown`, NOT proof of missing auth. `ok: true` with an empty
- * account is positive proof of no native auth.
+ * `ok: false` means the isolated token probe failed (timeout or exception), so
+ * the result is inconclusive rather than proof that the token is invalid.
  */
 async function probeClaudeCodeAuth(
   env?: Record<string, string | undefined>
@@ -117,29 +99,6 @@ async function probeClaudeCodeAuth(
       // best-effort cleanup
     }
   }
-}
-
-/** Turn a Claude `accountInfo()` probe into a tool result (authenticated) or an evidence status. */
-function classifyClaudeProbe(probe: {
-  ok: boolean;
-  account: Claude.AccountInfo | null;
-}): AuthCheckResult {
-  if (!probe.ok) return unknown('Claude Code auth probe did not complete.');
-  const { account } = probe;
-  const hasAuthSignal = !!(account?.apiKeySource || account?.tokenSource || account?.email);
-  if (hasAuthSignal && account) {
-    const method: AuthCheckResult['method'] = account.apiKeySource
-      ? 'api-key'
-      : account.tokenSource
-        ? 'oauth'
-        : 'native';
-    const hintParts: string[] = [];
-    if (account.email) hintParts.push(account.email);
-    if (account.subscriptionType) hintParts.push(account.subscriptionType);
-    if (account.organization) hintParts.push(account.organization);
-    return authed(method, hintParts.length > 0 ? hintParts.join(' • ') : undefined);
-  }
-  return unauthenticated('none', 'No Claude Code authentication detected.');
 }
 
 /** Claude subscription tokens from `claude setup-token` carry an `sk-ant-oat` prefix. */
@@ -183,64 +142,11 @@ function buildClaudeProbeEnv(token: string): Record<string, string> {
 async function validateClaudeSubscriptionToken(token: string): Promise<AuthCheckStatus> {
   const probe = await probeClaudeCodeAuth(buildClaudeProbeEnv(token));
   if (!probe.ok) return 'unknown';
-  return probe.account?.tokenSource ? 'authenticated' : 'unauthenticated';
-}
-
-/**
- * Shape of `$CODEX_HOME/auth.json` — the file the codex CLI writes after a
- * successful login. The executor reads from the same path.
- */
-interface CodexAuthFile {
-  auth_mode?: string;
-  tokens?: {
-    access_token?: string;
-    refresh_token?: string;
-    id_token?: string;
-  };
-  last_refresh?: string;
-  OPENAI_API_KEY?: string;
-}
-
-/**
- * Probe Codex auth by reading `$CODEX_HOME/auth.json` (default `~/.codex`).
- * Absent / unreadable / malformed / empty is positive proof of no native auth.
- */
-async function probeCodexAuth(): Promise<AuthCheckResult> {
-  const codexHome = process.env.CODEX_HOME || join(homedir(), '.codex');
-  const authPath = join(codexHome, 'auth.json');
-
-  let parsed: CodexAuthFile;
-  try {
-    const raw = await fs.readFile(authPath, 'utf-8');
-    parsed = JSON.parse(raw) as CodexAuthFile;
-  } catch {
-    return unauthenticated('none', 'No Codex authentication detected.');
-  }
-
-  // ChatGPT OAuth path — the CLI auto-refreshes via refresh_token, but OpenAI
-  // considers the session stale after ~8 days without a refresh.
-  if (parsed.tokens?.refresh_token) {
-    if (parsed.last_refresh) {
-      const refreshedAt = Date.parse(parsed.last_refresh);
-      if (Number.isFinite(refreshedAt) && Date.now() - refreshedAt > CODEX_SESSION_STALE_MS) {
-        return unauthenticated(
-          'oauth',
-          'Codex ChatGPT session is stale (>8 days since last refresh). Run `codex` once to refresh.'
-        );
-      }
-    }
-    return authed(
-      'oauth',
-      parsed.auth_mode ? `ChatGPT (${parsed.auth_mode})` : 'ChatGPT subscription auth'
-    );
-  }
-
-  // API key persisted into auth.json (set via `codex login --api-key`).
-  if (parsed.OPENAI_API_KEY) {
-    return authed('api-key', 'Using OPENAI_API_KEY from ~/.codex/auth.json');
-  }
-
-  return unauthenticated('none', 'No Codex authentication detected.');
+  // accountInfo() is not a reliable negative signal for setup-token auth: some
+  // valid subscription sessions initialize without returning account metadata.
+  // Only positive account metadata proves auth; absence is inconclusive and
+  // must not drive the persistent "credentials aren't working" banner.
+  return probe.account?.tokenSource ? 'authenticated' : 'unknown';
 }
 
 /**
@@ -248,7 +154,11 @@ async function probeCodexAuth(): Promise<AuthCheckResult> {
  * `unauthenticated` only on a real 401/403 rejection; everything else (timeout,
  * 5xx, network error) is `unknown` — a failure to VERIFY is not proof of invalidity.
  */
-async function validateApiKey(tool: string, key: string): Promise<AuthCheckStatus> {
+async function validateApiKey(
+  tool: string,
+  key: string,
+  connection: Record<string, string | undefined> = {}
+): Promise<AuthCheckStatus> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
@@ -258,13 +168,13 @@ async function validateApiKey(tool: string, key: string): Promise<AuthCheckStatu
 
     switch (tool) {
       case 'claude-code': {
-        url = 'https://api.anthropic.com/v1/models';
+        url = `${(connection.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com').replace(/\/$/, '')}/v1/models`;
         headers['x-api-key'] = key;
         headers['anthropic-version'] = '2023-06-01';
         break;
       }
       case 'codex': {
-        url = 'https://api.openai.com/v1/models';
+        url = `${(connection.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, '')}/models`;
         headers.Authorization = `Bearer ${key}`;
         break;
       }
@@ -322,6 +232,10 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       const { tool, apiKey: rawKey } = data;
       const userId = params?.user?.user_id as UserID | undefined;
 
+      if (!(await isTenantAgenticToolEnabled(tool as AgenticToolName, db))) {
+        return unauthenticated('none', `${tool} is disabled for this workspace.`);
+      }
+
       // opencode is server-based — no credentials concept, always ready.
       if (tool === 'opencode') {
         return authed('native');
@@ -356,9 +270,9 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
         );
       }
 
-      // Otherwise resolve from stored credentials (user > config.yaml > env > native).
+      // Otherwise resolve from the tenant's explicit user/workspace policy.
       const toolName = tool as AgenticToolName;
-      const { apiKey, useNativeAuth, decryptionFailed } = await resolveApiKey(keyName, {
+      const { apiKey, decryptionFailed, connection, useNativeAuth } = await resolveApiKey(keyName, {
         userId,
         db,
         tool: toolName,
@@ -371,29 +285,16 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
         );
       }
 
-      let effectiveUserEnv: Record<string, string> | undefined;
-      const getEffectiveUserEnv = async () => {
-        if (!userId) return {};
-        effectiveUserEnv ??= await resolveUserEnvironment(userId, db, { tool: toolName });
-        return effectiveUserEnv;
-      };
-
       if (apiKey) {
         return resultFromKeyStatus(
-          await validateApiKey(tool, apiKey),
+          await validateApiKey(tool, apiKey, connection as Record<string, string | undefined>),
           'Stored key was rejected by provider — update it in Settings → Agent Setup.'
         );
       }
 
-      // User Settings → Env Vars is not the recommended credential home, but executors
-      // do receive those values. Validate that setup through the same user/tool env
-      // resolver used to spawn sessions.
-      const userEnv = await getEffectiveUserEnv();
-      const userEnvApiKey = userEnv[keyName];
-      if (userEnvApiKey) {
-        return resultFromKeyStatus(
-          await validateApiKey(tool, userEnvApiKey),
-          'Stored env var key was rejected by provider — update it in Settings → Env Vars.'
+      if (tool === 'codex' && useNativeAuth) {
+        return unknown(
+          'Codex subscription login is configured for this user but can only be verified when Codex runs.'
         );
       }
 
@@ -411,37 +312,21 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
           );
         }
 
-        const subscriptionToken = subscriptionResolution.apiKey || userEnv.CLAUDE_CODE_OAUTH_TOKEN;
+        const subscriptionToken = subscriptionResolution.apiKey;
         if (subscriptionToken) {
           const status = await validateClaudeSubscriptionToken(subscriptionToken);
           if (status === 'authenticated') return authed('oauth');
           if (status === 'unauthenticated') {
             return unauthenticated(
               'none',
-              subscriptionResolution.apiKey
-                ? 'Stored Claude subscription token was rejected — update it in Settings → Agent Setup.'
-                : 'Claude subscription token env var was rejected — update CLAUDE_CODE_OAUTH_TOKEN in Settings → Env Vars.'
+              'Stored Claude subscription token was rejected — update it in Settings → Agent Setup.'
             );
           }
           return unknown('Could not verify the Claude subscription token — try again.');
         }
       }
 
-      // Native filesystem auth for the tools that have a server-probeable path.
-      if (useNativeAuth && NATIVE_AUTH_TOOLS.has(tool)) {
-        if (tool === 'claude-code') {
-          return classifyClaudeProbe(await probeClaudeCodeAuth());
-        }
-        if (tool === 'codex') {
-          return probeCodexAuth();
-        }
-      }
-
-      // gemini / copilot / cursor: an API key is verifiable, but their native login
-      // (Google account, Cursor, Copilot) is NOT server-probeable — no key ⇒ unknown.
-      return unknown(
-        `No ${keyName} configured and ${toolName} native login can't be verified from the server.`
-      );
+      return unauthenticated('none', `No usable ${keyName} is available under workspace policy.`);
     },
   };
 }

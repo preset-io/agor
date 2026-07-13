@@ -1,10 +1,7 @@
 import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
-import { runWithTenantDatabaseScope, type TenantScopeAwareDatabase } from '@agor/core/db';
+import { runWithTenantContext, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { Params, SessionID, TenantContext, TenantID } from '@agor/core/types';
-import {
-  deferWithTenantDatabaseScope,
-  resolveTenantIdForDeferredScope,
-} from './tenant-db-scope.js';
+import { deferWithTenantContext, resolveTenantIdForDeferredScope } from './tenant-db-scope.js';
 
 type QueueTenantParams = Params & {
   tenant?: Pick<TenantContext, 'tenant_id' | 'source'>;
@@ -40,8 +37,21 @@ export function queueTenantParams(
   source: TenantContext['source'] = 'explicit'
 ): QueueTenantParams {
   const currentTenant = (params as QueueTenantParams | undefined)?.tenant;
+  // Queue drains are new daemon-owned operations, not continuations of the
+  // request that completed the previous task. In particular, executor JWTs
+  // are task-scoped: forwarding the completed task's transport/auth params
+  // makes secret resolution for the next queued task fail with a task-scope
+  // mismatch. Preserve the resolved user and other internal context, but
+  // deliberately cross an authentication boundary here.
+  const {
+    authentication: _authentication,
+    connection: _connection,
+    provider: _provider,
+    headers: _headers,
+    ...internalParams
+  } = params ?? {};
   return {
-    ...(params ?? {}),
+    ...internalParams,
     tenant: {
       ...currentTenant,
       tenant_id: tenantId as TenantID,
@@ -58,13 +68,13 @@ export async function runWithSessionQueueTenantScope<T>(
 
   if (capturedTenantId) {
     const scopedParams = queueTenantParams(options.params, capturedTenantId, 'explicit');
-    return runWithTenantDatabaseScope(options.db, capturedTenantId, () => work(scopedParams));
+    return runWithTenantContext(capturedTenantId, () => work(scopedParams));
   }
 
   const tenantIdHint = trustedTenantIdHint(options);
   if (tenantIdHint) {
     const scopedParams = queueTenantParams(options.params, tenantIdHint, 'explicit');
-    return runWithTenantDatabaseScope(options.db, tenantIdHint, () => work(scopedParams));
+    return runWithTenantContext(tenantIdHint, () => work(scopedParams));
   }
 
   const configuredStaticTenantId = staticTenantId(options.config);
@@ -76,7 +86,7 @@ export async function runWithSessionQueueTenantScope<T>(
   }
 
   const scopedParams = queueTenantParams(options.params, configuredStaticTenantId, 'static');
-  return runWithTenantDatabaseScope(options.db, configuredStaticTenantId, () => work(scopedParams));
+  return runWithTenantContext(configuredStaticTenantId, () => work(scopedParams));
 }
 
 export function deferWithSessionQueueTenantScope(
@@ -95,14 +105,14 @@ export function deferWithSessionQueueTenantScope(
   const capturedTenantId = resolveTenantIdForDeferredScope(options.params);
   if (capturedTenantId) {
     const scopedParams = queueTenantParams(options.params, capturedTenantId, 'explicit');
-    deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), handleError);
+    deferWithTenantContext(scopedParams, () => work(scopedParams), handleError);
     return;
   }
 
   const tenantIdHint = trustedTenantIdHint(options);
   if (tenantIdHint) {
     const scopedParams = queueTenantParams(options.params, tenantIdHint, 'explicit');
-    deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), handleError);
+    deferWithTenantContext(scopedParams, () => work(scopedParams), handleError);
     return;
   }
 
@@ -115,5 +125,5 @@ export function deferWithSessionQueueTenantScope(
   }
 
   const scopedParams = queueTenantParams(options.params, configuredStaticTenantId, 'static');
-  deferWithTenantDatabaseScope(options.db, scopedParams, () => work(scopedParams), handleError);
+  deferWithTenantContext(scopedParams, () => work(scopedParams), handleError);
 }

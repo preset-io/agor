@@ -23,7 +23,14 @@ import {
 } from '../../types/link';
 import type { Database } from '../client';
 import { isUniqueConstraintError } from '../constraint-errors';
-import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  isPostgresDatabase,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
 import { branches, type LinkInsert, type LinkRow, links, sessions } from '../schema';
 import { attachHiddenTenant, RepositoryError } from './base';
 import {
@@ -288,8 +295,8 @@ export class LinksRepository {
     data: readonly Partial<LinkCreate>[]
   ): Promise<Array<{ link: Link; created: boolean }>> {
     if (data.length === 0) return [];
-    return this.db.transaction(async (tx) => {
-      const repository = new LinksRepository(tx as unknown as Database);
+    return runDatabaseTransaction(this.db, async (tx) => {
+      const repository = new LinksRepository(tx);
       const results: Array<{ link: Link; created: boolean }> = [];
       for (const item of data) {
         results.push(await repository.upsertWithStatus(item));

@@ -411,8 +411,29 @@
     {
       "idx": 58,
       "version": "7",
-      "when": 1782400100000,
-      "tag": "0059_links",
+      "when": 1783800000000,
+      "tag": "0059_agentic_tool_presets",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1783900000000,
+      "tag": "0060_decouple_mcp_from_agentic_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1784000000000,
+      "tag": "0061_default_agentic_tool_presets",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1784000100000,
+      "tag": "0062_links",
       "breakpoints": true
     }
   ]

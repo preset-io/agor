@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorProperty: log output intentionally uses a fixed terminal-like surface
 import type { AgorClient, Branch } from '@agor-live/client';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Checkbox, Modal, Space, Typography, theme } from 'antd';

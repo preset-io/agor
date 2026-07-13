@@ -9,6 +9,8 @@
  * - Typography features
  */
 
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: demo content intentionally demonstrates Mermaid's exact palette syntax
+
 import { Card, Space, Typography } from 'antd';
 import type React from 'react';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';

@@ -24,7 +24,7 @@
  *     the UI already has bundled. The picker stays usable.
  */
 
-import { resolveApiKey } from '@agor/core/config';
+import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import { shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { COPILOT_MODEL_METADATA, DEFAULT_COPILOT_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
@@ -73,9 +73,12 @@ export class CopilotModelsService {
   constructor(private db: TenantScopeAwareDatabase) {}
 
   async find(params?: AuthenticatedParams): Promise<CopilotModelsResult> {
+    if (!(await isTenantAgenticToolEnabled('copilot', this.db))) {
+      throw new Error('GitHub Copilot is disabled for this workspace');
+    }
     const userId = params?.user?.user_id;
 
-    // Resolve the GitHub token. Precedence: per-user > config.yaml > env.
+    // Resolve the GitHub token through the tenant's explicit scope policy.
     // Falls through to static if nothing is configured anywhere.
     const resolution = await resolveApiKey('COPILOT_GITHUB_TOKEN', {
       userId,

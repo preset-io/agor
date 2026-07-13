@@ -8,6 +8,7 @@
 import type { Board, BoardID, BoardObject, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
+import { DEFAULT_BOARD_BACKGROUND } from '../../design/board-backgrounds';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
@@ -43,6 +44,9 @@ function createBoardData(overrides?: Partial<Board>): Partial<Board> {
   };
   if (overrides && Object.hasOwn(overrides, 'primary_teammate_id')) {
     data.primary_teammate_id = overrides.primary_teammate_id;
+  }
+  if (overrides && Object.hasOwn(overrides, 'background_color')) {
+    data.background_color = overrides.background_color;
   }
   return data;
 }
@@ -110,6 +114,23 @@ async function getStoredBoardIcon(db: Database, boardId: UUID): Promise<string |
 // ============================================================================
 
 describe('BoardRepository.create', () => {
+  dbTest('defaults an omitted background to Gold Shimmer', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    const created = await repo.create(createBoardData());
+
+    expect(created.background_color).toBe(DEFAULT_BOARD_BACKGROUND);
+  });
+
+  dbTest('preserves an explicitly supplied background', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const background = 'linear-gradient(90deg, red, blue)';
+
+    const created = await repo.create(createBoardData({ background_color: background }));
+
+    expect(created.background_color).toBe(background);
+  });
+
   dbTest('should create board with all required fields', async ({ db }) => {
     const repo = new BoardRepository(db);
     const data = createBoardData({

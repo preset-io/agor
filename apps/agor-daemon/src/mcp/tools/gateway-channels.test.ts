@@ -1161,6 +1161,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         is_bot: false,
         is_trigger: false,
         is_mention: false,
+        files: [{ id: 'F123', name: 'error.log', mimetype: 'text/plain', size: 512 }],
       },
     ],
   };
@@ -1198,6 +1199,10 @@ describe('gateway agent-tool capability gating (MCP)', () => {
     });
     expect(payload.channel).toEqual({ slack_channel_id: 'C123' });
     expect(payload.messages[0]).toMatchObject({ actor_label: 'Alice', text: 'shipping update' });
+    expect(payload.messages[0].files).toEqual([
+      { id: 'F123', name: 'error.log', mimetype: 'text/plain', size: 512 },
+    ]);
+    expect(JSON.stringify(payload)).not.toContain('url_private_download');
     expect(JSON.stringify(payload)).not.toContain('xoxb-secret');
     expect(JSON.stringify(payload)).not.toContain('xapp-secret');
   });
@@ -1220,6 +1225,8 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
     expect(payload.markdown).toContain('# Slack channel C123 history');
     expect(payload.markdown).toContain('shipping update');
+    expect(payload.markdown).toContain('Attached file F123: error.log (text/plain, 512 bytes)');
+    expect(payload.markdown).not.toContain('url_private_download');
     expect(payload.messages).toBeUndefined();
   });
 
@@ -1892,6 +1899,319 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       expect(getConnector).not.toHaveBeenCalled();
     });
   });
+
+  describe('agor_gateway_slack_file_download', () => {
+    const fileDownloadEnabled = {
+      ...slackChannel,
+      config: { ...slackChannel.config, agent_tools: { file_download: true } },
+    };
+
+    const slackFileInfo = {
+      id: 'F123',
+      name: 'error.log',
+      mimetype: 'text/plain',
+      size: 512,
+      url_private_download: 'https://files.slack.com/files-pri/T1-F123/download/error.log',
+    };
+
+    const slackFileResult = { file: slackFileInfo, sourceConversationIds: ['C123'] };
+
+    let uploadDir: string;
+
+    function withUploadDir(): string {
+      uploadDir = fs.mkdtempSync(path.join(tmpdir(), 'agor-gateway-download-'));
+      vi.mocked(getUploadDirectory).mockReturnValue(uploadDir);
+      return uploadDir;
+    }
+
+    afterEach(() => {
+      if (uploadDir) fs.rmSync(uploadDir, { recursive: true, force: true });
+      vi.unstubAllGlobals();
+    });
+
+    it('downloads a file via files.info through the hardened ingestion path into the upload dir', async () => {
+      const dir = withUploadDir();
+      const fetchMock = vi.fn(
+        async () =>
+          new Response('log line one', {
+            status: 200,
+            headers: { 'content-type': 'text/plain' },
+          })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      const getFileInfo = vi.fn(async () => slackFileResult);
+      vi.mocked(getConnector).mockReturnValue({ getFileInfo } as any);
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileDownloadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      const result = await tools.agor_gateway_slack_file_download.handler({ fileId: 'F123' });
+      const payload = JSON.parse(result.content[0].text);
+
+      expect(getFileInfo).toHaveBeenCalledWith('F123');
+      // The download reuses the hardened inbound-ingestion path: bot-token
+      // Authorization against the allowlisted Slack host, manual redirects.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(slackFileInfo.url_private_download, {
+        headers: { Authorization: 'Bearer xoxb-secret' },
+        redirect: 'manual',
+      });
+      expect(payload).toMatchObject({
+        downloaded: true,
+        gateway_channel: { id: 'chan-1', target_branch_id: 'branch-1' },
+        file: { id: 'F123', name: 'error.log', mimetype: 'text/plain', size: 512 },
+      });
+      expect(payload.file.path.startsWith(dir)).toBe(true);
+      expect(payload.file.path).toContain('F123_error');
+      expect(fs.readFileSync(payload.file.path, 'utf8')).toBe('log line one');
+      expect(JSON.stringify(payload)).not.toContain('url_private_download');
+      expect(JSON.stringify(payload)).not.toContain('files.slack.com');
+      expect(JSON.stringify(payload)).not.toContain('xoxb-secret');
+    });
+
+    it('denies file download when the capability is disabled, with an actionable error', async () => {
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        slackChannel as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('admin');
+      const error = await tools.agor_gateway_slack_file_download
+        .handler({ fileId: 'F123' })
+        .then(() => null)
+        .catch((err: Error) => err);
+
+      expect(error).toBeTruthy();
+      expect(error!.message).toContain("capability 'file_download' is disabled");
+      expect(error!.message).toContain('agor_gateway_channels_update');
+      expect(error!.message).toContain('config.agent_tools.file_download');
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('denies file download across branches even for admins', async () => {
+      spyCallerSessionBranch('branch-2');
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileDownloadEnabled as any
+      );
+
+      const tools = await captureTools('admin');
+      await expect(
+        tools.agor_gateway_slack_file_download.handler({
+          gatewayChannelId: 'chan-1',
+          fileId: 'F123',
+        })
+      ).rejects.toThrow('targets a different branch');
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('rejects a disallowed mimetype without downloading', async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      vi.mocked(getConnector).mockReturnValue({
+        getFileInfo: vi.fn(async () => ({
+          ...slackFileResult,
+          file: { ...slackFileInfo, mimetype: 'application/pdf' },
+        })),
+      } as any);
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileDownloadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_file_download.handler({ fileId: 'F123' })
+      ).rejects.toThrow('which the gateway does not download');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('inherits the slack.com host allowlist from the hardened download path', async () => {
+      withUploadDir();
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      vi.mocked(getConnector).mockReturnValue({
+        getFileInfo: vi.fn(async () => ({
+          ...slackFileResult,
+          file: {
+            ...slackFileInfo,
+            url_private_download: 'https://evil.example/files-pri/T1-F123/download/error.log',
+          },
+        })),
+      } as any);
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileDownloadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_file_download.handler({ fileId: 'F123' })
+      ).rejects.toThrow('Failed to download Slack file');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps the no-session path gated on admin or branch 'all' permission", async () => {
+      const dir = withUploadDir();
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          async () =>
+            new Response('log line one', {
+              status: 200,
+              headers: { 'content-type': 'text/plain' },
+            })
+        )
+      );
+      vi.mocked(getConnector).mockReturnValue({
+        getFileInfo: vi.fn(async () => slackFileResult),
+      } as any);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileDownloadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+      vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
+      const permission = vi
+        .spyOn(BranchRepository.prototype, 'resolveUserPermission')
+        .mockResolvedValue('view' as any);
+
+      const tools = await captureTools('member', makeFakeApp({}), null);
+      await expect(
+        tools.agor_gateway_slack_file_download.handler({
+          gatewayChannelId: 'chan-1',
+          fileId: 'F123',
+        })
+      ).rejects.toThrow("'all' branch permission");
+
+      permission.mockResolvedValue('all' as any);
+      const result = await tools.agor_gateway_slack_file_download.handler({
+        gatewayChannelId: 'chan-1',
+        fileId: 'F123',
+      });
+      const payload = JSON.parse(result.content[0].text);
+      expect(payload.downloaded).toBe(true);
+      expect(payload.file.path.startsWith(dir)).toBe(true);
+    });
+
+    it('rejects a malformed fileId at the schema layer', async () => {
+      const tools = await captureTools('member');
+      const schema = tools.agor_gateway_slack_file_download.cfg.inputSchema;
+
+      expect(schema.safeParse({ fileId: 'not-a-file-id' }).success).toBe(false);
+      expect(schema.safeParse({ fileId: 'f0123abc456' }).success).toBe(false);
+      expect(schema.safeParse({ fileId: 'C0123ABC456' }).success).toBe(false);
+      expect(schema.safeParse({}).success).toBe(false);
+      expect(schema.safeParse({ fileId: 'F0123ABC456' }).success).toBe(true);
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it('is not marked read-only — it writes into the daemon upload directory', async () => {
+      const tools = await captureTools('member');
+      expect(tools.agor_gateway_slack_file_download.cfg.annotations).toEqual({
+        destructiveHint: false,
+        idempotentHint: true,
+      });
+    });
+
+    describe('allowed_channel_ids whitelist on file provenance', () => {
+      const restrictedDownloadEnabled = {
+        ...slackChannel,
+        config: {
+          ...slackChannel.config,
+          agent_tools: { file_download: true },
+          allowed_channel_ids: ['C123'],
+        },
+      };
+
+      function setupRestrictedDownload(sourceConversationIds: string[]) {
+        vi.mocked(getConnector).mockReturnValue({
+          getFileInfo: vi.fn(async () => ({ file: slackFileInfo, sourceConversationIds })),
+        } as any);
+        spyCallerGatewaySession('branch-1', gatewaySource);
+        vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+          restrictedDownloadEnabled as any
+        );
+        vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+      }
+
+      it('denies a file whose only sources are non-whitelisted channels, without leaking them', async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        setupRestrictedDownload(['C777', 'G888']);
+
+        const tools = await captureTools('member');
+        const error = await tools.agor_gateway_slack_file_download
+          .handler({ fileId: 'F123' })
+          .then(() => null)
+          .catch((err: Error) => err);
+
+        expect(error).toBeTruthy();
+        expect(error!.message).toContain('allowed_channel_ids');
+        expect(error!.message).not.toContain('C777');
+        expect(error!.message).not.toContain('G888');
+        expect(error!.message).not.toContain('error.log');
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
+
+      it('denies a file with no visible source conversations when a whitelist is configured', async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        setupRestrictedDownload([]);
+
+        const tools = await captureTools('member');
+        await expect(
+          tools.agor_gateway_slack_file_download.handler({ fileId: 'F123' })
+        ).rejects.toThrow('allowed_channel_ids');
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
+
+      it('allows a file shared into a whitelisted channel', async () => {
+        withUploadDir();
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(
+            async () =>
+              new Response('log line one', {
+                status: 200,
+                headers: { 'content-type': 'text/plain' },
+              })
+          )
+        );
+        setupRestrictedDownload(['C777', 'C123']);
+
+        const tools = await captureTools('member');
+        const result = await tools.agor_gateway_slack_file_download.handler({ fileId: 'F123' });
+        const payload = JSON.parse(result.content[0].text);
+        expect(payload.downloaded).toBe(true);
+      });
+
+      it('allows a file shared in a DM even with a whitelist configured', async () => {
+        withUploadDir();
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(
+            async () =>
+              new Response('log line one', {
+                status: 200,
+                headers: { 'content-type': 'text/plain' },
+              })
+          )
+        );
+        setupRestrictedDownload(['D999']);
+
+        const tools = await captureTools('member');
+        const result = await tools.agor_gateway_slack_file_download.handler({ fileId: 'F123' });
+        const payload = JSON.parse(result.content[0].text);
+        expect(payload.downloaded).toBe(true);
+      });
+    });
+  });
 });
 
 describe('getRequiredSecretFields — Slack app_token required unless explicitly outbound-only', () => {
@@ -1936,11 +2256,13 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     channelHistory,
     reactions,
     fileUpload,
+    fileDownload,
     ...rest
   }: typeof dmOnly & {
     botDisplayName?: string;
     reactions?: boolean;
     fileUpload?: boolean;
+    fileDownload?: boolean;
   }) {
     return {
       ...rest,
@@ -1949,6 +2271,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
         channel_history: channelHistory,
         reactions,
         file_upload: fileUpload,
+        file_download: fileDownload,
       },
     };
   }
@@ -2101,6 +2424,32 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     });
   });
 
+  it('adds files:read scope and agent_tools config when fileDownload is enabled', async () => {
+    const opts = { ...dmOnly, fileDownload: true };
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler(opts);
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(wizardOptionsFor(opts)));
+    expect(payload.bot_scopes).toEqual(expect.arrayContaining(['files:read']));
+    expect(payload.create_channel_config_hint.config.agent_tools).toEqual({
+      thread_history: true,
+      channel_history: false,
+      file_download: true,
+    });
+  });
+
+  it('omits files:read when fileDownload is off and no other capability forces it', async () => {
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler({
+      ...dmOnly,
+      fileDownload: false,
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.bot_scopes).not.toContain('files:read');
+  });
+
   it('generates an all-on manifest and maps restrictToChannelIds to allowed_channel_ids', async () => {
     const opts = {
       appName: 'Agor',
@@ -2160,11 +2509,12 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     });
     expect(parsed.alignUsers).toBe(true);
     // Schema defaults mirror the capability defaults: thread history stays on,
-    // channel history/reactions/fileUpload require explicit opt-in.
+    // channel history/reactions/fileUpload/fileDownload require explicit opt-in.
     expect(parsed.threadHistory).toBe(true);
     expect(parsed.channelHistory).toBe(false);
     expect(parsed.reactions).toBe(false);
     expect(parsed.fileUpload).toBe(false);
+    expect(parsed.fileDownload).toBe(false);
 
     const result = await tools.agor_gateway_slack_manifest_generate.handler(parsed);
     const payload = JSON.parse(result.content[0].text);

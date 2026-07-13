@@ -2,7 +2,7 @@ import type { UserID } from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type AppVariableInsert, type AppVariableRow, appVariables } from '../schema';
 import { RepositoryError } from './base';
@@ -120,6 +120,26 @@ export class AppVariableRepository {
     return this.rowToVariable(row as AppVariableRow);
   }
 
+  /** Ensure a row exists without replacing a concurrent writer's value. */
+  async setIfAbsent(data: SetAppVariableInput): Promise<void> {
+    const now = new Date();
+    const encrypted = data.encrypted === true;
+    const insertRow: AppVariableInsert = {
+      variable_id: generateId(),
+      namespace: data.namespace,
+      key: data.key,
+      value_text: encrypted ? null : data.value,
+      value_encrypted: encrypted && data.value !== null ? encryptApiKey(data.value) : null,
+      is_encrypted: encrypted,
+      content_type: data.content_type ?? 'text/plain',
+      metadata: data.metadata ?? null,
+      updated_by: data.updated_by ?? null,
+      created_at: now,
+      updated_at: now,
+    };
+    await insert(this.db, appVariables).values(insertRow).onConflictDoNothing().run();
+  }
+
   async setEncrypted(
     namespace: string,
     key: string,
@@ -127,5 +147,11 @@ export class AppVariableRepository {
     updatedBy?: UserID | null
   ): Promise<AppVariable> {
     return this.set({ namespace, key, value, encrypted: true, updated_by: updatedBy ?? null });
+  }
+
+  async delete(namespace: string, key: string): Promise<void> {
+    await deleteFrom(this.db, appVariables)
+      .where(and(eq(appVariables.namespace, namespace), eq(appVariables.key, key)))
+      .run();
   }
 }

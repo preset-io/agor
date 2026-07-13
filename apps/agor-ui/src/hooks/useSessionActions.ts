@@ -84,6 +84,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
       const newSession = await client.service('sessions').create({
         agentic_tool: agenticTool,
+        agentic_tool_preset_id: config.agenticToolPresetId as Session['agentic_tool_preset_id'],
         status: SessionStatus.IDLE,
         title: config.title || undefined,
         description: config.initialPrompt || undefined,

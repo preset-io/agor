@@ -37,8 +37,8 @@ export const HighlightMatch: React.FC<HighlightMatchProps> = ({
             // biome-ignore lint/suspicious/noArrayIndexKey: positional pieces from a stable string split
             key={index}
             style={{
-              backgroundColor: token.colorWarning,
-              color: 'rgba(0, 0, 0, 0.88)',
+              backgroundColor: token.colorWarningBg,
+              color: token.colorText,
             }}
           >
             {part}

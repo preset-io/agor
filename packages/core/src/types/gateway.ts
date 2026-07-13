@@ -111,6 +111,8 @@ export interface SlackAgentToolsConfig {
   reactions?: boolean;
   /** Upload a file/image to a channel or thread (agor_gateway_slack_file_upload). */
   file_upload?: boolean;
+  /** Download a Slack file into the upload area by id (agor_gateway_slack_file_download). */
+  file_download?: boolean;
 }
 
 export type SlackAgentToolCapability = keyof SlackAgentToolsConfig;
@@ -127,12 +129,16 @@ export type SlackAgentToolCapability = keyof SlackAgentToolsConfig;
  * - `reactions` and `file_upload` default OFF — both add write scopes
  *   (`reactions:write`, `files:write`) the installed app may not hold, so
  *   they require explicit opt-in.
+ * - `file_download` defaults OFF — it lets agents pull workspace file content
+ *   on demand and adds the `files:read` scope the installed app may not hold,
+ *   so it requires explicit opt-in.
  */
 export const SLACK_AGENT_TOOL_DEFAULTS: Record<SlackAgentToolCapability, boolean> = {
   thread_history: true,
   channel_history: false,
   reactions: false,
   file_upload: false,
+  file_download: false,
 };
 
 /**
@@ -215,9 +221,10 @@ export interface GatewayEnvVar {
 
 export interface GatewayAgenticConfig {
   agent: AgenticToolName;
+  /** Live preset reference. Remaining runtime fields are ignored when present. */
+  presetId?: import('./agentic-tool-preset').AgenticToolPresetID;
   modelConfig?: DefaultModelConfig;
   permissionMode?: PermissionMode;
-  mcpServerIds?: string[];
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
@@ -254,6 +261,8 @@ export interface GatewayChannel {
   channel_key: string; // UUID — the auth secret for inbound webhooks
   config: Record<string, unknown>; // Platform credentials (encrypted at rest)
   agentic_config: GatewayAgenticConfig | null; // Session creation settings
+  /** MCP servers attached independently of the agentic-tool configuration. */
+  mcp_server_ids?: string[];
   enabled: boolean;
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601

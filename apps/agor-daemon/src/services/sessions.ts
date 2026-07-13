@@ -5,7 +5,14 @@
  * Uses DrizzleService adapter with SessionRepository.
  */
 
-import { PAGINATION } from '@agor/core/config';
+import {
+  assertInlineAgenticConfigurationAllowed,
+  isTenantAgenticToolEnabled,
+  PAGINATION,
+  presetConfigurationToSessionPatch,
+  resolveAgenticConfigurationReference,
+  resolveAgenticToolPreset,
+} from '@agor/core/config';
 import {
   BranchRepository,
   SessionEnvSelectionRepository,
@@ -106,6 +113,8 @@ export type SessionParams = QueryParams<{
     _include_last_message?: boolean | 'true' | 'false';
     /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
     _agorSqlSessionAccessUserId?: UUID;
+    /** Internal task-start reconciliation of a live preset. */
+    _applyingAgenticToolPreset?: boolean;
   };
 
 /**
@@ -185,6 +194,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
   private sessionEnvSelectionRepo: SessionEnvSelectionRepository;
   private usersRepo: UsersRepository;
   private branchRepo: BranchRepository;
+  private db: TenantScopeAwareDatabase;
 
   private assertSupportedModelConfig(
     agenticTool: Session['agentic_tool'],
@@ -212,6 +222,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     });
 
     this.sessionRepo = sessionRepo;
+    this.db = db;
     this.app = app;
     this.sessionMCPRepo = new SessionMCPServerRepository(db);
     this.sessionRelationshipRepo = new SessionRelationshipRepository(db);
@@ -221,6 +232,50 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     // without going through app.service('users') — matches the convention used
     // by scheduler.ts / gateway.ts / terminals.ts.
     this.usersRepo = new UsersRepository(db);
+  }
+
+  async create(data: Partial<Session>, params?: SessionParams): Promise<Session | Session[]> {
+    const agenticTool = data.agentic_tool ?? 'claude-code';
+    if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
+      throw new BadRequest(`${agenticTool} is disabled for this workspace`);
+    }
+    let createData = data;
+    if (data.agentic_tool_preset_id) {
+      const resolved = await resolveAgenticConfigurationReference(
+        this.db,
+        agenticTool,
+        data.agentic_tool_preset_id,
+        params?.user?.user_id as import('@agor/core/types').UserID | undefined
+      );
+      const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
+      createData = {
+        ...data,
+        agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
+        ...presetConfigurationToSessionPatch(agenticTool, configuration),
+      };
+    } else {
+      await assertInlineAgenticConfigurationAllowed(this.db, agenticTool);
+    }
+    return super.create(createData, params);
+  }
+
+  /** Re-resolve a live preset immediately before a task starts. */
+  async materializeAgenticToolPreset(session: Session, _params?: SessionParams): Promise<Session> {
+    if (!session.agentic_tool_preset_id) {
+      await assertInlineAgenticConfigurationAllowed(this.db, session.agentic_tool);
+      return session;
+    }
+    const preset = await resolveAgenticToolPreset(
+      this.db,
+      session.agentic_tool,
+      session.agentic_tool_preset_id
+    );
+    const updated = await this.sessionRepo.update(
+      session.session_id,
+      presetConfigurationToSessionPatch(session.agentic_tool, preset.configuration),
+      { replaceAgenticConfig: true }
+    );
+    return updated;
   }
 
   protected async fetchData(_query: Query, params?: SessionParams): Promise<Session[]> {
@@ -267,11 +322,15 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     for (const serverId of serverIds) {
       try {
         await this.sessionMCPRepo.addServer(sessionId, serverId as MCPServerID);
-        this.app?.service('session-mcp-servers')?.emit?.('created', {
-          session_id: sessionId,
-          mcp_server_id: serverId,
-          enabled: true,
-          added_at: new Date(),
+        emitServiceEvent(this.app, {
+          path: 'session-mcp-servers',
+          event: 'created',
+          data: {
+            session_id: sessionId,
+            mcp_server_id: serverId,
+            enabled: true,
+            added_at: new Date(),
+          },
         });
       } catch {
         console.warn(`Skipped MCP server ${serverId} during ${label}`);
@@ -294,11 +353,15 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         try {
           await this.sessionMCPRepo.addServer(targetSessionId, server.mcp_server_id as MCPServerID);
           // Emit WebSocket event for real-time UI updates
-          this.app?.service('session-mcp-servers')?.emit?.('created', {
-            session_id: targetSessionId,
-            mcp_server_id: server.mcp_server_id,
-            enabled: true,
-            added_at: new Date(),
+          emitServiceEvent(this.app, {
+            path: 'session-mcp-servers',
+            event: 'created',
+            data: {
+              session_id: targetSessionId,
+              mcp_server_id: server.mcp_server_id,
+              enabled: true,
+              added_at: new Date(),
+            },
           });
         } catch {
           // Silently skip — server may have been deleted between list and add
@@ -433,6 +496,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const forkedSession = await this.create(
       {
         agentic_tool: parent.agentic_tool,
+        agentic_tool_preset_id: parent.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
         title: data.prompt.substring(0, 100), // First 100 chars as title
         description: data.prompt,
@@ -531,6 +595,21 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     }
     const parent = await this.get(id, params);
     const targetTool = data.agent || parent.agentic_tool;
+    const hasAtomicOverride =
+      data.permissionMode !== undefined ||
+      data.modelConfig !== undefined ||
+      data.codexSandboxMode !== undefined ||
+      data.codexApprovalPolicy !== undefined ||
+      data.codexNetworkAccess !== undefined ||
+      data.mcpServerIds !== undefined;
+    const inheritedPresetId =
+      targetTool === parent.agentic_tool ? parent.agentic_tool_preset_id : undefined;
+    const presetId = data.presetId ?? inheritedPresetId ?? undefined;
+    if (inheritedPresetId && !data.presetId && hasAtomicOverride) {
+      throw new BadRequest(
+        'Preset-backed child sessions cannot override individual configuration fields'
+      );
+    }
 
     // Resolve identity first so per-tool defaults come from the resolved
     // child owner, not the parent owner. (For internal/provider-less calls,
@@ -606,6 +685,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const spawnedSession = await this.create(
       {
         agentic_tool: targetTool,
+        agentic_tool_preset_id: presetId,
         status: SessionStatus.IDLE,
         title: data.title || data.prompt.substring(0, 100), // Use provided title or first 100 chars
         description: finalPrompt, // Use final prompt with extra instructions if provided
@@ -1037,7 +1117,61 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     data: Partial<Session>,
     params?: SessionParams
   ): Promise<Session | Session[]> {
-    const result = (await super.patch(id, data, params)) as Session | Session[];
+    let replaceAgenticConfig = false;
+    if (
+      (id === null || Array.isArray(id)) &&
+      (data.agentic_tool !== undefined ||
+        data.agentic_tool_preset_id !== undefined ||
+        data.model_config !== undefined ||
+        data.permission_config !== undefined)
+    ) {
+      throw new BadRequest('Agentic configuration cannot be changed with a multi-session patch');
+    }
+    if (data.agentic_tool && !(await isTenantAgenticToolEnabled(data.agentic_tool, this.db))) {
+      throw new BadRequest(`${data.agentic_tool} is disabled for this workspace`);
+    }
+    if (id && !Array.isArray(id) && !params?._applyingAgenticToolPreset) {
+      const current = await this.get(String(id), params);
+      const mutatesAtomicConfig =
+        data.model_config !== undefined ||
+        data.permission_config !== undefined ||
+        data.agentic_tool !== undefined;
+      if (
+        current.agentic_tool_preset_id &&
+        mutatesAtomicConfig &&
+        data.agentic_tool_preset_id === undefined
+      ) {
+        throw new BadRequest(
+          'Preset-backed session configuration can only be changed by selecting a preset'
+        );
+      }
+      if (data.agentic_tool_preset_id) {
+        const tool = data.agentic_tool ?? current.agentic_tool;
+        const resolved = await resolveAgenticConfigurationReference(
+          this.db,
+          tool,
+          data.agentic_tool_preset_id,
+          params?.user?.user_id as import('@agor/core/types').UserID | undefined
+        );
+        const configuration = resolved.preset?.configuration ?? resolved.configuration ?? {};
+        data = {
+          ...data,
+          agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
+          ...presetConfigurationToSessionPatch(tool, configuration),
+        };
+        replaceAgenticConfig = true;
+      } else if (data.agentic_tool_preset_id === null && current.agentic_tool_preset_id) {
+        await assertInlineAgenticConfigurationAllowed(
+          this.db,
+          data.agentic_tool ?? current.agentic_tool
+        );
+      }
+    }
+    const result = (
+      replaceAgenticConfig && id && !Array.isArray(id)
+        ? await this.sessionRepo.update(String(id), data, { replaceAgenticConfig: true })
+        : await super.patch(id, data, params)
+    ) as Session | Session[];
 
     const callbackEnabled = data.callback_config?.enabled;
     if (
@@ -1055,6 +1189,10 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     }
 
     return result;
+  }
+
+  async update(id: string, data: Partial<Session>, params?: SessionParams): Promise<Session> {
+    return (await this.patch(id, data, params)) as Session;
   }
 
   /**

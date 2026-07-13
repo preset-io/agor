@@ -35,7 +35,7 @@
     "concurrently": "^9.2.1",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.10"
   },
   "files": [
     "dist"

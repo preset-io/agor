@@ -36,6 +36,26 @@ export function txAsDb(tx: unknown): Database {
   return tx as unknown as Database;
 }
 
+/** Execute an atomic unit with the dialect's native transaction semantics. */
+export async function runDatabaseTransaction<T>(
+  db: Database,
+  work: (tx: Database) => Promise<T>,
+  options: { sqliteImmediate?: boolean } = {}
+): Promise<T> {
+  const transaction = (
+    db as unknown as {
+      transaction(
+        callback: (tx: unknown) => Promise<T>,
+        config?: { behavior: 'immediate' }
+      ): Promise<T>;
+    }
+  ).transaction.bind(db);
+  return transaction(
+    (tx) => work(txAsDb(tx)),
+    isSQLiteDatabase(db) && options.sqliteImmediate ? { behavior: 'immediate' } : undefined
+  );
+}
+
 /**
  * Result of a mutation query (INSERT/UPDATE/DELETE)
  */

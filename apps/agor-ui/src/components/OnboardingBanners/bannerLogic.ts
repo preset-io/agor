@@ -8,7 +8,14 @@
  * the server-side check-auth probe, not by a presence check.
  */
 
-import type { AgenticToolName, AuthCheckStatus, User } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AuthCheckStatus,
+  TenantAgenticToolName,
+  TenantAgenticToolSettings,
+  User,
+} from '@agor-live/client';
+import { PROVIDER_CREDENTIAL_FIELDS } from '@agor-live/client';
 
 const CLAUDE_CREDENTIAL_FIELDS = [
   'ANTHROPIC_API_KEY',
@@ -106,6 +113,45 @@ export function resolveProbeAgent(user: User | null | undefined): AgenticToolNam
   return probeTargetFor(
     primaryAgentForUser(user) ?? onboardingSelectedAgent(user) ?? 'claude-code'
   );
+}
+
+/** Pick one enabled, policy-governed provider for the persistent auth banner. */
+export function resolveGovernedProbeAgent(
+  user: User | null | undefined,
+  settings: Map<TenantAgenticToolName, TenantAgenticToolSettings>
+): AgenticToolName {
+  const preferred = resolveProbeAgent(user);
+  const canonical = preferred === 'claude-code-cli' ? 'claude-code' : preferred;
+  if (settings.get(canonical as TenantAgenticToolName)?.enabled !== false) return preferred;
+  const fallback = SUPPORTED_AGENTIC_TOOLS.find(
+    ({ tool }) =>
+      settings.get((tool === 'claude-code-cli' ? 'claude-code' : tool) as TenantAgenticToolName)
+        ?.enabled !== false
+  );
+  return fallback ? probeTargetFor(fallback.tool) : 'claude-code';
+}
+
+export function hasConfiguredCredentialFor(
+  user: User | null | undefined,
+  tool: AgenticToolName,
+  settings?: TenantAgenticToolSettings
+): boolean {
+  const spec = SUPPORTED_AGENTIC_TOOLS.find((candidate) => candidate.tool === tool);
+  const hasUserCredential = !!user && !!spec && hasStoredKeyFor(user, tool, spec.credentialFields);
+  const fields: readonly string[] = Object.hasOwn(PROVIDER_CREDENTIAL_FIELDS, tool)
+    ? PROVIDER_CREDENTIAL_FIELDS[tool as keyof typeof PROVIDER_CREDENTIAL_FIELDS]
+    : [];
+  const hasTenantCredential = fields.some(
+    (field) => settings?.connection[field as keyof typeof settings.connection]?.configured
+  );
+  return hasUserCredential || hasTenantCredential;
+}
+
+export function preferredCredentialOwner(settings?: TenantAgenticToolSettings): 'user' | 'tenant' {
+  return settings?.resolution_policy === 'tenant_preferred' ||
+    settings?.resolution_policy === 'tenant_required'
+    ? 'tenant'
+    : 'user';
 }
 
 /**

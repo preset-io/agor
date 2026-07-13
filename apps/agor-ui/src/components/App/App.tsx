@@ -18,7 +18,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, PermissionScope } from '@agor-live/client';
-import { Layout, Upload } from 'antd';
+import { Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
@@ -354,6 +354,7 @@ export const App: React.FC<AppProps> = ({
   // stays quiet across unrelated entity patches), a call-time
   // `agorStore.getState()` read inside a handler, or pushed down into the
   // component that actually consumes the map (SettingsModal, UrlStateBridge).
+  const { token } = theme.useToken();
   const { showWarning } = useThemedMessage();
   const location = useLocation();
   const routeParams = useParams<{
@@ -915,6 +916,7 @@ export const App: React.FC<AppProps> = ({
     const sessionConfig: NewSessionConfig = {
       branch_id: branch.branch_id,
       agent: result.agent,
+      agenticToolPresetId: result.agenticToolPresetId,
       title: `${result.emoji ? `${result.emoji} ` : ''}${result.displayName} bootstrap`,
       initialPrompt: buildTeammateBootstrapPrompt({
         displayName: result.displayName,
@@ -1397,7 +1399,7 @@ export const App: React.FC<AppProps> = ({
               style={{
                 position: 'relative',
                 width: leftPanelCollapsed ? '0px' : '4px',
-                background: 'var(--ant-color-border-secondary)',
+                background: token.colorBorderSecondary,
                 cursor: leftPanelCollapsed ? 'default' : 'col-resize',
                 transition: 'background 0.2s',
                 pointerEvents: leftPanelCollapsed ? 'none' : 'auto',
@@ -1410,13 +1412,13 @@ export const App: React.FC<AppProps> = ({
               onMouseEnter={(e) => {
                 if (!leftPanelCollapsed) {
                   (e.currentTarget as unknown as HTMLDivElement).style.background =
-                    'var(--ant-color-primary)';
+                    token.colorPrimary;
                 }
               }}
               onMouseLeave={(e) => {
                 if (!leftPanelCollapsed) {
                   (e.currentTarget as unknown as HTMLDivElement).style.background =
-                    'var(--ant-color-border-secondary)';
+                    token.colorBorderSecondary;
                 }
               }}
             />
@@ -1521,7 +1523,7 @@ export const App: React.FC<AppProps> = ({
                     <PanelResizeHandle
                       style={{
                         width: '4px',
-                        background: 'var(--ant-color-border-secondary)',
+                        background: token.colorBorderSecondary,
                         cursor: 'col-resize',
                         transition: 'background 0.2s',
                       }}
@@ -1530,11 +1532,11 @@ export const App: React.FC<AppProps> = ({
                       }}
                       onMouseEnter={(e) => {
                         (e.currentTarget as unknown as HTMLDivElement).style.background =
-                          'var(--ant-color-primary)';
+                          token.colorPrimary;
                       }}
                       onMouseLeave={(e) => {
                         (e.currentTarget as unknown as HTMLDivElement).style.background =
-                          'var(--ant-color-border-secondary)';
+                          token.colorBorderSecondary;
                       }}
                     />
                     <Panel

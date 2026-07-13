@@ -1,4 +1,5 @@
 import type {
+  AgenticAuthMethod,
   AgenticToolConfigField,
   AgenticToolName,
   AgorClient,
@@ -6,6 +7,7 @@ import type {
   EnvVarScope,
   Group,
   GroupMembership,
+  TenantAgenticToolName,
   UpdateUserInput,
   User,
 } from '@agor-live/client';
@@ -13,7 +15,6 @@ import { hasMinimumRole, ROLE_OPTIONS, ROLES } from '@agor-live/client';
 import {
   ApiOutlined,
   CloseOutlined,
-  RobotOutlined,
   SettingOutlined,
   SoundOutlined,
   TeamOutlined,
@@ -31,6 +32,7 @@ import {
   Menu,
   Modal,
   Popconfirm,
+  Radio,
   Select,
   Space,
   Switch,
@@ -46,7 +48,6 @@ import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredenti
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import {
-  AgenticToolConfigForm,
   buildConfigFromFormValues,
   getClearedFormValues,
   getFormValuesFromConfig,
@@ -54,9 +55,12 @@ import {
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
+import { SessionMcpServersField } from '../MCPServerSelect';
+import { ToolIcon } from '../ToolIcon';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
+import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
 const { Sider, Content } = Layout;
 
@@ -70,7 +74,11 @@ const AGENTIC_TOOL_TABS = [
   'cursor',
 ] as const satisfies readonly AgenticToolName[];
 
-type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1];
+type AgenticConfigFormValues = Parameters<typeof buildConfigFromFormValues>[1] & {
+  defaultSelectionSource?: 'workspace_default' | 'preset' | 'inline';
+  defaultPresetId?: string;
+  mcpServerIds?: string[];
+};
 
 const isAgenticToolTab = (value: string): value is AgenticToolName =>
   AGENTIC_TOOL_TABS.includes(value as AgenticToolName);
@@ -99,6 +107,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
   const mcpServerById = useAgorStore(selectMcpServerById);
+  const tenantToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
+  const visibleAgenticToolTabs = AGENTIC_TOOL_TABS.filter((tool) => {
+    const canonical = tool === 'claude-code-cli' ? 'claude-code' : tool;
+    return tenantToolSettings.get(canonical as TenantAgenticToolName)?.enabled !== false;
+  });
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState<string>(initialTab ?? 'general');
   const initializedUserIdRef = useRef<string | null>(null);
@@ -145,6 +158,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     cursor: {},
   });
   const [savingToolField, setSavingToolField] = useState<Record<string, boolean>>({});
+  const [agenticAuthMethods, setAgenticAuthMethods] = useState<
+    Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>
+  >({});
 
   // Environment variable management state (scope-aware, v0.5 env-var-access)
   const [userEnvVars, setUserEnvVars] = useState<Record<string, EnvVarMetadata>>({});
@@ -274,10 +290,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (!open || !user) return;
 
     if (isAgenticToolTab(activeTab)) {
-      agenticFormByTool[activeTab].setFieldsValue(
-        agenticConfigDraftByTool[activeTab] ??
-          getFormValuesFromConfig(activeTab, user.default_agentic_config?.[activeTab])
-      );
+      agenticFormByTool[activeTab].setFieldsValue({
+        ...(agenticConfigDraftByTool[activeTab] ??
+          getFormValuesFromConfig(activeTab, user.default_agentic_config?.[activeTab])),
+        mcpServerIds: user.default_mcp_server_ids ?? [],
+        defaultSelectionSource:
+          user.default_agentic_selection?.[activeTab]?.source ??
+          (user.default_agentic_config?.[activeTab] ? 'inline' : 'workspace_default'),
+        defaultPresetId:
+          user.default_agentic_selection?.[activeTab]?.source === 'preset'
+            ? user.default_agentic_selection[activeTab].preset_id
+            : undefined,
+      });
       return;
     }
 
@@ -317,6 +341,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       }
     }
     setAgenticToolStatus(next);
+    setAgenticAuthMethods(user?.agentic_auth_methods ?? {});
 
     if (user?.env_vars) {
       setUserEnvVars(user.env_vars);
@@ -355,16 +380,33 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     const nextConfig: NonNullable<UpdateUserInput['default_agentic_config']> = {
       ...(user.default_agentic_config ?? {}),
     };
+    const nextSelections: NonNullable<UpdateUserInput['default_agentic_selection']> = {
+      ...(user.default_agentic_selection ?? {}),
+    };
 
     for (const tool of tools) {
       const values: AgenticConfigFormValues =
         agenticConfigDraftByTool[tool] ??
         (agenticFormByTool[tool].getFieldsValue() as AgenticConfigFormValues);
-      nextConfig[tool] = buildConfigFromFormValues(tool, values);
+      if (values.defaultSelectionSource === 'inline') {
+        nextConfig[tool] = buildConfigFromFormValues(tool, values);
+      }
+      nextSelections[tool] =
+        values.defaultSelectionSource === 'preset' && values.defaultPresetId
+          ? { source: 'preset', preset_id: values.defaultPresetId as never }
+          : values.defaultSelectionSource === 'inline'
+            ? { source: 'inline' }
+            : { source: 'workspace_default' };
     }
 
+    const mcpSourceTool = tools[0];
+    const defaultMcpServerIds = mcpSourceTool
+      ? (agenticFormByTool[mcpSourceTool].getFieldValue('mcpServerIds') as string[] | undefined)
+      : user.default_mcp_server_ids;
     await onUpdate?.(user.user_id, {
       default_agentic_config: nextConfig,
+      default_agentic_selection: nextSelections,
+      default_mcp_server_ids: defaultMcpServerIds ?? [],
     });
 
     setDirtyAgenticConfigTools((prev) => {
@@ -445,7 +487,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, value));
+      const patch = buildAgenticToolCredentialPatch(tool, field, value);
+      await onUpdate?.(user.user_id, patch);
+      if (patch.agentic_auth_methods) {
+        setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
+      }
       setAgenticToolStatus((prev) => ({
         ...prev,
         [tool]: { ...(prev[tool] ?? {}), [field]: true },
@@ -479,6 +525,21 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       throw err;
     } finally {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: false }));
+    }
+  };
+
+  const handleAuthMethodChange = async (
+    tool: 'claude-code' | 'codex',
+    method: AgenticAuthMethod
+  ) => {
+    if (!user) return;
+    const next = { ...agenticAuthMethods, [tool]: method };
+    setAgenticAuthMethods(next);
+    try {
+      await onUpdate?.(user.user_id, { agentic_auth_methods: next });
+    } catch (error) {
+      setAgenticAuthMethods(user.agentic_auth_methods ?? {});
+      throw error;
     }
   };
 
@@ -692,34 +753,34 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         {
           key: 'claude-code',
           label: 'Claude Code',
-          icon: <RobotOutlined />,
+          icon: <ToolIcon tool="claude-code" size={18} />,
         },
         {
           key: 'codex',
           label: 'Codex',
-          icon: <RobotOutlined />,
+          icon: <ToolIcon tool="codex" size={18} />,
         },
         {
           key: 'gemini',
           label: 'Gemini',
-          icon: <RobotOutlined />,
+          icon: <ToolIcon tool="gemini" size={18} />,
         },
         {
           key: 'opencode',
           label: 'OpenCode',
-          icon: <RobotOutlined />,
+          icon: <ToolIcon tool="opencode" size={18} />,
         },
         {
           key: 'cursor',
           label: 'Cursor SDK',
-          icon: <RobotOutlined />,
+          icon: <ToolIcon tool="cursor" size={18} />,
         },
         {
           key: 'copilot',
           label: 'GitHub Copilot',
-          icon: <RobotOutlined />,
+          icon: <ToolIcon tool="copilot" size={18} />,
         },
-      ],
+      ].filter((item) => visibleAgenticToolTabs.includes(item.key as AgenticToolName)),
     },
   ];
 
@@ -899,8 +960,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 <span>
                   API keys and SDK config (Anthropic, OpenAI, Gemini, Copilot) live under each
                   tool's screen in the <strong>Agentic Tools</strong> section. Per-tool config takes
-                  precedence over global env vars and is scoped so credentials never leak across
-                  SDKs.
+                  precedence over generic user environment variables and is scoped so credentials
+                  never leak across SDKs.
                 </span>
               }
             />
@@ -959,12 +1020,62 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           copilot: 'Copilot',
           cursor: 'Cursor SDK',
         };
-        // Field set is owned by ApiKeyFields' `TOOL_FIELD_CONFIGS`. Per-field
-        // saving spinners are tracked in `savingToolField` keyed by `${tool}.${field}`.
-        const toolFields = TOOL_FIELD_CONFIGS[toolName] ?? [];
-        const fieldStatus: FieldStatus = agenticToolStatus[toolName] ?? {};
+        const canonicalTool = (
+          toolName === 'claude-code-cli' ? 'claude-code' : toolName
+        ) as TenantAgenticToolName;
+        const credentialToolName: AgenticToolName =
+          toolName === 'claude-code-cli' ? 'claude-code' : toolName;
+        // Field set is owned by ApiKeyFields' `TOOL_FIELD_CONFIGS`. Claude and Codex
+        // expose an explicit method so dormant credentials are never selected by accident.
+        const allToolFields = TOOL_FIELD_CONFIGS[toolName] ?? [];
+        const fieldStatus: FieldStatus = agenticToolStatus[credentialToolName] ?? {};
+        const authMethod =
+          canonicalTool === 'claude-code'
+            ? (agenticAuthMethods['claude-code'] ??
+              (fieldStatus.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key'))
+            : canonicalTool === 'codex'
+              ? (agenticAuthMethods.codex ?? 'api_key')
+              : undefined;
+        const toolFields = allToolFields.filter((field) => {
+          if (canonicalTool === 'claude-code') {
+            return authMethod === 'subscription'
+              ? field.field === 'CLAUDE_CODE_OAUTH_TOKEN'
+              : field.field !== 'CLAUDE_CODE_OAUTH_TOKEN';
+          }
+          return canonicalTool !== 'codex' || authMethod === 'api_key';
+        });
+        const tenantSettings = tenantToolSettings.get(canonicalTool);
+        const resolutionPolicy = tenantSettings?.resolution_policy ?? 'user_preferred';
+        const personalConfigured =
+          (canonicalTool === 'codex' && authMethod === 'subscription') ||
+          toolFields.some(
+            ({ field }) => fieldStatus[field] && !String(field).endsWith('_BASE_URL')
+          );
+        const workspaceConfigured = Object.entries(tenantSettings?.connection ?? {}).some(
+          ([field, status]) => status?.configured && !field.endsWith('_BASE_URL')
+        );
+        const effectiveSource =
+          resolutionPolicy === 'user_required'
+            ? personalConfigured
+              ? 'Personal configuration'
+              : 'Unavailable'
+            : resolutionPolicy === 'tenant_required'
+              ? workspaceConfigured
+                ? 'Workspace configuration'
+                : 'Unavailable'
+              : resolutionPolicy === 'tenant_preferred'
+                ? workspaceConfigured
+                  ? 'Workspace configuration'
+                  : personalConfigured
+                    ? 'Personal configuration'
+                    : 'Unavailable'
+                : personalConfigured
+                  ? 'Personal configuration'
+                  : workspaceConfigured
+                    ? 'Workspace configuration'
+                    : 'Unavailable';
         const savingForTool: Partial<Record<AgenticToolConfigField, boolean>> = Object.fromEntries(
-          toolFields.map((c) => [c.field, !!savingToolField[`${toolName}.${c.field}`]])
+          toolFields.map((c) => [c.field, !!savingToolField[`${credentialToolName}.${c.field}`]])
         );
         const defaultsPane = (
           <>
@@ -981,11 +1092,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 markAgenticConfigDirty(toolName);
               }}
             >
-              <AgenticToolConfigForm
-                agenticTool={toolName}
-                mcpServerById={mcpServerById}
-                showHelpText={false}
-              />
+              <UserAgenticDefaultEditor tool={toolName} client={client} isAdmin={isAdmin} />
+              <SessionMcpServersField mcpServerById={mcpServerById} showHelpText={false} />
             </Form>
             <div style={{ marginTop: 16 }}>
               <Button onClick={() => handleAgenticConfigClear(toolName)}>Clear Defaults</Button>
@@ -994,29 +1102,99 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         );
 
         // Tools with no auth/config fields (e.g. OpenCode) skip the tab strip entirely.
-        if (toolFields.length === 0) {
+        if (allToolFields.length === 0) {
           return defaultsPane;
         }
 
+        const personalPolicyDescription =
+          resolutionPolicy === 'user_required'
+            ? 'Your personal configuration is required. Workspace credentials will not be used.'
+            : resolutionPolicy === 'user_preferred'
+              ? 'Your personal configuration is used first, with workspace configuration as fallback.'
+              : 'Workspace configuration is used first. Your personal configuration is retained as fallback.';
+        const managedByWorkspace = resolutionPolicy === 'tenant_required';
         const authPane = (
           <>
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
-              Per-user credentials and config for {displayNames[toolName]}. Encrypted at rest;
-              injected into the agent runtime, not the prompt transcript; and preferred over daemon
-              globals and env vars.
-            </Typography.Paragraph>
-            <ApiKeyFields
-              tool={toolName}
-              fieldStatus={fieldStatus}
-              onSave={(field, value) => handleToolFieldSave(toolName, field, value)}
-              onClear={(field) => handleToolFieldClear(toolName, field)}
-              saving={savingForTool}
-              publicValues={
-                user?.agentic_tools_public_values?.[toolName] as
-                  | Partial<Record<AgenticToolConfigField, string>>
-                  | undefined
+            <Alert
+              type={effectiveSource === 'Unavailable' ? 'warning' : 'info'}
+              showIcon
+              title={`Effective source: ${effectiveSource}`}
+              description={
+                managedByWorkspace
+                  ? 'Authentication is managed by this workspace. Personal configuration is never used.'
+                  : personalPolicyDescription
               }
+              style={{ marginBottom: 16 }}
             />
+            {managedByWorkspace ? (
+              personalConfigured && (
+                <Space direction="vertical">
+                  <Typography.Text type="secondary">
+                    Saved personal configuration is inactive and will be retained if the workspace
+                    policy changes.
+                  </Typography.Text>
+                  <Popconfirm
+                    title="Delete saved personal configuration?"
+                    description="This permanently removes your saved credentials for this tool."
+                    onConfirm={async () => {
+                      for (const field of allToolFields) {
+                        if (fieldStatus[field.field]) {
+                          await handleToolFieldClear(credentialToolName, field.field);
+                        }
+                      }
+                      if (canonicalTool === 'codex') {
+                        await handleAuthMethodChange('codex', 'api_key');
+                      }
+                    }}
+                  >
+                    <Button danger>Delete saved personal configuration</Button>
+                  </Popconfirm>
+                </Space>
+              )
+            ) : (
+              <>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+                  Personal credentials are encrypted at rest and injected only into the agent
+                  runtime.
+                </Typography.Paragraph>
+                {(canonicalTool === 'claude-code' || canonicalTool === 'codex') && (
+                  <Radio.Group
+                    value={authMethod}
+                    onChange={(event) =>
+                      void handleAuthMethodChange(canonicalTool, event.target.value)
+                    }
+                    style={{ marginBottom: 16 }}
+                  >
+                    <Radio.Button value="subscription">
+                      {canonicalTool === 'codex' ? 'ChatGPT subscription' : 'Claude subscription'}
+                    </Radio.Button>
+                    <Radio.Button value="api_key">API key</Radio.Button>
+                  </Radio.Group>
+                )}
+                {canonicalTool === 'codex' && authMethod === 'subscription' ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="Use Codex CLI subscription authentication"
+                    description="Agor will use the Codex CLI login belonging to this session's Unix user. Run `codex login` in a terminal as that same user. This declaration does not prove that the login is still valid."
+                  />
+                ) : (
+                  <ApiKeyFields
+                    tool={toolName}
+                    fields={toolFields}
+                    fieldStatus={fieldStatus}
+                    onSave={(field, value) => handleToolFieldSave(credentialToolName, field, value)}
+                    onClear={(field) => handleToolFieldClear(credentialToolName, field)}
+                    saving={savingForTool}
+                    publicValues={
+                      user?.agentic_tools_public_values?.[credentialToolName] as
+                        | Partial<Record<AgenticToolConfigField, string>>
+                        | undefined
+                    }
+                  />
+                )}
+              </>
+            )}
           </>
         );
 
@@ -1025,7 +1203,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             defaultActiveKey="auth"
             items={[
               { key: 'auth', label: 'Authentication', children: authPane },
-              { key: 'defaults', label: 'Defaults', children: defaultsPane },
+              { key: 'defaults', label: 'Session Defaults', children: defaultsPane },
             ]}
           />
         );
@@ -1118,7 +1296,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           tabs can produce noisy "useForm is not connected" console warnings. */}
       <div hidden aria-hidden="true">
         {activeTab !== 'audio' && <Form component={false} form={audioForm} />}
-        {AGENTIC_TOOL_TABS.map((tool) =>
+        {visibleAgenticToolTabs.map((tool) =>
           activeTab === tool ? null : (
             <Form key={tool} component={false} form={agenticFormByTool[tool]} />
           )

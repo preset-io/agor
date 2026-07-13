@@ -503,7 +503,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const contextWindowUsed = task.computed_context_window ?? contextSnapshot?.totalTokens ?? 0;
     const contextWindowLimit = contextSnapshot?.maxTokens ?? normalized?.contextWindowLimit ?? 0;
     const taskHeaderGradient = hasContextWindowUsage
-      ? getContextWindowGradient(contextWindowUsed, contextWindowLimit, contextSnapshot)
+      ? getContextWindowGradient(contextWindowUsed, contextWindowLimit, contextSnapshot, {
+          normal: token.colorSuccessBg,
+          warning: token.colorWarningBg,
+          critical: token.colorErrorBg,
+        })
       : undefined;
 
     // Task header shows when collapsed
@@ -803,7 +807,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                       style={{
                         marginTop: token.sizeUnit * 1.5,
                         padding: `${token.sizeUnit * 0.75}px ${token.sizeUnit * 1.25}px`,
-                        background: 'rgba(0, 0, 0, 0.02)',
+                        background: token.colorFillAlter,
                         borderRadius: token.borderRadius,
                       }}
                     >
@@ -828,7 +832,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                         style={{
                           marginTop: token.sizeUnit,
                           padding: token.sizeUnit * 1.5,
-                          background: 'rgba(82, 196, 26, 0.05)',
+                          background: token.colorSuccessBg,
                           border: `1px solid ${token.colorSuccessBorder}`,
                           borderRadius: token.borderRadius,
                           fontSize: 13,

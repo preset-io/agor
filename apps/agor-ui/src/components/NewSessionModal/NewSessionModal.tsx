@@ -15,13 +15,16 @@ import { useEffect, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
-import { AgenticToolConfigForm, getFormValuesFromConfig } from '../AgenticToolConfigForm';
+import { getFormValuesFromConfig } from '../AgenticToolConfigForm';
+import {
+  AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
+} from '../AgenticToolConfigurationPicker';
 import {
   type AgenticToolOption,
   AgentSelectionGrid,
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import { SessionMcpServersField } from '../MCPServerSelect';
 import type { ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
@@ -36,6 +39,7 @@ const PASTE_SHORTCUT =
 export interface NewSessionConfig {
   branch_id: string; // Required - sessions are always created from a branch
   agent: string;
+  agenticToolPresetId?: string;
   title?: string;
   initialPrompt?: string;
 
@@ -118,7 +122,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       initialPrompt: '',
       ...baseValues,
       mcpServerIds:
-        branchMcpIds && branchMcpIds.length > 0 ? branchMcpIds : baseValues.mcpServerIds,
+        branchMcpIds && branchMcpIds.length > 0
+          ? branchMcpIds
+          : currentUser?.default_mcp_server_ids,
     });
   }, [open, form]);
 
@@ -132,10 +138,6 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       // MCP inheritance: branch config > user defaults
       form.setFieldsValue({
         ...baseValues,
-        mcpServerIds:
-          branch?.mcp_server_ids && branch.mcp_server_ids.length > 0
-            ? branch.mcp_server_ids
-            : baseValues.mcpServerIds,
         // Clear codex fields when switching away from codex
         ...(tool !== 'codex' && {
           codexSandboxMode: undefined,
@@ -144,7 +146,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         }),
       });
     }
-  }, [selectedAgent, form, currentUser, branch?.mcp_server_ids]);
+  }, [selectedAgent, form, currentUser]);
 
   const handleCreate = () => {
     form.validateFields().then(() => {
@@ -159,7 +161,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       // MCP fallback must respect branch > user defaults (same as open-reset effect)
       const branchMcpIds = branch?.mcp_server_ids;
       const fallbackMcpServerIds =
-        branchMcpIds && branchMcpIds.length > 0 ? branchMcpIds : agentDefaults?.mcpServerIds;
+        branchMcpIds && branchMcpIds.length > 0
+          ? branchMcpIds
+          : currentUser?.default_mcp_server_ids;
 
       const permissionMode: PermissionMode =
         (values.permissionMode as PermissionMode | undefined) ??
@@ -169,6 +173,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       const config: NewSessionConfig = {
         branch_id: branchId,
         agent: selectedAgent,
+        agenticToolPresetId:
+          values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
+            ? undefined
+            : values.agenticToolPresetId,
         title: values.title,
         initialPrompt: values.initialPrompt,
         // Daemon's applySessionConfigDefaults hook fills the tool default.
@@ -250,6 +258,13 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           />
         </Form.Item>
 
+        <AgenticToolConfigurationPicker
+          tool={(selectedAgent as AgenticToolName) || 'claude-code'}
+          mcpServerById={mcpServerById}
+          showHelpText={true}
+          client={client}
+        />
+
         {/* Session Title */}
         <Form.Item name="title" label="Title (optional)">
           <Input placeholder="e.g., Add authentication system" />
@@ -285,28 +300,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           </div>
         )}
 
-        {/* MCP Servers — first-class field, mirrors SessionSettingsModal */}
-        <SessionMcpServersField mcpServerById={mcpServerById} />
-
         {/* Advanced Configuration (Collapsible) */}
         <Collapse
           ghost
           destroyOnHidden={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={[
-            {
-              key: 'agentic-tool-config',
-              label: <Typography.Text strong>Agentic Tool Configuration</Typography.Text>,
-              children: (
-                <AgenticToolConfigForm
-                  agenticTool={(selectedAgent as AgenticToolName) || 'claude-code'}
-                  mcpServerById={mcpServerById}
-                  showHelpText={true}
-                  hideMcpServers
-                  client={client}
-                />
-              ),
-            },
             ...(currentUser && client
               ? [
                   {

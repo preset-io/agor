@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   logFirstRunAdminBootstrap,
   runFirstRunAdminBootstrap,
-  warnDeprecatedAnonymousConfig,
+  warnDeprecatedConfig,
 } from './first-run-admin.js';
 
 // Mock the pure-DB layer so we can exercise the daemon-side factory
@@ -31,7 +31,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
   };
 });
 
-describe('warnDeprecatedAnonymousConfig', () => {
+describe('warnDeprecatedConfig', () => {
   let stderrSpy: ReturnType<typeof vi.spyOn>;
   let written: string;
 
@@ -48,17 +48,17 @@ describe('warnDeprecatedAnonymousConfig', () => {
   });
 
   it('is silent when no daemon block exists', () => {
-    warnDeprecatedAnonymousConfig({} as AgorConfig);
+    warnDeprecatedConfig({} as AgorConfig);
     expect(written).toBe('');
   });
 
   it('is silent when daemon block has no deprecated keys', () => {
-    warnDeprecatedAnonymousConfig({ daemon: { port: 3030 } } as AgorConfig);
+    warnDeprecatedConfig({ daemon: { port: 3030 } } as AgorConfig);
     expect(written).toBe('');
   });
 
   it('warns when allowAnonymous is present', () => {
-    warnDeprecatedAnonymousConfig({
+    warnDeprecatedConfig({
       daemon: { allowAnonymous: true },
     } as unknown as AgorConfig);
     expect(written).toContain('DEPRECATED CONFIG KEYS DETECTED');
@@ -67,7 +67,7 @@ describe('warnDeprecatedAnonymousConfig', () => {
   });
 
   it('warns when requireAuth is present', () => {
-    warnDeprecatedAnonymousConfig({
+    warnDeprecatedConfig({
       daemon: { requireAuth: false },
     } as unknown as AgorConfig);
     expect(written).toContain('DEPRECATED CONFIG KEYS DETECTED');
@@ -75,7 +75,7 @@ describe('warnDeprecatedAnonymousConfig', () => {
   });
 
   it('lists both keys when both are present', () => {
-    warnDeprecatedAnonymousConfig({
+    warnDeprecatedConfig({
       daemon: { allowAnonymous: true, requireAuth: false },
     } as unknown as AgorConfig);
     expect(written).toContain('daemon.allowAnonymous: true');
@@ -85,10 +85,39 @@ describe('warnDeprecatedAnonymousConfig', () => {
   it('fires even when the deprecated value is falsy (key presence is what matters)', () => {
     // Operators who explicitly wrote `allowAnonymous: false` still get the
     // nudge — the key is dead, regardless of its value.
-    warnDeprecatedAnonymousConfig({
+    warnDeprecatedConfig({
       daemon: { allowAnonymous: false },
     } as unknown as AgorConfig);
     expect(written).toContain('daemon.allowAnonymous: false');
+  });
+
+  it('warns about the retired display.shortIdLength key', () => {
+    warnDeprecatedConfig({
+      display: { shortIdLength: 12 },
+    } as unknown as AgorConfig);
+    expect(written).toContain('display.shortIdLength: 12');
+  });
+
+  it('warns about retired CLI display settings while accepting old config files', () => {
+    warnDeprecatedConfig({
+      display: { tableStyle: 'ascii', colorOutput: false },
+    } as unknown as AgorConfig);
+    expect(written).toContain('display.tableStyle: ascii');
+    expect(written).toContain('display.colorOutput: false');
+    expect(written).toContain('no longer have any effect');
+  });
+
+  it('warns about retired global defaults and onboarding YAML state', () => {
+    warnDeprecatedConfig({
+      defaults: { board: 'main', agent: 'claude-code' },
+      onboarding: { teammatePending: true, frameworkRepoUrl: 'https://example.test/repo.git' },
+    } as unknown as AgorConfig);
+    expect(written).toContain('defaults.board: main');
+    expect(written).toContain('defaults.agent: claude-code');
+    expect(written).toContain('onboarding.teammatePending: true');
+    expect(written).toContain('onboarding.frameworkRepoUrl: https://example.test/repo.git');
+    expect(written).toContain('teammates.framework_repo_url');
+    expect(written).toContain('Onboarding progress is stored');
   });
 });
 

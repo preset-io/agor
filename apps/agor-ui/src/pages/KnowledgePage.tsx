@@ -259,41 +259,45 @@ const kindLabels: Record<KnowledgeDocumentKind, string> = {
 
 const indexingStateMeta: Record<
   KnowledgeDocumentIndexingStatus['state'],
-  { label: string; color: string; tooltip: string }
+  {
+    label: string;
+    colorToken: 'colorTextSecondary' | 'colorInfo' | 'colorSuccess' | 'colorWarning' | 'colorError';
+    tooltip: string;
+  }
 > = {
   empty: {
     label: 'No semantic index',
-    color: 'default',
+    colorToken: 'colorTextSecondary',
     tooltip: 'No indexable units exist for the current version yet.',
   },
   not_configured: {
     label: 'Semantic indexing unavailable',
-    color: 'default',
+    colorToken: 'colorTextSecondary',
     tooltip: 'Semantic indexing is not configured for these chunks.',
   },
   queued: {
     label: 'Indexing',
-    color: '#1677ff',
+    colorToken: 'colorInfo',
     tooltip: 'Some chunks are queued for semantic indexing.',
   },
   ready: {
     label: 'Semantic index ready',
-    color: '#52c41a',
+    colorToken: 'colorSuccess',
     tooltip: 'Current chunks are available for semantic search.',
   },
   stale: {
     label: 'Needs semantic refresh',
-    color: '#faad14',
+    colorToken: 'colorWarning',
     tooltip: 'Some chunks are stale and need semantic index refresh.',
   },
   error: {
     label: 'Semantic index error',
-    color: '#ff4d4f',
+    colorToken: 'colorError',
     tooltip: 'At least one chunk failed semantic indexing.',
   },
   mixed: {
     label: 'Partial semantic index',
-    color: '#1677ff',
+    colorToken: 'colorInfo',
     tooltip: 'Chunks have mixed semantic indexing states.',
   },
 };
@@ -355,10 +359,11 @@ function IndexingStatusCue({
   status?: KnowledgeDocumentIndexingStatus | null;
   size?: number;
 }) {
+  const { token } = theme.useToken();
   if (!shouldShowIndexingCue(status) || !status) return null;
 
   const meta = indexingStateMeta[status.state];
-  const iconStyle = { color: meta.color, fontSize: size };
+  const iconStyle = { color: token[meta.colorToken], fontSize: size };
   const icon =
     status.state === 'queued' ? (
       <LoadingOutlined spin style={iconStyle} />

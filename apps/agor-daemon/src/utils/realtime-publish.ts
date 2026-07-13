@@ -3,8 +3,8 @@ import {
   resolveTenantContext,
   TenantResolutionError,
 } from '@agor/core/config';
-import type { BranchRepository, SessionRepository } from '@agor/core/db';
-import { getCurrentTenantId, shortId } from '@agor/core/db';
+import type { BranchRepository, SessionRepository, TenantScopeAwareDatabase } from '@agor/core/db';
+import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, HookContext, User, UserID } from '@agor/core/types';
 import { hasMinimumRole, isInternalLinkData, ROLES } from '@agor/core/types';
@@ -110,6 +110,7 @@ type ConnectionLike = {
 
 type RealtimePublishOptions = {
   app: Application;
+  db?: TenantScopeAwareDatabase;
   branchRbacEnabled: boolean;
   branchRepository: BranchRepository;
   sessionsRepository: SessionRepository;
@@ -541,6 +542,7 @@ function resolveRealtimeTenantId(multiTenancy: ResolvedMultiTenancyConfig, conte
 export function configureRealtimePublish(options: RealtimePublishOptions): void {
   const {
     app,
+    db,
     branchRbacEnabled,
     branchRepository,
     sessionsRepository,
@@ -565,9 +567,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
 
     const authenticated = app.channel('authenticated');
     let tenantScoped = authenticated;
+    let tenantId: string | undefined;
     if (multiTenancy) {
       try {
-        const tenantId = resolveRealtimeTenantId(multiTenancy, context);
+        tenantId = resolveRealtimeTenantId(multiTenancy, context);
         tenantScoped = app.channel(tenantChannelName(tenantId));
       } catch (error) {
         if (error instanceof TenantResolutionError) {
@@ -581,57 +584,71 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         throw error;
       }
     }
-    // Internal links do not leave trusted service connections until target-level
-    // authorization exists. Owner visibility alone cannot authorize the target.
-    if (context.path === 'links' && isInternalLinkData(data)) {
-      return filterToServiceConnections(tenantScoped);
-    }
-    // Streaming events are routed to session subscribers (plus service and
-    // owner connections) regardless of branch RBAC — this is the always-on
-    // firehose the tenant broadcast must not carry.
-    if (isStreamingEvent(context)) {
-      return resolveStreamingDelivery(
-        app,
-        data,
-        tenantScoped,
-        accessCache,
-        branchRbacEnabled,
-        allowSuperadmin
-      );
-    }
 
-    if (!branchRbacEnabled) return tenantScoped;
+    const resolveDelivery = async () => {
+      // Internal links do not leave trusted service connections until target-level
+      // authorization exists. Owner visibility alone cannot authorize the target.
+      if (context.path === 'links' && isInternalLinkData(data)) {
+        return filterToServiceConnections(tenantScoped);
+      }
 
-    const scope = await resolvePublishScope(data, context, accessCache);
-    if (scope.kind === 'global') return tenantScoped;
-    if (scope.kind === 'serviceOnly') return filterToServiceConnections(tenantScoped);
-    if (scope.kind === 'users') {
-      return filterToUserIdsOrAdmins(tenantScoped, scope.userIds, allowSuperadmin);
-    }
+      // Streaming events are routed to session subscribers (plus service and
+      // owner connections) regardless of branch RBAC — this is the always-on
+      // firehose the tenant broadcast must not carry.
+      if (isStreamingEvent(context)) {
+        return resolveStreamingDelivery(
+          app,
+          data,
+          tenantScoped,
+          accessCache,
+          branchRbacEnabled,
+          allowSuperadmin
+        );
+      }
 
-    if (!scope.branchId) {
-      console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
-        path: context.path,
-        event: context.event,
-        method: context.method,
-      });
-      return filterToServiceConnections(tenantScoped);
-    }
+      if (!branchRbacEnabled) return tenantScoped;
 
-    const visibility = await accessCache.getBranchVisibility(scope.branchId);
-    if (!visibility) {
-      console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
-        path: context.path,
-        event: context.event,
-        method: context.method,
-      });
-      return filterToServiceConnections(tenantScoped);
-    }
+      const scope = await resolvePublishScope(data, context, accessCache);
+      if (scope.kind === 'global') return tenantScoped;
+      if (scope.kind === 'serviceOnly') return filterToServiceConnections(tenantScoped);
+      if (scope.kind === 'users') {
+        return filterToUserIdsOrAdmins(tenantScoped, scope.userIds, allowSuperadmin);
+      }
 
-    if (visibility.mode === 'allAuthenticated') {
-      return tenantScoped;
-    }
+      if (!scope.branchId) {
+        console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
+          path: context.path,
+          event: context.event,
+          method: context.method,
+        });
+        return filterToServiceConnections(tenantScoped);
+      }
 
-    return filterToUserIdsOrSuperadmins(tenantScoped, visibility.userIds, allowSuperadmin);
+      const visibility = await accessCache.getBranchVisibility(scope.branchId);
+      if (!visibility) {
+        console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
+          path: context.path,
+          event: context.event,
+          method: context.method,
+        });
+        return filterToServiceConnections(tenantScoped);
+      }
+
+      if (visibility.mode === 'allAuthenticated') {
+        return tenantScoped;
+      }
+
+      return filterToUserIdsOrSuperadmins(tenantScoped, visibility.userIds, allowSuperadmin);
+    };
+
+    // Feathers invokes publishers asynchronously from EventEmitter listeners
+    // and does not await them. Manual/background events can therefore carry a
+    // correct tenant in HookContext params while no tenant DB ALS scope is
+    // active by the time RBAC visibility repositories run. Re-enter the scope
+    // resolved for channel routing so the authorization lookup and delivery
+    // decision use the same tenant as the event.
+    return db && tenantId
+      ? runWithTenantDatabaseScope(db, tenantId, resolveDelivery)
+      : resolveDelivery();
   });
 }

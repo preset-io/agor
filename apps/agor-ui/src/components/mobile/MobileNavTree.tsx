@@ -113,7 +113,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                   styles={{
                     indicator: {
                       backgroundColor: `${token.colorPrimary}80`, // 0.5 opacity (80 in hex = 128/255 ≈ 0.5)
-                      boxShadow: '0 0 0 2px rgba(0, 0, 0, 0.5)',
+                      boxShadow: `0 0 0 2px ${token.colorBgMask}`,
                     },
                   }}
                 >
@@ -199,7 +199,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                                   }}
                                   onMouseEnter={(e) => {
                                     (e.currentTarget as HTMLElement).style.background =
-                                      'rgba(255, 255, 255, 0.04)';
+                                      token.colorFillTertiary;
                                   }}
                                   onMouseLeave={(e) => {
                                     (e.currentTarget as HTMLElement).style.background =

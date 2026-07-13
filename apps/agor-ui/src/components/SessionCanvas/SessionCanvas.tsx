@@ -2112,7 +2112,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           const objectId = `zone-${Date.now()}`;
 
           // Default colors for new zones
+          // biome-ignore lint/plugin/noHardcodedColorLiteral: persisted neutral default for user-editable zone palettes
           const defaultBorderColor = '#d9d9d9';
+          // biome-ignore lint/plugin/noHardcodedColorLiteral: persisted translucent default for user-editable zone palettes
           const defaultBackgroundColor = '#d9d9d91a'; // 10% opacity
 
           // Optimistic update
@@ -2489,8 +2491,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               top: Math.min(drawingZone.start.y, drawingZone.end.y),
               width: Math.abs(drawingZone.end.x - drawingZone.start.x),
               height: Math.abs(drawingZone.end.y - drawingZone.start.y),
-              border: '2px dashed #1677ff',
-              background: 'rgba(22, 119, 255, 0.1)',
+              border: `2px dashed ${token.colorPrimary}`,
+              background: token.colorPrimaryBg,
               pointerEvents: 'none',
               zIndex: 1000,
             }}
@@ -2604,7 +2606,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('select');
                     }}
                     style={{
-                      borderLeft: activeTool === 'select' ? '3px solid #1677ff' : 'none',
+                      borderLeft:
+                        activeTool === 'select'
+                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                          : 'none',
                     }}
                   >
                     <SelectOutlined style={{ fontSize: '16px' }} />
@@ -2624,7 +2629,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('zone');
                     }}
                     style={{
-                      borderLeft: activeTool === 'zone' ? '3px solid #1677ff' : 'none',
+                      borderLeft:
+                        activeTool === 'zone'
+                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                          : 'none',
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2648,7 +2656,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('comment');
                     }}
                     style={{
-                      borderLeft: activeTool === 'comment' ? '3px solid #1677ff' : 'none',
+                      borderLeft:
+                        activeTool === 'comment'
+                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                          : 'none',
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2675,7 +2686,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       setActiveTool('markdown');
                     }}
                     style={{
-                      borderLeft: activeTool === 'markdown' ? '3px solid #1677ff' : 'none',
+                      borderLeft:
+                        activeTool === 'markdown'
+                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                          : 'none',
                       opacity: mutationGate.canMutate ? 1 : 0.4,
                       cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
                     }}
@@ -2893,6 +2907,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               action,
               renderedTemplate,
               agent,
+              agenticToolPresetId,
               modelConfig,
               permissionMode,
               mcpServerIds,
@@ -2911,6 +2926,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   const newSession = await client.service('sessions').create({
                     branch_id: branchTriggerModal.branchId,
                     agentic_tool: (agent || 'claude-code') as AgenticToolName,
+                    agentic_tool_preset_id:
+                      agenticToolPresetId as Session['agentic_tool_preset_id'],
                     description: `Session from zone "${branchTriggerModal.zoneName}"`,
                     status: 'idle',
                     model_config: modelConfig

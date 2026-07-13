@@ -1,0 +1,12 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
+  "extends": "//",
+  "plugins": [
+    "./biome-plugins/noFirstPartyCss.grit",
+    "./biome-plugins/noDirectAntCssVar.grit",
+    "./biome-plugins/noHardcodedColorAttribute.grit",
+    "./biome-plugins/noHardcodedColorProperty.grit",
+    "./biome-plugins/noHardcodedColorLiteral.grit",
+    "./biome-plugins/noHardcodedCssColor.grit"
+  ]
+}

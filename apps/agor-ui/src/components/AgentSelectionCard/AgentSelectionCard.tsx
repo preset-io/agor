@@ -1,4 +1,4 @@
-import { Card, Space, Typography } from 'antd';
+import { Card, Space, Typography, theme } from 'antd';
 import type { AgenticToolOption } from '../../types';
 import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
@@ -14,12 +14,14 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
   selected = false,
   onClick,
 }) => {
+  const { token } = theme.useToken();
+
   return (
     <Card
       hoverable
       onClick={onClick}
       style={{
-        borderColor: selected ? '#1890ff' : undefined,
+        borderColor: selected ? token.colorPrimary : undefined,
         borderWidth: selected ? 2 : 1,
         cursor: 'pointer',
       }}

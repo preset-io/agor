@@ -5,9 +5,9 @@ import type { InboundFile } from '@agor/core/gateway';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildPromptWithAttachments,
-  ingestInboundImageAttachments,
+  ingestInboundAttachments,
   isAllowedSlackFileUrl,
-  isIngestableImageFile,
+  isIngestableFile,
 } from './gateway-attachments.js';
 import { MAX_UPLOAD_FILE_SIZE } from './upload.js';
 
@@ -46,16 +46,30 @@ describe('isAllowedSlackFileUrl', () => {
   });
 });
 
-describe('isIngestableImageFile', () => {
+describe('isIngestableFile', () => {
   it('accepts allowlisted image types and normalizes mime parameters', () => {
-    expect(isIngestableImageFile(makeFile({ mimetype: 'image/png' }))).toBe(true);
-    expect(isIngestableImageFile(makeFile({ mimetype: 'IMAGE/JPEG; charset=binary' }))).toBe(true);
+    expect(isIngestableFile(makeFile({ mimetype: 'image/png' }))).toBe(true);
+    expect(isIngestableFile(makeFile({ mimetype: 'IMAGE/JPEG; charset=binary' }))).toBe(true);
   });
 
-  it('rejects non-image and non-allowlisted types', () => {
-    expect(isIngestableImageFile(makeFile({ mimetype: 'application/pdf' }))).toBe(false);
-    expect(isIngestableImageFile(makeFile({ mimetype: 'image/svg+xml' }))).toBe(false);
-    expect(isIngestableImageFile(makeFile({ mimetype: 'text/html' }))).toBe(false);
+  it('accepts allowlisted text-like types', () => {
+    expect(isIngestableFile(makeFile({ mimetype: 'text/plain' }))).toBe(true);
+    expect(isIngestableFile(makeFile({ mimetype: 'text/csv' }))).toBe(true);
+    expect(isIngestableFile(makeFile({ mimetype: 'text/markdown' }))).toBe(true);
+    expect(isIngestableFile(makeFile({ mimetype: 'application/json' }))).toBe(true);
+    expect(isIngestableFile(makeFile({ mimetype: 'Text/Plain; charset=utf-8' }))).toBe(true);
+  });
+
+  it('rejects non-allowlisted types', () => {
+    expect(isIngestableFile(makeFile({ mimetype: 'image/svg+xml' }))).toBe(false);
+    expect(isIngestableFile(makeFile({ mimetype: 'text/html' }))).toBe(false);
+    expect(isIngestableFile(makeFile({ mimetype: 'application/x-sh' }))).toBe(false);
+    expect(isIngestableFile(makeFile({ mimetype: 'application/xml' }))).toBe(false);
+  });
+
+  it('rejects allowlisted types outside the image/text ingest scope', () => {
+    expect(isIngestableFile(makeFile({ mimetype: 'application/pdf' }))).toBe(false);
+    expect(isIngestableFile(makeFile({ mimetype: 'application/zip' }))).toBe(false);
   });
 });
 
@@ -83,7 +97,7 @@ describe('buildPromptWithAttachments', () => {
   });
 });
 
-describe('ingestInboundImageAttachments', () => {
+describe('ingestInboundAttachments', () => {
   let uploadDir: string;
 
   beforeEach(async () => {
@@ -99,7 +113,7 @@ describe('ingestInboundImageAttachments', () => {
     const bytes = new Uint8Array([137, 80, 78, 71]);
     const fetchImpl = vi.fn(async () => makeImageResponse(bytes));
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [makeFile()],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -117,10 +131,39 @@ describe('ingestInboundImageAttachments', () => {
     expect(new Uint8Array(await fs.readFile(result.paths[0]))).toEqual(bytes);
   });
 
-  it('ignores non-image attachments without counting them as failures', async () => {
+  it('downloads a text attachment and stores it in the upload dir', async () => {
+    const body = 'ts,level,message\n1,error,boom\n';
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'text/csv; charset=utf-8' },
+        })
+    );
+
+    const result = await ingestInboundAttachments({
+      files: [
+        makeFile({
+          name: 'errors.csv',
+          mimetype: 'text/csv',
+          url_private_download: 'https://files.slack.com/files-pri/T1-F123/download/errors.csv',
+        }),
+      ],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      uploadDir,
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.paths).toHaveLength(1);
+    expect(path.basename(result.paths[0])).toMatch(/^F123_errors_\d+\.csv$/);
+    expect(await fs.readFile(result.paths[0], 'utf8')).toBe(body);
+  });
+
+  it('ignores non-ingestable attachments without counting them as failures', async () => {
     const fetchImpl = vi.fn();
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [makeFile({ mimetype: 'application/pdf', name: 'doc.pdf' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -135,7 +178,7 @@ describe('ingestInboundImageAttachments', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const fetchImpl = vi.fn();
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [makeFile({ url_private_download: 'https://evil.example.com/a.png' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -151,7 +194,7 @@ describe('ingestInboundImageAttachments', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const fetchImpl = vi.fn();
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [makeFile({ size: MAX_UPLOAD_FILE_SIZE + 1 })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -172,7 +215,7 @@ describe('ingestInboundImageAttachments', () => {
         })
     );
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [makeFile()],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -200,7 +243,7 @@ describe('ingestInboundImageAttachments', () => {
       )
       .mockResolvedValueOnce(makeImageResponse(bytes));
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [makeFile()],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -220,7 +263,7 @@ describe('ingestInboundImageAttachments', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const chunkSize = 1024 * 1024;
     let chunksPulled = 0;
-    // Endless image stream with no Content-Length: if the implementation
+    // Endless text stream with no Content-Length: if the implementation
     // buffered before checking, this test would never terminate.
     const endlessBody = new ReadableStream<Uint8Array>({
       pull(controller) {
@@ -232,12 +275,12 @@ describe('ingestInboundImageAttachments', () => {
       async () =>
         new Response(endlessBody, {
           status: 200,
-          headers: { 'content-type': 'image/png' },
+          headers: { 'content-type': 'text/plain' },
         })
     );
 
-    const result = await ingestInboundImageAttachments({
-      files: [makeFile()],
+    const result = await ingestInboundAttachments({
+      files: [makeFile({ name: 'server.log', mimetype: 'text/plain' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
       uploadDir,
@@ -259,8 +302,29 @@ describe('ingestInboundImageAttachments', () => {
         })
     );
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [makeFile()],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      uploadDir,
+    });
+
+    expect(result).toEqual({ paths: [], failed: 1 });
+    expect(await fs.readdir(uploadDir)).toEqual([]);
+  });
+
+  it('rejects response bodies whose type is allowlisted but outside the ingest scope', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('%PDF-1.4', {
+          status: 200,
+          headers: { 'content-type': 'application/pdf' },
+        })
+    );
+
+    const result = await ingestInboundAttachments({
+      files: [makeFile({ name: 'report.txt', mimetype: 'text/plain' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
       uploadDir,
@@ -273,7 +337,7 @@ describe('ingestInboundImageAttachments', () => {
   it('stores same-named files with distinct Slack IDs at distinct paths', async () => {
     const fetchImpl = vi.fn(async () => makeImageResponse(new Uint8Array([1])));
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [makeFile({ id: 'F1', name: 'image.png' }), makeFile({ id: 'F2', name: 'image.png' })],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -296,7 +360,7 @@ describe('ingestInboundImageAttachments', () => {
         })
     );
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [makeFile()],
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -314,7 +378,7 @@ describe('ingestInboundImageAttachments', () => {
       .mockRejectedValueOnce(new Error('network down'))
       .mockResolvedValueOnce(makeImageResponse(bytes));
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files: [
         makeFile({ id: 'F1', name: 'first.png' }),
         makeFile({ id: 'F2', name: 'second.png' }),
@@ -337,7 +401,7 @@ describe('ingestInboundImageAttachments', () => {
       makeFile({ id: `F${i}`, name: `img-${i}.png` })
     );
 
-    const result = await ingestInboundImageAttachments({
+    const result = await ingestInboundAttachments({
       files,
       botToken: 'xoxb-test',
       fetchImpl: fetchImpl as unknown as typeof fetch,

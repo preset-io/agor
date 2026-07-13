@@ -7,7 +7,7 @@
  * the SDK call fails.
  */
 
-import { resolveApiKey } from '@agor/core/config';
+import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import { shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { CURSOR_MODEL_METADATA, DEFAULT_CURSOR_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
@@ -72,6 +72,9 @@ export class CursorModelsService {
   constructor(private db: TenantScopeAwareDatabase) {}
 
   async find(params?: AuthenticatedParams): Promise<CursorModelsResult> {
+    if (!(await isTenantAgenticToolEnabled('cursor', this.db))) {
+      throw new Error('Cursor is disabled for this workspace');
+    }
     const userId = params?.user?.user_id;
     const resolution = await resolveApiKey('CURSOR_API_KEY', {
       userId,

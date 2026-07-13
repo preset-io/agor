@@ -43,8 +43,8 @@ export interface SessionDefaultsOverrides extends SessionRuntimeOverrides {
 
 export interface ResolveSessionDefaultsArgs {
   agenticTool: AgenticToolName;
-  /** User whose `default_agentic_config[tool]` provides the next-priority defaults. */
-  user?: Pick<User, 'default_agentic_config'> | null;
+  /** User whose agentic and MCP defaults provide the next-priority defaults. */
+  user?: Pick<User, 'default_agentic_config' | 'default_mcp_server_ids'> | null;
   /** Optional branch for MCP server inheritance (branch-level overrides user defaults). */
   branch?: { mcp_server_ids?: string[] | null } | null;
   overrides?: SessionDefaultsOverrides;
@@ -92,7 +92,7 @@ export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): Resolv
   } else if (branch?.mcp_server_ids && branch.mcp_server_ids.length > 0) {
     mcp_server_ids = branch.mcp_server_ids;
   } else {
-    mcp_server_ids = userToolDefaults?.mcpServerIds ?? [];
+    mcp_server_ids = user?.default_mcp_server_ids ?? [];
   }
 
   return { permission_config, model_config, mcp_server_ids };
