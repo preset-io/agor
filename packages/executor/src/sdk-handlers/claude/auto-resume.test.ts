@@ -152,6 +152,63 @@ describe('usage aggregation', () => {
     expect(final.duration_ms).toBe(300);
   });
 
+  it('sums every billable field of the complete SDK usage shape and maxes capacities', () => {
+    // Complete ModelUsage (all required SDK fields) + full top-level usage.
+    const invocation = (n: number) => ({
+      subtype: 'success',
+      terminal_reason: n === 2 ? 'completed' : 'blocking_limit',
+      total_cost_usd: 0.01 * n,
+      duration_ms: 100 * n,
+      duration_api_ms: 80 * n,
+      usage: {
+        input_tokens: 10 * n,
+        output_tokens: 5 * n,
+        cache_creation_input_tokens: 2 * n,
+        cache_read_input_tokens: 3 * n,
+        server_tool_use: { web_fetch_requests: n, web_search_requests: 2 * n },
+        service_tier: 'standard',
+      },
+      modelUsage: {
+        'claude-opus': {
+          inputTokens: 10 * n,
+          outputTokens: 5 * n,
+          cacheReadInputTokens: 3 * n,
+          cacheCreationInputTokens: 2 * n,
+          webSearchRequests: 2 * n,
+          costUSD: 0.01 * n,
+          contextWindow: 200_000,
+          maxOutputTokens: 64_000,
+        },
+      },
+    });
+
+    let acc = emptyRetryUsageAccumulator();
+    acc = accumulateResultUsage(acc, invocation(1) as Any);
+    acc = accumulateResultUsage(acc, invocation(2) as Any);
+
+    // Additive fields summed (n=1 + n=2 => x3 of the base).
+    expect(acc.usage.input_tokens).toBe(30);
+    expect(acc.usage.cache_creation_input_tokens).toBe(6);
+    expect(acc.usage.cache_read_input_tokens).toBe(9);
+    expect(acc.usage.server_tool_use.web_fetch_requests).toBe(3);
+    expect(acc.usage.server_tool_use.web_search_requests).toBe(6);
+    expect(acc.totalCostUsd).toBeCloseTo(0.03);
+    expect(acc.durationApiMs).toBe(240);
+    const mu = acc.modelUsage['claude-opus'];
+    expect(mu.webSearchRequests).toBe(6);
+    expect(mu.costUSD).toBeCloseTo(0.03);
+    // Capacity fields maxed, not summed.
+    expect(mu.contextWindow).toBe(200_000);
+    expect(mu.maxOutputTokens).toBe(64_000);
+
+    const final = applyAccumulatedUsage(invocation(2) as Any, acc) as Any;
+    // Structural fields from the final result are preserved, not dropped.
+    expect(final.usage.service_tier).toBe('standard');
+    expect(final.usage.server_tool_use.web_search_requests).toBe(6);
+    expect(final.modelUsage['claude-opus'].maxOutputTokens).toBe(64_000);
+    expect(final.total_cost_usd).toBeCloseTo(0.03);
+  });
+
   it('is a no-op-equivalent for a single invocation (no retries)', () => {
     let acc = emptyRetryUsageAccumulator();
     const raw = {

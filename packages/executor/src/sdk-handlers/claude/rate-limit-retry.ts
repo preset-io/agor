@@ -92,7 +92,8 @@ export function computeRateLimitRetryDelayMs(opts: {
   const rawBase = hasUsableReset
     ? resetMs - opts.nowMs
     : RATE_LIMIT_BACKOFF_MS[Math.min(opts.attempt, RATE_LIMIT_BACKOFF_MS.length - 1)];
-  const base = Math.min(rawBase, MAX_RATE_LIMIT_WAIT_MS);
+  // Reserve room for jitter so base + jitter stays strictly under the ceiling.
+  const base = Math.min(rawBase, MAX_RATE_LIMIT_WAIT_MS - RATE_LIMIT_JITTER_MS);
   const jitter = Math.floor(random() * RATE_LIMIT_JITTER_MS);
   return base + jitter;
 }

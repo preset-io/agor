@@ -17,6 +17,7 @@
 
 // Claude Agent SDK - direct type exports for convenience
 export type {
+  ModelUsage,
   PermissionMode,
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,

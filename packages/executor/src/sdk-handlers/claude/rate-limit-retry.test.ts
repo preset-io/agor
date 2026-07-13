@@ -70,11 +70,20 @@ describe('computeRateLimitRetryDelayMs', () => {
     ).toBe(30_000);
   });
 
-  it('clamps a far-future resetsAt to the max single wait', () => {
+  it('clamps a far-future resetsAt so even max jitter stays under the ceiling', () => {
     const resetsAt = (nowMs + 30 * 24 * 60 * 60 * 1000) / 1000; // 30 days out
+    // Base reserves room for jitter.
     expect(computeRateLimitRetryDelayMs({ resetsAt, attempt: 0, ...noJitter })).toBe(
-      MAX_RATE_LIMIT_WAIT_MS
+      MAX_RATE_LIMIT_WAIT_MS - RATE_LIMIT_JITTER_MS
     );
+    // Even with near-max jitter the total wait never reaches the hard ceiling.
+    const withJitter = computeRateLimitRetryDelayMs({
+      resetsAt,
+      attempt: 0,
+      nowMs,
+      random: () => 0.999,
+    });
+    expect(withJitter).toBeLessThan(MAX_RATE_LIMIT_WAIT_MS);
   });
 
   it('uses capped exponential backoff when resetsAt is unknown', () => {
