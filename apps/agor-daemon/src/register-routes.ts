@@ -125,9 +125,9 @@ import {
   PERMISSION_RANK,
   resolveBranchPermission,
 } from './utils/branch-authorization.js';
-import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
+import { ensureInitialUserMessage } from './utils/ensure-initial-user-message.js';
 import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
@@ -1141,44 +1141,34 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       params
     )) as Task;
 
-    // Alt D — write the user-message row before spawning. Gated by kill switch.
-    // The executor's createUserMessage has a skip-if-exists guard so a duplicate
-    // write is harmless if the daemon path is enabled.
-    if (config.execution?.daemon_writes_user_message !== false) {
-      try {
-        const isCallback = task.metadata?.is_agor_callback === true;
-        const messageMetadata: Message['metadata'] = {};
-        if (isCallback) {
-          messageMetadata.is_agor_callback = true;
-        }
-        // Prefer task.metadata.source (set when the task was queued) over
-        // the request's messageSource — the latter applies only to the
-        // current draining tick, the former to where the prompt originated.
-        const source = task.metadata?.source ?? options.messageSource;
-        if (source) {
-          messageMetadata.source = source;
-        }
+    // Idempotently persist the initial user-message row for this task,
+    // called in two places:
+    //   1. Here (pre-spawn), gated by the daemon_writes_user_message kill
+    //      switch, so the transcript shows the prompt the instant the task
+    //      renders.
+    //   2. From the deferred spawn's error handler (unconditionally), so
+    //      that when the executor process dies before its createUserMessage
+    //      ever runs (e.g. the sonnet-5 + advisor combo that killed the
+    //      Claude Code process at startup on 2026-07-13), the user's
+    //      prompt still appears above the "agent failed to start" system
+    //      message instead of being buried in `tasks.full_prompt` /
+    //      `session.description`.
+    // Idempotence is checked against the DB (skip-if-exists on the user-
+    // role row), so silent failures on path 1 don't block path 2.
+    const writeInitialUserMessageIfMissing = () =>
+      ensureInitialUserMessage({
+        app,
+        db,
+        task,
+        timestamp: startTimestamp,
+        params,
+        messageSource: options.messageSource,
+        countMessagesForSession: (sessionId) => sessionsRepository.countMessages(sessionId),
+      });
 
-        const userMessage = buildInitialUserMessage({
-          sessionId: task.session_id,
-          taskId: task.task_id,
-          index: messageStartIndex,
-          timestamp: startTimestamp,
-          content: task.full_prompt,
-          // Callback messages are typed `system` so the UI shows the special
-          // Agor-callback styling. Normal prompts stay `user`.
-          type: isCallback ? 'system' : 'user',
-          metadata: Object.keys(messageMetadata).length > 0 ? messageMetadata : undefined,
-        });
-        await app.service('messages').create(userMessage, params);
-      } catch (msgErr) {
-        // Don't fail the spawn — the executor's createUserMessage fallback
-        // (with skip-if-exists) will write the row when it connects.
-        console.warn(
-          `⚠️  [Daemon] Failed to write initial user-message row for task ${shortId(task.task_id)} (executor will retry):`,
-          msgErr
-        );
-      }
+    // Alt D — write the user-message row before spawning. Gated by kill switch.
+    if (config.execution?.daemon_writes_user_message !== false) {
+      await writeInitialUserMessageIfMissing();
     }
 
     // Flip session to RUNNING and append to session.tasks. Done here so both
@@ -1354,6 +1344,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           'Task',
           params
         );
+
+        // Safety net: guarantee the user-message row exists before we
+        // append the system error. Without this, an executor process that
+        // dies before its own createUserMessage runs (invalid preset like
+        // the sonnet-5 + advisor combo, missing binary, sandbox refused,
+        // etc.) — while the pre-spawn daemon write is either off via kill
+        // switch or was silently swallowed by an RBAC/DB error — leaves
+        // the transcript with a system error and NO original prompt above
+        // it. `writeInitialUserMessageIfMissing` is idempotent: it
+        // no-ops when the row already exists (e.g. the pre-spawn write
+        // ran cleanly).
+        await writeInitialUserMessageIfMissing();
 
         // Synthesize a system message so the chat surfaces *why* the agent
         // didn't respond. Without this the transcript shows only the user
