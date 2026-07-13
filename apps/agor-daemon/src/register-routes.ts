@@ -17,6 +17,7 @@ import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
   generateId,
+  getCurrentTenantId,
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
@@ -1100,10 +1101,15 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     params: RouteParams
   ): Promise<Task> {
-    const session = await sessionsService.get(task.session_id, params);
-
-    // Recompute message_range.start_index against the live message count.
-    const messageStartIndex = await sessionsRepository.countMessages(task.session_id);
+    const { messageStartIndex, session } = await runWithTenantDatabaseScope(
+      db,
+      getCurrentTenantId(),
+      async () => ({
+        session: await sessionsService.get(task.session_id, params),
+        // Recompute message_range.start_index against the live message count.
+        messageStartIndex: await sessionsRepository.countMessages(task.session_id),
+      })
+    );
     const startTimestamp = new Date().toISOString();
 
     // The daemon transitions the task to RUNNING and writes required sentinel
@@ -1206,7 +1212,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       rawPrompt: task.full_prompt,
       sessionCreatedBy: session.created_by,
       prompterUserId: task.created_by,
-      usersRepo: new UsersRepository(db),
+      usersRepo: bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db)),
     });
 
     const useStreaming = options.stream !== false;
@@ -1912,7 +1918,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       ensureMinimumRole(params, ROLES.MEMBER, 'upload files');
 
-      const session = await sessionsService.get(sessionId, params);
+      const session = await runWithTenantDatabaseScope(db, params.tenant?.tenant_id, () =>
+        sessionsService.get(sessionId, params)
+      );
       if (!session) {
         console.error(`❌ [Upload Authz] Session not found: ${shortId(sessionId)}`);
         return res.status(404).json({ error: 'Session not found' });
@@ -2418,11 +2426,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
     );
 
-    const session = await reconcileSessionPromptStateIfStuck(
-      await sessionsService.get(sessionId, taskParams),
-      taskRepo,
-      taskParams
+    const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
+      sessionsService.get(sessionId, taskParams)
     );
+    const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
 
     if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
       console.log(
