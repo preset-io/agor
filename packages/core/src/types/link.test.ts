@@ -142,8 +142,8 @@ describe('link target semantics', () => {
     expect(normalizeLinkTargetKey({ url: 'https://EXAMPLE.com/a#section' })).toBe(
       'url:https://example.com/a'
     );
-    expect(normalizeLinkTargetKey({ ref_uri: ' AGOR://KB/Team/Runbook.md ' })).toBe(
-      'ref:agor://kb/team/runbook.md'
+    expect(normalizeLinkTargetKey({ ref_uri: ' AGOR://KB/team/Runbook.md ' })).toBe(
+      'ref:agor://kb/team/Runbook.md'
     );
     expect(normalizeLinkTargetKey({ file_path: ' /uploads/image.png ' })).toBe(
       'file:/uploads/image.png'

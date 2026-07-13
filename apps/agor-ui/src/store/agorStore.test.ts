@@ -117,23 +117,26 @@ describe('agorStore state and link maps', () => {
     expect(state.linksBySession.get('s1')).toEqual([sessionLink]);
   });
 
-  it('applies link mutation results only when they still match current store state', () => {
+  it('orders link mutation results by revision even when timestamps are equal', () => {
     const newerLink = {
       link_id: 'l-branch',
       branch_id: 'b1',
       session_id: null,
       is_pinned: true,
       updated_at: '2026-07-01T12:00:00.000Z',
+      revision: 2,
     } as Link;
     const stalePatchResponse = {
       ...newerLink,
       is_pinned: false,
-      updated_at: '2026-07-01T11:59:00.000Z',
+      updated_at: '2026-07-01T12:00:00.000Z',
+      revision: 1,
     } as Link;
     const freshPatchResponse = {
       ...newerLink,
       is_pinned: false,
-      updated_at: '2026-07-01T12:01:00.000Z',
+      updated_at: '2026-07-01T12:00:00.000Z',
+      revision: 3,
     } as Link;
 
     agorStore.getState().applyMaps((prev) => mergeLinksIntoMaps(prev, [newerLink]));
@@ -159,6 +162,7 @@ describe('agorStore state and link maps', () => {
       ...removedLink,
       is_pinned: false,
       updated_at: '2026-07-01T12:01:00.000Z',
+      revision: 2,
     } as Link;
 
     agorStore.getState().applyMaps((prev) => mergeLinksIntoMaps(prev, [removedLink]));
@@ -181,6 +185,7 @@ describe('agorStore state and link maps', () => {
       ...existing,
       is_pinned: true,
       updated_at: '2026-07-01T12:00:00.000Z',
+      revision: 1,
     } as Link;
 
     agorStore.getState().applyMaps((prev) => mergeLinksIntoMaps(prev, [existing]));

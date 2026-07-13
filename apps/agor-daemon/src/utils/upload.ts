@@ -4,6 +4,7 @@
  * Stores daemon-side uploads under ~/.agor/uploads/.
  */
 
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getAgorHome } from '@agor/core/config';
@@ -50,7 +51,7 @@ export function validateUploadDestinationQuery(destination: unknown): void {
 
 /**
  * Sanitize an original filename (path traversal, unsafe chars) and suffix it
- * with a timestamp so concurrent uploads of the same name never overwrite.
+ * with a timestamp and random ID so concurrent uploads never overwrite.
  */
 export function buildUploadFilename(originalname: string): string {
   const basename = path.basename(originalname);
@@ -59,12 +60,13 @@ export function buildUploadFilename(originalname: string): string {
     .replace(/\.\./g, '_') // Remove path traversal attempts
     .replace(/[/\\:*?"<>|]/g, '_') // Remove filesystem-unsafe chars (Windows + Unix)
     .replace(/\.+$/g, '') // Remove trailing dots (Windows issue)
-    .substring(0, 200); // Limit length (leave room for timestamp)
+    .substring(0, 200); // Leave room for the timestamp and UUID suffix.
 
   const timestamp = Date.now();
+  const uniqueId = randomUUID();
   const ext = path.extname(sanitized);
   const nameWithoutExt = sanitized.slice(0, -ext.length || undefined);
-  return `${nameWithoutExt}_${timestamp}${ext}`;
+  return `${nameWithoutExt}_${timestamp}_${uniqueId}${ext}`;
 }
 
 /**

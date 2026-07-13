@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildPromptWithAttachments,
   isBlockingComposerAttachment,
   isPreviewableComposerImage,
   summarizeComposerFileRejections,
@@ -8,32 +7,6 @@ import {
 } from './composerAttachments';
 
 describe('composerAttachments', () => {
-  it('builds a hidden file-path preamble without modifying visible text', () => {
-    expect(
-      buildPromptWithAttachments('Compare these charts', [
-        '.agor/uploads/chart-a.png',
-        '.agor/uploads/chart-b.png',
-      ])
-    ).toBe(
-      'Attached files:\n- .agor/uploads/chart-a.png\n- .agor/uploads/chart-b.png\n\nCompare these charts'
-    );
-  });
-
-  it('preserves slash commands at the start of the sent prompt', () => {
-    expect(
-      buildPromptWithAttachments('/compact focus on this chart', ['.agor/uploads/chart.png'])
-    ).toBe(`/compact focus on this chart
-
-Attached files:
-- .agor/uploads/chart.png`);
-  });
-
-  it('supports attachment-only prompts', () => {
-    expect(buildPromptWithAttachments('   ', ['.agor/uploads/chart-a.png'])).toBe(
-      'Attached files:\n- .agor/uploads/chart-a.png'
-    );
-  });
-
   it('matches the server image allowlist used by composer-native attachments', () => {
     expect(isPreviewableComposerImage(new File(['x'], 'chart.png', { type: 'image/png' }))).toBe(
       true

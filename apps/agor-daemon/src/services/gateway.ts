@@ -68,13 +68,10 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
+import { buildPromptWithAttachments, hasMinimumRole, ROLES, SessionStatus } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { hasBranchPermission } from '../utils/branch-authorization.js';
-import {
-  buildPromptWithAttachments,
-  ingestInboundAttachments,
-} from '../utils/gateway-attachments.js';
+import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 
 /**

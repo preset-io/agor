@@ -536,6 +536,7 @@ export const links = sqliteTable(
     }),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at').notNull(),
+    revision: integer('revision').notNull().default(1),
   },
   (table) => ({
     ownerXorCheck: check(

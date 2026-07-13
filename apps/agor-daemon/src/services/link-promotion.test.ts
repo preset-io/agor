@@ -108,38 +108,25 @@ describe('LinkPromotionService', () => {
     });
   });
 
-  dbTest(
-    'promotes uploads as teammate-owned references to the same stored file',
-    async ({ db }) => {
-      const branch = await seedBranch(db);
-      const session = await seedSession(db, branch.branch_id);
-      const teammate = await seedBranch(db, { teammate: true });
-      const source = await new LinksRepository(db).create({
-        session_id: session.session_id,
-        kind: 'image',
-        source: 'upload',
-        file_path: '/tmp/agor-upload/image.png',
-        title: 'image.png',
-        mime_type: 'image/png',
-        metadata: { filename: 'stored.png', size: 123 },
-      });
+  dbTest('rejects file-backed promotion until file lifetime is defined', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id);
+    const teammate = await seedBranch(db, { teammate: true });
+    const source = await new LinksRepository(db).create({
+      session_id: session.session_id,
+      kind: 'image',
+      source: 'upload',
+      file_path: '/tmp/agor-upload/image.png',
+      title: 'image.png',
+      mime_type: 'image/png',
+      metadata: { filename: 'stored.png', size: 123 },
+    });
 
-      const { service } = promotionService(db);
-      const promoted = await promote(service, source, teammate.branch_id);
-
-      expect(promoted).toMatchObject({
-        branch_id: teammate.branch_id,
-        session_id: null,
-        kind: 'image',
-        source: 'upload',
-        file_path: '/tmp/agor-upload/image.png',
-        title: 'image.png',
-        mime_type: 'image/png',
-        is_pinned: true,
-        metadata: null,
-      });
-    }
-  );
+    const { service } = promotionService(db);
+    await expect(promote(service, source, teammate.branch_id)).rejects.toThrow(
+      'File-backed links cannot be promoted'
+    );
+  });
 
   dbTest('rejects internal links until target access checks are enforced', async ({ db }) => {
     const branch = await seedBranch(db);

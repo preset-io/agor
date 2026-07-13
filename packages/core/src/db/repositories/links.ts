@@ -194,6 +194,7 @@ export class LinksRepository {
         created_by: (row.created_by as UUID | null) ?? null,
         created_at: new Date(row.created_at).toISOString(),
         updated_at: new Date(row.updated_at).toISOString(),
+        revision: row.revision,
       },
       row
     );
@@ -249,6 +250,7 @@ export class LinksRepository {
       created_by: data.created_by ?? null,
       created_at: now,
       updated_at: now,
+      revision: 1,
     } as LinkInsert;
   }
 
@@ -442,7 +444,7 @@ export class LinksRepository {
     });
 
     const updated = await update(this.db, links)
-      .set(next)
+      .set({ ...next, revision: sql`${links.revision} + 1` })
       .where(eq(links.link_id, id))
       .returning()
       .one();

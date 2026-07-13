@@ -12,6 +12,7 @@ import path from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildUploadFilename,
   createUploadMiddleware,
   enforceParsedTotalUploadSize,
   enforceTotalUploadSize,
@@ -36,6 +37,18 @@ function mockRes() {
 }
 
 describe('upload limits', () => {
+  it('generates distinct storage names for same-named files in the same millisecond', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+
+    const first = buildUploadFilename('report.pdf');
+    const second = buildUploadFilename('report.pdf');
+
+    expect(first).not.toBe(second);
+    expect(first).toMatch(/^report_1700000000000_[0-9a-f-]{36}\.pdf$/);
+    expect(second).toMatch(/^report_1700000000000_[0-9a-f-]{36}\.pdf$/);
+    vi.restoreAllMocks();
+  });
+
   it('multer instance carries the configured limits', () => {
     // Tiny stand-ins for the repos — the limit fields are read off the multer
     // instance directly, so the storage callbacks never run.

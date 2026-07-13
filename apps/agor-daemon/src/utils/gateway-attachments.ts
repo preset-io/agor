@@ -75,27 +75,6 @@ export function isIngestableFile(file: InboundFile): boolean {
 }
 
 /**
- * Fold stored attachment paths into a prompt.
- *
- * Server-side copy of the session composer's `buildPromptWithAttachments`
- * (`apps/agor-ui/src/components/SessionPanel/composerAttachments.ts`) — the
- * daemon must not import agor-ui. Keep the two in sync.
- */
-export function buildPromptWithAttachments(text: string, attachmentPaths: string[]): string {
-  const trimmedText = text.trim();
-  if (attachmentPaths.length === 0) return trimmedText;
-
-  const attachmentBlock = [
-    'Attached files:',
-    ...attachmentPaths.map((attachmentPath) => `- ${attachmentPath}`),
-  ].join('\n');
-  if (trimmedText.startsWith('/')) {
-    return `${trimmedText}\n\n${attachmentBlock}`;
-  }
-  return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
-}
-
-/**
  * Fetch an allowlisted URL, following redirects manually so that EVERY hop's
  * host is validated against the Slack allowlist before it is fetched. This
  * makes "the bot-token Authorization header is only ever sent to allowlisted

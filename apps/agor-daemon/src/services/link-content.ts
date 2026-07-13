@@ -44,6 +44,16 @@ function encodeContentDispositionValue(value: string): string {
     .replace(/\*/g, '%2A');
 }
 
+function asciiContentDispositionFallback(value: string): string {
+  const fallback = value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E]/gu, '_')
+    .replace(/[\r\n"\\]/g, '_')
+    .trim();
+  return fallback || 'download';
+}
+
 function safeContentFilename(link: Pick<Link, 'title' | 'file_path' | 'metadata'>): string {
   const metadata = link.metadata && typeof link.metadata === 'object' ? link.metadata : {};
   const metadataName =
@@ -65,9 +75,10 @@ export function contentDispositionHeader(
   disposition: 'inline' | 'attachment',
   filename: string
 ): string {
-  const safeName = filename.replace(/[\r\n"\\]/g, '_') || 'download';
-  const encoded = encodeContentDispositionValue(safeName);
-  return `${disposition}; filename="${safeName}"; filename*=UTF-8''${encoded}`;
+  const utf8Name = filename.replace(/[\r\n"\\]/g, '_') || 'download';
+  const fallback = asciiContentDispositionFallback(utf8Name);
+  const encoded = encodeContentDispositionValue(utf8Name);
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 export function chooseLinkContentDisposition(args: {

@@ -107,20 +107,20 @@ async function resolveLegacyUpload(
 /**
  * Lazily reconcile pre-links messages for one session. This keeps upgrades
  * compatible without a global startup scan on large installations. Upserts are
- * idempotent, and the caller memoizes successful session scans for this daemon
- * process so ordinary owner hydration pays the cost only once.
+ * idempotent, and the caller keeps a bounded short-lived cache so ordinary
+ * owner hydration avoids repeated scans without retaining arbitrary owners.
  */
 export async function backfillLegacySessionLinks(args: {
   db: TenantScopeAwareDatabase;
   sessionId: SessionID;
   uploadRoot?: string;
   visibleToUserId?: UUID;
-}): Promise<void> {
+}): Promise<boolean> {
   const messages = await new MessagesRepository(args.db).findAll({
     sessionId: args.sessionId,
     visibleToUserId: args.visibleToUserId,
   });
-  if (messages.length === 0) return;
+  if (messages.length === 0) return false;
 
   const linksRepository = new LinksRepository(args.db);
   const existingTargetKeys = new Set(
@@ -169,4 +169,5 @@ export async function backfillLegacySessionLinks(args: {
   }
 
   await linksRepository.upsertManyWithStatus(drafts);
+  return true;
 }

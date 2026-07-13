@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises';
+import { validateHeaderValue } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { Forbidden } from '@agor/core/feathers';
 import type { Link } from '@agor/core/types';
 import type { Request, Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
+import { getUploadDirectory } from '../utils/upload.js';
 import {
   chooseLinkContentDisposition,
   contentDispositionHeader,
@@ -12,6 +14,11 @@ import {
   registerLinkContentRoute,
   resolveUploadedLinkContentFile,
 } from './link-content';
+
+vi.mock('../utils/upload.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/upload.js')>();
+  return { ...actual, getUploadDirectory: vi.fn(actual.getUploadDirectory) };
+});
 
 async function withTempUploads<T>(fn: (root: string) => Promise<T>): Promise<T> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-link-content-'));
@@ -130,6 +137,61 @@ describe('link content route helpers', () => {
     expect(contentDispositionHeader('attachment', 'report "q1".pdf')).toContain(
       'attachment; filename="report _q1_.pdf"'
     );
+  });
+
+  it('emits Node-safe headers while preserving Unicode filenames in filename*', () => {
+    const header = contentDispositionHeader('attachment', '报告 📎.pdf');
+
+    expect(() => validateHeaderValue('Content-Disposition', header)).not.toThrow();
+    expect(header).toContain('filename="__ _.pdf"');
+    expect(header).toContain("filename*=UTF-8''%E6%8A%A5%E5%91%8A%20%F0%9F%93%8E.pdf");
+  });
+
+  it('serves Unicode filenames without producing an invalid response header', async () => {
+    await withTempUploads(async (root) => {
+      vi.mocked(getUploadDirectory).mockReturnValue(root);
+      await fs.writeFile(path.join(root, 'stored.pdf'), 'pdf');
+
+      let handler: (req: Request, res: Response) => Promise<void> = async () => {};
+      const authCreate = vi.fn(async () => ({
+        user: { user_id: 'user-1' },
+        authentication: { strategy: 'jwt' },
+      }));
+      const linksGet = vi.fn(async () =>
+        link({ file_path: 'stored.pdf', title: '报告 📎.pdf', mime_type: 'application/pdf' })
+      );
+      const app = {
+        get: vi.fn((_path: string, routeHandler: typeof handler) => {
+          handler = routeHandler;
+        }),
+        service: vi.fn((pathName: string) => {
+          if (pathName === 'authentication') return { create: authCreate };
+          if (pathName === 'links') return { get: linksGet };
+          throw new Error(`Unexpected service: ${pathName}`);
+        }),
+      };
+      registerLinkContentRoute(app as never);
+      const setHeader = vi.fn((name: string, value: string) => validateHeaderValue(name, value));
+      const sendFile = vi.fn();
+      const json = vi.fn();
+      const status = vi.fn(() => ({ json }));
+
+      await handler(
+        {
+          headers: { authorization: 'Bearer token' },
+          params: { linkId: 'link-1' },
+          query: {},
+        } as unknown as Request,
+        { setHeader, sendFile, status } as unknown as Response
+      );
+
+      expect(sendFile).toHaveBeenCalledWith(await fs.realpath(path.join(root, 'stored.pdf')));
+      expect(setHeader).toHaveBeenCalledWith(
+        'Content-Disposition',
+        expect.stringContaining("filename*=UTF-8''%E6%8A%A5%E5%91%8A%20%F0%9F%93%8E.pdf")
+      );
+      expect(status).not.toHaveBeenCalled();
+    });
   });
 
   it('requires bearer auth before resolving link content', async () => {

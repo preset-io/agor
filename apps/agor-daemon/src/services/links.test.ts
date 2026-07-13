@@ -59,6 +59,19 @@ describe('LinksService', () => {
     expect(LINKS_SERVICE_METHODS).not.toContain('update');
   });
 
+  dbTest('does not retain empty legacy-backfill lookups', async ({ db }) => {
+    const service = new LinksService(db);
+
+    await service.find({ query: { session_id: generateId() as SessionID } });
+
+    const cache = (
+      service as unknown as {
+        legacyBackfills: Map<string, unknown>;
+      }
+    ).legacyBackfills;
+    expect(cache.size).toBe(0);
+  });
+
   dbTest('allows bulk create but rejects multi patch/remove', async ({ db }) => {
     const branch = await seedBranch(db, 'view');
     const session = await seedSession(db, branch.branch_id);

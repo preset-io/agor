@@ -1,5 +1,7 @@
 import type { UploadDestination, UploadedFile } from '../FileUpload';
 
+export { buildPromptWithAttachments } from '@agor-live/client';
+
 export const COMPOSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -155,17 +157,4 @@ export function isBlockingComposerAttachment(attachment: ComposerAttachment): bo
 
 export function getComposerUploadAccept(): undefined {
   return undefined;
-}
-
-export function buildPromptWithAttachments(text: string, attachmentPaths: string[]): string {
-  const trimmedText = text.trim();
-  if (attachmentPaths.length === 0) return trimmedText;
-
-  const attachmentBlock = ['Attached files:', ...attachmentPaths.map((path) => `- ${path}`)].join(
-    '\n'
-  );
-  if (trimmedText.startsWith('/')) {
-    return `${trimmedText}\n\n${attachmentBlock}`;
-  }
-  return trimmedText ? `${attachmentBlock}\n\n${trimmedText}` : attachmentBlock;
 }

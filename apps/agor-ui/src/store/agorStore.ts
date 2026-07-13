@@ -259,6 +259,9 @@ function linkUpdatedAtMillis(link: Link): number | null {
 }
 
 function isStaleLinkMutationResult(existing: Link, incoming: Link): boolean {
+  if (existing.revision !== undefined && incoming.revision !== undefined) {
+    return incoming.revision <= existing.revision;
+  }
   const existingUpdatedAt = linkUpdatedAtMillis(existing);
   const incomingUpdatedAt = linkUpdatedAtMillis(incoming);
   if (existingUpdatedAt === null || incomingUpdatedAt === null) return false;

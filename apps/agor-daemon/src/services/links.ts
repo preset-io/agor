@@ -31,6 +31,9 @@ import { DrizzleService, type Query } from '../adapters/drizzle';
 import { backfillLegacySessionLinks } from './legacy-links-backfill.js';
 
 export const LINKS_SERVICE_METHODS = ['find', 'get', 'create', 'patch', 'remove'] as const;
+const LEGACY_BACKFILL_CACHE_MAX_ENTRIES = 500;
+const LEGACY_BACKFILL_CACHE_TTL_MS = 15 * 60 * 1000;
+type LegacyBackfillCacheEntry = { promise: Promise<boolean>; expiresAt: number };
 type LinkParams = QueryParams<{
   board_id?: UUID;
   owner_scope?: LinkOwnerScope;
@@ -49,7 +52,7 @@ type LinkParams = QueryParams<{
 
 export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams> {
   private linksRepo: LinksRepository;
-  private legacyBackfills = new Map<string, Promise<void>>();
+  private legacyBackfills = new Map<string, LegacyBackfillCacheEntry>();
 
   constructor(private readonly db: TenantScopeAwareDatabase) {
     const linksRepo = new LinksRepository(db);
@@ -69,19 +72,41 @@ export class LinksService extends DrizzleService<Link, Partial<Link>, LinkParams
     if (typeof query.session_id === 'string') {
       const sessionId = query.session_id as SessionID;
       const backfillKey = `${sessionId}:${params?._agorSqlLinkAccessUserId ?? '*'}`;
-      let backfill = this.legacyBackfills.get(backfillKey);
-      if (!backfill) {
-        backfill = backfillLegacySessionLinks({
+      const now = Date.now();
+      let entry = this.legacyBackfills.get(backfillKey);
+      if (entry && entry.expiresAt <= now) {
+        this.legacyBackfills.delete(backfillKey);
+        entry = undefined;
+      }
+      if (!entry) {
+        const promise = backfillLegacySessionLinks({
           db: this.db,
           sessionId,
           visibleToUserId: params?._agorSqlLinkAccessUserId,
-        }).catch((error) => {
-          this.legacyBackfills.delete(backfillKey);
-          throw error;
         });
-        this.legacyBackfills.set(backfillKey, backfill);
+        while (this.legacyBackfills.size >= LEGACY_BACKFILL_CACHE_MAX_ENTRIES) {
+          const oldestKey = this.legacyBackfills.keys().next().value;
+          if (oldestKey === undefined) break;
+          this.legacyBackfills.delete(oldestKey);
+        }
+        entry = { promise, expiresAt: now + LEGACY_BACKFILL_CACHE_TTL_MS };
+        this.legacyBackfills.set(backfillKey, entry);
+      } else {
+        // Refresh insertion order so eviction behaves as an LRU.
+        this.legacyBackfills.delete(backfillKey);
+        this.legacyBackfills.set(backfillKey, entry);
       }
-      await backfill;
+      try {
+        const scanned = await entry.promise;
+        if (!scanned && this.legacyBackfills.get(backfillKey) === entry) {
+          this.legacyBackfills.delete(backfillKey);
+        }
+      } catch (error) {
+        if (this.legacyBackfills.get(backfillKey) === entry) {
+          this.legacyBackfills.delete(backfillKey);
+        }
+        throw error;
+      }
     }
     const filter: Parameters<LinksRepository['findAll']>[0] = {};
     if (typeof query.board_id === 'string') filter.boardId = query.board_id as UUID;

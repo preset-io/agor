@@ -19,6 +19,7 @@ CREATE TABLE "links" (
 	"created_by" varchar(36),
 	"created_at" timestamp with time zone NOT NULL,
 	"updated_at" timestamp with time zone NOT NULL,
+	"revision" integer DEFAULT 1 NOT NULL,
 	CONSTRAINT "links_owner_xor_check" CHECK ((("branch_id" is not null) and ("session_id" is null)) or (("branch_id" is null) and ("session_id" is not null))),
 	CONSTRAINT "links_target_xor_check" CHECK ((case when "url" is not null and "url" <> '' then 1 else 0 end + case when "ref_uri" is not null and "ref_uri" <> '' then 1 else 0 end + case when "file_path" is not null and "file_path" <> '' then 1 else 0 end) = 1),
 	CONSTRAINT "links_target_object_pair_check" CHECK ((("target_object_type" is null) and ("target_object_id" is null)) or (("target_object_type" is not null) and ("target_object_id" is not null)))

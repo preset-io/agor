@@ -41,14 +41,14 @@ describe('linkPromotion', () => {
     );
     const refLink = link({
       url: null,
-      ref_uri: 'agor://kb/Team/Doc',
-      target_key: 'ref:agor://kb/team/doc',
+      ref_uri: 'agor://kb/team/Doc',
+      target_key: 'ref:agor://kb/team/Doc',
     });
     expect(
       findTeammateLinkForTarget(
         item({
-          targetKey: 'ref:AGOR://KB/TEAM/DOC',
-          refUri: 'AGOR://KB/TEAM/DOC',
+          targetKey: 'ref:AGOR://KB/team/Doc',
+          refUri: 'AGOR://KB/team/Doc',
           url: undefined,
         }),
         [refLink]
@@ -184,7 +184,7 @@ describe('linkPromotion', () => {
     ).toMatchObject({ canPromote: true, isPromoted: true, teammateLink });
   });
 
-  it('allows uploaded files and keeps internal promotion unavailable', () => {
+  it('keeps uploaded file and internal promotion unavailable', () => {
     expect(
       getTeammatePromotionState({
         item: item({
@@ -198,7 +198,7 @@ describe('linkPromotion', () => {
         sourceBranchId: 'branch-1',
         teammateLinks: [],
       })
-    ).toMatchObject({ canPromote: true, isPromoted: false, reason: null });
+    ).toMatchObject({ canPromote: false, reason: 'file-target-lifetime' });
 
     expect(
       getTeammatePromotionState({

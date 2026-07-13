@@ -80,6 +80,8 @@ export interface Link {
   created_by?: UserID | null;
   created_at: string;
   updated_at: string;
+  /** Monotonic per-row version used to order HTTP and realtime results. */
+  revision?: number;
 }
 
 export type LinkOwner =
@@ -285,7 +287,12 @@ export function normalizeUrlTargetKey(url: string): string {
 }
 
 export function normalizeRefTargetKey(refUri: string): string {
-  return `ref:${refUri.trim().toLowerCase()}`;
+  const trimmed = refUri.trim();
+  const hierarchicalUri = trimmed.match(/^([a-z][a-z\d+.-]*):\/\/([^/]*)(.*)$/i);
+  if (!hierarchicalUri) return `ref:${trimmed}`;
+
+  const [, scheme, authority, pathAndSuffix] = hierarchicalUri;
+  return `ref:${scheme.toLowerCase()}://${authority.toLowerCase()}${pathAndSuffix}`;
 }
 
 export function normalizeFileTargetKey(filePath: string): string {

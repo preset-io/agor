@@ -96,6 +96,7 @@ describe('LinksRepository', () => {
       created_by: null,
       created_at: new Date('2026-01-01T00:00:00.000Z'),
       updated_at: new Date('2026-01-01T00:00:00.000Z'),
+      revision: 1,
     });
 
     expect(Object.keys(link)).not.toContain('tenant_id');
@@ -124,6 +125,7 @@ describe('LinksRepository', () => {
     expect(branchLink.session_id).toBeNull();
     expect(sessionLink.session_id).toBe(session.session_id);
     expect(sessionLink.branch_id).toBeNull();
+    expect(sessionLink.revision).toBe(1);
 
     await expect(
       repo.create({
@@ -194,6 +196,47 @@ describe('LinksRepository', () => {
     expect(second.target_key).toBe(normalizeUrlTargetKey('https://example.com/repeat'));
     expect(second.title).toBe('deduped');
     expect(await repo.findAll({ sessionId: session.session_id })).toHaveLength(1);
+  });
+
+  dbTest('keeps case-sensitive Knowledge paths as distinct targets', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+
+    const upper = await repo.create({
+      session_id: session.session_id,
+      kind: 'kb_ref',
+      source: 'manual',
+      ref_uri: 'agor://kb/team/Runbook.md',
+    });
+    const lower = await repo.create({
+      session_id: session.session_id,
+      kind: 'kb_ref',
+      source: 'manual',
+      ref_uri: 'agor://kb/team/runbook.md',
+    });
+
+    expect(lower.link_id).not.toBe(upper.link_id);
+    expect(await repo.findAll({ sessionId: session.session_id })).toHaveLength(2);
+  });
+
+  dbTest('increments revision on every update', async ({ db }) => {
+    const repo = new LinksRepository(db);
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const created = await repo.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'manual',
+      url: 'https://example.com/revision',
+    });
+
+    const first = await repo.update(created.link_id, { title: 'first' });
+    const second = await repo.update(created.link_id, { title: 'second' });
+
+    expect(created.revision).toBe(1);
+    expect(first.revision).toBe(2);
+    expect(second.revision).toBe(3);
   });
 
   dbTest(
