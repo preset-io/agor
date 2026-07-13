@@ -6,6 +6,11 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", ".next/**", "build/**"]
     },
+    "@agor/daemon#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "build/**"],
+      "env": ["AGOR_BUILD_SHA", "AGOR_BUILT_AT"]
+    },
     "dev": {
       "cache": false,
       "persistent": true
