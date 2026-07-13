@@ -744,6 +744,11 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
  * @param value - Value to set
  */
 export async function setConfigValue(key: string, value: string | boolean | number): Promise<void> {
+  if (key === 'onboarding.frameworkRepoUrl') {
+    throw new Error(
+      'Configuration key onboarding.frameworkRepoUrl is deprecated; set teammates.framework_repo_url instead'
+    );
+  }
   if (RETIRED_CONFIG_PATHS.has(key)) {
     throw new Error(`Configuration key ${key} has been retired and no longer has any effect`);
   }

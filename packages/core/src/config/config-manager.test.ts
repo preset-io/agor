@@ -867,6 +867,12 @@ describe('setConfigValue', () => {
     );
   });
 
+  it('directs new framework repository writes to the canonical operator key', async () => {
+    await expect(
+      setConfigValue('onboarding.frameworkRepoUrl', 'https://example.test/framework.git')
+    ).rejects.toThrow(/set teammates\.framework_repo_url instead/);
+  });
+
   it('should update existing value', async () => {
     const config = createConfigData();
     await saveConfig(config);
