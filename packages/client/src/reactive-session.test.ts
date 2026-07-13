@@ -3,6 +3,7 @@ import { TaskStatus } from '@agor/core/client';
 import { describe, expect, it, vi } from 'vitest';
 import {
   __streamSubscriptionCountForTest,
+  attachReactiveSessionApi,
   ensureSessionStreamsCapabilityAnnounce,
   ReactiveSessionHandle,
   type TaskHydrationMode,
@@ -883,5 +884,20 @@ describe('session-streams capability announce', () => {
 
     expect(() => fireIo('connect')).not.toThrow();
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+  });
+
+  // Guards the wire-up itself: attaching the reactive API must arm the announce
+  // so an idle home/board tab — which never opens a transcript — still gets
+  // flagged. If the ensure-call is dropped from attachReactiveSessionApi, no
+  // connect announce fires and this goes red even though the direct-call tests
+  // above stay green.
+  it('arms the capability announce through attachReactiveSessionApi', async () => {
+    const { client, create, fireIo } = makeAnnounceClient(false);
+    attachReactiveSessionApi(client);
+
+    expect(create).not.toHaveBeenCalled();
+    fireIo('connect');
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create).toHaveBeenCalledWith({ capability: true });
   });
 });

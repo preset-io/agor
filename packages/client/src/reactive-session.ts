@@ -1161,6 +1161,9 @@ export function ensureSessionStreamsCapabilityAnnounce(client: AgorClient): void
       .catch(() => {});
   };
 
+  // Intentionally never removed: there is one announce per client and its
+  // lifetime equals the client's (a long-lived tab), so re-announcing on every
+  // reconnect for the client's whole life is exactly the desired behavior.
   io.on('connect', announce);
   // The socket may already be connected by the time the reactive API is
   // attached (autoConnect clients), in which case 'connect' won't fire again.

@@ -243,7 +243,7 @@ function isServiceConnection(connection: unknown): boolean {
  * clients that never speak the protocol. Reset implicitly per connection (a
  * reconnect is a fresh connection object; the client re-announces on reauth).
  */
-export const SESSION_STREAMS_AWARE_FLAG = 'sessionStreamsAware';
+export const SESSION_STREAMS_AWARE_FLAG = '__agorSessionStreamsAware';
 
 /**
  * Record that a realtime connection speaks the session-streams protocol. Kept
