@@ -5,11 +5,19 @@
  */
 
 import type { SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  isSQLiteDatabase,
+  lockRowForUpdate,
+  select,
+  txAsDb,
+  update,
+} from '../database-wrapper';
 import { type TaskInsert, type TaskRow, tasks } from '../schema';
 import {
   AmbiguousIdError,
@@ -22,11 +30,48 @@ import {
 import { visibleSessionReferenceAccessExists } from './branch-access';
 import { deepMerge } from './merge-utils';
 
+function isSQLiteBusyError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  if (error.message.includes('SQLITE_BUSY') || error.message.includes('database is locked')) {
+    return true;
+  }
+  return 'cause' in error && isSQLiteBusyError(error.cause);
+}
+
 /**
  * Task repository implementation
  */
 export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   constructor(private db: Database) {}
+
+  /** Acquire the task write lock consistently across database dialects. */
+  private async lockTaskForMutation(txDb: Database, taskId: string): Promise<void> {
+    // PostgreSQL provides a real row lock. SQLite transactions begin deferred,
+    // so acquire the write lock with a no-op row update before reading.
+    if (isSQLiteDatabase(this.db)) {
+      await update(txDb, tasks)
+        .set({ status: sql`${tasks.status}` })
+        .where(eq(tasks.task_id, taskId))
+        .run();
+      return;
+    }
+
+    await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, taskId));
+  }
+
+  /** Retry an entire SQLite mutation so a contending writer re-reads fresh state. */
+  private async runTaskMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
+    try {
+      return await mutation();
+    } catch (error) {
+      // libSQL reports write contention immediately even with busy_timeout.
+      if (isSQLiteDatabase(this.db) && attempt < 4 && isSQLiteBusyError(error)) {
+        await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+        return this.runTaskMutation(mutation, attempt + 1);
+      }
+      throw error;
+    }
+  }
 
   /**
    * Convert database row to Task type
@@ -38,6 +83,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       status: row.status,
       queue_position: row.queue_position ?? undefined,
       created_at: new Date(row.created_at).toISOString(),
+      started_at: row.started_at ? new Date(row.started_at).toISOString() : undefined,
+      executor_connected_at: row.executor_connected_at
+        ? new Date(row.executor_connected_at).toISOString()
+        : undefined,
       completed_at: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
       last_executor_heartbeat_at: row.last_executor_heartbeat_at
         ? new Date(row.last_executor_heartbeat_at).toISOString()
@@ -72,6 +121,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       task_id: taskId,
       session_id: task.session_id,
       created_at: new Date(now), // Always use server timestamp, ignore client-provided value
+      started_at: task.started_at ? new Date(task.started_at) : undefined,
+      executor_connected_at: task.executor_connected_at
+        ? new Date(task.executor_connected_at)
+        : undefined,
       completed_at: task.completed_at ? new Date(task.completed_at) : undefined,
       last_executor_heartbeat_at: task.last_executor_heartbeat_at
         ? new Date(task.last_executor_heartbeat_at)
@@ -274,7 +327,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
-   * Find orphaned tasks (running, stopping, awaiting permission, or awaiting input)
+   * Find orphaned tasks (dispatching, running, stopping, awaiting permission, or awaiting input)
    * These are tasks that were interrupted when daemon stopped.
    *
    * NOTE: QUEUED tasks are intentionally NOT considered orphans — they were
@@ -287,7 +340,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       const rows = await select(this.db)
         .from(tasks)
         .where(
-          sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission', 'awaiting_input')`
+          sql`${tasks.status} IN ('dispatching', 'running', 'stopping', 'awaiting_permission', 'awaiting_input')`
         )
         .all();
 
@@ -342,6 +395,51 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
+   * Atomically claim a daemon-dispatched task for its authenticated executor.
+   * Repeated claims after the first successful transition are idempotent.
+   */
+  async connectExecutor(id: string): Promise<{ task: Task; transitioned: boolean } | null> {
+    try {
+      const fullId = await this.resolveId(id);
+      return await this.runTaskMutation(() =>
+        this.db.transaction(async (tx) => {
+          const txDb = txAsDb(tx);
+          await this.lockTaskForMutation(txDb, fullId);
+
+          const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+          if (!row) throw new EntityNotFoundError('Task', id);
+
+          if (row.status === TaskStatus.RUNNING && row.executor_connected_at) {
+            return { task: this.rowToTask(row), transitioned: false };
+          }
+          if (row.status !== TaskStatus.DISPATCHING) return null;
+
+          const connectedAt = new Date();
+          await update(txDb, tasks)
+            .set({ status: TaskStatus.RUNNING, executor_connected_at: connectedAt })
+            .where(eq(tasks.task_id, fullId))
+            .run();
+
+          return {
+            task: this.rowToTask({
+              ...row,
+              status: TaskStatus.RUNNING,
+              executor_connected_at: connectedAt,
+            }),
+            transitioned: true,
+          };
+        })
+      );
+    } catch (error) {
+      if (error instanceof RepositoryError || error instanceof EntityNotFoundError) throw error;
+      throw new RepositoryError(
+        `Failed to connect executor: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Update task by ID (atomic with database-level transaction)
    *
    * Uses a transaction to ensure read-merge-write is atomic, preventing race conditions
@@ -356,44 +454,72 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       );
 
       // Use transaction to make read-merge-write atomic
-      const result = await this.db.transaction(async (tx) => {
-        // Acquire row-level lock on PostgreSQL to prevent lost updates
+      const mutate = () =>
+        this.db.transaction(async (tx) => {
+          const txDb = txAsDb(tx);
 
-        await lockRowForUpdate(txAsDb(tx), this.db, tasks, eq(tasks.task_id, fullId));
+          await this.lockTaskForMutation(txDb, fullId);
 
-        // STEP 1: Read current task (within transaction)
-        const currentRow = await select(txAsDb(tx))
-          .from(tasks)
-          .where(eq(tasks.task_id, fullId))
-          .one();
+          // STEP 1: Read current task (within transaction)
+          const currentRow = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
 
-        if (!currentRow) {
-          throw new EntityNotFoundError('Task', id);
-        }
+          if (!currentRow) {
+            throw new EntityNotFoundError('Task', id);
+          }
 
-        const current = this.rowToTask(currentRow);
+          const current = this.rowToTask(currentRow);
 
-        // STEP 2: Deep merge updates into current task (in memory)
-        // Preserves nested objects like message_range when doing partial updates
-        const merged = deepMerge(current, updates);
-        const insertData = this.taskToInsert(merged);
+          // Terminal task status is immutable at the row-locked mutation boundary.
+          // Service-level checks are useful for friendly idempotence, but cannot
+          // make a terminal-vs-resume race safe because their read happens before
+          // this transaction acquires the lock. Metadata-only updates remain
+          // allowed for existing callers.
+          if (
+            isTerminalTaskStatus(current.status) &&
+            updates.status !== undefined &&
+            updates.status !== current.status
+          ) {
+            throw new RepositoryError(
+              `terminal task status cannot be changed from ${current.status}`
+            );
+          }
 
-        // STEP 3: Write merged task (within same transaction)
-        await update(txAsDb(tx), tasks)
-          .set({
-            status: insertData.status,
-            queue_position: insertData.queue_position,
-            completed_at: insertData.completed_at,
-            last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
-            session_md5: insertData.session_md5,
-            data: insertData.data,
-          })
-          .where(eq(tasks.task_id, fullId))
-          .run();
+          // The authenticated executor claim is the only path allowed to cross
+          // this boundary. connectExecutor performs its own guarded SQL update
+          // above; generic service update/patch calls flow through this method.
+          if (current.status === TaskStatus.DISPATCHING && updates.status === TaskStatus.RUNNING) {
+            throw new RepositoryError('dispatching tasks must be claimed through connectExecutor');
+          }
 
-        // Return merged task (no need to re-fetch, we have it in memory)
-        return merged;
-      });
+          // STEP 2: Deep merge updates into current task (in memory)
+          // Preserves nested objects like message_range when doing partial updates.
+          // The latest pulse is a complete snapshot; replacing it avoids stale
+          // id/label fields surviving when a newer pulse omits them.
+          const merged = deepMerge(current, updates);
+          if (updates.latest_executor_pulse !== undefined) {
+            merged.latest_executor_pulse = updates.latest_executor_pulse;
+          }
+          const insertData = this.taskToInsert(merged);
+
+          // STEP 3: Write merged task (within same transaction)
+          await update(txDb, tasks)
+            .set({
+              status: insertData.status,
+              queue_position: insertData.queue_position,
+              started_at: insertData.started_at,
+              executor_connected_at: insertData.executor_connected_at,
+              completed_at: insertData.completed_at,
+              last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
+              session_md5: insertData.session_md5,
+              data: insertData.data,
+            })
+            .where(eq(tasks.task_id, fullId))
+            .run();
+
+          // Return merged task (no need to re-fetch, we have it in memory)
+          return merged;
+        });
+      const result = await this.runTaskMutation(mutate);
       return result;
     } catch (error) {
       if (error instanceof RepositoryError) throw error;

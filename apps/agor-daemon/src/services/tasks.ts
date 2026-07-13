@@ -17,7 +17,7 @@ import {
   TaskRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Conflict } from '@agor/core/feathers';
 import type {
   ContentBlock,
   Paginated,
@@ -1164,10 +1164,41 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
-   * Custom method: Get orphaned tasks (running, stopping, awaiting permission)
+   * Custom method: Get orphaned tasks (dispatching, running, stopping, awaiting permission)
    */
   async getOrphaned(_params?: TaskParams): Promise<Task[]> {
     return this.taskRepo.findOrphaned();
+  }
+
+  /** Internal helper for hooks that must validate persisted executor connection state. */
+  async findByIdForScopeCheck(taskId: TaskID): Promise<Task | null> {
+    return this.taskRepo.findById(taskId);
+  }
+
+  /** Claim a DISPATCHING task after executor transport authentication. */
+  async connectExecutor(data: { task_id: string }, _params?: TaskParams): Promise<Task> {
+    const connection = await this.taskRepo.connectExecutor(data.task_id);
+    if (!connection) {
+      const current = await this.taskRepo.findById(data.task_id);
+      throw new Conflict(
+        `Task ${shortId(data.task_id)} cannot connect an executor from status ${current?.status ?? 'unknown'}`
+      );
+    }
+    if (connection.transitioned) {
+      const startedAt = Date.parse(connection.task.started_at ?? '');
+      const connectedAt = Date.parse(connection.task.executor_connected_at ?? '');
+      if (Number.isFinite(startedAt) && Number.isFinite(connectedAt)) {
+        console.log(
+          `🔌 [TasksService] Executor connected for task ${shortId(connection.task.task_id)} ` +
+            `in ${Math.max(0, connectedAt - startedAt)}ms`
+        );
+      }
+      this.trackTaskStarted(connection.task);
+      // The guarded repository transition bypasses the standard patch method,
+      // so publish the canonical patched event explicitly for reactive clients.
+      this.emit?.('patched', connection.task);
+    }
+    return connection.task;
   }
 
   /**

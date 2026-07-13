@@ -619,6 +619,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     for (let index = tasks.length - 1; index >= 0; index -= 1) {
       const candidate = tasks[index];
       if (
+        candidate.status === TaskStatus.DISPATCHING ||
         candidate.status === TaskStatus.RUNNING ||
         candidate.status === TaskStatus.STOPPING ||
         candidate.status === TaskStatus.AWAITING_PERMISSION ||

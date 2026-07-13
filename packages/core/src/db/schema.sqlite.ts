@@ -309,12 +309,14 @@ export const tasks = sqliteTable(
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
     created_at: t.timestamp('created_at').notNull(),
     started_at: t.timestamp('started_at'),
+    executor_connected_at: t.timestamp('executor_connected_at'),
     completed_at: t.timestamp('completed_at'),
     last_executor_heartbeat_at: t.timestamp('last_executor_heartbeat_at'),
     status: text('status', {
       enum: [
         'queued',
         'created',
+        'dispatching',
         'running',
         'stopping',
         'awaiting_permission',
