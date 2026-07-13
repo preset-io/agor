@@ -1138,10 +1138,6 @@ describe('configureRealtimePublish streaming scope', () => {
   });
 
   it('skips the owner fallback for an owner connection that announced session-streams awareness (the idle-firehose fix)', async () => {
-    // The power-user idle case: the owner has an idle home/board tab that
-    // announced capability but never subscribed to this session. The owner
-    // fallback must NOT bridge it — that idle firehose is exactly what this
-    // change removes.
     const ownerIdle = { user: user('owner-user') };
     markConnectionSessionStreamsAware(ownerIdle);
     const other = { user: user('other-user') };
@@ -1170,10 +1166,7 @@ describe('configureRealtimePublish streaming scope', () => {
   });
 
   it('delivers to an announced+subscribed owner connection via the room exactly once (no double, no drop)', async () => {
-    // An aware owner connection that IS subscribed receives through the room —
-    // and, because the fallback skips aware connections, it appears in exactly
-    // one delivery channel, never both. Union alone can't catch a double, so
-    // count raw occurrences across every returned channel.
+    // Union can't catch a double-delivery, so count raw occurrences across channels.
     const ownerSubscribed = { user: user('owner-user') };
     markConnectionSessionStreamsAware(ownerSubscribed);
     const app = makeApp(
@@ -1204,8 +1197,6 @@ describe('configureRealtimePublish streaming scope', () => {
   });
 
   it('still bridges a stale owner connection that never announced (safety net)', async () => {
-    // A stale/legacy client that never speaks the capability protocol keeps its
-    // owner-fallback bridge — the whole point of the fallback.
     const staleOwner = { user: user('owner-user') };
     const other = { user: user('other-user') };
     const app = makeApp(
@@ -1233,8 +1224,6 @@ describe('configureRealtimePublish streaming scope', () => {
   });
 
   it('still delivers to service accounts when the owner announced awareness', async () => {
-    // Gateway / Slack service delivery is independent of the owner fallback, so
-    // gating an aware owner must not disturb it.
     const ownerIdle = { user: user('owner-user') };
     markConnectionSessionStreamsAware(ownerIdle);
     const service = { user: { _isServiceAccount: true, role: 'service' } };
@@ -1263,8 +1252,6 @@ describe('configureRealtimePublish streaming scope', () => {
   });
 
   it('skips the owner fallback for an aware owner even under branch RBAC (allAuthenticated)', async () => {
-    // The gate covers the RBAC-on allAuthenticated branch too: an aware, access-
-    // holding owner still gets no fallback bridge when idle.
     const ownerIdle = { user: user('owner-user') };
     markConnectionSessionStreamsAware(ownerIdle);
     const other = { user: user('other-user') };
@@ -1293,8 +1280,7 @@ describe('configureRealtimePublish streaming scope', () => {
   });
 
   it('skips the owner fallback for an aware owner even under branch RBAC (explicit-users)', async () => {
-    // Same gate on the explicit-users branch: the owner holds view (so the
-    // fallback WOULD fire), but their aware idle connection is still skipped.
+    // Owner holds view, so the fallback would fire — but the aware connection is still skipped.
     const ownerIdle = { user: user('owner-user') };
     markConnectionSessionStreamsAware(ownerIdle);
     const other = { user: user('other-user') };
@@ -1323,9 +1309,7 @@ describe('configureRealtimePublish streaming scope', () => {
   });
 
   it('does not deliver to a non-owner, non-subscribed connection regardless of awareness (unchanged)', async () => {
-    // Baseline invariant: awareness only ever removes an owner from the
-    // fallback; it never grants a non-owner any streaming it did not already
-    // have (here: none).
+    // Awareness only removes an owner from the fallback; it never grants a non-owner streaming.
     const ownerIdle = { user: user('owner-user') };
     markConnectionSessionStreamsAware(ownerIdle);
     const strangerAware = { user: user('stranger') };

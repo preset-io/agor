@@ -886,11 +886,7 @@ describe('session-streams capability announce', () => {
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
   });
 
-  // Guards the wire-up itself: attaching the reactive API must arm the announce
-  // so an idle home/board tab — which never opens a transcript — still gets
-  // flagged. If the ensure-call is dropped from attachReactiveSessionApi, no
-  // connect announce fires and this goes red even though the direct-call tests
-  // above stay green.
+  // Fail-on-revert: drop the announce wire-up from attachReactiveSessionApi and this goes red.
   it('arms the capability announce through attachReactiveSessionApi', async () => {
     const { client, create, fireIo } = makeAnnounceClient(false);
     attachReactiveSessionApi(client);

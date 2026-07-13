@@ -1118,9 +1118,7 @@ export function attachReactiveSessionApi(client: AgorClient): ReactiveAgorClient
     return new ReactiveSessionHandle(client, sessionId, options);
   };
 
-  // Announce session-streams capability once per connection, independent of
-  // opening any transcript, so idle home/board tabs are excluded from the
-  // publish-time owner fallback too (the power-user idle-firehose fix).
+  // Announce capability once per connection so idle tabs (no transcript) are also excluded from the owner fallback.
   ensureSessionStreamsCapabilityAnnounce(client);
 
   return reactiveClient;
@@ -1129,18 +1127,9 @@ export function attachReactiveSessionApi(client: AgorClient): ReactiveAgorClient
 const CAPABILITY_ANNOUNCED_CLIENTS = new WeakSet<AgorClient>();
 
 /**
- * Tell the daemon this connection speaks the session-streams room protocol so
- * the publish-time owner fallback skips it. Distinct from
- * {@link retainSessionStream}: it joins NO room and requires NO open transcript,
- * so an idle home/board tab — which never constructs a ReactiveSessionHandle and
- * so never subscribes to any session — still gets flagged. Without it, such a
- * tab owned by a power user keeps receiving the whole owner-fallback streaming
- * firehose for every session they own.
- *
- * Fires on the initial connect and on every reconnect (a reconnect is a fresh
- * connection with no aware flag on the daemon side). Idempotent per client: the
- * `connect` listener is wired at most once, and each fire is a single cheap
- * `create({ capability: true })` that the daemon treats as a no-room marker.
+ * Mark this connection session-streams aware so the owner fallback skips it —
+ * even idle tabs that never open a transcript (unlike {@link retainSessionStream},
+ * this joins no room). Fires on connect and every reconnect; idempotent per client.
  */
 export function ensureSessionStreamsCapabilityAnnounce(client: AgorClient): void {
   const io = client.io;
@@ -1148,10 +1137,7 @@ export function ensureSessionStreamsCapabilityAnnounce(client: AgorClient): void
   CAPABILITY_ANNOUNCED_CLIENTS.add(client);
 
   const announce = () => {
-    // Best-effort: a stale daemon that doesn't understand the capability marker
-    // (or a transient auth refresh mid-connect) just leaves this connection on
-    // the owner fallback — correct, if slightly chattier, behavior. The
-    // around-hook retries the underlying call on a recoverable auth error.
+    // Best-effort: a rejection just leaves this connection on the owner fallback.
     void (
       client.service('session-streams') as {
         create: (data: unknown) => Promise<unknown>;
@@ -1161,12 +1147,9 @@ export function ensureSessionStreamsCapabilityAnnounce(client: AgorClient): void
       .catch(() => {});
   };
 
-  // Intentionally never removed: there is one announce per client and its
-  // lifetime equals the client's (a long-lived tab), so re-announcing on every
-  // reconnect for the client's whole life is exactly the desired behavior.
+  // Never removed: one per client, lifetime equals the client's — re-announcing on every reconnect is intended.
   io.on('connect', announce);
-  // The socket may already be connected by the time the reactive API is
-  // attached (autoConnect clients), in which case 'connect' won't fire again.
+  // Socket may already be connected (autoConnect), so 'connect' won't fire again.
   if (io.connected) announce();
 }
 

@@ -233,23 +233,10 @@ function isServiceConnection(connection: unknown): boolean {
   return user?._isServiceAccount === true || (user?.role as string | undefined) === 'service';
 }
 
-/**
- * Per-connection flag set by `session-streams.create` once a client has spoken
- * the room-subscribe protocol on this connection (a real subscribe OR a
- * capability-announce marker). It marks a MODERN client: one that receives a
- * session's streaming via the per-session room when it subscribes, and neither
- * subscribes nor needs streaming when idle. The publish-time owner fallback
- * therefore skips these connections — it exists only to bridge genuinely stale
- * clients that never speak the protocol. Reset implicitly per connection (a
- * reconnect is a fresh connection object; the client re-announces on reauth).
- */
+/** Per-connection flag: this client spoke the session-streams protocol (subscribe or announce), so the owner fallback skips it. Reset per connection. */
 export const SESSION_STREAMS_AWARE_FLAG = '__agorSessionStreamsAware';
 
-/**
- * Record that a realtime connection speaks the session-streams protocol. Kept
- * in this audited file alongside the raw `app.channel` surface so every mutation
- * of a connection's realtime-routing state lives in one place.
- */
+/** Set the aware flag. Lives beside the raw `app.channel` surface so realtime-routing mutations stay in one audited place. */
 export function markConnectionSessionStreamsAware(connection: unknown): void {
   if (connection && typeof connection === 'object') {
     (connection as Record<string, unknown>)[SESSION_STREAMS_AWARE_FLAG] = true;
@@ -461,13 +448,8 @@ async function resolveStreamingDelivery(
     // Best-effort owner fallback; the session room + service connections still
     // deliver even if the owner lookup fails.
   }
-  // Owner fallback, capability-gated: deliver to the owner's own connections
-  // that have NOT announced session-streams awareness. Aware (modern) owner
-  // connections receive a session's streaming via its room when subscribed, and
-  // need nothing when idle — so bridging them here is pure waste (the idle
-  // firehose to a power user's home/board tabs). This only ever REMOVES a
-  // connection that already passed the owner-identity check; it cannot widen
-  // visibility, and the room's RBAC filtering below is untouched.
+  // Owner fallback: only owner connections that haven't announced awareness
+  // (aware clients get streaming via the room). Never widens.
   const ownerChannel = (): PublishChannel =>
     tenantScoped.filter(
       (connection: unknown) =>

@@ -20,11 +20,8 @@ import {
  * from channels automatically on disconnect, so unsubscribe on refresh /
  * navigation is best-effort; the socket teardown is the real cleanup.
  *
- * `create` also accepts a session-less capability announce (`{ capability:
- * true }`) that only marks the CONNECTION session-streams aware, joining no
- * room and reading no session. A modern client announces once per connection so
- * the publish-time owner fallback (which bridges only stale clients) skips its
- * idle tabs — see `markConnectionSessionStreamsAware` in `realtime-publish`.
+ * `create` also accepts `{ capability: true }`: mark the connection aware,
+ * joining no room and reading no session (see `markConnectionSessionStreamsAware`).
  */
 export interface SessionStreamSubscription {
   session_id: string;
@@ -34,13 +31,7 @@ export interface SessionStreamSubscription {
 interface SubscribeData {
   session_id?: string;
   sessionId?: string;
-  /**
-   * Capability announce: a modern client sends `{ capability: true }` (no
-   * session_id) once per connection to mark this connection session-streams
-   * aware WITHOUT joining any room. It carries no session id, reads no session,
-   * and joins nothing — so it needs no access check (it can only ever REMOVE
-   * this connection from the publish-time owner fallback, never widen delivery).
-   */
+  /** Announce awareness without joining a room; needs no access check (only ever removes from the owner fallback, never widens). */
   capability?: boolean;
 }
 
@@ -79,12 +70,7 @@ export function createSessionStreamsService(app: Application) {
       }
       const sessionId = data?.session_id ?? data?.sessionId;
       if (!sessionId || typeof sessionId !== 'string') {
-        // Capability announce (no session_id): mark the connection aware and
-        // return without touching any room or reading any session. Idle home /
-        // board tabs that never open a transcript announce here so the publish-
-        // time owner fallback skips them too. Access-safe: joins no room, so it
-        // cannot leak streaming — it only ever removes this connection from the
-        // fallback firehose.
+        // Capability-only announce: mark aware; joins no room, reads no session.
         if (data?.capability === true) {
           markConnectionSessionStreamsAware(connection);
           return { session_id: '', subscribed: false };
@@ -95,9 +81,7 @@ export function createSessionStreamsService(app: Application) {
       // room publishers emit to (they carry the full UUID).
       const canonicalId = (await resolveAccessibleSessionId(sessionId, params)) ?? sessionId;
       joinSessionStreamChannel(app, canonicalId, connection);
-      // A real subscribe is itself proof of a modern client: mark the connection
-      // aware so the owner fallback stops bridging it (the room now delivers this
-      // session's streaming, and idle sessions need nothing).
+      // A real subscribe proves a modern client: mark aware so the owner fallback stops bridging it.
       markConnectionSessionStreamsAware(connection);
       return { session_id: canonicalId, subscribed: true };
     },
