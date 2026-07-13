@@ -1,5 +1,5 @@
 .actionRowLink:hover,
 .actionRowLink:focus-visible {
   /* biome-ignore lint/plugin/noFirstPartyCss: native SPA link hover/focus needs pseudo selectors that React inline styles cannot express. */
-  color: var(--ant-color-primary);
+  --agor-action-row-link-color: var(--ant-color-primary);
 }

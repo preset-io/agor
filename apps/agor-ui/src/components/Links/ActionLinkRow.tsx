@@ -48,7 +48,7 @@ export function ActionLinkRow({
           minWidth: 0,
           flex: 1,
           alignItems: 'stretch',
-          color: 'inherit',
+          color: 'var(--agor-action-row-link-color, inherit)',
           textDecoration: 'none',
           padding: primaryPadding,
         }}
