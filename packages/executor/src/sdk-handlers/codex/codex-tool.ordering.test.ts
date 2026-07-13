@@ -1,6 +1,8 @@
+import type { AgorClient } from '@agor/core/api';
 import type { Message } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessagesRepository, SessionRepository } from '../../db/feathers-repositories.js';
+import { executeToolTask } from '../../handlers/sdk/base-executor.js';
 import type { MessagesService } from '../base/index.js';
 import { CodexTool } from './codex-tool.js';
 import type { CodexStreamEvent } from './prompt-service.js';
@@ -173,6 +175,7 @@ describe('CodexTool ordered transcript persistence', () => {
 
   it('stops later transcript persistence when a tool result acknowledgement rejects', async () => {
     const persisted: string[] = [];
+    const taskPatches: Array<Record<string, unknown>> = [];
     const messagesService: MessagesService = {
       create: vi.fn(async (data: Partial<Message>) => {
         const content = Array.isArray(data.content) ? data.content : [];
@@ -229,13 +232,57 @@ describe('CodexTool ordered transcript persistence', () => {
     };
     (tool as unknown as { promptService: typeof promptService }).promptService = promptService;
 
+    const client = {
+      service(path: string) {
+        if (path === 'sessions') {
+          return { get: vi.fn().mockResolvedValue({ session_id: 'session-1' }) };
+        }
+        if (path === 'config/resolve-api-key') {
+          return {
+            create: vi
+              .fn()
+              .mockResolvedValue({ apiKey: 'test-key', source: 'global', useNativeAuth: false }),
+          };
+        }
+        if (path === 'tasks') {
+          return {
+            patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
+              taskPatches.push(data);
+              return data;
+            }),
+          };
+        }
+        if (path === '/tasks/streaming') {
+          return { create: vi.fn() };
+        }
+        if (path === 'messages') {
+          return {
+            find: vi.fn().mockResolvedValue({ total: 0, limit: 0, skip: 0, data: [] }),
+            create: vi.fn(async (data: unknown) => data),
+          };
+        }
+        throw new Error(`Unexpected executor service: ${path}`);
+      },
+    } as unknown as AgorClient;
+
     await expect(
-      tool.executePromptWithStreaming(
-        '018f0000-0000-7000-8000-000000000003' as never,
-        'prompt',
-        '018f0000-0000-7000-8000-000000000004' as never
-      )
+      executeToolTask({
+        client,
+        sessionId: '018f0000-0000-7000-8000-000000000003' as never,
+        taskId: '018f0000-0000-7000-8000-000000000004' as never,
+        prompt: 'prompt',
+        abortController: new AbortController(),
+        apiKeyEnvVar: 'OPENAI_API_KEY',
+        toolName: 'codex',
+        createTool: () => tool,
+      })
     ).rejects.toThrow('tool result acknowledgement timed out');
     expect(persisted).toEqual(['user', 'tool-start']);
+    expect(taskPatches).toContainEqual(
+      expect.objectContaining({
+        status: 'failed',
+        error_message: 'tool result acknowledgement timed out',
+      })
+    );
   });
 });

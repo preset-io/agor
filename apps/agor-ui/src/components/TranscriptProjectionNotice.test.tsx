@@ -1,8 +1,14 @@
-import type { Message, ToolResultContentBlock } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import {
+  type Message,
+  type Task,
+  TaskStatus,
+  type ToolResultContentBlock,
+} from '@agor-live/client';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { AgentChain } from './AgentChain';
 import { MessageBlock } from './MessageBlock';
+import { TaskBlock } from './TaskBlock';
 import { ToolUseRenderer } from './ToolUseRenderer';
 
 const projection = {
@@ -73,23 +79,38 @@ describe('transcript projection notice', () => {
     expect(screen.getByText('new')).toBeInTheDocument();
   });
 
-  it('renders once for standalone MessageBlock and AgentChain result paths', () => {
+  it('copies a standalone projected result without the adjacent notice', async () => {
     const standalone = message([projectedResult()]);
+    if (!navigator.clipboard?.writeText) {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: vi.fn() },
+      });
+    }
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+
     const messageBlock = render(<MessageBlock message={standalone} />);
     expect(screen.getAllByText(notice)).toHaveLength(1);
     const boundedContent = screen.getByText(/HEAD/);
     expect(boundedContent).toBeInTheDocument();
-    expect(boundedContent.closest('div[style*="position: relative"]')).not.toHaveTextContent(
-      notice
-    );
+    const copyable = boundedContent.closest('div[style*="position: relative"]');
+    expect(copyable).not.toHaveTextContent(notice);
+    fireEvent.mouseEnter(copyable!);
+    fireEvent.click(screen.getByRole('img', { name: 'copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(String(projectedResult().content)));
+    expect(writeText.mock.calls[0][0]).not.toContain(notice);
     messageBlock.unmount();
+    writeText.mockRestore();
+  });
 
+  it('renders once for standalone MessageBlock and AgentChain result paths', () => {
+    const standalone = message([projectedResult()]);
     render(<AgentChain messages={[standalone]} isTaskRunning={false} isLatest />);
     expect(screen.getAllByText(notice)).toHaveLength(1);
     expect(screen.getByText(/HEAD/)).toBeInTheDocument();
   });
 
-  it('omits the notice from every result path and renders no running spinner after failure', () => {
+  it('omits the notice from every result path', () => {
     const completeResult = projectedResult({ transcript_projection: undefined });
     const generic = render(
       <ToolUseRenderer
@@ -119,27 +140,63 @@ describe('transcript projection notice', () => {
     expect(screen.queryByText(/Result truncated for transcript storage/)).not.toBeInTheDocument();
     messageBlock.unmount();
 
-    const { container } = render(
+    render(
       <AgentChain
         messages={[
           message(
-            [{ type: 'tool_use', id: 'tool-pending', name: 'UnknownTool', input: {} }],
+            [{ type: 'tool_use', id: 'tool-complete', name: 'UnknownTool', input: {} }],
             'assistant'
           ),
           message([
             {
               type: 'tool_result',
-              tool_use_id: 'unrelated',
+              tool_use_id: 'tool-complete',
               content: 'complete result',
             },
           ]),
         ]}
-        isTaskRunning={false}
         isLatest
       />
     );
 
     expect(screen.queryByText(/Result truncated for transcript storage/)).not.toBeInTheDocument();
+  });
+
+  it('derives terminal tool state from a failed task without a pending spinner', () => {
+    const failedTask = {
+      task_id: '018f0000-0000-7000-8000-000000000003',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      status: TaskStatus.FAILED,
+      full_prompt: 'Exercise executor failure convergence',
+      error_message: 'socket has been disconnected',
+      tool_use_count: 1,
+      created_at: '2026-07-13T12:00:00.000Z',
+      completed_at: '2026-07-13T12:00:01.000Z',
+      git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
+      message_range: {
+        start_index: 0,
+        end_index: 0,
+        start_timestamp: '2026-07-13T12:00:00.000Z',
+      },
+    } as Task;
+    const pendingTool = message(
+      [{ type: 'tool_use', id: 'tool-pending', name: 'UnknownTool', input: {} }],
+      'assistant'
+    );
+
+    const { container } = render(
+      <TaskBlock
+        task={failedTask}
+        isExpanded
+        onExpandChange={() => {}}
+        taskMessages={[pendingTool]}
+        taskMessagesLoaded
+        onLoadTaskMessages={() => {}}
+        onUnloadTaskMessages={() => {}}
+        isLatestTask
+      />
+    );
+
     expect(container.querySelector('.ant-spin')).not.toBeInTheDocument();
   });
 });
