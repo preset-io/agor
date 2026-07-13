@@ -5,6 +5,7 @@ import {
   buildSlackManifest,
   requiredBotEvents,
   requiredBotScopes,
+  SLACK_APPS_URL,
   type SlackWizardOptions,
   slackAppManifestUrl,
 } from '@agor/core/gateway/slack-manifest';
@@ -598,19 +599,19 @@ const SlackTestResultView: React.FC<{ result: SlackTestResult }> = ({ result }) 
 };
 
 /**
- * External link to the channel's Slack app manifest editor. The app id is
- * resolved server-side from the stored bot token (`gateway-channels/app-info`);
- * when unresolved the link degrades to the generic Slack app list.
+ * External link to the channel's Slack app manifest editor. The app + team ids
+ * are resolved server-side from the stored bot token
+ * (`gateway-channels/app-info`); when unresolved the link degrades to the
+ * generic Slack app list.
  */
-const SlackAppManifestLink: React.FC<{ appInfo: SlackAppInfo | null }> = ({ appInfo }) => (
-  <Typography.Link
-    href={slackAppManifestUrl(appInfo?.appId)}
-    target="_blank"
-    rel="noopener noreferrer"
-  >
-    {appInfo?.appId ? 'Open Slack app manifest' : 'Open Slack apps'} ↗
-  </Typography.Link>
-);
+const SlackAppManifestLink: React.FC<{ appInfo: SlackAppInfo | null }> = ({ appInfo }) => {
+  const href = slackAppManifestUrl(appInfo?.appId, appInfo?.teamId);
+  return (
+    <Typography.Link href={href} target="_blank" rel="noopener noreferrer">
+      {href === SLACK_APPS_URL ? 'Open Slack apps' : 'Open Slack app manifest'} ↗
+    </Typography.Link>
+  );
+};
 
 /**
  * Inline warning shown while editing a channel whenever the pending capability
@@ -679,7 +680,6 @@ const SlackScopeChangeWarning: React.FC<{
           </Space>
         </>
       }
-      style={{ marginBottom: 16 }}
     />
   );
 };
@@ -1349,6 +1349,7 @@ const ChannelFormFields: React.FC<{
   slackAppInfo,
 }) => {
   const { showError } = useThemedMessage();
+  const { token } = theme.useToken();
 
   // Watch message source settings for showing warnings/scope requirements. A
   // watched value is `undefined` while its (lazily-rendered) Collapse panel is
@@ -2189,16 +2190,10 @@ const ChannelFormFields: React.FC<{
 
         {/* ── Collapsible sections (Slack edit) ── */}
         {channelType === 'slack' && mode === 'edit' && (
-          <>
-            <div style={{ marginBottom: 8 }}>
-              <SlackOutlined style={{ marginInlineEnd: 6 }} />
-              <SlackAppManifestLink appInfo={slackAppInfo} />
-            </div>
-            {/* Single instance above the Collapse — the scope-affecting toggles
-                are spread across several panels, and an in-panel copy would
-                duplicate whenever more than one is expanded. */}
-            {scopeChangeWarning}
-          </>
+          <div style={{ marginBottom: 8 }}>
+            <SlackOutlined style={{ marginInlineEnd: 6 }} />
+            <SlackAppManifestLink appInfo={slackAppInfo} />
+          </div>
         )}
         {channelType === 'slack' && mode === 'edit' && (
           <Collapse
@@ -2642,6 +2637,27 @@ const ChannelFormFields: React.FC<{
               },
             ]}
           />
+        )}
+
+        {/* Pinned to the bottom of the scrollable form body: the toggles that
+            add scopes live deep inside collapse panels, so an in-flow alert
+            above them is off-screen at the moment the user acts. Sticky keeps
+            it visible while toggling anywhere in the form and again at save
+            time. Solid background so form items don't show through the
+            (translucent) alert fill while it floats. */}
+        {channelType === 'slack' && mode === 'edit' && addedSlackScopes.length > 0 && (
+          <div
+            style={{
+              position: 'sticky',
+              bottom: 0,
+              zIndex: 2,
+              marginTop: 12,
+              padding: '8px 0',
+              background: token.colorBgElevated,
+            }}
+          >
+            {scopeChangeWarning}
+          </div>
         )}
       </div>
     </>

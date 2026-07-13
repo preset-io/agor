@@ -471,17 +471,20 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     ).toBeInTheDocument();
   });
 
-  it('deep-links to the Slack app manifest editor with the server-resolved app id', async () => {
-    const { client, appInfoCreate } = makeClient(undefined, { appId: 'A0123ABC', teamId: 'T1' });
+  it('deep-links to the Slack app manifest editor with the server-resolved app + team ids', async () => {
+    const { client, appInfoCreate } = makeClient(undefined, {
+      appId: 'A0BH0A7TUGJ',
+      teamId: 'T0BELR0LTNG',
+    });
     renderEditTable(client, makeSlackChannel());
 
     await waitFor(() => expect(appInfoCreate).toHaveBeenCalledTimes(1));
-    // The app id resolves server-side from the STORED token — never form values.
+    // The ids resolve server-side from the STORED token — never form values.
     expect(appInfoCreate.mock.calls[0][0]).toEqual({ gatewayChannelId: 'channel-1' });
 
     const link = await screen.findByText(/Open Slack app manifest/);
     expect(link.closest('a')?.getAttribute('href')).toBe(
-      'https://api.slack.com/apps/A0123ABC/app-manifest'
+      'https://app.slack.com/app-settings/T0BELR0LTNG/A0BH0A7TUGJ/app-manifest'
     );
   });
 
@@ -550,7 +553,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     resolvers.get('channel-2')?.({ appId: 'ABBB222', teamId: 'T1' });
     const link = await screen.findByText(/Open Slack app manifest/);
     expect(link.closest('a')?.getAttribute('href')).toBe(
-      'https://api.slack.com/apps/ABBB222/app-manifest'
+      'https://app.slack.com/app-settings/T1/ABBB222/app-manifest'
     );
 
     // A's stale response lands last and must be ignored.
@@ -561,7 +564,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
         .getByText(/Open Slack app manifest/)
         .closest('a')
         ?.getAttribute('href')
-    ).toBe('https://api.slack.com/apps/ABBB222/app-manifest');
+    ).toBe('https://app.slack.com/app-settings/T1/ABBB222/app-manifest');
   });
 
   it('warns with the added scope when a capability toggle needs a scope the saved config lacks', async () => {
