@@ -201,4 +201,85 @@ describe('HealthMonitor tenant context', () => {
     expect(ambientTenantIds).toEqual(['tenant-a', 'tenant-a']);
     monitor.cleanup();
   });
+
+  it('deduplicates repeated lifecycle patches during the startup grace period', async () => {
+    const branches = new BranchServiceMock();
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+    const branch = makeBranch({ environment_instance: { status: 'running' } });
+
+    branches.emit('patched', branch);
+    branches.emit('patched', branch);
+    branches.emit('patched', branch);
+
+    expect(monitor.getStatus()).toMatchObject({
+      monitoringCount: 1,
+      monitoredBranches: [branch.branch_id],
+    });
+
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS * 2);
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(3));
+    monitor.cleanup();
+  });
+
+  it('cancels a pending grace check when the environment stops', async () => {
+    const branches = new BranchServiceMock();
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+    const branch = makeBranch({ environment_instance: { status: 'starting' } });
+
+    branches.emit('patched', branch);
+    branches.emit(
+      'patched',
+      makeBranch({
+        branch_id: branch.branch_id,
+        environment_instance: { status: 'stopped' },
+      })
+    );
+
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+    await vi.advanceTimersByTimeAsync(
+      ENVIRONMENT.STARTUP_GRACE_PERIOD_MS + ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS
+    );
+    expect(branches.checkHealth).not.toHaveBeenCalled();
+    monitor.cleanup();
+  });
+
+  it('does not overlap slow health checks for the same branch', async () => {
+    const branches = new BranchServiceMock();
+    let releaseCheck: (() => void) | undefined;
+    branches.checkHealth.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseCheck = resolve;
+        })
+    );
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+
+    branches.emit('patched', makeBranch({ environment_instance: { status: 'running' } }));
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS * 3);
+    expect(branches.checkHealth).toHaveBeenCalledTimes(1);
+
+    releaseCheck?.();
+    await vi.runAllTicks();
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS);
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(2));
+    monitor.cleanup();
+  });
+
+  it('cleanup cancels pending grace timers', async () => {
+    const branches = new BranchServiceMock();
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+
+    branches.emit('patched', makeBranch({ environment_instance: { status: 'running' } }));
+    monitor.cleanup();
+
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    expect(branches.checkHealth).not.toHaveBeenCalled();
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+  });
 });

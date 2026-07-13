@@ -61,6 +61,11 @@ export interface HealthMonitorOptions {
   discoverActiveEnvironmentRefs?: () => Promise<HealthMonitorActiveEnvironmentRef[]>;
 }
 
+interface HealthMonitorTimer {
+  handle: NodeJS.Timeout;
+  phase: 'grace' | 'interval';
+}
+
 function tenantParamsFromBranch(branch: Branch): HealthMonitorParams | undefined {
   const tenantId = getHiddenTenantId(branch);
   if (!tenantId) return undefined;
@@ -69,7 +74,16 @@ function tenantParamsFromBranch(branch: Branch): HealthMonitorParams | undefined
 
 export class HealthMonitor {
   private app: Application;
-  private intervals = new Map<BranchID, NodeJS.Timeout>();
+  /**
+   * One timer per branch, including the startup grace period.
+   *
+   * The grace timeout must be registered immediately. Previously a branch had
+   * no entry until the grace period elapsed, so every lifecycle patch received
+   * during those three seconds scheduled another permanent interval. Only the
+   * last interval was retained in the map; the others could never be stopped.
+   */
+  private timers = new Map<BranchID, HealthMonitorTimer>();
+  private checksInFlight = new Set<BranchID>();
   private branchParams = new Map<BranchID, HealthMonitorParams>();
   private isShuttingDown = false;
   private defaultParams?: HealthMonitorParams;
@@ -141,13 +155,13 @@ export class HealthMonitor {
         return;
       }
       if (params) this.branchParams.set(branch.branch_id, params);
-      if (!this.intervals.has(branch.branch_id)) {
+      if (!this.timers.has(branch.branch_id)) {
         healthMonitorDebug(`🏥 Starting health monitoring for branch: ${branch.name}`);
         this.startMonitoring(branch.branch_id, params);
       }
     } else {
       // Stop monitoring if status is not running or starting.
-      if (this.intervals.has(branch.branch_id)) {
+      if (this.timers.has(branch.branch_id)) {
         healthMonitorDebug(`🏥 Stopping health monitoring for branch: ${branch.name}`);
         this.stopMonitoring(branch.branch_id);
       }
@@ -159,7 +173,7 @@ export class HealthMonitor {
    * Start monitoring a branch's health
    */
   private startMonitoring(branchId: BranchID, params = this.branchParams.get(branchId)) {
-    // Clear existing interval if any
+    // Clear an existing grace timeout or interval before replacing it.
     this.stopMonitoring(branchId);
     if (params) this.branchParams.set(branchId, params);
 
@@ -172,20 +186,31 @@ export class HealthMonitor {
     // DB scope so every check enters a fresh scope through the branches service
     // hooks using the stored tenant params.
     runWithoutTenantDatabaseScope(() => {
-      setTimeout(() => {
-        if (this.isShuttingDown) return;
+      const graceHandle = setTimeout(() => {
+        const currentTimer = this.timers.get(branchId);
+        if (
+          this.isShuttingDown ||
+          currentTimer?.phase !== 'grace' ||
+          currentTimer.handle !== graceHandle
+        ) {
+          return;
+        }
 
         // Perform first health check
-        this.checkHealth(branchId);
+        void this.checkHealth(branchId);
 
         // Set up periodic health checks
         const interval = setInterval(() => {
           if (this.isShuttingDown) return;
-          this.checkHealth(branchId);
+          void this.checkHealth(branchId);
         }, ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS);
 
-        this.intervals.set(branchId, interval);
+        this.timers.set(branchId, { handle: interval, phase: 'interval' });
       }, ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+
+      // Register the grace period synchronously so repeated `patched` events
+      // cannot schedule duplicate intervals before this timeout fires.
+      this.timers.set(branchId, { handle: graceHandle, phase: 'grace' });
     });
   }
 
@@ -193,10 +218,11 @@ export class HealthMonitor {
    * Stop monitoring a branch's health
    */
   private stopMonitoring(branchId: BranchID) {
-    const interval = this.intervals.get(branchId);
-    if (interval) {
-      clearInterval(interval);
-      this.intervals.delete(branchId);
+    const timer = this.timers.get(branchId);
+    if (timer) {
+      if (timer.phase === 'grace') clearTimeout(timer.handle);
+      else clearInterval(timer.handle);
+      this.timers.delete(branchId);
     }
   }
 
@@ -204,6 +230,13 @@ export class HealthMonitor {
    * Perform health check for a specific branch
    */
   private async checkHealth(branchId: BranchID) {
+    // `setInterval` does not await async callbacks. The normal HTTP timeout is
+    // shorter than the poll interval, but DB stalls or executor/service delays
+    // can exceed it. Never let two observations for one branch race and write a
+    // stale healthy/unhealthy result over the newer one.
+    if (this.checksInFlight.has(branchId)) return;
+    this.checksInFlight.add(branchId);
+
     try {
       const branchesService = this.app.service('branches') as unknown as BranchesServiceImpl;
 
@@ -267,6 +300,8 @@ export class HealthMonitor {
         `❌ Health check failed for branch ${shortId(branchId)}:`,
         error instanceof Error ? error.message : error
       );
+    } finally {
+      this.checksInFlight.delete(branchId);
     }
   }
 
@@ -413,13 +448,14 @@ export class HealthMonitor {
   cleanup() {
     this.isShuttingDown = true;
 
-    // Clear all intervals
-    const stoppedCount = this.intervals.size;
-    for (const interval of this.intervals.values()) {
-      clearInterval(interval);
+    // Clear pending grace periods and active intervals.
+    const stoppedCount = this.timers.size;
+    for (const timer of this.timers.values()) {
+      if (timer.phase === 'grace') clearTimeout(timer.handle);
+      else clearInterval(timer.handle);
     }
 
-    this.intervals.clear();
+    this.timers.clear();
     this.branchParams.clear();
     console.log(`🏥 Health Monitor cleaned up (${stoppedCount} monitor(s) stopped)`);
   }
@@ -430,8 +466,8 @@ export class HealthMonitor {
   getStatus() {
     return {
       isShuttingDown: this.isShuttingDown,
-      monitoredBranches: Array.from(this.intervals.keys()),
-      monitoringCount: this.intervals.size,
+      monitoredBranches: Array.from(this.timers.keys()),
+      monitoringCount: this.timers.size,
     };
   }
 }

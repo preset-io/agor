@@ -543,9 +543,9 @@ describe('BranchesService environment start async behavior', () => {
   });
 
   // The health monitor probes every running env every 5s. updateEnvironment
-  // must persist + broadcast ONLY when a health-relevant field actually changes,
-  // never on a bare re-probe or a timestamp-only refresh, or every client
-  // rebuilds its branch map and re-runs branch-derived subscriptions per probe.
+  // persists each observation timestamp, but broadcasts ONLY when a
+  // health-relevant field actually changes. Otherwise every client rebuilds
+  // its branch map and re-runs branch-derived subscriptions per probe.
   describe('health-probe change gate', () => {
     function createGateHarness(initialEnv: Record<string, unknown>) {
       const { service, branchesService } = createServiceHarness();
@@ -581,7 +581,7 @@ describe('BranchesService environment start async behavior', () => {
       access_urls: [{ name: 'App', url: 'http://localhost:5173' }],
     });
 
-    it('does not patch or emit when the re-probe reports no change', async () => {
+    it('persists but does not emit when the re-probe only advances the timestamp', async () => {
       const { service, branch, patchSpy, emit } = createGateHarness(healthyEnv());
 
       await service.updateEnvironment(branch.branch_id, {
@@ -593,11 +593,22 @@ describe('BranchesService environment start async behavior', () => {
         },
       });
 
-      expect(patchSpy).not.toHaveBeenCalled();
+      expect(patchSpy).toHaveBeenCalledTimes(1);
+      expect(patchSpy).toHaveBeenCalledWith(
+        branch.branch_id,
+        {
+          environment_instance: expect.objectContaining({
+            last_health_check: expect.objectContaining({
+              timestamp: '2026-01-01T00:00:05.000Z',
+            }),
+          }),
+        },
+        undefined
+      );
       expect(emit).not.toHaveBeenCalled();
     });
 
-    it('does not broadcast when only the health-check timestamp changes', async () => {
+    it('does not broadcast timestamp bookkeeping', async () => {
       const { service, branch, patchSpy, emit } = createGateHarness(healthyEnv());
 
       // Same status + health status + message; only the bookkeeping timestamp
@@ -605,6 +616,22 @@ describe('BranchesService environment start async behavior', () => {
       await service.updateEnvironment(branch.branch_id, {
         last_health_check: {
           timestamp: '2026-06-30T12:00:00.000Z',
+          status: 'healthy',
+          message: 'HTTP 200',
+        },
+      });
+
+      expect(patchSpy).toHaveBeenCalledTimes(1);
+      expect(emit).not.toHaveBeenCalled();
+    });
+
+    it('does not write or emit an exactly identical observation', async () => {
+      const { service, branch, patchSpy, emit } = createGateHarness(healthyEnv());
+
+      await service.updateEnvironment(branch.branch_id, {
+        status: 'running',
+        last_health_check: {
+          timestamp: '2026-01-01T00:00:00.000Z',
           status: 'healthy',
           message: 'HTTP 200',
         },

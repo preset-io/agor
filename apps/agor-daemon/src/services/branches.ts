@@ -1869,8 +1869,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    // Check if environment state actually changed (ignoring timestamp-only updates)
-    // For health checks, we only care about status and message changes, not timestamp
+    // Distinguish persisted observations from user-visible state changes. A
+    // successful re-probe advances last_health_check.timestamp in storage, but
+    // that bookkeeping alone must not emit a full `branches.patched` payload to
+    // every authorized browser every five seconds.
+    const hasPersistedChange =
+      JSON.stringify(existing.environment_instance) !== JSON.stringify(updatedEnvironment);
+    if (!hasPersistedChange) {
+      return existing;
+    }
+
+    // For realtime publication, health status and message matter; the
+    // observation timestamp does not.
     const oldState = { ...existing.environment_instance };
     const newState = { ...updatedEnvironment };
 
@@ -1886,21 +1896,24 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const hasChanged = JSON.stringify(oldState) !== JSON.stringify(newState);
 
-    // Only emit WebSocket event if state changed
-    if (!hasChanged) {
-      return existing;
-    }
-
     const branch = await this.withTenantDatabase(resolvedParams, () =>
       this.patch(
         id,
         {
           environment_instance: updatedEnvironment,
-          updated_at: new Date().toISOString(),
+          ...(hasChanged ? { updated_at: new Date().toISOString() } : {}),
         },
         resolvedParams
       )
     );
+
+    // Observation-only persistence deliberately bypasses Feathers publication.
+    // The custom method calls the raw service implementation, so simply
+    // returning here keeps the database timestamp accurate without generating
+    // a realtime branch patch.
+    if (!hasChanged) {
+      return branch;
+    }
 
     // this.patch() calls the raw implementation and bypasses Feathers event
     // dispatch, so the patched event is not automatically emitted. Emit it
