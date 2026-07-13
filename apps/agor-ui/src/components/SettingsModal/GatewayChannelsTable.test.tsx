@@ -154,7 +154,7 @@ async function advanceToOptions() {
   });
   fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
   clickButton(/^Continue$/);
-  await flush();
+  await waitFor(() => expect(getButton(/^Back$/).disabled).toBe(false));
 }
 
 /**

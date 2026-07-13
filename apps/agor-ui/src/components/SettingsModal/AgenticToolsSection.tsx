@@ -15,6 +15,7 @@ import {
   type FieldStatus,
   TOOL_FIELD_CONFIGS,
 } from '../ApiKeyFields';
+import { ToolIcon } from '../ToolIcon';
 import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
 
 export interface AgenticToolsSectionProps {
@@ -170,7 +171,12 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
           );
           return {
             key: tool,
-            label: TOOL_LABELS[tool],
+            label: (
+              <Space size={6}>
+                <ToolIcon tool={tool} size={18} />
+                <span>{TOOL_LABELS[tool]}</span>
+              </Space>
+            ),
             children: (
               <Space direction="vertical" size="large" style={{ width: '100%' }}>
                 <Space>
