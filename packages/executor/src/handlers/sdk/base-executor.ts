@@ -22,7 +22,7 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
@@ -395,15 +395,11 @@ function hasProviderCredential(
   tool: AgenticToolName,
   connection: Record<string, string | undefined>
 ): boolean {
-  const fields: Partial<Record<AgenticToolName, readonly string[]>> = {
-    'claude-code': ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'],
-    'claude-code-cli': ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'],
-    codex: ['OPENAI_API_KEY'],
-    gemini: ['GEMINI_API_KEY'],
-    copilot: ['COPILOT_GITHUB_TOKEN'],
-    cursor: ['CURSOR_API_KEY'],
-  };
-  return (fields[tool] ?? []).some((field) => connection[field]?.trim());
+  const canonicalTool = tool === 'claude-code-cli' ? 'claude-code' : tool;
+  if (!(canonicalTool in PROVIDER_CREDENTIAL_FIELDS)) return false;
+  return PROVIDER_CREDENTIAL_FIELDS[canonicalTool as keyof typeof PROVIDER_CREDENTIAL_FIELDS].some(
+    (field) => connection[field]?.trim()
+  );
 }
 
 /**

@@ -64,6 +64,7 @@ import { slugify } from '../../utils/repoSlug';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import { buildTeammateBootstrapPrompt } from '../../utils/teammateBootstrapPrompt';
 import { ensureTeammateWelcomeNote } from '../../utils/teammateWelcomeNote';
+import { ClaudeSubscriptionTokenInstructions } from '../ClaudeSubscriptionTokenInstructions';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import type { NewSessionConfig } from '../NewSessionModal/NewSessionModal';
 import { ToolIcon } from '../ToolIcon';
@@ -914,19 +915,7 @@ export function OnboardingWizard({
             type="info"
             showIcon
             style={{ marginBottom: 16, textAlign: 'left' }}
-            description={
-              <span>
-                In any terminal with Claude Code installed, run <Text code>claude setup-token</Text>
-                , then paste the printed token below. Need Claude Code?{' '}
-                <Typography.Link
-                  href="https://docs.claude.com/en/docs/claude-code/setup"
-                  target="_blank"
-                >
-                  Install docs
-                </Typography.Link>
-                .
-              </span>
-            }
+            description={<ClaudeSubscriptionTokenInstructions />}
           />
         );
       }

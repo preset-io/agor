@@ -152,7 +152,11 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
         style={{ marginBottom: token.marginLG }}
       />
       <Tabs
-        defaultActiveKey="claude-code"
+        defaultActiveKey={
+          (Object.keys(TOOL_LABELS) as TenantAgenticToolName[]).find(
+            (tool) => settings[tool]?.enabled !== false
+          ) ?? 'claude-code'
+        }
         items={(Object.keys(TOOL_LABELS) as TenantAgenticToolName[]).map((tool) => {
           const current = settings[tool] ?? {
             tool,

@@ -17,6 +17,7 @@ import {
   bindRepositoryToTenantUnitOfWork,
   GatewayChannelRepository,
   GatewayOutboundMessageRepository,
+  getCurrentTenantDatabase,
   getCurrentTenantId,
   getHiddenTenantId,
   MCPServerRepository,
@@ -1855,10 +1856,12 @@ export class GatewayService {
     // get silently dropped.
     const agenticConfig = channel.agentic_config;
     const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
+    const tenantDb = getCurrentTenantDatabase();
+    if (!tenantDb) throw new Error('Missing tenant database scope for gateway agent resolution');
     const preset = agenticConfig?.presetId
-      ? await resolveAgenticToolPreset(this.db, agenticTool, agenticConfig.presetId)
+      ? await resolveAgenticToolPreset(tenantDb, agenticTool, agenticConfig.presetId)
       : null;
-    if (!preset) await assertInlineAgenticConfigurationAllowed(this.db, agenticTool);
+    if (!preset) await assertInlineAgenticConfigurationAllowed(tenantDb, agenticTool);
     const runtimeConfig = preset?.configuration ?? agenticConfig;
     const {
       permission_config: gatewayPermissionConfig,

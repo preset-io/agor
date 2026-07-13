@@ -3536,7 +3536,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           enabled: true,
           added_at: new Date(),
         };
-        app.service('session-mcp-servers').emit('created', relationship);
+        emitServiceEvent(app, {
+          path: 'session-mcp-servers',
+          event: 'created',
+          data: relationship,
+          params,
+        });
 
         return relationship;
       },
@@ -3556,7 +3561,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           session_id: id,
           mcp_server_id: mcpId,
         };
-        app.service('session-mcp-servers').emit('removed', relationship);
+        emitServiceEvent(app, {
+          path: 'session-mcp-servers',
+          event: 'removed',
+          data: relationship,
+          params,
+        });
 
         return relationship;
       },

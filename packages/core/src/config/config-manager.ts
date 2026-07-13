@@ -247,7 +247,9 @@ function validateConfig(config: AgorConfig): void {
     }
   };
   only(config.defaults, 'defaults', ['board', 'agent']);
-  only(config.display, 'display', ['tableStyle', 'colorOutput']);
+  // Known upgrade-only keys remain loadable so the daemon can print its
+  // dedicated deprecation guidance before ignoring them.
+  only(config.display, 'display', ['tableStyle', 'colorOutput', 'shortIdLength']);
   only(config.daemon, 'daemon', [
     'port',
     'host',
@@ -265,6 +267,8 @@ function validateConfig(config: AgorConfig): void {
     'cors_allow_sandpack',
     'cors_origins',
     'trust_proxy_hops',
+    'allowAnonymous',
+    'requireAuth',
   ]);
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
   only(config.external_launch, 'external_launch', [

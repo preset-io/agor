@@ -278,10 +278,13 @@ const DEPRECATED_ANONYMOUS_KEYS = ['allowAnonymous', 'requireAuth'] as const;
  */
 export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
   const daemon = (config as { daemon?: Record<string, unknown> }).daemon;
-  if (!daemon) return;
+  const display = (config as { display?: Record<string, unknown> }).display;
 
-  const present = DEPRECATED_ANONYMOUS_KEYS.filter((key) => Object.hasOwn(daemon, key));
-  if (present.length === 0) return;
+  const present = daemon
+    ? DEPRECATED_ANONYMOUS_KEYS.filter((key) => Object.hasOwn(daemon, key))
+    : [];
+  const hasShortIdLength = !!display && Object.hasOwn(display, 'shortIdLength');
+  if (present.length === 0 && !hasShortIdLength) return;
 
   const lines: string[] = [
     '',
@@ -291,12 +294,13 @@ export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
     '  Your config.yaml contains:',
   ];
   for (const key of present) {
-    lines.push(`    daemon.${key}: ${String(daemon[key])}`);
+    lines.push(`    daemon.${key}: ${String(daemon?.[key])}`);
   }
+  if (hasShortIdLength) lines.push(`    display.shortIdLength: ${String(display?.shortIdLength)}`);
   lines.push(
     '',
-    '  These keys no longer have any effect. Authentication is now',
-    '  always required — anonymous mode was removed.',
+    '  These keys no longer have any effect. Authentication is always',
+    '  required, and short-ID display length is managed by Agor.',
     '',
     '  Action: remove these keys from your config.yaml at your',
     '  convenience. If you previously ran anonymously, the daemon',

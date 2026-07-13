@@ -142,7 +142,11 @@ function buildClaudeProbeEnv(token: string): Record<string, string> {
 async function validateClaudeSubscriptionToken(token: string): Promise<AuthCheckStatus> {
   const probe = await probeClaudeCodeAuth(buildClaudeProbeEnv(token));
   if (!probe.ok) return 'unknown';
-  return probe.account?.tokenSource ? 'authenticated' : 'unauthenticated';
+  // accountInfo() is not a reliable negative signal for setup-token auth: some
+  // valid subscription sessions initialize without returning account metadata.
+  // Only positive account metadata proves auth; absence is inconclusive and
+  // must not drive the persistent "credentials aren't working" banner.
+  return probe.account?.tokenSource ? 'authenticated' : 'unknown';
 }
 
 /**

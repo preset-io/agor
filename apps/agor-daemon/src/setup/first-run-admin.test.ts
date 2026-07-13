@@ -90,6 +90,13 @@ describe('warnDeprecatedAnonymousConfig', () => {
     } as unknown as AgorConfig);
     expect(written).toContain('daemon.allowAnonymous: false');
   });
+
+  it('warns about the retired display.shortIdLength key', () => {
+    warnDeprecatedAnonymousConfig({
+      display: { shortIdLength: 12 },
+    } as unknown as AgorConfig);
+    expect(written).toContain('display.shortIdLength: 12');
+  });
 });
 
 describe('logFirstRunAdminBootstrap', () => {

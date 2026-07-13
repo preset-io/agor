@@ -73,6 +73,8 @@ Personal credentials are encrypted in the DB and set through **User Settings →
 
 The complete provider connection always comes from one scope. Agor does not combine a credential from one scope with an endpoint from another, and does not fall back to `config.yaml` or daemon environment variables. Claude users explicitly choose a subscription token or API-key connection. Codex users explicitly choose an API key or declare that they authenticated the Codex CLI with `codex login`; native Codex login is never inferred merely because no key exists. Shared-machine Codex subscription authentication is rejected in hosted `required_from_auth` mode.
 
+> **Upgrading from implicit CLI or environment authentication:** Agor intentionally does not migrate or infer shared-machine native login state. Each affected user must select their authentication method in **User Settings → Agentic Tools**; Claude subscription users must save a `claude setup-token` token, while Codex subscription users explicitly declare their existing `codex login`. Until then, Agor reports the provider as unavailable instead of silently borrowing ambient credentials.
+
 ### Agentic-tool configuration governance
 
 Workspace administrators can define live, tool-specific presets under **Workspace Settings → Agentic Tools**. Configuration surfaces always ask for the tool first and then show only presets for that tool. When inline configuration is allowed, members may instead choose **Define configuration here**.

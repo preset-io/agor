@@ -4,6 +4,7 @@ import {
   TenantAgenticToolSettingsRepository,
   UsersRepository,
 } from '../db/repositories';
+import { resolveSessionDefaults } from '../sessions/resolve-session-defaults';
 import type {
   AgenticToolName,
   AgenticToolPreset,
@@ -32,8 +33,13 @@ export async function resolveAgenticConfigurationReference(
   const canonical = canonicalTenantAgenticTool(tool);
   if (reference === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION) {
     const preset = await new AgenticToolPresetRepository(db).findDefault(canonical);
-    if (!preset) throw new Error(`No workspace default preset is configured for ${canonical}`);
-    return { preset };
+    if (preset) return { preset };
+    // A workspace preset is optional while inline configuration is allowed.
+    // Resolve the built-in configuration explicitly so fresh/upgraded users'
+    // implicit "workspace default" remains usable. When governance requires
+    // presets, the tenant setting invariant below fails closed instead.
+    await assertInlineAgenticConfigurationAllowed(db, tool);
+    return { configuration: {} };
   }
   if (reference !== USER_DEFAULT_AGENTIC_CONFIGURATION) {
     return { preset: await resolveAgenticToolPreset(db, tool, reference) };
@@ -91,36 +97,24 @@ export async function assertInlineAgenticConfigurationAllowed(
   }
 }
 
-export function presetConfigurationToSessionPatch(configuration: DefaultAgenticToolConfig) {
-  const modelConfig = configuration.modelConfig;
+export function presetConfigurationToSessionPatch(
+  tool: AgenticToolName,
+  configuration: DefaultAgenticToolConfig
+) {
+  const resolved = resolveSessionDefaults({
+    agenticTool: tool,
+    user: null,
+    overrides: {
+      modelConfig: configuration.modelConfig,
+      permissionMode: configuration.permissionMode,
+      codexSandboxMode: configuration.codexSandboxMode,
+      codexApprovalPolicy: configuration.codexApprovalPolicy,
+      codexNetworkAccess: configuration.codexNetworkAccess,
+    },
+  });
   return {
-    ...(modelConfig?.mode && modelConfig.model
-      ? {
-          model_config: {
-            ...modelConfig,
-            mode: modelConfig.mode,
-            model: modelConfig.model,
-            updated_at: new Date().toISOString(),
-          },
-        }
-      : {}),
-    ...(configuration.permissionMode ||
-    (configuration.codexSandboxMode && configuration.codexApprovalPolicy)
-      ? {
-          permission_config: {
-            mode: configuration.permissionMode,
-            ...(configuration.codexSandboxMode && configuration.codexApprovalPolicy
-              ? {
-                  codex: {
-                    sandboxMode: configuration.codexSandboxMode,
-                    approvalPolicy: configuration.codexApprovalPolicy,
-                    networkAccess: configuration.codexNetworkAccess,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
+    permission_config: resolved.permission_config,
+    model_config: resolved.model_config ?? null,
   };
 }
 

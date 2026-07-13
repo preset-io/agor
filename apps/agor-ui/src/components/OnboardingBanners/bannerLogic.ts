@@ -8,7 +8,14 @@
  * the server-side check-auth probe, not by a presence check.
  */
 
-import type { AgenticToolName, AuthCheckStatus, User } from '@agor-live/client';
+import type {
+  AgenticToolName,
+  AuthCheckStatus,
+  TenantAgenticToolName,
+  TenantAgenticToolSettings,
+  User,
+} from '@agor-live/client';
+import { PROVIDER_CREDENTIAL_FIELDS } from '@agor-live/client';
 
 const CLAUDE_CREDENTIAL_FIELDS = [
   'ANTHROPIC_API_KEY',
@@ -106,6 +113,35 @@ export function resolveProbeAgent(user: User | null | undefined): AgenticToolNam
   return probeTargetFor(
     primaryAgentForUser(user) ?? onboardingSelectedAgent(user) ?? 'claude-code'
   );
+}
+
+const BANNER_AUTH_TOOLS = ['claude-code', 'codex'] as const;
+
+/** Pick one enabled, policy-governed provider for the persistent auth banner. */
+export function resolveGovernedProbeAgent(
+  settings: Map<TenantAgenticToolName, TenantAgenticToolSettings>
+): (typeof BANNER_AUTH_TOOLS)[number] {
+  return BANNER_AUTH_TOOLS.find((tool) => settings.get(tool)?.enabled !== false) ?? 'claude-code';
+}
+
+export function hasConfiguredCredentialFor(
+  user: User | null | undefined,
+  tool: 'claude-code' | 'codex',
+  settings?: TenantAgenticToolSettings
+): boolean {
+  const spec = SUPPORTED_AGENTIC_TOOLS.find((candidate) => candidate.tool === tool);
+  const hasUserCredential = !!user && !!spec && hasStoredKeyFor(user, tool, spec.credentialFields);
+  const hasTenantCredential = PROVIDER_CREDENTIAL_FIELDS[tool].some(
+    (field) => settings?.connection[field]?.configured
+  );
+  return hasUserCredential || hasTenantCredential;
+}
+
+export function preferredCredentialOwner(settings?: TenantAgenticToolSettings): 'user' | 'tenant' {
+  return settings?.resolution_policy === 'tenant_preferred' ||
+    settings?.resolution_policy === 'tenant_required'
+    ? 'tenant'
+    : 'user';
 }
 
 /**

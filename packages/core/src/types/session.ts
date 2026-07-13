@@ -244,7 +244,7 @@ export interface Session {
       /** Network access controls whether outbound HTTP/HTTPS requests are allowed (workspace-write only) */
       networkAccess?: boolean;
     };
-  };
+  } | null;
 
   // Model configuration (session-level model selection)
   model_config?: {
@@ -266,7 +266,7 @@ export interface Session {
      * Only applicable when agentic_tool='opencode'
      */
     provider?: string;
-  };
+  } | null;
 
   /**
    * Claude Code CLI adapter state. Only set when `agentic_tool === 'claude-code-cli'`.

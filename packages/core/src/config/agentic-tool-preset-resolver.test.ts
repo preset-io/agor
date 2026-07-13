@@ -1,12 +1,18 @@
-import { beforeAll, describe, expect } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   AgenticToolPresetRepository,
   TenantAgenticToolSettingsRepository,
+  UsersRepository,
 } from '../db/repositories';
 import { dbTest } from '../db/test-helpers';
-import { type UserID, WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION } from '../types';
+import {
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  type UserID,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from '../types';
 import {
   assertInlineAgenticConfigurationAllowed,
+  presetConfigurationToSessionPatch,
   resolveAgenticConfigurationReference,
   resolveAgenticToolPreset,
 } from './agentic-tool-preset-resolver';
@@ -46,5 +52,58 @@ describe('agentic tool preset resolution', () => {
     await expect(
       resolveAgenticConfigurationReference(db, 'codex', WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION)
     ).resolves.toMatchObject({ preset: { preset_id: preset.preset_id } });
+  });
+
+  dbTest(
+    'falls back to built-in inline defaults when no workspace preset exists',
+    async ({ db }) => {
+      await expect(
+        resolveAgenticConfigurationReference(db, 'codex', WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION)
+      ).resolves.toEqual({ configuration: {} });
+    }
+  );
+
+  dbTest('resolves a fresh user implicit default through the built-in fallback', async ({ db }) => {
+    const user = await new UsersRepository(db).create({
+      email: `preset-default-${Date.now()}-${Math.random()}@example.com`,
+      name: 'Fresh User',
+    });
+    await expect(
+      resolveAgenticConfigurationReference(
+        db,
+        'codex',
+        USER_DEFAULT_AGENTIC_CONFIGURATION,
+        user.user_id as UserID
+      )
+    ).resolves.toEqual({ configuration: {} });
+  });
+
+  dbTest('missing workspace default fails closed when presets are required', async ({ db }) => {
+    await new TenantAgenticToolSettingsRepository(db).patch('codex', {
+      inline_configuration_allowed: false,
+    });
+    await expect(
+      resolveAgenticConfigurationReference(db, 'codex', WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION)
+    ).rejects.toThrow(/requires an administrator-managed preset/);
+  });
+
+  it('materializes a complete replacement when preset fields are removed', () => {
+    const configured = presetConfigurationToSessionPatch('codex', {
+      modelConfig: { mode: 'exact', model: 'gpt-5.4' },
+      codexSandboxMode: 'danger-full-access',
+      codexApprovalPolicy: 'never',
+    });
+    expect(configured).toMatchObject({
+      model_config: { model: 'gpt-5.4' },
+      permission_config: {
+        codex: { sandboxMode: 'danger-full-access', approvalPolicy: 'never' },
+      },
+    });
+
+    const cleared = presetConfigurationToSessionPatch('cursor', {});
+    expect(cleared).toEqual({
+      model_config: null,
+      permission_config: expect.any(Object),
+    });
   });
 });

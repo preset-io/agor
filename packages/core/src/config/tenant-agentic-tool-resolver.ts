@@ -19,6 +19,7 @@ import {
   DEFAULT_PROVIDER_RESOLUTION_POLICY,
   isProviderConnectionTool,
   PROVIDER_CONNECTION_FIELDS,
+  PROVIDER_CREDENTIAL_FIELDS,
 } from '../types';
 
 const PROVIDER_ENV_KEYS = new Set<string>([
@@ -40,14 +41,7 @@ export interface ResolvedProviderConnection {
 }
 
 function hasCredential(tool: ProviderConnectionTool, connection: ProviderConnection): boolean {
-  const credentialFields: Record<ProviderConnectionTool, readonly string[]> = {
-    'claude-code': ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'],
-    codex: ['OPENAI_API_KEY'],
-    gemini: ['GEMINI_API_KEY'],
-    copilot: ['COPILOT_GITHUB_TOKEN'],
-    cursor: ['CURSOR_API_KEY'],
-  };
-  return credentialFields[tool].some((field) =>
+  return PROVIDER_CREDENTIAL_FIELDS[tool].some((field) =>
     Boolean((connection as Record<string, string>)[field])
   );
 }

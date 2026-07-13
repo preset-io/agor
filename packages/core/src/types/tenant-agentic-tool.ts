@@ -40,6 +40,15 @@ export const PROVIDER_CONNECTION_FIELDS = {
   cursor: ['CURSOR_API_KEY'],
 } as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
 
+/** Credential-bearing subset of each atomic provider connection (excludes endpoints). */
+export const PROVIDER_CREDENTIAL_FIELDS = {
+  'claude-code': ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'],
+  codex: ['OPENAI_API_KEY'],
+  gemini: ['GEMINI_API_KEY'],
+  copilot: ['COPILOT_GITHUB_TOKEN'],
+  cursor: ['CURSOR_API_KEY'],
+} as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
+
 export const TENANT_PROVIDER_CONNECTION_FIELDS = {
   ...PROVIDER_CONNECTION_FIELDS,
   'claude-code': PROVIDER_CONNECTION_FIELDS['claude-code'].filter(

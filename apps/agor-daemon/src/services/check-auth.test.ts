@@ -94,6 +94,23 @@ describe('check-auth Claude subscription tokens', () => {
       tool: 'claude-code',
     });
   });
+
+  it('treats missing subscription account metadata as unknown, not rejected', async () => {
+    resolveApiKeyMock
+      .mockResolvedValueOnce({ apiKey: undefined, source: 'none', useNativeAuth: false })
+      .mockResolvedValueOnce({
+        apiKey: 'sk-ant-oat01-stored',
+        source: 'user',
+        useNativeAuth: false,
+      });
+    mockClaudeAccount(null);
+
+    const result = await service().create({ tool: 'claude-code' }, {
+      user: { user_id: 'user-1' },
+    } as never);
+
+    expect(result.status).toBe('unknown');
+  });
 });
 
 // Round-3 — honest tri-state / fail-safe distinctions layered on top of #1867.

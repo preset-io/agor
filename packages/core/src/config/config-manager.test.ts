@@ -247,6 +247,24 @@ describe('loadConfig', () => {
     );
   });
 
+  it('loads known deprecated nested keys so startup can print migration guidance', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        daemon: { allowAnonymous: false, requireAuth: true },
+        display: { shortIdLength: 12 },
+      }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      daemon: { allowAnonymous: false, requireAuth: true },
+      display: { shortIdLength: 12 },
+    });
+  });
+
   it('should handle partial config with missing sections', async () => {
     const partialConfig: AgorConfig = {
       daemon: { port: 4040 },

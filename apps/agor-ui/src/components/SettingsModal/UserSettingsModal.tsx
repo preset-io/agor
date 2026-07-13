@@ -487,7 +487,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, value));
+      const patch = buildAgenticToolCredentialPatch(tool, field, value);
+      await onUpdate?.(user.user_id, patch);
+      if (patch.agentic_auth_methods) {
+        setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
+      }
       setAgenticToolStatus((prev) => ({
         ...prev,
         [tool]: { ...(prev[tool] ?? {}), [field]: true },
@@ -1098,7 +1102,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         );
 
         // Tools with no auth/config fields (e.g. OpenCode) skip the tab strip entirely.
-        if (toolFields.length === 0) {
+        if (allToolFields.length === 0) {
           return defaultsPane;
         }
 

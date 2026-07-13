@@ -251,7 +251,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
       createData = {
         ...data,
         agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
-        ...presetConfigurationToSessionPatch(configuration),
+        ...presetConfigurationToSessionPatch(agenticTool, configuration),
       };
     } else {
       await assertInlineAgenticConfigurationAllowed(this.db, agenticTool);
@@ -272,7 +272,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     );
     const updated = (await this.patch(
       session.session_id,
-      presetConfigurationToSessionPatch(preset.configuration),
+      presetConfigurationToSessionPatch(session.agentic_tool, preset.configuration),
       { ...params, _applyingAgenticToolPreset: true }
     )) as Session;
     return updated;
@@ -524,13 +524,11 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     const session = forkedSession as Session;
 
     // Copy MCP servers from parent session to forked session
-    if (!session.agentic_tool_preset_id) {
-      await this.copyMCPServers(
-        parent.session_id as SessionID,
-        session.session_id as SessionID,
-        'fork'
-      );
-    }
+    await this.copyMCPServers(
+      parent.session_id as SessionID,
+      session.session_id as SessionID,
+      'fork'
+    );
 
     // Copy parent's env var *names* to forked session.
     // Names resolve at execution time against the child session's owner's
@@ -1149,7 +1147,7 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         data = {
           ...data,
           agentic_tool_preset_id: resolved.preset?.preset_id ?? null,
-          ...presetConfigurationToSessionPatch(configuration),
+          ...presetConfigurationToSessionPatch(tool, configuration),
         };
       } else if (data.agentic_tool_preset_id === null && current.agentic_tool_preset_id) {
         await assertInlineAgenticConfigurationAllowed(

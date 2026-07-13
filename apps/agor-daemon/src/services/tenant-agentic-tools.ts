@@ -73,9 +73,9 @@ export class TenantAgenticToolSettingsService {
       throw new BadRequest('inline_configuration_allowed must be a boolean');
     }
     if (data.inline_configuration_allowed === false) {
-      const presets = await this.presets.find(tool);
-      if (presets.length === 0) {
-        throw new BadRequest(`Create at least one ${tool} preset before requiring presets`);
+      const defaultPreset = await this.presets.findDefault(tool);
+      if (!defaultPreset) {
+        throw new BadRequest(`Set a default ${tool} preset before requiring presets`);
       }
     }
     if (

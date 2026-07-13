@@ -9,7 +9,14 @@ import type {
   UserID,
 } from '../../types';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
 import {
   type AgenticToolPresetInsert,
   type AgenticToolPresetRow,
@@ -85,14 +92,18 @@ export class AgenticToolPresetRepository {
       updated_at: now,
     };
     try {
-      if (data.is_default) {
-        await update(this.db, agenticToolPresets)
-          .set({ is_default: false })
-          .where(eq(agenticToolPresets.tool, data.tool))
-          .run();
-      }
-      return rowToPreset(
-        await insert(this.db, agenticToolPresets).values(values).returning().one()
+      return await runDatabaseTransaction(
+        this.db,
+        async (db) => {
+          if (data.is_default) {
+            await update(db, agenticToolPresets)
+              .set({ is_default: false })
+              .where(eq(agenticToolPresets.tool, data.tool))
+              .run();
+          }
+          return rowToPreset(await insert(db, agenticToolPresets).values(values).returning().one());
+        },
+        { sqliteImmediate: true }
       );
     } catch (error) {
       throw new RepositoryError(`Failed to create preset '${name}': ${String(error)}`, error);
@@ -104,32 +115,41 @@ export class AgenticToolPresetRepository {
     data: PatchAgenticToolPreset,
     actor: UserID
   ): Promise<AgenticToolPreset> {
-    const current = await this.findById(id);
-    if (!current) throw new EntityNotFoundError('AgenticToolPreset', id);
-    if (data.is_default) {
-      await update(this.db, agenticToolPresets)
-        .set({ is_default: false })
-        .where(eq(agenticToolPresets.tool, current.tool))
-        .run();
-    }
-    const row = await update(this.db, agenticToolPresets)
-      .set({
-        ...(data.name !== undefined ? { name: data.name.trim() } : {}),
-        ...(data.description !== undefined ? { description: data.description.trim() || null } : {}),
-        ...(data.configuration !== undefined ? { configuration: data.configuration } : {}),
-        ...(data.is_default !== undefined ? { is_default: data.is_default } : {}),
-        updated_by: actor,
-        updated_at: new Date(),
-      })
-      .where(
-        and(
-          eq(agenticToolPresets.preset_id, current.preset_id),
-          eq(agenticToolPresets.tool, current.tool)
+    return runDatabaseTransaction(this.db, async (db) => {
+      await lockRowForUpdate(db, this.db, agenticToolPresets, eq(agenticToolPresets.preset_id, id));
+      const currentRow = await select(db)
+        .from(agenticToolPresets)
+        .where(eq(agenticToolPresets.preset_id, id))
+        .one();
+      if (!currentRow) throw new EntityNotFoundError('AgenticToolPreset', id);
+      const current = rowToPreset(currentRow);
+      if (data.is_default) {
+        await update(db, agenticToolPresets)
+          .set({ is_default: false })
+          .where(eq(agenticToolPresets.tool, current.tool))
+          .run();
+      }
+      const row = await update(db, agenticToolPresets)
+        .set({
+          ...(data.name !== undefined ? { name: data.name.trim() } : {}),
+          ...(data.description !== undefined
+            ? { description: data.description.trim() || null }
+            : {}),
+          ...(data.configuration !== undefined ? { configuration: data.configuration } : {}),
+          ...(data.is_default !== undefined ? { is_default: data.is_default } : {}),
+          updated_by: actor,
+          updated_at: new Date(),
+        })
+        .where(
+          and(
+            eq(agenticToolPresets.preset_id, current.preset_id),
+            eq(agenticToolPresets.tool, current.tool)
+          )
         )
-      )
-      .returning()
-      .one();
-    return rowToPreset(row);
+        .returning()
+        .one();
+      return rowToPreset(row);
+    });
   }
 
   async remove(id: AgenticToolPresetID | string): Promise<AgenticToolPreset> {

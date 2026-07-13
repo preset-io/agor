@@ -7,11 +7,15 @@ import { UserSettingsModal } from './UserSettingsModal';
 
 vi.mock('../ApiKeyFields', () => ({
   ApiKeyFields: () => null,
-  TOOL_FIELD_CONFIGS: Object.fromEntries(
-    ['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'].map(
-      (tool) => [tool, []]
-    )
-  ),
+  TOOL_FIELD_CONFIGS: {
+    'claude-code': [],
+    'claude-code-cli': [],
+    codex: [{ field: 'OPENAI_API_KEY', label: 'OpenAI API Key' }],
+    gemini: [],
+    opencode: [],
+    copilot: [],
+    cursor: [],
+  },
 }));
 
 vi.mock('../AgenticToolConfigForm', async () => {
@@ -127,6 +131,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
     await screen.findByRole('heading', { name: 'Codex' });
+    fireEvent.click(screen.getByText('Session Defaults'));
     fireEvent.click(screen.getByLabelText('codex allow-all'));
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -145,6 +150,25 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       });
     }, ASYNC);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows Codex authentication choices when subscription mode hides API-key fields', async () => {
+    const user = makeUser({ agentic_auth_methods: { codex: 'subscription' } });
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /codex/i }));
+    await screen.findByRole('heading', { name: 'Codex' });
+    expect(screen.getByText('ChatGPT subscription')).toBeInTheDocument();
+    expect(screen.getByText('Use Codex CLI subscription authentication')).toBeInTheDocument();
   });
 
   it('saves a Claude model alias before closing', async () => {

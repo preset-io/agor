@@ -1,6 +1,7 @@
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
 
 const onboardedUser = (userId: string, overrides: Partial<User> = {}): User =>
@@ -26,6 +27,8 @@ const baseProps = (over: Partial<OnboardingBannersProps>): OnboardingBannersProp
 });
 
 describe('OnboardingBanners probe effect', () => {
+  beforeEach(() => agorStore.getState().reset());
+
   it('shows "No AI" once every probe positively reports unauthenticated', async () => {
     render(
       <OnboardingBanners {...baseProps({ onCheckAuth: async () => result('unauthenticated') })} />
@@ -106,5 +109,58 @@ describe('OnboardingBanners probe effect', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
     expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+  });
+
+  it('routes tenant-preferred credential failures to workspace agentic-tool settings', async () => {
+    agorStore.getState().setAgenticToolSettings([
+      {
+        tool: 'claude-code',
+        enabled: true,
+        resolution_policy: 'tenant_preferred',
+        inline_configuration_allowed: true,
+        connection: { ANTHROPIC_API_KEY: { configured: true } },
+      },
+    ]);
+    const onOpenUserSettings = vi.fn();
+    const onOpenWorkspaceSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          onOpenUserSettings,
+          onOpenWorkspaceSettings,
+          onCheckAuth: async () => result('unauthenticated'),
+        })}
+      />
+    );
+    fireEvent.click((await screen.findByText('Reconnect AI')).closest('button')!);
+    expect(onOpenWorkspaceSettings).toHaveBeenCalledWith('agentic-tools');
+    expect(onOpenUserSettings).not.toHaveBeenCalled();
+  });
+
+  it('routes user-preferred credential failures to the selected user tool tab', async () => {
+    agorStore.getState().setAgenticToolSettings([
+      {
+        tool: 'claude-code',
+        enabled: false,
+        resolution_policy: 'user_preferred',
+        inline_configuration_allowed: true,
+        connection: {},
+      },
+      {
+        tool: 'codex',
+        enabled: true,
+        resolution_policy: 'user_required',
+        inline_configuration_allowed: true,
+        connection: {},
+      },
+    ]);
+    const onOpenUserSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({ onOpenUserSettings, onCheckAuth: async () => result('unauthenticated') })}
+      />
+    );
+    fireEvent.click((await screen.findByText('Connect AI')).closest('button')!);
+    expect(onOpenUserSettings).toHaveBeenCalledWith('codex');
   });
 });

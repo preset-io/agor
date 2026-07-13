@@ -3,6 +3,7 @@ import {
   GatewayChannelRepository,
   ScheduleRepository,
   SessionRepository,
+  TenantAgenticToolSettingsRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
@@ -49,6 +50,22 @@ function validateConfiguration(
     throw new BadRequest(`Unknown preset configuration fields: ${unknown.join(', ')}`);
 }
 
+function isForeignKeyRestriction(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; current && depth < 4; depth++) {
+    const record = current as { code?: unknown; message?: unknown; cause?: unknown };
+    if (record.code === '23503') return true;
+    if (
+      typeof record.message === 'string' &&
+      /foreign key constraint|violates foreign key constraint/i.test(record.message)
+    ) {
+      return true;
+    }
+    current = record.cause;
+  }
+  return false;
+}
+
 export class AgenticToolPresetsService {
   private repository: AgenticToolPresetRepository;
   private db: TenantScopeAwareDatabase;
@@ -82,10 +99,26 @@ export class AgenticToolPresetsService {
   ): Promise<AgenticToolPreset> {
     if (data.configuration !== undefined) validateConfiguration(data.configuration);
     if (data.name !== undefined && !data.name.trim()) throw new BadRequest('name is required');
+    if (data.is_default === false) {
+      const current = await this.get(id);
+      const settings = await new TenantAgenticToolSettingsRepository(this.db).find(current.tool);
+      if (current.is_default && settings.inline_configuration_allowed === false) {
+        throw new BadRequest(
+          `Choose another default ${current.tool} preset before unsetting this one`
+        );
+      }
+    }
     return this.repository.patch(id, data, actor(params));
   }
 
   async remove(id: string): Promise<AgenticToolPreset> {
+    const current = await this.get(id);
+    const settings = await new TenantAgenticToolSettingsRepository(this.db).find(current.tool);
+    if (current.is_default && settings.inline_configuration_allowed === false) {
+      throw new BadRequest(
+        `Choose another default ${current.tool} preset before deleting this one`
+      );
+    }
     const [sessions, schedules, channels, users] = await Promise.all([
       new SessionRepository(this.db).findAll(),
       new ScheduleRepository(this.db).findAll(),
@@ -106,7 +139,17 @@ export class AgenticToolPresetsService {
         `Preset is referenced by ${references} configuration${references === 1 ? '' : 's'}`
       );
     }
-    return this.repository.remove(id);
+    try {
+      return await this.repository.remove(id);
+    } catch (error) {
+      // A relational reference may be created after the best-effort scan.
+      // The database remains authoritative via ON DELETE RESTRICT; never leak
+      // a dialect-specific constraint error through the API.
+      if (isForeignKeyRestriction(error)) {
+        throw new BadRequest('Preset is still referenced and cannot be deleted');
+      }
+      throw error;
+    }
   }
 }
 
