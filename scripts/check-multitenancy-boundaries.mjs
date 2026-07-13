@@ -67,14 +67,7 @@ const checks = [
     // receives the service path, original params, and tenant-aware context.
     // Service-local CRUD emits predate emitServiceEvent(). Keep them explicit
     // so new call sites cannot silently expand this legacy surface.
-    baseline: {
-      'apps/agor-daemon/src/adapters/drizzle.ts': 7,
-      'apps/agor-daemon/src/services/board-objects.ts': 6,
-      'apps/agor-daemon/src/services/knowledge-documents.ts': 6,
-      'apps/agor-daemon/src/services/knowledge-namespaces.ts': 6,
-      'apps/agor-daemon/src/services/repos.ts': 1,
-      'apps/agor-daemon/src/services/sessions.ts': 1,
-    },
+    baseline: {},
   },
 
   {

@@ -1,5 +1,9 @@
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { runWithTenantContext, runWithTenantDatabaseScope } from '@agor/core/db';
+import {
+  bindRepositoryToTenantUnitOfWork,
+  runWithTenantContext,
+  runWithTenantDatabaseScope,
+} from '@agor/core/db';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { wrapRegisterTool } from './register-tool-proxy.js';
 import type { McpContext } from './server.js';
@@ -16,6 +20,14 @@ export async function runWithMcpTenantDatabaseScope<T>(
   const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
   if (!tenantId) return work(ctx.db);
   return runWithTenantDatabaseScope(ctx.db, tenantId, () => work(ctx.db));
+}
+
+/** Bind a repository used by long MCP orchestration to short tenant DB units. */
+export function bindMcpRepositoryToTenantUnitOfWork<T extends object>(
+  ctx: McpContext,
+  create: (db: TenantScopeAwareDatabase) => T
+): T {
+  return bindRepositoryToTenantUnitOfWork(ctx.db, create(ctx.db));
 }
 
 /**

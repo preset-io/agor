@@ -59,7 +59,10 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
-import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
+import {
+  bindMcpRepositoryToTenantUnitOfWork,
+  runWithMcpTenantDatabaseScope,
+} from '../tenant-scope.js';
 
 function requireAdmin(ctx: McpContext, action: string): void {
   if (!hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN)) {
@@ -1005,8 +1008,11 @@ async function resolveGatewaySlackToolTarget(
   args: { gatewayChannelId?: string; slackChannelId?: string },
   capability: SlackAgentToolCapability
 ): Promise<{ channel: GatewayChannel; branch: Branch | null; slackChannelId: string }> {
-  const channelRepo = new GatewayChannelRepository(ctx.db);
-  const branchRepo = new BranchRepository(ctx.db);
+  const channelRepo = bindMcpRepositoryToTenantUnitOfWork(
+    ctx,
+    (db) => new GatewayChannelRepository(db)
+  );
+  const branchRepo = bindMcpRepositoryToTenantUnitOfWork(ctx, (db) => new BranchRepository(db));
   const callerSession = await loadCallerSession(ctx);
   const callerSessionBranchId = callerSession ? (callerSession.branch_id as BranchID) : null;
   const gatewaySource = callerSession ? getGatewaySource(callerSession) : null;
@@ -1102,7 +1108,7 @@ async function resolveGatewayUploadFilePath(
     return { absolutePath: canonical, sourceName: path.basename(canonical) };
   }
 
-  const branchRepo = new BranchRepository(ctx.db);
+  const branchRepo = bindMcpRepositoryToTenantUnitOfWork(ctx, (db) => new BranchRepository(db));
   const workspace = await resolveBranchWorkspacePath({
     branchRepo,
     branchId,
