@@ -267,11 +267,15 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
     for (const serverId of serverIds) {
       try {
         await this.sessionMCPRepo.addServer(sessionId, serverId as MCPServerID);
-        this.app?.service('session-mcp-servers')?.emit?.('created', {
-          session_id: sessionId,
-          mcp_server_id: serverId,
-          enabled: true,
-          added_at: new Date(),
+        emitServiceEvent(this.app, {
+          path: 'session-mcp-servers',
+          event: 'created',
+          data: {
+            session_id: sessionId,
+            mcp_server_id: serverId,
+            enabled: true,
+            added_at: new Date(),
+          },
         });
       } catch {
         console.warn(`Skipped MCP server ${serverId} during ${label}`);
@@ -294,11 +298,15 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
         try {
           await this.sessionMCPRepo.addServer(targetSessionId, server.mcp_server_id as MCPServerID);
           // Emit WebSocket event for real-time UI updates
-          this.app?.service('session-mcp-servers')?.emit?.('created', {
-            session_id: targetSessionId,
-            mcp_server_id: server.mcp_server_id,
-            enabled: true,
-            added_at: new Date(),
+          emitServiceEvent(this.app, {
+            path: 'session-mcp-servers',
+            event: 'created',
+            data: {
+              session_id: targetSessionId,
+              mcp_server_id: server.mcp_server_id,
+              enabled: true,
+              added_at: new Date(),
+            },
           });
         } catch {
           // Silently skip — server may have been deleted between list and add

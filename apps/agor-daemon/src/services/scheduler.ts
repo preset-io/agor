@@ -74,6 +74,7 @@ import {
 } from '@agor/core/utils/cron';
 import Handlebars from 'handlebars';
 import type { Application } from '../declarations';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 
 /**
  * Session statuses that count as "actively consuming the branch" for
@@ -729,11 +730,15 @@ export class SchedulerService {
                 serverId as MCPServerID
               )
             );
-            this.app.service('session-mcp-servers')?.emit?.('created', {
-              session_id: createdSession.session_id,
-              mcp_server_id: serverId,
-              enabled: true,
-              added_at: new Date(),
+            emitServiceEvent(this.app, {
+              path: 'session-mcp-servers',
+              event: 'created',
+              data: {
+                session_id: createdSession.session_id,
+                mcp_server_id: serverId,
+                enabled: true,
+                added_at: new Date(),
+              },
             });
           } catch {
             // Silently skip deleted/invalid MCP servers

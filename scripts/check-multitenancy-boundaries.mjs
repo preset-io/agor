@@ -60,7 +60,7 @@ const checks = [
     roots: ['apps/agor-daemon/src'],
     excludeTests: true,
     patterns: [
-      /\.service\([^\n]+\)\.emit(?:\?\.)?\s*\(\s*['"](?:created|patched|updated|removed)['"]/g,
+      /\.service\([^\n]+\)(?:\.|\?\.)emit(?:\?\.)?\s*\(\s*['"](?:created|patched|updated|removed)['"]/g,
       /\bthis\.emit\?\.\(\s*['"](?:created|patched|updated|removed)['"]/gs,
     ],
     // Manual CRUD events must use emitServiceEvent() so realtime publishing
