@@ -7,7 +7,6 @@
 
 import {
   type AgorConfig,
-  isTenantAgenticToolEnabled,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
   resolveExecutionSecurityMode,
@@ -17,6 +16,7 @@ import {
   BoardRepository,
   BranchRepository,
   eq,
+  GatewayChannelRepository,
   getCurrentTenantId,
   inArray,
   isPostgresDatabase,
@@ -84,6 +84,7 @@ import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
@@ -718,19 +719,8 @@ function createExecuteHandler(
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
   ) => {
-    let session = await sessionsService.get(sessionId, params);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
     const tenantId = getCurrentTenantId();
-    if (!tenantId) throw new Error('Missing active tenant context for executor startup');
-    const agenticToolEnabled = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
-      isTenantAgenticToolEnabled(session.agentic_tool, tenantDb)
-    );
-    if (!agenticToolEnabled) {
-      throw new Error(`${session.agentic_tool} is disabled for this workspace`);
-    }
-    session = await sessionsService.materializeAgenticToolPreset(session, params);
+    const session = await prepareSessionForExecutorStart(db, sessionsService, sessionId, params);
     if (
       session.agentic_tool_preset_id &&
       data.permissionMode !== undefined &&
@@ -783,12 +773,13 @@ function createExecuteHandler(
     // Get branch path
     let cwd = process.cwd();
     if (session.branch_id) {
-      try {
-        const branch = await app.service('branches').get(session.branch_id, params);
-        cwd = branch.path;
-      } catch (error) {
-        console.warn(`Could not get branch path for ${session.branch_id}:`, error);
-      }
+      const branchPath = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+        const branch = await new BranchRepository(tenantDb).findById(session.branch_id);
+        return branch?.path;
+      });
+      if (!branchPath)
+        throw new Error(`Branch ${session.branch_id} not found for executor startup`);
+      cwd = branchPath;
     }
 
     // Determine Unix user for executor
@@ -832,16 +823,15 @@ function createExecuteHandler(
     const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
 
     // Resolve gateway-level env vars
-    let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
     const gatewaySource = (session.custom_context as Record<string, unknown> | undefined)
       ?.gateway_source as { channel_id?: string } | undefined;
-    if (gatewaySource?.channel_id) {
-      try {
-        const { GatewayChannelRepository, decryptApiKey, isEncrypted } = await import(
-          '@agor/core/db'
+    const executorEnv = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
+      if (gatewaySource?.channel_id) {
+        const { decryptApiKey, isEncrypted } = await import('@agor/core/db');
+        const channel = await new GatewayChannelRepository(tenantDb).findById(
+          gatewaySource.channel_id
         );
-        const channelRepo = new GatewayChannelRepository(db);
-        const channel = await channelRepo.findById(gatewaySource.channel_id);
         if (channel?.agentic_config?.envVars) {
           gatewayEnv = channel.agentic_config.envVars.map((v) => ({
             ...v,
@@ -855,21 +845,19 @@ function createExecuteHandler(
             })(),
           }));
         }
-      } catch {
-        // Non-fatal
       }
-    }
 
-    // Provider connections are resolved once by the executor through the
-    // task-scoped daemon API. Generic process environment never carries them.
-    const executorEnv = await createUserProcessEnvironment(
-      userId,
-      db,
-      undefined,
-      !!executorUnixUser,
-      gatewayEnv,
-      sessionId as SessionID
-    );
+      // Provider connections are resolved once by the executor through the
+      // task-scoped daemon API. Generic process environment never carries them.
+      return createUserProcessEnvironment(
+        userId,
+        tenantDb,
+        undefined,
+        !!executorUnixUser,
+        gatewayEnv,
+        sessionId as SessionID
+      );
+    });
 
     // Validate required user environment variables
     const requiredUserEnvVars = config.execution?.required_user_env_vars;
@@ -886,14 +874,16 @@ function createExecuteHandler(
           '',
           'This is a one-time setup — once configured, this message will not appear again.',
         ].join('\n');
-        await appendSystemMessage({
-          app,
-          db,
-          sessionId,
-          taskId: data.taskId,
-          content: errorContent,
-          contentPreview: `Missing required env vars: ${missingVars.join(', ')}`,
-        });
+        await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+          appendSystemMessage({
+            app,
+            db,
+            sessionId,
+            taskId: data.taskId,
+            content: errorContent,
+            contentPreview: `Missing required env vars: ${missingVars.join(', ')}`,
+          })
+        );
         throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
       }
     }

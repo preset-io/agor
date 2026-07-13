@@ -1,6 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { buildClaudeCliSpawn } from '@agor/core/claude-cli';
+import {
+  getCurrentTenantDatabaseScope,
+  runWithTenantContext,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Session } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +23,7 @@ vi.mock('../mcp/tokens.js', () => ({
 }));
 
 const generatedPaths: string[] = [];
+const testDb = { run: vi.fn() } as unknown as TenantScopeAwareDatabase;
 
 function makeApp(
   config: {
@@ -26,7 +32,11 @@ function makeApp(
   } = {}
 ): Application {
   return {
-    get: (key: string) => (key === 'config' ? config : undefined),
+    get: (key: string) => {
+      if (key === 'config') return config;
+      if (key === 'database') return testDb;
+      return undefined;
+    },
   } as unknown as Application;
 }
 
@@ -101,9 +111,18 @@ describe('Claude CLI Agor MCP config', () => {
   });
 
   it('writes a private temp config for the session creator', async () => {
-    const filePath = await writeClaudeCliMcpConfigForSession(makeApp(), makeSession(), {
-      actor: { user_id: 'user-1', role: 'member' },
+    vi.mocked(generateSessionToken).mockImplementationOnce(async () => {
+      expect(getCurrentTenantDatabaseScope()).toMatchObject({
+        kind: 'tenant',
+        tenantId: 'tenant-x',
+      });
+      return 'tok_test';
     });
+    const filePath = await runWithTenantContext('tenant-x', () =>
+      writeClaudeCliMcpConfigForSession(makeApp(), makeSession(), {
+        actor: { user_id: 'user-1', role: 'member' },
+      })
+    );
     expect(filePath).toBeTruthy();
     generatedPaths.push(filePath as string);
 

@@ -1424,13 +1424,22 @@ export async function writeClaudeCliMcpConfigForSession(
     return undefined;
   }
 
-  try {
-    const { generateSessionToken } = await import('../mcp/tokens.js');
-    const mcpToken = await generateSessionToken(
+  const db = getDb(app);
+  if (!db) throw new Error('Missing tenant database for Claude CLI MCP config generation');
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) {
+    throw new Error('Missing active tenant context for Claude CLI MCP config generation');
+  }
+  const { generateSessionToken } = await import('../mcp/tokens.js');
+  const mcpToken = await runWithTenantDatabaseScope(db, tenantId, () =>
+    generateSessionToken(
       app,
       session.session_id,
       session.created_by as import('@agor/core/types').UserID
-    );
+    )
+  );
+
+  try {
     const mcpConfig = buildClaudeCliAgorMcpConfig({
       daemonUrl: getDaemonUrl(),
       mcpToken,
