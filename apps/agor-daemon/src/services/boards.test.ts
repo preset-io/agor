@@ -429,6 +429,30 @@ describe('BoardsService - Custom Methods', () => {
     expect(typeof service.clone).toBe('function');
     expect(typeof service.ensureTeammateWelcomeNote).toBe('function');
   });
+
+  dbTest('manually emits archive transitions from the custom method', async ({ db }) => {
+    const emitBoardEvent = vi.fn();
+    const service = new BoardsService(db, undefined, emitBoardEvent);
+    const board = (await service.create({
+      name: 'Archive realtime',
+      slug: 'archive-realtime',
+      created_by: TEST_USER,
+    })) as Board;
+    const params = {
+      user: { user_id: TEST_USER },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+
+    const archived = await service.archive(board.board_id, params);
+
+    expect(archived.archived).toBe(true);
+    expect(emitBoardEvent).toHaveBeenCalledWith({
+      event: 'patched',
+      data: archived,
+      params,
+      id: board.board_id,
+    });
+  });
 });
 
 describe('BoardsService.find SQL pushdown', () => {

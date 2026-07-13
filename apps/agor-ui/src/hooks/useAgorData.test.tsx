@@ -336,6 +336,23 @@ describe('useAgorData — socket-event bailouts', () => {
     expect(agorStore.getState().branchById.get('b-1')?.name).toBe('feature/x');
   });
 
+  it('evicts an archived branch and its sessions on branches.patched', async () => {
+    const branch = makeBranch();
+    const session = makeSession();
+    const { client, emit } = makeMockClient({ branches: [branch], sessions: [session] });
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    expect(agorStore.getState().branchById.has('b-1')).toBe(true);
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
+
+    act(() => emit('branches', 'patched', { ...branch, archived: true }));
+
+    expect(agorStore.getState().branchById.has('b-1')).toBe(false);
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
+    expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);
+  });
+
   it('drops a duplicate `sessions.created` for an existing id', async () => {
     const session = makeSession();
     const { client, emit } = makeMockClient({ sessions: [session] });

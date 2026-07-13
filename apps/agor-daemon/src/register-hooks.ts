@@ -398,6 +398,8 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'tasks',
   'messages',
   'boards',
+  'boards/:id/archive',
+  'boards/:id/unarchive',
   'repos',
   'branches',
   'branches/:id/owners',

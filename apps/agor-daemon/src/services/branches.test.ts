@@ -1091,8 +1091,9 @@ describe('BranchesService.unarchive', () => {
 });
 
 describe('BranchesService.archiveOrDelete', () => {
-  it('preserves a zoned board object when archiving through the archive operation', async () => {
-    const { service, boardObjectsService, sessionsService } = createServiceHarness();
+  it('preserves placement and manually emits the tenant-aware archive transition', async () => {
+    const { service, boardObjectsService, sessionsService, branchesService } =
+      createServiceHarness();
     const branchId = 'wt-archive-op' as BranchID;
     const userId = 'user-1' as UUID;
 
@@ -1120,7 +1121,10 @@ describe('BranchesService.archiveOrDelete', () => {
     await service.archiveOrDelete(
       branchId,
       { metadataAction: 'archive', filesystemAction: 'preserved' },
-      { user: { user_id: userId } } as never
+      {
+        user: { user_id: userId },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never
     );
 
     expect(sessionsService.find).toHaveBeenCalledWith({
@@ -1129,6 +1133,20 @@ describe('BranchesService.archiveOrDelete', () => {
     });
     expect(boardObjectsService.findByBranchId).not.toHaveBeenCalled();
     expect(boardObjectsService.patch).not.toHaveBeenCalled();
+    expect(branchesService.emit).toHaveBeenCalledTimes(1);
+    expect(branchesService.emit).toHaveBeenCalledWith(
+      'patched',
+      expect.objectContaining({ branch_id: branchId, archived: true }),
+      expect.objectContaining({
+        path: 'branches',
+        method: 'patch',
+        event: 'patched',
+        id: branchId,
+        params: expect.objectContaining({
+          tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        }),
+      })
+    );
   });
 });
 

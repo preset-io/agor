@@ -416,6 +416,49 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }, { user: admin }]);
   });
 
+  it('delivers an archived branch tombstone only to tenant users who had view access', async () => {
+    const allowed = user('allowed');
+    const denied = user('denied');
+    const otherTenant = user('other-tenant');
+    const allowedConnection = { user: allowed };
+    const deniedConnection = { user: denied };
+    const app = makeApp(
+      [allowedConnection, deniedConnection, { user: otherTenant }],
+      {},
+      {
+        authenticated: [allowedConnection, deniedConnection, { user: otherTenant }],
+        'tenant:tenant-a': [allowedConnection, deniedConnection],
+      }
+    );
+    const archivedBranch = { ...branch('b1', 'none'), archived: true } as Branch;
+    const r = repos({
+      branch: archivedBranch,
+      permissions: { allowed: 'view', denied: 'none' },
+    });
+    configureRealtimePublish({
+      app,
+      db: scopeOnlyDb,
+      branchRbacEnabled: true,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as any,
+        auth_claim: 'tenant_id',
+      },
+      ...r,
+    });
+
+    const channel = await app.runPublish(archivedBranch, {
+      path: 'branches',
+      method: 'patch',
+      event: 'patched',
+      id: 'b1',
+      params: { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
+    });
+
+    expect(channel.connections).toEqual([allowedConnection]);
+    expect(r.branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledWith('b1');
+  });
+
   it('scopes nested branch permission service events through the route branch id', async () => {
     const allowed = user('allowed');
     const denied = user('denied');

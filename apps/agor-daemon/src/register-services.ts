@@ -303,15 +303,19 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   } as any);
   app.use(
     '/boards',
-    createBoardsService(db, (boardObject, params) => {
-      emitServiceEvent(app, {
-        path: 'board-objects',
-        event: 'patched',
-        data: boardObject,
-        params,
-        id: boardObject.object_id,
-      });
-    }),
+    createBoardsService(
+      db,
+      (boardObject, params) => {
+        emitServiceEvent(app, {
+          path: 'board-objects',
+          event: 'patched',
+          data: boardObject,
+          params,
+          id: boardObject.object_id,
+        });
+      },
+      (event) => emitServiceEvent(app, { path: 'boards', ...event })
+    ),
     {
       methods: [
         'find',

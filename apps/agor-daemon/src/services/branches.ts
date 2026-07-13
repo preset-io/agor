@@ -1509,6 +1509,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         )
       );
 
+      // archiveOrDelete is a custom service method. Its internal this.patch()
+      // call bypasses Feathers' standard-method event hook, so publish the
+      // branch transition explicitly (with the request tenant/RBAC context).
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: archivedBranch,
+        params,
+        id: archivedBranch.branch_id,
+      });
+
       // Archive all sessions in this branch
       // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
       const sessionsService = this.app.service('sessions');
@@ -1577,6 +1588,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const unarchivedBranch = await this.withTenantDatabase(params, () =>
       this.patch(id, patchData, params)
     );
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: unarchivedBranch,
+      params,
+      id: unarchivedBranch.branch_id,
+    });
 
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')

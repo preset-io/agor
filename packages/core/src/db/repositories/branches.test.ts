@@ -556,6 +556,26 @@ describe('BranchRepository.findAll', () => {
     expect(archivedOnly.map((w) => w.branch_id)).toEqual([archived.branch_id]);
   });
 
+  dbTest('keeps archived rows resolvable for realtime tombstone authorization', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const archived = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'archived-realtime',
+        branch_unique_id: 1,
+        others_can: 'view',
+      })
+    );
+    await branchRepo.update(archived.branch_id, { archived: true });
+
+    await expect(branchRepo.findRealtimeVisibilityBranch(archived.branch_id)).resolves.toEqual({
+      branch_id: archived.branch_id,
+      others_can: 'view',
+    });
+  });
+
   dbTest('should restrict to an explicit branchIds set', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
