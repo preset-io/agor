@@ -10,8 +10,7 @@ export default class ConfigSet extends Command {
   static description = 'Set a configuration value';
 
   static examples = [
-    '<%= config.bin %> <%= command.id %> defaults.board experiments',
-    '<%= config.bin %> <%= command.id %> defaults.agent claude-code',
+    '<%= config.bin %> <%= command.id %> daemon.port 4000',
     '<%= config.bin %> <%= command.id %> daemon.port 4000',
   ];
 

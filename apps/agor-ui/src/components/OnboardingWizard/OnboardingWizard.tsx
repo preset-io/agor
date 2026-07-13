@@ -116,9 +116,6 @@ export interface OnboardingWizardProps {
   onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => Promise<void>;
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
-
-  teammatePending?: boolean;
-  frameworkRepoUrl?: string;
 }
 
 function sanitizeBranchName(input: string): string {
@@ -247,7 +244,6 @@ export function OnboardingWizard({
   onCreateSession,
   onUpdateUser,
   onCheckAuth,
-  frameworkRepoUrl,
 }: OnboardingWizardProps) {
   // Self-subscribe to the entity maps this wizard reads. The subscription used
   // to live in the outer App shell; relocating it here keeps the shell from
@@ -277,8 +273,6 @@ export function OnboardingWizard({
   const clonePollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completingRepoRef = useRef<string | null>(null);
   const knownFailedRepoIdsRef = useRef<Set<string>>(new Set());
-  const effectiveFrameworkUrl = frameworkRepoUrl || FRAMEWORK_REPO_URL;
-
   const defaultBranchName = useMemo(
     () => defaultTeammateBranchName(teammateDisplayName),
     [teammateDisplayName]
@@ -696,7 +690,7 @@ export function OnboardingWizard({
     try {
       const cloneResult = await onCreateRepo(
         {
-          url: effectiveFrameworkUrl,
+          url: FRAMEWORK_REPO_URL,
           slug: FRAMEWORK_REPO_SLUG,
           default_branch: 'main',
         },
@@ -741,14 +735,7 @@ export function OnboardingWizard({
       setSetupStage('error');
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [
-    effectiveFrameworkUrl,
-    fetchExistingFrameworkRepo,
-    finishSetupFromRepo,
-    onCreateRepo,
-    pollRepoUntilReady,
-    repoById,
-  ]);
+  }, [fetchExistingFrameworkRepo, finishSetupFromRepo, onCreateRepo, pollRepoUntilReady, repoById]);
 
   useEffect(() => {
     if (currentStep !== 'loading' || setupStage !== 'cloning') return;

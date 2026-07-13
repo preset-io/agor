@@ -268,17 +268,22 @@ export function logFirstRunAdminBootstrap(result: DaemonBootstrapResult): void {
 const DEPRECATED_ANONYMOUS_KEYS = ['allowAnonymous', 'requireAuth'] as const;
 
 /**
- * Print a clear stderr banner if the loaded config still carries leftover
- * keys from the anonymous-mode path. The keys themselves have no runtime
- * effect anymore — this is purely an operator-UX nudge.
+ * Print a clear stderr banner if the loaded config still carries retired
+ * upgrade-only keys. The keys have no runtime effect anymore — this is purely
+ * an operator-UX nudge.
  *
  * Detected separately from the `AgorConfig` type because we deliberately
  * removed these fields from the interface; we reach into the raw object via
  * a Record cast to see what the YAML file actually contained.
  */
-export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
+export function warnDeprecatedConfig(config: AgorConfig): void {
+  const legacy = config as AgorConfig & {
+    defaults?: Record<string, unknown>;
+    display?: Record<string, unknown>;
+    onboarding?: Record<string, unknown>;
+  };
   const daemon = (config as { daemon?: Record<string, unknown> }).daemon;
-  const display = (config as { display?: Record<string, unknown> }).display;
+  const display = legacy.display;
 
   const present = daemon
     ? DEPRECATED_ANONYMOUS_KEYS.filter((key) => Object.hasOwn(daemon, key))
@@ -288,7 +293,16 @@ export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
   const presentDisplay = display
     ? retiredDisplayKeys.filter((key) => Object.hasOwn(display, key))
     : [];
-  if (present.length === 0 && !hasShortIdLength && presentDisplay.length === 0) return;
+  const presentDefaults = legacy.defaults ? Object.keys(legacy.defaults) : [];
+  const presentOnboarding = legacy.onboarding ? Object.keys(legacy.onboarding) : [];
+  if (
+    present.length === 0 &&
+    !hasShortIdLength &&
+    presentDisplay.length === 0 &&
+    presentDefaults.length === 0 &&
+    presentOnboarding.length === 0
+  )
+    return;
 
   const lines: string[] = [
     '',
@@ -304,17 +318,27 @@ export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
   for (const key of presentDisplay) {
     lines.push(`    display.${key}: ${String(display?.[key])}`);
   }
+  for (const key of presentDefaults) {
+    lines.push(`    defaults.${key}: ${String(legacy.defaults?.[key])}`);
+  }
+  for (const key of presentOnboarding) {
+    lines.push(`    onboarding.${key}: ${String(legacy.onboarding?.[key])}`);
+  }
   lines.push(
     '',
-    '  These keys no longer have any effect. Authentication is always',
-    '  required, and terminal presentation is managed by each client.',
+    '  These keys no longer have any effect. Onboarding progress is stored',
+    '  per user, and product defaults and terminal presentation are managed',
+    '  by Agor and its clients.',
     '',
-    '  Action: remove these keys from your config.yaml at your',
-    '  convenience. If you previously ran anonymously, the daemon',
-    `  has auto-generated admin credentials at ${getAdminCredentialsPath()}`,
-    '  (printed below if just created on this start).',
-    '================================================================',
-    ''
+    '  Action: remove these keys from your config.yaml at your convenience.'
   );
+  if (present.length > 0) {
+    lines.push(
+      '  If you previously ran anonymously, the daemon has auto-generated',
+      `  admin credentials at ${getAdminCredentialsPath()}`,
+      '  (printed below if just created on this start).'
+    );
+  }
+  lines.push('================================================================', '');
   process.stderr.write(lines.join('\n'));
 }

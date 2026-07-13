@@ -249,7 +249,6 @@ function AppContent() {
   const {
     config: authConfig,
     instanceConfig,
-    onboardingConfig,
     featuresConfig,
     loading: authConfigLoading,
     error: authConfigError,
@@ -511,15 +510,6 @@ function AppContent() {
       },
       { silent: true }
     ).catch(() => {});
-
-    // Clear the AI teammate pending flag if applicable
-    if (result.path === 'teammate' && client) {
-      try {
-        await client.service('config').patch(null, { onboarding: { teammatePending: false } });
-      } catch {
-        // Non-critical — ignore
-      }
-    }
 
     // Navigate to the user's board + session, or to the boards list if they
     // skipped. Use the centralized path builders — the old
@@ -1773,8 +1763,6 @@ function AppContent() {
           handleUpdateBranch(branchId, updates, { silent: true })
         }
         onCheckAuth={handleCheckAuth}
-        teammatePending={onboardingConfig?.teammatePending}
-        frameworkRepoUrl={onboardingConfig?.frameworkRepoUrl}
       />
 
       <DeviceRouter />

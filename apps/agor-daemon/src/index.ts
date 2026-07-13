@@ -65,7 +65,7 @@ import { loadBuildInfo } from './setup/build-info.js';
 import { createDynamicCompressionMiddleware } from './setup/compression.js';
 import { buildCorsConfig, isSandpackOrigin } from './setup/cors.js';
 import { initializeDatabase } from './setup/database.js';
-import { warnDeprecatedAnonymousConfig } from './setup/first-run-admin.js';
+import { warnDeprecatedConfig } from './setup/first-run-admin.js';
 import { securityHeaders } from './setup/security-headers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/static-assets.js';
@@ -201,11 +201,8 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     );
   }
 
-  // Surface a clear migration note if the config still carries leftover
-  // anonymous-mode keys. Operators upgrading from a release that had
-  // `daemon.allowAnonymous` / `daemon.requireAuth` see what to do; the keys
-  // are otherwise silently ignored.
-  warnDeprecatedAnonymousConfig(config);
+  // Surface a clear migration note for accepted-but-ignored upgrade keys.
+  warnDeprecatedConfig(config);
 
   // --------------------------------------------------------------------------
   // Auth configuration

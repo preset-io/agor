@@ -9,10 +9,6 @@ const DEFAULT_DAEMON_HOST = 'localhost';
 
 export function getDefaultConfig(): AgorConfig {
   return {
-    defaults: {
-      board: 'main',
-      agent: 'claude-code',
-    },
     daemon: {
       port: DEFAULT_DAEMON_PORT,
       host: DEFAULT_DAEMON_HOST,

@@ -42,10 +42,6 @@ import type { AgorConfig } from './types';
  */
 function createConfigData(overrides?: Partial<AgorConfig>): AgorConfig {
   return {
-    defaults: {
-      board: 'test-board',
-      agent: 'test-agent',
-    },
     daemon: {
       port: 4000,
       host: '0.0.0.0',
@@ -86,8 +82,6 @@ describe('getDefaultConfig', () => {
     const defaults = getDefaultConfig();
 
     // Verify structure and key defaults
-    expect(defaults.defaults?.board).toBe('main');
-    expect(defaults.defaults?.agent).toBe('claude-code');
     expect(defaults.daemon?.port).toBe(3030);
     expect(defaults.daemon?.host).toBe('localhost');
     expect(defaults.ui?.port).toBe(5173);
@@ -249,13 +243,17 @@ describe('loadConfig', () => {
       configPath,
       yaml.dump({
         daemon: { allowAnonymous: false, requireAuth: true },
+        defaults: { board: 'main', agent: 'claude-code' },
         display: { shortIdLength: 12, tableStyle: 'ascii', colorOutput: false },
+        onboarding: { teammatePending: true, frameworkRepoUrl: 'https://example.test/repo.git' },
       }),
       'utf-8'
     );
     await expect(loadConfig()).resolves.toMatchObject({
       daemon: { allowAnonymous: false, requireAuth: true },
+      defaults: { board: 'main', agent: 'claude-code' },
       display: { shortIdLength: 12, tableStyle: 'ascii', colorOutput: false },
+      onboarding: { teammatePending: true, frameworkRepoUrl: 'https://example.test/repo.git' },
     });
   });
 
@@ -273,7 +271,6 @@ describe('loadConfig', () => {
 
     const loaded = await loadConfig();
     expect(loaded.daemon?.port).toBe(4040);
-    expect(loaded.defaults).toBeUndefined();
   });
 
   it('does not configure an external launch login redirect by default', async () => {
@@ -687,8 +684,8 @@ describe('saveConfig', () => {
     const content = await fs.readFile(configPath, 'utf-8');
 
     // Check that content is properly indented (2 spaces)
-    expect(content).toContain('defaults:');
-    expect(content).toContain('  board: ');
+    expect(content).toContain('daemon:');
+    expect(content).toContain('  port: ');
     expect(content).not.toContain('    '); // No 4-space indents (we use 2)
   });
 });
@@ -782,11 +779,15 @@ describe('getConfigValue', () => {
 
   it('ignores retired display settings from an existing config file', async () => {
     await saveConfig({
+      defaults: { board: 'legacy', agent: 'legacy-agent' },
       display: { tableStyle: 'ascii', colorOutput: false },
+      onboarding: { teammatePending: true },
     } as unknown as AgorConfig);
 
+    expect(await getConfigValue('defaults.board')).toBeUndefined();
     expect(await getConfigValue('display.tableStyle')).toBeUndefined();
     expect(await getConfigValue('display.colorOutput')).toBeUndefined();
+    expect(await getConfigValue('onboarding.teammatePending')).toBeUndefined();
   });
 
   it('should handle number values', async () => {
@@ -825,12 +826,13 @@ describe('setConfigValue', () => {
     expect(value).toBe(8888);
   });
 
-  it('should create section if it does not exist', async () => {
-    await saveConfig({});
-    await setConfigValue('onboarding.teammatePending', true);
-
-    const loaded = await loadConfig();
-    expect(loaded.onboarding?.teammatePending).toBe(true);
+  it('rejects retired defaults and onboarding keys', async () => {
+    await expect(setConfigValue('onboarding.teammatePending', true)).rejects.toThrow(
+      /has been retired/
+    );
+    await expect(setConfigValue('defaults.board', 'custom-board')).rejects.toThrow(
+      /has been retired/
+    );
   });
 
   it('should update existing value', async () => {
@@ -841,14 +843,6 @@ describe('setConfigValue', () => {
 
     const value = await getConfigValue('daemon.port');
     expect(value).toBe(7777);
-  });
-
-  it('should handle string values', async () => {
-    await saveConfig({});
-    await setConfigValue('defaults.board', 'custom-board');
-
-    const value = await getConfigValue('defaults.board');
-    expect(value).toBe('custom-board');
   });
 
   it('should handle boolean values', async () => {
@@ -891,7 +885,6 @@ describe('setConfigValue', () => {
 
     const loaded = await loadConfig();
     expect(loaded.daemon?.port).toBe(5555);
-    expect(loaded.defaults).toMatchObject(config.defaults!);
   });
 });
 
@@ -948,7 +941,7 @@ describe('unsetConfigValue', () => {
     await unsetConfigValue('daemon.port');
 
     const loaded = await loadConfig();
-    expect(loaded.defaults).toMatchObject(config.defaults!);
+    expect(loaded.ui).toEqual(config.ui);
   });
 
   it('should throw error for top-level keys', async () => {
@@ -1030,10 +1023,7 @@ describe('getDaemonUrl', () => {
   });
 
   it('should handle partial config with missing daemon section', async () => {
-    const config: AgorConfig = {
-      defaults: { board: 'main' },
-      // No daemon section
-    };
+    const config: AgorConfig = {};
     await saveConfig(config);
 
     const url = await getDaemonUrl();

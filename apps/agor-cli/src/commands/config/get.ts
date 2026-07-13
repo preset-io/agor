@@ -9,8 +9,7 @@ export default class ConfigGet extends Command {
   static description = 'Get a configuration value';
 
   static examples = [
-    '<%= config.bin %> <%= command.id %> defaults.board',
-    '<%= config.bin %> <%= command.id %> defaults.agent',
+    '<%= config.bin %> <%= command.id %> daemon.port',
     '<%= config.bin %> <%= command.id %> daemon.port',
   ];
 

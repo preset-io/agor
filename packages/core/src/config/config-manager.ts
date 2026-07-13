@@ -246,12 +246,16 @@ function validateConfig(config: AgorConfig): void {
       if (!allowed.includes(key)) unknownPaths.push(`${path}.${key}`);
     }
   };
-  only(config.defaults, 'defaults', ['board', 'agent']);
+  const legacyConfig = config as AgorConfig & {
+    defaults?: unknown;
+    display?: unknown;
+    onboarding?: unknown;
+  };
+  only(legacyConfig.defaults, 'defaults', ['board', 'agent']);
   // Known upgrade-only keys remain loadable so the daemon can print its
   // dedicated deprecation guidance before ignoring them. `display` is not
   // part of AgorConfig anymore: all three settings were retired.
-  const legacyDisplay = (config as { display?: unknown }).display;
-  only(legacyDisplay, 'display', ['tableStyle', 'colorOutput', 'shortIdLength']);
+  only(legacyConfig.display, 'display', ['tableStyle', 'colorOutput', 'shortIdLength']);
   only(config.daemon, 'daemon', [
     'port',
     'host',
@@ -403,7 +407,7 @@ function validateConfig(config: AgorConfig): void {
     'last_usage_summary_day',
     'last_reported_version',
   ]);
-  only(config.onboarding, 'onboarding', [
+  only(legacyConfig.onboarding, 'onboarding', [
     'teammatePending',
     'assistantPending',
     'persistedAgentPending',
@@ -610,10 +614,6 @@ export async function saveConfig(config: AgorConfig): Promise<void> {
  */
 export function getDefaultConfig(): AgorConfig {
   return {
-    defaults: {
-      board: 'main',
-      agent: 'claude-code',
-    },
     daemon: {
       port: DAEMON.DEFAULT_PORT,
       host: DAEMON.DEFAULT_HOST,
@@ -678,15 +678,21 @@ export async function initConfig(): Promise<void> {
 export async function getConfigValue(key: string): Promise<string | boolean | number | undefined> {
   const config = await loadConfig();
   const defaults = getDefaultConfig();
-  const { display: _retiredDisplay, ...activeConfig } = config as AgorConfig & {
+  const {
+    defaults: _retiredDefaults,
+    display: _retiredDisplay,
+    onboarding: _retiredOnboarding,
+    ...activeConfig
+  } = config as AgorConfig & {
+    defaults?: unknown;
     display?: unknown;
+    onboarding?: unknown;
   };
 
   // Merge config with defaults (deep merge for sections)
   const merged = {
     ...defaults,
     ...activeConfig,
-    defaults: { ...defaults.defaults, ...config.defaults },
     daemon: { ...defaults.daemon, ...config.daemon },
     ui: { ...defaults.ui, ...config.ui },
     execution: { ...defaults.execution, ...config.execution },
@@ -716,7 +722,12 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
  * @param value - Value to set
  */
 export async function setConfigValue(key: string, value: string | boolean | number): Promise<void> {
-  if (key === 'display.tableStyle' || key === 'display.colorOutput') {
+  if (
+    key.startsWith('defaults.') ||
+    key.startsWith('onboarding.') ||
+    key === 'display.tableStyle' ||
+    key === 'display.colorOutput'
+  ) {
     throw new Error(`Configuration key ${key} has been retired and no longer has any effect`);
   }
   const config = await loadConfig();

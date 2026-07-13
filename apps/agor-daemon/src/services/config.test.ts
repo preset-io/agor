@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(async () => ({})),
-  saveConfig: vi.fn(async () => undefined),
   resolveApiKey: vi.fn(),
 }));
 
@@ -13,16 +12,18 @@ import type { TaskID, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { ConfigService } from './config.js';
 
-describe('ConfigService retired display compatibility', () => {
+describe('ConfigService retired config compatibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configMocks.loadConfig.mockResolvedValue({
       daemon: { port: 3030 },
+      defaults: { board: 'main', agent: 'claude-code' },
       display: { tableStyle: 'ascii', colorOutput: false },
+      onboarding: { teammatePending: true, frameworkRepoUrl: 'https://example.test/repo.git' },
     });
   });
 
-  it('does not expose accepted legacy display settings from /config', async () => {
+  it('does not expose accepted legacy settings from /config', async () => {
     const service = new ConfigService({} as never);
     await expect(service.find()).resolves.toEqual({ daemon: { port: 3030 } });
   });
@@ -30,6 +31,17 @@ describe('ConfigService retired display compatibility', () => {
   it('does not expose accepted legacy display settings by dotted lookup', async () => {
     const service = new ConfigService({} as never);
     await expect(service.get('display.tableStyle')).resolves.toBeUndefined();
+  });
+
+  it('does not expose legacy defaults or onboarding state by dotted lookup', async () => {
+    const service = new ConfigService({} as never);
+    await expect(service.get('defaults.board')).resolves.toBeUndefined();
+    await expect(service.get('onboarding.teammatePending')).resolves.toBeUndefined();
+  });
+
+  it('has no mutation method because operator config is file-owned', () => {
+    const service = new ConfigService({} as never);
+    expect('patch' in service).toBe(false);
   });
 });
 
@@ -331,33 +343,5 @@ describe('ConfigService.resolveApiKey', () => {
     ).rejects.toBeInstanceOf(Forbidden);
 
     expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
-  });
-});
-
-describe('ConfigService.patch onboarding compatibility', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    configMocks.loadConfig.mockResolvedValue({});
-  });
-
-  it('normalizes legacy assistantPending into teammatePending', async () => {
-    const service = new ConfigService({} as never);
-
-    const result = await service.patch(null, { onboarding: { assistantPending: true } } as never);
-
-    expect(configMocks.saveConfig).toHaveBeenCalledWith({
-      onboarding: { teammatePending: true },
-    });
-    expect(result.onboarding?.teammatePending).toBe(true);
-  });
-
-  it('normalizes legacy persistedAgentPending into teammatePending', async () => {
-    const service = new ConfigService({} as never);
-
-    await service.patch(null, { onboarding: { persistedAgentPending: true } } as never);
-
-    expect(configMocks.saveConfig).toHaveBeenCalledWith({
-      onboarding: { teammatePending: true },
-    });
   });
 });

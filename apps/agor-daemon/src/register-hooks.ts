@@ -1823,7 +1823,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       all: [requireAuth],
       find: [requireMinimumRole(ROLES.ADMIN, 'view configuration')],
       get: [requireMinimumRole(ROLES.ADMIN, 'view configuration')],
-      patch: [requireMinimumRole(ROLES.ADMIN, 'update configuration')],
     },
   });
 

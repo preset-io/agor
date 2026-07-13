@@ -5,13 +5,7 @@
  * Wraps @agor/core/config functions for UI access.
  */
 
-import {
-  type AgorConfig,
-  type ApiKeyName,
-  loadConfig,
-  resolveApiKey,
-  saveConfig,
-} from '@agor/core/config';
+import { type AgorConfig, type ApiKeyName, loadConfig, resolveApiKey } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
@@ -41,8 +35,14 @@ function isResolvableApiKeyName(value: string): value is ApiKeyName {
 
 /** Keep retired upgrade-only keys out of the tenant-facing config API. */
 function publicConfig(config: AgorConfig): AgorConfig {
-  const result = structuredClone(config) as AgorConfig & { display?: Record<string, unknown> };
+  const result = structuredClone(config) as AgorConfig & {
+    defaults?: Record<string, unknown>;
+    display?: Record<string, unknown>;
+    onboarding?: Record<string, unknown>;
+  };
+  delete result.defaults;
   delete result.display;
+  delete result.onboarding;
   return result;
 }
 
@@ -285,46 +285,6 @@ export class ConfigService {
       useNativeAuth: result.useNativeAuth,
       ...(result.decryptionFailed && { decryptionFailed: true }),
     };
-  }
-
-  /**
-   * Update config values
-   *
-   * Temporary compatibility surface for onboarding state only. Product settings
-   * must use tenant-owned typed services.
-   */
-  async patch(_id: null, data: Partial<AgorConfig>, _params?: Params): Promise<AgorConfig> {
-    // Log patch keys without values to avoid leaking secrets
-    const patchSections = Object.keys(data);
-    console.log(`[Config Service] Patch received: sections=[${patchSections}]`);
-    if (patchSections.some((section) => section !== 'onboarding')) {
-      throw new BadRequest('Only onboarding may be patched through the legacy config service');
-    }
-    const config = await loadConfig();
-
-    // Allow updating onboarding configuration
-    if (data.onboarding) {
-      if (!config.onboarding) {
-        config.onboarding = {};
-      }
-      const teammatePending =
-        data.onboarding.teammatePending ??
-        data.onboarding.assistantPending ??
-        data.onboarding.persistedAgentPending;
-      if (teammatePending !== undefined) {
-        config.onboarding.teammatePending = teammatePending;
-        delete config.onboarding.assistantPending;
-        delete config.onboarding.persistedAgentPending;
-      }
-      if (data.onboarding.frameworkRepoUrl !== undefined) {
-        config.onboarding.frameworkRepoUrl = data.onboarding.frameworkRepoUrl;
-      }
-    }
-
-    await saveConfig(config);
-    console.log('[Config Service] Config saved successfully');
-
-    return publicConfig(config);
   }
 }
 

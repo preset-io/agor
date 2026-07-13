@@ -23,11 +23,6 @@ interface InstanceConfig {
   description?: string;
 }
 
-interface OnboardingConfig {
-  teammatePending?: boolean;
-  frameworkRepoUrl?: string;
-}
-
 export interface FeaturesConfig {
   /**
    * Whether the web terminal is enabled for members (execution.allow_web_terminal).
@@ -71,14 +66,12 @@ interface HealthResponse {
   database: string;
   auth: AuthConfig;
   instance?: InstanceConfig;
-  onboarding?: OnboardingConfig;
   features?: FeaturesConfig;
 }
 
 export function useAuthConfig() {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [instanceConfig, setInstanceConfig] = useState<InstanceConfig | null>(null);
-  const [onboardingConfig, setOnboardingConfig] = useState<OnboardingConfig | null>(null);
   const [featuresConfig, setFeaturesConfig] = useState<FeaturesConfig | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -94,7 +87,6 @@ export function useAuthConfig() {
         const health: HealthResponse = await response.json();
         setConfig(health.auth);
         setInstanceConfig(health.instance ?? null);
-        setOnboardingConfig(health.onboarding ?? null);
         setFeaturesConfig(health.features);
         setError(null);
       } catch (err) {
@@ -102,7 +94,6 @@ export function useAuthConfig() {
         // Default to requiring auth on error (secure by default)
         setConfig({ requireAuth: true });
         setInstanceConfig(null);
-        setOnboardingConfig(null);
         setFeaturesConfig(undefined);
       } finally {
         setLoading(false);
@@ -115,7 +106,6 @@ export function useAuthConfig() {
   return {
     config,
     instanceConfig,
-    onboardingConfig,
     featuresConfig,
     loading,
     error,
