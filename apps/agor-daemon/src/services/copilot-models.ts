@@ -25,7 +25,12 @@
  */
 
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
-import { shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { COPILOT_MODEL_METADATA, DEFAULT_COPILOT_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import { CopilotClient, type ModelInfo } from '@github/copilot-sdk';
@@ -73,17 +78,21 @@ export class CopilotModelsService {
   constructor(private db: TenantScopeAwareDatabase) {}
 
   async find(params?: AuthenticatedParams): Promise<CopilotModelsResult> {
-    if (!(await isTenantAgenticToolEnabled('copilot', this.db))) {
-      throw new Error('GitHub Copilot is disabled for this workspace');
-    }
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for Copilot model discovery');
     const userId = params?.user?.user_id;
 
     // Resolve the GitHub token through the tenant's explicit scope policy.
     // Falls through to static if nothing is configured anywhere.
-    const resolution = await resolveApiKey('COPILOT_GITHUB_TOKEN', {
-      userId,
-      db: this.db,
-      tool: 'copilot',
+    const resolution = await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+      if (!(await isTenantAgenticToolEnabled('copilot', tenantDb))) {
+        throw new Error('GitHub Copilot is disabled for this workspace');
+      }
+      return resolveApiKey('COPILOT_GITHUB_TOKEN', {
+        userId,
+        db: tenantDb,
+        tool: 'copilot',
+      });
     });
 
     if (!resolution.apiKey) {

@@ -117,11 +117,19 @@ export async function resolveClaudeCliProviderSpawn(
   built: { bin: string; args: string[] }
 ): Promise<{ bin: string; args: string[] } | null> {
   const db = getDb(app) ?? undefined;
-  if (!db || !(await isTenantAgenticToolEnabled('claude-code', db))) return null;
-  const resolved = await resolveProviderConnection('claude-code', {
-    userId: (session.created_by as import('@agor/core/types').UserID | null) ?? undefined,
-    db,
+  if (!db) return null;
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) {
+    throw new Error('Missing active tenant context for Claude CLI provider resolution');
+  }
+  const resolved = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+    if (!(await isTenantAgenticToolEnabled('claude-code', tenantDb))) return null;
+    return resolveProviderConnection('claude-code', {
+      userId: (session.created_by as import('@agor/core/types').UserID | null) ?? undefined,
+      db: tenantDb,
+    });
   });
+  if (!resolved) return null;
   const connection = resolved.connection as Record<string, string | undefined>;
   const hasCredential = [
     'ANTHROPIC_API_KEY',

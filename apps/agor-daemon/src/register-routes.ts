@@ -1098,16 +1098,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     params: RouteParams
   ): Promise<Task> {
-    const { messageStartIndex, session: loadedSession } = await runWithTenantDatabaseScope(
-      db,
-      getCurrentTenantId(),
-      async () => ({
-        session: await sessionsService.get(task.session_id, params),
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for task executor startup');
+    const {
+      agenticToolEnabled,
+      messageStartIndex,
+      session: loadedSession,
+    } = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      const session = await sessionsService.get(task.session_id, params);
+      return {
+        session,
+        agenticToolEnabled: await isTenantAgenticToolEnabled(session.agentic_tool, tenantDb),
         // Recompute message_range.start_index against the live message count.
         messageStartIndex: await sessionsRepository.countMessages(task.session_id),
-      })
-    );
-    if (!(await isTenantAgenticToolEnabled(loadedSession.agentic_tool, db))) {
+      };
+    });
+    if (!agenticToolEnabled) {
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
     const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);

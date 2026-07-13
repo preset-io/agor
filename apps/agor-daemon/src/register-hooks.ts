@@ -446,6 +446,17 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'leaderboard',
 ];
 
+// These endpoints perform network/process work after their tenant DB reads,
+// so they carry tenant identity for the full request and open short database
+// units of work at the call site instead of holding an HTTP-long transaction.
+const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
+  'check-auth',
+  'claude-models',
+  'copilot-models',
+  'cursor-models',
+  'terminals',
+] as const;
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -561,6 +572,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         before: { all: [scopeTenantBefore] },
         after: { all: [assertTenantAfter] },
       });
+    }
+  };
+
+  const registerTenantIdentityHooks = (): void => {
+    for (const path of TENANT_IDENTITY_ONLY_SERVICE_PATHS) {
+      safeService(path)?.hooks({ around: { all: [tenantIdentityAround] } });
     }
   };
 
@@ -3344,4 +3361,5 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   if (tenantColumnsEnabled) {
     registerTenantHooks();
   }
+  registerTenantIdentityHooks();
 }

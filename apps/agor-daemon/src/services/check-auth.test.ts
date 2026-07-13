@@ -1,4 +1,5 @@
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
+import { runWithTenantContext } from '@agor/core/db';
 import { Claude } from '@agor/core/sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCheckAuthService } from './check-auth';
@@ -21,6 +22,7 @@ vi.mock('@agor/core/sdk', () => ({
 const resolveApiKeyMock = vi.mocked(resolveApiKey);
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const claudeQueryMock = vi.mocked(Claude.query);
+const TEST_DB = { run: vi.fn() } as never;
 
 function mockClaudeAccount(account: Record<string, unknown> | null) {
   claudeQueryMock.mockReturnValue({
@@ -29,7 +31,13 @@ function mockClaudeAccount(account: Record<string, unknown> | null) {
   } as never);
 }
 
-const service = () => createCheckAuthService({} as never);
+const service = () => {
+  const delegate = createCheckAuthService(TEST_DB);
+  return {
+    create: (...args: Parameters<typeof delegate.create>) =>
+      runWithTenantContext('tenant-test', () => delegate.create(...args)),
+  };
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -85,12 +93,12 @@ describe('check-auth Claude subscription tokens', () => {
     expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(resolveApiKeyMock).toHaveBeenNthCalledWith(1, 'ANTHROPIC_API_KEY', {
       userId: 'user-1',
-      db: {},
+      db: TEST_DB,
       tool: 'claude-code',
     });
     expect(resolveApiKeyMock).toHaveBeenNthCalledWith(2, 'CLAUDE_CODE_OAUTH_TOKEN', {
       userId: 'user-1',
-      db: {},
+      db: TEST_DB,
       tool: 'claude-code',
     });
   });

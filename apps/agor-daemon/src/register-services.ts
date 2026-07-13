@@ -21,6 +21,7 @@ import {
   inArray,
   isPostgresDatabase,
   MCPServerRepository,
+  runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   type SessionMCPServerRow,
   select,
@@ -721,7 +722,12 @@ function createExecuteHandler(
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
-    if (!(await isTenantAgenticToolEnabled(session.agentic_tool, db))) {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for executor startup');
+    const agenticToolEnabled = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+      isTenantAgenticToolEnabled(session.agentic_tool, tenantDb)
+    );
+    if (!agenticToolEnabled) {
       throw new Error(`${session.agentic_tool} is disabled for this workspace`);
     }
     session = await sessionsService.materializeAgenticToolPreset(session, params);

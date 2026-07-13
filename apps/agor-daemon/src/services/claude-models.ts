@@ -7,7 +7,12 @@
  */
 
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
-import { shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { AVAILABLE_CLAUDE_MODEL_ALIASES, DEFAULT_CLAUDE_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import Anthropic from '@anthropic-ai/sdk';
@@ -113,14 +118,18 @@ export class ClaudeModelsService {
   constructor(private db: TenantScopeAwareDatabase) {}
 
   async find(params?: AuthenticatedParams): Promise<ClaudeModelsResult> {
-    if (!(await isTenantAgenticToolEnabled('claude-code', this.db))) {
-      throw new Error('Claude Code is disabled for this workspace');
-    }
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for Claude model discovery');
     const userId = params?.user?.user_id;
-    const resolution = await resolveApiKey('ANTHROPIC_API_KEY', {
-      userId,
-      db: this.db,
-      tool: 'claude-code',
+    const resolution = await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+      if (!(await isTenantAgenticToolEnabled('claude-code', tenantDb))) {
+        throw new Error('Claude Code is disabled for this workspace');
+      }
+      return resolveApiKey('ANTHROPIC_API_KEY', {
+        userId,
+        db: tenantDb,
+        tool: 'claude-code',
+      });
     });
 
     if (!resolution.apiKey) {

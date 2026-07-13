@@ -1,3 +1,4 @@
+import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configMocks = vi.hoisted(() => ({
@@ -32,8 +33,10 @@ describe('CursorModelsService', () => {
       { id: 'composer-latest', displayName: 'Composer Latest' },
     ]);
 
-    const service = new CursorModelsService({} as never);
-    const result = await service.find({ user: { user_id: 'user-id' } } as never);
+    const service = new CursorModelsService({ run: vi.fn() } as never);
+    const result = await runWithTenantContext('tenant-test', () =>
+      service.find({ user: { user_id: 'user-id' } } as never)
+    );
 
     expect(result.default).toBe('composer-latest');
     expect(result.source).toBe('dynamic');
@@ -44,8 +47,10 @@ describe('CursorModelsService', () => {
     configMocks.resolveApiKey.mockResolvedValue({ apiKey: 'cursor-key', source: 'user' });
     cursorMocks.modelsList.mockRejectedValue(new Error('boom'));
 
-    const service = new CursorModelsService({} as never);
-    const result = await service.find({ user: { user_id: 'user-id' } } as never);
+    const service = new CursorModelsService({ run: vi.fn() } as never);
+    const result = await runWithTenantContext('tenant-test', () =>
+      service.find({ user: { user_id: 'user-id' } } as never)
+    );
 
     expect(result).toMatchObject({
       default: 'composer-latest',

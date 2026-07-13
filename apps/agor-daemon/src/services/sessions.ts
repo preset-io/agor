@@ -15,6 +15,8 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
   SessionEnvSelectionRepository,
   SessionMCPServerRepository,
   SessionRelationshipRepository,
@@ -261,21 +263,27 @@ export class SessionsService extends DrizzleService<Session, Partial<Session>, S
 
   /** Re-resolve a live preset immediately before a task starts. */
   async materializeAgenticToolPreset(session: Session, _params?: SessionParams): Promise<Session> {
-    if (!session.agentic_tool_preset_id) {
-      await assertInlineAgenticConfigurationAllowed(this.db, session.agentic_tool);
-      return session;
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) {
+      throw new Error('Missing active tenant context for agentic tool preset materialization');
     }
-    const preset = await resolveAgenticToolPreset(
-      this.db,
-      session.agentic_tool,
-      session.agentic_tool_preset_id
-    );
-    const updated = await this.sessionRepo.update(
-      session.session_id,
-      presetConfigurationToSessionPatch(session.agentic_tool, preset.configuration),
-      { replaceAgenticConfig: true }
-    );
-    return updated;
+
+    return runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+      if (!session.agentic_tool_preset_id) {
+        await assertInlineAgenticConfigurationAllowed(tenantDb, session.agentic_tool);
+        return session;
+      }
+      const preset = await resolveAgenticToolPreset(
+        tenantDb,
+        session.agentic_tool,
+        session.agentic_tool_preset_id
+      );
+      return this.sessionRepo.update(
+        session.session_id,
+        presetConfigurationToSessionPatch(session.agentic_tool, preset.configuration),
+        { replaceAgenticConfig: true }
+      );
+    });
   }
 
   protected async fetchData(_query: Query, params?: SessionParams): Promise<Session[]> {
