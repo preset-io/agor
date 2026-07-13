@@ -337,7 +337,11 @@ export type KnowledgeLinkRef =
 // or /knowledge/<slug>/<path>) as inserted by the editor's `@` autocomplete.
 // Path segments may be percent-encoded.
 const KNOWLEDGE_LINK_RE =
-  /(?:agor:\/\/kb\/|kb:\/\/|\/(?:kb|knowledge)\/)([A-Za-z0-9._~%-]+)\/([^\s)"'<>]+)/g;
+  /(?:agor:\/\/kb\/|kb:\/\/|\/(?:kb|knowledge)\/)([A-Za-z0-9._~%-]+)\/([^\s)"'<>]+)/gi;
+
+function startsWithIgnoreCase(value: string, prefix: string): boolean {
+  return value.slice(0, prefix.length).toLowerCase() === prefix;
+}
 
 const safeDecodeSegment = (segment: string): string => {
   try {
@@ -363,7 +367,7 @@ export function extractKnowledgeLinks(markdown?: string | null): KnowledgeLinkRe
 
     // Rename-proof id reference: agor://kb/document/<uuid>. The `document` type
     // segment is reserved, so this never collides with a real namespace slug.
-    if (match[0].startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX) && UUID_RE.test(rawPath)) {
+    if (startsWithIgnoreCase(match[0], KNOWLEDGE_DOCUMENT_URI_PREFIX) && UUID_RE.test(rawPath)) {
       const documentId = rawPath.toLowerCase() as KnowledgeDocumentID;
       const key = `id:${documentId}`;
       if (seen.has(key)) continue;

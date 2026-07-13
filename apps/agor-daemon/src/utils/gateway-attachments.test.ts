@@ -267,6 +267,36 @@ describe('ingestInboundAttachments', () => {
     expect(await fs.readdir(uploadDir)).toEqual([]);
   });
 
+  it('enforces the aggregate limit against actual streamed bytes', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const response = () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'image/png' } }
+      );
+    const fetchImpl = vi.fn(async () => response());
+
+    const result = await ingestInboundAttachments({
+      files: [
+        makeFile({ id: 'F1', name: 'first.png', size: 1 }),
+        makeFile({ id: 'F2', name: 'second.png', size: 1 }),
+      ],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      uploadDir,
+      maxTotalBytes: 5,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ paths: [expect.stringContaining('F1_first_')], failed: 1 });
+    expect(await fs.readdir(uploadDir)).toHaveLength(1);
+  });
+
   it('rejects image/svg+xml response bodies (excluded from the upload allowlist)', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const fetchImpl = vi.fn(

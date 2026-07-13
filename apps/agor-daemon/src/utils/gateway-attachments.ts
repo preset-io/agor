@@ -21,6 +21,7 @@ import {
   getUploadDirectory,
   MAX_UPLOAD_FILE_SIZE,
   MAX_UPLOAD_FILES_PER_REQUEST,
+  MAX_UPLOAD_TOTAL_SIZE,
 } from './upload.js';
 
 export interface AttachmentIngestResult {
@@ -141,13 +142,20 @@ export async function ingestInboundAttachments(args: {
   botToken: string;
   fetchImpl?: typeof fetch;
   uploadDir?: string;
+  maxTotalBytes?: number;
 }): Promise<AttachmentIngestResult> {
   const fetchImpl = args.fetchImpl ?? fetch;
   const uploadDir = args.uploadDir ?? getUploadDirectory();
+  const requestedMaxTotalBytes = args.maxTotalBytes;
+  const maxTotalBytes =
+    typeof requestedMaxTotalBytes === 'number' && Number.isFinite(requestedMaxTotalBytes)
+      ? Math.max(0, Math.min(requestedMaxTotalBytes, MAX_UPLOAD_TOTAL_SIZE))
+      : MAX_UPLOAD_TOTAL_SIZE;
 
   const ingestable = args.files.filter(isIngestableFile);
   const paths: string[] = [];
   let failed = 0;
+  let totalBytes = 0;
 
   for (const [index, file] of ingestable.entries()) {
     if (index >= MAX_UPLOAD_FILES_PER_REQUEST) {
@@ -161,6 +169,14 @@ export async function ingestInboundAttachments(args: {
       failed++;
       console.warn(
         `[gateway] Skipping attachment "${file.name}": ${file.size} bytes exceeds per-file limit ${MAX_UPLOAD_FILE_SIZE}`
+      );
+      continue;
+    }
+    const remainingBytes = maxTotalBytes - totalBytes;
+    if (remainingBytes <= 0) {
+      failed++;
+      console.warn(
+        `[gateway] Skipping attachment "${file.name}": message exceeds aggregate size limit ${maxTotalBytes}`
       );
       continue;
     }
@@ -193,7 +209,13 @@ export async function ingestInboundAttachments(args: {
       if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_FILE_SIZE) {
         throw new Error(`declared size ${declaredLength} exceeds per-file limit`);
       }
-      const body = await readBodyWithLimit(response, MAX_UPLOAD_FILE_SIZE);
+      if (Number.isFinite(declaredLength) && declaredLength > remainingBytes) {
+        throw new Error(`declared size ${declaredLength} exceeds remaining message limit`);
+      }
+      const body = await readBodyWithLimit(
+        response,
+        Math.min(MAX_UPLOAD_FILE_SIZE, remainingBytes)
+      );
 
       await fs.mkdir(uploadDir, { recursive: true });
       // Slack names every pasted screenshot "image.png"; prefix the unique
@@ -202,6 +224,7 @@ export async function ingestInboundAttachments(args: {
       const filePath = path.join(uploadDir, buildUploadFilename(`${file.id}_${file.name}`));
       await fs.writeFile(filePath, body);
       paths.push(filePath);
+      totalBytes += body.byteLength;
     } catch (error) {
       failed++;
       console.warn(`[gateway] Failed to ingest attachment "${file.name}":`, error);

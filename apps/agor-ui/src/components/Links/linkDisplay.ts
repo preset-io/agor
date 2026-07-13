@@ -97,6 +97,10 @@ const GLYPH_LABELS: Record<LinkDisplayCategory, string> = {
   unknown: 'LINK',
 };
 
+function startsWithIgnoreCase(value: string, prefix: string): boolean {
+  return value.slice(0, prefix.length).toLowerCase() === prefix;
+}
+
 function cleanSegment(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -149,14 +153,18 @@ function githubKindLabel(kind?: LinkKind): 'Issue' | 'PR' | null {
 }
 
 export function routeForKnowledgeRefUri(refUri?: string | null, basePath = '/kb'): string | null {
-  if (!refUri?.startsWith(KB_URI_PREFIX)) return null;
-  if (refUri.startsWith(KB_DOCUMENT_URI_PREFIX) || refUri.startsWith(KB_UNIT_URI_PREFIX)) {
+  const trimmed = refUri?.trim();
+  if (!trimmed || !startsWithIgnoreCase(trimmed, KB_URI_PREFIX)) return null;
+  if (
+    startsWithIgnoreCase(trimmed, KB_DOCUMENT_URI_PREFIX) ||
+    startsWithIgnoreCase(trimmed, KB_UNIT_URI_PREFIX)
+  ) {
     return null;
   }
 
-  const rest = refUri.slice(KB_URI_PREFIX.length);
+  const rest = trimmed.slice(KB_URI_PREFIX.length);
   const [namespaceSlug, ...pathParts] = rest.split('/').filter(Boolean).map(cleanSegment);
-  if (!namespaceSlug || namespaceSlug === 'document' || namespaceSlug === 'unit') return null;
+  if (!namespaceSlug || ['document', 'unit'].includes(namespaceSlug.toLowerCase())) return null;
 
   return buildKnowledgeRoutePath(basePath, namespaceSlug, pathParts.join('/') || null);
 }
@@ -173,14 +181,17 @@ export function targetForLinkDisplay(args: {
 }
 
 function getRefDisplayLabel(refUri: string): string {
-  if (refUri.startsWith(KB_DOCUMENT_URI_PREFIX)) {
-    return `KB document ${refUri.slice(KB_DOCUMENT_URI_PREFIX.length, KB_DOCUMENT_URI_PREFIX.length + 8)}`;
+  const trimmed = refUri.trim();
+  if (startsWithIgnoreCase(trimmed, KB_DOCUMENT_URI_PREFIX)) {
+    return `KB document ${trimmed.slice(KB_DOCUMENT_URI_PREFIX.length, KB_DOCUMENT_URI_PREFIX.length + 8)}`;
   }
-  if (refUri.startsWith(KB_UNIT_URI_PREFIX)) {
-    return `KB unit ${refUri.slice(KB_UNIT_URI_PREFIX.length, KB_UNIT_URI_PREFIX.length + 8)}`;
+  if (startsWithIgnoreCase(trimmed, KB_UNIT_URI_PREFIX)) {
+    return `KB unit ${trimmed.slice(KB_UNIT_URI_PREFIX.length, KB_UNIT_URI_PREFIX.length + 8)}`;
   }
-  if (refUri.startsWith(KB_URI_PREFIX)) return `KB: ${refUri.slice(KB_URI_PREFIX.length)}`;
-  return `Ref: ${refUri}`;
+  if (startsWithIgnoreCase(trimmed, KB_URI_PREFIX)) {
+    return `KB: ${trimmed.slice(KB_URI_PREFIX.length)}`;
+  }
+  return `Ref: ${trimmed}`;
 }
 
 export function getLinkDisplayCategory(args: {
@@ -194,7 +205,11 @@ export function getLinkDisplayCategory(args: {
   if (args.kind === 'pr') return 'pr';
   if (args.kind === 'url') return 'url';
   if (args.kind === 'internal') return 'internal';
-  if (args.kind === 'kb_ref' || args.refUri?.startsWith(KB_URI_PREFIX)) return 'knowledge';
+  if (
+    args.kind === 'kb_ref' ||
+    (args.refUri ? startsWithIgnoreCase(args.refUri.trim(), KB_URI_PREFIX) : false)
+  )
+    return 'knowledge';
   if (args.kind === 'image' || args.mimeType?.startsWith('image/')) return 'image';
 
   const mime = args.mimeType?.split(';')[0]?.trim().toLowerCase() ?? '';

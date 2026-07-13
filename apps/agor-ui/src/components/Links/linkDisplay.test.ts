@@ -32,6 +32,12 @@ describe('link display helpers', () => {
     expect(routeForKnowledgeRefUri('agor://kb/unit/0190a000')).toBeNull();
   });
 
+  it('routes Knowledge URI grammar case-insensitively without folding path case', () => {
+    expect(routeForKnowledgeRefUri('  AGOR://KB/Team/Runbook.md  ')).toBe('/kb/Team/Runbook.md');
+    expect(routeForKnowledgeRefUri('AGOR://KB/DOCUMENT/0190a000')).toBeNull();
+    expect(routeForKnowledgeRefUri('AGOR://KB/UNIT/0190a000')).toBeNull();
+  });
+
   it('only creates navigable targets for safe web URLs or routed KB refs', () => {
     expect(targetForLinkDisplay({ refUri: 'agor://kb/global/readme.md' })).toEqual({
       href: '/kb/global/readme.md',
