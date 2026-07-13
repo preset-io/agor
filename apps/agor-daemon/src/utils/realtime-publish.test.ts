@@ -10,7 +10,11 @@ import type {
   RealtimeAccessBranchRepository,
   RealtimeAccessSessionRepository,
 } from './realtime-access-cache';
-import { configureRealtimePublish, leaveAllSessionStreamChannels } from './realtime-publish';
+import {
+  configureRealtimePublish,
+  leaveAllSessionStreamChannels,
+  markConnectionSessionStreamsAware,
+} from './realtime-publish';
 
 class FakeChannel {
   constructor(public connections: unknown[]) {}
@@ -1131,6 +1135,223 @@ describe('configureRealtimePublish streaming scope', () => {
     );
 
     expect(unionConnections(result)).toEqual([active]);
+  });
+
+  it('skips the owner fallback for an owner connection that announced session-streams awareness (the idle-firehose fix)', async () => {
+    // The power-user idle case: the owner has an idle home/board tab that
+    // announced capability but never subscribed to this session. The owner
+    // fallback must NOT bridge it — that idle firehose is exactly what this
+    // change removes.
+    const ownerIdle = { user: user('owner-user') };
+    markConnectionSessionStreamsAware(ownerIdle);
+    const other = { user: user('other-user') };
+    const app = makeApp(
+      [ownerIdle, other],
+      {},
+      {
+        authenticated: [ownerIdle, other],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hi' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([]);
+  });
+
+  it('delivers to an announced+subscribed owner connection via the room exactly once (no double, no drop)', async () => {
+    // An aware owner connection that IS subscribed receives through the room —
+    // and, because the fallback skips aware connections, it appears in exactly
+    // one delivery channel, never both. Union alone can't catch a double, so
+    // count raw occurrences across every returned channel.
+    const ownerSubscribed = { user: user('owner-user') };
+    markConnectionSessionStreamsAware(ownerSubscribed);
+    const app = makeApp(
+      [ownerSubscribed],
+      {},
+      {
+        authenticated: [ownerSubscribed],
+        'session-stream:s1': [ownerSubscribed],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hi' },
+      streamingContext
+    );
+
+    const channels = Array.isArray(result) ? result : [result];
+    const rawDeliveries = channels.flatMap((c) => (c as FakeChannel).connections);
+    expect(rawDeliveries.filter((c) => c === ownerSubscribed)).toHaveLength(1);
+    expect(unionConnections(result)).toEqual([ownerSubscribed]);
+  });
+
+  it('still bridges a stale owner connection that never announced (safety net)', async () => {
+    // A stale/legacy client that never speaks the capability protocol keeps its
+    // owner-fallback bridge — the whole point of the fallback.
+    const staleOwner = { user: user('owner-user') };
+    const other = { user: user('other-user') };
+    const app = makeApp(
+      [staleOwner, other],
+      {},
+      {
+        authenticated: [staleOwner, other],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hi' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([staleOwner]);
+  });
+
+  it('still delivers to service accounts when the owner announced awareness', async () => {
+    // Gateway / Slack service delivery is independent of the owner fallback, so
+    // gating an aware owner must not disturb it.
+    const ownerIdle = { user: user('owner-user') };
+    markConnectionSessionStreamsAware(ownerIdle);
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp(
+      [ownerIdle, service],
+      {},
+      {
+        authenticated: [ownerIdle, service],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hi' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([service]);
+  });
+
+  it('skips the owner fallback for an aware owner even under branch RBAC (allAuthenticated)', async () => {
+    // The gate covers the RBAC-on allAuthenticated branch too: an aware, access-
+    // holding owner still gets no fallback bridge when idle.
+    const ownerIdle = { user: user('owner-user') };
+    markConnectionSessionStreamsAware(ownerIdle);
+    const other = { user: user('other-user') };
+    const app = makeApp(
+      [ownerIdle, other],
+      {},
+      {
+        authenticated: [ownerIdle, other],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: { 'owner-user': 'view', 'other-user': 'view' },
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hi' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([]);
+  });
+
+  it('skips the owner fallback for an aware owner even under branch RBAC (explicit-users)', async () => {
+    // Same gate on the explicit-users branch: the owner holds view (so the
+    // fallback WOULD fire), but their aware idle connection is still skipped.
+    const ownerIdle = { user: user('owner-user') };
+    markConnectionSessionStreamsAware(ownerIdle);
+    const other = { user: user('other-user') };
+    const app = makeApp(
+      [ownerIdle, other],
+      {},
+      {
+        authenticated: [ownerIdle, other],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'none'),
+      session: session('s1', 'b1'),
+      permissions: { 'owner-user': 'view' },
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hi' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([]);
+  });
+
+  it('does not deliver to a non-owner, non-subscribed connection regardless of awareness (unchanged)', async () => {
+    // Baseline invariant: awareness only ever removes an owner from the
+    // fallback; it never grants a non-owner any streaming it did not already
+    // have (here: none).
+    const ownerIdle = { user: user('owner-user') };
+    markConnectionSessionStreamsAware(ownerIdle);
+    const strangerAware = { user: user('stranger') };
+    markConnectionSessionStreamsAware(strangerAware);
+    const app = makeApp(
+      [ownerIdle, strangerAware],
+      {},
+      {
+        authenticated: [ownerIdle, strangerAware],
+        'session-stream:s1': [],
+      }
+    );
+    const r = repos({
+      branch: branch('b1', 'view'),
+      session: session('s1', 'b1'),
+      permissions: {},
+      owner: 'owner-user',
+    });
+    configureRealtimePublish({ app, branchRbacEnabled: false, ...r });
+
+    const result = await app.runPublish(
+      { session_id: 's1', message_id: 'm1', chunk: 'hi' },
+      streamingContext
+    );
+
+    expect(unionConnections(result)).toEqual([]);
   });
 });
 

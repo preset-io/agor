@@ -3,6 +3,7 @@ import { TaskStatus } from '@agor/core/client';
 import { describe, expect, it, vi } from 'vitest';
 import {
   __streamSubscriptionCountForTest,
+  ensureSessionStreamsCapabilityAnnounce,
   ReactiveSessionHandle,
   type TaskHydrationMode,
 } from './reactive-session';
@@ -809,5 +810,78 @@ describe('ReactiveSessionHandle stream subscription', () => {
     await vi.waitFor(() => {
       expect(__streamSubscriptionCountForTest(client)).toBe(0);
     });
+  });
+});
+
+describe('session-streams capability announce', () => {
+  function makeAnnounceClient(startConnected: boolean) {
+    const ioHandlers: Record<string, Array<(...a: unknown[]) => void>> = {};
+    const create = vi.fn(async () => ({ session_id: '', subscribed: false }));
+    const client = {
+      io: {
+        connected: startConnected,
+        on: vi.fn((event: string, handler: (...a: unknown[]) => void) => {
+          const handlers = ioHandlers[event] ?? [];
+          handlers.push(handler);
+          ioHandlers[event] = handlers;
+        }),
+        off: vi.fn(),
+      },
+      service: vi.fn((name: string) => {
+        if (name === 'session-streams') return { create };
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as AgorClient;
+    const fireIo = (event: string) => {
+      for (const handler of [...(ioHandlers[event] ?? [])]) handler();
+    };
+    return { client, create, fireIo };
+  }
+
+  it('announces capability on connect and again on reconnect', async () => {
+    const { client, create, fireIo } = makeAnnounceClient(false);
+    ensureSessionStreamsCapabilityAnnounce(client);
+
+    // Not connected yet → no eager announce.
+    expect(create).not.toHaveBeenCalled();
+
+    fireIo('connect');
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    // Reconnect is a fresh connection with no aware flag → re-announce.
+    fireIo('connect');
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+
+    // Every announce is a no-room capability marker (no session_id).
+    for (const call of create.mock.calls) {
+      expect(call[0]).toEqual({ capability: true });
+    }
+  });
+
+  it('announces immediately when the socket is already connected at wire-up', async () => {
+    const { client, create } = makeAnnounceClient(true);
+    ensureSessionStreamsCapabilityAnnounce(client);
+
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create).toHaveBeenCalledWith({ capability: true });
+  });
+
+  it('wires the connect listener at most once per client', () => {
+    const { client } = makeAnnounceClient(false);
+    ensureSessionStreamsCapabilityAnnounce(client);
+    ensureSessionStreamsCapabilityAnnounce(client);
+
+    const connectRegistrations = (
+      client.io.on as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.filter((call) => call[0] === 'connect');
+    expect(connectRegistrations).toHaveLength(1);
+  });
+
+  it('swallows a create rejection (stale daemon / mid-connect auth refresh)', async () => {
+    const { client, create, fireIo } = makeAnnounceClient(false);
+    create.mockRejectedValue(new Error('NotAuthenticated'));
+    ensureSessionStreamsCapabilityAnnounce(client);
+
+    expect(() => fireIo('connect')).not.toThrow();
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
   });
 });
