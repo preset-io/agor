@@ -487,4 +487,12 @@ describe('slackAppManifestUrl', () => {
     expect(slackAppManifestUrl(undefined)).toBe('https://api.slack.com/apps');
     expect(slackAppManifestUrl('')).toBe('https://api.slack.com/apps');
   });
+
+  it('falls back when the app id does not match the Slack app-id shape', () => {
+    // The id is interpolated into a URL path, so anything that could alter
+    // the path/query/fragment must be refused, not encoded.
+    expect(slackAppManifestUrl('A123/../evil?x#y')).toBe('https://api.slack.com/apps');
+    expect(slackAppManifestUrl('a123abc')).toBe('https://api.slack.com/apps');
+    expect(slackAppManifestUrl('B0123ABC')).toBe('https://api.slack.com/apps');
+  });
 });

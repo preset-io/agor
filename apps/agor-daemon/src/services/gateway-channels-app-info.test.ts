@@ -81,11 +81,16 @@ beforeEach(() => {
 describe('gateway-channels/app-info admin gate', () => {
   const gate = requireMinimumRole(ROLES.ADMIN, 'read gateway app info');
 
+  it('rejects an unauthenticated external caller', () => {
+    const context = { params: { provider: 'rest' } } as unknown as HookContext;
+    expect(() => gate(context)).toThrow(/authentication required/i);
+  });
+
   it('rejects a non-admin caller', () => {
     const context = {
       params: { provider: 'rest', user: { user_id: 'u', role: ROLES.MEMBER } },
     } as unknown as HookContext;
-    expect(() => gate(context)).toThrow();
+    expect(() => gate(context)).toThrow(/admin/i);
   });
 
   it('allows an admin caller', () => {
@@ -107,6 +112,13 @@ describe('gateway-channels/app-info hook wiring (register-services)', () => {
   it('gates create with requireAuth then admin role', () => {
     expect(start).toBeGreaterThan(-1);
     expect(block).toMatch(/create:\s*\[\s*ctx\.requireAuth,\s*requireMinimumRole\(ROLES\.ADMIN/);
+  });
+
+  it('suppresses realtime publication of the create result', () => {
+    // Without a per-service publisher the default `created` event falls
+    // through the global publisher's `global` scope and the app-info result
+    // would broadcast to every authenticated socket.
+    expect(source).toMatch(/app\.service\('gateway-channels\/app-info'\)\.publish\(\(\) => \[\]\)/);
   });
 });
 

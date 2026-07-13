@@ -1515,6 +1515,14 @@ describe('SlackConnector.getAppInfo', () => {
     await expect(connector.getAppInfo()).resolves.toEqual({ appId: null, teamId: 'T1' });
   });
 
+  it('yields null appId when an OK bots.info response carries no app_id', async () => {
+    const connector = makeAppInfoConnector({
+      botsInfo: async (params) => ({ ok: true, bot: { id: params.bot } }),
+    });
+
+    await expect(connector.getAppInfo()).resolves.toEqual({ appId: null, teamId: 'T1' });
+  });
+
   it('yields null appId when auth.test carries no bot_id', async () => {
     const connector = makeAppInfoConnector({
       authTest: async () => ({ ok: true, team_id: 'T1', user_id: 'U1' }),

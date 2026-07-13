@@ -2189,10 +2189,16 @@ const ChannelFormFields: React.FC<{
 
         {/* ── Collapsible sections (Slack edit) ── */}
         {channelType === 'slack' && mode === 'edit' && (
-          <div style={{ marginBottom: 8 }}>
-            <SlackOutlined style={{ marginInlineEnd: 6 }} />
-            <SlackAppManifestLink appInfo={slackAppInfo} />
-          </div>
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <SlackOutlined style={{ marginInlineEnd: 6 }} />
+              <SlackAppManifestLink appInfo={slackAppInfo} />
+            </div>
+            {/* Single instance above the Collapse — the scope-affecting toggles
+                are spread across several panels, and an in-panel copy would
+                duplicate whenever more than one is expanded. */}
+            {scopeChangeWarning}
+          </>
         )}
         {channelType === 'slack' && mode === 'edit' && (
           <Collapse
@@ -2232,7 +2238,6 @@ const ChannelFormFields: React.FC<{
                         />
                       }
                     />
-                    {scopeChangeWarning}
                   </>
                 ),
               },
@@ -2428,8 +2433,6 @@ const ChannelFormFields: React.FC<{
                       <Switch />
                     </Form.Item>
 
-                    {scopeChangeWarning}
-
                     {sourcesEnabled && (
                       <CompactAlert
                         type="info"
@@ -2540,8 +2543,6 @@ const ChannelFormFields: React.FC<{
                         </span>
                       }
                     />
-
-                    {scopeChangeWarning}
                   </>
                 ),
               },
@@ -2694,6 +2695,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [slackTestResult, setSlackTestResult] = useState<SlackTestResult | null>(null);
   // Slack app identity resolved server-side when the edit modal opens (edit mode).
   const [slackAppInfo, setSlackAppInfo] = useState<SlackAppInfo | null>(null);
+  // Channel id the in-flight app-info fetch belongs to; a response is dropped
+  // unless it still matches, so reopening the modal on another channel can't
+  // be overwritten by a slower earlier response.
+  const slackAppInfoChannelIdRef = useRef<string | null>(null);
 
   // Keep referenced target branches resolvable in CRUD even when archived branches
   // are excluded from the core store.
@@ -2773,6 +2778,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setSlackTestLoading(false);
     setSlackTestResult(null);
     setSlackAppInfo(null);
+    slackAppInfoChannelIdRef.current = null;
   }, []);
 
   // Reset the whole create flow back to its universal first step.
@@ -3131,15 +3137,23 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     // Resolve the Slack app id behind the stored bot token (best-effort; the
     // backend returns nulls rather than erroring). Fire-and-forget so the modal
     // opens instantly; the app link degrades to a generic Slack link meanwhile.
+    // The ref pins the response to the channel still being edited — a slow
+    // response for a previously-opened channel must not deep-link this one to
+    // the wrong Slack app.
+    slackAppInfoChannelIdRef.current = channel.channel_type === 'slack' ? channel.id : null;
     if (channel.channel_type === 'slack' && client) {
       void (async () => {
+        let info: SlackAppInfo | null = null;
         try {
-          const info = (await client
-            .service('gateway-channels/app-info')
-            .create({ gatewayChannelId: channel.id })) as SlackAppInfo | undefined;
-          setSlackAppInfo(info ?? null);
+          info =
+            ((await client
+              .service('gateway-channels/app-info')
+              .create({ gatewayChannelId: channel.id })) as SlackAppInfo | undefined) ?? null;
         } catch {
-          setSlackAppInfo(null);
+          info = null;
+        }
+        if (slackAppInfoChannelIdRef.current === channel.id) {
+          setSlackAppInfo(info);
         }
       })();
     }

@@ -490,6 +490,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'test gateway channels')],
       },
     });
+    // Request/response probe — its default `created` event would otherwise fall
+    // through the global publisher's `global` scope and broadcast the probe
+    // result to every authenticated socket. Publish to no one.
+    app.service('gateway-channels/test').publish(() => []);
 
     // Sub-path service resolving the Slack app id behind a channel's stored
     // bot token (auth.test → bots.info). Same gating rationale as /test above:
@@ -500,6 +504,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'read gateway app info')],
       },
     });
+    // Request/response read — same broadcast fall-through as /test above.
+    app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
     app.use('/gateway', createGatewayService(db, app), {

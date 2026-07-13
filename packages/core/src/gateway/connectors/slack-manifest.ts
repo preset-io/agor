@@ -60,12 +60,22 @@ export const SLACK_AGENT_TOOL_SCOPES: Record<SlackAgentToolCapability, string[]>
 };
 
 /**
+ * Slack app ids are an "A" followed by uppercase alphanumerics (e.g.
+ * "A0123ABCD"). Anything else is treated as unresolved: the id lands in a URL
+ * path, so this shape check is what keeps a malformed/hostile value (slashes,
+ * query/fragment chars) from steering the link somewhere else.
+ */
+const SLACK_APP_ID_SHAPE = /^A[A-Z0-9]+$/;
+
+/**
  * URL of a Slack app's manifest editor when the app id is known, falling back
  * to the generic app list when it isn't (e.g. the id could not be resolved
- * from the stored bot token).
+ * from the stored bot token, or doesn't look like a Slack app id).
  */
 export function slackAppManifestUrl(appId?: string | null): string {
-  return appId ? `https://api.slack.com/apps/${appId}/app-manifest` : 'https://api.slack.com/apps';
+  return appId && SLACK_APP_ID_SHAPE.test(appId)
+    ? `https://api.slack.com/apps/${appId}/app-manifest`
+    : 'https://api.slack.com/apps';
 }
 
 export interface SlackBotEventSubscriptions {

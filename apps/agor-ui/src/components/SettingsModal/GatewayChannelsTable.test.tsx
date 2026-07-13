@@ -493,6 +493,77 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(link.closest('a')?.getAttribute('href')).toBe('https://api.slack.com/apps');
   });
 
+  it('keeps the generic link when the backend resolves a null app id', async () => {
+    const { client, appInfoCreate } = makeClient(undefined, { appId: null, teamId: null });
+    renderEditTable(client, makeSlackChannel());
+
+    await waitFor(() => expect(appInfoCreate).toHaveBeenCalledTimes(1));
+    const link = await screen.findByText(/Open Slack apps/);
+    expect(link.closest('a')?.getAttribute('href')).toBe('https://api.slack.com/apps');
+  });
+
+  it('drops a stale app-info response after switching to another channel', async () => {
+    // Per-channel deferred resolutions so channel A's response can land AFTER
+    // channel B's — the link must keep B's app id.
+    const resolvers = new Map<string, (info: unknown) => void>();
+    const appInfoCreate = vi.fn(
+      ({ gatewayChannelId }: { gatewayChannelId: string }) =>
+        new Promise((resolve) => resolvers.set(gatewayChannelId, resolve))
+    );
+    const client = {
+      service: (name: string) => {
+        if (name === 'gateway-channels/app-info') return { create: appInfoCreate };
+        return { create: vi.fn(), get: vi.fn() };
+      },
+    } as unknown as AgorClient;
+
+    const channelA = makeSlackChannel();
+    const channelB = {
+      ...makeSlackChannel(),
+      id: 'channel-2',
+      name: 'Zeta Slack', // sorts after "Team Slack" so row order is A, B
+    } as GatewayChannel;
+    const branch = makeBranch();
+    const user = makeUser();
+    renderWithProviders(
+      <GatewayChannelsTable
+        client={client}
+        gatewayChannelById={
+          new Map([
+            [channelA.id, channelA],
+            [channelB.id, channelB],
+          ])
+        }
+        branchById={new Map([[branch.branch_id, branch]])}
+        userById={new Map([[user.user_id, user]])}
+        mcpServerById={new Map<string, MCPServer>()}
+        currentUser={user}
+      />
+    );
+
+    // Open A's edit modal, close it, open B's while A's fetch is in flight.
+    fireEvent.click(screen.getAllByTitle('Edit')[0]);
+    clickButton(/^Cancel$/);
+    fireEvent.click(screen.getAllByTitle('Edit')[1]);
+    await waitFor(() => expect(appInfoCreate).toHaveBeenCalledTimes(2));
+
+    resolvers.get('channel-2')?.({ appId: 'ABBB222', teamId: 'T1' });
+    const link = await screen.findByText(/Open Slack app manifest/);
+    expect(link.closest('a')?.getAttribute('href')).toBe(
+      'https://api.slack.com/apps/ABBB222/app-manifest'
+    );
+
+    // A's stale response lands last and must be ignored.
+    resolvers.get('channel-1')?.({ appId: 'AAAA111', teamId: 'T1' });
+    await flush();
+    expect(
+      screen
+        .getByText(/Open Slack app manifest/)
+        .closest('a')
+        ?.getAttribute('href')
+    ).toBe('https://api.slack.com/apps/ABBB222/app-manifest');
+  });
+
   it('warns with the added scope when a capability toggle needs a scope the saved config lacks', async () => {
     const { client } = makeClient(undefined, { appId: 'A0123ABC', teamId: 'T1' });
     renderEditTable(client, makeSlackChannel());
