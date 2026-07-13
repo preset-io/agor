@@ -246,6 +246,7 @@ describe('TaskRepository.create', () => {
 
     const statuses = [
       TaskStatus.CREATED,
+      TaskStatus.DISPATCHING,
       TaskStatus.RUNNING,
       TaskStatus.STOPPING,
       TaskStatus.AWAITING_PERMISSION,
@@ -680,6 +681,7 @@ describe('TaskRepository.findByStatus', () => {
 
     const statuses = [
       TaskStatus.CREATED,
+      TaskStatus.DISPATCHING,
       TaskStatus.RUNNING,
       TaskStatus.STOPPING,
       TaskStatus.AWAITING_PERMISSION,
@@ -701,10 +703,141 @@ describe('TaskRepository.findByStatus', () => {
 });
 
 // ============================================================================
+// Executor connection
+// ============================================================================
+
+describe('TaskRepository.connectExecutor', () => {
+  dbTest(
+    'atomically transitions dispatching to running with a server timestamp',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const startedAt = '2026-01-01T00:00:00.000Z';
+      const created = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.DISPATCHING,
+          started_at: startedAt,
+        })
+      );
+
+      const connection = await taskRepo.connectExecutor(created.task_id);
+      const found = await taskRepo.findById(created.task_id);
+
+      expect(connection?.transitioned).toBe(true);
+      expect(connection?.task.status).toBe(TaskStatus.RUNNING);
+      expect(connection?.task.started_at).toBe(startedAt);
+      expect(connection?.task.executor_connected_at).toBeDefined();
+      expect(found).toMatchObject({
+        status: TaskStatus.RUNNING,
+        started_at: startedAt,
+        executor_connected_at: connection?.task.executor_connected_at,
+      });
+    }
+  );
+
+  dbTest(
+    'is idempotent once running and does not rewrite the connection timestamp',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const created = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+      );
+
+      const first = await taskRepo.connectExecutor(created.task_id);
+      const second = await taskRepo.connectExecutor(created.task_id);
+
+      expect(second).toEqual({ task: first?.task, transitioned: false });
+    }
+  );
+
+  dbTest('serializes concurrent executor claims without SQLite lock errors', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+
+    const claims = await Promise.all([
+      taskRepo.connectExecutor(created.task_id),
+      taskRepo.connectExecutor(created.task_id),
+    ]);
+
+    expect(claims.map((claim) => claim?.transitioned).sort()).toEqual([false, true]);
+    expect(new Set(claims.map((claim) => claim?.task.executor_connected_at)).size).toBe(1);
+    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.RUNNING);
+  });
+
+  dbTest('does not accept a timestamp-less running row as a prior claim', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const corrupted = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    expect(await taskRepo.connectExecutor(corrupted.task_id)).toBeNull();
+    expect(await taskRepo.findById(corrupted.task_id)).toMatchObject({
+      status: TaskStatus.RUNNING,
+      executor_connected_at: undefined,
+    });
+  });
+
+  dbTest('does not revive stopping, stopped, or terminal tasks', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    for (const status of [
+      TaskStatus.STOPPING,
+      TaskStatus.STOPPED,
+      TaskStatus.COMPLETED,
+      TaskStatus.FAILED,
+      TaskStatus.TIMED_OUT,
+    ]) {
+      const task = await taskRepo.create(createTaskData({ session_id: sessionId, status }));
+      expect(await taskRepo.connectExecutor(task.task_id)).toBeNull();
+      expect((await taskRepo.findById(task.task_id))?.status).toBe(status);
+    }
+  });
+
+  dbTest(
+    'includes dispatching in orphan cleanup but not connected-heartbeat supervision',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.DISPATCHING,
+          last_executor_heartbeat_at: '2026-01-01T00:00:00.000Z',
+        })
+      );
+
+      expect((await taskRepo.findOrphaned()).map((item) => item.task_id)).toContain(task.task_id);
+      expect(
+        (await taskRepo.findActiveWithExecutorHeartbeat()).map((item) => item.task_id)
+      ).not.toContain(task.task_id);
+    }
+  );
+});
+
+// ============================================================================
 // Update
 // ============================================================================
 
 describe('TaskRepository.update', () => {
+  dbTest('does not let generic updates claim a dispatching task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+
+    await expect(taskRepo.update(created.task_id, { status: TaskStatus.RUNNING })).rejects.toThrow(
+      'dispatching tasks must be claimed through connectExecutor'
+    );
+    expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.DISPATCHING);
+  });
+
   dbTest('should update task by full UUID and short ID', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -720,6 +853,124 @@ describe('TaskRepository.update', () => {
     const updated2 = await taskRepo.update(idPrefix, { status: TaskStatus.COMPLETED });
     expect(updated2.status).toBe(TaskStatus.COMPLETED);
   });
+
+  dbTest('allows a running executor task to complete normally', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    const updated = await taskRepo.update(created.task_id, {
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-07-10T20:00:00.000Z',
+    });
+
+    expect(updated).toMatchObject({
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-07-10T20:00:00.000Z',
+    });
+  });
+
+  for (const terminalStatus of [TaskStatus.COMPLETED, TaskStatus.STOPPED]) {
+    dbTest(
+      `does not revive a ${terminalStatus} task through awaiting_permission then running`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const created = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: terminalStatus,
+            executor_connected_at: '2026-07-10T20:00:00.000Z',
+          })
+        );
+
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.AWAITING_PERMISSION })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.RUNNING })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        expect((await taskRepo.findById(created.task_id))?.status).toBe(terminalStatus);
+      }
+    );
+  }
+
+  for (const terminalStatus of [TaskStatus.COMPLETED, TaskStatus.STOPPED]) {
+    dbTest(
+      `does not revive a ${terminalStatus} task through awaiting_input then running`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const created = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: terminalStatus,
+            executor_connected_at: '2026-07-10T20:00:00.000Z',
+          })
+        );
+
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.AWAITING_INPUT })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        await expect(
+          taskRepo.update(created.task_id, { status: TaskStatus.RUNNING })
+        ).rejects.toThrow(`terminal task status cannot be changed from ${terminalStatus}`);
+        expect((await taskRepo.findById(created.task_id))?.status).toBe(terminalStatus);
+      }
+    );
+  }
+
+  dbTest(
+    'allows metadata-only updates after completion without changing status',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const created = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.COMPLETED })
+      );
+
+      const updated = await taskRepo.update(created.task_id, { tool_use_count: 7 });
+
+      expect(updated).toMatchObject({ status: TaskStatus.COMPLETED, tool_use_count: 7 });
+    }
+  );
+
+  for (const resumableStatus of [TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT]) {
+    dbTest(
+      `keeps terminal status across a concurrent resume from ${resumableStatus}`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const created = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: resumableStatus,
+            executor_connected_at: '2026-07-10T20:00:00.000Z',
+          })
+        );
+
+        // Do not assume which transaction acquires the row lock first. If the
+        // resume wins it may complete before the terminal write; if completion
+        // wins, the resume must reject. The lifecycle invariant is identical.
+        const [completionResult, resumeResult] = await Promise.allSettled([
+          taskRepo.update(created.task_id, { status: TaskStatus.COMPLETED }),
+          taskRepo.update(created.task_id, { status: TaskStatus.RUNNING }),
+        ]);
+
+        expect(completionResult.status).toBe('fulfilled');
+        if (resumeResult.status === 'fulfilled') {
+          expect(resumeResult.value.status).toBe(TaskStatus.RUNNING);
+        } else {
+          expect(String(resumeResult.reason)).toContain(
+            'terminal task status cannot be changed from completed'
+          );
+        }
+        expect((await taskRepo.findById(created.task_id))?.status).toBe(TaskStatus.COMPLETED);
+      }
+    );
+  }
 
   dbTest('should update multiple fields and preserve unchanged ones', async ({ db }) => {
     const taskRepo = new TaskRepository(db);

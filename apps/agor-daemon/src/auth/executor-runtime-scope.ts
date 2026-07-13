@@ -43,6 +43,11 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
   return null;
 }
 
+/** Whether this authenticated transport request carries executor scope for one task. */
+export function isTaskScopedExecutorRequest(context: HookContext, taskId: string): boolean {
+  return scopedPayload(context)?.task_id === taskId;
+}
+
 function expectClaim(claim: string | undefined, label: string): string {
   if (!claim) {
     throw new Forbidden(`Executor token is missing ${label} scope`);
@@ -170,6 +175,16 @@ export function scopeExecutorRuntimeAuth(requireAuth: AuthHook): AuthHook {
   return async (context: HookContext): Promise<HookContext> => {
     const authenticated = await requireAuth(context);
     return executorRuntimeScopeGuard()(authenticated);
+  };
+}
+
+/** Require this transport call to carry a task-scoped executor session token. */
+export function requireExecutorRuntimeToken() {
+  return async (context: HookContext): Promise<HookContext> => {
+    if (!scopedPayload(context)) {
+      throw new Forbidden('A task-scoped executor token is required for this request');
+    }
+    return context;
   };
 }
 

@@ -6,6 +6,7 @@ import type { ReportPath, ReportTemplate } from './report';
 export const TaskStatus = {
   QUEUED: 'queued', // Task created but not yet running (waiting for executor to drain queue)
   CREATED: 'created',
+  DISPATCHING: 'dispatching', // Daemon persisted launch intent; executor has not connected yet
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for SDK to halt
   AWAITING_PERMISSION: 'awaiting_permission',
@@ -94,6 +95,7 @@ export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
  * pre-executor row and QUEUED is waiting for a future turn.
  */
 export const EXECUTING_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  TaskStatus.DISPATCHING,
   TaskStatus.RUNNING,
   TaskStatus.STOPPING,
   TaskStatus.AWAITING_PERMISSION,
@@ -256,7 +258,9 @@ export interface Task {
   session_md5?: string;
 
   created_at: string;
-  started_at?: string; // When task status changed to RUNNING (UTC ISO string)
+  started_at?: string; // When task execution was dispatched (UTC ISO string)
+  /** Server timestamp recorded when the authenticated executor claims the task. */
+  executor_connected_at?: string; // UTC ISO string
   /** Latest heartbeat emitted by the executor while this task is active. */
   last_executor_heartbeat_at?: string; // UTC ISO string
   completed_at?: string; // When task reached terminal status (UTC ISO string)

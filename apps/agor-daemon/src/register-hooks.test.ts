@@ -18,12 +18,14 @@
  * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
+import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  protectServerManagedTaskWrites,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
@@ -47,6 +49,247 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('protectServerManagedTaskWrites', () => {
+  const executorPayload = {
+    type: 'executor-session',
+    purpose: 'executor-task',
+    session_id: 'session-1',
+    task_id: 'task-1',
+    branch_id: 'branch-1',
+  };
+  const externalContext = (
+    method: 'create' | 'update' | 'patch',
+    data: unknown,
+    options: {
+      taskId?: string;
+      executorTaskId?: string;
+      persistedTask?: Record<string, unknown>;
+    } = {}
+  ): import('@agor/core/types').HookContext =>
+    ({
+      path: 'tasks',
+      method,
+      id: options.taskId,
+      data,
+      params: {
+        provider: 'rest',
+        ...(options.executorTaskId
+          ? {
+              authentication: {
+                payload: { ...executorPayload, task_id: options.executorTaskId },
+              },
+            }
+          : {}),
+      },
+      service: options.persistedTask
+        ? { findByIdForScopeCheck: async () => options.persistedTask }
+        : undefined,
+    }) as import('@agor/core/types').HookContext;
+
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('rejects executor_connected_at on external %s', async (method) => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(method, { executor_connected_at: '2026-07-10T20:00:00.000Z' })
+      )
+    ).rejects.toThrow('executor_connected_at is server-managed');
+  });
+
+  it('rejects executor_connected_at in bulk create data', async () => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext('create', [
+          { full_prompt: 'safe' },
+          { executor_connected_at: '2026-07-10T20:00:00.000Z' },
+        ])
+      )
+    ).rejects.toThrow('executor_connected_at is server-managed');
+  });
+
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('rejects server-owned dispatching status on external %s', async (method) => {
+    await expect(
+      protectServerManagedTaskWrites(externalContext(method, { status: TaskStatus.DISPATCHING }))
+    ).rejects.toThrow('dispatching task status is server-managed');
+  });
+
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('rejects server-owned dispatching status in external %s array data', async (method) => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(method, [
+          { status: TaskStatus.CREATED },
+          { status: TaskStatus.DISPATCHING },
+        ])
+      )
+    ).rejects.toThrow('dispatching task status is server-managed');
+  });
+
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('rejects server-owned running status on external %s', async (method) => {
+    await expect(
+      protectServerManagedTaskWrites(externalContext(method, { status: TaskStatus.RUNNING }))
+    ).rejects.toThrow('running task status is server-managed');
+  });
+
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('rejects server-owned running status in external %s array data', async (method) => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(method, [{ status: TaskStatus.CREATED }, { status: TaskStatus.RUNNING }])
+      )
+    ).rejects.toThrow('running task status is server-managed');
+  });
+
+  it('blocks the external dispatching-to-created-to-running bypass', async () => {
+    await expect(
+      protectServerManagedTaskWrites(externalContext('patch', { status: TaskStatus.CREATED }))
+    ).resolves.toBeDefined();
+    await expect(
+      protectServerManagedTaskWrites(externalContext('patch', { status: TaskStatus.RUNNING }))
+    ).rejects.toThrow('running task status is server-managed');
+  });
+
+  it('rejects a pre-claim executor running patch', async () => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(
+          'patch',
+          { status: TaskStatus.RUNNING },
+          {
+            taskId: 'task-1',
+            executorTaskId: 'task-1',
+            persistedTask: {
+              task_id: 'task-1',
+              status: TaskStatus.DISPATCHING,
+              executor_connected_at: null,
+            },
+          }
+        )
+      )
+    ).rejects.toThrow('running task status is server-managed');
+  });
+
+  it('rejects a connected task-scoped executor forging dispatching', async () => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(
+          'patch',
+          { status: TaskStatus.DISPATCHING },
+          {
+            taskId: 'task-1',
+            executorTaskId: 'task-1',
+            persistedTask: {
+              task_id: 'task-1',
+              status: TaskStatus.AWAITING_INPUT,
+              executor_connected_at: '2026-07-10T20:00:00.000Z',
+            },
+          }
+        )
+      )
+    ).rejects.toThrow('dispatching task status is server-managed');
+  });
+
+  it('rejects a normal user resuming an already-connected task', async () => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(
+          'patch',
+          { status: TaskStatus.RUNNING },
+          {
+            taskId: 'task-1',
+            persistedTask: {
+              task_id: 'task-1',
+              status: TaskStatus.AWAITING_PERMISSION,
+              executor_connected_at: '2026-07-10T20:00:00.000Z',
+            },
+          }
+        )
+      )
+    ).rejects.toThrow('running task status is server-managed');
+  });
+
+  it.each([
+    TaskStatus.AWAITING_PERMISSION,
+    TaskStatus.AWAITING_INPUT,
+  ])('allows a connected scoped executor to resume from %s', async (status) => {
+    const context = externalContext(
+      'patch',
+      { status: TaskStatus.RUNNING },
+      {
+        taskId: 'task-1',
+        executorTaskId: 'task-1',
+        persistedTask: {
+          task_id: 'task-1',
+          status,
+          executor_connected_at: '2026-07-10T20:00:00.000Z',
+        },
+      }
+    );
+
+    await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+  });
+
+  it('rejects a connected executor token scoped to another task', async () => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(
+          'patch',
+          { status: TaskStatus.RUNNING },
+          {
+            taskId: 'task-1',
+            executorTaskId: 'task-2',
+            persistedTask: {
+              task_id: 'task-1',
+              status: TaskStatus.AWAITING_PERMISSION,
+              executor_connected_at: '2026-07-10T20:00:00.000Z',
+            },
+          }
+        )
+      )
+    ).rejects.toThrow('running task status is server-managed');
+  });
+
+  it('allows external executors to finish running tasks', async () => {
+    await expect(
+      protectServerManagedTaskWrites(externalContext('patch', { status: TaskStatus.COMPLETED }))
+    ).resolves.toBeDefined();
+  });
+
+  it('preserves trusted internal direct-to-running task writes', async () => {
+    const context = externalContext('patch', {
+      status: TaskStatus.RUNNING,
+    });
+    context.params.provider = undefined;
+
+    await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+  });
+
+  it('preserves trusted internal dispatching task writes', async () => {
+    const context = externalContext('patch', {
+      status: TaskStatus.DISPATCHING,
+    });
+    context.params.provider = undefined;
+
+    await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+  });
+});
 
 describe('tenant-owned service registration', () => {
   it('wraps gateway inbound routing in tenant database scope', () => {

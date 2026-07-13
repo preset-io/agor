@@ -87,6 +87,11 @@ export class AgorExecutor {
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken);
       executorDebug('[executor] Connected to daemon');
 
+      // Authentication is complete. Atomically claim the daemon-dispatched task
+      // before starting heartbeats or SDK work; a late executor cannot revive a
+      // stopped or terminal task.
+      await this.client.service('tasks').connectExecutor({ task_id: this.config.taskId });
+
       // Setup event listeners
       this.setupEventListeners();
 

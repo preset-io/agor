@@ -192,6 +192,38 @@ describe('TasksService executor heartbeat helpers', () => {
     expect(service.emit).not.toHaveBeenCalled();
   });
 
+  it.each([
+    TaskStatus.COMPLETED,
+    TaskStatus.STOPPED,
+  ])('does not let a terminal %s task enter an executor awaiting state', async (terminalStatus) => {
+    const taskId = '018f0000-0000-7000-8000-000000000009';
+    const terminalTask = {
+      task_id: taskId,
+      session_id: '018f0000-0000-7000-8000-000000000010',
+      status: terminalStatus,
+      created_at: '2026-01-01T00:00:00.000Z',
+      completed_at: '2026-01-01T00:00:05.000Z',
+      executor_connected_at: '2026-01-01T00:00:01.000Z',
+    };
+    const service = Object.create(TasksService.prototype) as TasksService & {
+      get: ReturnType<typeof vi.fn>;
+      repository: { update: ReturnType<typeof vi.fn> };
+      id: string;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    service.get = vi.fn().mockResolvedValue(terminalTask);
+    service.repository = { update: vi.fn() };
+    service.id = 'task_id';
+    service.emit = vi.fn();
+
+    for (const status of [TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT]) {
+      await expect(service.patch(taskId, { status })).resolves.toBe(terminalTask);
+    }
+
+    expect(service.repository.update).not.toHaveBeenCalled();
+    expect(service.emit).not.toHaveBeenCalled();
+  });
+
   it('supports administrative stopped patches without callbacks or queue draining', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000010';
     const sessionId = '018f0000-0000-7000-8000-000000000011';

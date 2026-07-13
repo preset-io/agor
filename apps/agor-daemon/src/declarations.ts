@@ -120,6 +120,7 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
  * Tasks service with custom methods (server-side implementation)
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
+  connectExecutor(data: { task_id: string }, params?: FeathersParams): Promise<Task>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,
