@@ -13,6 +13,13 @@ import {
   seedLinkSession as seedSession,
 } from './links.test-helpers';
 
+async function setupLinksRepository(db: Parameters<typeof seedBranch>[0]) {
+  const repo = new LinksRepository(db);
+  const branch = await seedBranch(db);
+  const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+  return { repo, branch, session };
+}
+
 describe('LinksRepository', () => {
   dbTest('enforces durable link row structure in the database', async ({ db }) => {
     const branch = await seedBranch(db);
@@ -104,9 +111,7 @@ describe('LinksRepository', () => {
   });
 
   dbTest('creates branch-owned and session-owned links with exactly one owner', async ({ db }) => {
-    const repo = new LinksRepository(db);
-    const branch = await seedBranch(db);
-    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const { repo, branch, session } = await setupLinksRepository(db);
 
     const branchLink = await repo.create({
       branch_id: branch.branch_id,
@@ -172,9 +177,7 @@ describe('LinksRepository', () => {
   });
 
   dbTest('derives target_key instead of trusting caller-supplied keys', async ({ db }) => {
-    const repo = new LinksRepository(db);
-    const branch = await seedBranch(db);
-    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const { repo, session } = await setupLinksRepository(db);
 
     const first = await repo.create({
       session_id: session.session_id,
@@ -199,9 +202,7 @@ describe('LinksRepository', () => {
   });
 
   dbTest('keeps case-sensitive Knowledge paths as distinct targets', async ({ db }) => {
-    const repo = new LinksRepository(db);
-    const branch = await seedBranch(db);
-    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const { repo, session } = await setupLinksRepository(db);
 
     const upper = await repo.create({
       session_id: session.session_id,
@@ -221,9 +222,7 @@ describe('LinksRepository', () => {
   });
 
   dbTest('increments revision on every update', async ({ db }) => {
-    const repo = new LinksRepository(db);
-    const branch = await seedBranch(db);
-    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const { repo, session } = await setupLinksRepository(db);
     const created = await repo.create({
       session_id: session.session_id,
       kind: 'url',
@@ -240,9 +239,7 @@ describe('LinksRepository', () => {
   });
 
   dbTest('retries concurrent disjoint patches without losing either update', async ({ db }) => {
-    const repo = new LinksRepository(db);
-    const branch = await seedBranch(db);
-    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const { repo, session } = await setupLinksRepository(db);
     const messageId = (await seedMessage(db, session.session_id)).message_id;
     const created = await repo.create({
       session_id: session.session_id,
@@ -279,9 +276,7 @@ describe('LinksRepository', () => {
   });
 
   dbTest('preserves the first source message when parsed-link dedupes race', async ({ db }) => {
-    const repo = new LinksRepository(db);
-    const branch = await seedBranch(db);
-    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const { repo, session } = await setupLinksRepository(db);
     const firstMessageId = (await seedMessage(db, session.session_id)).message_id;
     const secondMessageId = (await seedMessage(db, session.session_id)).message_id;
     const created = await repo.create({
@@ -353,9 +348,7 @@ describe('LinksRepository', () => {
   dbTest(
     'preserves first source message attribution when deduping parsed links',
     async ({ db }) => {
-      const repo = new LinksRepository(db);
-      const branch = await seedBranch(db);
-      const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+      const { repo, session } = await setupLinksRepository(db);
       const firstMessageId = (await seedMessage(db, session.session_id)).message_id;
       const secondMessageId = (await seedMessage(db, session.session_id)).message_id;
 
@@ -385,9 +378,7 @@ describe('LinksRepository', () => {
   );
 
   dbTest('fills missing source message attribution during dedupe', async ({ db }) => {
-    const repo = new LinksRepository(db);
-    const branch = await seedBranch(db);
-    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const { repo, session } = await setupLinksRepository(db);
     const messageId = (await seedMessage(db, session.session_id)).message_id;
 
     const manual = await repo.create({
@@ -409,9 +400,7 @@ describe('LinksRepository', () => {
   });
 
   dbTest('recomputes target_key and honors explicit null patch fields', async ({ db }) => {
-    const repo = new LinksRepository(db);
-    const branch = await seedBranch(db);
-    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const { repo, session } = await setupLinksRepository(db);
     const created = await repo.create({
       session_id: session.session_id,
       kind: 'url',
@@ -437,9 +426,7 @@ describe('LinksRepository', () => {
   });
 
   dbTest('rejects ambiguous or missing effective targets on create and patch', async ({ db }) => {
-    const repo = new LinksRepository(db);
-    const branch = await seedBranch(db);
-    const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+    const { repo, session } = await setupLinksRepository(db);
     const created = await repo.create({
       session_id: session.session_id,
       kind: 'url',
@@ -465,9 +452,7 @@ describe('LinksRepository', () => {
   dbTest(
     'rejects kind/source combinations that contradict the effective target',
     async ({ db }) => {
-      const repo = new LinksRepository(db);
-      const branch = await seedBranch(db);
-      const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+      const { repo, session } = await setupLinksRepository(db);
       const urlLink = await repo.create({
         session_id: session.session_id,
         kind: 'url',
@@ -517,9 +502,7 @@ describe('LinksRepository', () => {
   dbTest(
     'refetches and updates the existing link when an insert loses a dedupe race',
     async ({ db }) => {
-      const repo = new LinksRepository(db);
-      const branch = await seedBranch(db);
-      const session = await seedSession(db, branch.branch_id, 'owner' as UUID);
+      const { repo, session } = await setupLinksRepository(db);
       const createToInsert = (
         repo as unknown as {
           createToInsert(data: unknown, existing?: unknown): LinkInsert;

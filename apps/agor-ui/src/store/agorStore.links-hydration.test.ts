@@ -1,5 +1,6 @@
 import type { Branch, Link, Session } from '@agor-live/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { deferred } from '../testUtils';
 import { cancelAllHydrations, resetHydrationRevisions, runHydration } from './agorHydration';
 import { mergeLinksIntoMaps, reconcilePinnedBranchLinksIntoMaps } from './agorMaps';
 import { branchPatched, linkCreated, linkRemoved, sessionRemoved } from './agorRealtimeActions';
@@ -8,14 +9,6 @@ import {
   getPinnedBranchLinkPreserveBranchIds,
   invalidateFullLinkRequestsForLink,
 } from './agorStore';
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
 
 function link(linkId: string, owner: Partial<Link>): Link {
   return {

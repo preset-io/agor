@@ -111,7 +111,19 @@ const makeLink = (overrides: Partial<Link> = {}) =>
     ...overrides,
   });
 
-function makeClient(links: Link[]) {
+interface PromotionClientOptions {
+  sessionLinks: Link[];
+  branchLinks?: Link[];
+  teammateLinks: Link[];
+  promoted: Link;
+}
+
+function makeClient(input: Link[] | PromotionClientOptions) {
+  const promotion = Array.isArray(input) ? null : input;
+  const sessionLinks = Array.isArray(input) ? input : input.sessionLinks;
+  const branchLinks = promotion?.branchLinks ?? [];
+  const teammateLinks = promotion?.teammateLinks ?? [];
+  const links = [...sessionLinks, ...branchLinks, ...teammateLinks];
   const calls: Array<{ service: string; method: string; args: unknown[] }> = [];
   const linksById = new Map(links.map((link) => [link.link_id, link]));
   const client = {
@@ -122,16 +134,27 @@ function makeClient(links: Link[]) {
           if (path.endsWith('/tasks/queue')) return { data: [] };
           return [];
         },
-        async findAll(args?: unknown) {
-          calls.push({ service: path, method: 'findAll', args: [args] });
-          if (path === 'links') return links;
-          return [];
+        async findAll(params?: { query?: { owner_scope?: string; branch_id?: string } }) {
+          calls.push({ service: path, method: 'findAll', args: [params] });
+          if (!promotion) return path === 'links' ? links : [];
+          if (params?.query?.owner_scope !== 'branch') return sessionLinks;
+          return params.query.branch_id === branch.branch_id ? branchLinks : teammateLinks;
         },
         async patch(id: string, body: unknown) {
           calls.push({ service: path, method: 'patch', args: [id, body] });
           const existing = linksById.get(id);
           return { ...existing, ...(body as object), link_id: id };
         },
+        ...(promotion && {
+          async create(body: unknown) {
+            calls.push({ service: path, method: 'create', args: [body] });
+            return promotion.promoted;
+          },
+          async remove(id: string) {
+            calls.push({ service: path, method: 'remove', args: [id] });
+            return promotion.promoted;
+          },
+        }),
         on: vi.fn(),
         off: vi.fn(),
       };
@@ -140,59 +163,8 @@ function makeClient(links: Link[]) {
   return { client, calls };
 }
 
-function makePromotionClient(args: {
-  sessionLinks: Link[];
-  branchLinks?: Link[];
-  teammateLinks: Link[];
-  promoted: Link;
-}) {
-  const calls: Array<{ service: string; method: string; args: unknown[] }> = [];
-  const client = {
-    service(path: string) {
-      return {
-        async find(args?: unknown) {
-          calls.push({ service: path, method: 'find', args: [args] });
-          if (path.endsWith('/tasks/queue')) return { data: [] };
-          return [];
-        },
-        async findAll(params?: { query?: { owner_scope?: string; branch_id?: string } }) {
-          calls.push({ service: path, method: 'findAll', args: [params] });
-          if (
-            params?.query?.owner_scope === 'branch' &&
-            params.query.branch_id === branch.branch_id
-          ) {
-            return args.branchLinks ?? [];
-          }
-          if (params?.query?.owner_scope === 'branch') return args.teammateLinks;
-          return args.sessionLinks;
-        },
-        async patch(id: string, body: unknown) {
-          calls.push({ service: path, method: 'patch', args: [id, body] });
-          const existing = [
-            ...args.sessionLinks,
-            ...(args.branchLinks ?? []),
-            ...args.teammateLinks,
-          ].find((link) => link.link_id === id);
-          return {
-            ...existing,
-            ...(body as object),
-            link_id: id,
-          };
-        },
-        async create(body: unknown) {
-          calls.push({ service: path, method: 'create', args: [body] });
-          return args.promoted;
-        },
-        async remove(id: string) {
-          calls.push({ service: path, method: 'remove', args: [id] });
-          return args.promoted;
-        },
-        on: vi.fn(),
-        off: vi.fn(),
-      };
-    },
-  } as unknown as AgorClient;
-  return { client, calls };
+function makePromotionClient(options: PromotionClientOptions) {
+  return makeClient(options);
 }
 
 function renderPanel(client: AgorClient, panelBranch: Branch = branch) {

@@ -1,6 +1,7 @@
 import type { AgorClient, Link } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { deferred } from '../../testUtils';
 import type { LinkDisplayItem } from './linkDisplay';
 import { useLinkMutations } from './useLinkMutations';
 
@@ -16,14 +17,6 @@ vi.mock('../../utils/message', () => ({
 }));
 vi.mock('./linkPinning', () => ({ toggleLinkDisplayItemPinned: mocks.togglePinned }));
 vi.mock('./linkPromotion', () => ({ promoteLinkToTeammate: mocks.promote }));
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function item(linkId: string): LinkDisplayItem {
   return { key: linkId, linkId, isPinned: false } as LinkDisplayItem;

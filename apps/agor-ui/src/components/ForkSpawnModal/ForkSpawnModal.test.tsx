@@ -12,6 +12,7 @@
 import type { Session } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { deferred } from '../../testUtils';
 import { ForkSpawnModal } from './ForkSpawnModal';
 
 // The AutocompleteTextarea depends on a live client + DOM APIs that are
@@ -41,14 +42,6 @@ const mockSession: Partial<Session> = {
   title: 'Parent Session',
   agentic_tool: 'claude-code',
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 // 10s timeout per test: these exercise full Antd Modal mount + async
 // confirm + waitFor cycles which intermittently brush against vitest's
