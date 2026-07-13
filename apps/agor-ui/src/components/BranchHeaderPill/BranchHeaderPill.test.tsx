@@ -169,6 +169,14 @@ describe('BranchHeaderPill', () => {
       name: 'preset-io/agor / feature/remove-nuke · Open session',
     });
     expect(identity).toHaveAttribute('data-tooltip-trigger', 'hover,focus');
+    expect(identity).toHaveStyle({
+      flex: '1 1 auto',
+      minWidth: '0',
+    });
+    expect(identity.parentElement).toHaveStyle({
+      width: '100%',
+      minWidth: '0',
+    });
 
     expect(screen.getByText(repo.slug)).toHaveStyle({
       overflow: 'hidden',
@@ -177,6 +185,13 @@ describe('BranchHeaderPill', () => {
     expect(screen.getByText(branch.name)).toHaveStyle({
       overflow: 'hidden',
       textOverflow: 'ellipsis',
+    });
+
+    expect(screen.getByRole('button', { name: 'Start environment' }).parentElement).toHaveStyle({
+      flexShrink: '0',
+    });
+    expect(screen.getByRole('button', { name: 'Sessions' }).parentElement).toHaveStyle({
+      flexShrink: '0',
     });
 
     for (const name of [
