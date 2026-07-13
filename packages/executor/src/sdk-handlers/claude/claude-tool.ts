@@ -11,7 +11,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { generateId, shortId } from '@agor/core/db';
-import type { PermissionMode as ClaudeSDKPermissionMode } from '@agor/core/sdk';
+import type { PermissionMode as ClaudeSDKPermissionMode, TerminalReason } from '@agor/core/sdk';
 import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   BranchRepository,
@@ -57,14 +57,12 @@ import {
 } from './message-builder.js';
 import type { ProcessedEvent } from './message-processor.js';
 import { ClaudePromptService } from './prompt-service.js';
+import { autoResumeOnRateLimit, RATE_LIMIT_TERMINAL_REASON } from './rate-limit-retry.js';
 import {
-  computeRateLimitRetryDelayMs,
-  MAX_RATE_LIMIT_RETRIES,
-  RATE_LIMIT_RESUME_PROMPT,
-  RATE_LIMIT_TERMINAL_REASON,
-  shouldAutoResumeAfterRateLimit,
-  sleepUnlessAborted,
-} from './rate-limit-retry.js';
+  accumulateResultUsage,
+  applyAccumulatedUsage,
+  emptyRetryUsageAccumulator,
+} from './usage-aggregation.js';
 
 const DEBUG_CLAUDE_STREAMING =
   process.env.AGOR_DEBUG_CLAUDE_STREAMING === '1' ||
@@ -88,7 +86,7 @@ function formatRateLimitText(event: Extract<ProcessedEvent, { type: 'rate_limit'
   const resetsAtStr = event.resetsAt ? new Date(event.resetsAt * 1000).toLocaleString() : undefined;
 
   if (event.status === 'rejected') {
-    return `Rate limited (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}. ` : ''}Auto-retrying when the limit resets…`;
+    return `Rate limited (${type}).${resetsAtStr ? ` Resets at ${resetsAtStr}.` : ''}`;
   }
   if (event.status === 'allowed_warning') {
     return `Approaching rate limit (${type}). ${resetsAtStr ? `Resets at ${resetsAtStr}.` : ''} Requests may be delayed.`;
@@ -245,91 +243,31 @@ export class ClaudeTool implements ITool {
   }
 
   /**
-   * Wrap {@link ClaudePromptService.promptSessionStreaming} so a turn cut short
-   * by a hard rate limit auto-waits and resumes instead of going idle.
-   *
-   * A hard limit ends the turn with `result.terminal_reason === 'blocking_limit'`
-   * (and a `rejected` rate_limit event); the SDK itself does not wait. On that
-   * signal we sleep until the limit resets (or back off when the reset time is
-   * unknown), then re-issue a continue prompt — up to {@link MAX_RATE_LIMIT_RETRIES}
-   * times, after which we fall back to today's manual-continue behavior. A user
-   * stop / session cancel interrupts the wait cleanly via `abortController`.
-   *
-   * The synthetic `rate_limit_retry` / `rate_limit_retry_exhausted` events are
-   * surfaced as system messages by the caller.
+   * Stream a turn with auto-resume on hard rate limits (see
+   * {@link autoResumeOnRateLimit}): a turn cut short by `blocking_limit` waits
+   * and resumes instead of going idle, its throttled result re-labelled
+   * `intermediate_result` while the eventual one is the final `result`. A user
+   * stop / session cancel interrupts the wait via `abortController`.
    */
-  private async *promptWithRateLimitResume(
+  private promptWithRateLimitResume(
     sessionId: SessionID,
     prompt: string,
     taskId: TaskID | undefined,
     permissionMode: ClaudeSDKPermissionMode | undefined,
     abortController?: AbortController
   ): AsyncGenerator<ProcessedEvent> {
-    let currentPrompt = prompt;
-    let attempt = 0;
-
-    while (true) {
-      let sawRejectedRateLimit = false;
-      let rejectedResetsAt: number | undefined;
-      let terminalReason: string | undefined;
-
-      for await (const event of this.promptService!.promptSessionStreaming(
-        sessionId,
-        currentPrompt,
-        taskId,
-        permissionMode,
-        undefined, // chunkCallback (unused)
-        abortController
-      )) {
-        if (event.type === 'rate_limit' && event.status === 'rejected') {
-          sawRejectedRateLimit = true;
-          rejectedResetsAt = event.resetsAt;
-        }
-        if (event.type === 'result') {
-          terminalReason = (event.raw_sdk_message as { terminal_reason?: string })?.terminal_reason;
-        }
-        yield event;
-      }
-
-      if (
-        abortController?.signal.aborted ||
-        !shouldAutoResumeAfterRateLimit({ terminalReason, sawRejectedRateLimit, attempt })
-      ) {
-        // Only announce exhaustion when the turn actually ended on a rate limit.
-        const endedOnRateLimit =
-          terminalReason === RATE_LIMIT_TERMINAL_REASON || sawRejectedRateLimit;
-        if (
-          !abortController?.signal.aborted &&
-          endedOnRateLimit &&
-          terminalReason !== 'completed' &&
-          attempt >= MAX_RATE_LIMIT_RETRIES
-        ) {
-          yield { type: 'rate_limit_retry_exhausted', attempts: attempt };
-        }
-        return;
-      }
-
-      const delayMs = computeRateLimitRetryDelayMs({
-        resetsAt: rejectedResetsAt,
-        attempt,
-        nowMs: Date.now(),
-      });
-      yield {
-        type: 'rate_limit_retry',
-        retryAtMs: Date.now() + delayMs,
-        attempt: attempt + 1,
-        maxRetries: MAX_RATE_LIMIT_RETRIES,
-      };
-
-      const { aborted } = await sleepUnlessAborted(delayMs, abortController?.signal);
-      if (aborted) {
-        yield { type: 'stopped' };
-        return;
-      }
-
-      attempt += 1;
-      currentPrompt = RATE_LIMIT_RESUME_PROMPT;
-    }
+    return autoResumeOnRateLimit(
+      (resumePrompt) =>
+        this.promptService!.promptSessionStreaming(
+          sessionId,
+          resumePrompt,
+          taskId,
+          permissionMode,
+          undefined, // chunkCallback (unused)
+          abortController
+        ),
+      { prompt, signal: abortController?.signal }
+    );
   }
 
   /**
@@ -444,6 +382,10 @@ export class ClaudeTool implements ITool {
     let wasStopped = false;
     let hadError = false;
     let errorDetails: string[] | undefined;
+    // Billable usage summed across every SDK invocation this task spans (a
+    // rate-limited turn can be auto-resumed into several). Applied to the final
+    // rawSdkResponse so accounting reflects total consumption, not just the last.
+    let usageAcc = emptyRetryUsageAccumulator();
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
@@ -807,17 +749,34 @@ export class ClaudeTool implements ITool {
         });
       }
 
+      // A throttled turn's result: aggregate its billable usage, then drop it —
+      // it is neither the final result nor an error (we are auto-resuming). Reset
+      // per-turn usage so it can't attach to the resumed turn's messages.
+      if (event.type === 'intermediate_result') {
+        usageAcc = accumulateResultUsage(usageAcc, event.raw_sdk_message);
+        tokenUsage = undefined;
+        modelUsage = undefined;
+      }
+
       // Capture raw SDK response for token accounting
       if (event.type === 'result') {
-        rawSdkResponse = event.raw_sdk_message;
-        // Detect error results from SDK (e.g., error_during_execution)
+        usageAcc = accumulateResultUsage(usageAcc, event.raw_sdk_message);
+        rawSdkResponse = applyAccumulatedUsage(event.raw_sdk_message, usageAcc);
+        // Detect error results from SDK (e.g., error_during_execution). A final
+        // `blocking_limit` means auto-resume was exhausted, not a failure — the
+        // task goes idle for manual continue (its own system message was shown).
         if (rawSdkResponse && 'subtype' in rawSdkResponse) {
           const sdkResult = rawSdkResponse as {
             subtype?: string;
             errors?: string[];
             is_error?: boolean;
+            terminal_reason?: TerminalReason;
           };
-          if (sdkResult.subtype && sdkResult.subtype !== 'success') {
+          if (
+            sdkResult.subtype &&
+            sdkResult.subtype !== 'success' &&
+            sdkResult.terminal_reason !== RATE_LIMIT_TERMINAL_REASON
+          ) {
             hadError = true;
             errorDetails = sdkResult.errors;
             console.error(

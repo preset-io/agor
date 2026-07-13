@@ -28,6 +28,7 @@ export type {
   SDKUserMessage,
   SDKUserMessageReplay,
   SlashCommand,
+  TerminalReason,
 } from '@anthropic-ai/claude-agent-sdk';
 // Claude Agent SDK - namespace export
 export * as Claude from '@anthropic-ai/claude-agent-sdk';

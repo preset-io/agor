@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeRateLimitRetryDelayMs,
   MAX_RATE_LIMIT_RETRIES,
+  MAX_RATE_LIMIT_WAIT_MS,
   RATE_LIMIT_BACKOFF_MS,
   RATE_LIMIT_JITTER_MS,
   shouldAutoResumeAfterRateLimit,
@@ -9,58 +10,37 @@ import {
 } from './rate-limit-retry.js';
 
 describe('shouldAutoResumeAfterRateLimit', () => {
-  it('resumes when the turn ended on the blocking_limit terminal reason', () => {
-    expect(
-      shouldAutoResumeAfterRateLimit({
-        terminalReason: 'blocking_limit',
-        sawRejectedRateLimit: false,
-        attempt: 0,
-      })
-    ).toBe(true);
-  });
-
-  it('resumes on a rejected rate_limit even when terminal_reason is absent', () => {
-    expect(
-      shouldAutoResumeAfterRateLimit({
-        terminalReason: undefined,
-        sawRejectedRateLimit: true,
-        attempt: 0,
-      })
-    ).toBe(true);
+  it('resumes ONLY on the blocking_limit terminal reason', () => {
+    expect(shouldAutoResumeAfterRateLimit({ terminalReason: 'blocking_limit', attempt: 0 })).toBe(
+      true
+    );
   });
 
   it('never re-issues a turn that completed normally', () => {
-    expect(
-      shouldAutoResumeAfterRateLimit({
-        terminalReason: 'completed',
-        sawRejectedRateLimit: true,
-        attempt: 0,
-      })
-    ).toBe(false);
+    expect(shouldAutoResumeAfterRateLimit({ terminalReason: 'completed', attempt: 0 })).toBe(false);
   });
 
-  it('does not resume when there was no rate limit signal', () => {
-    expect(
-      shouldAutoResumeAfterRateLimit({
-        terminalReason: 'max_turns',
-        sawRejectedRateLimit: false,
-        attempt: 0,
-      })
-    ).toBe(false);
+  it('fails closed on a missing/unknown terminal reason', () => {
+    expect(shouldAutoResumeAfterRateLimit({ terminalReason: undefined, attempt: 0 })).toBe(false);
+  });
+
+  it('does not resume on some other terminal reason', () => {
+    expect(shouldAutoResumeAfterRateLimit({ terminalReason: 'max_turns', attempt: 0 })).toBe(false);
+    expect(shouldAutoResumeAfterRateLimit({ terminalReason: 'model_error', attempt: 0 })).toBe(
+      false
+    );
   });
 
   it('enforces the retry cap', () => {
     expect(
       shouldAutoResumeAfterRateLimit({
         terminalReason: 'blocking_limit',
-        sawRejectedRateLimit: true,
         attempt: MAX_RATE_LIMIT_RETRIES,
       })
     ).toBe(false);
     expect(
       shouldAutoResumeAfterRateLimit({
         terminalReason: 'blocking_limit',
-        sawRejectedRateLimit: true,
         attempt: MAX_RATE_LIMIT_RETRIES - 1,
       })
     ).toBe(true);
@@ -69,21 +49,35 @@ describe('shouldAutoResumeAfterRateLimit', () => {
 
 describe('computeRateLimitRetryDelayMs', () => {
   const nowMs = 1_000_000;
+  const noJitter = { nowMs, random: () => 0 };
 
-  it('waits until resetsAt when it is known', () => {
+  it('waits until resetsAt when it is a finite future timestamp', () => {
     const resetsAt = (nowMs + 90_000) / 1000; // epoch SECONDS
-    const delay = computeRateLimitRetryDelayMs({ resetsAt, attempt: 0, nowMs, random: () => 0 });
-    expect(delay).toBe(90_000);
+    expect(computeRateLimitRetryDelayMs({ resetsAt, attempt: 0, ...noJitter })).toBe(90_000);
   });
 
-  it('never returns a negative wait when resetsAt is in the past', () => {
+  it('treats a past resetsAt as unknown and falls to backoff', () => {
     const resetsAt = (nowMs - 60_000) / 1000;
-    const delay = computeRateLimitRetryDelayMs({ resetsAt, attempt: 0, nowMs, random: () => 0 });
-    expect(delay).toBe(0);
+    expect(computeRateLimitRetryDelayMs({ resetsAt, attempt: 0, ...noJitter })).toBe(30_000);
+  });
+
+  it('treats NaN / Infinity resetsAt as unknown and falls to backoff', () => {
+    expect(computeRateLimitRetryDelayMs({ resetsAt: Number.NaN, attempt: 0, ...noJitter })).toBe(
+      30_000
+    );
+    expect(
+      computeRateLimitRetryDelayMs({ resetsAt: Number.POSITIVE_INFINITY, attempt: 0, ...noJitter })
+    ).toBe(30_000);
+  });
+
+  it('clamps a far-future resetsAt to the max single wait', () => {
+    const resetsAt = (nowMs + 30 * 24 * 60 * 60 * 1000) / 1000; // 30 days out
+    expect(computeRateLimitRetryDelayMs({ resetsAt, attempt: 0, ...noJitter })).toBe(
+      MAX_RATE_LIMIT_WAIT_MS
+    );
   });
 
   it('uses capped exponential backoff when resetsAt is unknown', () => {
-    const noJitter = { nowMs, random: () => 0 };
     expect(computeRateLimitRetryDelayMs({ attempt: 0, ...noJitter })).toBe(30_000);
     expect(computeRateLimitRetryDelayMs({ attempt: 1, ...noJitter })).toBe(60_000);
     expect(computeRateLimitRetryDelayMs({ attempt: 2, ...noJitter })).toBe(120_000);

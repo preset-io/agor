@@ -120,6 +120,16 @@ export type ProcessedEvent =
       raw_sdk_message: SDKResultMessage; // Pass the entire SDK message unchanged
       agentSessionId?: string;
     }
+  /**
+   * A per-invocation result for a turn that will be auto-resumed after a rate
+   * limit (synthesized by the retry wrapper). Its billable usage is aggregated,
+   * but it is NOT the task's final result — so it must not set error state or
+   * overwrite the final result.
+   */
+  | {
+      type: 'intermediate_result';
+      raw_sdk_message: SDKResultMessage;
+    }
   | {
       type: 'system_complete';
       systemType: string;
