@@ -426,7 +426,7 @@ export class SchedulerService {
    */
   async executeScheduleNow(opts: { scheduleId: ScheduleID; triggeredBy: UUID }): Promise<Session> {
     const { scheduleId, triggeredBy } = opts;
-    const schedule = await this.scheduleRepo.findById(scheduleId);
+    const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
     if (!schedule) {
       throw new ScheduleNotReadyError('schedule_incomplete', `Schedule not found: ${scheduleId}`);
     }

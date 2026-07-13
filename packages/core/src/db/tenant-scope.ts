@@ -153,8 +153,8 @@ export async function runWithTenantDatabaseScope<T>(
       },
       () => work(baseDb as TenantScopedDatabase)
     );
-    await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
     await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
+    await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
     return result;
   }
 
@@ -174,8 +174,8 @@ export async function runWithTenantDatabaseScope<T>(
       () => work(scopedDb as TenantScopedDatabase)
     );
   });
-  await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
   await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
+  await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
   return result;
 }
 

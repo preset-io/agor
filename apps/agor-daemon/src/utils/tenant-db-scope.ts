@@ -5,6 +5,7 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
+  enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
@@ -93,6 +94,29 @@ export function deferWithTenantDatabaseScope(
   }
 
   schedule();
+}
+
+/** Defer long orchestration work after commit with tenant identity only. */
+export function deferWithTenantContext(
+  params: unknown,
+  work: () => Promise<void>,
+  onError?: (error: unknown) => void
+): void {
+  const tenantId = resolveTenantIdForDeferredScope(params);
+  if (!tenantId) {
+    onError?.(new Error('Missing tenant context for deferred work'));
+    return;
+  }
+  const schedule = () => {
+    runWithoutTenantDatabaseScope(() => {
+      setImmediate(() => {
+        void runWithTenantContext(tenantId, work).catch((error) =>
+          onError ? onError(error) : console.error('[tenant-context] Deferred work failed:', error)
+        );
+      });
+    });
+  };
+  if (!enqueueAfterTenantDatabaseCommit(schedule)) schedule();
 }
 
 export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScopeOptions) {

@@ -1298,7 +1298,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const { deleteFromFilesystem } = params?.query || {};
 
     // Get branch details before deletion
-    const branch = await this.get(id, params);
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
 
     // Remove from database FIRST for instant UI feedback
     // CASCADE will clean up related comments automatically
@@ -1380,7 +1380,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions | { deleted: true; branch_id: BranchID }> {
     const { metadataAction, filesystemAction } = options;
-    const branch = await this.get(id, params);
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     // Hook chain enforces auth before we get here.
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
@@ -1412,11 +1412,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // owns all branches and impersonation would resolve getBranchesDir()
       // to the wrong home directory, causing safety check failures.
 
-      appWithToken.sessionTokenService
-        ?.generateToken('branch-clean', userId ?? currentUserId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        })
+      void this.withTenantDatabase(
+        params,
+        () =>
+          appWithToken.sessionTokenService?.generateToken('branch-clean', userId ?? currentUserId, {
+            branchId: branch.branch_id,
+            maxUses: -1,
+          }) ?? Promise.reject(new Error('Session token service unavailable'))
+      )
         .then((sessionToken) => {
           spawnExecutor(
             {
@@ -1445,11 +1448,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // owns all branches and impersonation would resolve getBranchesDir()
       // to the wrong home directory, causing safety check failures.
 
-      appWithToken.sessionTokenService
-        ?.generateToken('branch-delete', userId ?? currentUserId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        })
+      void this.withTenantDatabase(
+        params,
+        () =>
+          appWithToken.sessionTokenService?.generateToken(
+            'branch-delete',
+            userId ?? currentUserId,
+            {
+              branchId: branch.branch_id,
+              maxUses: -1,
+            }
+          ) ?? Promise.reject(new Error('Session token service unavailable'))
+      )
         .then((sessionToken) => {
           spawnExecutor(
             {
@@ -1487,17 +1497,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       console.log(`📦 Archiving branch: ${branch.name} (filesystem: ${filesystemAction})`);
 
       // Update branch
-      const archivedBranch = await this.patch(
-        id,
-        {
-          archived: true,
-          archived_at: new Date().toISOString(),
-          archived_by: currentUserId,
-          filesystem_status: filesystemAction,
-          // Preserve board_id + board_object placement so unarchive can restore in-place
-          updated_at: new Date().toISOString(),
-        },
-        params
+      const archivedBranch = await this.withTenantDatabase(params, () =>
+        this.patch(
+          id,
+          {
+            archived: true,
+            archived_at: new Date().toISOString(),
+            archived_by: currentUserId,
+            filesystem_status: filesystemAction,
+            // Preserve board_id + board_object placement so unarchive can restore in-place
+            updated_at: new Date().toISOString(),
+          },
+          params
+        )
       );
 
       // Archive all sessions in this branch
@@ -1527,7 +1539,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
       console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
 
-      await this.remove(id, params);
+      await this.withTenantDatabase(params, () => this.remove(id, params));
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
       return { deleted: true, branch_id: id };
@@ -1542,7 +1554,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     options?: { boardId?: BoardID },
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
-    const branch = await this.get(id, params);
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
 
     if (!branch.archived) {
       throw new Error(`Branch ${branch.name} is not archived`);
@@ -1565,7 +1577,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       patchData.board_id = options?.boardId;
     }
 
-    const unarchivedBranch = await this.patch(id, patchData, params);
+    const unarchivedBranch = await this.withTenantDatabase(params, () =>
+      this.patch(id, patchData, params)
+    );
 
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
@@ -1573,11 +1587,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
 
       // Set filesystem_status to 'creating' while we rebuild
-      await this.patch(id, { filesystem_status: 'creating' }, { provider: undefined });
+      await this.withTenantDatabase(params, () =>
+        this.patch(id, { filesystem_status: 'creating' }, { ...params, provider: undefined })
+      );
 
       // Look up repo to get local_path
       const reposService = this.app.service('repos');
-      const repo = (await reposService.get(branch.repo_id)) as Repo;
+      const repo = await this.withTenantDatabase(
+        params,
+        () => reposService.get(branch.repo_id, params) as Promise<Repo>
+      );
 
       // Unix group initialization is a filesystem concern controlled by
       // unix_user_mode. Logical branch RBAC may be enabled in simple/Cloud mode
@@ -1600,10 +1619,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           `Cannot unarchive clone-mode branch '${branch.name}' for repo '${repo.slug}': ` +
           `repo has no remote_url. The clone source URL is unknown.`;
         console.error(`⚠️  ${errMsg}`);
-        await this.patch(
-          id,
-          { filesystem_status: 'failed', error_message: errMsg },
-          { provider: undefined }
+        await this.withTenantDatabase(params, () =>
+          this.patch(
+            id,
+            { filesystem_status: 'failed', error_message: errMsg },
+            { ...params, provider: undefined }
+          )
         );
         return unarchivedBranch;
       }
@@ -2444,11 +2465,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: { variant?: string } | undefined,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'render branch environment');
-
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'render branch environment');
     const reposService = this.app.service('repos');
-    const repo = (await reposService.get(branch.repo_id, params)) as Repo;
+    const repo = await this.withTenantDatabase(
+      params,
+      () => reposService.get(branch.repo_id, params) as Promise<Repo>
+    );
 
     const env = repo.environment;
     if (!env) {
@@ -2503,19 +2525,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       app: snapshot.app,
     });
 
-    return await this.patch(
-      id,
-      {
-        environment_variant: snapshot.variant,
-        start_command: snapshot.start || undefined,
-        stop_command: snapshot.stop || undefined,
-        nuke_command: snapshot.nuke,
-        logs_command: snapshot.logs,
-        health_check_url: snapshot.health,
-        app_url: snapshot.app,
-        updated_at: new Date().toISOString(),
-      },
-      params
+    return await this.withTenantDatabase(params, () =>
+      this.patch(
+        id,
+        {
+          environment_variant: snapshot.variant,
+          start_command: snapshot.start || undefined,
+          stop_command: snapshot.stop || undefined,
+          nuke_command: snapshot.nuke,
+          logs_command: snapshot.logs,
+          health_check_url: snapshot.health,
+          app_url: snapshot.app,
+          updated_at: new Date().toISOString(),
+        },
+        params
+      )
     );
   }
 }

@@ -1,6 +1,7 @@
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   attachHiddenTenant,
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   shortId,
@@ -477,18 +478,15 @@ describe('GatewayService outbound routing tenant scope', () => {
     const tx = {
       execute: vi.fn(async () => []),
     };
-    let transactionCount = 0;
     let resolveRouted!: () => void;
     const routed = new Promise<void>((resolve) => {
       resolveRouted = resolve;
     });
     const db = {
       transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
-        transactionCount += 1;
         events.push('tx:start');
         const result = await callback(tx);
         events.push('tx:commit');
-        if (transactionCount === 3) resolveRouted();
         return result;
       }),
     } as TenantScopeAwareDatabase;
@@ -496,7 +494,9 @@ describe('GatewayService outbound routing tenant scope', () => {
     const seenTenants: Array<string | undefined> = [];
     const sendMessage = vi.fn(async () => {
       events.push('send');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       seenTenants.push(getCurrentTenantId() as string | undefined);
+      resolveRouted();
       return '104.000000';
     });
 
@@ -522,16 +522,7 @@ describe('GatewayService outbound routing tenant scope', () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(seenTenants).toEqual(['tenant-channel']);
-    expect(events).toEqual([
-      'tx:start',
-      'scheduled',
-      'tx:commit',
-      'tx:start',
-      'tx:commit',
-      'tx:start',
-      'send',
-      'tx:commit',
-    ]);
+    expect(events.indexOf('tx:commit')).toBeLessThan(events.indexOf('send'));
   });
 });
 
@@ -541,18 +532,15 @@ describe('GatewayService Slack progress tenant scope', () => {
     const tx = {
       execute: vi.fn(async () => []),
     };
-    let transactionCount = 0;
     let resolveUpdated!: () => void;
     const updated = new Promise<void>((resolve) => {
       resolveUpdated = resolve;
     });
     const db = {
       transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
-        transactionCount += 1;
         events.push('tx:start');
         const result = await callback(tx);
         events.push('tx:commit');
-        if (transactionCount === 3) resolveUpdated();
         return result;
       }),
     } as TenantScopeAwareDatabase;
@@ -560,7 +548,9 @@ describe('GatewayService Slack progress tenant scope', () => {
     const seenTenants: Array<string | undefined> = [];
     const setThreadStatus = vi.fn(async () => {
       events.push('status');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       seenTenants.push(getCurrentTenantId() as string | undefined);
+      resolveUpdated();
     });
 
     const { service } = makeGatewayHarness({
@@ -592,16 +582,7 @@ describe('GatewayService Slack progress tenant scope', () => {
       })
     );
     expect(seenTenants).toEqual(['tenant-channel']);
-    expect(events).toEqual([
-      'tx:start',
-      'scheduled',
-      'tx:commit',
-      'tx:start',
-      'tx:commit',
-      'tx:start',
-      'status',
-      'tx:commit',
-    ]);
+    expect(events.indexOf('tx:commit')).toBeLessThan(events.indexOf('status'));
   });
 });
 

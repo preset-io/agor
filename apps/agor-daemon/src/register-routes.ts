@@ -11,6 +11,7 @@ import {
   loadConfig,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
+  resolveTenantContext,
 } from '@agor/core/config';
 import {
   BranchRepository,
@@ -330,6 +331,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
       ...options,
       around: [tenantDatabaseScopeAround, ...(options.around ?? [])],
+    });
+
+  const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteBase = (
+    routeApp,
+    path,
+    service,
+    authConfig,
+    routeRequireAuth,
+    options = {}
+  ) =>
+    registerAuthenticatedRouteBase(routeApp, path, service, authConfig, routeRequireAuth, {
+      ...options,
+      around: [tenantIdentityAround, ...(options.around ?? [])],
     });
 
   // Helper: safely get a service (returns undefined if not registered due to tier=off)
@@ -1919,12 +1933,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!session.branch_id) {
           return res.status(403).json({ error: 'Not authorized to upload to this session' });
         }
-        const wt = await branchRepo.findById(session.branch_id);
-        if (!wt) {
+        const access = await runWithTenantDatabaseScope(db, params.tenant?.tenant_id, async () => {
+          const wt = await branchRepo.findById(session.branch_id);
+          if (!wt) return null;
+          const isOwner = await branchRepo.isOwner(wt.branch_id, userId);
+          const branchPermission = await branchRepo.resolveUserPermission(wt, userId);
+          return { branchPermission, isOwner, wt };
+        });
+        if (!access) {
           return res.status(404).json({ error: 'Branch not found' });
         }
-        const isOwner = await branchRepo.isOwner(wt.branch_id, userId);
-        const branchPermission = await branchRepo.resolveUserPermission(wt, userId);
+        const { branchPermission, isOwner, wt } = access;
         const effectiveLevel = resolveBranchPermission(
           wt,
           userId,
@@ -2019,6 +2038,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const promptParams: any = {
             route: { id: sessionId },
             user: params.user,
+            authentication: params.authentication,
+            tenant: params.tenant,
           };
           await promptService.create({ prompt: promptText }, promptParams);
         } catch (error) {
@@ -2089,10 +2110,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         console.log('   User:', result.user?.user_id ? shortId(result.user.user_id) : 'unknown');
       }
 
-      req.feathers = {
+      const authParams = {
         user: result.user,
         provider: 'rest',
         authentication: result.authentication,
+        headers: req.headers,
+      };
+      req.feathers = {
+        ...authParams,
+        tenant: resolveTenantContext(multiTenancy, {
+          params: authParams,
+          authPayload: result.authentication?.payload,
+          headers: req.headers,
+        }),
       };
 
       next();
@@ -2891,7 +2921,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   const branchesService = app.service('branches') as unknown as BranchesServiceImpl;
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/branches/:id/start',
     {
@@ -2910,7 +2940,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/branches/:id/stop',
     {
@@ -2927,7 +2957,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/branches/:id/restart',
     {
@@ -2947,7 +2977,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/branches/:id/nuke',
     {
@@ -2964,7 +2994,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/branches/:id/render-environment',
     {
@@ -2985,7 +3015,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/branches/:id/health',
     {
@@ -3020,11 +3050,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/archive-or-delete').hooks({
+    around: { all: [tenantIdentityAround] },
     before: {
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'archive or delete branches'),
-        async (context: HookContext) => {
+        inTenantDatabaseScope(async (context: HookContext) => {
           const id = context.params.route?.id;
           if (!id) throw new Error('Branch ID required');
 
@@ -3036,7 +3067,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           await cacheBranchAccess(context.params, branchRepository, branch);
 
           return context;
-        },
+        }),
         branchRbacEnabled
           ? ensureBranchPermission('all', 'archive or delete branches', superadminOpts)
           : (context: HookContext) => {
@@ -3065,11 +3096,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/unarchive').hooks({
+    around: { all: [tenantIdentityAround] },
     before: {
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'unarchive branches'),
-        async (context: HookContext) => {
+        inTenantDatabaseScope(async (context: HookContext) => {
           const id = context.params.route?.id;
           if (!id) throw new Error('Branch ID required');
 
@@ -3081,7 +3113,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           await cacheBranchAccess(context.params, branchRepository, branch);
 
           return context;
-        },
+        }),
         branchRbacEnabled
           ? ensureBranchPermission('all', 'unarchive branches', superadminOpts)
           : (context: HookContext) => {
@@ -3280,7 +3312,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   // Branch logs
-  registerAuthenticatedRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/branches/logs',
     {

@@ -153,7 +153,7 @@ import {
 } from './utils/spawn-executor.js';
 import {
   createTenantDatabaseScopeAroundHook,
-  deferWithTenantDatabaseScope,
+  deferWithTenantContext,
 } from './utils/tenant-db-scope.js';
 
 const DEBUG_MCP_TOKENS =
@@ -504,6 +504,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     config,
     jwtSecret,
   });
+  const tenantIdentityAround = createTenantDatabaseScopeAroundHook({
+    db,
+    config,
+    jwtSecret,
+    transaction: false,
+  });
 
   const ensureTenantContext = async (context: HookContext): Promise<HookContext> => {
     try {
@@ -549,7 +555,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const service = safeService(path);
       if (!service) continue;
       service.hooks({
-        around: { all: [tenantDatabaseScopeAround] },
+        around: { all: [path === 'gateway' ? tenantIdentityAround : tenantDatabaseScopeAround] },
         before: { all: [scopeTenantBefore] },
         after: { all: [assertTenantAfter] },
       });
@@ -2717,7 +2723,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             // Defer outside the just-finished transaction, then re-enter a fresh
             // tenant scope so gateway DB work keeps Cloud RLS context without
             // inheriting a committed transaction object.
-            deferWithTenantDatabaseScope(db, context.params, async () => {
+            deferWithTenantContext(context.params, async () => {
               try {
                 const gatewayService = context.app.service('gateway') as unknown as GatewayService;
                 await gatewayService.flushGitHubBuffer(session.session_id);

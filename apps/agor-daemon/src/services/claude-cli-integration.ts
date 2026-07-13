@@ -56,6 +56,7 @@ import {
   generateId,
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
@@ -124,6 +125,15 @@ async function runCliCallbackDatabaseScope<T>(
   if (!db) return work();
   const tenantId = cliWatcherTenantBySession.get(sessionId) ?? captureCliWatcherTenantId(app);
   return runWithTenantDatabaseScope(db, tenantId, work);
+}
+
+async function runCliCallbackTenantContext<T>(
+  app: Application,
+  sessionId: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const tenantId = cliWatcherTenantBySession.get(sessionId) ?? captureCliWatcherTenantId(app);
+  return runWithTenantContext(tenantId, work);
 }
 
 /** Per-turn accumulator used by the sink between `user_message` and `turn_end`. */
@@ -353,7 +363,7 @@ function startTaskWatchdog(app: Application, sessionId: SessionID): void {
   stopTaskWatchdog(sessionId);
   runWithoutTenantDatabaseScope(() => {
     const timer = setInterval(() => {
-      void runCliCallbackDatabaseScope(app, sessionId, async () => {
+      void runCliCallbackTenantContext(app, sessionId, async () => {
         const active = activeCliTurn.get(sessionId);
         if (!active) {
           // Turn already closed by some other path — stop watching.

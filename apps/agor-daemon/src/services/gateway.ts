@@ -9,13 +9,14 @@
 import { PublicBaseUrlNotConfiguredError, requirePublicBaseUrl } from '@agor/core/config';
 import {
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   GatewayChannelRepository,
   GatewayOutboundMessageRepository,
   getCurrentTenantId,
   getHiddenTenantId,
   MCPServerRepository,
   runWithoutTenantDatabaseScope,
-  runWithTenantDatabaseScope,
+  runWithTenantContext,
   SessionRepository,
   shortId,
   type TenantScopeAwareDatabase,
@@ -67,7 +68,7 @@ import {
   buildPromptWithAttachments,
   ingestInboundImageAttachments,
 } from '../utils/gateway-attachments.js';
-import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
+import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 
 /**
  * Inbound message data (platform → session)
@@ -556,7 +557,6 @@ function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): Ga
  * Gateway routing service
  */
 export class GatewayService {
-  private db: TenantScopeAwareDatabase;
   private channelRepo: GatewayChannelRepository;
   private threadMapRepo: ThreadSessionMapRepository;
   private outboundRepo: GatewayOutboundMessageRepository;
@@ -605,16 +605,18 @@ export class GatewayService {
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
-    this.db = db;
-    this.channelRepo = new GatewayChannelRepository(db);
-    this.threadMapRepo = new ThreadSessionMapRepository(db);
-    this.outboundRepo = new GatewayOutboundMessageRepository(db);
-    this.branchRepo = new BranchRepository(db);
-    this.sessionRepo = new SessionRepository(db);
-    this.usersRepo = new UsersRepository(db);
+    this.channelRepo = bindRepositoryToTenantUnitOfWork(db, new GatewayChannelRepository(db));
+    this.threadMapRepo = bindRepositoryToTenantUnitOfWork(db, new ThreadSessionMapRepository(db));
+    this.outboundRepo = bindRepositoryToTenantUnitOfWork(
+      db,
+      new GatewayOutboundMessageRepository(db)
+    );
+    this.branchRepo = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
+    this.sessionRepo = bindRepositoryToTenantUnitOfWork(db, new SessionRepository(db));
+    this.usersRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
 
-    this.mcpServerRepo = new MCPServerRepository(db);
-    this.userTokenRepo = new UserMCPOAuthTokenRepository(db);
+    this.mcpServerRepo = bindRepositoryToTenantUnitOfWork(db, new MCPServerRepository(db));
+    this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
     this.app = app;
   }
 
@@ -1025,8 +1027,7 @@ export class GatewayService {
    * routes whose enclosing transaction is about to close.
    */
   updateProgressAfterCommit(data: GatewayProgressData, params?: unknown): void {
-    deferWithTenantDatabaseScope(
-      this.db,
+    deferWithTenantContext(
       params,
       async () => {
         await this.updateProgress(data);
@@ -2433,8 +2434,7 @@ export class GatewayService {
    * graph is visible on a new scoped connection.
    */
   routeMessageAfterCommit(data: RouteMessageData, params?: unknown): void {
-    deferWithTenantDatabaseScope(
-      this.db,
+    deferWithTenantContext(
       params,
       async () => {
         await this.routeMessage(data);
@@ -2656,7 +2656,7 @@ export class GatewayService {
       throw new Error(`Missing tenant context for gateway listener channel ${channel.id}`);
     }
 
-    await runWithTenantDatabaseScope(this.db, tenantId, async () => {
+    await runWithTenantContext(tenantId, async () => {
       await this.create({
         channel_key: channel.channel_key,
         thread_id: msg.threadId,

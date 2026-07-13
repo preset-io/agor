@@ -1,4 +1,8 @@
-import { getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
+import {
+  getCurrentTenantDatabaseScope,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+} from '@agor/core/db';
 import type { SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -31,6 +35,7 @@ describe('session queue tenant scope', () => {
         label: 'test drain',
       },
       async (params) => {
+        expect(getCurrentTenantDatabaseScope()).toBeUndefined();
         seen.push(`tenant:${getCurrentTenantId()}`);
         seen.push(`params:${params.tenant?.tenant_id}`);
       }
@@ -188,6 +193,7 @@ describe('session queue tenant scope', () => {
             label: 'session after.patch drain',
           },
           async (params) => {
+            expect(getCurrentTenantDatabaseScope()).toBeUndefined();
             seen.push(`tenant:${getCurrentTenantId()}`);
             seen.push(`params:${params.tenant?.tenant_id}`);
             resolve();
