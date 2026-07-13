@@ -47,7 +47,7 @@ describe('MessageBlock attachments', () => {
   it('renders a user attachment-only message with blank content', () => {
     renderMessage({ content: '   ' }, [makeLink()]);
 
-    expect(screen.getByRole('button', { name: /open spec\.pdf/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /download spec\.pdf/i })).toBeInTheDocument();
   });
 
   it('renders parsed knowledge references as cards in assistant messages', () => {
@@ -106,7 +106,7 @@ describe('MessageBlock attachments', () => {
       ]
     );
 
-    expect(screen.getByRole('button', { name: /open spec\.pdf/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /download spec\.pdf/i })).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /open image preview for chart\.png/i })
     ).toBeInTheDocument();
