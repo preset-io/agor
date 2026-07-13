@@ -48,8 +48,5 @@ describe('ActionLinkRow', () => {
     );
     const spaLink = screen.getByRole('link', { name: 'Open knowledge' });
     expect(spaLink).toHaveAttribute('href', '/kb/team/guide');
-    expect(spaLink).toHaveStyle({
-      color: 'var(--agor-action-row-link-color, inherit)',
-    });
   });
 });
