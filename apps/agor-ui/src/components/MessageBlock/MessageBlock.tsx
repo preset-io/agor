@@ -12,13 +12,12 @@
 import {
   type AgenticToolName,
   type AgorClient,
-  type ContentBlock as CoreContentBlock,
-  type DiffEnrichment,
   type Message,
   type PermissionRequestContent,
   PermissionScope,
   PermissionStatus,
   shortId,
+  type ToolResultContentBlock,
   type User,
 } from '@agor-live/client';
 import { RobotOutlined, SyncOutlined, WarningOutlined } from '@ant-design/icons';
@@ -48,6 +47,7 @@ import {
 } from '../ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
+import { TranscriptProjectionNotice } from '../TranscriptProjectionNotice';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 // Side-effect import: registers every built-in widget component with the
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
@@ -59,14 +59,6 @@ interface ToolUseBlock {
   id: string;
   name: string;
   input: Record<string, unknown>;
-}
-
-interface ToolResultBlock {
-  type: 'tool_result';
-  tool_use_id: string;
-  content: string | CoreContentBlock[];
-  is_error?: boolean;
-  diff?: DiffEnrichment;
 }
 
 interface TextBlock {
@@ -532,13 +524,15 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const getContentBlocks = (): {
     thinkingBlocks: string[];
     textBeforeTools: string[];
-    toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultBlock }[];
+    toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultContentBlock }[];
     textAfterTools: string[];
+    standaloneProjectedResults: ToolResultContentBlock[];
   } => {
     const thinkingBlocks: string[] = [];
     const textBeforeTools: string[] = [];
     const textAfterTools: string[] = [];
-    const toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultBlock }[] = [];
+    const toolBlocks: { toolUse: ToolUseBlock; toolResult?: ToolResultContentBlock }[] = [];
+    const standaloneProjectedResults: ToolResultContentBlock[] = [];
 
     // Handle string content
     if (typeof message.content === 'string') {
@@ -549,13 +543,14 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         textBeforeTools: [content],
         toolBlocks: [],
         textAfterTools: [],
+        standaloneProjectedResults: [],
       };
     }
 
     // Handle array of content blocks
     if (Array.isArray(message.content)) {
       const toolUseMap = new Map<string, ToolUseBlock>();
-      const toolResultMap = new Map<string, ToolResultBlock>();
+      const toolResultMap = new Map<string, ToolResultContentBlock>();
       let hasSeenTool = false;
 
       // First pass: collect blocks and track order
@@ -590,7 +585,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
             hasSeenTool = true;
           }
         } else if (block.type === 'tool_result') {
-          const toolResult = block as unknown as ToolResultBlock;
+          const toolResult = block as unknown as ToolResultContentBlock;
           toolResultMap.set(toolResult.tool_use_id, toolResult);
 
           // Special handling: If this is a Task tool result (user message rendered as agent),
@@ -601,6 +596,14 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
             if (resultText.trim()) {
               textBeforeTools.push(resultText);
             }
+          }
+        }
+      }
+
+      if (isTaskResult) {
+        for (const result of toolResultMap.values()) {
+          if (result.transcript_projection && !toolUseMap.has(result.tool_use_id)) {
+            standaloneProjectedResults.push(result);
           }
         }
       }
@@ -625,10 +628,22 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       }
     }
 
-    return { thinkingBlocks, textBeforeTools, toolBlocks, textAfterTools };
+    return {
+      thinkingBlocks,
+      textBeforeTools,
+      toolBlocks,
+      textAfterTools,
+      standaloneProjectedResults,
+    };
   };
 
-  const { thinkingBlocks, textBeforeTools, toolBlocks, textAfterTools } = getContentBlocks();
+  const {
+    thinkingBlocks,
+    textBeforeTools,
+    toolBlocks,
+    textAfterTools,
+    standaloneProjectedResults,
+  } = getContentBlocks();
 
   // Also check for streaming thinking content
   const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
@@ -641,7 +656,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
 
-  if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools) {
+  if (
+    !hasThinking &&
+    !hasTextBefore &&
+    !hasTextAfter &&
+    !hasTools &&
+    standaloneProjectedResults.length === 0
+  ) {
     return null;
   }
 
@@ -663,6 +684,12 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       )}
 
       {/* Text before tools (if any) - rare but possible */}
+      {standaloneProjectedResults.map((result) => (
+        <TranscriptProjectionNotice
+          key={result.tool_use_id}
+          projection={result.transcript_projection}
+        />
+      ))}
       {hasTextBefore &&
         (() => {
           const avatar = isUser ? (

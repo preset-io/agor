@@ -6,6 +6,7 @@
  */
 
 import { type AgorClient, createClient } from '@agor/core/api';
+import { projectTranscriptRequestData } from './transcript-projector.js';
 
 // Re-export AgorClient type for use in other executor files
 export type { AgorClient } from '@agor/core/api';
@@ -17,11 +18,34 @@ const SERVER_DISCONNECT_RECONNECT_BASE_DELAY_MS = 1000;
 const SERVER_DISCONNECT_RECONNECT_MAX_DELAY_MS = 30_000;
 const SERVER_DISCONNECT_RECONNECT_MAX_ATTEMPTS = 8;
 const SERVER_DISCONNECT_RECONNECT_MAX_AUTH_FAILURES = 3;
+const EXECUTOR_ACK_TIMEOUT_MS = 60_000;
 
 function feathersClientDebug(...args: unknown[]): void {
   if (DEBUG_FEATHERS_CLIENT) {
     console.debug(...args);
   }
+}
+
+export function registerExecutorClientHooks(client: AgorClient): void {
+  client.hooks({
+    before: {
+      all: [
+        async (context) => {
+          const path = String(context.path);
+          const projectsTranscriptData =
+            (path === 'messages' && (context.method === 'create' || context.method === 'patch')) ||
+            (path === 'messages/bulk' && context.method === 'create');
+          if (projectsTranscriptData) {
+            context.data = projectTranscriptRequestData(context.data, {
+              path,
+              method: context.method,
+            });
+          }
+          return context;
+        },
+      ],
+    },
+  });
 }
 
 /**
@@ -92,8 +116,10 @@ export async function createExecutorClient(
     // lifetime; the existing reconnect handler below re-authenticates the
     // socket after each successful reconnect.
     reconnectionAttempts: Number.POSITIVE_INFINITY,
+    ackTimeout: EXECUTOR_ACK_TIMEOUT_MS,
     authStorage: storage,
   });
+  registerExecutorClientHooks(client);
 
   // Keep the executor JWT available for daemon endpoints that need an explicit
   // task-scoped proof. Socket.io auth can preserve the session creator user

@@ -1036,6 +1036,8 @@ export function createClient(
     verbose?: boolean;
     /** Limit reconnection attempts (useful for CLI to avoid hanging) */
     reconnectionAttempts?: number;
+    /** Reject acknowledged service calls when Socket.IO does not receive an acknowledgement. */
+    ackTimeout?: number;
     /** Explicit authentication storage for non-browser clients. */
     authStorage?: {
       getItem(key: string): string | null | Promise<string | null>;
@@ -1061,6 +1063,7 @@ export function createClient(
       options?.reconnectionAttempts ?? (isBrowser ? Number.POSITIVE_INFINITY : 2),
     // Timeout settings
     timeout: 20000, // 20s timeout for initial connection
+    ...(options?.ackTimeout === undefined ? {} : { ackTimeout: options.ackTimeout }),
     // Transports (WebSocket preferred, fallback to polling)
     transports: ['websocket', 'polling'],
     // Connection lifecycle settings

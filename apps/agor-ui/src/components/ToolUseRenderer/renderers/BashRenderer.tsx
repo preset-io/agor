@@ -29,7 +29,8 @@ export const BashRenderer: React.FC<ToolRendererProps> = ({ input, result }) => 
     }
 
     if (Array.isArray(result.content)) {
-      return result.content
+      const blocks: unknown[] = result.content;
+      return blocks
         .filter((block): block is { type: 'text'; text: string } => {
           const b = block as { type: string; text?: string };
           return b.type === 'text';

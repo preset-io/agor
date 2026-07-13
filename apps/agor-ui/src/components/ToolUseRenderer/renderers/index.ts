@@ -25,7 +25,7 @@
  * See TEXT_TRUNCATION constants in src/constants/ui.ts for default limits.
  */
 
-import type { DiffEnrichment } from '@agor-live/client';
+import type { ToolResultContentBlock } from '@agor-live/client';
 import type React from 'react';
 import { BashRenderer } from './BashRenderer';
 import { EditFilesRenderer } from './EditFilesRenderer';
@@ -50,12 +50,7 @@ export interface ToolRendererProps {
   /**
    * Optional tool result (if available)
    */
-  result?: {
-    content: string | unknown[];
-    is_error?: boolean;
-    /** Executor-enriched diff data (best-effort, may not be present) */
-    diff?: DiffEnrichment;
-  };
+  result?: ToolResultContentBlock;
 }
 
 /**
@@ -71,7 +66,8 @@ export function extractErrorMessage(result: ToolRendererProps['result']): string
   if (!result?.is_error) return undefined;
   if (typeof result.content === 'string') return result.content;
   if (Array.isArray(result.content)) {
-    return result.content
+    const blocks: unknown[] = result.content;
+    return blocks
       .filter((b): b is { type: 'text'; text: string } => {
         const block = b as { type: string; text?: string };
         return block.type === 'text';

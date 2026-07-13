@@ -86,6 +86,9 @@ export const WEBSOCKET = {
   PRESENCE_TIMEOUT_MS: 10000, // 10 seconds
 } as const;
 
+/** Shared Socket.IO packet ceiling used by the daemon transport. */
+export const SOCKET_IO_MAX_BUFFER_SIZE_BYTES = 1_000_000;
+
 /**
  * Database Constants
  */

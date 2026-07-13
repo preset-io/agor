@@ -37,7 +37,8 @@ export const ExampleCustomRenderer: React.FC<ToolRendererProps> = ({
     }
 
     if (Array.isArray(result.content)) {
-      return result.content
+      const blocks: unknown[] = result.content;
+      return blocks
         .filter(
           (block: unknown): block is { type: 'text'; text: string } =>
             typeof block === 'object' && block !== null && 'type' in block && block.type === 'text'

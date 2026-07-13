@@ -1,16 +1,19 @@
+import type { ToolResultContent } from '@agor-live/client';
+
 function isTextBlock(block: unknown): block is { type: 'text'; text: string } {
   if (!block || typeof block !== 'object') return false;
   const record = block as Record<string, unknown>;
   return record.type === 'text' && typeof record.text === 'string';
 }
 
-export function toolResultToDisplayText(content: string | unknown[]): string {
+export function toolResultToDisplayText(content: ToolResultContent): string {
   if (typeof content === 'string') {
     return content;
   }
 
   if (Array.isArray(content)) {
-    const textBlocks = content
+    const blocks: unknown[] = content;
+    const textBlocks = blocks
       .filter(isTextBlock)
       .map((block) => block.text)
       .join('\n\n');
@@ -22,5 +25,5 @@ export function toolResultToDisplayText(content: string | unknown[]): string {
     return JSON.stringify(content, null, 2);
   }
 
-  return '';
+  return JSON.stringify(content, null, 2);
 }

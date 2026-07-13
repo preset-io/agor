@@ -13,7 +13,7 @@
  * (like AgentChain) are responsible for wrapping this in ThoughtChain items.
  */
 
-import type { ContentBlock as CoreContentBlock, DiffEnrichment } from '@agor-live/client';
+import type { ToolResultContentBlock } from '@agor-live/client';
 import { theme } from 'antd';
 import type React from 'react';
 import { shouldUseAnsiRendering } from '../../utils/ansi';
@@ -21,6 +21,7 @@ import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../CollapsibleText';
 import { CollapsibleAnsiText } from '../CollapsibleText/CollapsibleAnsiText';
 import { ThemedSyntaxHighlighter } from '../ThemedSyntaxHighlighter';
+import { TranscriptProjectionNotice } from '../TranscriptProjectionNotice';
 import { getToolRenderer } from './renderers';
 
 interface ToolUseBlock {
@@ -28,15 +29,6 @@ interface ToolUseBlock {
   id: string;
   name: string;
   input: Record<string, unknown>;
-}
-
-interface ToolResultBlock {
-  type: 'tool_result';
-  tool_use_id: string;
-  content: string | CoreContentBlock[];
-  is_error?: boolean;
-  /** Executor-enriched diff data (best-effort, may not be present) */
-  diff?: DiffEnrichment;
 }
 
 interface ToolUseRendererProps {
@@ -48,7 +40,7 @@ interface ToolUseRendererProps {
   /**
    * Optional tool result block
    */
-  toolResult?: ToolResultBlock;
+  toolResult?: ToolResultContentBlock;
 }
 
 export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolResult }) => {
@@ -91,19 +83,8 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
   if (CustomRenderer) {
     return (
       <div>
-        <CustomRenderer
-          toolUseId={toolUse.id}
-          input={input}
-          result={
-            toolResult
-              ? {
-                  content: toolResult.content,
-                  is_error: toolResult.is_error,
-                  diff: toolResult.diff,
-                }
-              : undefined
-          }
-        />
+        <TranscriptProjectionNotice projection={toolResult?.transcript_projection} />
+        <CustomRenderer toolUseId={toolUse.id} input={input} result={toolResult} />
         {inputParamsBlock}
       </div>
     );
@@ -125,6 +106,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
   // Default generic content renderer (no ThoughtChain wrapper - that's handled by parent)
   return toolResult ? (
     <div>
+      <TranscriptProjectionNotice projection={toolResult.transcript_projection} />
       {/* Tool result */}
       <div
         style={{

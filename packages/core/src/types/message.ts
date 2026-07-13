@@ -95,6 +95,28 @@ export interface DiffEnrichment {
   files?: FileDiff[];
 }
 
+/** Metadata attached when executor persistence stores only a bounded tool-result preview. */
+export interface TranscriptContentProjection {
+  truncated: true;
+  original_content_bytes: number;
+  persisted_content_bytes: number;
+}
+
+/** Canonical persisted content accepted by a tool-result block. */
+export type ToolResultContent = string | ContentBlock[] | unknown[] | Record<string, unknown>;
+
+/** Canonical tool-result block shared by executors and every transcript renderer. */
+export interface ToolResultContentBlock {
+  type: 'tool_result';
+  tool_use_id: string;
+  content: ToolResultContent;
+  is_error?: boolean;
+  diff?: DiffEnrichment;
+  metadata?: Record<string, unknown>;
+  transcript_projection?: TranscriptContentProjection;
+  [key: string]: unknown;
+}
+
 /**
  * Tool use in a message
  */
