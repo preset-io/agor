@@ -3,7 +3,9 @@ import type { Database } from './client';
 import { insert } from './database-wrapper';
 import {
   createTenantScopedDatabaseProxy,
+  enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   MissingTenantDatabaseScopeError,
   requireCurrentTenantId,
@@ -25,6 +27,26 @@ describe('tenant operation context', () => {
 
     expect(db.transaction).not.toHaveBeenCalled();
     expect(getCurrentTenantId()).toBeUndefined();
+  });
+
+  it('runs after-commit callbacks outside the DB scope while retaining identity', async () => {
+    const db = { run: vi.fn() } as unknown as Database;
+    const seen: Array<{ dbScoped: boolean; tenantId?: string }> = [];
+
+    await runWithTenantContext('tenant-a', () =>
+      runWithTenantDatabaseScope(db, undefined, async () => {
+        expect(
+          enqueueAfterTenantDatabaseCommit(() => {
+            seen.push({
+              dbScoped: !!getCurrentTenantDatabaseScope(),
+              tenantId: getCurrentTenantId(),
+            });
+          })
+        ).toBe(true);
+      })
+    );
+
+    expect(seen).toEqual([{ dbScoped: false, tenantId: 'tenant-a' }]);
   });
 
   it('lets database scopes inherit operation identity and rejects conflicts', async () => {

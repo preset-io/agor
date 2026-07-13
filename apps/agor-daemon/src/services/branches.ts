@@ -19,7 +19,9 @@ import {
   BoardRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  getCurrentTenantId,
   KnowledgeNamespaceRepository,
+  runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
@@ -163,6 +165,26 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     this.boardRepo = new BoardRepository(db);
     this.db = db;
     this.app = app;
+  }
+
+  /** Short tenant/RLS unit of work for custom methods that bypass Feathers hooks. */
+  private withTenantDatabase<T>(
+    params: BranchParams | undefined,
+    work: () => Promise<T>
+  ): Promise<T> {
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    return runWithTenantDatabaseScope(this.db, tenantId, work);
+  }
+
+  private loadEnvironmentForAction(
+    id: BranchID,
+    params: BranchParams | undefined,
+    action: string
+  ): Promise<BranchWithZoneAndSessions> {
+    return this.withTenantDatabase(params, async () => {
+      await this.ensureCanTriggerEnv(id, params, action);
+      return this.get(id, params);
+    });
   }
 
   /**
@@ -315,31 +337,41 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     };
   }
 
-  private async resolveEnvironmentExecutorContext(branch: Branch): Promise<{
+  private async resolveEnvironmentExecutorContext(
+    branch: Branch,
+    params?: BranchParams
+  ): Promise<{
     asUser?: string;
     env: Record<string, string>;
   }> {
     const config = await loadConfig();
     const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
-    let asUser: string | undefined;
+    return this.withTenantDatabase(params, async () => {
+      let asUser: string | undefined;
 
-    if (unixUserMode !== 'simple') {
-      const usersRepo = new UsersRepository(this.db);
-      const user = await usersRepo.findById(branch.created_by);
-      const impersonationResult = resolveUnixUserForImpersonation({
-        mode: unixUserMode,
-        userUnixUsername: user?.unix_username,
-        executorUnixUser: config.execution?.executor_unix_user,
-      });
+      if (unixUserMode !== 'simple') {
+        const usersRepo = new UsersRepository(this.db);
+        const user = await usersRepo.findById(branch.created_by);
+        const impersonationResult = resolveUnixUserForImpersonation({
+          mode: unixUserMode,
+          userUnixUsername: user?.unix_username,
+          executorUnixUser: config.execution?.executor_unix_user,
+        });
 
-      asUser = impersonationResult.unixUser ?? undefined;
-      if (asUser) {
-        validateResolvedUnixUser(unixUserMode, asUser);
+        asUser = impersonationResult.unixUser ?? undefined;
+        if (asUser) {
+          validateResolvedUnixUser(unixUserMode, asUser);
+        }
       }
-    }
 
-    const env = await createUserProcessEnvironment(branch.created_by, this.db, undefined, !!asUser);
-    return { asUser, env };
+      const env = await createUserProcessEnvironment(
+        branch.created_by,
+        this.db,
+        undefined,
+        !!asUser
+      );
+      return { asUser, env };
+    });
   }
 
   private async createEnvironmentExecutorPayload(options: {
@@ -358,16 +390,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const appWithToken = this.app as unknown as {
       sessionTokenService?: import('../services/session-token-service').SessionTokenService;
     };
-    const sessionToken = await appWithToken.sessionTokenService?.generateToken(
-      `environment-${action}`,
-      userId,
-      { branchId: branch.branch_id, maxUses: -1 }
+    const sessionToken = await this.withTenantDatabase(
+      params,
+      () =>
+        appWithToken.sessionTokenService?.generateToken(`environment-${action}`, userId, {
+          branchId: branch.branch_id,
+          maxUses: -1,
+        }) ?? Promise.resolve(undefined)
     );
     if (!sessionToken) {
       throw new Error(`Session token service unavailable; cannot dispatch environment ${action}`);
     }
 
-    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch);
+    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch, options.params);
 
     return {
       asUser,
@@ -478,16 +513,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const appWithToken = this.app as unknown as {
       sessionTokenService?: import('../services/session-token-service').SessionTokenService;
     };
-    const sessionToken = await appWithToken.sessionTokenService?.generateToken(
-      'environment-logs',
-      userId,
-      { branchId: branch.branch_id, maxUses: -1 }
+    const sessionToken = await this.withTenantDatabase(
+      params,
+      () =>
+        appWithToken.sessionTokenService?.generateToken('environment-logs', userId, {
+          branchId: branch.branch_id,
+          maxUses: -1,
+        }) ?? Promise.resolve(undefined)
     );
     if (!sessionToken) {
       throw new Error('Session token service unavailable; cannot fetch environment logs');
     }
 
-    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch);
+    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch, params);
     const result = await runExecutorCommand(
       {
         command: 'environment.logs',
@@ -1795,7 +1833,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('Environment update is required');
     }
 
-    const existing = await this.get(id, resolvedParams);
+    const existing = await this.withTenantDatabase(resolvedParams, () =>
+      this.get(id, resolvedParams)
+    );
 
     const updatedEnvironment = {
       ...existing.environment_instance,
@@ -1833,13 +1873,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return existing;
     }
 
-    const branch = await this.patch(
-      id,
-      {
-        environment_instance: updatedEnvironment,
-        updated_at: new Date().toISOString(),
-      },
-      resolvedParams
+    const branch = await this.withTenantDatabase(resolvedParams, () =>
+      this.patch(
+        id,
+        {
+          environment_instance: updatedEnvironment,
+          updated_at: new Date().toISOString(),
+        },
+        resolvedParams
+      )
     );
 
     // this.patch() calls the raw implementation and bypasses Feathers event
@@ -1866,8 +1908,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Start environment
    */
   async startEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'start branch environments');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'start branch environments');
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -1919,7 +1960,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
 
       // Keep status as 'starting' - let health checks transition to 'running'.
-      return await this.get(id, params);
+      return await this.withTenantDatabase(params, () => this.get(id, params));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const commandOutput =
@@ -1949,8 +1990,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Stop environment
    */
   async stopEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'stop branch environments');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'stop branch environments');
 
     await this.updateEnvironment(id, { status: 'stopping' }, params);
 
@@ -1976,7 +2016,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           });
         } else {
           await this.dispatchEnvironmentExecutor({ branch, action: 'stop', params });
-          return await this.get(id, params);
+          return await this.withTenantDatabase(params, () => this.get(id, params));
         }
       } else {
         // No down command - kill the managed process if we have it. This is
@@ -2034,8 +2074,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     id: BranchID,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'restart branch environments');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'restart branch environments');
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -2066,7 +2105,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     try {
       await this.dispatchEnvironmentExecutor({ branch, action: 'restart', params });
-      return await this.get(id, params);
+      return await this.withTenantDatabase(params, () => this.get(id, params));
     } catch (error) {
       await this.updateEnvironment(
         id,
@@ -2088,8 +2127,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Nuke environment (destructive operation)
    */
   async nukeEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'nuke branch environments');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'nuke branch environments');
 
     if (!branch.nuke_command) {
       throw new Error('No nuke_command configured for this branch');
@@ -2119,7 +2157,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         });
       } else {
         await this.dispatchEnvironmentExecutor({ branch, action: 'nuke', params });
-        return await this.get(id, params);
+        return await this.withTenantDatabase(params, () => this.get(id, params));
       }
 
       const managedProcess = this.processes.get(id);
@@ -2162,8 +2200,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Check health
    */
   async checkHealth(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    const branch = await this.get(id, params);
-    const _repo = (await this.app.service('repos').get(branch.repo_id, params)) as Repo;
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    const _repo = await this.withTenantDatabase(
+      params,
+      () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
+    );
 
     // Only check active environments, plus errored environments that may have been
     // started successfully out-of-band. Allowing explicit health checks to recover
@@ -2315,8 +2356,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     error?: string;
     truncated?: boolean;
   }> {
-    await this.ensureCanTriggerEnv(id, params, 'fetch branch environment logs');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'fetch branch environment logs');
 
     // Check if static logs command is configured
     if (!branch.logs_command) {

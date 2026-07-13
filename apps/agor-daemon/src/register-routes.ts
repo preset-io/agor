@@ -18,6 +18,7 @@ import {
   MCPServerRepository,
   MessagesRepository,
   RepoRepository,
+  runWithTenantDatabaseScope,
   ScheduleRepository,
   SessionMCPServerRepository,
   SessionRepository,
@@ -295,6 +296,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
   const reposService = app.service('repos') as unknown as ReposServiceImpl;
   const tenantDatabaseScopeAround = createTenantDatabaseScopeAroundHook({ db, config, jwtSecret });
+  const tenantIdentityAround = createTenantDatabaseScopeAroundHook({
+    db,
+    config,
+    jwtSecret,
+    transaction: false,
+  });
+  const inTenantDatabaseScope = <T>(hook: (context: HookContext) => T) =>
+    async function scopedHook(context: HookContext): Promise<Awaited<T>> {
+      return runWithTenantDatabaseScope(db, context.params.tenant?.tenant_id, async () =>
+        hook(context)
+      ) as Promise<Awaited<T>>;
+    };
 
   /**
    * Schedule fn in a new event-loop tick with a fresh tenant DB scope.
@@ -3135,7 +3148,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/schedules/:id/run-now').hooks({
-    around: { all: [tenantDatabaseScopeAround] },
+    around: { all: [tenantIdentityAround] },
     before: {
       create: [
         requireAuth,
@@ -3143,7 +3156,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // Reuse the canonical hook so caching semantics (params.schedule
         // / params.branch / params.isBranchOwner) match every other
         // schedule-touching path.
-        loadScheduleAndBranch(scheduleRepository, branchRepository),
+        inTenantDatabaseScope(loadScheduleAndBranch(scheduleRepository, branchRepository)),
         ensureScheduleRunsAsCaller(superadminOpts),
         branchRbacEnabled
           ? ensureBranchPermission('all', 'run schedule', superadminOpts)
@@ -3183,10 +3196,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         throw new NotAuthenticated('Authentication required to trigger schedule.');
       }
 
-      const branch = await branchRepository.findById(branchId);
-      if (!branch) throw new NotFound(`Branch not found: ${branchId}`);
-
-      const branchSchedules = await scheduleRepository.findByBranchId(branch.branch_id);
+      const { branch, branchSchedules } = await runWithTenantDatabaseScope(
+        db,
+        (params as AuthenticatedParams).tenant?.tenant_id,
+        async () => {
+          const branch = await branchRepository.findById(branchId);
+          if (!branch) throw new NotFound(`Branch not found: ${branchId}`);
+          const branchSchedules = await scheduleRepository.findByBranchId(branch.branch_id);
+          return { branch, branchSchedules };
+        }
+      );
       if (branchSchedules.length === 0) {
         throw new BadRequest(
           `Branch "${branch.name}" has no schedules. Create one and call POST /schedules/:id/run-now instead.`,
@@ -3227,12 +3246,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   app.service('/branches/:id/execute-schedule-now').hooks({
-    around: { all: [tenantDatabaseScopeAround] },
+    around: { all: [tenantIdentityAround] },
     before: {
       create: [
         requireAuth,
         requireMinimumRole(ROLES.MEMBER, 'execute scheduled runs'),
-        async (context: HookContext) => {
+        inTenantDatabaseScope(async (context: HookContext) => {
           const id = context.params.route?.id;
           if (!id) throw new BadRequest('Branch ID required');
 
@@ -3243,7 +3262,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
           await cacheBranchAccess(context.params, branchRepository, branch);
           return context;
-        },
+        }),
         branchRbacEnabled
           ? ensureBranchPermission('all', 'execute scheduled runs', superadminOpts)
           : (context: HookContext) => {

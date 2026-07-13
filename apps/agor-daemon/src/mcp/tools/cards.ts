@@ -328,15 +328,17 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const cardId = await resolveCardId(ctx, args.cardId);
-      const boardObjectRepo = new BoardObjectRepository(ctx.db);
-      const boardObj = await boardObjectRepo.findByCardId(cardId as never);
-      if (!boardObj) throw new Error(`Card ${cardId} has no board placement`);
-      const boardObjectsService = ctx.app.service(
-        'board-objects'
-      ) as unknown as import('../../services/board-objects.js').BoardObjectsService;
-      const updatedBoardObject = await boardObjectsService.updatePosition(boardObj.object_id, {
-        x: args.x,
-        y: args.y,
+      const updatedBoardObject = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+        const boardObjectRepo = new BoardObjectRepository(db);
+        const boardObj = await boardObjectRepo.findByCardId(cardId as never);
+        if (!boardObj) throw new Error(`Card ${cardId} has no board placement`);
+        const boardObjectsService = ctx.app.service(
+          'board-objects'
+        ) as unknown as import('../../services/board-objects.js').BoardObjectsService;
+        return boardObjectsService.updatePosition(boardObj.object_id, {
+          x: args.x,
+          y: args.y,
+        });
       });
       return textResult(updatedBoardObject);
     }

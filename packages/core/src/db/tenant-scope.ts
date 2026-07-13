@@ -1,8 +1,13 @@
 import { sql } from 'drizzle-orm';
 import type { TenantID } from '../types/tenant';
-import { tenantContextScope, tenantDatabaseScope } from './tenant-context';
+import {
+  runWithoutTenantDatabaseScope,
+  tenantContextScope,
+  tenantDatabaseScope,
+} from './tenant-context';
 
 export {
+  enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabase,
   getCurrentTenantDatabaseScope,
@@ -135,12 +140,20 @@ export async function runWithTenantDatabaseScope<T>(
 
   const baseDb = unwrapTenantScopedDatabaseProxy(db);
   const postCommitCallbacks: Array<() => Promise<void>> = [];
+  const afterCommitCallbacks: Array<() => Promise<void> | void> = [];
 
   if (!isPostgresDatabase(baseDb) || !effectiveTenantId) {
     const result = await tenantDatabaseScope.run(
-      { db: baseDb, kind: 'tenant', tenantId: effectiveTenantId, postCommitCallbacks },
+      {
+        db: baseDb,
+        kind: 'tenant',
+        tenantId: effectiveTenantId,
+        postCommitCallbacks,
+        afterCommitCallbacks,
+      },
       () => work(baseDb as TenantScopedDatabase)
     );
+    await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
     await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
     return result;
   }
@@ -151,12 +164,27 @@ export async function runWithTenantDatabaseScope<T>(
       sql`SELECT set_config('agor.tenant_id', ${effectiveTenantId}, true)`
     );
     return tenantDatabaseScope.run(
-      { db: scopedDb, kind: 'tenant', tenantId: effectiveTenantId, postCommitCallbacks },
+      {
+        db: scopedDb,
+        kind: 'tenant',
+        tenantId: effectiveTenantId,
+        postCommitCallbacks,
+        afterCommitCallbacks,
+      },
       () => work(scopedDb as TenantScopedDatabase)
     );
   });
+  await drainAfterTenantDatabaseCommitCallbacks(afterCommitCallbacks);
   await drainTenantDatabasePostCommitCallbacks(baseDb, effectiveTenantId, postCommitCallbacks);
   return result;
+}
+
+async function drainAfterTenantDatabaseCommitCallbacks(
+  callbacks: Array<() => Promise<void> | void>
+): Promise<void> {
+  for (const callback of callbacks) {
+    await runWithoutTenantDatabaseScope(callback);
+  }
 }
 
 /**

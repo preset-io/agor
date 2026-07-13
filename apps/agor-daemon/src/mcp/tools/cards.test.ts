@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/db', () => ({
   BoardObjectRepository: class BoardObjectRepository {},
+  enqueueAfterTenantDatabaseCommit: () => false,
   getCurrentTenantId: () => undefined,
   runWithTenantDatabaseScope: vi.fn((_db, _tenantId, work) => work()),
 }));

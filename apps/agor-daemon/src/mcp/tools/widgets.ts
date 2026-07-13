@@ -44,6 +44,7 @@ import {
 } from '../../widgets/gateway-token/index.js';
 import type { McpContext } from '../server.js';
 import { sessionContextRequiredResult, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 function requireAdmin(ctx: McpContext, action: string): void {
   if (!hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN)) {
@@ -148,23 +149,25 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       );
       const hostTaskId = hostTask?.task_id as TaskID | undefined;
 
-      const created = await appendSystemMessage({
-        app: ctx.app,
-        db: ctx.db,
-        sessionId: currentSessionId,
-        taskId: hostTaskId,
-        content: widgetContentPreview(params),
-        contentPreview: `Widget: env_vars (${params.names.join(', ')})`,
-        type: 'widget_request',
-        role: MessageRole.SYSTEM,
-        // widget_id is filled in once we know the new message_id (id == widget_id).
-        metadata: {
-          widget: {
-            ...baseWidgetMeta,
-            widget_id: 'pending' as MessageID,
+      const created = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        appendSystemMessage({
+          app: ctx.app,
+          db,
+          sessionId: currentSessionId,
+          taskId: hostTaskId,
+          content: widgetContentPreview(params),
+          contentPreview: `Widget: env_vars (${params.names.join(', ')})`,
+          type: 'widget_request',
+          role: MessageRole.SYSTEM,
+          // widget_id is filled in once we know the new message_id (id == widget_id).
+          metadata: {
+            widget: {
+              ...baseWidgetMeta,
+              widget_id: 'pending' as MessageID,
+            },
           },
-        },
-      });
+        })
+      );
 
       const widgetId = created.message_id as MessageID;
 
@@ -305,22 +308,24 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       );
       const hostTaskId = hostTask?.task_id as TaskID | undefined;
 
-      const created = await appendSystemMessage({
-        app: ctx.app,
-        db: ctx.db,
-        sessionId: currentSessionId,
-        taskId: hostTaskId,
-        content: `Please provide the ${channelType} tokens for "${channel.name}": ${params.reason}`,
-        contentPreview: `Widget: gateway_token (${channel.name})`,
-        type: 'widget_request',
-        role: MessageRole.SYSTEM,
-        metadata: {
-          widget: {
-            ...baseWidgetMeta,
-            widget_id: 'pending' as MessageID,
+      const created = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+        appendSystemMessage({
+          app: ctx.app,
+          db,
+          sessionId: currentSessionId,
+          taskId: hostTaskId,
+          content: `Please provide the ${channelType} tokens for "${channel.name}": ${params.reason}`,
+          contentPreview: `Widget: gateway_token (${channel.name})`,
+          type: 'widget_request',
+          role: MessageRole.SYSTEM,
+          metadata: {
+            widget: {
+              ...baseWidgetMeta,
+              widget_id: 'pending' as MessageID,
+            },
           },
-        },
-      });
+        })
+      );
 
       const widgetId = created.message_id as MessageID;
 

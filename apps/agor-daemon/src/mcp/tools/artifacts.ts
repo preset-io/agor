@@ -680,15 +680,20 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
         others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
       };
 
-      const branchRepo = new BranchRepository(ctx.db);
       const branchIdBranded = branch.branch_id as BranchID;
       const userIdBranded = ctx.userId as UUID;
-      const isOwner = await branchRepo.isOwner(branchIdBranded, userIdBranded);
-      const fullBranch = await branchRepo.findById(branchIdBranded);
-      if (!fullBranch) {
+      const permission = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+        const branchRepo = new BranchRepository(db);
+        const isOwner = await branchRepo.isOwner(branchIdBranded, userIdBranded);
+        const fullBranch = await branchRepo.findById(branchIdBranded);
+        if (!fullBranch) return null;
+        const effective = await branchRepo.resolveUserPermission(fullBranch, userIdBranded);
+        return { effective, fullBranch, isOwner };
+      });
+      if (!permission) {
         return textResult({ error: `Branch ${branchId} not found` });
       }
-      const effective = await branchRepo.resolveUserPermission(fullBranch, userIdBranded);
+      const { effective, fullBranch, isOwner } = permission;
       const canWrite = hasBranchPermission(
         fullBranch,
         userIdBranded,

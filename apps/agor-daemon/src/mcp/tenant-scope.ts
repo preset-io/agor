@@ -1,3 +1,4 @@
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { runWithTenantContext, runWithTenantDatabaseScope } from '@agor/core/db';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { wrapRegisterTool } from './register-tool-proxy.js';
@@ -10,11 +11,11 @@ import type { McpContext } from './server.js';
  */
 export async function runWithMcpTenantDatabaseScope<T>(
   ctx: McpContext,
-  work: () => Promise<T>
+  work: (db: TenantScopeAwareDatabase) => Promise<T>
 ): Promise<T> {
   const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
-  if (!tenantId) return work();
-  return runWithTenantDatabaseScope(ctx.db, tenantId, work);
+  if (!tenantId) return work(ctx.db);
+  return runWithTenantDatabaseScope(ctx.db, tenantId, () => work(ctx.db));
 }
 
 /**

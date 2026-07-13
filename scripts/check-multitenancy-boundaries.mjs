@@ -60,7 +60,7 @@ const checks = [
     roots: ['apps/agor-daemon/src'],
     excludeTests: true,
     patterns: [
-      /\.service\([^\n]+\)\.emit\s*\(\s*['"](?:created|patched|updated|removed)['"]/g,
+      /\.service\([^\n]+\)\.emit(?:\?\.)?\s*\(\s*['"](?:created|patched|updated|removed)['"]/g,
       /\bthis\.emit\?\.\(\s*['"](?:created|patched|updated|removed)['"]/gs,
     ],
     // Manual CRUD events must use emitServiceEvent() so realtime publishing
@@ -75,6 +75,17 @@ const checks = [
       'apps/agor-daemon/src/services/repos.ts': 1,
       'apps/agor-daemon/src/services/sessions.ts': 1,
     },
+  },
+
+  {
+    name: 'unscoped MCP database access',
+    roots: ['apps/agor-daemon/src/mcp/tools'],
+    excludeTests: true,
+    patterns: [/\bctx\.db\b/g],
+    // MCP handlers carry tenant identity only. Database work must go through
+    // runWithMcpTenantDatabaseScope(), which opens a short RLS transaction and
+    // supplies the guarded DB proxy to the callback.
+    baseline: {},
   },
 
   {
@@ -141,7 +152,6 @@ const checks = [
       'packages/core/src/db/repositories/sessions.ts': 2,
       'packages/core/src/db/repositories/schedules.ts': 1,
       'packages/core/src/seed/demo-fixtures.ts': 1,
-      'apps/agor-daemon/src/services/scheduler.ts': 1,
     },
   },
 ];

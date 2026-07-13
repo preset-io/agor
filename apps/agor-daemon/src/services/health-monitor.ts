@@ -17,6 +17,7 @@ import {
   getHiddenTenantId,
   runWithoutTenantDatabaseScope,
   runWithSystemDatabaseScope,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   shortId,
   type TenantScopeAwareDatabase,
@@ -219,7 +220,12 @@ export class HealthMonitor {
 
       const runCheck = async () => {
         // Get current branch state
-        const branch = await branchesService.get(branchId, params as never);
+        const branch =
+          this.db && params?.tenant?.tenant_id
+            ? await runWithTenantDatabaseScope(this.db, params.tenant.tenant_id, () =>
+                branchesService.get(branchId, params as never)
+              )
+            : await branchesService.get(branchId, params as never);
 
         // Only check if still running or starting
         const status = branch.environment_instance?.status;
@@ -239,8 +245,8 @@ export class HealthMonitor {
       };
 
       const tenantId = params?.tenant?.tenant_id;
-      if (this.db && tenantId) {
-        await runWithTenantDatabaseScope(this.db, tenantId, runCheck);
+      if (tenantId) {
+        await runWithTenantContext(tenantId, runCheck);
       } else {
         await runCheck();
       }

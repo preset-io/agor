@@ -21,6 +21,8 @@ interface TenantDatabaseScopeOptions {
   db: TenantScopeAwareDatabase;
   config: AgorConfig;
   jwtSecret: string;
+  /** Identity-only boundary for long custom operations with explicit DB units. */
+  transaction?: boolean;
 }
 
 function readHeaderValue(
@@ -159,7 +161,9 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
       return;
     }
     await runWithTenantContext(tenantId, () =>
-      runWithTenantDatabaseScope(options.db, tenantId, next)
+      options.transaction === false
+        ? next()
+        : runWithTenantDatabaseScope(options.db, tenantId, next)
     );
   };
 }

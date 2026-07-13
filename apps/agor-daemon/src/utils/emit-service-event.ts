@@ -1,4 +1,4 @@
-import { getCurrentTenantId } from '@agor/core/db';
+import { enqueueAfterTenantDatabaseCommit, getCurrentTenantId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { HookContext, TenantContext } from '@agor/core/types';
 
@@ -81,17 +81,21 @@ export function emitServiceEvent(app: Application, event: ManualServiceEvent): v
     };
   }
 
-  const service = app.service(event.path as never) as unknown as {
-    emit?: (name: string, data: unknown, hook: Partial<HookContext>) => void;
+  const emit = () => {
+    const service = app.service(event.path as never) as unknown as {
+      emit?: (name: string, data: unknown, hook: Partial<HookContext>) => void;
+    };
+    service.emit?.(event.event, event.data, {
+      app,
+      service,
+      path: event.path,
+      method: event.method ?? DEFAULT_EVENT_METHOD[event.event] ?? 'patch',
+      event: event.event,
+      id: event.id,
+      result: event.data,
+      params,
+    } as Partial<HookContext>);
   };
-  service.emit?.(event.event, event.data, {
-    app,
-    service,
-    path: event.path,
-    method: event.method ?? DEFAULT_EVENT_METHOD[event.event] ?? 'patch',
-    event: event.event,
-    id: event.id,
-    result: event.data,
-    params,
-  } as Partial<HookContext>);
+
+  if (!enqueueAfterTenantDatabaseCommit(emit)) emit();
 }

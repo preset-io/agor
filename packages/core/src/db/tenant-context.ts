@@ -8,6 +8,7 @@ export interface TenantDatabaseScope {
   tenantId?: TenantID | string;
   systemReason?: string;
   postCommitCallbacks?: Array<() => Promise<void>>;
+  afterCommitCallbacks?: Array<() => Promise<void> | void>;
 }
 
 export interface TenantContextScope {
@@ -80,5 +81,13 @@ export function enqueueTenantDatabasePostCommitCallback(callback: () => Promise<
   const store = tenantDatabaseScope.getStore();
   if (!store?.postCommitCallbacks) return false;
   store.postCommitCallbacks.push(callback);
+  return true;
+}
+
+/** Schedule non-DB work after the active transaction commits. */
+export function enqueueAfterTenantDatabaseCommit(callback: () => Promise<void> | void): boolean {
+  const store = tenantDatabaseScope.getStore();
+  if (!store?.afterCommitCallbacks) return false;
+  store.afterCommitCallbacks.push(callback);
   return true;
 }

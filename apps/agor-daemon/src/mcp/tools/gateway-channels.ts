@@ -59,6 +59,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 function requireAdmin(ctx: McpContext, action: string): void {
   if (!hasMinimumRole(ctx.authenticatedUser?.role, ROLES.ADMIN)) {
@@ -82,7 +83,9 @@ async function resolveCallerSessionBranchId(ctx: McpContext): Promise<BranchID |
  * when a session ID is present but the session cannot be loaded. */
 async function loadCallerSession(ctx: McpContext): Promise<Session | null> {
   if (!ctx.sessionId) return null;
-  const session = await new SessionRepository(ctx.db).findById(ctx.sessionId);
+  const session = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+    new SessionRepository(db).findById(ctx.sessionId!)
+  );
   if (!session) {
     throw new Error('Gateway access denied: calling session not found');
   }
@@ -551,83 +554,85 @@ async function resolveSlackThreadHistoryTarget(
   ctx: McpContext,
   args: z.infer<typeof slackThreadHistorySchema>
 ): Promise<ResolvedSlackThreadHistoryTarget> {
-  const channelRepo = new GatewayChannelRepository(ctx.db);
-  const threadMapRepo = new ThreadSessionMapRepository(ctx.db);
-  const branchRepo = new BranchRepository(ctx.db);
-  const callerSessionBranchId = await resolveCallerSessionBranchId(ctx);
+  return runWithMcpTenantDatabaseScope(ctx, async (db) => {
+    const channelRepo = new GatewayChannelRepository(db);
+    const threadMapRepo = new ThreadSessionMapRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const callerSessionBranchId = await resolveCallerSessionBranchId(ctx);
 
-  if (args.sessionId) {
-    const session = (await ctx.app
-      .service('sessions')
-      .get(args.sessionId, ctx.baseServiceParams)) as {
-      session_id: string;
-      branch_id?: string;
-    };
-    const mapping = await threadMapRepo.findBySession(session.session_id);
-    if (!mapping) {
-      throw new Error(`No gateway thread mapping found for session ${session.session_id}.`);
+    if (args.sessionId) {
+      const session = (await ctx.app
+        .service('sessions')
+        .get(args.sessionId, ctx.baseServiceParams)) as {
+        session_id: string;
+        branch_id?: string;
+      };
+      const mapping = await threadMapRepo.findBySession(session.session_id);
+      if (!mapping) {
+        throw new Error(`No gateway thread mapping found for session ${session.session_id}.`);
+      }
+      if (callerSessionBranchId && mapping.branch_id !== callerSessionBranchId) {
+        throw sessionBranchReadDeniedError();
+      }
+      const channel = await channelRepo.findById(mapping.channel_id);
+      if (!channel) {
+        throw new Error(`Gateway channel not found for session mapping ${mapping.id}.`);
+      }
+      if (callerSessionBranchId && channel.target_branch_id !== callerSessionBranchId) {
+        throw sessionBranchReadDeniedError();
+      }
+      const branch = await branchRepo.findById(mapping.branch_id);
+      return {
+        channel,
+        branch,
+        mapping,
+        threadId: mapping.thread_id,
+        source: 'session',
+        sessionId: session.session_id,
+      };
     }
-    if (callerSessionBranchId && mapping.branch_id !== callerSessionBranchId) {
-      throw sessionBranchReadDeniedError();
-    }
-    const channel = await channelRepo.findById(mapping.channel_id);
+
+    const channel = await channelRepo.findById(args.gatewayChannelId as string);
     if (!channel) {
-      throw new Error(`Gateway channel not found for session mapping ${mapping.id}.`);
+      throw new Error(`Gateway channel not found: ${args.gatewayChannelId}`);
     }
     if (callerSessionBranchId && channel.target_branch_id !== callerSessionBranchId) {
       throw sessionBranchReadDeniedError();
     }
-    const branch = await branchRepo.findById(mapping.branch_id);
-    return {
-      channel,
-      branch,
-      mapping,
-      threadId: mapping.thread_id,
-      source: 'session',
-      sessionId: session.session_id,
-    };
-  }
-
-  const channel = await channelRepo.findById(args.gatewayChannelId as string);
-  if (!channel) {
-    throw new Error(`Gateway channel not found: ${args.gatewayChannelId}`);
-  }
-  if (callerSessionBranchId && channel.target_branch_id !== callerSessionBranchId) {
-    throw sessionBranchReadDeniedError();
-  }
-  const mapping = await threadMapRepo.findByChannelAndThread(channel.id, args.threadId as string);
-  if (mapping) {
-    const branch = await branchRepo.findById(mapping.branch_id);
-    if (!branch) {
-      throw new Error(`Target branch not found for gateway thread mapping ${mapping.id}.`);
+    const mapping = await threadMapRepo.findByChannelAndThread(channel.id, args.threadId as string);
+    if (mapping) {
+      const branch = await branchRepo.findById(mapping.branch_id);
+      if (!branch) {
+        throw new Error(`Target branch not found for gateway thread mapping ${mapping.id}.`);
+      }
+      await requireBranchAllForGatewayHistory(ctx, branchRepo, branch);
+      return {
+        channel,
+        branch,
+        mapping,
+        threadId: args.threadId as string,
+        source: 'explicit',
+        ...(mapping.session_id ? { sessionId: mapping.session_id } : {}),
+      };
     }
-    await requireBranchAllForGatewayHistory(ctx, branchRepo, branch);
+
+    if (!isAdmin(ctx)) {
+      throw new Error(
+        'Access denied: admin role required to read unmapped Slack thread history by gatewayChannelId/threadId'
+      );
+    }
+    const branch = await branchRepo.findById(channel.target_branch_id);
+    if (!branch) {
+      throw new Error(`Target branch not found for gateway channel ${channel.id}.`);
+    }
     return {
       channel,
       branch,
-      mapping,
+      mapping: null,
       threadId: args.threadId as string,
       source: 'explicit',
-      ...(mapping.session_id ? { sessionId: mapping.session_id } : {}),
     };
-  }
-
-  if (!isAdmin(ctx)) {
-    throw new Error(
-      'Access denied: admin role required to read unmapped Slack thread history by gatewayChannelId/threadId'
-    );
-  }
-  const branch = await branchRepo.findById(channel.target_branch_id);
-  if (!branch) {
-    throw new Error(`Target branch not found for gateway channel ${channel.id}.`);
-  }
-  return {
-    channel,
-    branch,
-    mapping: null,
-    threadId: args.threadId as string,
-    source: 'explicit',
-  };
+  });
 }
 
 const gatewayChannelUpdateSchema = z.strictObject({
@@ -1271,64 +1276,69 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       }),
     },
     async (args) => {
-      const channelRepo = new GatewayChannelRepository(ctx.db);
-      const branchRepo = new BranchRepository(ctx.db);
-      const callerSessionBranchId = await resolveCallerSessionBranchId(ctx);
-      const branchFilter = args.branchId ? await branchRepo.findById(args.branchId) : null;
-      const requestedBranchId = branchFilter?.branch_id;
-      if (callerSessionBranchId && args.branchId && requestedBranchId !== callerSessionBranchId) {
+      return runWithMcpTenantDatabaseScope(ctx, async (db) => {
+        const channelRepo = new GatewayChannelRepository(db);
+        const branchRepo = new BranchRepository(db);
+        const callerSessionBranchId = await resolveCallerSessionBranchId(ctx);
+        const branchFilter = args.branchId ? await branchRepo.findById(args.branchId) : null;
+        const requestedBranchId = branchFilter?.branch_id;
+        if (callerSessionBranchId && args.branchId && requestedBranchId !== callerSessionBranchId) {
+          return textResult({
+            channels: [],
+            binding:
+              "Results are scoped to the calling session's branch; the requested branchId targets a different branch, so this session cannot use its channels.",
+          });
+        }
+        const branchFilterId = callerSessionBranchId ?? requestedBranchId;
+        const allChannels = args.gatewayChannelId
+          ? [await channelRepo.findById(args.gatewayChannelId)]
+          : await channelRepo.findAll();
+
+        const channels = [];
+        for (const channel of allChannels) {
+          if (!channel) continue;
+          if (args.channelType && channel.channel_type !== args.channelType) continue;
+          if (channel.channel_type !== 'slack') continue;
+          if (
+            (callerSessionBranchId || args.branchId) &&
+            channel.target_branch_id !== branchFilterId
+          )
+            continue;
+          if (!channel.enabled) continue;
+          const outbound = getOutboundConfig(channel);
+          if (!outbound.outbound_enabled) continue;
+
+          const branch = await branchRepo.findById(channel.target_branch_id);
+          if (!branch) continue;
+          if (!(await canUseGatewayOutbound(ctx, branchRepo, branch))) continue;
+
+          channels.push({
+            gateway_channel_id: channel.id,
+            name: channel.name,
+            channel_type: 'slack' as const,
+            target_branch_id: channel.target_branch_id,
+            target_branch_name: branch.name,
+            outbound_enabled: outbound.outbound_enabled,
+            ...(outbound.default_outbound_target
+              ? { default_outbound_target: outbound.default_outbound_target }
+              : {}),
+            accepted_target_formats: [
+              'channel:C123',
+              '#project-updates',
+              'channel_name:project-updates',
+              'user@example.com',
+            ],
+          });
+        }
+
         return textResult({
-          channels: [],
-          binding:
-            "Results are scoped to the calling session's branch; the requested branchId targets a different branch, so this session cannot use its channels.",
-        });
-      }
-      const branchFilterId = callerSessionBranchId ?? requestedBranchId;
-      const allChannels = args.gatewayChannelId
-        ? [await channelRepo.findById(args.gatewayChannelId)]
-        : await channelRepo.findAll();
-
-      const channels = [];
-      for (const channel of allChannels) {
-        if (!channel) continue;
-        if (args.channelType && channel.channel_type !== args.channelType) continue;
-        if (channel.channel_type !== 'slack') continue;
-        if ((callerSessionBranchId || args.branchId) && channel.target_branch_id !== branchFilterId)
-          continue;
-        if (!channel.enabled) continue;
-        const outbound = getOutboundConfig(channel);
-        if (!outbound.outbound_enabled) continue;
-
-        const branch = await branchRepo.findById(channel.target_branch_id);
-        if (!branch) continue;
-        if (!(await canUseGatewayOutbound(ctx, branchRepo, branch))) continue;
-
-        channels.push({
-          gateway_channel_id: channel.id,
-          name: channel.name,
-          channel_type: 'slack' as const,
-          target_branch_id: channel.target_branch_id,
-          target_branch_name: branch.name,
-          outbound_enabled: outbound.outbound_enabled,
-          ...(outbound.default_outbound_target
-            ? { default_outbound_target: outbound.default_outbound_target }
+          channels,
+          ...(callerSessionBranchId && channels.length === 0
+            ? {
+                hint: "No outbound-enabled channel targets this session's branch — ask an operator to create/enable one.",
+              }
             : {}),
-          accepted_target_formats: [
-            'channel:C123',
-            '#project-updates',
-            'channel_name:project-updates',
-            'user@example.com',
-          ],
         });
-      }
-
-      return textResult({
-        channels,
-        ...(callerSessionBranchId && channels.length === 0
-          ? {
-              hint: "No outbound-enabled channel targets this session's branch — ask an operator to create/enable one.",
-            }
-          : {}),
       });
     }
   );
@@ -1603,7 +1613,9 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       let emittedByScheduleId: ScheduleID | undefined;
       if (ctx.sessionId) {
         try {
-          const session = await new SessionRepository(ctx.db).findById(ctx.sessionId);
+          const session = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+            new SessionRepository(db).findById(ctx.sessionId!)
+          );
           emittedByScheduleId = session?.schedule_id;
         } catch {
           // Best-effort audit enrichment. A missing/stale session context should
