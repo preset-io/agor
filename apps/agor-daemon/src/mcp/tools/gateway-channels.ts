@@ -1686,7 +1686,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_slack_file_download',
     {
       description:
-        "Download a Slack file into the daemon upload directory through a gateway channel without exposing Slack tokens, returning the stored absolute path so the session agent can Read it. Pass a fileId from the files metadata returned by the Slack history tools. Gated by the channel's agent_tools.file_download capability (disabled by default — an admin enables it per channel, which also adds the files:read OAuth scope to the app manifest). Only image and text-like files (screenshots, logs, CSV, JSON, markdown) are downloaded — the same allowlist and size limits as inbound attachment ingestion — and when the channel restricts allowed_channel_ids, only files shared in a permitted conversation or DM. When called from a gateway-created session, gatewayChannelId defaults to that session's own channel; calls are restricted to gateway channels whose target branch matches the calling session's branch. Callers without session context need admin role or 'all' branch permission.",
+        "Download a Slack file by fileId (from the files metadata in the Slack history tools) into the session upload directory, returning the stored path for the agent to Read. Gated by the channel's agent_tools.file_download capability; only files shared in a conversation permitted by the channel's allowed_channel_ids (DMs exempt), and only image/text-like types under the same limits as inbound attachment ingestion.",
       annotations: { destructiveHint: false, idempotentHint: true },
       inputSchema: slackFileDownloadSchema,
     },
