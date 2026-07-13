@@ -29,16 +29,6 @@ export default class ConfigIndex extends Command {
         this.log(`  default agent: ${chalk.gray(config.defaults.agent)}`);
       }
 
-      // Display Settings
-      this.log(chalk.bold('\nDisplay Settings:'));
-      if (config.display?.tableStyle) {
-        this.log(`  table style:   ${chalk.gray(config.display.tableStyle)}`);
-      }
-      if (config.display?.colorOutput !== undefined) {
-        this.log(
-          `  color output:  ${chalk.gray(config.display.colorOutput ? 'enabled' : 'disabled')}`
-        );
-      }
       // Database Settings
       // Use the same centralized database URL resolution as the daemon
       const databaseUrl = getDatabaseUrl();
@@ -89,9 +79,6 @@ export default class ConfigIndex extends Command {
       this.log('');
       this.log(chalk.cyan('  Defaults:'));
       this.log('    defaults.board, defaults.agent');
-      this.log('');
-      this.log(chalk.cyan('  Display:'));
-      this.log('    display.tableStyle, display.colorOutput');
       this.log('');
       this.log(chalk.cyan('  Daemon:'));
       this.log('    daemon.port, daemon.host');

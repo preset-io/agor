@@ -39,6 +39,13 @@ function isResolvableApiKeyName(value: string): value is ApiKeyName {
   return Object.hasOwn(RESOLVABLE_API_KEY_NAMES, value);
 }
 
+/** Keep retired upgrade-only keys out of the tenant-facing config API. */
+function publicConfig(config: AgorConfig): AgorConfig {
+  const result = structuredClone(config) as AgorConfig & { display?: Record<string, unknown> };
+  delete result.display;
+  return result;
+}
+
 type ExecutorTokenPayload = {
   type?: string;
   purpose?: string;
@@ -107,14 +114,14 @@ export class ConfigService {
    * Get full config (masked)
    */
   async find(_params?: Params): Promise<AgorConfig> {
-    return loadConfig();
+    return publicConfig(await loadConfig());
   }
 
   /**
    * Get specific config section or value
    */
   async get(id: string, _params?: Params): Promise<unknown> {
-    const config = await loadConfig();
+    const config = publicConfig(await loadConfig());
 
     // Support dot notation for the remaining bootstrap configuration.
     const parts = id.split('.');
@@ -317,7 +324,7 @@ export class ConfigService {
     await saveConfig(config);
     console.log('[Config Service] Config saved successfully');
 
-    return config;
+    return publicConfig(config);
   }
 }
 

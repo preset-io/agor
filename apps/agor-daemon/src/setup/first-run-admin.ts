@@ -284,7 +284,11 @@ export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
     ? DEPRECATED_ANONYMOUS_KEYS.filter((key) => Object.hasOwn(daemon, key))
     : [];
   const hasShortIdLength = !!display && Object.hasOwn(display, 'shortIdLength');
-  if (present.length === 0 && !hasShortIdLength) return;
+  const retiredDisplayKeys = ['tableStyle', 'colorOutput'] as const;
+  const presentDisplay = display
+    ? retiredDisplayKeys.filter((key) => Object.hasOwn(display, key))
+    : [];
+  if (present.length === 0 && !hasShortIdLength && presentDisplay.length === 0) return;
 
   const lines: string[] = [
     '',
@@ -297,10 +301,13 @@ export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
     lines.push(`    daemon.${key}: ${String(daemon?.[key])}`);
   }
   if (hasShortIdLength) lines.push(`    display.shortIdLength: ${String(display?.shortIdLength)}`);
+  for (const key of presentDisplay) {
+    lines.push(`    display.${key}: ${String(display?.[key])}`);
+  }
   lines.push(
     '',
     '  These keys no longer have any effect. Authentication is always',
-    '  required, and short-ID display length is managed by Agor.',
+    '  required, and terminal presentation is managed by each client.',
     '',
     '  Action: remove these keys from your config.yaml at your',
     '  convenience. If you previously ran anonymously, the daemon',

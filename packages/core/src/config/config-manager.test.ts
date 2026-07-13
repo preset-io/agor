@@ -46,10 +46,6 @@ function createConfigData(overrides?: Partial<AgorConfig>): AgorConfig {
       board: 'test-board',
       agent: 'test-agent',
     },
-    display: {
-      tableStyle: 'ascii',
-      colorOutput: false,
-    },
     daemon: {
       port: 4000,
       host: '0.0.0.0',
@@ -92,8 +88,6 @@ describe('getDefaultConfig', () => {
     // Verify structure and key defaults
     expect(defaults.defaults?.board).toBe('main');
     expect(defaults.defaults?.agent).toBe('claude-code');
-    expect(defaults.display?.tableStyle).toBe('unicode');
-    expect(defaults.display?.colorOutput).toBe(true);
     expect(defaults.daemon?.port).toBe(3030);
     expect(defaults.daemon?.host).toBe('localhost');
     expect(defaults.ui?.port).toBe(5173);
@@ -255,13 +249,13 @@ describe('loadConfig', () => {
       configPath,
       yaml.dump({
         daemon: { allowAnonymous: false, requireAuth: true },
-        display: { shortIdLength: 12 },
+        display: { shortIdLength: 12, tableStyle: 'ascii', colorOutput: false },
       }),
       'utf-8'
     );
     await expect(loadConfig()).resolves.toMatchObject({
       daemon: { allowAnonymous: false, requireAuth: true },
-      display: { shortIdLength: 12 },
+      display: { shortIdLength: 12, tableStyle: 'ascii', colorOutput: false },
     });
   });
 
@@ -280,7 +274,6 @@ describe('loadConfig', () => {
     const loaded = await loadConfig();
     expect(loaded.daemon?.port).toBe(4040);
     expect(loaded.defaults).toBeUndefined();
-    expect(loaded.display).toBeUndefined();
   });
 
   it('does not configure an external launch login redirect by default', async () => {
@@ -776,10 +769,8 @@ describe('getConfigValue', () => {
     await saveConfig(partialConfig);
 
     const customValue = await getConfigValue('daemon.port');
-    const defaultValue = await getConfigValue('display.tableStyle');
-
     expect(customValue).toBe(9999);
-    expect(defaultValue).toBe('unicode'); // From defaults
+    expect(await getConfigValue('display.tableStyle')).toBeUndefined();
   });
 
   it('should return undefined for non-existent keys', async () => {
@@ -789,20 +780,13 @@ describe('getConfigValue', () => {
     expect(value).toBeUndefined();
   });
 
-  it('should handle boolean values', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
+  it('ignores retired display settings from an existing config file', async () => {
+    await saveConfig({
+      display: { tableStyle: 'ascii', colorOutput: false },
+    } as unknown as AgorConfig);
 
-    const colorOutput = await getConfigValue('display.colorOutput');
-    expect(colorOutput).toBe(false);
-  });
-
-  it('should handle string values', async () => {
-    const config = createConfigData();
-    await saveConfig(config);
-
-    const tableStyle = await getConfigValue('display.tableStyle');
-    expect(tableStyle).toBe('ascii');
+    expect(await getConfigValue('display.tableStyle')).toBeUndefined();
+    expect(await getConfigValue('display.colorOutput')).toBeUndefined();
   });
 
   it('should handle number values', async () => {
@@ -822,6 +806,10 @@ describe('setConfigValue', () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-test-'));
     vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+  });
+
+  it('rejects newly setting retired display keys', async () => {
+    await expect(setConfigValue('display.tableStyle', 'ascii')).rejects.toThrow(/has been retired/);
   });
 
   afterEach(async () => {
@@ -903,7 +891,6 @@ describe('setConfigValue', () => {
 
     const loaded = await loadConfig();
     expect(loaded.daemon?.port).toBe(5555);
-    expect(loaded.display).toMatchObject(config.display!);
     expect(loaded.defaults).toMatchObject(config.defaults!);
   });
 });
@@ -961,7 +948,6 @@ describe('unsetConfigValue', () => {
     await unsetConfigValue('daemon.port');
 
     const loaded = await loadConfig();
-    expect(loaded.display).toMatchObject(config.display!);
     expect(loaded.defaults).toMatchObject(config.defaults!);
   });
 

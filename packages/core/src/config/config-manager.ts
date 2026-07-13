@@ -248,8 +248,10 @@ function validateConfig(config: AgorConfig): void {
   };
   only(config.defaults, 'defaults', ['board', 'agent']);
   // Known upgrade-only keys remain loadable so the daemon can print its
-  // dedicated deprecation guidance before ignoring them.
-  only(config.display, 'display', ['tableStyle', 'colorOutput', 'shortIdLength']);
+  // dedicated deprecation guidance before ignoring them. `display` is not
+  // part of AgorConfig anymore: all three settings were retired.
+  const legacyDisplay = (config as { display?: unknown }).display;
+  only(legacyDisplay, 'display', ['tableStyle', 'colorOutput', 'shortIdLength']);
   only(config.daemon, 'daemon', [
     'port',
     'host',
@@ -612,10 +614,6 @@ export function getDefaultConfig(): AgorConfig {
       board: 'main',
       agent: 'claude-code',
     },
-    display: {
-      tableStyle: 'unicode',
-      colorOutput: true,
-    },
     daemon: {
       port: DAEMON.DEFAULT_PORT,
       host: DAEMON.DEFAULT_HOST,
@@ -680,13 +678,15 @@ export async function initConfig(): Promise<void> {
 export async function getConfigValue(key: string): Promise<string | boolean | number | undefined> {
   const config = await loadConfig();
   const defaults = getDefaultConfig();
+  const { display: _retiredDisplay, ...activeConfig } = config as AgorConfig & {
+    display?: unknown;
+  };
 
   // Merge config with defaults (deep merge for sections)
   const merged = {
     ...defaults,
-    ...config,
+    ...activeConfig,
     defaults: { ...defaults.defaults, ...config.defaults },
-    display: { ...defaults.display, ...config.display },
     daemon: { ...defaults.daemon, ...config.daemon },
     ui: { ...defaults.ui, ...config.ui },
     execution: { ...defaults.execution, ...config.execution },
@@ -716,6 +716,9 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
  * @param value - Value to set
  */
 export async function setConfigValue(key: string, value: string | boolean | number): Promise<void> {
+  if (key === 'display.tableStyle' || key === 'display.colorOutput') {
+    throw new Error(`Configuration key ${key} has been retired and no longer has any effect`);
+  }
   const config = await loadConfig();
   const parts = key.split('.');
 

@@ -35,17 +35,6 @@ export interface AgorDefaults {
 }
 
 /**
- * Display settings
- */
-export interface AgorDisplaySettings {
-  /** Table style: unicode, ascii, or minimal */
-  tableStyle?: 'unicode' | 'ascii' | 'minimal';
-
-  /** Enable color output */
-  colorOutput?: boolean;
-}
-
-/**
  * Daemon settings
  */
 export interface AgorDaemonSettings {
@@ -1068,9 +1057,6 @@ export interface AgorConfig {
   /** Global defaults */
   defaults?: AgorDefaults;
 
-  /** Display settings */
-  display?: AgorDisplaySettings;
-
   /** Daemon settings */
   daemon?: AgorDaemonSettings;
 
@@ -1126,7 +1112,6 @@ export interface AgorConfig {
  */
 export type ConfigKey =
   | `defaults.${keyof AgorDefaults}`
-  | `display.${keyof AgorDisplaySettings}`
   | `daemon.${keyof AgorDaemonSettings}`
   | `ui.${keyof AgorUISettings}`
   | `database.${keyof AgorDatabaseSettings}`

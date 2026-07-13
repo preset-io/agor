@@ -97,6 +97,15 @@ describe('warnDeprecatedAnonymousConfig', () => {
     } as unknown as AgorConfig);
     expect(written).toContain('display.shortIdLength: 12');
   });
+
+  it('warns about retired CLI display settings while accepting old config files', () => {
+    warnDeprecatedAnonymousConfig({
+      display: { tableStyle: 'ascii', colorOutput: false },
+    } as unknown as AgorConfig);
+    expect(written).toContain('display.tableStyle: ascii');
+    expect(written).toContain('display.colorOutput: false');
+    expect(written).toContain('no longer have any effect');
+  });
 });
 
 describe('logFirstRunAdminBootstrap', () => {

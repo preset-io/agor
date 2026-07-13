@@ -13,6 +13,26 @@ import type { TaskID, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { ConfigService } from './config.js';
 
+describe('ConfigService retired display compatibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockResolvedValue({
+      daemon: { port: 3030 },
+      display: { tableStyle: 'ascii', colorOutput: false },
+    });
+  });
+
+  it('does not expose accepted legacy display settings from /config', async () => {
+    const service = new ConfigService({} as never);
+    await expect(service.find()).resolves.toEqual({ daemon: { port: 3030 } });
+  });
+
+  it('does not expose accepted legacy display settings by dotted lookup', async () => {
+    const service = new ConfigService({} as never);
+    await expect(service.get('display.tableStyle')).resolves.toBeUndefined();
+  });
+});
+
 describe('ConfigService.resolveApiKey', () => {
   beforeEach(() => {
     vi.clearAllMocks();

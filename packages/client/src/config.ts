@@ -13,10 +13,6 @@ export function getDefaultConfig(): AgorConfig {
       board: 'main',
       agent: 'claude-code',
     },
-    display: {
-      tableStyle: 'unicode',
-      colorOutput: true,
-    },
     daemon: {
       port: DEFAULT_DAEMON_PORT,
       host: DEFAULT_DAEMON_HOST,
