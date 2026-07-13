@@ -1,17 +1,12 @@
-import { type AgorClient, isTeammatePromotionLink, type Link } from '@agor-live/client';
+import type { AgorClient, Link } from '@agor-live/client';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { useCallback, useRef, useState } from 'react';
 import { agorStore } from '../../store/agorStore';
 import { useThemedMessage } from '../../utils/message';
 import type { LinkDisplayItem } from './linkDisplay';
-import {
-  createManualLink,
-  type ManualLinkDraft,
-  saveLinkToBranch,
-  updateLinkDisplayItem,
-} from './linkLifecycle';
-import { ensurePersistedLink, toggleLinkDisplayItemPinned } from './linkPinning';
-import { promoteLinkToTeammate } from './linkPromotion';
+import { createManualLink, type ManualLinkDraft, updateLinkDisplayItem } from './linkLifecycle';
+import { type LinkMoveSelection, moveLinkDisplayItem } from './linkMove';
+import { toggleLinkDisplayItemPinned } from './linkPinning';
 import {
   formatLinkMutationFailure,
   LINK_BUSY_KEY,
@@ -46,21 +41,13 @@ interface UseLinkMutationsOptions {
   client: AgorClient | null;
   branchId?: string | null;
   sessionId?: string | null;
-  teammateBranchId?: string | null;
 }
 
-export function useLinkMutations({
-  client,
-  branchId,
-  sessionId,
-  teammateBranchId,
-}: UseLinkMutationsOptions) {
+export function useLinkMutations({ client, branchId, sessionId }: UseLinkMutationsOptions) {
   const { showSuccess, showError } = useThemedMessage();
   const [pinningKeys, setPinningKeys] = useState<ReadonlySet<string>>(new Set());
-  const [teammateBusyKeys, setTeammateBusyKeys] = useState<ReadonlySet<string>>(new Set());
   const [lifecycleBusyKeys, setLifecycleBusyKeys] = useState<ReadonlySet<string>>(new Set());
   const pinningRef = useRef(new Set<string>());
-  const teammateBusyRef = useRef(new Set<string>());
   const lifecycleBusyRef = useRef(new Set<string>());
 
   const togglePinned = useCallback(
@@ -84,36 +71,6 @@ export function useLinkMutations({
       }
     },
     [branchId, client, sessionId, showError]
-  );
-
-  const promoteToTeammate = useCallback(
-    async (item: LinkDisplayItem) => {
-      const key = item.linkId ?? item.key;
-      if (!client || !teammateBranchId || !startBusy(teammateBusyRef, setTeammateBusyKeys, key))
-        return;
-      try {
-        const source = item.linkId
-          ? null
-          : await ensurePersistedLink({ client, item, branchId, sessionId, isPinned: false });
-        if (source) agorStore.getState().applyKnownLinkCreatedResult(source);
-        const promoted = await promoteLinkToTeammate({
-          client,
-          sourceLinkId: item.linkId ?? String(source?.link_id),
-          teammateBranchId,
-        });
-        agorStore.getState().applyKnownLinkCreatedResult(promoted);
-        showSuccess(
-          isTeammatePromotionLink(promoted)
-            ? LINK_MUTATION_MESSAGE.savedToTeammate
-            : LINK_MUTATION_MESSAGE.alreadyOnTeammate
-        );
-      } catch (error) {
-        showError(formatLinkMutationFailure(LINK_MUTATION_FAILURE_PREFIX.saveToTeammate, error));
-      } finally {
-        finishBusy(teammateBusyRef, setTeammateBusyKeys, key);
-      }
-    },
-    [branchId, client, sessionId, showError, showSuccess, teammateBranchId]
   );
 
   const createLink = useCallback(
@@ -190,60 +147,40 @@ export function useLinkMutations({
     [client, showError, showSuccess]
   );
 
-  const saveToBranch = useCallback(
-    async (item: LinkDisplayItem): Promise<boolean> => {
+  const moveLink = useCallback(
+    async (item: LinkDisplayItem, selection: LinkMoveSelection): Promise<boolean> => {
       const key = item.linkId ?? item.key;
-      if (!client || !branchId || !startBusy(lifecycleBusyRef, setLifecycleBusyKeys, key))
-        return false;
+      if (!client || !startBusy(lifecycleBusyRef, setLifecycleBusyKeys, key)) return false;
       try {
-        const saved = await saveLinkToBranch({ client, item, branchId });
-        agorStore.getState().applyKnownLinkCreatedResult(saved);
-        showSuccess(LINK_MUTATION_MESSAGE.savedToBranch);
+        const result = await moveLinkDisplayItem({
+          client,
+          item,
+          selection,
+          branchId,
+          sessionId,
+        });
+        const state = agorStore.getState();
+        state.applyKnownLinkRemovedResult(result.previous_link);
+        state.applyKnownLinkCreatedResult(result.link);
+        showSuccess(LINK_MUTATION_MESSAGE.moved);
         return true;
       } catch (error) {
-        showError(formatLinkMutationFailure(LINK_MUTATION_FAILURE_PREFIX.save, error));
+        showError(formatLinkMutationFailure(LINK_MUTATION_FAILURE_PREFIX.move, error));
         return false;
       } finally {
         finishBusy(lifecycleBusyRef, setLifecycleBusyKeys, key);
       }
     },
-    [branchId, client, showError, showSuccess]
-  );
-
-  const removeFromTeammate = useCallback(
-    async (item: LinkDisplayItem, teammateLinkId: string) => {
-      const key = item.linkId ?? item.key;
-      const teammateLink = agorStore.getState().linkById.get(teammateLinkId);
-      if (!teammateLink || !isTeammatePromotionLink(teammateLink)) {
-        showError(LINK_MUTATION_MESSAGE.invalidTeammateRemoval);
-        return;
-      }
-      if (!client || !startBusy(teammateBusyRef, setTeammateBusyKeys, key)) return;
-      try {
-        const removed = (await client.service(LINK_SERVICE).remove(teammateLinkId)) as Link;
-        agorStore.getState().applyKnownLinkRemovedResult(removed);
-        showSuccess(LINK_MUTATION_MESSAGE.removedFromTeammate);
-      } catch (error) {
-        showError(
-          formatLinkMutationFailure(LINK_MUTATION_FAILURE_PREFIX.removeFromTeammate, error)
-        );
-      } finally {
-        finishBusy(teammateBusyRef, setTeammateBusyKeys, key);
-      }
-    },
-    [client, showError, showSuccess]
+    [branchId, client, sessionId, showError, showSuccess]
   );
 
   return {
     pinningKeys,
-    teammateBusyKeys,
     lifecycleBusyKeys,
     togglePinned,
     createLink,
     updateLink,
     removeLink,
-    saveToBranch,
-    promoteToTeammate,
-    removeFromTeammate,
+    moveLink,
   };
 }

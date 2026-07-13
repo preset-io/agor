@@ -1,12 +1,7 @@
 import type { AgorClient, Link } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { LinkDisplayItem } from './linkDisplay';
-import {
-  getBranchSaveState,
-  getManualLinkTarget,
-  saveLinkToBranch,
-  updateLinkDisplayItem,
-} from './linkLifecycle';
+import { getManualLinkTarget, updateLinkDisplayItem } from './linkLifecycle';
 
 const sessionItem: LinkDisplayItem = {
   key: 'link:source',
@@ -35,40 +30,6 @@ describe('link lifecycle helpers', () => {
     });
     expect(() => getManualLinkTarget('javascript:alert(1)')).toThrow(
       'Only http:// and https:// links are supported'
-    );
-  });
-
-  it('reports branch-save capabilities without hiding the action', () => {
-    expect(getBranchSaveState({ item: sessionItem, branchLinks: [], available: true })).toEqual({
-      canSave: true,
-      reason: null,
-    });
-    expect(
-      getBranchSaveState({
-        item: { ...sessionItem, filePath: 'report.pdf', source: 'upload' },
-        branchLinks: [],
-        available: true,
-      })
-    ).toMatchObject({ canSave: false, reason: expect.stringContaining('retention') });
-  });
-
-  it('creates a durable branch copy through the existing links service', async () => {
-    const created = { link_id: 'branch-copy' } as Link;
-    const create = vi.fn(async () => created);
-    const client = { service: vi.fn(() => ({ create })) } as unknown as AgorClient;
-
-    await expect(
-      saveLinkToBranch({ client, item: sessionItem, branchId: 'branch-1' })
-    ).resolves.toBe(created);
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        branch_id: 'branch-1',
-        session_id: null,
-        source: 'manual',
-        url: sessionItem.url,
-        is_pinned: false,
-        title: null,
-      })
     );
   });
 

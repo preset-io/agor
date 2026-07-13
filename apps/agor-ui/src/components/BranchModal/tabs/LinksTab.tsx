@@ -16,6 +16,7 @@ import {
   canEditLinkTarget,
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
+  getLinkMoveActions,
   LINK_ACTION_LABEL,
   LINK_OWNER_SCOPE,
   type LinkCategoryTabKey,
@@ -75,29 +76,20 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   const teammateBranchId = branch.board_id
     ? (boardById.get(branch.board_id)?.primary_teammate_id ?? null)
     : null;
-  const teammateLinksSelector = useMemo(
-    () => makeLinksForBranchSelector(teammateBranchId ?? ''),
-    [teammateBranchId]
-  );
-  const teammateLinks = useAgorStore(teammateLinksSelector) ?? [];
-  const teammatePromotionLinks = teammateBranchId === branch.branch_id ? links : teammateLinks;
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const {
     pinningKeys,
-    teammateBusyKeys,
     lifecycleBusyKeys,
     togglePinned: handleTogglePinned,
     createLink,
     updateLink,
     removeLink,
-    promoteToTeammate: handlePromoteToTeammate,
-    removeFromTeammate: handleRemoveFromTeammate,
+    moveLink: handleMoveLink,
   } = useLinkMutations({
     client,
     branchId: branch.branch_id,
-    teammateBranchId,
   });
   const { preview, setPreview, openItem } = useLinkFileActions(navigate);
   const [activeCategory, setActiveCategory] = useState<LinkCategoryTabKey>('all');
@@ -111,18 +103,14 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
     setLoading(true);
     setError(null);
     try {
-      const requests = [fetchAndReplaceFullBranchLinks(client, branch.branch_id)];
-      if (teammateBranchId && teammateBranchId !== branch.branch_id) {
-        requests.push(fetchAndReplaceFullBranchLinks(client, teammateBranchId));
-      }
-      await Promise.all(requests);
+      await fetchAndReplaceFullBranchLinks(client, branch.branch_id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message || 'Could not load branch links');
     } finally {
       setLoading(false);
     }
-  }, [teammateBranchId, branch.branch_id, client, fetchAndReplaceFullBranchLinks]);
+  }, [branch.branch_id, client, fetchAndReplaceFullBranchLinks]);
 
   useEffect(() => {
     if (!open || !active || !client) return;
@@ -209,16 +197,16 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       key={item.key}
                       item={item}
                       sourceSessionLabel={getSourceSessionLabel(item, sessionById)}
-                      teammateBranchId={teammateBranchId}
-                      teammateLinks={teammatePromotionLinks}
-                      sourceBranchId={branch.branch_id}
-                      teammateBusyKeys={teammateBusyKeys}
+                      moveActions={getLinkMoveActions(item, {
+                        branchId: branch.branch_id,
+                        teammateBranchId,
+                        available: Boolean(client),
+                      })}
                       lifecycleBusy={lifecycleBusyKeys.has(item.linkId ?? item.key)}
                       pinning={pinningKeys.has(item.linkId ?? item.key)}
                       onOpen={openItem}
                       onTogglePinned={handleTogglePinned}
-                      onPromote={handlePromoteToTeammate}
-                      onRemove={handleRemoveFromTeammate}
+                      onMove={handleMoveLink}
                       onEdit={openEditLink}
                       onDelete={removeLink}
                     />

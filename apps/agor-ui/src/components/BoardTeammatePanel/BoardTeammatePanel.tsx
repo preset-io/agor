@@ -33,6 +33,7 @@ import { BranchSessionSections } from '../BranchCard';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardSessionList } from '../BranchListDrawer';
 import type { BranchModalTab } from '../BranchModal';
+import { BRANCH_MODAL_TAB } from '../BranchModal/branchModalConstants';
 import { CommentsPanel } from '../CommentsPanel';
 import { buildLinkDisplayItems, type LinkDisplayItem, useLinkMutations } from '../Links';
 import { PinnedLinkList } from '../Links/PinnedLinkList';
@@ -48,6 +49,7 @@ function TeammatePinnedLinksBlock({
   onTogglePinned,
   pinningKeys,
   onOpenMore,
+  onManage,
 }: {
   items: LinkDisplayItem[];
   loading: boolean;
@@ -55,6 +57,7 @@ function TeammatePinnedLinksBlock({
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
   pinningKeys?: ReadonlySet<string>;
   onOpenMore?: () => void;
+  onManage?: () => void;
 }) {
   return (
     <PinnedLinkList
@@ -66,6 +69,7 @@ function TeammatePinnedLinksBlock({
       onTogglePinned={onTogglePinned}
       pinningKeys={pinningKeys}
       onOpenMore={onOpenMore}
+      onManage={onManage}
     />
   );
 }
@@ -350,6 +354,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       const teammateConfig = getTeammateConfig(primaryTeammateBranch);
       const teammateDescription = primaryTeammateBranch.notes?.trim();
       const isCreating = primaryTeammateBranch.filesystem_status === 'creating';
+      const openTeammateLinks = () =>
+        onOpenSettings?.(primaryTeammateBranch.branch_id, BRANCH_MODAL_TAB.links);
 
       return (
         <div style={{ padding: 16 }}>
@@ -448,7 +454,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             error={teammateLinksError}
             onTogglePinned={client ? handleToggleTeammatePinned : undefined}
             pinningKeys={teammatePinningKeys}
-            onOpenMore={() => onOpenSettings?.(primaryTeammateBranch.branch_id, 'links')}
+            onOpenMore={openTeammateLinks}
+            onManage={openTeammateLinks}
           />
 
           {sessionDetailsHydrated ? (

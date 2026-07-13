@@ -126,4 +126,34 @@ describe('legacy links backfill', () => {
       ).resolves.toEqual([]);
     }
   );
+
+  dbTest('does not recreate a parsed link after it moves away from the session', async ({ db }) => {
+    const branch = await seedLinkBranch(db);
+    const session = await seedLinkSession(db, branch.branch_id, 'owner' as UUID);
+    const message: Message = {
+      message_id: generateId(),
+      session_id: session.session_id,
+      type: 'user',
+      role: MessageRole.USER,
+      index: 0,
+      timestamp: new Date().toISOString(),
+      content_preview: 'move this link',
+      content: 'See https://example.com/move-once',
+    };
+    await new MessagesRepository(db).create(message);
+    const linksRepository = new LinksRepository(db);
+
+    await backfillLegacySessionLinks({ db, sessionId: session.session_id });
+    const [source] = await linksRepository.findAll({ sessionId: session.session_id });
+    await linksRepository.move(source.link_id, { branch_id: branch.branch_id });
+    await backfillLegacySessionLinks({ db, sessionId: session.session_id });
+
+    await expect(linksRepository.findAll({ sessionId: session.session_id })).resolves.toEqual([]);
+    await expect(linksRepository.findAll({ branchId: branch.branch_id })).resolves.toEqual([
+      expect.objectContaining({
+        link_id: source.link_id,
+        source_message_id: message.message_id,
+      }),
+    ]);
+  });
 });

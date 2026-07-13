@@ -23,6 +23,7 @@ import {
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
+import { BRANCH_MODAL_TAB, type BranchModalTab } from '../BranchModal/branchModalConstants';
 import { EnvironmentPill } from '../EnvironmentPill';
 import { buildLinkDisplayItems, type LinkDisplayItem, useLinkMutations } from '../Links';
 import { PinnedLinkList } from '../Links/PinnedLinkList';
@@ -40,10 +41,12 @@ function BranchCardPinnedLinksBlock({
   items,
   onTogglePinned,
   pinningKeys,
+  onManage,
 }: {
   items: LinkDisplayItem[];
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
   pinningKeys?: ReadonlySet<string>;
+  onManage?: () => void;
 }) {
   return (
     <PinnedLinkList
@@ -52,6 +55,7 @@ function BranchCardPinnedLinksBlock({
       data-testid="branch-card-pinned-links"
       onTogglePinned={onTogglePinned}
       pinningKeys={pinningKeys}
+      onManage={onManage}
     />
   );
 }
@@ -75,7 +79,7 @@ interface BranchCardProps {
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
-  onOpenSettings?: (branchId: string) => void;
+  onOpenSettings?: (branchId: string, tab?: BranchModalTab) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
   onStartEnvironment?: (branchId: string) => void;
@@ -620,6 +624,11 @@ const BranchCardComponent = ({
           items={pinnedLinkItems}
           onTogglePinned={client ? handleToggleLinkPinned : undefined}
           pinningKeys={pinningKeys}
+          onManage={
+            onOpenSettings
+              ? () => onOpenSettings(branch.branch_id, BRANCH_MODAL_TAB.links)
+              : undefined
+          }
         />
       )}
 

@@ -106,6 +106,11 @@ import { registerHealthProbeRoutes } from './health/routes.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { GatewayService } from './services/gateway.js';
 import { registerLinkContentRoute } from './services/link-content.js';
+import {
+  createLinkMoveService,
+  LINK_MOVE_AUTH_ACTION,
+  LINK_MOVE_ROUTE,
+} from './services/link-move.js';
 import { createLinkPromotionService } from './services/link-promotion.js';
 import {
   ScheduleBusyError,
@@ -805,6 +810,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     }),
     {
       create: { role: ROLES.MEMBER, action: 'promote links to assistant' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    LINK_MOVE_ROUTE,
+    createLinkMoveService({
+      app,
+      db,
+      branchRepository,
+      branchRbacEnabled,
+      sessionsService,
+      superadminOpts,
+    }),
+    {
+      create: { role: ROLES.MEMBER, action: LINK_MOVE_AUTH_ACTION },
     },
     requireAuth
   );

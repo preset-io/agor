@@ -81,6 +81,7 @@ import { sanitizeBoardCss } from '../../utils/sanitizeCss';
 import { isDarkTheme } from '../../utils/theme';
 import { AutocompleteTextarea } from '../AutocompleteTextarea/AutocompleteTextarea';
 import BranchCard from '../BranchCard';
+import type { BranchModalTab } from '../BranchModal/branchModalConstants';
 import CardModal from '../CardModal';
 import type { CardNodeData } from '../CardNode';
 import CardNode from '../CardNode';
@@ -132,7 +133,7 @@ interface SessionCanvasProps {
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
   onOpenSettings?: (sessionId: string) => void;
   onCreateSessionForBranch?: (branchId: string) => void;
-  onOpenBranch?: (branchId: string) => void;
+  onOpenBranch?: (branchId: string, tab?: BranchModalTab) => void;
   onArchiveOrDeleteBranch?: (
     branchId: string,
     options: {
@@ -223,7 +224,7 @@ interface BranchNodeData {
       filesystemAction: 'preserved' | 'cleaned' | 'deleted';
     }
   ) => void;
-  onOpenSettings?: (branchId: string) => void;
+  onOpenSettings?: (branchId: string, tab?: BranchModalTab) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
   onStartEnvironment?: (branchId: string) => void;

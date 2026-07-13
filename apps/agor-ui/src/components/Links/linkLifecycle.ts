@@ -13,11 +13,9 @@ import {
   LINK_FORM_COPY,
   LINK_KIND,
   LINK_LIFECYCLE_ERROR,
-  LINK_OWNER_SCOPE,
   LINK_SERVICE,
   LINK_SOURCE,
   LINK_TARGET,
-  LINK_UNAVAILABLE_REASON,
 } from './linkUiConstants';
 
 export interface ManualLinkDraft {
@@ -118,51 +116,4 @@ export async function updateLinkDisplayItem(args: {
   const patch: LinkPatch = { title: titleValue(args.title) };
   if (args.target !== undefined) Object.assign(patch, getManualLinkTarget(args.target));
   return args.client.service(LINK_SERVICE).patch(linkId, patch) as Promise<Link>;
-}
-
-export async function saveLinkToBranch(args: {
-  client: AgorClient;
-  item: LinkDisplayItem;
-  branchId: string;
-}): Promise<Link> {
-  const target = args.item.url
-    ? { url: args.item.url, ref_uri: null, file_path: null }
-    : args.item.refUri && args.item.kind === LINK_KIND.knowledge
-      ? { url: null, ref_uri: args.item.refUri, file_path: null }
-      : null;
-  if (!target) throw new Error(LINK_LIFECYCLE_ERROR.branchSaveTarget);
-
-  return args.client.service(LINK_SERVICE).create({
-    branch_id: args.branchId as BranchID,
-    session_id: null,
-    ...target,
-    kind: args.item.kind ?? (args.item.url ? LINK_KIND.url : LINK_KIND.knowledge),
-    source: LINK_SOURCE.manual,
-    is_pinned: false,
-    title: args.item.title?.trim() || null,
-  } satisfies LinkCreate) as Promise<Link>;
-}
-
-export function getBranchSaveState(args: {
-  item: LinkDisplayItem;
-  branchLinks: readonly Link[];
-  available?: boolean;
-}): { canSave: boolean; reason: string | null } {
-  if (!args.available) return { canSave: false, reason: LINK_UNAVAILABLE_REASON.disconnected };
-  if (args.item.ownerScope === LINK_OWNER_SCOPE.branch) {
-    return { canSave: false, reason: LINK_UNAVAILABLE_REASON.branchOwned };
-  }
-  if (args.branchLinks.some((link) => link.target_key === args.item.targetKey)) {
-    return { canSave: false, reason: LINK_UNAVAILABLE_REASON.branchOwned };
-  }
-  if (args.item.filePath || args.item.source === LINK_SOURCE.upload) {
-    return { canSave: false, reason: LINK_UNAVAILABLE_REASON.fileLifetime };
-  }
-  if (args.item.kind === LINK_KIND.internal) {
-    return { canSave: false, reason: LINK_UNAVAILABLE_REASON.internalAccess };
-  }
-  if (!args.item.url && !(args.item.refUri && args.item.kind === LINK_KIND.knowledge)) {
-    return { canSave: false, reason: LINK_UNAVAILABLE_REASON.missingTarget };
-  }
-  return { canSave: true, reason: null };
 }

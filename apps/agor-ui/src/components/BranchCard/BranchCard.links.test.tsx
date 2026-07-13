@@ -1,10 +1,11 @@
 import type { Branch, Link, Repo } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { BRANCH_MODAL_TAB } from '../BranchModal/branchModalConstants';
 import { makeTestLink } from '../Links/testUtils';
 import BranchCard from './BranchCard';
 
@@ -81,5 +82,35 @@ describe('BranchCard pinned links', () => {
 
     expect(screen.getByText('Runbook')).toBeInTheDocument();
     expect(screen.queryByText('Draft')).not.toBeInTheDocument();
+  });
+
+  it('opens the branch links tab from the pinned-links gear', () => {
+    const onOpenSettings = vi.fn();
+    render(
+      <MemoryRouter>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <BranchCard
+            branch={branch}
+            repo={repo}
+            sessions={[]}
+            userById={new Map()}
+            client={null}
+            onOpenSettings={onOpenSettings}
+          />
+        </ConnectionProvider>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage links' }));
+
+    expect(onOpenSettings).toHaveBeenCalledWith(branch.branch_id, BRANCH_MODAL_TAB.links);
   });
 });

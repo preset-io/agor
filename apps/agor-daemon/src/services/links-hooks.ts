@@ -5,18 +5,18 @@ import {
 } from '@agor/core/db';
 import { Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import { linkQueryValidator, typedValidateQuery } from '@agor/core/lib/feathers-validation';
-import type { HookContext, Link, Session, UserID } from '@agor/core/types';
+import type { HookContext, Link, LinkOwner, UserID } from '@agor/core/types';
 import { isInternalLinkData, ROLES } from '@agor/core/types';
 import { executorRuntimeScopeGuard } from '../auth/executor-runtime-scope.js';
 import type { SessionsServiceImpl } from '../declarations.js';
 import { requireMinimumRole } from '../utils/authorization.js';
-import {
-  cacheBranchAccess,
-  isSuperAdmin,
-  PERMISSION_RANK,
-  resolveBranchPermission,
-} from '../utils/branch-authorization.js';
+import { isSuperAdmin } from '../utils/branch-authorization.js';
 import { injectCreatedBy } from '../utils/inject-created-by.js';
+import {
+  ensureLinkOwnerAccess as authorizeLinkOwnerAccess,
+  LINK_OWNER_ACCESS_MODE,
+  type LinkOwnerAccessMode,
+} from './link-owner-authorization.js';
 
 export function isExternalFileBackedLinkMutation(data: unknown): boolean {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
@@ -93,6 +93,12 @@ export function linksHooks({
   superadminOpts,
 }: LinksHooksContext) {
   const linksRepository = new LinksRepository(db);
+  const ownerAuthorizationOptions = {
+    branchRepository,
+    branchRbacEnabled,
+    sessionsService,
+    superadminOpts,
+  };
 
   const hideExternalInternalLinks = (context: HookContext) => {
     if (context.params.provider) {
@@ -112,7 +118,7 @@ export function linksHooks({
     return context;
   };
 
-  const ensureLinkOwnerAccess = (mode: 'view' | 'mutate') => async (context: HookContext) => {
+  const ensureLinkOwnerAccess = (mode: LinkOwnerAccessMode) => async (context: HookContext) => {
     if (!context.params.provider) return context;
 
     const user = context.params.user;
@@ -129,72 +135,26 @@ export function linksHooks({
       };
     }
 
-    if (!branchRbacEnabled || user._isServiceAccount) return context;
-
-    const checkAccess = async (branchId: string | null | undefined, session: Session | null) => {
-      if (!branchId) throw new Forbidden('Link owner branch not found');
-      const branch = await branchRepository.findById(branchId);
-      if (!branch) throw new Forbidden(`Branch not found: ${branchId}`);
-
-      await cacheBranchAccess(context.params, branchRepository, branch);
-      const isOwner = context.params.isBranchOwner ?? false;
-      const effectiveLevel = resolveBranchPermission(
-        branch,
-        user.user_id as UserID,
-        isOwner,
-        user.role,
-        superadminOpts.allowSuperadmin,
-        context.params.branchPermission
-      );
-
-      if (mode === 'view') {
-        if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.view) return;
-        throw new Forbidden(
-          `You need 'view' permission to view links. You have '${effectiveLevel}' permission.`
-        );
-      }
-
-      const isSessionOwned = Boolean(session);
-      const allowed = isSessionOwned
-        ? PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-          (effectiveLevel === 'session' && session?.created_by === user.user_id)
-        : PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.all;
-
-      if (!allowed) {
-        throw new Forbidden(
-          isSessionOwned
-            ? `You need prompt permission (or session permission on your own session) to mutate session links. You have '${effectiveLevel}' permission.`
-            : `You need 'all' permission to mutate branch links. You have '${effectiveLevel}' permission.`
-        );
-      }
-    };
-
     if (context.method === 'create') {
       const records = Array.isArray(context.data) ? context.data : [context.data];
       for (const record of records as Partial<Link>[]) {
-        let branchId: string | null | undefined = record.branch_id;
-        let session: Session | null = null;
-        if (record.session_id) {
-          session = (await sessionsService.get(record.session_id, {
-            provider: undefined,
-          })) as Session;
-          branchId = session.branch_id;
-        }
-        await checkAccess(branchId, session);
+        await authorizeLinkOwnerAccess({
+          mode,
+          owner: record as LinkOwner,
+          options: ownerAuthorizationOptions,
+          params: context.params,
+        });
       }
       return context;
     }
 
     if (!link) return context;
-    let branchId: string | null | undefined;
-    let session: Session | null = null;
-    if (link.session_id) {
-      session = (await sessionsService.get(link.session_id, { provider: undefined })) as Session;
-      branchId = session.branch_id;
-    } else {
-      branchId = link.branch_id;
-    }
-    await checkAccess(branchId, session);
+    await authorizeLinkOwnerAccess({
+      mode,
+      owner: link as LinkOwner,
+      options: ownerAuthorizationOptions,
+      params: context.params,
+    });
 
     return context;
   };
@@ -242,20 +202,23 @@ export function linksHooks({
     before: {
       all: [typedValidateQuery(linkQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [hideExternalInternalLinks, scopeFindToAccessibleLinksSql],
-      get: [ensureLinkOwnerAccess('view')],
+      get: [ensureLinkOwnerAccess(LINK_OWNER_ACCESS_MODE.view)],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create links'),
         ...externalMutationGuards,
         injectCreatedBy(),
-        ensureLinkOwnerAccess('mutate'),
+        ensureLinkOwnerAccess(LINK_OWNER_ACCESS_MODE.mutate),
       ],
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update links'),
         ...externalMutationGuards,
         rejectLinkOwnerPatch,
-        ensureLinkOwnerAccess('mutate'),
+        ensureLinkOwnerAccess(LINK_OWNER_ACCESS_MODE.mutate),
       ],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete links'), ensureLinkOwnerAccess('mutate')],
+      remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete links'),
+        ensureLinkOwnerAccess(LINK_OWNER_ACCESS_MODE.mutate),
+      ],
     },
   };
 }

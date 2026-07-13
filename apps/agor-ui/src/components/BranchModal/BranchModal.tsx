@@ -6,6 +6,7 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
+import { BRANCH_MODAL_TAB, type BranchModalTab } from './branchModalConstants';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
@@ -17,19 +18,7 @@ import { SessionsTab } from './tabs/SessionsTab';
 import { TeammateTab } from './tabs/TeammateTab';
 import { type BranchUpdate, useBranchModalForm } from './useBranchModalForm';
 
-export const BRANCH_MODAL_TAB = {
-  general: 'general',
-  teammate: 'teammate',
-  knowledge: 'knowledge',
-  links: 'links',
-  sessions: 'sessions',
-  environment: 'environment',
-  files: 'files',
-  permissions: 'permissions',
-  schedule: 'schedule',
-} as const;
-
-export type BranchModalTab = (typeof BRANCH_MODAL_TAB)[keyof typeof BRANCH_MODAL_TAB];
+export type { BranchModalTab } from './branchModalConstants';
 
 const BRANCH_TAB_ORDER: readonly BranchModalTab[] = [
   BRANCH_MODAL_TAB.general,

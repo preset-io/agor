@@ -33,6 +33,8 @@ import type {
   Link,
   LinkCreate,
   LinkID,
+  LinkMoveRequest,
+  LinkMoveResult,
   LinkPatch,
   MCPServer,
   Message,
@@ -271,6 +273,10 @@ export interface LinksService extends Omit<AgorService<Link>, 'create' | 'update
 
 export interface LinkPromotionService {
   create(data: LinkPromoteRequest, params?: Params): Promise<Link>;
+}
+
+export interface LinkMoveService {
+  create(data: LinkMoveRequest, params?: Params): Promise<LinkMoveResult>;
 }
 
 export type AgenticToolSettingsService = AgorService<
@@ -613,6 +619,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'boards'): BoardsService;
   service(path: 'links'): LinksService;
   service(path: `links/${string}/promote`): LinkPromotionService;
+  service(path: `links/${string}/move`): LinkMoveService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
 

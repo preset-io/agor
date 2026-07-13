@@ -1,6 +1,7 @@
 import { App, Flex, type MenuProps, Typography } from 'antd';
 import { LinkOverflowAction } from './LinkActions';
 import type { LinkDisplayItem } from './linkDisplay';
+import type { LinkMoveAction, LinkMoveSelection } from './linkMove';
 import {
   getLinkActionsAriaLabel,
   LINK_ACTION_KEY,
@@ -13,18 +14,8 @@ interface LinkActionsMenuProps {
   busy?: boolean;
   onEdit: () => void;
   onDelete?: () => Promise<unknown>;
-  branchSave?: {
-    disabled: boolean;
-    reason?: string | null;
-    onSave: () => Promise<unknown>;
-  };
-  teammateAction?: {
-    label: string;
-    disabled: boolean;
-    reason?: string | null;
-    removal?: boolean;
-    onAction: () => Promise<unknown>;
-  };
+  moveActions?: readonly LinkMoveAction[];
+  onMove?: (selection: LinkMoveSelection) => Promise<unknown>;
 }
 
 function actionLabel(label: string, reason?: string | null) {
@@ -42,32 +33,17 @@ export function LinkActionsMenu({
   busy = false,
   onEdit,
   onDelete,
-  branchSave,
-  teammateAction,
+  moveActions = [],
+  onMove,
 }: LinkActionsMenuProps) {
   const { modal } = App.useApp();
   const items: NonNullable<MenuProps['items']> = [
     { key: LINK_ACTION_KEY.edit, label: LINK_ACTION_LABEL.edit, disabled: busy },
-    ...(branchSave
-      ? [
-          {
-            key: LINK_ACTION_KEY.saveToBranch,
-            label: actionLabel(LINK_ACTION_LABEL.saveToBranch, branchSave.reason),
-            disabled: busy || branchSave.disabled,
-          },
-        ]
-      : []),
-    ...(teammateAction
-      ? [
-          {
-            key: teammateAction.removal
-              ? LINK_ACTION_KEY.removeFromTeammate
-              : LINK_ACTION_KEY.saveToTeammate,
-            label: actionLabel(teammateAction.label, teammateAction.reason),
-            disabled: busy || teammateAction.disabled,
-          },
-        ]
-      : []),
+    ...moveActions.map((action) => ({
+      key: action.key,
+      label: actionLabel(action.label, action.reason),
+      disabled: busy || action.disabled,
+    })),
     ...(onDelete
       ? [
           { type: 'divider' as const },
@@ -83,10 +59,8 @@ export function LinkActionsMenu({
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     if (key === LINK_ACTION_KEY.edit) onEdit();
-    if (key === LINK_ACTION_KEY.saveToBranch) void branchSave?.onSave();
-    if (key === LINK_ACTION_KEY.saveToTeammate || key === LINK_ACTION_KEY.removeFromTeammate) {
-      void teammateAction?.onAction();
-    }
+    const moveAction = moveActions.find((action) => action.key === key);
+    if (moveAction && onMove) void onMove(moveAction);
     if (key === LINK_ACTION_KEY.delete && onDelete) {
       modal.confirm({
         title: LINK_CONFIRM_COPY.deleteTitle,

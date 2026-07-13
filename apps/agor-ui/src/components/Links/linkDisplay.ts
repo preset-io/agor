@@ -55,6 +55,7 @@ export interface LinkDisplayItem {
   mimeType?: string;
   title?: string;
   linkId?: string;
+  ownerBranchId?: string;
   sessionId?: string;
   sourceSessionId?: string;
   href?: string;
@@ -333,6 +334,7 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
     isPinned: Boolean(link.is_pinned),
     isPromoted: isTeammatePromotionLink(link),
     linkId: String(link.link_id),
+    ownerBranchId: link.branch_id ?? undefined,
     sessionId: link.session_id ?? undefined,
     sourceSessionId: link.session_id ?? promotedFromSessionId,
     mimeType: link.mime_type ?? undefined,
@@ -383,6 +385,7 @@ function branchUrlToDisplayItem(args: {
   key: string;
   url: string;
   kind: Extract<LinkKind, 'issue' | 'pr'>;
+  branchId?: string;
 }): LinkDisplayItem {
   const label = args.kind === 'issue' ? 'Issue' : 'PR';
   const safeUrl = safeWebUrl(args.url);
@@ -394,6 +397,7 @@ function branchUrlToDisplayItem(args: {
     kind: args.kind,
     source: 'branch',
     ownerScope: 'branch',
+    ownerBranchId: args.branchId,
     isPinned: false,
     url: args.url,
     href: safeUrl ?? undefined,
@@ -431,7 +435,7 @@ export function sortLinkDisplayItems(items: LinkDisplayItem[]): LinkDisplayItem[
 }
 
 export function buildLinkDisplayItems(args: {
-  branch?: Pick<Branch, 'issue_url' | 'pull_request_url'> | null;
+  branch?: Pick<Branch, 'issue_url' | 'pull_request_url'> & Partial<Pick<Branch, 'branch_id'>>;
   links?: readonly Link[];
   includeBranchLinks?: boolean;
 }): LinkDisplayItem[] {
@@ -444,6 +448,7 @@ export function buildLinkDisplayItems(args: {
         key: 'branch:issue',
         url: args.branch.issue_url,
         kind: 'issue',
+        branchId: args.branch.branch_id,
       })
     );
   }
@@ -454,6 +459,7 @@ export function buildLinkDisplayItems(args: {
         key: 'branch:pr',
         url: args.branch.pull_request_url,
         kind: 'pr',
+        branchId: args.branch.branch_id,
       })
     );
   }

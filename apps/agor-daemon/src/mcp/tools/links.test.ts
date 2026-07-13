@@ -38,6 +38,7 @@ describe('link MCP tools', () => {
       'agor_links_get',
       'agor_links_create',
       'agor_links_update',
+      'agor_links_move',
       'agor_links_save',
       'agor_links_delete',
     ]);
@@ -153,6 +154,29 @@ describe('link MCP tools', () => {
         title: source.title,
       }),
       { authenticated: true, _agorPreserveExistingOnCreate: true }
+    );
+  });
+
+  it('moves a link to a resolved session owner through the guarded move route', async () => {
+    const move = vi.fn(async (payload) => ({ link: payload, merged: false }));
+    const handlers = registerTools({
+      sessions: { get: vi.fn(async () => ({ session_id: 'session-full' })) },
+      '/links/:linkId/move': { create: move },
+      links: {},
+    });
+
+    await handlers.get('agor_links_move')?.({
+      linkId: 'link-1',
+      destination: 'session',
+      sessionId: 'session-full',
+    });
+
+    expect(move).toHaveBeenCalledWith(
+      { target: 'session', session_id: 'session-full' },
+      {
+        authenticated: true,
+        route: { linkId: 'link-1' },
+      }
     );
   });
 

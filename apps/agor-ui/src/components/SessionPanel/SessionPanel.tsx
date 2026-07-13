@@ -71,12 +71,9 @@ import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import {
   buildLinkDisplayItems,
-  getBranchSaveState,
-  getTeammatePromotionState,
-  getTeammatePromotionUnavailableReason,
+  getLinkMoveActions,
   groupRenderableLinksByMessageId,
   LINK_OWNER_SCOPE,
-  LINK_UNAVAILABLE_REASON,
   type LinkDisplayItem,
   selectPinnedLinkDisplayItems,
   useLinkMutations,
@@ -349,11 +346,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const teammateBranchId = branch?.board_id
     ? (boardById.get(branch.board_id)?.primary_teammate_id ?? null)
     : null;
-  const teammateLinksSelector = React.useMemo(
-    () => makeLinksForBranchSelector(teammateBranchId ?? ''),
-    [teammateBranchId]
-  );
-  const teammateLinks = useAgorStore(teammateLinksSelector) ?? [];
   const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
   const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
   // The ref blocks same-tick re-entry; reactive state locks composer mutations
@@ -362,20 +354,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [composerBusy, setComposerBusy] = React.useState(false);
   const {
     pinningKeys,
-    teammateBusyKeys,
     lifecycleBusyKeys,
     togglePinned: handleToggleSessionLinkPinned,
     createLink: handleCreateSessionLink,
     updateLink: handleUpdateSessionLink,
     removeLink: handleDeleteSessionLink,
-    saveToBranch: handleSaveSessionLinkToBranch,
-    promoteToTeammate: handlePromoteSessionLinkToTeammate,
-    removeFromTeammate: handleRemoveSessionLinkFromTeammate,
+    moveLink: handleMoveSessionLink,
   } = useLinkMutations({
     client,
     branchId: branch?.branch_id,
     sessionId: session?.session_id,
-    teammateBranchId,
   });
   const [sessionLinksLoading, setSessionLinksLoading] = React.useState(false);
   const [sessionLinksError, setSessionLinksError] = React.useState<string | null>(null);
@@ -563,9 +551,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     if (branch?.branch_id) {
       requests.push(fetchAndReplaceFullBranchLinks(client, branch.branch_id));
     }
-    if (teammateBranchId && teammateBranchId !== branch?.branch_id) {
-      requests.push(fetchAndReplaceFullBranchLinks(client, teammateBranchId));
-    }
     const results = await Promise.allSettled(requests);
     if (requestId !== linksLoadRequestRef.current) return;
     const failure = results.find(
@@ -578,7 +563,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
     setSessionLinksLoading(false);
   }, [
-    teammateBranchId,
     branch?.branch_id,
     client,
     fetchAndReplaceFullBranchLinks,
@@ -1153,35 +1137,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const teammateStateForSessionLink = (item: LinkDisplayItem) => {
-    const state = getTeammatePromotionState({
-      item,
+  const moveActionsForSessionLink = (item: LinkDisplayItem) =>
+    getLinkMoveActions(item, {
+      branchId: branch?.branch_id,
+      sessionId: session.session_id,
       teammateBranchId,
-      sourceBranchId: branch?.branch_id ?? null,
-      teammateLinks,
+      available: Boolean(client && !connectionDisabled),
     });
-    const unavailableReason = getTeammatePromotionUnavailableReason(state);
-    const actionKey = item.linkId ?? item.key;
-    return {
-      isPromoted: state.isPromoted,
-      teammateLinkId: state.teammateLink?.link_id,
-      disabled: !state.canPromote || !client || connectionDisabled,
-      loading: teammateBusyKeys.has(actionKey),
-      unavailableReason:
-        unavailableReason ??
-        (!client || connectionDisabled ? LINK_UNAVAILABLE_REASON.disconnected : null),
-    };
-  };
-
-  const branchStateForSessionLink = (item: LinkDisplayItem) => {
-    if (item.ownerScope !== LINK_OWNER_SCOPE.session) return null;
-    const state = getBranchSaveState({
-      item,
-      branchLinks: currentBranchLinks,
-      available: Boolean(client && branch && !connectionDisabled),
-    });
-    return { disabled: !state.canSave, unavailableReason: state.reason };
-  };
 
   const handleFork = async () => {
     if (!session || composerActionInFlightRef.current) return;
@@ -1529,12 +1491,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               pinningKeys={pinningKeys}
               onTogglePinned={handleToggleSessionLinkPinned}
               onRegisterOpenPinnedManager={handleRegisterOpenPinnedManager}
-              getTeammateActionState={teammateStateForSessionLink}
-              onPromoteToTeammate={handlePromoteSessionLinkToTeammate}
-              onRemoveFromTeammate={handleRemoveSessionLinkFromTeammate}
-              teammatePromotionBusyKeys={teammateBusyKeys}
-              getBranchActionState={branchStateForSessionLink}
-              onSaveToBranch={handleSaveSessionLinkToBranch}
+              getMoveActions={moveActionsForSessionLink}
+              onMoveLink={handleMoveSessionLink}
               lifecycleBusyKeys={lifecycleBusyKeys}
               onCreateLink={(draft) => handleCreateSessionLink(draft, LINK_OWNER_SCOPE.session)}
               onUpdateLink={handleUpdateSessionLink}

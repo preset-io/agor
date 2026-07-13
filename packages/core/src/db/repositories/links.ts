@@ -4,6 +4,8 @@ import type {
   LinkCreate,
   LinkID,
   LinkKind,
+  LinkMoveResult,
+  LinkOwner,
   LinkOwnerScope,
   LinkPatch,
   LinkSource,
@@ -46,6 +48,7 @@ export interface LinkFindFilter {
   sessionId?: SessionID;
   sessionIds?: SessionID[];
   sourceMessageId?: MessageID;
+  sourceMessageIds?: MessageID[];
   kind?: LinkKind;
   source?: LinkSource;
   isPinned?: boolean;
@@ -336,6 +339,7 @@ export class LinksRepository {
   async findAll(filter?: LinkFindFilter): Promise<Link[]> {
     if (filter?.branchIds !== undefined && filter.branchIds.length === 0) return [];
     if (filter?.sessionIds !== undefined && filter.sessionIds.length === 0) return [];
+    if (filter?.sourceMessageIds !== undefined && filter.sourceMessageIds.length === 0) return [];
 
     const conditions = [];
     if (filter?.ownerScope === 'branch') conditions.push(isNotNull(links.branch_id));
@@ -358,6 +362,8 @@ export class LinksRepository {
       conditions.push(inArray(links.session_id, filter.sessionIds));
     if (filter?.sourceMessageId)
       conditions.push(eq(links.source_message_id, filter.sourceMessageId));
+    if (filter?.sourceMessageIds !== undefined)
+      conditions.push(inArray(links.source_message_id, filter.sourceMessageIds));
     if (filter?.kind) conditions.push(eq(links.kind, filter.kind));
     if (filter?.hideInternal) {
       conditions.push(
@@ -455,6 +461,79 @@ export class LinksRepository {
     }
 
     throw new RepositoryError(`Link ${id} changed concurrently; retry update`);
+  }
+
+  /**
+   * Transfer one link to another owner atomically.
+   *
+   * Existing destination targets win so installations that used the earlier
+   * copy-based save flow converge back to one destination record without
+   * overwriting its contextual label or pin state.
+   */
+  async move(
+    id: string,
+    owner: LinkOwner,
+    options: { expectedRevision?: number } = {}
+  ): Promise<LinkMoveResult> {
+    const ownerCount = countPresent([owner.branch_id, owner.session_id]);
+    if (ownerCount !== 1) {
+      throw new RepositoryError('Link move requires exactly one owner: branch_id XOR session_id');
+    }
+
+    return runDatabaseTransaction(this.db, async (tx) => {
+      const repository = new LinksRepository(tx);
+      const source = await repository.findById(id);
+      if (!source) throw new RepositoryError(`Link ${id} not found`);
+      if (
+        options.expectedRevision !== undefined &&
+        (source.revision ?? 1) !== options.expectedRevision
+      ) {
+        throw new RepositoryError(`Link ${id} changed concurrently; retry move`);
+      }
+
+      const destination = await repository.findByOwnerAndTarget({
+        ...owner,
+        url: source.url,
+        ref_uri: source.ref_uri,
+        file_path: source.file_path,
+        target_object_type: source.target_object_type,
+        target_object_id: source.target_object_id,
+      });
+      if (destination) {
+        if (destination.link_id === source.link_id) {
+          return { link: source, previous_link: source, merged: false };
+        }
+        const resolvedDestination =
+          !destination.source_message_id && source.source_message_id
+            ? await repository.update(destination.link_id, {
+                source_message_id: source.source_message_id,
+              })
+            : destination;
+        await repository.delete(source.link_id);
+        return { link: resolvedDestination, previous_link: source, merged: true };
+      }
+
+      try {
+        const expectedRevision = source.revision ?? 1;
+        const row = (await update(tx, links)
+          .set({
+            branch_id: owner.branch_id ?? null,
+            session_id: owner.session_id ?? null,
+            updated_at: new Date(),
+            revision: sql`${links.revision} + 1`,
+          })
+          .where(and(eq(links.link_id, source.link_id), eq(links.revision, expectedRevision)))
+          .returning()
+          .one()) as LinkRow | undefined;
+        if (!row) throw new RepositoryError(`Link ${id} changed concurrently; retry move`);
+        return { link: repository.rowToLink(row), previous_link: source, merged: false };
+      } catch (error) {
+        if (isUniqueConstraintError(error)) {
+          throw new RepositoryError('The destination already owns this link target');
+        }
+        throw error;
+      }
+    });
   }
 
   async delete(id: string): Promise<void> {

@@ -1,4 +1,4 @@
-/* biome-ignore-all lint/plugin/noFirstPartyCss: native SPA link hover/focus needs pseudo selectors that React inline styles cannot express. */
+/* biome-ignore-all lint/plugin/noFirstPartyCss: native SPA link states need pseudo selectors; shared pinned-list layout intentionally avoids duplicated inline styles. */
 
 .actionRowLink:hover,
 .actionRowLink:focus-visible {
@@ -89,4 +89,27 @@
 
 .inactivePinButton {
   color: var(--ant-color-text-tertiary);
+}
+
+.pinnedList {
+  margin-block: var(--ant-margin-xxs) var(--ant-margin-md);
+  padding-block: var(--ant-padding-xxs) var(--ant-padding-sm);
+  border-bottom: 1px dashed var(--ant-color-border-secondary);
+}
+
+.pinnedListHeader {
+  margin-bottom: var(--ant-margin-xs);
+}
+
+.pinnedListIcon {
+  color: var(--ant-color-text-tertiary);
+  font-size: var(--ant-font-size-sm);
+}
+
+.pinnedListText {
+  font-size: var(--ant-font-size-sm);
+}
+
+.pinnedListItems {
+  width: 100%;
 }

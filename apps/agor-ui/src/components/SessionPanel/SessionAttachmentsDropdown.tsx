@@ -34,11 +34,10 @@ import { getLinkUnavailableReason, getSafeLinkContentLabel } from '../Links/link
 import linkStyles from '../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../Links/SessionLinksControl';
 import {
-  type SessionAttachmentBranchActions,
   SessionAttachmentDrawerRow,
   type SessionAttachmentLifecycleActions,
+  type SessionAttachmentMoveActions,
   SessionAttachmentQuickRow,
-  type SessionAttachmentTeammateActions,
 } from './SessionAttachmentRows';
 
 type SessionAttachmentItem = LinkDisplayItem;
@@ -51,8 +50,7 @@ function matchesAttachmentSearch(item: LinkDisplayItem, query: string): boolean 
 }
 
 interface Props
-  extends SessionAttachmentTeammateActions,
-    SessionAttachmentBranchActions,
+  extends SessionAttachmentMoveActions,
     Omit<SessionAttachmentLifecycleActions, 'onEditLink'> {
   items: SessionAttachmentItem[];
   loading?: boolean;
@@ -76,12 +74,8 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   pinningKeys,
   onTogglePinned,
   onRegisterOpenPinnedManager,
-  getTeammateActionState,
-  onPromoteToTeammate,
-  onRemoveFromTeammate,
-  teammatePromotionBusyKeys,
-  getBranchActionState,
-  onSaveToBranch,
+  getMoveActions,
+  onMoveLink,
   lifecycleBusyKeys,
   onDeleteLink,
   onCreateLink,
@@ -287,12 +281,8 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
                     pinningKeys={pinningKeys}
                     onOpen={openTarget}
                     onTogglePinned={onTogglePinned}
-                    getTeammateActionState={getTeammateActionState}
-                    onPromoteToTeammate={onPromoteToTeammate}
-                    onRemoveFromTeammate={onRemoveFromTeammate}
-                    teammatePromotionBusyKeys={teammatePromotionBusyKeys}
-                    getBranchActionState={getBranchActionState}
-                    onSaveToBranch={onSaveToBranch}
+                    getMoveActions={getMoveActions}
+                    onMoveLink={onMoveLink}
                     lifecycleBusyKeys={lifecycleBusyKeys}
                     onEditLink={openEditLink}
                     onDeleteLink={onDeleteLink}

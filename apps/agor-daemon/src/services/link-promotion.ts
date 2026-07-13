@@ -1,9 +1,8 @@
 import { BranchRepository, LinksRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import { BadRequest, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
-  Branch,
   BranchID,
   Link,
   LinkCreate,
@@ -11,11 +10,8 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { isTeammate, TEAMMATE_PROMOTION_METADATA_KEY } from '@agor/core/types';
-import {
-  isSuperAdmin,
-  PERMISSION_RANK,
-  resolveBranchPermission,
-} from '../utils/branch-authorization.js';
+import { ensureLinkOwnerAccess, LINK_OWNER_ACCESS_MODE } from './link-owner-authorization.js';
+import { getTrustedTransferTarget } from './link-transfer-policy.js';
 
 interface LinkPromotionRouteParams extends AuthenticatedParams {
   route?: Record<string, string | undefined>;
@@ -46,51 +42,11 @@ function sourceLinkIdFromParams(params?: LinkPromotionRouteParams): string | nul
   return params?.route?.sourceLinkId ?? params?.route?.id ?? null;
 }
 
-type TrustedTargetCreateFields =
-  | {
-      url: string;
-      ref_uri: null;
-      file_path: null;
-      target_object_type: null;
-      target_object_id: null;
-    }
-  | {
-      url: null;
-      ref_uri: string;
-      file_path: null;
-      target_object_type: Link['target_object_type'];
-      target_object_id: Link['target_object_id'];
-    };
-
-function trustedTargetCreateFields(source: Link): TrustedTargetCreateFields {
-  if (source.source === 'upload' || source.file_path) {
-    throw new BadRequest('File-backed links cannot be promoted until file lifetime is defined');
-  }
-  if (source.kind === 'internal' || source.target_object_type || source.target_object_id) {
-    throw new BadRequest(
-      'Internal links cannot be promoted until target access checks are enforced'
-    );
-  }
-  if (source.url) {
-    return {
-      url: source.url,
-      ref_uri: null,
-      file_path: null,
-      target_object_type: null,
-      target_object_id: null,
-    };
-  }
-  if (source.kind === 'kb_ref' && source.ref_uri) {
-    return {
-      url: null,
-      ref_uri: source.ref_uri,
-      file_path: null,
-      target_object_type: null,
-      target_object_id: null,
-    };
-  }
-  throw new BadRequest('Source link has no trusted target to promote');
-}
+const LINK_PROMOTION_TRANSFER_ERROR = {
+  fileLifetime: 'File-backed links cannot be promoted until file lifetime is defined',
+  internalAccess: 'Internal links cannot be promoted until target access checks are enforced',
+  missingTarget: 'Source link has no trusted target to promote',
+} as const;
 
 export class LinkPromotionService {
   private branchRepository: BranchRepository;
@@ -103,37 +59,6 @@ export class LinkPromotionService {
 
   private linksService(): LinksCrudService {
     return this.options.app.service('links') as unknown as LinksCrudService;
-  }
-
-  private async ensureCanMutateTeammateBranch(
-    teammateBranch: Branch,
-    params?: LinkPromotionRouteParams
-  ): Promise<void> {
-    if (!this.options.branchRbacEnabled || !params?.provider) return;
-    const user = params.user;
-    if (!user) throw new NotAuthenticated('Authentication required');
-    if (user._isServiceAccount) return;
-    if (isSuperAdmin(user.role, this.options.superadminOpts.allowSuperadmin)) return;
-
-    const userId = user.user_id as UUID;
-    const isOwner = await this.branchRepository.isOwner(teammateBranch.branch_id, userId);
-    const branchPermission = await this.branchRepository.resolveUserPermission(
-      teammateBranch,
-      userId
-    );
-    const effectiveLevel = resolveBranchPermission(
-      teammateBranch,
-      userId,
-      isOwner,
-      user.role,
-      this.options.superadminOpts.allowSuperadmin,
-      branchPermission
-    );
-
-    if (PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.all) return;
-    throw new Forbidden(
-      `You need 'all' permission to promote links to this teammate. You have '${effectiveLevel}' permission.`
-    );
   }
 
   async create(data: LinkPromotionData, params?: LinkPromotionRouteParams): Promise<Link> {
@@ -152,10 +77,19 @@ export class LinkPromotionService {
     if (!teammateBranch) throw new NotFound(`Teammate branch not found: ${teammateBranchId}`);
     if (!isTeammate(teammateBranch)) throw new BadRequest('Target branch is not a teammate');
 
-    await this.ensureCanMutateTeammateBranch(teammateBranch, params);
+    await ensureLinkOwnerAccess({
+      mode: LINK_OWNER_ACCESS_MODE.mutate,
+      owner: { branch_id: teammateBranch.branch_id },
+      options: {
+        branchRepository: this.branchRepository,
+        branchRbacEnabled: this.options.branchRbacEnabled,
+        superadminOpts: this.options.superadminOpts,
+      },
+      params,
+    });
 
     const callerId = (params?.user?.user_id as UUID | undefined) ?? null;
-    const targetFields = trustedTargetCreateFields(source);
+    const targetFields = getTrustedTransferTarget(source, LINK_PROMOTION_TRANSFER_ERROR);
     const existing = await this.linksRepository.findByOwnerAndTarget({
       branch_id: teammateBranch.branch_id,
       session_id: null,

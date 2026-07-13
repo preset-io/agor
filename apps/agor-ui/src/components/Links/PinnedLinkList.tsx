@@ -1,7 +1,9 @@
-import { PushpinFilled } from '@ant-design/icons';
-import { Button, Flex, Space, Spin, Typography, theme } from 'antd';
+import { PushpinFilled, SettingOutlined } from '@ant-design/icons';
+import { Button, Flex, Space, Spin, Tooltip, Typography } from 'antd';
 import { useMemo } from 'react';
 import type { LinkDisplayItem } from './linkDisplay';
+import styles from './linkUi.module.css';
+import { LINK_MANAGER_COPY } from './linkUiConstants';
 import { LinkPreviewModal, LinkRow, useLinkFileActions } from './SessionLinksControl';
 
 interface PinnedLinkListProps {
@@ -11,6 +13,7 @@ interface PinnedLinkListProps {
   onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
   pinningKeys?: ReadonlySet<string>;
   onOpenMore?: () => void;
+  onManage?: () => void;
   countMode?: 'hidden' | 'total';
   loadingLabel?: string;
   className?: string;
@@ -26,12 +29,12 @@ export function PinnedLinkList({
   onTogglePinned,
   pinningKeys,
   onOpenMore,
+  onManage,
   countMode = 'hidden',
   loadingLabel = 'Loading links…',
   className,
   'data-testid': dataTestId,
 }: PinnedLinkListProps) {
-  const { token } = theme.useToken();
   const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
   const pinnedItems = useMemo(() => items.filter((item) => item.isPinned), [items]);
   const inlineItems = pinnedItems.slice(0, INLINE_LIMIT);
@@ -42,42 +45,56 @@ export function PinnedLinkList({
   return (
     <>
       <div
-        className={className}
+        className={[styles.pinnedList, className].filter(Boolean).join(' ')}
         data-testid={dataTestId}
-        style={{
-          margin: `${token.sizeUnit}px 0 ${token.sizeUnit * 3}px`,
-          padding: `${token.sizeUnit * 0.5}px 0 ${token.sizeUnit * 2}px`,
-          borderBottom: `1px dashed ${token.colorBorderSecondary}`,
-        }}
       >
         <Flex
           align="center"
-          gap={token.sizeUnit}
-          style={{ marginBottom: pinnedItems.length > 0 || loading || error ? token.sizeXS : 0 }}
+          justify="space-between"
+          gap="small"
+          className={styles.pinnedListHeader}
         >
-          <PushpinFilled style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }} />
-          <Typography.Text type="secondary" strong style={{ fontSize: token.fontSizeSM }}>
-            Pinned links
-          </Typography.Text>
-          {pinnedItems.length > 0 && countMode === 'total' && (
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              {pinnedItems.length}
+          <Flex align="center" gap="small">
+            <PushpinFilled className={styles.pinnedListIcon} />
+            <Typography.Text type="secondary" strong className={styles.pinnedListText}>
+              {LINK_MANAGER_COPY.pinnedTitle}
             </Typography.Text>
-          )}
-          {hiddenCount > 0 && countMode === 'hidden' && (
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              +{hiddenCount} more
-            </Typography.Text>
-          )}
-          {loading && <Spin size="small" style={{ marginLeft: 'auto' }} />}
+            {pinnedItems.length > 0 && countMode === 'total' && (
+              <Typography.Text type="secondary" className={styles.pinnedListText}>
+                {pinnedItems.length}
+              </Typography.Text>
+            )}
+            {hiddenCount > 0 && countMode === 'hidden' && (
+              <Typography.Text type="secondary" className={styles.pinnedListText}>
+                +{hiddenCount} more
+              </Typography.Text>
+            )}
+          </Flex>
+          <Flex align="center" gap="small">
+            {loading && <Spin size="small" />}
+            {onManage && (
+              <Tooltip title={LINK_MANAGER_COPY.managePinnedTooltip}>
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label={LINK_MANAGER_COPY.managePinnedTooltip}
+                  icon={<SettingOutlined />}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onManage();
+                  }}
+                />
+              </Tooltip>
+            )}
+          </Flex>
         </Flex>
 
         {error ? (
-          <Typography.Text type="danger" style={{ fontSize: token.fontSizeSM }}>
+          <Typography.Text type="danger" className={styles.pinnedListText}>
             {error}
           </Typography.Text>
         ) : inlineItems.length > 0 ? (
-          <Space direction="vertical" size={token.sizeXS} style={{ width: '100%' }}>
+          <Space direction="vertical" size="small" className={styles.pinnedListItems}>
             {inlineItems.map((item) => (
               <LinkRow
                 key={item.key}
@@ -96,7 +113,7 @@ export function PinnedLinkList({
             )}
           </Space>
         ) : loading ? (
-          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+          <Typography.Text type="secondary" className={styles.pinnedListText}>
             {loadingLabel}
           </Typography.Text>
         ) : null}

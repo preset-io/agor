@@ -1,4 +1,3 @@
-import type { Link } from '@agor-live/client';
 import { Flex, List, Typography, theme } from 'antd';
 import {
   ActionLinkRow,
@@ -6,11 +5,10 @@ import {
   getCompactLinkDisplayName,
   getLinkDisplaySecondaryLabel,
   getLinkPinActionLabel,
-  getTeammatePromotionActionLabel,
-  getTeammatePromotionState,
-  getTeammatePromotionUnavailableReason,
   LinkActionsMenu,
   type LinkDisplayItem,
+  type LinkMoveAction,
+  type LinkMoveSelection,
   LinkPinAction,
 } from '../../Links';
 import { LinkCategoryGlyph } from '../../Links/LinkVisual';
@@ -19,16 +17,12 @@ import { getLinkUnavailableReason } from '../../Links/linkContent';
 interface BranchLinkListItemProps {
   item: LinkDisplayItem;
   sourceSessionLabel: string | null;
-  teammateBranchId?: string | null;
-  teammateLinks: Link[];
-  sourceBranchId: string;
-  teammateBusyKeys?: ReadonlySet<string>;
+  moveActions: readonly LinkMoveAction[];
   pinning: boolean;
   lifecycleBusy: boolean;
   onOpen: (item: LinkDisplayItem) => void;
   onTogglePinned: (item: LinkDisplayItem) => void | Promise<void>;
-  onPromote: (item: LinkDisplayItem) => void | Promise<void>;
-  onRemove: (item: LinkDisplayItem, teammateLinkId: string) => void | Promise<void>;
+  onMove: (item: LinkDisplayItem, selection: LinkMoveSelection) => Promise<unknown>;
   onEdit: (item: LinkDisplayItem) => void;
   onDelete: (item: LinkDisplayItem) => Promise<unknown>;
 }
@@ -39,13 +33,6 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
   const disabled = Boolean(disabledReason);
   const title = getCompactLinkDisplayName(props.item);
   const targetLabel = getLinkDisplaySecondaryLabel(props.item);
-  const promotionState = getTeammatePromotionState({
-    item: props.item,
-    teammateBranchId: props.teammateBranchId,
-    teammateLinks: props.teammateLinks,
-    sourceBranchId: props.sourceBranchId,
-  });
-  const teammateBusy = props.teammateBusyKeys?.has(props.item.linkId ?? props.item.key) ?? false;
 
   return (
     <List.Item style={{ paddingBlock: 0 }}>
@@ -66,22 +53,11 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
             />
             <LinkActionsMenu
               item={props.item}
-              busy={props.lifecycleBusy || teammateBusy}
+              busy={props.lifecycleBusy}
               onEdit={() => props.onEdit(props.item)}
               onDelete={props.item.linkId ? () => props.onDelete(props.item) : undefined}
-              teammateAction={{
-                label: getTeammatePromotionActionLabel(promotionState),
-                disabled: !promotionState.canPromote,
-                reason: getTeammatePromotionUnavailableReason(promotionState),
-                removal: promotionState.isPromoted,
-                onAction: async () => {
-                  if (promotionState.isPromoted && promotionState.teammateLink) {
-                    await props.onRemove(props.item, promotionState.teammateLink.link_id);
-                    return;
-                  }
-                  await props.onPromote(props.item);
-                },
-              }}
+              moveActions={props.moveActions}
+              onMove={(selection) => props.onMove(props.item, selection)}
             />
           </>
         }

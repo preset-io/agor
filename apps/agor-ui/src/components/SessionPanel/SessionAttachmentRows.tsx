@@ -7,9 +7,10 @@ import {
   getLinkPinActionLabel,
   isFileLinkDisplayItem,
   isKnowledgeLinkDisplayItem,
-  LINK_ACTION_LABEL,
   LinkActionsMenu,
   type LinkDisplayItem,
+  type LinkMoveAction,
+  type LinkMoveSelection,
   LinkPinAction,
 } from '../Links';
 import { getLinkItemIcon, LinkCategoryGlyph } from '../Links/LinkVisual';
@@ -22,29 +23,9 @@ import {
 
 type SessionAttachmentItem = LinkDisplayItem;
 
-export interface SessionAttachmentTeammateState {
-  isPromoted: boolean;
-  teammateLinkId?: string;
-  disabled?: boolean;
-  loading?: boolean;
-  unavailableReason?: string | null;
-}
-
-export interface SessionAttachmentTeammateActions {
-  getTeammateActionState?: (item: SessionAttachmentItem) => SessionAttachmentTeammateState | null;
-  onPromoteToTeammate?: (item: SessionAttachmentItem) => void | Promise<void>;
-  onRemoveFromTeammate?: (
-    item: SessionAttachmentItem,
-    teammateLinkId: string
-  ) => void | Promise<void>;
-  teammatePromotionBusyKeys?: ReadonlySet<string>;
-}
-
-export interface SessionAttachmentBranchActions {
-  getBranchActionState?: (
-    item: SessionAttachmentItem
-  ) => { disabled: boolean; unavailableReason?: string | null } | null;
-  onSaveToBranch?: (item: SessionAttachmentItem) => Promise<unknown>;
+export interface SessionAttachmentMoveActions {
+  getMoveActions?: (item: SessionAttachmentItem) => readonly LinkMoveAction[];
+  onMoveLink?: (item: SessionAttachmentItem, selection: LinkMoveSelection) => Promise<unknown>;
 }
 
 export interface SessionAttachmentLifecycleActions {
@@ -62,8 +43,7 @@ interface SharedProps {
 
 interface DrawerProps
   extends SharedProps,
-    SessionAttachmentTeammateActions,
-    SessionAttachmentBranchActions,
+    SessionAttachmentMoveActions,
     SessionAttachmentLifecycleActions {}
 
 function attachmentIcon(item: SessionAttachmentItem, disabled: boolean): React.ReactNode {
@@ -97,13 +77,8 @@ function pinAction(props: SharedProps) {
 }
 
 function actionsMenu(props: DrawerProps) {
-  const state = props.getTeammateActionState?.(props.item);
-  const branchState = props.getBranchActionState?.(props.item);
   const busyKey = props.item.linkId ?? props.item.key;
-  const busy =
-    Boolean(state?.loading) ||
-    Boolean(props.teammatePromotionBusyKeys?.has(busyKey)) ||
-    Boolean(props.lifecycleBusyKeys?.has(busyKey));
+  const busy = Boolean(props.lifecycleBusyKeys?.has(busyKey));
 
   return (
     <LinkActionsMenu
@@ -115,34 +90,8 @@ function actionsMenu(props: DrawerProps) {
           ? async () => props.onDeleteLink?.(props.item)
           : undefined
       }
-      branchSave={
-        branchState && props.onSaveToBranch
-          ? {
-              disabled: branchState.disabled,
-              reason: branchState.unavailableReason,
-              onSave: async () => props.onSaveToBranch?.(props.item),
-            }
-          : undefined
-      }
-      teammateAction={
-        state
-          ? {
-              label: state.isPromoted
-                ? LINK_ACTION_LABEL.removeFromTeammate
-                : LINK_ACTION_LABEL.saveToTeammate,
-              disabled: Boolean(state.disabled || (state.isPromoted && !state.teammateLinkId)),
-              reason: state.unavailableReason,
-              removal: state.isPromoted,
-              onAction: async () => {
-                if (state.isPromoted && state.teammateLinkId) {
-                  await props.onRemoveFromTeammate?.(props.item, state.teammateLinkId);
-                  return;
-                }
-                await props.onPromoteToTeammate?.(props.item);
-              },
-            }
-          : undefined
-      }
+      moveActions={props.getMoveActions?.(props.item)}
+      onMove={(selection) => props.onMoveLink?.(props.item, selection) ?? Promise.resolve()}
     />
   );
 }

@@ -88,6 +88,26 @@ export type LinkOwner =
   | { branch_id: BranchID; session_id?: null }
   | { branch_id?: null; session_id: SessionID };
 
+export const LINK_MOVE_TARGET = {
+  branch: 'branch',
+  session: 'session',
+} as const;
+export const LINK_MOVE_TARGETS = Object.values(LINK_MOVE_TARGET);
+export type LinkMoveTarget = (typeof LINK_MOVE_TARGET)[keyof typeof LINK_MOVE_TARGET];
+
+export type LinkMoveRequest =
+  | { target: typeof LINK_MOVE_TARGET.branch; branch_id: BranchID; session_id?: never }
+  | { target: typeof LINK_MOVE_TARGET.session; branch_id?: never; session_id: SessionID };
+
+export interface LinkMoveResult {
+  /** The canonical link now owned by the destination. */
+  link: Link;
+  /** The source snapshot removed from its previous owner. */
+  previous_link: Link;
+  /** True when the destination already owned the same target and was retained. */
+  merged: boolean;
+}
+
 export type LinkTarget =
   | {
       url: string;

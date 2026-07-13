@@ -25,29 +25,19 @@ export const LINK_TARGET = {
   httpProtocol: 'http:',
   httpsProtocol: 'https:',
   githubHost: 'github.com',
-  fileKeyPrefix: 'file:',
-  urlKeyPrefix: 'url:',
-  refKeyPrefix: 'ref:',
 } as const;
 
-export const LINK_PROMOTION_TARGET = {
+export const LINK_MOVE_DESTINATION = {
+  branch: 'branch',
+  session: 'session',
   teammate: 'teammate',
 } as const;
 
-export const LINK_PROMOTION_REASON = {
-  noTeammate: 'no-teammate',
-  sameOwner: 'same-owner',
-  existingTarget: 'existing-target',
-  missingTarget: 'missing-target',
-  fileLifetime: 'file-target-lifetime',
-  internalAccess: 'internal-target-access',
-} as const;
-
-export type LinkPromotionReason =
-  (typeof LINK_PROMOTION_REASON)[keyof typeof LINK_PROMOTION_REASON];
+export type LinkMoveDestination =
+  (typeof LINK_MOVE_DESTINATION)[keyof typeof LINK_MOVE_DESTINATION];
 
 export const LINK_ROUTE = {
-  promote: (linkId: string) => `${LINK_SERVICE}/${linkId}/promote`,
+  move: (linkId: string) => `${LINK_SERVICE}/${linkId}/move`,
 } as const;
 
 export const LINK_FORM_FIELD = {
@@ -64,22 +54,21 @@ export const LINK_ACTION_LABEL = {
   add: 'Add link',
   edit: 'Edit link',
   delete: 'Delete link',
-  saveToBranch: 'Save to branch',
-  saveToTeammate: 'Save to teammate',
-  removeFromTeammate: 'Remove from teammate',
+  moveToBranch: 'Move to branch',
+  moveToSession: 'Move to this session',
+  moveToTeammate: 'Move to teammate',
   saveChanges: 'Save changes',
   pin: 'Pin',
   unpin: 'Unpin',
-  promotionUnavailable: 'Cannot save this link to a teammate',
 } as const;
 
 export const LINK_ACTION_KEY = {
   default: 'action',
   edit: 'edit',
   delete: 'delete',
-  saveToBranch: 'save-to-branch',
-  saveToTeammate: 'save-to-teammate',
-  removeFromTeammate: 'remove-from-teammate',
+  moveToBranch: 'move-to-branch',
+  moveToSession: 'move-to-session',
+  moveToTeammate: 'move-to-teammate',
 } as const;
 
 export function getLinkActionsAriaLabel(name: string): string {
@@ -109,23 +98,19 @@ export const LINK_MANAGER_COPY = {
   title: 'Manage links',
   pinnedTitle: 'Pinned links',
   actionsTooltip: 'Link actions',
+  managePinnedTooltip: 'Manage links',
 } as const;
 
 export const LINK_LIFECYCLE_ERROR = {
   ownerRequired: 'A branch or session owner is required',
   persistenceUnavailable: 'This link cannot be saved from this view',
-  branchSaveTarget: 'Only web and knowledge links can be saved to a branch',
 } as const;
 
 export const LINK_MUTATION_MESSAGE = {
   added: 'Link added',
   updated: 'Link updated',
   deleted: 'Link deleted',
-  savedToBranch: 'Saved to branch',
-  savedToTeammate: 'Saved to teammate',
-  alreadyOnTeammate: 'Already available on teammate',
-  removedFromTeammate: 'Removed from teammate',
-  invalidTeammateRemoval: 'Only links created by teammate promotion can be removed',
+  moved: 'Link moved',
 } as const;
 
 export const LINK_MUTATION_FAILURE_PREFIX = {
@@ -133,9 +118,7 @@ export const LINK_MUTATION_FAILURE_PREFIX = {
   add: 'Failed to add link',
   update: 'Failed to update link',
   delete: 'Failed to delete link',
-  save: 'Failed to save link',
-  saveToTeammate: 'Failed to save link to teammate',
-  removeFromTeammate: 'Failed to remove teammate link',
+  move: 'Failed to move link',
 } as const;
 
 export function formatLinkMutationFailure(prefix: string, error: unknown): string {
@@ -143,15 +126,11 @@ export function formatLinkMutationFailure(prefix: string, error: unknown): strin
   return `${prefix}: ${detail}`;
 }
 
-export const LINK_UNAVAILABLE_REASON = {
+export const LINK_MOVE_UNAVAILABLE_REASON = {
   disconnected: 'Link actions are unavailable while disconnected',
-  noTeammate: 'No teammate configured',
-  sameOwner: 'Already saved to this teammate',
-  existingTarget: 'Already saved to teammate',
-  missingTarget: 'This link has no reusable target',
-  fileLifetime: 'Files cannot be saved until retention and cleanup rules are defined',
-  internalAccess: 'Internal references cannot be saved without target access checks',
-  branchOwned: 'Already saved to branch',
+  missingTarget: 'This link has no movable target',
+  fileLifetime: 'Files cannot move until retention and cleanup rules are defined',
+  internalAccess: 'Internal references cannot move without target access checks',
 } as const;
 
 export const LINK_BUSY_KEY = {

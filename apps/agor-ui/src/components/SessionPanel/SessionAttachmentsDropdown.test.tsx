@@ -1,6 +1,12 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  LINK_ACTION_KEY,
+  LINK_ACTION_LABEL,
+  LINK_MOVE_DESTINATION,
+  LINK_MOVE_UNAVAILABLE_REASON,
+} from '../Links/linkUiConstants';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 
 describe('SessionAttachmentsDropdown', () => {
@@ -122,7 +128,7 @@ describe('SessionAttachmentsDropdown', () => {
     expect(screen.getByRole('radio', { name: 'Issues/PRs 0' })).toBeInTheDocument();
   });
 
-  it('keeps the action menu visible and explains unsupported uploaded-file saves', async () => {
+  it('keeps the action menu visible and explains unsupported uploaded-file moves', async () => {
     const item = {
       key: 'link:file-1',
       linkId: 'file-1',
@@ -141,11 +147,16 @@ describe('SessionAttachmentsDropdown', () => {
         <SessionAttachmentsDropdown
           items={[item]}
           onTogglePinned={vi.fn()}
-          getTeammateActionState={() => ({
-            isPromoted: false,
-            disabled: true,
-            unavailableReason: 'File promotion awaits upload retention support',
-          })}
+          getMoveActions={() => [
+            {
+              destination: LINK_MOVE_DESTINATION.branch,
+              ownerId: 'branch-1',
+              key: LINK_ACTION_KEY.moveToBranch,
+              label: LINK_ACTION_LABEL.moveToBranch,
+              disabled: true,
+              reason: LINK_MOVE_UNAVAILABLE_REASON.fileLifetime,
+            },
+          ]}
         />
       </MemoryRouter>
     );
@@ -154,6 +165,6 @@ describe('SessionAttachmentsDropdown', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Manage links' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Actions for report.pdf' }));
-    expect(await screen.findByText(/upload retention/i)).toBeInTheDocument();
+    expect(await screen.findByText(LINK_MOVE_UNAVAILABLE_REASON.fileLifetime)).toBeInTheDocument();
   });
 });

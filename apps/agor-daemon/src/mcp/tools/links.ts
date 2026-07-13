@@ -1,4 +1,5 @@
-import type { Link, LinkCreate, LinkKind, LinkPatch } from '@agor/core/types';
+import type { Link, LinkCreate, LinkKind, LinkMoveRequest, LinkPatch } from '@agor/core/types';
+import { LINK_MOVE_TARGET } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { resolveBranchId, resolveSessionId } from '../resolve-ids.js';
@@ -9,6 +10,7 @@ import { textResult } from '../server.js';
 const LINKS_SERVICE = 'links';
 const SESSIONS_SERVICE = 'sessions';
 const LINK_PROMOTION_SERVICE = '/links/:sourceLinkId/promote';
+const LINK_MOVE_SERVICE = '/links/:linkId/move';
 const LINK_SOURCE_MANUAL = 'manual';
 const LINK_KIND = {
   issue: 'issue',
@@ -21,12 +23,17 @@ const LINK_TOOL = {
   get: 'agor_links_get',
   create: 'agor_links_create',
   update: 'agor_links_update',
+  move: 'agor_links_move',
   save: 'agor_links_save',
   delete: 'agor_links_delete',
 } as const;
 const LINK_SAVE_DESTINATION = {
   branch: 'branch',
   teammate: 'teammate',
+} as const;
+const LINK_MOVE_DESTINATION = {
+  branch: 'branch',
+  session: 'session',
 } as const;
 const LINK_TARGET = {
   knowledgePrefix: 'agor://kb/',
@@ -43,6 +50,8 @@ const LINK_TOOL_ERROR = {
   immutableTarget: 'Only manual links can change target.',
   httpTargetRequired: 'Only HTTP(S) targets are supported',
   targetBranchRequired: 'Provide branchId when saving to a teammate.',
+  moveBranchConflict: 'Do not provide sessionId when moving to a branch.',
+  moveSessionConflict: 'Do not provide branchId when moving to a session.',
   reusableTargetRequired: 'Only web and knowledge links can be saved to another owner.',
 } as const;
 const LINK_LIMIT = {
@@ -59,6 +68,10 @@ const linkKindSchema = z.enum(PUBLIC_LINK_KINDS);
 const linkSaveDestinationSchema = z.enum([
   LINK_SAVE_DESTINATION.branch,
   LINK_SAVE_DESTINATION.teammate,
+]);
+const linkMoveDestinationSchema = z.enum([
+  LINK_MOVE_DESTINATION.branch,
+  LINK_MOVE_DESTINATION.session,
 ]);
 const httpUrlSchema = z
   .string()
@@ -150,6 +163,33 @@ async function resolveOwner(
     return { branch_id: null, session_id: await resolveSessionId(ctx, sessionId) };
   }
   throw new Error(LINK_TOOL_ERROR.ownerRequired);
+}
+
+async function resolveMoveRequest(
+  ctx: McpContext,
+  args: {
+    destination: (typeof LINK_MOVE_DESTINATION)[keyof typeof LINK_MOVE_DESTINATION];
+    branchId?: string;
+    sessionId?: string;
+  }
+): Promise<LinkMoveRequest> {
+  if (args.destination === LINK_MOVE_DESTINATION.branch) {
+    if (args.sessionId) throw new Error(LINK_TOOL_ERROR.moveBranchConflict);
+    return {
+      target: LINK_MOVE_TARGET.branch,
+      branch_id: await resolveSaveBranchId(ctx, {
+        branchId: args.branchId,
+        destination: LINK_SAVE_DESTINATION.branch,
+      }),
+    };
+  }
+  if (args.branchId) throw new Error(LINK_TOOL_ERROR.moveSessionConflict);
+  const sessionId = args.sessionId ?? ctx.sessionId;
+  if (!sessionId) throw new Error(LINK_TOOL_ERROR.ownerRequired);
+  return {
+    target: LINK_MOVE_TARGET.session,
+    session_id: await resolveSessionId(ctx, sessionId),
+  };
 }
 
 export function registerLinkTools(server: McpServer, ctx: McpContext): void {
@@ -303,6 +343,29 @@ export function registerLinkTools(server: McpServer, ctx: McpContext): void {
       }
       return textResult(
         await ctx.app.service(LINKS_SERVICE).patch(linkId, patch, ctx.baseServiceParams)
+      );
+    }
+  );
+
+  server.registerTool(
+    LINK_TOOL.move,
+    {
+      description:
+        'Move a visible web or knowledge link to a branch or session owner. The current branch or session is used when the matching destination ID is omitted.',
+      inputSchema: z.strictObject({
+        linkId: mcpRequiredId('linkId', 'Link'),
+        destination: linkMoveDestinationSchema,
+        branchId: mcpOptionalId('branchId', 'Branch', 'Destination branch'),
+        sessionId: mcpOptionalId('sessionId', 'Session', 'Destination session'),
+      }),
+    },
+    async (args) => {
+      const request = await resolveMoveRequest(ctx, args);
+      return textResult(
+        await ctx.app.service(LINK_MOVE_SERVICE).create(request, {
+          ...ctx.baseServiceParams,
+          route: { linkId: args.linkId },
+        })
       );
     }
   );
