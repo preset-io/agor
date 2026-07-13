@@ -691,7 +691,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }, [tasks, session?.agentic_tool]);
 
   const linkDisplayItems = React.useMemo(
-    () => buildLinkDisplayItems({ branch, links: [...sessionLinks, ...currentBranchLinks] }),
+    () =>
+      buildLinkDisplayItems({
+        branch: branch ?? undefined,
+        links: [...sessionLinks, ...currentBranchLinks],
+      }),
     [branch, currentBranchLinks, sessionLinks]
   );
   const attachmentItems = linkDisplayItems;

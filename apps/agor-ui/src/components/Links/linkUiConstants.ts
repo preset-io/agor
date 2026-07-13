@@ -37,7 +37,7 @@ export type LinkMoveDestination =
   (typeof LINK_MOVE_DESTINATION)[keyof typeof LINK_MOVE_DESTINATION];
 
 export const LINK_ROUTE = {
-  move: (linkId: string) => `${LINK_SERVICE}/${linkId}/move`,
+  move: (linkId: string): `links/${string}/move` => `${LINK_SERVICE}/${linkId}/move`,
 } as const;
 
 export const LINK_FORM_FIELD = {
