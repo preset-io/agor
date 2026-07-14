@@ -55,6 +55,7 @@ export async function seedOnboardingTeammate(
         emoji: input.teammateEmoji,
         repoId: input.frameworkRepo.repo_id,
         boardId: input.boardId,
+        createdViaOnboarding: true,
       },
       {
         client: input.client,
@@ -64,7 +65,12 @@ export async function seedOnboardingTeammate(
       }
     );
 
-    if (!branch) return {};
+    if (!branch) {
+      input.onWarn(
+        "Your board is ready, but we couldn't set up your AI teammate's workspace. You can add a teammate from the board anytime."
+      );
+      return {};
+    }
 
     const sessionId = await startTeammateBootstrapSession({
       client: input.client,

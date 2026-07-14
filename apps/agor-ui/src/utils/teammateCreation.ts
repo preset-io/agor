@@ -16,6 +16,8 @@ export interface TeammateCreationInput {
    * When omitted (e.g. the CreateDialog flow), a fresh board is created.
    */
   boardId?: string;
+  /** Tags the teammate as onboarding-seeded so its card shows the right copy. */
+  createdViaOnboarding?: boolean;
 }
 
 export interface TeammateCreationDeps {
@@ -83,7 +85,7 @@ export async function createTeammateBranch(
     displayName: input.displayName.trim(),
     emoji: input.emoji || undefined,
     frameworkRepo: repo?.slug,
-    createdViaOnboarding: false,
+    createdViaOnboarding: input.createdViaOnboarding ?? false,
   };
 
   // Create the branch with teammate metadata on the initial row. That keeps

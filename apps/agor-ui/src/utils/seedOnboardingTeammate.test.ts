@@ -1,5 +1,6 @@
 import type { Branch, Repo } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../hooks/useFrameworkRepo';
 import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import { createTeammateBranch } from './teammateCreation';
@@ -80,15 +81,55 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
-  it('does NOT create a teammate and warns when the framework repo is still cloning (fallback)', async () => {
-    const { input, onWarn } = setup({ frameworkRepo: undefined });
+  // The completion handler (App.handleOnboardingComplete) resolves the framework
+  // repo FRESH and READY-ONLY from repoById before calling this. These tests
+  // exercise that seam with the repo states real usage actually produces — the
+  // daemon pre-creates a `cloning` placeholder, so `frameworkRepo: undefined`
+  // never occurs on its own. `findFrameworkRepo(..., { readyOnly: true })` is
+  // what turns a not-ready placeholder into the graceful fallback.
+  function frameworkRepoWithStatus(clone_status: Repo['clone_status']): Repo {
+    return { repo_id: 'repo-fw', slug: FRAMEWORK_REPO_SLUG, clone_status } as Repo;
+  }
+
+  for (const status of ['cloning', 'failed'] as const) {
+    it(`does NOT create a teammate and warns when the framework repo is ${status} (readyOnly fallback)`, async () => {
+      const repoById = new Map<string, Repo>([['repo-fw', frameworkRepoWithStatus(status)]]);
+      // Mirror the completion handler: resolve ready-only, feed the result in.
+      const readyFrameworkRepo = findFrameworkRepo(repoById, { readyOnly: true })?.[1];
+      expect(readyFrameworkRepo).toBeUndefined();
+
+      const { input, onWarn } = setup({ frameworkRepo: readyFrameworkRepo, repoById });
+      const result = await seedOnboardingTeammate(input);
+
+      expect(createTeammateBranchMock).not.toHaveBeenCalled();
+      expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+      expect(onWarn).toHaveBeenCalledTimes(1);
+      expect(onWarn.mock.calls[0][0]).toMatch(/still finishing setup/i);
+      expect(result).toEqual({});
+    });
+  }
+
+  it('creates a teammate when the framework repo is ready (readyOnly resolves it)', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue('session-1');
+
+    const repoById = new Map<string, Repo>([['repo-fw', frameworkRepoWithStatus('ready')]]);
+    const readyFrameworkRepo = findFrameworkRepo(repoById, { readyOnly: true })?.[1];
+    expect(readyFrameworkRepo?.repo_id).toBe('repo-fw');
+
+    const { input, onWarn } = setup({ frameworkRepo: readyFrameworkRepo, repoById });
     const result = await seedOnboardingTeammate(input);
 
-    expect(createTeammateBranchMock).not.toHaveBeenCalled();
-    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
-    expect(onWarn).toHaveBeenCalledTimes(1);
-    expect(onWarn.mock.calls[0][0]).toMatch(/still finishing setup/i);
-    expect(result).toEqual({});
+    expect(createTeammateBranchMock).toHaveBeenCalledTimes(1);
+    expect(createTeammateBranchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ repoId: 'repo-fw', createdViaOnboarding: true }),
+      expect.anything()
+    );
+    expect(result).toEqual({ sessionId: 'session-1' });
+    expect(onWarn).not.toHaveBeenCalled();
   });
 
   it('warns (non-fatal) and returns no session when teammate creation throws', async () => {

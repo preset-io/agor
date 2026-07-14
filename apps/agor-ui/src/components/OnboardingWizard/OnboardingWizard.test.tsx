@@ -403,8 +403,10 @@ describe('OnboardingWizard', () => {
       teammateName: 'Rusty',
       teammateEmoji: '🤖',
       agent: 'claude-code',
-      // Persona was skipped → the default MCP suggestion set flows through.
+      // Persona was skipped → the default MCP suggestion set flows through, and
+      // the persona threaded to the completion handler is null.
       suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+      persona: null,
     });
     // The teammate branch/session is created by the app shell on completion, not
     // by the wizard — the wizard itself never invokes these provisioning props.
@@ -445,6 +447,7 @@ describe('OnboardingWizard', () => {
       teammateEmoji: '🤖',
       agent: null,
       suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
+      persona: null,
     });
   });
 

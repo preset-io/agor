@@ -9,7 +9,6 @@ import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
-  Branch,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -453,6 +452,9 @@ export interface OnboardingWizardProps {
     agent?: AgenticToolName | null;
     /** Persona-tailored MCP integration names to seed into the bootstrap prompt. */
     suggestedIntegrations?: string[];
+    /** Persona chosen in step 1, threaded straight through so the completion
+     * handler never has to wait on the async preference save. */
+    persona?: string | null;
     // May run async (teammate creation) — the wizard awaits it and shows a
     // loading state until it resolves, so the modal covers the whole operation.
   }) => void | Promise<void>;
@@ -463,7 +465,6 @@ export interface OnboardingWizardProps {
   client: AgorClient | null;
 
   onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
-  onUpdateBranch?: (branchId: string, updates: Partial<Branch>) => Promise<void>;
 
   onCheckAuth?: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
 
@@ -943,6 +944,7 @@ export function OnboardingWizard({
             teammateEmoji,
             agent: selectedAgent,
             suggestedIntegrations,
+            persona: selectedPersona,
           });
         } finally {
           setCompleting(false);
@@ -1778,22 +1780,19 @@ export function OnboardingWizard({
             {
               label: 'AI connected',
               done: aiConnected,
-              pending: false,
               hint: 'Add in Settings - AI & Agents',
             },
             {
               label: 'Workspace ready',
               done: workspaceReady,
-              pending: false,
               hint: 'Create a board in Settings',
             },
             {
               label: 'MCP tools',
               done: false,
-              pending: false,
               hint: 'Connect anytime via Settings - MCP',
             },
-          ].map(({ label, done, pending, hint }) => (
+          ].map(({ label, done, hint }) => (
             <div
               key={label}
               style={{
@@ -1806,17 +1805,17 @@ export function OnboardingWizard({
               <span
                 style={{
                   fontSize: 14,
-                  color: done ? SUCCESS_GREEN : pending ? PRIMARY : TEXT_MUTED,
+                  color: done ? SUCCESS_GREEN : TEXT_MUTED,
                   fontWeight: 600,
                   width: 16,
                   textAlign: 'center',
                 }}
               >
-                {done ? '✓' : pending ? '→' : '·'}
+                {done ? '✓' : '·'}
               </span>
               <Text
                 style={{
-                  color: done || pending ? TEXT_PRIMARY : TEXT_SECONDARY,
+                  color: done ? TEXT_PRIMARY : TEXT_SECONDARY,
                   flex: 1,
                   fontSize: 13,
                 }}
@@ -1897,7 +1896,9 @@ export function OnboardingWizard({
 
   return (
     <>
-      <style>{ONB_ANIM_CSS}</style>
+      {/* The wizard is always mounted; only inject the ambient-orb keyframes
+          while it's actually open so a closed wizard adds nothing to the DOM. */}
+      {open && <style>{ONB_ANIM_CSS}</style>}
       <Modal
         open={open}
         closable={false}
