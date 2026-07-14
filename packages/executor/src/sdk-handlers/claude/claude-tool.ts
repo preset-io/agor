@@ -386,6 +386,9 @@ export class ClaudeTool implements ITool {
     // rate-limited turn can be auto-resumed into several). Applied to the final
     // rawSdkResponse so accounting reflects total consumption, not just the last.
     let usageAcc = emptyRetryUsageAccumulator();
+    // Latest throttled invocation's raw result, used to carry the accumulated
+    // accounting onto a stopped outcome when the user cancels during the wait.
+    let lastIntermediateRaw: import('@agor/core/sdk').SDKResultMessage | undefined;
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
@@ -402,6 +405,12 @@ export class ClaudeTool implements ITool {
       // Detect if execution was stopped early
       if (event.type === 'stopped') {
         wasStopped = true;
+        // If the user cancelled during an auto-retry wait, no final `result`
+        // arrives — carry the accounting from the already-completed throttled
+        // invocation(s) onto the stopped outcome so their usage isn't dropped.
+        if (lastIntermediateRaw && !rawSdkResponse) {
+          rawSdkResponse = applyAccumulatedUsage(lastIntermediateRaw, usageAcc);
+        }
         console.log(`🛑 Claude execution was stopped for session ${sessionId}`);
         continue; // Skip processing this event
       }
@@ -754,6 +763,7 @@ export class ClaudeTool implements ITool {
       // per-turn usage so it can't attach to the resumed turn's messages.
       if (event.type === 'intermediate_result') {
         usageAcc = accumulateResultUsage(usageAcc, event.raw_sdk_message);
+        lastIntermediateRaw = event.raw_sdk_message;
         tokenUsage = undefined;
         modelUsage = undefined;
       }

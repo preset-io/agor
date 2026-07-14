@@ -114,6 +114,48 @@ describe('autoResumeOnRateLimit', () => {
     // No resumed turn ran, so no completed final result.
     expect(events.some((e) => e.type === 'result')).toBe(false);
   });
+
+  it('preserves a throttled invocation usage on the stopped outcome when cancelled mid-wait', async () => {
+    const sleep = vi.fn(async () => ({ aborted: true })); // cancel during the first wait
+    const events = await drain(
+      autoResumeOnRateLimit(turnRunner([blockedTurn(), completedTurn()]), { prompt: 'go', sleep })
+    );
+
+    // The completed-but-throttled invocation is surfaced before the stop.
+    const idxIntermediate = events.findIndex((e) => e.type === 'intermediate_result');
+    const idxStopped = events.findIndex((e) => e.type === 'stopped');
+    expect(idxIntermediate).toBeGreaterThanOrEqual(0);
+    expect(idxStopped).toBeGreaterThan(idxIntermediate);
+    expect(events.some((e) => e.type === 'result')).toBe(false);
+
+    // Mirror claude-tool's accounting reducer over the event stream.
+    let usageAcc = emptyRetryUsageAccumulator();
+    let lastIntermediateRaw: Any;
+    let rawSdkResponse: Any;
+    let wasStopped = false;
+    for (const e of events) {
+      if (e.type === 'intermediate_result') {
+        usageAcc = accumulateResultUsage(usageAcc, e.raw_sdk_message);
+        lastIntermediateRaw = e.raw_sdk_message;
+      } else if (e.type === 'result') {
+        usageAcc = accumulateResultUsage(usageAcc, e.raw_sdk_message);
+        rawSdkResponse = applyAccumulatedUsage(e.raw_sdk_message, usageAcc);
+      } else if (e.type === 'stopped') {
+        wasStopped = true;
+        if (lastIntermediateRaw && !rawSdkResponse) {
+          rawSdkResponse = applyAccumulatedUsage(lastIntermediateRaw, usageAcc);
+        }
+      }
+    }
+
+    expect(wasStopped).toBe(true);
+    // The throttled invocation's usage/cost/duration survive onto the stopped payload...
+    expect(rawSdkResponse.usage.input_tokens).toBe(10);
+    expect(rawSdkResponse.usage.output_tokens).toBe(5);
+    expect(rawSdkResponse.total_cost_usd).toBeCloseTo(0.01);
+    expect(rawSdkResponse.duration_ms).toBe(100);
+    // ...counted exactly once (blockedTurn had input_tokens: 10, not doubled to 20).
+  });
 });
 
 describe('usage aggregation', () => {
