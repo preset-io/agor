@@ -17,7 +17,12 @@
  */
 
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
+} from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
 import { Claude } from '@agor/core/sdk';
 import type {
@@ -231,8 +236,16 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
     ): Promise<AuthCheckResult> {
       const { tool, apiKey: rawKey } = data;
       const userId = params?.user?.user_id as UserID | undefined;
+      const tenantId = getCurrentTenantId();
+      if (!tenantId) throw new Error('Missing active tenant context for agent authentication');
+      const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
+        runWithTenantDatabaseScope(db, tenantId, work);
 
-      if (!(await isTenantAgenticToolEnabled(tool as AgenticToolName, db))) {
+      if (
+        !(await withTenantDatabase((tenantDb) =>
+          isTenantAgenticToolEnabled(tool as AgenticToolName, tenantDb)
+        ))
+      ) {
         return unauthenticated('none', `${tool} is disabled for this workspace.`);
       }
 
@@ -272,11 +285,14 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
 
       // Otherwise resolve from the tenant's explicit user/workspace policy.
       const toolName = tool as AgenticToolName;
-      const { apiKey, decryptionFailed, connection, useNativeAuth } = await resolveApiKey(keyName, {
-        userId,
-        db,
-        tool: toolName,
-      });
+      const { apiKey, decryptionFailed, connection, useNativeAuth } = await withTenantDatabase(
+        (tenantDb) =>
+          resolveApiKey(keyName, {
+            userId,
+            db: tenantDb,
+            tool: toolName,
+          })
+      );
 
       if (decryptionFailed) {
         return unauthenticated(
@@ -299,11 +315,13 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       }
 
       if (tool === 'claude-code') {
-        const subscriptionResolution = await resolveApiKey('CLAUDE_CODE_OAUTH_TOKEN', {
-          userId,
-          db,
-          tool: 'claude-code',
-        });
+        const subscriptionResolution = await withTenantDatabase((tenantDb) =>
+          resolveApiKey('CLAUDE_CODE_OAUTH_TOKEN', {
+            userId,
+            db: tenantDb,
+            tool: 'claude-code',
+          })
+        );
 
         if (subscriptionResolution.decryptionFailed) {
           return unauthenticated(

@@ -3,6 +3,7 @@ import {
   attachHiddenTenant,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   shortId,
 } from '@agor/core/db';
@@ -157,7 +158,14 @@ function makeGatewayHarness(args: {
   ).activeListeners.set(channel.id, args.connector ?? {});
   (service as unknown as { hasActiveChannels: boolean }).hasActiveChannels = true;
 
-  return { service, promptCreate, sessionsCreate, channelRepo, threadMapRepo };
+  return {
+    service,
+    createUnscoped: create,
+    promptCreate,
+    sessionsCreate,
+    channelRepo,
+    threadMapRepo,
+  };
 }
 
 afterEach(() => {
@@ -1042,5 +1050,39 @@ describe('GatewayService Slack attachment ingestion', () => {
     const prompt = promptCreate.mock.calls[0][0].prompt as string;
     expect(prompt).toContain('Attached files:\n- /home/agor/.agor/uploads/ok_1.png');
     expect(prompt).toContain('(an attachment could not be fetched)');
+  });
+});
+
+describe('GatewayService inbound create without ambient tenant DB scope', () => {
+  // Socket Mode listener messages enter through runWithTenantContext (tenant
+  // identity only) — unlike HTTP requests, no ambient tenant DB scope is open.
+  // Regression: #1890 made agent resolution throw
+  // 'Missing tenant database scope for gateway agent resolution' on this path,
+  // breaking all inbound Slack messages.
+  it('processes a Slack listener message with tenant identity only', async () => {
+    const fetchThreadHistory = vi.fn(async () => ({ has_more: false, messages: [] }));
+    const { createUnscoped, promptCreate } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { fetchThreadHistory, sendMessage: vi.fn(async () => undefined) },
+    });
+
+    const result = await runWithTenantContext('tenant-channel', () =>
+      createUnscoped({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: 'please answer',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '103.000000',
+          slack_thread_ts: '100.000000',
+        },
+      })
+    );
+
+    expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+    expect(result).toMatchObject({ success: true, sessionId: 'sess-1', created: false });
+    expect(promptCreate).toHaveBeenCalled();
   });
 });

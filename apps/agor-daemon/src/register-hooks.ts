@@ -446,6 +446,17 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'leaderboard',
 ];
 
+// These endpoints perform network/process work after their tenant DB reads,
+// so they carry tenant identity for the full request and open short database
+// units of work at the call site instead of holding an HTTP-long transaction.
+const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
+  'check-auth',
+  'claude-models',
+  'copilot-models',
+  'cursor-models',
+  'terminals',
+] as const;
+
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
     db,
@@ -561,6 +572,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         before: { all: [scopeTenantBefore] },
         after: { all: [assertTenantAfter] },
       });
+    }
+  };
+
+  const registerTenantIdentityHooks = (): void => {
+    for (const path of TENANT_IDENTITY_ONLY_SERVICE_PATHS) {
+      safeService(path)?.hooks({ around: { all: [tenantIdentityAround] } });
     }
   };
 
@@ -2586,24 +2603,31 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         async (context) => {
           const session = context.result as Session;
           if (session.agentic_tool !== 'claude-code-cli') return context;
-          try {
-            const branch = await context.app
-              .service('branches')
-              .get(session.branch_id, { provider: undefined });
-            const cwd = (branch as { path?: string } | undefined)?.path;
-            if (cwd) {
+          // Session creation is tenant-transactional. Defer filesystem,
+          // watcher, and terminal integration until after commit while retaining
+          // tenant identity; each DB helper then opens its own short unit.
+          deferWithTenantContext(
+            context.params,
+            async () => {
+              const branch = await context.app
+                .service('branches')
+                .get(session.branch_id, { provider: undefined });
+              const cwd = (branch as { path?: string } | undefined)?.path;
+              if (!cwd) {
+                console.warn(
+                  `[claude-cli-integration] no branch.path for session ${session.session_id}; skipping spawn`
+                );
+                return;
+              }
               const { onCliSessionCreated } = await import('./services/claude-cli-integration.js');
               await onCliSessionCreated(context.app, session, cwd);
-            } else {
-              console.warn(
-                `[claude-cli-integration] no branch.path for session ${session.session_id}; skipping spawn`
-              );
+            },
+            (err) => {
+              // Never fail the committed session on integration errors — the
+              // session row is still useful even if the watcher misfires.
+              console.error('[claude-cli-integration] onCliSessionCreated failed:', err);
             }
-          } catch (err) {
-            // Never fail the session create on integration errors — the
-            // session row is still useful even if the watcher misfires.
-            console.error('[claude-cli-integration] onCliSessionCreated failed:', err);
-          }
+          );
           return context;
         },
         async (context) => {
@@ -3344,4 +3368,5 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   if (tenantColumnsEnabled) {
     registerTenantHooks();
   }
+  registerTenantIdentityHooks();
 }

@@ -5,7 +5,9 @@ import {
   buildSlackManifest,
   requiredBotEvents,
   requiredBotScopes,
+  SLACK_APPS_URL,
   type SlackWizardOptions,
+  slackAppManifestUrl,
 } from '@agor/core/gateway/slack-manifest';
 import type {
   AgenticToolName,
@@ -17,6 +19,7 @@ import type {
   GatewayEnvVar,
   MCPServer,
   PermissionMode,
+  SlackAppInfo,
   SlackTestResult,
   User,
   UUID,
@@ -596,12 +599,101 @@ const SlackTestResultView: React.FC<{ result: SlackTestResult }> = ({ result }) 
 };
 
 /**
+ * External link to the channel's Slack app manifest editor. The app + team ids
+ * are resolved server-side from the stored bot token
+ * (`gateway-channels/app-info`); when unresolved the link degrades to the
+ * generic Slack app list.
+ */
+const SlackAppManifestLink: React.FC<{ appInfo: SlackAppInfo | null }> = ({ appInfo }) => {
+  const href = slackAppManifestUrl(appInfo?.appId, appInfo?.teamId);
+  return (
+    <Typography.Link href={href} target="_blank" rel="noopener noreferrer">
+      {href === SLACK_APPS_URL ? 'Open Slack apps' : 'Open Slack app manifest'} ↗
+    </Typography.Link>
+  );
+};
+
+/**
+ * Inline warning shown while editing a channel whenever the pending capability
+ * toggles require OAuth scopes the SAVED config does not — i.e. the installed
+ * Slack app is now missing scopes and must be updated + reinstalled before the
+ * capability works. The delta comes from {@link requiredBotScopes} on both
+ * configs (single source of truth), so unrelated edits never trigger it and
+ * removing a capability never warns.
+ */
+const SlackScopeChangeWarning: React.FC<{
+  addedScopes: string[];
+  appInfo: SlackAppInfo | null;
+  options: SlackWizardOptions;
+}> = ({ addedScopes, appInfo, options }) => {
+  const { showError } = useThemedMessage();
+  const [copied, setCopied] = useState(false);
+  const scopeKey = addedScopes.join(',');
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the scope set is the change trigger, not a value read in the body.
+  useEffect(() => {
+    setCopied(false);
+  }, [scopeKey]);
+
+  if (addedScopes.length === 0) return null;
+
+  const handleCopy = async () => {
+    const ok = await copyTextToClipboard(JSON.stringify(buildSlackManifest(options), null, 2));
+    if (ok) {
+      setCopied(true);
+    } else {
+      showError('Copy failed — copy the manifest from the App Manifest section.');
+    }
+  };
+
+  return (
+    <CompactAlert
+      type="warning"
+      icon={<ExclamationCircleOutlined />}
+      heading={
+        <>
+          This change adds the{' '}
+          {addedScopes.map((scope, i) => (
+            <span key={scope}>
+              {i > 0 ? ', ' : ''}
+              <code>{scope}</code>
+            </span>
+          ))}{' '}
+          scope{addedScopes.length > 1 ? 's' : ''}
+        </>
+      }
+      description={
+        <>
+          <div style={{ marginBottom: 6 }}>
+            Saving here does not change the Slack app — update its manifest and reinstall the app
+            for the new scope{addedScopes.length > 1 ? 's' : ''} to take effect.
+          </div>
+          <Space size="small" wrap>
+            <SlackAppManifestLink appInfo={appInfo} />
+            <Button
+              size="small"
+              icon={copied ? <CheckCircleOutlined /> : <CopyOutlined />}
+              onClick={handleCopy}
+            >
+              {copied ? 'Copied' : 'Copy manifest'}
+            </Button>
+          </Space>
+        </>
+      }
+    />
+  );
+};
+
+/**
  * Recommended Slack app manifest for an existing channel. Derived from the
  * channel's current capability toggles via {@link buildSlackManifest}, so it
  * always shows the manifest the app *should* have — not a readout of the app's
  * live Slack configuration. Paste it back into Slack to align scopes/events.
  */
-const SlackManifestPanel: React.FC<{ options: SlackWizardOptions }> = ({ options }) => {
+const SlackManifestPanel: React.FC<{
+  options: SlackWizardOptions;
+  appInfo: SlackAppInfo | null;
+}> = ({ options, appInfo }) => {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
   const [copied, setCopied] = useState(false);
@@ -635,7 +727,15 @@ const SlackManifestPanel: React.FC<{ options: SlackWizardOptions }> = ({ options
         configuration, not a readout of your app&apos;s live settings. Paste it into{' '}
         <strong>App Manifest</strong> in your Slack app to align its scopes and events.
       </Typography.Text>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 8,
+        }}
+      >
+        <SlackAppManifestLink appInfo={appInfo} />
         <Button
           size="small"
           icon={copied ? <CheckCircleOutlined /> : <CopyOutlined />}
@@ -1226,6 +1326,8 @@ const ChannelFormFields: React.FC<{
   slackTestResult: SlackTestResult | null;
   slackTestLoading: boolean;
   onSlackTest: () => void;
+  /** Slack app identity resolved server-side on edit open (edit mode only). */
+  slackAppInfo: SlackAppInfo | null;
 }> = ({
   client,
   form,
@@ -1244,8 +1346,10 @@ const ChannelFormFields: React.FC<{
   slackTestResult,
   slackTestLoading,
   onSlackTest,
+  slackAppInfo,
 }) => {
   const { showError } = useThemedMessage();
+  const { token } = theme.useToken();
 
   // Watch message source settings for showing warnings/scope requirements. A
   // watched value is `undefined` while its (lazily-rendered) Collapse panel is
@@ -1328,6 +1432,36 @@ const ChannelFormFields: React.FC<{
   );
   const slackScopes = useMemo(() => requiredBotScopes(slackOptions), [slackOptions]);
   const slackEvents = useMemo(() => requiredBotEvents(slackOptions), [slackOptions]);
+
+  // Scopes the channel's SAVED config requires — the baseline for detecting
+  // that a pending toggle ADDS a scope the installed Slack app may not hold.
+  const savedSlackScopes = useMemo(() => {
+    if (mode !== 'edit' || editingChannel?.channel_type !== 'slack') return null;
+    return requiredBotScopes({
+      appName: editingChannel.name || 'Agor',
+      publicChannels: Boolean(slackConfig?.enable_channels),
+      privateChannels: Boolean(slackConfig?.enable_groups),
+      groupDms: Boolean(slackConfig?.enable_mpim),
+      alignUsers: Boolean(slackConfig?.align_slack_users),
+      outbound: Boolean(slackConfig?.outbound_enabled),
+      ingestFiles: Boolean(slackConfig?.ingest_files),
+      agentTools: storedAgentTools,
+    });
+  }, [mode, editingChannel, slackConfig, storedAgentTools]);
+
+  const addedSlackScopes = useMemo(() => {
+    if (!savedSlackScopes) return [];
+    const saved = new Set(savedSlackScopes);
+    return slackScopes.filter((scope) => !saved.has(scope));
+  }, [savedSlackScopes, slackScopes]);
+
+  const scopeChangeWarning = (
+    <SlackScopeChangeWarning
+      addedScopes={addedSlackScopes}
+      appInfo={slackAppInfo}
+      options={slackOptions}
+    />
+  );
 
   const botTokenStored = isSecretStored(slackConfig, 'bot_token');
   const appTokenStored = isSecretStored(slackConfig, 'app_token');
@@ -2056,6 +2190,12 @@ const ChannelFormFields: React.FC<{
 
         {/* ── Collapsible sections (Slack edit) ── */}
         {channelType === 'slack' && mode === 'edit' && (
+          <div style={{ marginBottom: 8 }}>
+            <SlackOutlined style={{ marginInlineEnd: 6 }} />
+            <SlackAppManifestLink appInfo={slackAppInfo} />
+          </div>
+        )}
+        {channelType === 'slack' && mode === 'edit' && (
           <Collapse
             ghost
             destroyOnHidden={false}
@@ -2073,25 +2213,27 @@ const ChannelFormFields: React.FC<{
                   />
                 ),
                 children: (
-                  <PlatformIdentityFields
-                    alignFieldName="align_slack_users"
-                    alignLabel="Align Slack users"
-                    alignDescription="Match Slack profile email to an Agor user. Unmatched users are rejected."
-                    alignUsers={alignSlackUsers}
-                    userById={userById}
-                    alignedContent={
-                      <CompactAlert
-                        type="info"
-                        heading="Requires users:read.email scope"
-                        description={
-                          <span>
-                            Add <code>users:read.email</code> to your Slack app so Agor can match
-                            Slack profiles by email.
-                          </span>
-                        }
-                      />
-                    }
-                  />
+                  <>
+                    <PlatformIdentityFields
+                      alignFieldName="align_slack_users"
+                      alignLabel="Align Slack users"
+                      alignDescription="Match Slack profile email to an Agor user. Unmatched users are rejected."
+                      alignUsers={alignSlackUsers}
+                      userById={userById}
+                      alignedContent={
+                        <CompactAlert
+                          type="info"
+                          heading="Requires users:read.email scope"
+                          description={
+                            <span>
+                              Add <code>users:read.email</code> to your Slack app so Agor can match
+                              Slack profiles by email.
+                            </span>
+                          }
+                        />
+                      }
+                    />
+                  </>
                 ),
               },
               // ── Credentials ──
@@ -2174,7 +2316,7 @@ const ChannelFormFields: React.FC<{
                     subtitle="recommended scopes & events"
                   />
                 ),
-                children: <SlackManifestPanel options={slackOptions} />,
+                children: <SlackManifestPanel options={slackOptions} appInfo={slackAppInfo} />,
               },
 
               // ── Message Sources ──
@@ -2496,6 +2638,27 @@ const ChannelFormFields: React.FC<{
             ]}
           />
         )}
+
+        {/* Pinned to the bottom of the scrollable form body: the toggles that
+            add scopes live deep inside collapse panels, so an in-flow alert
+            above them is off-screen at the moment the user acts. Sticky keeps
+            it visible while toggling anywhere in the form and again at save
+            time. Solid background so form items don't show through the
+            (translucent) alert fill while it floats. */}
+        {channelType === 'slack' && mode === 'edit' && addedSlackScopes.length > 0 && (
+          <div
+            style={{
+              position: 'sticky',
+              bottom: 0,
+              zIndex: 2,
+              marginTop: 12,
+              padding: '8px 0',
+              background: token.colorBgElevated,
+            }}
+          >
+            {scopeChangeWarning}
+          </div>
+        )}
       </div>
     </>
   );
@@ -2546,6 +2709,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // ── Slack guided-setup state (create mode) ──
   const [slackTestLoading, setSlackTestLoading] = useState(false);
   const [slackTestResult, setSlackTestResult] = useState<SlackTestResult | null>(null);
+  // Slack app identity resolved server-side when the edit modal opens (edit mode).
+  const [slackAppInfo, setSlackAppInfo] = useState<SlackAppInfo | null>(null);
+  // Channel id the in-flight app-info fetch belongs to; a response is dropped
+  // unless it still matches, so reopening the modal on another channel can't
+  // be overwritten by a slower earlier response.
+  const slackAppInfoChannelIdRef = useRef<string | null>(null);
 
   // Keep referenced target branches resolvable in CRUD even when archived branches
   // are excluded from the core store.
@@ -2624,6 +2793,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const resetSlackState = useCallback(() => {
     setSlackTestLoading(false);
     setSlackTestResult(null);
+    setSlackAppInfo(null);
+    slackAppInfoChannelIdRef.current = null;
   }, []);
 
   // Reset the whole create flow back to its universal first step.
@@ -2979,6 +3150,29 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     skipAgentDefaultsAfterEditHydrationRef.current = true;
     setSelectedAgent(agent);
     resetSlackState();
+    // Resolve the Slack app id behind the stored bot token (best-effort; the
+    // backend returns nulls rather than erroring). Fire-and-forget so the modal
+    // opens instantly; the app link degrades to a generic Slack link meanwhile.
+    // The ref pins the response to the channel still being edited — a slow
+    // response for a previously-opened channel must not deep-link this one to
+    // the wrong Slack app.
+    slackAppInfoChannelIdRef.current = channel.channel_type === 'slack' ? channel.id : null;
+    if (channel.channel_type === 'slack' && client) {
+      void (async () => {
+        let info: SlackAppInfo | null = null;
+        try {
+          info =
+            ((await client
+              .service('gateway-channels/app-info')
+              .create({ gatewayChannelId: channel.id })) as SlackAppInfo | undefined) ?? null;
+        } catch {
+          info = null;
+        }
+        if (slackAppInfoChannelIdRef.current === channel.id) {
+          setSlackAppInfo(info);
+        }
+      })();
+    }
     editForm.resetFields();
 
     const config = channel.config as Record<string, unknown>;
@@ -3330,6 +3524,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             slackTestResult={slackTestResult}
             slackTestLoading={slackTestLoading}
             onSlackTest={handleSlackTest}
+            slackAppInfo={null}
           />
         </Form>
       </Modal>
@@ -3369,6 +3564,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             slackTestResult={slackTestResult}
             slackTestLoading={slackTestLoading}
             onSlackTest={handleSlackEditTest}
+            slackAppInfo={slackAppInfo}
           />
         </Form>
       </Modal>

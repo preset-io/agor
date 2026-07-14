@@ -41,6 +41,8 @@ interface BranchHeaderPillProps {
   showNukeEnvironment?: boolean;
   /** Optional link for the branch identity area. Used by session surfaces for deep links. */
   identityLink?: string | null;
+  /** Fill the available row width and let the identity shrink before action sections. */
+  fluid?: boolean;
   /**
    * Compact rendering for constrained side panels.
    * Hides the repo slug in the identity section and omits destructive environment actions.
@@ -49,11 +51,24 @@ interface BranchHeaderPillProps {
 }
 
 const PILL_HEIGHT = 22;
+const ACTION_BUTTON_HEIGHT = 22;
+const DEFAULT_ACTION_BUTTON_WIDTH = 22;
 
-const iconButtonStyle: React.CSSProperties = {
-  height: PILL_HEIGHT,
-  width: PILL_HEIGHT,
-  minWidth: PILL_HEIGHT,
+const DEFAULT_ACTION_BUTTON_STYLE: React.CSSProperties = {
+  height: ACTION_BUTTON_HEIGHT,
+  width: DEFAULT_ACTION_BUTTON_WIDTH,
+  minWidth: DEFAULT_ACTION_BUTTON_WIDTH,
+  padding: 0,
+};
+
+// The configured environment and shortcut sections cannot shrink. Reclaim two
+// pixels per action only in the constrained, non-compact fluid layout so the
+// complete action row fits before identity text collapses to its ellipsis.
+const FLUID_ACTION_BUTTON_WIDTH = 20;
+const FLUID_ACTION_BUTTON_STYLE: React.CSSProperties = {
+  height: ACTION_BUTTON_HEIGHT,
+  width: FLUID_ACTION_BUTTON_WIDTH,
+  minWidth: FLUID_ACTION_BUTTON_WIDTH,
   padding: 0,
 };
 
@@ -71,6 +86,7 @@ export function BranchHeaderPill({
   showEnvButtons = true,
   showNukeEnvironment = true,
   identityLink,
+  fluid = false,
   compact = false,
 }: BranchHeaderPillProps) {
   const { token } = theme.useToken();
@@ -88,6 +104,8 @@ export function BranchHeaderPill({
   const controlDisabledTooltip = resolvedCanControlEnvironment
     ? undefined
     : "Requires branch 'all' permission or admin access";
+  const actionButtonStyle =
+    fluid && !compact ? FLUID_ACTION_BUTTON_STYLE : DEFAULT_ACTION_BUTTON_STYLE;
 
   const status = env?.status || 'stopped';
   const isRunning = status === 'running';
@@ -121,20 +139,34 @@ export function BranchHeaderPill({
 
   const identityContent = (
     <>
-      <BranchesOutlined style={{ fontSize: 12 }} />
+      <BranchesOutlined style={{ fontSize: 12, flexShrink: 0 }} />
       {!compact && (
         <>
-          <span style={{ fontFamily: token.fontFamilyCode, fontSize: token.fontSizeSM }}>
+          <span
+            style={{
+              fontFamily: token.fontFamilyCode,
+              fontSize: token.fontSizeSM,
+              ...(fluid
+                ? {
+                    flex: '0 1 auto',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }
+                : {}),
+            }}
+          >
             {repo.slug}
           </span>
-          <ApartmentOutlined style={{ fontSize: 10, opacity: 0.6 }} />
+          <ApartmentOutlined style={{ fontSize: 10, opacity: 0.6, flexShrink: 0 }} />
         </>
       )}
       <span
         style={{
           fontFamily: token.fontFamilyCode,
           fontSize: token.fontSizeSM,
-          maxWidth: compact ? 220 : 180,
+          ...(fluid ? { flex: '1 1 auto', minWidth: 0 } : { maxWidth: compact ? 220 : 180 }),
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -194,13 +226,9 @@ export function BranchHeaderPill({
     }
   };
 
-  const identityTooltip = identityLink
-    ? `${repo.slug} / ${branch.name} · Open session`
-    : compact
-      ? `${repo.slug} / ${branch.name} · Open branch settings`
-      : 'Open branch settings';
+  const identityTooltip = `${repo.slug} / ${branch.name} · ${identityLink ? 'Open session' : 'Open branch settings'}`;
   const identityLinkStyle: React.CSSProperties = {
-    display: 'inline-flex',
+    display: fluid ? 'flex' : 'inline-flex',
     alignItems: 'center',
     gap: 4,
     padding: compact ? '0 6px' : '0 8px',
@@ -208,6 +236,7 @@ export function BranchHeaderPill({
     height: PILL_HEIGHT,
     color: 'inherit',
     textDecoration: 'none',
+    ...(fluid ? { flex: '1 1 auto', minWidth: 0, overflow: 'hidden' } : {}),
   };
   const isInternalIdentityLink = identityLink?.startsWith('/');
 
@@ -221,24 +250,36 @@ export function BranchHeaderPill({
         padding: 0,
         overflow: 'hidden',
         lineHeight: `${PILL_HEIGHT}px`,
-        display: 'inline-flex',
+        display: fluid ? 'flex' : 'inline-flex',
         alignItems: 'stretch',
         cursor: 'default',
+        ...(fluid ? { width: '100%', minWidth: 0, maxWidth: '100%' } : {}),
       }}
     >
       {/* Section 1: Repo + Branch — click opens either the supplied identity URL or the branch modal. */}
-      <Tooltip title={identityTooltip}>
+      <Tooltip title={identityTooltip} trigger={['hover', 'focus']}>
         {identityLink && isInternalIdentityLink ? (
-          <Link to={identityLink} onClick={(e) => e.stopPropagation()} style={identityLinkStyle}>
+          <Link
+            to={identityLink}
+            aria-label={identityTooltip}
+            onClick={(e) => e.stopPropagation()}
+            style={identityLinkStyle}
+          >
             {identityContent}
           </Link>
         ) : identityLink ? (
-          <a href={identityLink} onClick={(e) => e.stopPropagation()} style={identityLinkStyle}>
+          <a
+            href={identityLink}
+            aria-label={identityTooltip}
+            onClick={(e) => e.stopPropagation()}
+            style={identityLinkStyle}
+          >
             {identityContent}
           </a>
         ) : (
           <button
             type="button"
+            aria-label={identityTooltip}
             onClick={openModal}
             style={{
               display: 'inline-flex',
@@ -251,6 +292,7 @@ export function BranchHeaderPill({
               border: 'none',
               color: 'inherit',
               font: 'inherit',
+              ...(fluid ? { flex: '1 1 auto', minWidth: 0, overflow: 'hidden' } : {}),
             }}
           >
             {identityContent}
@@ -268,6 +310,7 @@ export function BranchHeaderPill({
             padding: '0 4px',
             height: PILL_HEIGHT,
             borderLeft: `1px solid ${token.colorBorderSecondary}`,
+            flexShrink: 0,
           }}
         >
           {hasConfig ? (
@@ -334,7 +377,7 @@ export function BranchHeaderPill({
                       if (!startDisabled) onStartEnvironment(branch.branch_id);
                     }}
                     disabled={startDisabled}
-                    style={iconButtonStyle}
+                    style={actionButtonStyle}
                   />
                 </Tooltip>
               )}
@@ -363,7 +406,7 @@ export function BranchHeaderPill({
                       if (!stopDisabled) onStopEnvironment(branch.branch_id);
                     }}
                     disabled={stopDisabled}
-                    style={iconButtonStyle}
+                    style={actionButtonStyle}
                   />
                 </Tooltip>
               )}
@@ -381,7 +424,7 @@ export function BranchHeaderPill({
                       if (resolvedCanControlEnvironment) onViewLogs(branch.branch_id);
                     }}
                     disabled={!resolvedCanControlEnvironment}
-                    style={iconButtonStyle}
+                    style={actionButtonStyle}
                   />
                 </Tooltip>
               )}
@@ -402,7 +445,7 @@ export function BranchHeaderPill({
                       }
                     }}
                     disabled={connectionDisabled || !resolvedCanControlEnvironment}
-                    style={iconButtonStyle}
+                    style={actionButtonStyle}
                   />
                 </Tooltip>
               )}
@@ -443,6 +486,7 @@ export function BranchHeaderPill({
           padding: '0 3px',
           height: PILL_HEIGHT,
           borderLeft: `1px solid ${token.colorBorderSecondary}`,
+          flexShrink: 0,
         }}
       >
         <Tooltip title={`Sessions${sessionCount != null ? ` (${sessionCount})` : ''}`}>
@@ -452,7 +496,7 @@ export function BranchHeaderPill({
             aria-label="Sessions"
             icon={<TeamOutlined />}
             onClick={openTab('sessions')}
-            style={iconButtonStyle}
+            style={actionButtonStyle}
           />
         </Tooltip>
         <Tooltip title="Files">
@@ -462,7 +506,7 @@ export function BranchHeaderPill({
             aria-label="Files"
             icon={<FolderOutlined />}
             onClick={openTab('files')}
-            style={iconButtonStyle}
+            style={actionButtonStyle}
           />
         </Tooltip>
         <Tooltip title="Schedule">
@@ -472,7 +516,7 @@ export function BranchHeaderPill({
             aria-label="Schedule"
             icon={<CalendarOutlined />}
             onClick={openTab('schedule')}
-            style={iconButtonStyle}
+            style={actionButtonStyle}
           />
         </Tooltip>
         <Tooltip title="Edit branch">
@@ -485,7 +529,7 @@ export function BranchHeaderPill({
               e.stopPropagation();
               openModal();
             }}
-            style={iconButtonStyle}
+            style={actionButtonStyle}
           />
         </Tooltip>
       </div>

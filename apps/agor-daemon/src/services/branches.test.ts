@@ -645,6 +645,30 @@ describe('BranchesService environment start async behavior', () => {
       expect(emit).not.toHaveBeenCalled();
     });
 
+    it('does not treat JSONB object key reordering as a health transition', async () => {
+      const initialEnv = healthyEnv();
+      initialEnv.last_health_check = {
+        message: 'HTTP 200',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        status: 'healthy',
+      };
+      const { service, branch, patchSpy, observationUpdateSpy, emit } =
+        createGateHarness(initialEnv);
+
+      await service.updateEnvironment(branch.branch_id, {
+        status: 'running',
+        last_health_check: {
+          timestamp: '2026-01-01T00:00:05.000Z',
+          status: 'healthy',
+          message: 'HTTP 200',
+        },
+      });
+
+      expect(patchSpy).not.toHaveBeenCalled();
+      expect(observationUpdateSpy).toHaveBeenCalledTimes(1);
+      expect(emit).not.toHaveBeenCalled();
+    });
+
     it('does not write or emit an exactly identical observation', async () => {
       const { service, branch, patchSpy, observationUpdateSpy, emit } = createGateHarness(
         healthyEnv()

@@ -31,6 +31,7 @@ import { slackifyMarkdown } from 'slackify-markdown';
 import type {
   ChannelType,
   SlackAgentToolsConfig,
+  SlackAppInfo,
   SlackTestFailure,
   SlackTestResult,
 } from '../../types/gateway';
@@ -957,6 +958,29 @@ export class SlackConnector implements GatewayConnector {
       failures,
       notVerifiable,
     };
+  }
+
+  /**
+   * Resolve the Slack app behind the configured bot token: `auth.test` yields
+   * the bot id + team id, then `bots.info` (baseline `users:read` scope — no
+   * scope beyond what every gateway channel already holds) yields the app id.
+   *
+   * Best-effort: any failure returns nulls rather than throwing, so the UI can
+   * fall back to a generic Slack link. The result never carries token values.
+   */
+  async getAppInfo(): Promise<SlackAppInfo> {
+    let teamId: string | null = null;
+    try {
+      const authTest = await this.web.auth.test();
+      if (!authTest.ok) return { appId: null, teamId: null };
+      teamId = authTest.team_id ?? null;
+      if (!authTest.bot_id) return { appId: null, teamId };
+      const botsInfo = await this.web.bots.info({ bot: authTest.bot_id });
+      if (!botsInfo.ok) return { appId: null, teamId };
+      return { appId: botsInfo.bot?.app_id ?? null, teamId };
+    } catch {
+      return { appId: null, teamId };
+    }
   }
 
   /**

@@ -17,12 +17,12 @@ import {
   bindRepositoryToTenantUnitOfWork,
   GatewayChannelRepository,
   GatewayOutboundMessageRepository,
-  getCurrentTenantDatabase,
   getCurrentTenantId,
   getHiddenTenantId,
   MCPServerRepository,
   runWithoutTenantDatabaseScope,
   runWithTenantContext,
+  runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
   type TenantScopeAwareDatabase,
@@ -573,6 +573,7 @@ export class GatewayService {
 
   private mcpServerRepo: MCPServerRepository;
   private userTokenRepo: UserMCPOAuthTokenRepository;
+  private db: TenantScopeAwareDatabase;
   private app: Application;
 
   /** Active Socket Mode listeners keyed by channel ID */
@@ -624,6 +625,7 @@ export class GatewayService {
 
     this.mcpServerRepo = bindRepositoryToTenantUnitOfWork(db, new MCPServerRepository(db));
     this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
+    this.db = db;
     this.app = app;
   }
 
@@ -1867,12 +1869,22 @@ export class GatewayService {
     // get silently dropped.
     const agenticConfig = channel.agentic_config;
     const agenticTool: AgenticToolName = (agenticConfig?.agent as AgenticToolName) ?? 'claude-code';
-    const tenantDb = getCurrentTenantDatabase();
-    if (!tenantDb) throw new Error('Missing tenant database scope for gateway agent resolution');
-    const preset = agenticConfig?.presetId
-      ? await resolveAgenticToolPreset(tenantDb, agenticTool, agenticConfig.presetId)
-      : null;
-    if (!preset) await assertInlineAgenticConfigurationAllowed(tenantDb, agenticTool);
+    // HTTP-originated requests carry an ambient tenant DB scope; socket-mode
+    // listener messages only carry tenant identity (runWithTenantContext).
+    // Open a short tenant unit of work from that identity — same pattern as
+    // bindRepositoryToTenantUnitOfWork — instead of assuming an ambient scope
+    // or falling back to the unscoped base connection.
+    const preset = await runWithTenantDatabaseScope(
+      this.db,
+      getCurrentTenantId(),
+      async (tenantDb) => {
+        const resolved = agenticConfig?.presetId
+          ? await resolveAgenticToolPreset(tenantDb, agenticTool, agenticConfig.presetId)
+          : null;
+        if (!resolved) await assertInlineAgenticConfigurationAllowed(tenantDb, agenticTool);
+        return resolved;
+      }
+    );
     const runtimeConfig = preset?.configuration ?? agenticConfig;
     const {
       permission_config: gatewayPermissionConfig,

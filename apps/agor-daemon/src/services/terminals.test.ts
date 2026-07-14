@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => {
   };
   return {
     branch,
+    tenantId: 'tenant-x' as string | undefined,
+    tenantDb: { scope: 'tenant-x' },
+    databaseScopeDepth: 0,
+    repositoryDbs: [] as unknown[],
     branchesById: new Map<string, typeof branch>([[branch.branch_id, branch]]),
     execSync: vi.fn((cmd: string) => {
       if (cmd === 'which zellij') return Buffer.from('/usr/bin/zellij\n');
@@ -37,6 +41,9 @@ vi.mock('@agor/core/config', () => ({
 
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class {
+    constructor(db: unknown) {
+      mocks.repositoryDbs.push(db);
+    }
     async findById(branchId: string) {
       return mocks.branchesById.get(branchId) ?? null;
     }
@@ -44,8 +51,29 @@ vi.mock('@agor/core/db', () => ({
       return true;
     }
   },
-  SessionRepository: class {},
+  getCurrentTenantId: () => mocks.tenantId,
+  runWithTenantDatabaseScope: async (
+    _db: unknown,
+    tenantId: string | undefined,
+    work: (db: unknown) => Promise<unknown>
+  ) => {
+    if (!tenantId) throw new Error('Missing tenant identity');
+    mocks.databaseScopeDepth += 1;
+    try {
+      return await work(mocks.tenantDb);
+    } finally {
+      mocks.databaseScopeDepth -= 1;
+    }
+  },
+  SessionRepository: class {
+    constructor(db: unknown) {
+      mocks.repositoryDbs.push(db);
+    }
+  },
   UsersRepository: class {
+    constructor(db: unknown) {
+      mocks.repositoryDbs.push(db);
+    }
     async findById() {
       return { unix_username: 'alice' };
     }
@@ -101,6 +129,51 @@ const params = {
   provider: 'rest',
   user: { user_id: 'user-1', role: 'admin' },
 };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.tenantId = 'tenant-x';
+  mocks.databaseScopeDepth = 0;
+  mocks.repositoryDbs.length = 0;
+});
+
+describe('TerminalsService tenant database units of work', () => {
+  it('keeps repository and environment reads scoped while process spawn stays outside', async () => {
+    mocks.branchesById.clear();
+    mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
+    mocks.resolveUserEnvironment.mockImplementation(async () => {
+      expect(mocks.databaseScopeDepth).toBeGreaterThan(0);
+      return {};
+    });
+    mocks.createUserProcessEnvironment.mockImplementation(async () => {
+      expect(mocks.databaseScopeDepth).toBeGreaterThan(0);
+      return {};
+    });
+    mocks.spawnExecutorFireAndForget.mockImplementation(() => {
+      expect(mocks.databaseScopeDepth).toBe(0);
+    });
+
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    await service.create({ branchId: mocks.branch.branch_id }, params as never);
+
+    expect(mocks.repositoryDbs.length).toBeGreaterThan(0);
+    expect(mocks.repositoryDbs).toEqual(
+      expect.arrayContaining([mocks.tenantDb, mocks.tenantDb, mocks.tenantDb])
+    );
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledOnce();
+    expect(mocks.databaseScopeDepth).toBe(0);
+  });
+
+  it('fails fast without ambient tenant identity', async () => {
+    mocks.tenantId = undefined;
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await expect(service.create({}, params as never)).rejects.toThrow(
+      'Missing active tenant context for terminal creation'
+    );
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+});
 
 describe('TerminalsService cold-start concurrency', () => {
   beforeEach(() => {

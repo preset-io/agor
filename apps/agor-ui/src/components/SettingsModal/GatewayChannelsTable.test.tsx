@@ -96,21 +96,24 @@ function makeSlackChannel(): GatewayChannel {
 
 /**
  * Minimal AgorClient stub exposing only the services the table calls. Records
- * the `gateway-channels` create payload and the `gateway-channels/test` probe.
+ * the `gateway-channels` create payload, the `gateway-channels/test` probe,
+ * and the `gateway-channels/app-info` resolution fired on edit open.
  */
-function makeClient(testResult?: unknown) {
+function makeClient(testResult?: unknown, appInfo?: unknown) {
   const channelCreate = vi.fn().mockResolvedValue({});
   const testCreate = vi
     .fn()
     .mockResolvedValue(testResult ?? { ok: true, failures: [], notVerifiable: [] });
+  const appInfoCreate = vi.fn().mockResolvedValue(appInfo ?? { appId: null, teamId: null });
   const client = {
     service: (name: string) => {
       if (name === 'gateway-channels') return { create: channelCreate };
       if (name === 'gateway-channels/test') return { create: testCreate };
+      if (name === 'gateway-channels/app-info') return { create: appInfoCreate };
       return { create: vi.fn(), get: vi.fn() };
     },
   } as unknown as AgorClient;
-  return { client, channelCreate, testCreate };
+  return { client, channelCreate, testCreate, appInfoCreate };
 }
 
 function renderTable(client: AgorClient | null) {
@@ -466,6 +469,134 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(
       screen.getByText('No token stored yet. Enter the app token (xapp-...).')
     ).toBeInTheDocument();
+  });
+
+  it('deep-links to the Slack app manifest editor with the server-resolved app + team ids', async () => {
+    const { client, appInfoCreate } = makeClient(undefined, {
+      appId: 'A0BH0A7TUGJ',
+      teamId: 'T0BELR0LTNG',
+    });
+    renderEditTable(client, makeSlackChannel());
+
+    await waitFor(() => expect(appInfoCreate).toHaveBeenCalledTimes(1));
+    // The ids resolve server-side from the STORED token — never form values.
+    expect(appInfoCreate.mock.calls[0][0]).toEqual({ gatewayChannelId: 'channel-1' });
+
+    const link = await screen.findByText(/Open Slack app manifest/);
+    expect(link.closest('a')?.getAttribute('href')).toBe(
+      'https://app.slack.com/app-settings/T0BELR0LTNG/A0BH0A7TUGJ/app-manifest'
+    );
+  });
+
+  it('falls back to the generic Slack apps link when the app id cannot be resolved', async () => {
+    // client=null → no app-info fetch can run at all.
+    renderEditTable(null, makeSlackChannel());
+
+    const link = await screen.findByText(/Open Slack apps/);
+    expect(link.closest('a')?.getAttribute('href')).toBe('https://api.slack.com/apps');
+  });
+
+  it('keeps the generic link when the backend resolves a null app id', async () => {
+    const { client, appInfoCreate } = makeClient(undefined, { appId: null, teamId: null });
+    renderEditTable(client, makeSlackChannel());
+
+    await waitFor(() => expect(appInfoCreate).toHaveBeenCalledTimes(1));
+    const link = await screen.findByText(/Open Slack apps/);
+    expect(link.closest('a')?.getAttribute('href')).toBe('https://api.slack.com/apps');
+  });
+
+  it('drops a stale app-info response after switching to another channel', async () => {
+    // Per-channel deferred resolutions so channel A's response can land AFTER
+    // channel B's — the link must keep B's app id.
+    const resolvers = new Map<string, (info: unknown) => void>();
+    const appInfoCreate = vi.fn(
+      ({ gatewayChannelId }: { gatewayChannelId: string }) =>
+        new Promise((resolve) => resolvers.set(gatewayChannelId, resolve))
+    );
+    const client = {
+      service: (name: string) => {
+        if (name === 'gateway-channels/app-info') return { create: appInfoCreate };
+        return { create: vi.fn(), get: vi.fn() };
+      },
+    } as unknown as AgorClient;
+
+    const channelA = makeSlackChannel();
+    const channelB = {
+      ...makeSlackChannel(),
+      id: 'channel-2',
+      name: 'Zeta Slack', // sorts after "Team Slack" so row order is A, B
+    } as GatewayChannel;
+    const branch = makeBranch();
+    const user = makeUser();
+    renderWithProviders(
+      <GatewayChannelsTable
+        client={client}
+        gatewayChannelById={
+          new Map([
+            [channelA.id, channelA],
+            [channelB.id, channelB],
+          ])
+        }
+        branchById={new Map([[branch.branch_id, branch]])}
+        userById={new Map([[user.user_id, user]])}
+        mcpServerById={new Map<string, MCPServer>()}
+        currentUser={user}
+      />
+    );
+
+    // Open A's edit modal, close it, open B's while A's fetch is in flight.
+    fireEvent.click(screen.getAllByTitle('Edit')[0]);
+    clickButton(/^Cancel$/);
+    fireEvent.click(screen.getAllByTitle('Edit')[1]);
+    await waitFor(() => expect(appInfoCreate).toHaveBeenCalledTimes(2));
+
+    resolvers.get('channel-2')?.({ appId: 'ABBB222', teamId: 'T1' });
+    const link = await screen.findByText(/Open Slack app manifest/);
+    expect(link.closest('a')?.getAttribute('href')).toBe(
+      'https://app.slack.com/app-settings/T1/ABBB222/app-manifest'
+    );
+
+    // A's stale response lands last and must be ignored.
+    resolvers.get('channel-1')?.({ appId: 'AAAA111', teamId: 'T1' });
+    await flush();
+    expect(
+      screen
+        .getByText(/Open Slack app manifest/)
+        .closest('a')
+        ?.getAttribute('href')
+    ).toBe('https://app.slack.com/app-settings/T1/ABBB222/app-manifest');
+  });
+
+  it('warns with the added scope when a capability toggle needs a scope the saved config lacks', async () => {
+    const { client } = makeClient(undefined, { appId: 'A0123ABC', teamId: 'T1' });
+    renderEditTable(client, makeSlackChannel());
+    expandPanel('Message Sources');
+
+    // Nothing has changed yet — no scope-change warning.
+    expect(screen.queryByText(/This change adds the/)).toBeNull();
+
+    // "Agents can download files" adds files:read (via requiredBotScopes),
+    // which the saved config (enable_channels only) does not carry.
+    fireEvent.click(document.querySelector('#agent_file_download') as HTMLElement);
+
+    expect(await screen.findByText(/This change adds the/)).toBeInTheDocument();
+    expect(screen.queryAllByText('files:read').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Open Slack app manifest/).length).toBeGreaterThan(0);
+    expect(queryButton(/Copy manifest/)).toBeDefined();
+  });
+
+  it('does not warn on unrelated edits or on toggles that only remove scopes', async () => {
+    renderEditTable(null, makeSlackChannel());
+    expandPanel('Message Sources');
+
+    // Turning OFF thread history removes nothing scope-wise (it has no scopes)…
+    fireEvent.click(document.querySelector('#agent_thread_history') as HTMLElement);
+    // …and turning OFF the saved public-channels surface only REMOVES scopes.
+    fireEvent.click(document.querySelector('#enable_channels') as HTMLElement);
+
+    // The scope list re-derives (drop of channels:history) before we assert.
+    await waitFor(() => expect(screen.queryAllByText('channels:history').length).toBe(0));
+    expect(screen.queryByText(/This change adds the/)).toBeNull();
   });
 
   it("preserves a channel's stored mcpServerIds on save, even when the current user has their own agent defaults", async () => {

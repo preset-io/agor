@@ -631,14 +631,21 @@ export class SchedulerService {
 
       let cfg = schedule.agentic_tool_config;
       if (cfg.preset_id) {
-        const preset = await resolveAgenticToolPreset(this.db, cfg.agentic_tool, cfg.preset_id);
+        const presetId = cfg.preset_id;
+        // Cron ticks carry tenant identity but no ambient DB scope — open a
+        // short tenant unit of work like the repo calls above.
+        const preset = await this.withTenantDatabase(() =>
+          resolveAgenticToolPreset(this.db, cfg.agentic_tool, presetId)
+        );
         cfg = presetConfigurationToScheduleConfig(
           cfg.agentic_tool,
           cfg.preset_id,
           preset.configuration
         );
       } else {
-        await assertInlineAgenticConfigurationAllowed(this.db, cfg.agentic_tool);
+        await this.withTenantDatabase(() =>
+          assertInlineAgenticConfigurationAllowed(this.db, cfg.agentic_tool)
+        );
       }
       const scheduleModelConfig = cfg.model_config
         ? resolveSessionDefaults({

@@ -1451,6 +1451,95 @@ describe('SlackConnector.testConnection', () => {
   });
 });
 
+describe('SlackConnector.getAppInfo', () => {
+  /** Build a connector with a mocked bot web client so no network is touched. */
+  function makeAppInfoConnector(args: {
+    authTest?: () => Promise<unknown>;
+    botsInfo?: (params: { bot: string }) => Promise<unknown>;
+    capture?: { botsInfoParams?: { bot: string } };
+  }) {
+    const connector = new SlackConnector({ bot_token: 'xoxb-secret-token' });
+    (connector as unknown as { web: unknown }).web = {
+      auth: {
+        test:
+          args.authTest ?? (async () => ({ ok: true, team_id: 'T1', user_id: 'U1', bot_id: 'B1' })),
+      },
+      bots: {
+        info: async (params: { bot: string }) => {
+          if (args.capture) args.capture.botsInfoParams = params;
+          return args.botsInfo
+            ? args.botsInfo(params)
+            : { ok: true, bot: { id: params.bot, app_id: 'A123' } };
+        },
+      },
+    };
+    return connector;
+  }
+
+  it('resolves appId + teamId via auth.test → bots.info', async () => {
+    const capture: { botsInfoParams?: { bot: string } } = {};
+    const connector = makeAppInfoConnector({ capture });
+
+    const result = await connector.getAppInfo();
+
+    expect(result).toEqual({ appId: 'A123', teamId: 'T1' });
+    // bots.info must be queried with the bot id auth.test reported.
+    expect(capture.botsInfoParams).toEqual({ bot: 'B1' });
+  });
+
+  it('returns nulls without throwing when auth.test fails', async () => {
+    const connector = makeAppInfoConnector({
+      authTest: async () => {
+        throw { data: { ok: false, error: 'invalid_auth' } };
+      },
+    });
+
+    await expect(connector.getAppInfo()).resolves.toEqual({ appId: null, teamId: null });
+  });
+
+  it('keeps teamId but yields null appId when bots.info throws', async () => {
+    const connector = makeAppInfoConnector({
+      botsInfo: async () => {
+        throw { data: { ok: false, error: 'bot_not_found' } };
+      },
+    });
+
+    await expect(connector.getAppInfo()).resolves.toEqual({ appId: null, teamId: 'T1' });
+  });
+
+  it('yields null appId on a non-OK bots.info response', async () => {
+    const connector = makeAppInfoConnector({
+      botsInfo: async () => ({ ok: false, error: 'bot_not_found' }),
+    });
+
+    await expect(connector.getAppInfo()).resolves.toEqual({ appId: null, teamId: 'T1' });
+  });
+
+  it('yields null appId when an OK bots.info response carries no app_id', async () => {
+    const connector = makeAppInfoConnector({
+      botsInfo: async (params) => ({ ok: true, bot: { id: params.bot } }),
+    });
+
+    await expect(connector.getAppInfo()).resolves.toEqual({ appId: null, teamId: 'T1' });
+  });
+
+  it('yields null appId when auth.test carries no bot_id', async () => {
+    const connector = makeAppInfoConnector({
+      authTest: async () => ({ ok: true, team_id: 'T1', user_id: 'U1' }),
+    });
+
+    await expect(connector.getAppInfo()).resolves.toEqual({ appId: null, teamId: 'T1' });
+  });
+
+  it('never includes token material in the result', async () => {
+    const result = await makeAppInfoConnector({}).getAppInfo();
+    const serialized = JSON.stringify(result);
+
+    expect(serialized).not.toContain('xoxb');
+    expect(serialized).not.toContain('secret');
+  });
+});
+
 describe('extractSlackInboundFiles', () => {
   const slackFile = {
     id: 'F123',

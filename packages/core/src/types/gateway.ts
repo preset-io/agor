@@ -195,6 +195,17 @@ export interface SlackTestResult {
   notVerifiable: string[];
 }
 
+/**
+ * Identity of the Slack app behind a channel's bot token, resolved server-side
+ * via `auth.test` → `bots.info` (which only needs the baseline `users:read`
+ * scope). Fields are null when resolution fails — never an error — so callers
+ * can degrade to a generic Slack link. Never carries token material.
+ */
+export interface SlackAppInfo {
+  appId: string | null;
+  teamId: string | null;
+}
+
 // ============================================================================
 // Agentic Tool Configuration
 // ============================================================================

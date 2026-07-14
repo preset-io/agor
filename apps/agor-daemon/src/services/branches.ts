@@ -7,6 +7,7 @@
 
 import type { ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
@@ -1891,8 +1892,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // successful re-probe advances last_health_check.timestamp in storage, but
     // that bookkeeping alone must not emit a full `branches.patched` payload to
     // every authorized browser every five seconds.
-    const hasPersistedChange =
-      JSON.stringify(existing.environment_instance) !== JSON.stringify(updatedEnvironment);
+    const hasPersistedChange = !isDeepStrictEqual(
+      existing.environment_instance,
+      updatedEnvironment
+    );
     if (!hasPersistedChange) {
       return existing;
     }
@@ -1912,7 +1915,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       newState.last_health_check = healthCheck as typeof newState.last_health_check;
     }
 
-    const hasChanged = JSON.stringify(oldState) !== JSON.stringify(newState);
+    // PostgreSQL JSONB does not preserve object-key insertion order. Comparing
+    // serialized objects can therefore report a change when the JSON values are
+    // identical, sending every observation down the realtime patch path. Deep
+    // equality preserves array ordering while treating object key order as
+    // irrelevant, which matches the JSON semantics stored in the database.
+    const hasChanged = !isDeepStrictEqual(oldState, newState);
 
     // Observation-only persistence deliberately bypasses Feathers publication.
     // It also preserves branch.updated_at so health bookkeeping does not affect

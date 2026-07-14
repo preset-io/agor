@@ -7,16 +7,16 @@ issue references, IDs, and hashes.
 
 Preliminary classification (path-based, requiring human confirmation):
 
-| Classification                  | Diagnostics |
-| ------------------------------- | ----------: |
-| Tests/fixtures                  |          49 |
-| Theme definitions/editor        |          16 |
-| Terminal/ANSI                   |          33 |
-| Syntax/diff                     |          13 |
-| Marketing screenshots           |          17 |
-| Canvas/data visualization       |          24 |
-| Brand asset                     |           1 |
-| Ordinary UI or needs review     |          73 |
+| Classification              | Diagnostics |
+| --------------------------- | ----------: |
+| Tests/fixtures              |          49 |
+| Theme definitions/editor    |          16 |
+| Terminal/ANSI               |          33 |
+| Syntax/diff                 |          13 |
+| Marketing screenshots       |          17 |
+| Canvas/data visualization   |          24 |
+| Brand asset                 |           1 |
+| Ordinary UI or needs review |          73 |
 
 The rules are in `apps/agor-ui/biome-plugins/`. The initial findings were
 resolved with AntD components/tokens or documented narrow suppressions for

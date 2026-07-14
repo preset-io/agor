@@ -6,6 +6,7 @@ import {
   App as AntApp,
   Button,
   Empty,
+  Flex,
   Select,
   Skeleton,
   Space,
@@ -299,7 +300,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </div>
             </div>
 
-            <Space size={4} wrap>
+            <Flex vertical style={{ minWidth: 0 }}>
               <BranchHeaderPill
                 repo={primaryTeammateRepo}
                 branch={primaryTeammateBranch}
@@ -307,28 +308,35 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                 onOpenBranch={onOpenSettings}
                 showEnvButtons={false}
                 compact
+                fluid
               />
-              {primaryTeammateBranch.created_by && (
-                <CreatedByTag
-                  createdBy={primaryTeammateBranch.created_by}
-                  currentUserId={currentUserId}
-                  userById={userById}
-                  prefix="Created by"
-                />
+              {(primaryTeammateBranch.created_by ||
+                primaryTeammateBranch.issue_url ||
+                primaryTeammateBranch.pull_request_url) && (
+                <Flex gap={token.sizeUnit} wrap style={{ marginTop: token.sizeUnit }}>
+                  {primaryTeammateBranch.created_by && (
+                    <CreatedByTag
+                      createdBy={primaryTeammateBranch.created_by}
+                      currentUserId={currentUserId}
+                      userById={userById}
+                      prefix="Created by"
+                    />
+                  )}
+                  {primaryTeammateBranch.issue_url && (
+                    <IssuePill
+                      issueUrl={primaryTeammateBranch.issue_url}
+                      currentRepo={primaryTeammateRepo}
+                    />
+                  )}
+                  {primaryTeammateBranch.pull_request_url && (
+                    <PullRequestPill
+                      prUrl={primaryTeammateBranch.pull_request_url}
+                      currentRepo={primaryTeammateRepo}
+                    />
+                  )}
+                </Flex>
               )}
-              {primaryTeammateBranch.issue_url && (
-                <IssuePill
-                  issueUrl={primaryTeammateBranch.issue_url}
-                  currentRepo={primaryTeammateRepo}
-                />
-              )}
-              {primaryTeammateBranch.pull_request_url && (
-                <PullRequestPill
-                  prUrl={primaryTeammateBranch.pull_request_url}
-                  currentRepo={primaryTeammateRepo}
-                />
-              )}
-            </Space>
+            </Flex>
             {teammateDescription && (
               <div className="markdown-compact" style={{ color: token.colorTextSecondary }}>
                 <MarkdownRenderer content={teammateDescription} compact showControls={false} />

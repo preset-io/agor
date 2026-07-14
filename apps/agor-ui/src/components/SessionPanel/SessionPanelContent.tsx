@@ -9,7 +9,7 @@ import {
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Divider, Space, Tabs, Tooltip, Typography, theme } from 'antd';
+import { Alert, Button, Divider, Flex, Space, Tabs, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useAgorStore } from '../../store/agorStore';
@@ -128,16 +128,17 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           style={{
             marginBottom: token.sizeUnit,
             display: 'flex',
-            alignItems: 'center',
+            // Keep navigation aligned with the branch pill's first row when metadata wraps below it.
+            alignItems: 'flex-start',
             justifyContent: 'space-between',
             gap: token.sizeUnit * 2,
           }}
         >
           {/* Pills section (only shown if there's content) */}
           {branch && (
-            <Space size={8} wrap style={{ flex: 1 }}>
-              {/* Unified Branch Pill */}
-              {branch && repo && (
+            <Flex vertical style={{ flex: '1 1 0', minWidth: 0 }}>
+              {/* Unified Branch Pill — owns the first row so its actions keep priority. */}
+              {repo && (
                 <BranchHeaderPill
                   repo={repo}
                   branch={branch}
@@ -147,21 +148,28 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                   onNukeEnvironment={onNukeEnvironment}
                   onViewLogs={onViewLogs}
                   identityLink={sessionPath(session.session_id)}
+                  fluid
                 />
               )}
-              {/* Issue and PR Pills */}
-              {branch?.issue_url && (
-                <IssuePill issueUrl={branch.issue_url} currentRepo={repo ?? undefined} />
+              {(branch.issue_url || branch.pull_request_url) && (
+                <Space size={token.sizeUnit * 2} wrap style={{ marginTop: token.sizeUnit }}>
+                  {branch.issue_url && (
+                    <IssuePill issueUrl={branch.issue_url} currentRepo={repo ?? undefined} />
+                  )}
+                  {branch.pull_request_url && (
+                    <PullRequestPill
+                      prUrl={branch.pull_request_url}
+                      currentRepo={repo ?? undefined}
+                    />
+                  )}
+                </Space>
               )}
-              {branch?.pull_request_url && (
-                <PullRequestPill prUrl={branch.pull_request_url} currentRepo={repo ?? undefined} />
-              )}
-            </Space>
+            </Flex>
           )}
           {/* Spacer if no pills */}
           {!branch && <div style={{ flex: 1 }} />}
           {/* Scroll Navigation Buttons - always visible */}
-          <Space size={4}>
+          <Space size={4} style={{ flexShrink: 0 }}>
             <Tooltip title="Scroll to top of conversation">
               <Button
                 type="text"

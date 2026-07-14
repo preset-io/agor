@@ -59,6 +59,33 @@ export const SLACK_AGENT_TOOL_SCOPES: Record<SlackAgentToolCapability, string[]>
   file_download: ['files:read'],
 };
 
+/**
+ * Slack app ids are an "A" followed by uppercase alphanumerics (e.g.
+ * "A0BH0A7TUGJ"); team ids are the same shape behind a "T" (workspace) or "E"
+ * (enterprise org) prefix. Anything else is treated as unresolved: both ids
+ * land in a URL path, so these shape checks are what keep a malformed/hostile
+ * value (slashes, query/fragment chars) from steering the link somewhere else.
+ */
+const SLACK_APP_ID_SHAPE = /^A[A-Z0-9]+$/;
+const SLACK_TEAM_ID_SHAPE = /^[TE][A-Z0-9]+$/;
+
+/** Generic Slack app list — the fallback when no manifest deep link can be built. */
+export const SLACK_APPS_URL = 'https://api.slack.com/apps';
+
+/**
+ * URL of a Slack app's manifest editor when the app AND team ids are known,
+ * falling back to the generic app list otherwise. The manifest editor lives on
+ * the workspace-scoped app-settings surface — the per-app
+ * `api.slack.com/apps/{id}` path 404s — so the team id is required for the
+ * deep link. An app id without a team id doesn't occur in practice: the app id
+ * is only resolved after an `auth.test` that also supplies the team id.
+ */
+export function slackAppManifestUrl(appId?: string | null, teamId?: string | null): string {
+  return appId && SLACK_APP_ID_SHAPE.test(appId) && teamId && SLACK_TEAM_ID_SHAPE.test(teamId)
+    ? `https://app.slack.com/app-settings/${teamId}/${appId}/app-manifest`
+    : SLACK_APPS_URL;
+}
+
 export interface SlackBotEventSubscriptions {
   bot_events: string[];
 }

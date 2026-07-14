@@ -8,7 +8,12 @@
  */
 
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
-import { shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { CURSOR_MODEL_METADATA, DEFAULT_CURSOR_MODEL } from '@agor/core/models';
 import type { Params, UserID } from '@agor/core/types';
 import { Cursor, type SDKModel } from '@cursor/sdk';
@@ -72,14 +77,18 @@ export class CursorModelsService {
   constructor(private db: TenantScopeAwareDatabase) {}
 
   async find(params?: AuthenticatedParams): Promise<CursorModelsResult> {
-    if (!(await isTenantAgenticToolEnabled('cursor', this.db))) {
-      throw new Error('Cursor is disabled for this workspace');
-    }
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing active tenant context for Cursor model discovery');
     const userId = params?.user?.user_id;
-    const resolution = await resolveApiKey('CURSOR_API_KEY', {
-      userId,
-      db: this.db,
-      tool: 'cursor',
+    const resolution = await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+      if (!(await isTenantAgenticToolEnabled('cursor', tenantDb))) {
+        throw new Error('Cursor is disabled for this workspace');
+      }
+      return resolveApiKey('CURSOR_API_KEY', {
+        userId,
+        db: tenantDb,
+        tool: 'cursor',
+      });
     });
 
     if (!resolution.apiKey) {

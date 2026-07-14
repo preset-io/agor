@@ -9,7 +9,13 @@
  * register-services.ts and operate on the daemon's DB + filesystem directly.
  */
 
-import { SerializedSessionRepository, shortId, type TenantScopeAwareDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  SerializedSessionRepository,
+  shortId,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import type { AgenticToolName } from '@agor/core/types';
 import {
   computeFileHash,
@@ -58,7 +64,8 @@ interface PushContext {
  * 5. No 'done' row, no local file → fresh session, proceed
  */
 export async function pullIfNeeded(ctx: PullContext): Promise<void> {
-  const repo = new SerializedSessionRepository(ctx.db);
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) throw new Error('Missing active tenant context for session state restore');
 
   // Both claude-code and codex now resolve transcripts under the executor
   // user's HOME (~/.claude or ~/.codex). For simple mode executorHomeDir is
@@ -71,7 +78,9 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   );
 
   // Check latest row (any status)
-  let latest = await repo.findLatest(ctx.sessionId);
+  let latest = await runWithTenantDatabaseScope(ctx.db, tenantId, (tenantDb) =>
+    new SerializedSessionRepository(tenantDb).findLatest(ctx.sessionId)
+  );
 
   if (!latest) {
     // Case 1: No rows at all → fresh session
@@ -85,9 +94,12 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
       console.log(
         `[session-state] Cleaning stale 'processing' row ${shortId(latest.id)} (age: ${Math.round(age / 1000)}s)`
       );
-      await repo.deleteById(latest.id);
-      // Fall through: check if there's a 'done' row behind it
-      latest = await repo.findLatestDone(ctx.sessionId);
+      latest = await runWithTenantDatabaseScope(ctx.db, tenantId, async (tenantDb) => {
+        const repo = new SerializedSessionRepository(tenantDb);
+        await repo.deleteById(latest!.id);
+        // Fall through: check if there's a 'done' row behind it
+        return repo.findLatestDone(ctx.sessionId);
+      });
       if (!latest) {
         // Case 5: No done row after cleanup
         return;
@@ -98,7 +110,9 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
       console.warn(
         `[session-state] Latest row is 'processing' (age: ${Math.round(age / 1000)}s), falling back to latest done row`
       );
-      latest = await repo.findLatestDone(ctx.sessionId);
+      latest = await runWithTenantDatabaseScope(ctx.db, tenantId, (tenantDb) =>
+        new SerializedSessionRepository(tenantDb).findLatestDone(ctx.sessionId)
+      );
       if (!latest) {
         // No done row available — proceed without restore
         return;
@@ -133,15 +147,15 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
  * Skips if file hash unchanged. Otherwise: insertProcessing → gzip → markDone → deletePreviousTurns.
  */
 export function pushAsync(ctx: PushContext): void {
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) throw new Error('Missing active tenant context for session state persistence');
   // Fire and forget — errors are logged but never propagated
-  void doPush(ctx).catch((err) => {
+  void doPush(ctx, tenantId).catch((err) => {
     console.error('[session-state] pushAsync failed:', err instanceof Error ? err.message : err);
   });
 }
 
-async function doPush(ctx: PushContext): Promise<void> {
-  const repo = new SerializedSessionRepository(ctx.db);
-
+async function doPush(ctx: PushContext, tenantId: string): Promise<void> {
   // For Codex, find the actual session file (may be in a date-based subdirectory)
   let filePath: string;
   if (ctx.tool === 'codex') {
@@ -170,26 +184,34 @@ async function doPush(ctx: PushContext): Promise<void> {
   }
 
   // Determine turn_index
-  const latestRow = await repo.findLatest(ctx.sessionId);
-  const turnIndex = latestRow ? latestRow.turn_index + 1 : 0;
-
-  // Insert processing row (fast — no payload yet)
-  const row = await repo.insertProcessing({
-    sessionId: ctx.sessionId,
-    branchId: ctx.branchId,
-    taskId: ctx.taskId,
-    turnIndex,
-    md5: currentMd5,
-  });
+  const { row, turnIndex } = await runWithTenantDatabaseScope(
+    ctx.db,
+    tenantId,
+    async (tenantDb) => {
+      const repo = new SerializedSessionRepository(tenantDb);
+      const latestRow = await repo.findLatest(ctx.sessionId);
+      const turnIndex = latestRow ? latestRow.turn_index + 1 : 0;
+      const row = await repo.insertProcessing({
+        sessionId: ctx.sessionId,
+        branchId: ctx.branchId,
+        taskId: ctx.taskId,
+        turnIndex,
+        md5: currentMd5,
+      });
+      return { row, turnIndex };
+    }
+  );
 
   // Gzip the file
   const payload = await serializeFile(filePath);
 
-  // Mark done with payload
-  await repo.markDone(row.id, payload);
-
-  // Clean up old rows (only delete turns older than this one — safe against concurrent pushes)
-  await repo.deletePreviousTurns(ctx.sessionId, turnIndex);
+  await runWithTenantDatabaseScope(ctx.db, tenantId, async (tenantDb) => {
+    const repo = new SerializedSessionRepository(tenantDb);
+    // Mark done with payload
+    await repo.markDone(row.id, payload);
+    // Only delete turns older than this one — safe against concurrent pushes.
+    await repo.deletePreviousTurns(ctx.sessionId, turnIndex);
+  });
 
   console.log(
     `[session-state] Pushed session state (turn ${turnIndex}, ${payload.length} bytes gzipped)`

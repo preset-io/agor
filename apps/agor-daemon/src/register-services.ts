@@ -7,7 +7,6 @@
 
 import {
   type AgorConfig,
-  isTenantAgenticToolEnabled,
   PublicBaseUrlNotConfiguredError,
   requirePublicBaseUrl,
   resolveExecutionSecurityMode,
@@ -17,10 +16,12 @@ import {
   BoardRepository,
   BranchRepository,
   eq,
+  GatewayChannelRepository,
   getCurrentTenantId,
   inArray,
   isPostgresDatabase,
   MCPServerRepository,
+  runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   type SessionMCPServerRow,
   select,
@@ -83,10 +84,12 @@ import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
+import { createGatewayChannelsAppInfoService } from './services/gateway-channels-app-info.js';
 import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
@@ -489,6 +492,22 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'test gateway channels')],
       },
     });
+    // Request/response probe — its default `created` event would otherwise fall
+    // through the global publisher's `global` scope and broadcast the probe
+    // result to every authenticated socket. Publish to no one.
+    app.service('gateway-channels/test').publish(() => []);
+
+    // Sub-path service resolving the Slack app id behind a channel's stored
+    // bot token (auth.test → bots.info). Same gating rationale as /test above:
+    // reads decrypted tokens via the repository, returns no token values.
+    app.use('/gateway-channels/app-info', createGatewayChannelsAppInfoService(db));
+    app.service('gateway-channels/app-info').hooks({
+      before: {
+        create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'read gateway app info')],
+      },
+    });
+    // Request/response read — same broadcast fall-through as /test above.
+    app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
     app.use('/gateway', createGatewayService(db, app), {
@@ -717,14 +736,8 @@ function createExecuteHandler(
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
   ) => {
-    let session = await sessionsService.get(sessionId, params);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-    if (!(await isTenantAgenticToolEnabled(session.agentic_tool, db))) {
-      throw new Error(`${session.agentic_tool} is disabled for this workspace`);
-    }
-    session = await sessionsService.materializeAgenticToolPreset(session, params);
+    const tenantId = getCurrentTenantId();
+    const session = await prepareSessionForExecutorStart(db, sessionsService, sessionId, params);
     if (
       session.agentic_tool_preset_id &&
       data.permissionMode !== undefined &&
@@ -777,12 +790,13 @@ function createExecuteHandler(
     // Get branch path
     let cwd = process.cwd();
     if (session.branch_id) {
-      try {
-        const branch = await app.service('branches').get(session.branch_id, params);
-        cwd = branch.path;
-      } catch (error) {
-        console.warn(`Could not get branch path for ${session.branch_id}:`, error);
-      }
+      const branchPath = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+        const branch = await new BranchRepository(tenantDb).findById(session.branch_id);
+        return branch?.path;
+      });
+      if (!branchPath)
+        throw new Error(`Branch ${session.branch_id} not found for executor startup`);
+      cwd = branchPath;
     }
 
     // Determine Unix user for executor
@@ -826,16 +840,15 @@ function createExecuteHandler(
     const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
 
     // Resolve gateway-level env vars
-    let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
     const gatewaySource = (session.custom_context as Record<string, unknown> | undefined)
       ?.gateway_source as { channel_id?: string } | undefined;
-    if (gatewaySource?.channel_id) {
-      try {
-        const { GatewayChannelRepository, decryptApiKey, isEncrypted } = await import(
-          '@agor/core/db'
+    const executorEnv = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
+      if (gatewaySource?.channel_id) {
+        const { decryptApiKey, isEncrypted } = await import('@agor/core/db');
+        const channel = await new GatewayChannelRepository(tenantDb).findById(
+          gatewaySource.channel_id
         );
-        const channelRepo = new GatewayChannelRepository(db);
-        const channel = await channelRepo.findById(gatewaySource.channel_id);
         if (channel?.agentic_config?.envVars) {
           gatewayEnv = channel.agentic_config.envVars.map((v) => ({
             ...v,
@@ -849,21 +862,19 @@ function createExecuteHandler(
             })(),
           }));
         }
-      } catch {
-        // Non-fatal
       }
-    }
 
-    // Provider connections are resolved once by the executor through the
-    // task-scoped daemon API. Generic process environment never carries them.
-    const executorEnv = await createUserProcessEnvironment(
-      userId,
-      db,
-      undefined,
-      !!executorUnixUser,
-      gatewayEnv,
-      sessionId as SessionID
-    );
+      // Provider connections are resolved once by the executor through the
+      // task-scoped daemon API. Generic process environment never carries them.
+      return createUserProcessEnvironment(
+        userId,
+        tenantDb,
+        undefined,
+        !!executorUnixUser,
+        gatewayEnv,
+        sessionId as SessionID
+      );
+    });
 
     // Validate required user environment variables
     const requiredUserEnvVars = config.execution?.required_user_env_vars;
@@ -880,14 +891,16 @@ function createExecuteHandler(
           '',
           'This is a one-time setup — once configured, this message will not appear again.',
         ].join('\n');
-        await appendSystemMessage({
-          app,
-          db,
-          sessionId,
-          taskId: data.taskId,
-          content: errorContent,
-          contentPreview: `Missing required env vars: ${missingVars.join(', ')}`,
-        });
+        await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+          appendSystemMessage({
+            app,
+            db,
+            sessionId,
+            taskId: data.taskId,
+            content: errorContent,
+            contentPreview: `Missing required env vars: ${missingVars.join(', ')}`,
+          })
+        );
         throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
       }
     }

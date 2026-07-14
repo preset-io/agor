@@ -117,11 +117,19 @@ export async function resolveClaudeCliProviderSpawn(
   built: { bin: string; args: string[] }
 ): Promise<{ bin: string; args: string[] } | null> {
   const db = getDb(app) ?? undefined;
-  if (!db || !(await isTenantAgenticToolEnabled('claude-code', db))) return null;
-  const resolved = await resolveProviderConnection('claude-code', {
-    userId: (session.created_by as import('@agor/core/types').UserID | null) ?? undefined,
-    db,
+  if (!db) return null;
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) {
+    throw new Error('Missing active tenant context for Claude CLI provider resolution');
+  }
+  const resolved = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+    if (!(await isTenantAgenticToolEnabled('claude-code', tenantDb))) return null;
+    return resolveProviderConnection('claude-code', {
+      userId: (session.created_by as import('@agor/core/types').UserID | null) ?? undefined,
+      db: tenantDb,
+    });
   });
+  if (!resolved) return null;
   const connection = resolved.connection as Record<string, string | undefined>;
   const hasCredential = [
     'ANTHROPIC_API_KEY',
@@ -1416,13 +1424,31 @@ export async function writeClaudeCliMcpConfigForSession(
     return undefined;
   }
 
+  const db = getDb(app);
+  if (!db) throw new Error('Missing tenant database for Claude CLI MCP config generation');
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) {
+    throw new Error('Missing active tenant context for Claude CLI MCP config generation');
+  }
+  const { generateSessionToken } = await import('../mcp/tokens.js');
+  const mcpToken = await runWithTenantDatabaseScope(db, tenantId, async () => {
+    try {
+      return await generateSessionToken(
+        app,
+        session.session_id,
+        session.created_by as import('@agor/core/types').UserID
+      );
+    } catch (err) {
+      console.warn(
+        `[claude-cli-integration] failed to issue MCP token for session ${shortId(session.session_id)}; Agor MCP tools will be unavailable in Claude CLI/RemoteTrigger:`,
+        err instanceof Error ? err.message : String(err)
+      );
+      return undefined;
+    }
+  });
+  if (!mcpToken) return undefined;
+
   try {
-    const { generateSessionToken } = await import('../mcp/tokens.js');
-    const mcpToken = await generateSessionToken(
-      app,
-      session.session_id,
-      session.created_by as import('@agor/core/types').UserID
-    );
     const mcpConfig = buildClaudeCliAgorMcpConfig({
       daemonUrl: getDaemonUrl(),
       mcpToken,
@@ -1497,6 +1523,8 @@ export async function onCliSessionCreated(
   branchCwd: string
 ): Promise<void> {
   if (session.agentic_tool !== 'claude-code-cli') return;
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) throw new Error('Missing active tenant context for Claude CLI session startup');
   const homeDir = resolveHomeDirForCliSession(session);
   const slug = slugForCwd(branchCwd);
   const jsonlPath = claudeSessionJsonlPath(homeDir, branchCwd, session.session_id);
@@ -1523,20 +1551,22 @@ export async function onCliSessionCreated(
   try {
     const db = getDb(app);
     if (db) {
-      const repo = new SessionRepository(db);
-      const row = await repo.findById(session.session_id).catch(() => null);
-      if (row) {
-        const patch = {
-          sdk_session_id: session.session_id,
-          cli_state: {
-            ...(row.cli_state ?? {}),
-            slug,
-            jsonl_path: jsonlPath,
-            zellij_tab_name: tabName,
-          },
-        } satisfies Partial<Session>;
-        await repo.update(session.session_id, patch);
-      }
+      await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+        const repo = new SessionRepository(tenantDb);
+        const row = await repo.findById(session.session_id).catch(() => null);
+        if (row) {
+          const patch = {
+            sdk_session_id: session.session_id,
+            cli_state: {
+              ...(row.cli_state ?? {}),
+              slug,
+              jsonl_path: jsonlPath,
+              zellij_tab_name: tabName,
+            },
+          } satisfies Partial<Session>;
+          await repo.update(session.session_id, patch);
+        }
+      });
     }
   } catch (err) {
     console.warn('[claude-cli-integration] failed to persist initial cli_state', err);
