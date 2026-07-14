@@ -1,7 +1,7 @@
 import type { Link } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import type { LinkDisplayItem } from './linkDisplay';
-import { getLinkPromotionActions } from './linkPromotion';
+import { getLinkPlacementMenuItems } from './linkPromotion';
 import {
   LINK_ACTION_KEY,
   LINK_ACTION_LABEL,
@@ -29,10 +29,10 @@ function linkItem(overrides: Partial<LinkDisplayItem> = {}): LinkDisplayItem {
   };
 }
 
-describe('getLinkPromotionActions', () => {
+describe('getLinkPlacementMenuItems', () => {
   it('offers branch and teammate destinations for a session-owned link', () => {
     expect(
-      getLinkPromotionActions(linkItem(), {
+      getLinkPlacementMenuItems(linkItem(), {
         branchId: BRANCH_ID,
         teammateBranchId: TEAMMATE_BRANCH_ID,
       })
@@ -58,7 +58,7 @@ describe('getLinkPromotionActions', () => {
 
   it('offers only the teammate destination for a branch-owned link', () => {
     expect(
-      getLinkPromotionActions(linkItem({ ownerScope: 'branch', ownerBranchId: BRANCH_ID }), {
+      getLinkPlacementMenuItems(linkItem({ ownerScope: 'branch', ownerBranchId: BRANCH_ID }), {
         branchId: BRANCH_ID,
         teammateBranchId: TEAMMATE_BRANCH_ID,
       })
@@ -76,7 +76,7 @@ describe('getLinkPromotionActions', () => {
 
   it('promotes a session inside a teammate only to that teammate', () => {
     expect(
-      getLinkPromotionActions(linkItem(), {
+      getLinkPlacementMenuItems(linkItem(), {
         branchId: TEAMMATE_BRANCH_ID,
         teammateBranchId: TEAMMATE_BRANCH_ID,
       })
@@ -98,7 +98,7 @@ describe('getLinkPromotionActions', () => {
     } as Link;
 
     expect(
-      getLinkPromotionActions(linkItem(), {
+      getLinkPlacementMenuItems(linkItem(), {
         branchId: BRANCH_ID,
         teammateBranchId: TEAMMATE_BRANCH_ID,
         placements: [teammatePlacement],
@@ -113,6 +113,30 @@ describe('getLinkPromotionActions', () => {
     });
   });
 
+  it('offers removal for a legacy promotion-managed teammate placement', () => {
+    const legacyPlacement = {
+      link_id: 'legacy-teammate-link',
+      branch_id: TEAMMATE_BRANCH_ID,
+      session_id: null,
+      target_key: 'url:https://example.com/runbook',
+      metadata: { teammate_promotion: true },
+    } as Link;
+
+    expect(
+      getLinkPlacementMenuItems(linkItem(), {
+        branchId: TEAMMATE_BRANCH_ID,
+        teammateBranchId: TEAMMATE_BRANCH_ID,
+        placements: [legacyPlacement],
+      })
+    ).toEqual([
+      expect.objectContaining({
+        key: LINK_ACTION_KEY.removeFromTeammate,
+        label: LINK_ACTION_LABEL.removeFromTeammate,
+        operation: LINK_PLACEMENT_OPERATION.remove,
+      }),
+    ]);
+  });
+
   it('does not offer removal for an independently curated matching teammate link', () => {
     const curatedPlacement = {
       link_id: 'curated-link',
@@ -123,17 +147,40 @@ describe('getLinkPromotionActions', () => {
     } as Link;
 
     expect(
-      getLinkPromotionActions(linkItem(), {
+      getLinkPlacementMenuItems(linkItem(), {
         branchId: BRANCH_ID,
         teammateBranchId: TEAMMATE_BRANCH_ID,
         placements: [curatedPlacement],
       })
-    ).toEqual([expect.objectContaining({ destination: LINK_PROMOTION_DESTINATION.branch })]);
+    ).toEqual([
+      expect.objectContaining({ destination: LINK_PROMOTION_DESTINATION.branch }),
+      {
+        key: LINK_ACTION_KEY.alreadyInTeammate,
+        label: LINK_ACTION_LABEL.alreadyInTeammate,
+        disabled: true,
+      },
+    ]);
+  });
+
+  it('shows a stable status while destination placements are loading', () => {
+    expect(
+      getLinkPlacementMenuItems(linkItem(), {
+        branchId: BRANCH_ID,
+        teammateBranchId: TEAMMATE_BRANCH_ID,
+        placementsLoaded: false,
+      })
+    ).toEqual([
+      {
+        key: LINK_ACTION_KEY.checkingDestinations,
+        label: LINK_ACTION_LABEL.checkingDestinations,
+        disabled: true,
+      },
+    ]);
   });
 
   it('does not offer downward promotion actions for teammate-owned links', () => {
     expect(
-      getLinkPromotionActions(
+      getLinkPlacementMenuItems(
         linkItem({ ownerScope: 'branch', ownerBranchId: TEAMMATE_BRANCH_ID }),
         {
           branchId: TEAMMATE_BRANCH_ID,
@@ -145,13 +192,13 @@ describe('getLinkPromotionActions', () => {
 
   it('keeps uploaded files promotable and internal references owner-local', () => {
     expect(
-      getLinkPromotionActions(
+      getLinkPlacementMenuItems(
         linkItem({ kind: 'document', source: 'upload', filePath: '/tmp/report.pdf' }),
         { branchId: BRANCH_ID }
       )
     ).toHaveLength(1);
     expect(
-      getLinkPromotionActions(linkItem({ kind: 'internal' }), { branchId: BRANCH_ID })
+      getLinkPlacementMenuItems(linkItem({ kind: 'internal' }), { branchId: BRANCH_ID })
     ).toEqual([]);
   });
 });

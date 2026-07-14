@@ -200,6 +200,32 @@ describe('LinkPlacementService', () => {
     }
   );
 
+  dbTest('removes a legacy promotion-managed teammate placement', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const teammate = await seedBranch(db, { teammate: true });
+    const repository = new LinksRepository(db);
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/legacy-placement');
+    const legacyPlacement = await createUrl(
+      db,
+      teammate.branch_id,
+      'https://example.com/legacy-placement',
+      { metadata: { teammate_promotion: true } }
+    );
+    const { service } = promotionService(db);
+
+    await expect(
+      service.remove(null, {
+        route: { sourceLinkId: source.link_id },
+        query: {
+          target: LINK_PROMOTION_TARGET.teammate,
+          teammate_branch_id: teammate.branch_id,
+        },
+      })
+    ).resolves.toMatchObject({ link_id: legacyPlacement.link_id });
+    await expect(repository.findById(source.link_id)).resolves.not.toBeNull();
+    await expect(repository.findById(legacyPlacement.link_id)).resolves.toBeNull();
+  });
+
   dbTest('preserves promotion lineage from session through branch to teammate', async ({ db }) => {
     const branch = await seedBranch(db);
     const session = await seedSession(db, branch.branch_id);

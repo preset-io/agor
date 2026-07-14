@@ -74,11 +74,12 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   pinningKeys,
   onTogglePinned,
   onRegisterOpenPinnedManager,
-  getPlacementActions,
+  getPlacementItems,
   onPlacementAction,
   onOpenPlacements,
   lifecycleBusyKeys,
   onDeleteLink,
+  deleteLabel,
   onCreateLink,
   onUpdateLink,
 }) => {
@@ -284,12 +285,13 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
                     pinningKeys={pinningKeys}
                     onOpen={openTarget}
                     onTogglePinned={onTogglePinned}
-                    getPlacementActions={getPlacementActions}
+                    getPlacementItems={getPlacementItems}
                     onPlacementAction={onPlacementAction}
                     onOpenPlacements={onOpenPlacements}
                     lifecycleBusyKeys={lifecycleBusyKeys}
                     onEditLink={openEditLink}
                     onDeleteLink={onDeleteLink}
+                    deleteLabel={deleteLabel}
                   />
                 ))}
               </div>

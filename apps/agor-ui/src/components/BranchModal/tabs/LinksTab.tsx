@@ -16,7 +16,7 @@ import {
   canEditLinkTarget,
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
-  getLinkPromotionActions,
+  getLinkPlacementMenuItems,
   LINK_ACTION_LABEL,
   LINK_OWNER_SCOPE,
   type LinkCategoryTabKey,
@@ -198,10 +198,11 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       key={item.key}
                       item={item}
                       sourceSessionLabel={getSourceSessionLabel(item, sessionById)}
-                      placementActions={getLinkPromotionActions(item, {
+                      placementItems={getLinkPlacementMenuItems(item, {
                         branchId: branch.branch_id,
                         teammateBranchId,
                         placements: placementsByTargetKey.get(item.targetKey),
+                        placementsLoaded: placementsByTargetKey.has(item.targetKey),
                         available: Boolean(client),
                       })}
                       lifecycleBusy={

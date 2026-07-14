@@ -65,6 +65,9 @@ export const LINK_ACTION_LABEL = {
   removeFromBranch: 'Remove from branch',
   removeFromSession: 'Remove from session',
   removeFromTeammate: 'Remove from teammate',
+  alreadyInBranch: 'Already in branch',
+  alreadyInTeammate: 'Already in teammate',
+  checkingDestinations: 'Checking destinations…',
   saveChanges: 'Save changes',
   pin: 'Pin',
   unpin: 'Unpin',
@@ -80,6 +83,9 @@ export const LINK_ACTION_KEY = {
   promoteToTeammate: 'promote-to-teammate',
   removeFromBranch: 'remove-from-branch',
   removeFromTeammate: 'remove-from-teammate',
+  alreadyInBranch: 'already-in-branch',
+  alreadyInTeammate: 'already-in-teammate',
+  checkingDestinations: 'checking-destinations',
 } as const;
 
 export function getLinkActionsAriaLabel(name: string): string {

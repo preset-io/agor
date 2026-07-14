@@ -1,7 +1,8 @@
 import {
   canPromoteLink,
-  isLinkPlacementFromPromotionRoot,
+  getLinkPlacementRelationship,
   LINK_CONTEXT_KIND,
+  LINK_PLACEMENT_RELATIONSHIP,
   LINK_PROMOTION_TARGET,
   type LinkContextKind,
   type LinkPromotionRequest,
@@ -44,10 +45,23 @@ export interface LinkPromotionAction extends LinkPromotionSelection {
   operation: LinkPlacementOperation;
 }
 
+export interface LinkPlacementStatus {
+  key: string;
+  label: string;
+  disabled: true;
+}
+
+export type LinkPlacementMenuItem = LinkPromotionAction | LinkPlacementStatus;
+
+export function isLinkPromotionAction(item: LinkPlacementMenuItem): item is LinkPromotionAction {
+  return 'operation' in item;
+}
+
 interface LinkPromotionContext {
   branchId?: string | null;
   teammateBranchId?: string | null;
   placements?: readonly Link[];
+  placementsLoaded?: boolean;
   available?: boolean;
 }
 
@@ -69,6 +83,16 @@ const LINK_REMOVAL_LABEL = {
 const LINK_REMOVAL_ACTION_KEY = {
   [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_KEY.removeFromBranch,
   [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_KEY.removeFromTeammate,
+} as const satisfies Record<LinkPromotionDestination, string>;
+
+const LINK_EXISTING_LABEL = {
+  [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_LABEL.alreadyInBranch,
+  [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_LABEL.alreadyInTeammate,
+} as const satisfies Record<LinkPromotionDestination, string>;
+
+const LINK_EXISTING_ACTION_KEY = {
+  [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_KEY.alreadyInBranch,
+  [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_KEY.alreadyInTeammate,
 } as const satisfies Record<LinkPromotionDestination, string>;
 
 function promotionSourceContext(
@@ -114,20 +138,23 @@ function placementMatchesSelection(link: Link, selection: LinkPromotionSelection
 }
 
 function getLinkPlacementAction(
-  item: LinkDisplayItem,
   selection: LinkPromotionSelection,
   placements: readonly Link[] = [],
   available = true
-): LinkPromotionAction | null {
+): LinkPlacementMenuItem {
   const existing = placements.find((link) => placementMatchesSelection(link, selection));
-  if (
-    existing &&
-    (!item.promotionRootLinkId ||
-      !isLinkPlacementFromPromotionRoot(existing, item.promotionRootLinkId))
-  ) {
-    return null;
+  const relationship = getLinkPlacementRelationship(existing);
+  if (relationship === LINK_PLACEMENT_RELATIONSHIP.independentlyOwned) {
+    return {
+      key: LINK_EXISTING_ACTION_KEY[selection.destination],
+      label: LINK_EXISTING_LABEL[selection.destination],
+      disabled: true,
+    };
   }
-  const operation = existing ? LINK_PLACEMENT_OPERATION.remove : LINK_PLACEMENT_OPERATION.promote;
+  const operation =
+    relationship === LINK_PLACEMENT_RELATIONSHIP.promotionManaged
+      ? LINK_PLACEMENT_OPERATION.remove
+      : LINK_PLACEMENT_OPERATION.promote;
   return {
     ...selection,
     operation,
@@ -143,20 +170,24 @@ function getLinkPlacementAction(
   };
 }
 
-export function getLinkPromotionActions(
+export function getLinkPlacementMenuItems(
   item: LinkDisplayItem,
   context: LinkPromotionContext
-): LinkPromotionAction[] {
+): LinkPlacementMenuItem[] {
   if (item.kind === LINK_KIND.internal) return [];
-  return promotionCandidates(item, context).flatMap((selection) => {
-    const action = getLinkPlacementAction(
-      item,
-      selection,
-      context.placements,
-      context.available ?? true
-    );
-    return action ? [action] : [];
-  });
+  const candidates = promotionCandidates(item, context);
+  if (candidates.length > 0 && context.placementsLoaded === false) {
+    return [
+      {
+        key: LINK_ACTION_KEY.checkingDestinations,
+        label: LINK_ACTION_LABEL.checkingDestinations,
+        disabled: true,
+      },
+    ];
+  }
+  return candidates.map((selection) =>
+    getLinkPlacementAction(selection, context.placements, context.available ?? true)
+  );
 }
 
 function promotionRequest(selection: LinkPromotionSelection): LinkPromotionRequest {

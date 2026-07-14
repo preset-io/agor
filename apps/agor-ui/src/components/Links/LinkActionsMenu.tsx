@@ -1,7 +1,11 @@
 import { App, type MenuProps } from 'antd';
 import { LinkOverflowAction } from './LinkActions';
 import type { LinkDisplayItem } from './linkDisplay';
-import type { LinkPromotionAction } from './linkPromotion';
+import {
+  isLinkPromotionAction,
+  type LinkPlacementMenuItem,
+  type LinkPromotionAction,
+} from './linkPromotion';
 import {
   getLinkActionsAriaLabel,
   LINK_ACTION_KEY,
@@ -15,7 +19,7 @@ interface LinkActionsMenuProps {
   onEdit: () => void;
   onDelete?: () => Promise<unknown>;
   deleteLabel?: string;
-  placementActions?: readonly LinkPromotionAction[];
+  placementItems?: readonly LinkPlacementMenuItem[];
   onPlacementAction?: (action: LinkPromotionAction) => Promise<unknown>;
   onOpenPlacements?: () => unknown | Promise<unknown>;
 }
@@ -26,17 +30,17 @@ export function LinkActionsMenu({
   onEdit,
   onDelete,
   deleteLabel = LINK_ACTION_LABEL.delete,
-  placementActions = [],
+  placementItems = [],
   onPlacementAction,
   onOpenPlacements,
 }: LinkActionsMenuProps) {
   const { modal } = App.useApp();
   const items: NonNullable<MenuProps['items']> = [
     { key: LINK_ACTION_KEY.edit, label: LINK_ACTION_LABEL.edit, disabled: busy },
-    ...placementActions.map((action) => ({
-      key: action.key,
-      label: action.label,
-      disabled: busy || action.disabled,
+    ...placementItems.map((item) => ({
+      key: item.key,
+      label: item.label,
+      disabled: busy || item.disabled,
     })),
     ...(onDelete
       ? [
@@ -53,8 +57,10 @@ export function LinkActionsMenu({
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     if (key === LINK_ACTION_KEY.edit) onEdit();
-    const placementAction = placementActions.find((action) => action.key === key);
-    if (placementAction && onPlacementAction) void onPlacementAction(placementAction);
+    const placementItem = placementItems.find((item) => item.key === key);
+    if (placementItem && isLinkPromotionAction(placementItem) && onPlacementAction) {
+      void onPlacementAction(placementItem);
+    }
     if (key === LINK_ACTION_KEY.delete && onDelete) {
       modal.confirm({
         title: LINK_CONFIRM_COPY.deleteTitle,

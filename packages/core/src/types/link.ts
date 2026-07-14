@@ -420,7 +420,7 @@ export function isLinkPlacementFromPromotionRoot(
   return promotionRootIdFromMetadata(link.metadata) === promotionRootLinkId;
 }
 
-export function isTeammatePromotionLink(link: Pick<Link, 'metadata'>): boolean {
+export function isPromotionManagedLink(link: Pick<Link, 'metadata'>): boolean {
   const metadata = link.metadata;
   return Boolean(
     metadata &&
@@ -428,6 +428,24 @@ export function isTeammatePromotionLink(link: Pick<Link, 'metadata'>): boolean {
         (metadata[LINK_PROMOTION_SOURCE_METADATA_KEY] &&
           typeof metadata[LINK_PROMOTION_SOURCE_METADATA_KEY] === 'object'))
   );
+}
+
+export const LINK_PLACEMENT_RELATIONSHIP = {
+  available: 'available',
+  promotionManaged: 'promotion_managed',
+  independentlyOwned: 'independently_owned',
+} as const;
+
+export type LinkPlacementRelationship =
+  (typeof LINK_PLACEMENT_RELATIONSHIP)[keyof typeof LINK_PLACEMENT_RELATIONSHIP];
+
+export function getLinkPlacementRelationship(
+  placement?: Pick<Link, 'metadata'> | null
+): LinkPlacementRelationship {
+  if (!placement) return LINK_PLACEMENT_RELATIONSHIP.available;
+  return isPromotionManagedLink(placement)
+    ? LINK_PLACEMENT_RELATIONSHIP.promotionManaged
+    : LINK_PLACEMENT_RELATIONSHIP.independentlyOwned;
 }
 
 export function normalizeLinkTargetKey(data: {

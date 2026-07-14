@@ -4,14 +4,16 @@ import {
   canPromoteLink,
   countLinkTargets,
   extractLinksFromMessage,
+  getLinkPlacementRelationship,
   getLinkPromotionRootId,
   getLinkTargetCompatibilityError,
   getLinkTargetField,
   isInternalLinkData,
   isLinkPlacementFromPromotionRoot,
-  isTeammatePromotionLink,
+  isPromotionManagedLink,
   LINK_CONTEXT_KIND,
   LINK_KIND_TARGET_FIELD,
+  LINK_PLACEMENT_RELATIONSHIP,
   LINK_PROMOTION_TARGET,
   LINK_SOURCE_TARGET_FIELDS,
   normalizeLinkTargetKey,
@@ -63,6 +65,21 @@ describe('link promotion policy', () => {
     expect(
       isLinkPlacementFromPromotionRoot(curatedTeammateLink, getLinkPromotionRootId(source))
     ).toBe(false);
+  });
+
+  it('classifies absent, current, legacy, and independently owned placements', () => {
+    expect(getLinkPlacementRelationship()).toBe(LINK_PLACEMENT_RELATIONSHIP.available);
+    expect(
+      getLinkPlacementRelationship({
+        metadata: { promoted_from_owner: { link_id: 'source-link' } },
+      })
+    ).toBe(LINK_PLACEMENT_RELATIONSHIP.promotionManaged);
+    expect(getLinkPlacementRelationship({ metadata: { teammate_promotion: true } })).toBe(
+      LINK_PLACEMENT_RELATIONSHIP.promotionManaged
+    );
+    expect(getLinkPlacementRelationship({ metadata: { teammate_owned: true } })).toBe(
+      LINK_PLACEMENT_RELATIONSHIP.independentlyOwned
+    );
   });
 });
 
@@ -225,13 +242,13 @@ describe('link target semantics', () => {
     expect(isInternalLinkData({ title: 'Updated title' })).toBe(false);
   });
 
-  it('recognizes current and legacy teammate promotion provenance', () => {
-    expect(isTeammatePromotionLink({ metadata: { teammate_promotion: true } })).toBe(true);
+  it('recognizes current and legacy promotion-managed provenance', () => {
+    expect(isPromotionManagedLink({ metadata: { teammate_promotion: true } })).toBe(true);
     expect(
-      isTeammatePromotionLink({ metadata: { promoted_from_owner: { session_id: 's1' } } })
+      isPromotionManagedLink({ metadata: { promoted_from_owner: { session_id: 's1' } } })
     ).toBe(true);
-    expect(isTeammatePromotionLink({ metadata: { teammate_owned: true } })).toBe(false);
-    expect(isTeammatePromotionLink({ metadata: null })).toBe(false);
+    expect(isPromotionManagedLink({ metadata: { teammate_owned: true } })).toBe(false);
+    expect(isPromotionManagedLink({ metadata: null })).toBe(false);
   });
 
   it('normalizes the populated target key', () => {

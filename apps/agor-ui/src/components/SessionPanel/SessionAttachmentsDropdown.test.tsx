@@ -172,7 +172,7 @@ describe('SessionAttachmentsDropdown', () => {
         <SessionAttachmentsDropdown
           items={[item]}
           onTogglePinned={vi.fn()}
-          getPlacementActions={() => [
+          getPlacementItems={() => [
             {
               destination: LINK_PROMOTION_DESTINATION.branch,
               branchId: 'branch-1',
@@ -183,6 +183,8 @@ describe('SessionAttachmentsDropdown', () => {
             },
           ]}
           onPlacementAction={onPlacementAction}
+          deleteLabel={LINK_ACTION_LABEL.removeFromSession}
+          onDeleteLink={vi.fn()}
         />
       </MemoryRouter>
     );
@@ -191,6 +193,7 @@ describe('SessionAttachmentsDropdown', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Manage links' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Actions for report.pdf' }));
+    expect(await screen.findByText(LINK_ACTION_LABEL.removeFromSession)).toBeInTheDocument();
     fireEvent.click(await screen.findByText(LINK_ACTION_LABEL.promoteToBranch));
     expect(onPlacementAction).toHaveBeenCalledWith(item, {
       destination: LINK_PROMOTION_DESTINATION.branch,

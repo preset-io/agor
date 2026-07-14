@@ -10,6 +10,7 @@ import {
   LinkActionsMenu,
   type LinkDisplayItem,
   LinkPinAction,
+  type LinkPlacementMenuItem,
   type LinkPromotionAction,
 } from '../Links';
 import { getLinkItemIcon, LinkCategoryGlyph } from '../Links/LinkVisual';
@@ -23,7 +24,7 @@ import {
 type SessionAttachmentItem = LinkDisplayItem;
 
 export interface SessionAttachmentPlacementActions {
-  getPlacementActions?: (item: SessionAttachmentItem) => readonly LinkPromotionAction[];
+  getPlacementItems?: (item: SessionAttachmentItem) => readonly LinkPlacementMenuItem[];
   onPlacementAction?: (
     item: SessionAttachmentItem,
     action: LinkPromotionAction
@@ -95,7 +96,7 @@ function actionsMenu(props: DrawerProps) {
           : undefined
       }
       deleteLabel={props.deleteLabel}
-      placementActions={props.getPlacementActions?.(props.item)}
+      placementItems={props.getPlacementItems?.(props.item)}
       onPlacementAction={(action) =>
         props.onPlacementAction?.(props.item, action) ?? Promise.resolve()
       }

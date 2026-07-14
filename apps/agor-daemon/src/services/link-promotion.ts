@@ -13,10 +13,10 @@ import type {
 } from '@agor/core/types';
 import {
   canPromoteLink,
-  getLinkPromotionRootId,
-  isLinkPlacementFromPromotionRoot,
+  getLinkPlacementRelationship,
   isTeammate,
   LINK_CONTEXT_KIND,
+  LINK_PLACEMENT_RELATIONSHIP,
   LINK_PROMOTION_SOURCE_METADATA_KEY,
   LINK_PROMOTION_TARGET,
   TEAMMATE_PROMOTION_METADATA_KEY,
@@ -259,7 +259,7 @@ export class LinkPlacementService {
     await this.authorizeDestination(destination, params);
     const existing = await this.findDestinationPlacement(source, destination);
     if (!existing) return null;
-    if (!isLinkPlacementFromPromotionRoot(existing, getLinkPromotionRootId(source))) {
+    if (getLinkPlacementRelationship(existing) !== LINK_PLACEMENT_RELATIONSHIP.promotionManaged) {
       throw new BadRequest(LINK_PROMOTION_ERROR.unrelatedPlacement);
     }
     const { query: _query, ...mutationParams } = params ?? {};

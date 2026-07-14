@@ -8,6 +8,7 @@ import {
   LinkActionsMenu,
   type LinkDisplayItem,
   LinkPinAction,
+  type LinkPlacementMenuItem,
   type LinkPromotionAction,
 } from '../../Links';
 import { LinkCategoryGlyph } from '../../Links/LinkVisual';
@@ -16,7 +17,7 @@ import { getLinkUnavailableReason } from '../../Links/linkContent';
 interface BranchLinkListItemProps {
   item: LinkDisplayItem;
   sourceSessionLabel: string | null;
-  placementActions: readonly LinkPromotionAction[];
+  placementItems: readonly LinkPlacementMenuItem[];
   pinning: boolean;
   lifecycleBusy: boolean;
   onOpen: (item: LinkDisplayItem) => void;
@@ -58,7 +59,7 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
               onEdit={() => props.onEdit(props.item)}
               onDelete={props.item.linkId ? () => props.onDelete(props.item) : undefined}
               deleteLabel={props.deleteLabel}
-              placementActions={props.placementActions}
+              placementItems={props.placementItems}
               onPlacementAction={(action) => props.onPlacementAction(props.item, action)}
               onOpenPlacements={() => props.onOpenPlacements(props.item)}
             />

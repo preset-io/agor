@@ -69,7 +69,7 @@ import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import {
   buildLinkDisplayItems,
-  getLinkPromotionActions,
+  getLinkPlacementMenuItems,
   groupRenderableLinksByMessageId,
   LINK_ACTION_LABEL,
   LINK_OWNER_SCOPE,
@@ -1126,11 +1126,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const placementActionsForSessionLink = (item: LinkDisplayItem) =>
-    getLinkPromotionActions(item, {
+  const placementItemsForSessionLink = (item: LinkDisplayItem) =>
+    getLinkPlacementMenuItems(item, {
       branchId: branch?.branch_id,
       teammateBranchId,
       placements: placementsByTargetKey.get(item.targetKey),
+      placementsLoaded: placementsByTargetKey.has(item.targetKey),
       available: Boolean(client && !connectionDisabled),
     });
 
@@ -1480,7 +1481,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               pinningKeys={pinningKeys}
               onTogglePinned={handleToggleSessionLinkPinned}
               onRegisterOpenPinnedManager={handleRegisterOpenPinnedManager}
-              getPlacementActions={placementActionsForSessionLink}
+              getPlacementItems={placementItemsForSessionLink}
               onPlacementAction={handleSessionLinkPlacementAction}
               onOpenPlacements={handleRefreshSessionLinkPlacements}
               lifecycleBusyKeys={sessionLinkBusyKeys}
