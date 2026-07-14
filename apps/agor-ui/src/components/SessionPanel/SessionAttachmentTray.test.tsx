@@ -84,7 +84,7 @@ describe('SessionAttachmentTray', () => {
     expect(screen.getByLabelText('notes.md')).toBeInTheDocument();
   });
 
-  it('locks remove and batch settings while the composer sends', () => {
+  it('locks remove and batch settings while composer files are uploading', () => {
     const onRemove = vi.fn();
 
     render(
@@ -96,7 +96,7 @@ describe('SessionAttachmentTray', () => {
     );
 
     expect(
-      screen.getByText('Sending prompt. Attachment changes are locked until sending finishes.')
+      screen.getByText('Files are uploading. Attachment changes are locked until upload finishes.')
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Remove chart.png')).toBeDisabled();
     expect(screen.queryByLabelText('Batch attachment settings')).not.toBeInTheDocument();

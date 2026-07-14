@@ -18,12 +18,10 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { type AgorState, useAgorStore } from '../../store/agorStore';
+import { useAgorStore } from '../../store/agorStore';
 import {
-  makeLinksForBranchSelector,
   selectBranchById,
   selectCommentById,
-  selectFetchAndReplaceFullBranchLinks,
   selectRepoById,
   selectSessionsByBranch,
   selectUserById,
@@ -34,41 +32,11 @@ import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardSessionList } from '../BranchListDrawer';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
-import { buildLinkDisplayItems, type LinkDisplayItem, useLinkMutations } from '../Links';
-import { PinnedLinkList } from '../Links/PinnedLinkList';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
 
 export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'comments';
-function TeammatePinnedLinksBlock({
-  items,
-  loading,
-  error,
-  onTogglePinned,
-  pinningKeys,
-  onOpenMore,
-}: {
-  items: LinkDisplayItem[];
-  loading: boolean;
-  error: string | null;
-  onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
-  pinningKeys?: ReadonlySet<string>;
-  onOpenMore?: () => void;
-}) {
-  return (
-    <PinnedLinkList
-      items={items}
-      loading={loading}
-      error={error}
-      countMode="total"
-      loadingLabel="Loading teammate links…"
-      onTogglePinned={onTogglePinned}
-      pinningKeys={pinningKeys}
-      onOpenMore={onOpenMore}
-    />
-  );
-}
 
 interface BoardTeammatePanelProps {
   board: Board | null;
@@ -147,23 +115,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   const repoById = useAgorStore(selectRepoById);
   const userById = useAgorStore(selectUserById);
   const commentById = useAgorStore(selectCommentById);
-  const teammateLinksSelector = useMemo(
-    () => makeLinksForBranchSelector(primaryTeammateBranch?.branch_id ?? ''),
-    [primaryTeammateBranch?.branch_id]
-  );
-  const teammateLinks = useAgorStore(teammateLinksSelector) ?? [];
-  const teammateLinksHydratedSelector = useMemo(
-    () => (state: AgorState) => {
-      const branchId = primaryTeammateBranch?.branch_id;
-      return branchId
-        ? state.fullBranchLinkOwnerIds.has(branchId) ||
-            state.directFullBranchLinkOwnerIds.has(branchId)
-        : false;
-    },
-    [primaryTeammateBranch?.branch_id]
-  );
-  const teammateLinksHydrated = useAgorStore(teammateLinksHydratedSelector);
-  const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
   const boardObjects = board?.objects;
   const defaultTab: BoardTeammatePanelTab = primaryTeammateInaccessible
     ? 'all-sessions'
@@ -252,10 +203,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById]);
   const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
   const [assigningTeammate, setAssigningTeammate] = useState(false);
-  const { pinningKeys: teammatePinningKeys, togglePinned: handleToggleTeammatePinned } =
-    useLinkMutations({ client, branchId: primaryTeammateBranch?.branch_id });
-  const [teammateLinksLoading, setTeammateLinksLoading] = useState(false);
-  const [teammateLinksError, setTeammateLinksError] = useState<string | null>(null);
 
   useEffect(() => {
     if (
@@ -299,51 +246,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       primaryTeammateBranch ? sessionsByBranch.get(primaryTeammateBranch.branch_id) || [] : [],
     [primaryTeammateBranch, sessionsByBranch]
   );
-  const teammatePinnedLinkItems = useMemo(
-    () =>
-      buildLinkDisplayItems({
-        links: teammateLinks.filter((link) => link.is_pinned),
-        includeBranchLinks: false,
-      }).filter((item) => item.ownerScope === 'branch' && item.isPinned),
-    [teammateLinks]
-  );
-
-  useEffect(() => {
-    const branchId = primaryTeammateBranch?.branch_id;
-    if (!branchId || !client) {
-      setTeammateLinksLoading(false);
-      setTeammateLinksError(null);
-      return;
-    }
-    if (teammateLinksHydrated) {
-      setTeammateLinksLoading(false);
-      setTeammateLinksError(null);
-      return;
-    }
-
-    let active = true;
-    setTeammateLinksLoading(true);
-    setTeammateLinksError(null);
-    fetchAndReplaceFullBranchLinks(client, branchId)
-      .catch((error) => {
-        if (!active) return;
-        setTeammateLinksError(
-          error instanceof Error ? error.message : 'Could not load teammate links'
-        );
-      })
-      .finally(() => {
-        if (active) setTeammateLinksLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [
-    teammateLinksHydrated,
-    client,
-    fetchAndReplaceFullBranchLinks,
-    primaryTeammateBranch?.branch_id,
-  ]);
 
   const teammateContent = (() => {
     if (primaryTeammateBranch && primaryTeammateRepo) {
@@ -441,15 +343,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </div>
             )}
           </div>
-
-          <TeammatePinnedLinksBlock
-            items={teammatePinnedLinkItems}
-            loading={teammateLinksLoading}
-            error={teammateLinksError}
-            onTogglePinned={client ? handleToggleTeammatePinned : undefined}
-            pinningKeys={teammatePinningKeys}
-            onOpenMore={() => onOpenSettings?.(primaryTeammateBranch.branch_id, 'links')}
-          />
 
           {sessionDetailsHydrated ? (
             <BranchSessionSections

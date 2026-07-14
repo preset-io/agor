@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildPromptWithAttachments,
   ingestInboundAttachments,
   isAllowedSlackFileUrl,
   isIngestableFile,
@@ -72,6 +73,30 @@ describe('isIngestableFile', () => {
   });
 });
 
+describe('buildPromptWithAttachments', () => {
+  it('returns the trimmed text when there are no attachments', () => {
+    expect(buildPromptWithAttachments('  hello  ', [])).toBe('hello');
+  });
+
+  it('prepends the attachment block to regular prompts', () => {
+    expect(buildPromptWithAttachments('look at this', ['/tmp/a.png'])).toBe(
+      'Attached files:\n- /tmp/a.png\n\nlook at this'
+    );
+  });
+
+  it('keeps slash commands first', () => {
+    expect(buildPromptWithAttachments('/review', ['/tmp/a.png'])).toBe(
+      '/review\n\nAttached files:\n- /tmp/a.png'
+    );
+  });
+
+  it('returns only the attachment block when the text is empty', () => {
+    expect(buildPromptWithAttachments('', ['/tmp/a.png', '/tmp/b.png'])).toBe(
+      'Attached files:\n- /tmp/a.png\n- /tmp/b.png'
+    );
+  });
+});
+
 describe('ingestInboundAttachments', () => {
   let uploadDir: string;
 
@@ -102,7 +127,7 @@ describe('ingestInboundAttachments', () => {
     expect(result.failed).toBe(0);
     expect(result.paths).toHaveLength(1);
     expect(result.paths[0].startsWith(uploadDir)).toBe(true);
-    expect(path.basename(result.paths[0])).toMatch(/^F123_screenshot_\d+_[0-9a-f-]{36}\.png$/);
+    expect(path.basename(result.paths[0])).toMatch(/^F123_screenshot_\d+\.png$/);
     expect(new Uint8Array(await fs.readFile(result.paths[0]))).toEqual(bytes);
   });
 
@@ -131,7 +156,7 @@ describe('ingestInboundAttachments', () => {
 
     expect(result.failed).toBe(0);
     expect(result.paths).toHaveLength(1);
-    expect(path.basename(result.paths[0])).toMatch(/^F123_errors_\d+_[0-9a-f-]{36}\.csv$/);
+    expect(path.basename(result.paths[0])).toMatch(/^F123_errors_\d+\.csv$/);
     expect(await fs.readFile(result.paths[0], 'utf8')).toBe(body);
   });
 
@@ -182,23 +207,12 @@ describe('ingestInboundAttachments', () => {
 
   it('rejects redirects to non-allowlisted hosts and never sends the token there', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    let bodyCancelled = false;
     const fetchImpl = vi.fn(
       async () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new Uint8Array([1]));
-            },
-            cancel() {
-              bodyCancelled = true;
-            },
-          }),
-          {
-            status: 302,
-            headers: { location: 'https://attacker.example/exfil.png' },
-          }
-        )
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://attacker.example/exfil.png' },
+        })
     );
 
     const result = await ingestInboundAttachments({
@@ -215,7 +229,6 @@ describe('ingestInboundAttachments', () => {
     for (const [calledUrl] of fetchImpl.mock.calls) {
       expect(isAllowedSlackFileUrl(calledUrl as string)).toBe(true);
     }
-    expect(bodyCancelled).toBe(true);
   });
 
   it('follows redirects between allowlisted Slack hosts with the token', async () => {
@@ -277,36 +290,6 @@ describe('ingestInboundAttachments', () => {
     // Reading stopped as soon as the running total crossed the 50MB ceiling.
     expect(chunksPulled).toBeLessThanOrEqual(MAX_UPLOAD_FILE_SIZE / chunkSize + 2);
     expect(await fs.readdir(uploadDir)).toEqual([]);
-  });
-
-  it('enforces the aggregate limit against actual streamed bytes', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const response = () =>
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([1, 2, 3]));
-            controller.close();
-          },
-        }),
-        { status: 200, headers: { 'content-type': 'image/png' } }
-      );
-    const fetchImpl = vi.fn(async () => response());
-
-    const result = await ingestInboundAttachments({
-      files: [
-        makeFile({ id: 'F1', name: 'first.png', size: 1 }),
-        makeFile({ id: 'F2', name: 'second.png', size: 1 }),
-      ],
-      botToken: 'xoxb-test',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      uploadDir,
-      maxTotalBytes: 5,
-    });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ paths: [expect.stringContaining('F1_first_')], failed: 1 });
-    expect(await fs.readdir(uploadDir)).toHaveLength(1);
   });
 
   it('rejects image/svg+xml response bodies (excluded from the upload allowlist)', async () => {
@@ -387,57 +370,6 @@ describe('ingestInboundAttachments', () => {
     expect(result).toEqual({ paths: [], failed: 1 });
   });
 
-  it('cancels response bodies rejected from headers', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    let cancellations = 0;
-    const cases: Array<{
-      status: number;
-      headers: Record<string, string>;
-      maxTotalBytes?: number;
-    }> = [
-      { status: 500, headers: { 'content-type': 'image/png' } },
-      { status: 200, headers: { 'content-type': 'text/html' } },
-      {
-        status: 200,
-        headers: {
-          'content-type': 'image/png',
-          'content-length': String(MAX_UPLOAD_FILE_SIZE + 1),
-        },
-      },
-      {
-        status: 200,
-        headers: { 'content-type': 'image/png', 'content-length': '2' },
-        maxTotalBytes: 1,
-      },
-    ];
-
-    for (const testCase of cases) {
-      const response = new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([1]));
-          },
-          cancel() {
-            cancellations++;
-          },
-        }),
-        { status: testCase.status, headers: testCase.headers }
-      );
-      const result = await ingestInboundAttachments({
-        files: [makeFile()],
-        botToken: 'xoxb-test',
-        fetchImpl: vi.fn(async () => response) as unknown as typeof fetch,
-        uploadDir,
-        maxTotalBytes: testCase.maxTotalBytes,
-      });
-
-      expect(result).toEqual({ paths: [], failed: 1 });
-    }
-
-    expect(cancellations).toBe(cases.length);
-    expect(await fs.readdir(uploadDir)).toEqual([]);
-  });
-
   it('continues past failures and still stores the remaining images', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const bytes = new Uint8Array([1, 2, 3]);
@@ -458,7 +390,7 @@ describe('ingestInboundAttachments', () => {
 
     expect(result.failed).toBe(1);
     expect(result.paths).toHaveLength(1);
-    expect(path.basename(result.paths[0])).toMatch(/^F2_second_\d+_[0-9a-f-]{36}\.png$/);
+    expect(path.basename(result.paths[0])).toMatch(/^F2_second_\d+\.png$/);
   });
 
   it('counts images beyond the per-message cap as failed without fetching them', async () => {

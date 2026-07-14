@@ -11,7 +11,6 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
-  Link,
   Message,
   PermissionMode,
   SandpackConfig,
@@ -24,7 +23,6 @@ import { relations, sql } from 'drizzle-orm';
 import {
   type AnySQLiteColumn,
   blob,
-  check,
   index,
   integer,
   primaryKey,
@@ -492,80 +490,6 @@ export const messages = sqliteTable(
       table.session_id,
       table.timestamp
     ),
-  })
-);
-
-/**
- * Links table - Branch/session-owned links and uploaded attachments.
- *
- * Stable row-shape invariants are enforced in both the database and repository.
- * Extensible kind/source compatibility remains application-owned.
- */
-export const links = sqliteTable(
-  'links',
-  {
-    link_id: text('link_id', { length: 36 }).primaryKey(),
-    branch_id: text('branch_id', { length: 36 }).references(() => branches.branch_id, {
-      onDelete: 'cascade',
-    }),
-    session_id: text('session_id', { length: 36 }).references(() => sessions.session_id, {
-      onDelete: 'cascade',
-    }),
-    source_message_id: text('source_message_id', { length: 36 }).references(
-      () => messages.message_id,
-      { onDelete: 'set null' }
-    ),
-    kind: text('kind', {
-      enum: ['issue', 'pr', 'kb_ref', 'internal', 'image', 'document', 'url'],
-    }).notNull(),
-    source: text('source', {
-      enum: ['manual', 'parsed', 'upload'],
-    }).notNull(),
-    url: text('url'),
-    ref_uri: text('ref_uri'),
-    file_path: text('file_path'),
-    target_object_type: text('target_object_type'),
-    target_object_id: text('target_object_id', { length: 36 }),
-    target_key: text('target_key').notNull(),
-    is_pinned: t.bool('is_pinned').notNull().default(false),
-    title: text('title'),
-    mime_type: text('mime_type'),
-    metadata: t.json<Link['metadata']>('metadata'),
-    created_by: text('created_by', { length: 36 }).references(() => users.user_id, {
-      onDelete: 'set null',
-    }),
-    created_at: t.timestamp('created_at').notNull(),
-    updated_at: t.timestamp('updated_at').notNull(),
-    revision: integer('revision').notNull().default(1),
-  },
-  (table) => ({
-    ownerXorCheck: check(
-      'links_owner_xor_check',
-      sql`((${table.branch_id} is not null) and (${table.session_id} is null)) or ((${table.branch_id} is null) and (${table.session_id} is not null))`
-    ),
-    targetXorCheck: check(
-      'links_target_xor_check',
-      sql`(case when ${table.url} is not null and trim(${table.url}) <> '' then 1 else 0 end + case when ${table.ref_uri} is not null and trim(${table.ref_uri}) <> '' then 1 else 0 end + case when ${table.file_path} is not null and trim(${table.file_path}) <> '' then 1 else 0 end) = 1`
-    ),
-    targetObjectPairCheck: check(
-      'links_target_object_pair_check',
-      sql`((${table.target_object_type} is null) and (${table.target_object_id} is null)) or ((${table.target_object_type} is not null) and (${table.target_object_id} is not null))`
-    ),
-    branchIdx: index('links_branch_id_idx').on(table.branch_id),
-    sessionIdx: index('links_session_id_idx').on(table.session_id),
-    sourceMessageIdx: index('links_source_message_id_idx').on(table.source_message_id),
-    targetObjectIdx: index('links_target_object_idx').on(
-      table.target_object_type,
-      table.target_object_id
-    ),
-    branchPinnedIdx: index('links_branch_pinned_idx').on(table.branch_id, table.is_pinned),
-    sessionPinnedIdx: index('links_session_pinned_idx').on(table.session_id, table.is_pinned),
-    branchTargetIdx: uniqueIndex('links_branch_target_idx')
-      .on(table.branch_id, table.target_key)
-      .where(sql`${table.branch_id} is not null`),
-    sessionTargetIdx: uniqueIndex('links_session_target_idx')
-      .on(table.session_id, table.target_key)
-      .where(sql`${table.session_id} is not null`),
   })
 );
 
@@ -2425,8 +2349,6 @@ export type TaskRow = typeof tasks.$inferSelect;
 export type TaskInsert = typeof tasks.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
-export type LinkRow = typeof links.$inferSelect;
-export type LinkInsert = typeof links.$inferInsert;
 export type BoardRow = typeof boards.$inferSelect;
 export type BoardInsert = typeof boards.$inferInsert;
 export type RepoRow = typeof repos.$inferSelect;
@@ -2505,7 +2427,6 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
     fields: [sessions.schedule_id],
     references: [schedules.schedule_id],
   }),
-  links: many(links),
   outboundRelationships: many(sessionRelationships, { relationName: 'relationshipSource' }),
   inboundRelationships: many(sessionRelationships, { relationName: 'relationshipTarget' }),
 }));
@@ -2529,23 +2450,7 @@ export const sessionRelationshipsRelations = relations(sessionRelationships, ({ 
 
 export const branchesRelations = relations(branches, ({ many }) => ({
   sessions: many(sessions),
-  links: many(links),
   schedules: many(schedules),
-}));
-
-export const linksRelations = relations(links, ({ one }) => ({
-  branch: one(branches, {
-    fields: [links.branch_id],
-    references: [branches.branch_id],
-  }),
-  session: one(sessions, {
-    fields: [links.session_id],
-    references: [sessions.session_id],
-  }),
-  sourceMessage: one(messages, {
-    fields: [links.source_message_id],
-    references: [messages.message_id],
-  }),
 }));
 
 export const schedulesRelations = relations(schedules, ({ one, many }) => ({

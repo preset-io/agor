@@ -164,14 +164,14 @@ async function advanceToOptions() {
 async function advanceToCreateAppStep() {
   await advanceToOptions();
   clickButton(/^Continue$/);
-  await waitFor(() => expect(getButton(/Copy manifest/)).toBeInTheDocument());
+  await flush();
 }
 
 /** Advance all the way to the final "Tokens & test" step (step 3). */
 async function advanceToTokensStep() {
   await advanceToCreateAppStep();
   clickButton(/^Continue$/);
-  await screen.findByPlaceholderText('xoxb-...');
+  await flush();
 }
 
 describe('GatewayChannelsTable Slack create wizard', () => {
@@ -217,9 +217,11 @@ describe('GatewayChannelsTable Slack create wizard', () => {
 
     // Slack aligns users by default, so no run-as user is required to advance.
     clickButton(/^Continue$/);
-    await waitFor(() => expect(getButton(/Copy manifest/)).toBeInTheDocument());
+    await flush();
+    expect(getButton(/Copy manifest/)).toBeInTheDocument();
     clickButton(/^Continue$/);
-    await waitFor(() => expect(getButton(/Create channel/)).toBeInTheDocument());
+    await flush();
+    expect(getButton(/Create channel/)).toBeInTheDocument();
     expect(queryButton(/^Continue$/)).toBeUndefined();
     expect(screen.getByPlaceholderText('xoxb-...')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('xapp-...')).toBeInTheDocument();

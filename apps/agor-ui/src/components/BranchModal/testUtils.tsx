@@ -2,7 +2,6 @@ import type {
   AgorClient,
   Branch,
   KnowledgeNamespace,
-  Link,
   Repo,
   TeammateConfig,
   User,
@@ -37,7 +36,6 @@ export interface StubClientOptions {
   /** Throw a 500-style error on the initial owners.find load. */
   failOwnersFind?: boolean;
   namespaces?: KnowledgeNamespace[];
-  links?: Link[];
 }
 
 export function makeStubClient(opts: StubClientOptions = {}): {
@@ -98,7 +96,6 @@ export function makeStubClient(opts: StubClientOptions = {}): {
         async findAll(args: unknown) {
           calls.push({ service: path, method: 'findAll', args: [args] });
           if (path === 'users') return users;
-          if (path === 'links') return opts.links ?? [];
           return [];
         },
         async create(body: unknown, params?: unknown) {
@@ -113,10 +110,6 @@ export function makeStubClient(opts: StubClientOptions = {}): {
         },
         async patch(id: string, body: unknown, params?: unknown) {
           calls.push({ service: path, method: 'patch', args: [id, body, params] });
-          if (path === 'links') {
-            const existing = opts.links?.find((link) => link.link_id === id);
-            return { ...existing, ...(body as object), link_id: id };
-          }
           if (path === 'branches' && opts.failBranchPatch) {
             throw new Error('daemon exploded');
           }

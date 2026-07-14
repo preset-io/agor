@@ -1,12 +1,61 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildPromptWithAttachments,
+  getLatestComposerPromptText,
   isBlockingComposerAttachment,
   isPreviewableComposerImage,
+  isSupportedComposerUploadFile,
   summarizeComposerFileRejections,
   validateComposerFileIntake,
 } from './composerAttachments';
 
 describe('composerAttachments', () => {
+  it('builds a hidden file-path preamble without modifying visible text', () => {
+    expect(
+      buildPromptWithAttachments('Compare these charts', [
+        '.agor/uploads/chart-a.png',
+        '.agor/uploads/chart-b.png',
+      ])
+    ).toBe(
+      'Attached files:\n- .agor/uploads/chart-a.png\n- .agor/uploads/chart-b.png\n\nCompare these charts'
+    );
+  });
+
+  it('preserves slash commands at the start of the sent prompt', () => {
+    expect(
+      buildPromptWithAttachments('/compact focus on this chart', ['.agor/uploads/chart.png'])
+    ).toBe(`/compact focus on this chart
+
+Attached files:
+- .agor/uploads/chart.png`);
+  });
+
+  it('supports attachment-only prompts', () => {
+    expect(buildPromptWithAttachments('   ', ['.agor/uploads/chart-a.png'])).toBe(
+      'Attached files:\n- .agor/uploads/chart-a.png'
+    );
+  });
+
+  it('uses the live textarea value for prompt edits typed during attachment upload', () => {
+    expect(
+      getLatestComposerPromptText({
+        promptHandle: { getValue: () => 'send-start text plus upload-time edit' },
+        inputValueRefValue: 'send-start text',
+        sendStartValue: 'send-start text',
+      })
+    ).toBe('send-start text plus upload-time edit');
+  });
+
+  it('does not resurrect send-start text when the live textarea is cleared during upload', () => {
+    expect(
+      getLatestComposerPromptText({
+        promptHandle: { getValue: () => '' },
+        inputValueRefValue: 'send-start text',
+        sendStartValue: 'send-start text',
+      })
+    ).toBe('');
+  });
+
   it('matches the server image allowlist used by composer-native attachments', () => {
     expect(isPreviewableComposerImage(new File(['x'], 'chart.png', { type: 'image/png' }))).toBe(
       true
@@ -16,23 +65,30 @@ describe('composerAttachments', () => {
     ).toBe(false);
   });
 
-  it('accepts arbitrary file types while keeping unsafe images out of inline preview', () => {
+  it('validates composer upload file types before send', () => {
+    expect(
+      isSupportedComposerUploadFile(new File(['x'], 'notes.txt', { type: 'text/plain' }))
+    ).toBe(true);
+    expect(
+      isSupportedComposerUploadFile(new File(['x'], 'chart.svg', { type: 'image/svg+xml' }))
+    ).toBe(false);
+
     const { acceptedFiles, rejections } = validateComposerFileIntake([
       new File(['x'], 'notes.txt', { type: 'text/plain' }),
       new File(['x'], 'unsafe.svg', { type: 'image/svg+xml' }),
-      new File(['<script>'], 'page.html', { type: 'text/html' }),
     ]);
 
-    expect(acceptedFiles.map((file) => file.name)).toEqual([
-      'notes.txt',
-      'unsafe.svg',
-      'page.html',
+    expect(acceptedFiles.map((file) => file.name)).toEqual(['notes.txt']);
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        file: expect.objectContaining({ name: 'unsafe.svg' }),
+        reason: 'Unsupported file type: image/svg+xml',
+      }),
     ]);
-    expect(rejections).toEqual([]);
-    expect(isPreviewableComposerImage(acceptedFiles[1])).toBe(false);
   });
 
-  it('infers preview MIME for known extensions without rejecting unknown files', () => {
+  it('infers supported file types from safe extensions when dropped files have empty MIME', () => {
+    expect(isSupportedComposerUploadFile(new File(['x'], 'notes.txt', { type: '' }))).toBe(true);
     expect(isPreviewableComposerImage(new File(['x'], 'chart.png', { type: '' }))).toBe(true);
 
     const { acceptedFiles, rejections } = validateComposerFileIntake([
@@ -41,22 +97,30 @@ describe('composerAttachments', () => {
       new File(['<svg />'], 'unsafe.svg', { type: '' }),
     ]);
 
-    expect(rejections).toEqual([]);
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        file: expect.objectContaining({ name: 'unsafe.svg' }),
+        reason: 'Unsupported file type: unknown',
+      }),
+    ]);
     expect(acceptedFiles.map((file) => [file.name, file.type])).toEqual([
       ['notes.txt', 'text/plain'],
       ['report.pdf', 'application/pdf'],
-      ['unsafe.svg', ''],
     ]);
   });
 
-  it('preserves a browser-reported MIME type without blocking the upload', () => {
+  it('does not trust extensions when the browser reports an unsupported MIME type', () => {
     const { acceptedFiles, rejections } = validateComposerFileIntake([
       new File(['<script>'], 'renamed.txt', { type: 'text/html' }),
     ]);
 
-    expect(acceptedFiles).toHaveLength(1);
-    expect(acceptedFiles[0].type).toBe('text/html');
-    expect(rejections).toEqual([]);
+    expect(acceptedFiles).toHaveLength(0);
+    expect(rejections).toEqual([
+      expect.objectContaining({
+        file: expect.objectContaining({ name: 'renamed.txt' }),
+        reason: 'Unsupported file type: text/html',
+      }),
+    ]);
   });
 
   it('rejects a supported incoming batch that exceeds one backend request batch', () => {
@@ -73,17 +137,17 @@ describe('composerAttachments', () => {
       expect.arrayContaining([
         expect.objectContaining({
           file: expect.objectContaining({ name: 'note-0.txt' }),
-          reason: 'Composer supports up to 10 attachments',
+          reason: 'Composer supports up to 10 pending files',
         }),
         expect.objectContaining({
           file: expect.objectContaining({ name: 'note-10.txt' }),
-          reason: 'Composer supports up to 10 attachments',
+          reason: 'Composer supports up to 10 pending files',
         }),
       ])
     );
   });
 
-  it('applies the file-count cap uniformly across arbitrary file types', () => {
+  it('prioritizes the cap message when mixed invalid and supported files exceed the cap', () => {
     const files = [
       new File(['<svg />'], 'bad.svg', { type: 'image/svg+xml' }),
       ...Array.from(
@@ -97,7 +161,7 @@ describe('composerAttachments', () => {
     expect(acceptedFiles).toHaveLength(0);
     expect(rejections).toHaveLength(12);
     expect(summarizeComposerFileRejections(rejections)).toBe(
-      'bad.svg: Composer supports up to 10 attachments (+11 more)'
+      'note-0.txt: Composer supports up to 10 pending files (+11 more)'
     );
   });
 
@@ -123,74 +187,11 @@ describe('composerAttachments', () => {
     expect(rejections).toEqual([
       expect.objectContaining({
         file: expect.objectContaining({ name: 'incoming-0.txt' }),
-        reason: 'Composer supports up to 10 attachments',
+        reason: 'Composer supports up to 10 pending files',
       }),
       expect.objectContaining({
         file: expect.objectContaining({ name: 'incoming-1.txt' }),
-        reason: 'Composer supports up to 10 attachments',
-      }),
-    ]);
-  });
-
-  it('counts uploaded retry attachments toward the file cap', () => {
-    const currentAttachments = Array.from({ length: 10 }, (_, index) => ({
-      id: `uploaded-${index}`,
-      file: new File(['x'], `uploaded-${index}.txt`, { type: 'text/plain' }),
-      destination: 'branch' as const,
-      status: 'uploaded' as const,
-      uploadedFile: {
-        filename: `uploaded-${index}.txt`,
-        path: `.agor/uploads/uploaded-${index}.txt`,
-        size: 1,
-        mimeType: 'text/plain',
-      },
-    }));
-    const incoming = new File(['x'], 'incoming.txt', { type: 'text/plain' });
-
-    const { acceptedFiles, rejections } = validateComposerFileIntake(
-      [incoming],
-      currentAttachments
-    );
-
-    expect(acceptedFiles).toEqual([]);
-    expect(rejections).toEqual([
-      expect.objectContaining({
-        file: incoming,
-        reason: 'Composer supports up to 10 attachments',
-      }),
-    ]);
-  });
-
-  it('counts uploaded retry attachment bytes toward the total-size cap', () => {
-    const uploadedFiles = ['uploaded-a.bin', 'uploaded-b.bin'].map((name) => {
-      const file = new File(['x'], name, { type: 'application/octet-stream' });
-      Object.defineProperty(file, 'size', { value: 50 * 1024 * 1024 });
-      return file;
-    });
-    const incoming = new File(['x'], 'incoming.bin', { type: 'application/octet-stream' });
-    Object.defineProperty(incoming, 'size', { value: 1 });
-
-    const { acceptedFiles, rejections } = validateComposerFileIntake(
-      [incoming],
-      uploadedFiles.map((file, index) => ({
-        id: `uploaded-${index}`,
-        file,
-        destination: 'branch',
-        status: 'uploaded' as const,
-        uploadedFile: {
-          filename: file.name,
-          path: `.agor/uploads/${file.name}`,
-          size: file.size,
-          mimeType: file.type,
-        },
-      }))
-    );
-
-    expect(acceptedFiles).toEqual([]);
-    expect(rejections).toEqual([
-      expect.objectContaining({
-        file: incoming,
-        reason: 'Selected files exceed 100 MB total',
+        reason: 'Composer supports up to 10 pending files',
       }),
     ]);
   });

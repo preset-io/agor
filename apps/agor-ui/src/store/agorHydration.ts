@@ -45,16 +45,6 @@ const HYDRATION_IMMEDIATE_RETRIES = 4;
 const HYDRATION_BACKOFF_BASE_MS = 200;
 const HYDRATION_BACKOFF_CAP_MS = 5000;
 
-/** Delay preceding a hydration attempt: immediate convergence, then capped backoff. */
-export function getHydrationRetryDelay(attempt: number): number {
-  return attempt < HYDRATION_IMMEDIATE_RETRIES
-    ? 0
-    : Math.min(
-        HYDRATION_BACKOFF_BASE_MS * 2 ** (attempt - HYDRATION_IMMEDIATE_RETRIES),
-        HYDRATION_BACKOFF_CAP_MS
-      );
-}
-
 // Hydrated collections that the background hydration replaces wholesale. Each
 // has its own live-write revision counter (`liveRevisions`) so a write to one
 // collection never blocks another's hydration from applying.
@@ -65,7 +55,6 @@ export type HydratedCollection =
   | 'boardObjects'
   | 'cards'
   | 'comments'
-  | 'links'
   | 'mcpServers'
   | 'sessionMcp'
   | 'gatewayChannels'
@@ -83,7 +72,6 @@ export const FIRST_PAINT_MERGE_COLLECTIONS = [
   'boardObjects',
   'cards',
   'comments',
-  'links',
 ] as const;
 
 const makeZeroCounters = (): Record<HydratedCollection, number> => ({
@@ -93,7 +81,6 @@ const makeZeroCounters = (): Record<HydratedCollection, number> => ({
   boardObjects: 0,
   cards: 0,
   comments: 0,
-  links: 0,
   mcpServers: 0,
   sessionMcp: 0,
   gatewayChannels: 0,
@@ -253,11 +240,19 @@ export async function runHydration<T>(
   // Delay PRECEDING attempt N: the first HYDRATION_IMMEDIATE_RETRIES attempts
   // fire back-to-back (delay 0) so a single transient race converges instantly;
   // after that, capped exponential backoff lets a sustained write burst settle.
+  const delayBeforeAttempt = (attempt: number) =>
+    attempt < HYDRATION_IMMEDIATE_RETRIES
+      ? 0
+      : Math.min(
+          HYDRATION_BACKOFF_BASE_MS * 2 ** (attempt - HYDRATION_IMMEDIATE_RETRIES),
+          HYDRATION_BACKOFF_CAP_MS
+        );
+
   // Retry until a quiet-window apply SUCCEEDS (or the loop is cancelled). We
   // never force-apply a racy snapshot — we just keep re-snapshotting and
   // re-fetching until no live write races a fetch.
   for (let attempt = 0; ; attempt++) {
-    const delayMs = getHydrationRetryDelay(attempt);
+    const delayMs = delayBeforeAttempt(attempt);
     if (delayMs > 0) {
       await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
       if (!isCurrent()) return; // superseded while waiting

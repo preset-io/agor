@@ -16,7 +16,6 @@
  * maps); the maps live in `agorStore`, so map assertions read them via
  * `agorStore.getState().<map>` while load-state reads stay on `result.current`.
  */
-import type { Link } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../store/agorStore';
@@ -153,21 +152,6 @@ const makeSession = (overrides: Record<string, unknown> = {}) => ({
   created_at: '2026-01-01T00:00:00Z',
   ...overrides,
 });
-
-const makeLink = (overrides: Record<string, unknown> = {}) =>
-  ({
-    link_id: 'l-1',
-    branch_id: 'b-1',
-    session_id: null,
-    kind: 'url',
-    source: 'manual',
-    url: 'https://example.com',
-    target_key: 'url:https://example.com',
-    is_pinned: true,
-    created_at: '2026-01-01T00:00:00Z',
-    updated_at: '2026-01-01T00:00:00Z',
-    ...overrides,
-  }) as Link;
 
 const makeBoardObject = (overrides: Record<string, unknown> = {}) => ({
   object_id: 'bo-1',
@@ -814,87 +798,6 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
  * state or repopulate the Maps after teardown. These tests pin BLOCKING-1.
  */
 describe('useAgorData — bulk-write revision bumps', () => {
-  it('preserves realtime pinned branch links when the cold Home load skips the links snapshot', async () => {
-    const realtimePinnedLink = makeLink({ link_id: 'l-realtime', branch_id: 'b-live' });
-    const linksHydrationGate = deferred();
-    const { client, emit, onFetch } = makeMockClient({
-      'sessions:find': [],
-      'sessions:findAll': [],
-      'branches:findAll': [],
-      'links:findAll': [],
-    });
-
-    // Hold the later global links hydration so this test isolates the first-paint
-    // skipped-snapshot path instead of racing the background reconciliation.
-    onFetch('links', 'findAll', () => linksHydrationGate.promise);
-    onFetch('sessions', 'find', (call) => {
-      if (call === 1) emit('links', 'created', realtimePinnedLink);
-    });
-
-    const { result } = renderHook(() => useAgorData(client));
-
-    await waitFor(() => {
-      expect(result.current.loading).toBe(false);
-      expect(result.current.initialLoadComplete).toBe(true);
-    });
-
-    expect(agorStore.getState().linkById.get('l-realtime')).toBe(realtimePinnedLink);
-    expect(agorStore.getState().linksByBranch.get('b-live')).toEqual([realtimePinnedLink]);
-  });
-
-  it('silent reconnect removes stale archived-branch pinned links without dropping other link scopes', async () => {
-    const branch = makeBranch({ branch_id: 'b-1' });
-    const pinnedLink = makeLink({ link_id: 'l-pinned' });
-    const unpinnedBranchLink = makeLink({
-      link_id: 'l-unpinned',
-      is_pinned: false,
-      url: 'https://example.com/unpinned',
-      target_key: 'url:https://example.com/unpinned',
-    });
-    const sessionLink = makeLink({
-      link_id: 'l-session',
-      branch_id: null,
-      session_id: 's-1',
-      url: 'https://example.com/session',
-      target_key: 'url:https://example.com/session',
-    });
-    const seed: Record<string, unknown[]> = {
-      'links:findAll': [pinnedLink],
-      'sessions:findAll': [],
-      'branches:findAll': [branch],
-    };
-    const { client, emit, emitIo } = makeMockClient(seed);
-    const { result } = renderHook(() => useAgorData(client));
-    await waitForInitialLoad(result);
-
-    await waitFor(() => expect(agorStore.getState().linkById.get('l-pinned')).toBe(pinnedLink));
-    await waitFor(() => expect(agorStore.getState().branchById.get('b-1')).toBe(branch));
-
-    act(() => {
-      emit('links', 'created', unpinnedBranchLink);
-      emit('links', 'created', sessionLink);
-    });
-    expect(agorStore.getState().linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
-    expect(agorStore.getState().linkById.get('l-session')).toBe(sessionLink);
-
-    // The archive event was missed. On reconnect, active branch hydration drops
-    // the archived branch and the global pinned branch link snapshot no longer
-    // contains its link.
-    seed['links:findAll'] = [];
-    seed['branches:findAll'] = [];
-    await act(async () => {
-      emitIo('connect');
-      await new Promise<void>((r) => setTimeout(r, 0));
-    });
-
-    await waitFor(() => expect(agorStore.getState().linkById.has('l-pinned')).toBe(false));
-    expect(agorStore.getState().branchById.has('b-1')).toBe(false);
-    expect(agorStore.getState().linkById.get('l-unpinned')).toBe(unpinnedBranchLink);
-    expect(agorStore.getState().linkById.get('l-session')).toBe(sessionLink);
-    expect(agorStore.getState().linksByBranch.get('b-1')).toEqual([unpinnedBranchLink]);
-    expect(agorStore.getState().linksBySession.get('s-1')).toEqual([sessionLink]);
-  });
-
   it('reconnect bulk-replace bumps revisions so an in-flight hydration discards (no clobber)', async () => {
     const s1 = makeSession({ session_id: 's-1', branch_id: 'b-1' });
     const sNew = makeSession({ session_id: 's-new', branch_id: 'b-1' });

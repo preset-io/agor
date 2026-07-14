@@ -9,7 +9,6 @@ import type {
   CreateRepoRequest,
   CreateUserInput,
   GatewayChannel,
-  LinkID,
   PermissionMode,
   Repo,
   Session,
@@ -167,8 +166,7 @@ export interface AppProps {
   onSendPrompt?: (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode,
-    uploadLinkIds?: LinkID[]
+    permissionMode?: PermissionMode
   ) => boolean | undefined | Promise<boolean | undefined>;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;

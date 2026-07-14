@@ -4,12 +4,42 @@
  * Stores daemon-side uploads under ~/.agor/uploads/.
  */
 
-import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getAgorHome } from '@agor/core/config';
 import type { NextFunction, Request, Response } from 'express';
 import multer from 'multer';
+
+/**
+ * MIME types accepted by the upload endpoint.
+ *
+ * Kept narrow on purpose: anything HTML-like, executable, or shell-like is
+ * rejected so that an uploaded file cannot be coerced into XSS / drive-by
+ * download territory if it is ever served back out of the branch.
+ *
+ * If you need to add a new type, prefer the most specific MIME possible.
+ */
+export const ALLOWED_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([
+  // Images
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  // NOTE: image/svg+xml is intentionally NOT allowed — SVGs can carry script.
+  // Text / docs
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+  'application/pdf',
+  // Office-style
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  // Archives commonly used to ship logs/artifacts
+  'application/zip',
+  'application/gzip',
+  'application/x-tar',
+]);
 
 /** Max size of a single uploaded file (bytes). */
 export const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -51,7 +81,7 @@ export function validateUploadDestinationQuery(destination: unknown): void {
 
 /**
  * Sanitize an original filename (path traversal, unsafe chars) and suffix it
- * with a timestamp and random ID so concurrent uploads never overwrite.
+ * with a timestamp so concurrent uploads of the same name never overwrite.
  */
 export function buildUploadFilename(originalname: string): string {
   const basename = path.basename(originalname);
@@ -60,13 +90,12 @@ export function buildUploadFilename(originalname: string): string {
     .replace(/\.\./g, '_') // Remove path traversal attempts
     .replace(/[/\\:*?"<>|]/g, '_') // Remove filesystem-unsafe chars (Windows + Unix)
     .replace(/\.+$/g, '') // Remove trailing dots (Windows issue)
-    .substring(0, 200); // Leave room for the timestamp and UUID suffix.
+    .substring(0, 200); // Limit length (leave room for timestamp)
 
   const timestamp = Date.now();
-  const uniqueId = randomUUID();
   const ext = path.extname(sanitized);
   const nameWithoutExt = sanitized.slice(0, -ext.length || undefined);
-  return `${nameWithoutExt}_${timestamp}_${uniqueId}${ext}`;
+  return `${nameWithoutExt}_${timestamp}${ext}`;
 }
 
 /**
@@ -140,6 +169,25 @@ export function createUploadMiddleware() {
       // `enforceTotalUploadSize()` (pre-multer Content-Length check) and
       // `enforceParsedTotalUploadSize()` (post-multer `req.files` sum), both
       // exported below.
+    },
+    fileFilter: (_req, file, cb) => {
+      // Match on the bare MIME (drop any `; charset=...` parameters).
+      const mime = (file.mimetype || '').split(';')[0].trim().toLowerCase();
+      if (!ALLOWED_UPLOAD_MIME_TYPES.has(mime)) {
+        if (DEBUG_UPLOAD) {
+          console.warn(`🚫 [Upload Storage] Rejecting MIME ${mime} for ${file.originalname}`);
+        }
+        // Pass an Error so the route's error handler returns 4xx with a
+        // clear message instead of silently dropping the file.
+        const err = new Error(`Unsupported file type: ${mime || 'unknown'}`) as Error & {
+          status?: number;
+          code?: string;
+        };
+        err.status = 415;
+        err.code = 'UNSUPPORTED_MEDIA_TYPE';
+        return cb(err);
+      }
+      cb(null, true);
     },
   });
 }

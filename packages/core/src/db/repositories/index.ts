@@ -18,7 +18,6 @@ export * from './gateway-channels';
 export * from './gateway-outbound-messages';
 export * from './groups';
 export * from './knowledge';
-export * from './links';
 export * from './mcp-servers';
 export * from './messages';
 export * from './repos';

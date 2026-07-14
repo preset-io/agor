@@ -14,14 +14,9 @@ import {
 interface UseComposerAttachmentsOptions {
   sessionId: SessionID | null;
   showError: (message: string) => void;
-  mutationLockedRef?: React.RefObject<boolean>;
 }
 
-export function useComposerAttachments({
-  sessionId,
-  showError,
-  mutationLockedRef,
-}: UseComposerAttachmentsOptions) {
+export function useComposerAttachments({ sessionId, showError }: UseComposerAttachmentsOptions) {
   const [attachments, setAttachments] = React.useState<ComposerAttachment[]>([]);
   const [validationError, setValidationError] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
@@ -60,7 +55,7 @@ export function useComposerAttachments({
 
   const addAttachments = React.useCallback(
     (files: File[]) => {
-      if (uploadingRef.current || mutationLockedRef?.current) return;
+      if (uploadingRef.current) return;
       if (files.length === 0) return;
 
       const { acceptedFiles, rejections } = validateComposerFileIntake(
@@ -93,12 +88,12 @@ export function useComposerAttachments({
         }),
       ]);
     },
-    [mutationLockedRef, showError]
+    [showError]
   );
 
   const removeAttachment = React.useCallback(
     (id: string) => {
-      if (uploadingRef.current || mutationLockedRef?.current) return;
+      if (uploadingRef.current) return;
       setValidationError(null);
 
       setAttachments((prev) => {
@@ -107,7 +102,7 @@ export function useComposerAttachments({
         return prev.filter((attachment) => attachment.id !== id);
       });
     },
-    [mutationLockedRef, revokePreview]
+    [revokePreview]
   );
 
   const uploadAttachments = React.useCallback(

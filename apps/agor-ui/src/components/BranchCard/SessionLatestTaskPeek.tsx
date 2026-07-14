@@ -6,12 +6,6 @@ import { useAppActions } from '../../contexts/AppActionsContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
-import { useAgorStore } from '../../store/agorStore';
-import {
-  makeLinksForSessionSelector,
-  selectFetchAndReplaceFullSessionLinks,
-} from '../../store/selectors';
-import { groupRenderableLinksByMessageId } from '../Links';
 import { TaskBlock } from '../TaskBlock';
 import { chooseLatestSessionTask } from './latestSessionTask';
 
@@ -44,9 +38,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
     const [prompt, setPrompt] = useState('');
 
     const sessionId = session.session_id;
-    const sessionLinksSelector = useMemo(() => makeLinksForSessionSelector(sessionId), [sessionId]);
-    const sessionLinks = useAgorStore(sessionLinksSelector) ?? [];
-    const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
     const { handle: reactiveSession, state: reactiveState } = useSharedReactiveSession(
       client,
       sessionId,
@@ -71,17 +62,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
     const streamingMessagesByTask = useStreamingMessagesByTask(allStreamingMessages);
     const taskId = task?.task_id ?? null;
     const taskMessagesLoaded = !!taskId && !!currentReactiveState?.loadedTaskIds.has(taskId);
-
-    useEffect(() => {
-      if (!enabled || !client || !sessionId) return;
-      fetchAndReplaceFullSessionLinks(client, sessionId).catch((error: unknown) => {
-        console.error('[SessionLatestTaskPeek] Failed to fetch session links:', error);
-      });
-    }, [client, enabled, fetchAndReplaceFullSessionLinks, sessionId]);
-
-    const attachmentLinksByMessageId = useMemo(() => {
-      return groupRenderableLinksByMessageId(sessionLinks);
-    }, [sessionLinks]);
 
     const isNearBottom = useCallback(() => {
       if (!containerRef.current) return true;
@@ -298,7 +278,6 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               teammateEmoji={undefined}
               isLatestTask={true}
               client={client}
-              attachmentLinksByMessageId={attachmentLinksByMessageId}
             />
           )}
         </div>

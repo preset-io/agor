@@ -7,7 +7,7 @@ import type { BranchRepository, SessionRepository, TenantScopeAwareDatabase } fr
 import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, HookContext, User, UserID } from '@agor/core/types';
-import { hasMinimumRole, isInternalLinkData, ROLES } from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { isSuperAdmin } from './branch-authorization.js';
 import {
   type RealtimeAccessBranchRepository,
@@ -135,11 +135,7 @@ const SESSION_ID_SCOPED_PATHS = new Set([
   'session-mcp-servers',
   'session-env-selections',
 ]);
-const OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS = new Set([
-  'board-objects',
-  'board-comments',
-  'links',
-]);
+const OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS = new Set(['board-objects', 'board-comments']);
 
 // High-frequency per-chunk events emitted on the `messages` service during a
 // streaming turn (text + thinking deltas). These fan out once per token-batch,
@@ -567,10 +563,9 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
 
     const authenticated = app.channel('authenticated');
     let tenantScoped = authenticated;
-    let tenantId: string | undefined;
     if (multiTenancy) {
       try {
-        tenantId = resolveRealtimeTenantId(multiTenancy, context);
+        const tenantId = resolveRealtimeTenantId(multiTenancy, context);
         tenantScoped = app.channel(tenantChannelName(tenantId));
       } catch (error) {
         if (error instanceof TenantResolutionError) {
@@ -584,14 +579,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         throw error;
       }
     }
-
     const resolveDelivery = async () => {
-      // Internal links do not leave trusted service connections until target-level
-      // authorization exists. Owner visibility alone cannot authorize the target.
-      if (context.path === 'links' && isInternalLinkData(data)) {
-        return filterToServiceConnections(tenantScoped);
-      }
-
       // Streaming events are routed to session subscribers (plus service and
       // owner connections) regardless of branch RBAC — this is the always-on
       // firehose the tenant broadcast must not carry.
@@ -647,6 +635,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     // active by the time RBAC visibility repositories run. Re-enter the scope
     // resolved for channel routing so the authorization lookup and delivery
     // decision use the same tenant as the event.
+    const tenantId = multiTenancy ? resolveRealtimeTenantId(multiTenancy, context) : undefined;
     return db && tenantId
       ? runWithTenantDatabaseScope(db, tenantId, resolveDelivery)
       : resolveDelivery();

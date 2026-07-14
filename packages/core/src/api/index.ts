@@ -30,10 +30,6 @@ import type {
   KnowledgeNamespaceGraph,
   KnowledgeSearchResult,
   KnowledgeSemanticSettingsPublic,
-  Link,
-  LinkCreate,
-  LinkID,
-  LinkPatch,
   MCPServer,
   Message,
   PatchAgenticToolPreset,
@@ -105,8 +101,6 @@ export interface SessionPromptRequest {
   permissionMode?: PermissionMode;
   stream?: boolean;
   messageSource?: 'gateway' | 'agor';
-  /** Upload links created by the composer immediately before this prompt. */
-  uploadLinkIds?: LinkID[];
 }
 
 export interface QueuedSessionPromptResult {
@@ -180,14 +174,6 @@ export interface TemplatesService {
   create(data: TemplateRenderRequest, params?: Params): Promise<TemplateRenderResponse>;
 }
 
-type LinkCreatePayload = ClientInput<LinkCreate>;
-type LinkPatchPayload = Partial<ClientInput<LinkPatch>>;
-
-export interface LinkPromoteRequest {
-  target: 'teammate';
-  teammate_branch_id: string;
-}
-
 /**
  * Service interfaces for type safety
  */
@@ -199,7 +185,6 @@ export interface ServiceTypes {
   'repos/clone': Repo;
   'repos/local': Repo;
   branches: Branch;
-  links: Link;
   schedules: Schedule;
   users: User;
   groups: Group;
@@ -261,16 +246,6 @@ export interface AgorService<
 
   // Emit custom events to WebSocket clients (available at runtime via FeathersJS socket.io integration)
   emit(event: string, data: unknown): void;
-}
-
-export interface LinksService extends Omit<AgorService<Link>, 'create' | 'update' | 'patch'> {
-  create(data: LinkCreatePayload, params?: Params): Promise<Link>;
-  create(data: LinkCreatePayload[], params?: Params): Promise<Link[]>;
-  patch(id: string, data: LinkPatchPayload, params?: Params): Promise<Link>;
-}
-
-export interface LinkPromotionService {
-  create(data: LinkPromoteRequest, params?: Params): Promise<Link>;
 }
 
 export type AgenticToolSettingsService = AgorService<
@@ -611,8 +586,6 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
-  service(path: 'links'): LinksService;
-  service(path: `links/${string}/promote`): LinkPromotionService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
 

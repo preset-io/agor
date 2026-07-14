@@ -10,7 +10,6 @@ import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
 import { KnowledgeTab } from './tabs/KnowledgeTab';
-import { LinksTab } from './tabs/LinksTab';
 import { PermissionsTab } from './tabs/PermissionsTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
@@ -21,7 +20,6 @@ export type BranchModalTab =
   | 'general'
   | 'teammate'
   | 'knowledge'
-  | 'links'
   | 'sessions'
   | 'environment'
   | 'files'
@@ -162,13 +160,6 @@ export const BranchModal: React.FC<BranchModalProps> = ({
           setField={form.setGeneral}
           onArchiveOrDelete={onArchiveOrDelete}
         />
-      ),
-    },
-    {
-      key: 'links',
-      label: 'Links',
-      children: (
-        <LinksTab branch={branch} client={client} active={activeTab === 'links'} open={open} />
       ),
     },
     {

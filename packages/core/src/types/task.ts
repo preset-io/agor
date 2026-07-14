@@ -1,5 +1,5 @@
 // src/types/task.ts
-import type { LinkID, MessageID, SessionID, TaskID } from './id';
+import type { MessageID, SessionID, TaskID } from './id';
 import type { MessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
 
@@ -65,11 +65,6 @@ export interface TaskMetadata {
    * this prompt. Links the task back to the originating widget for audit.
    */
   widget_id?: MessageID;
-  /**
-   * Uploaded links attached to the user prompt that created this task. The
-   * message-create hook stamps these links with the final source_message_id.
-   */
-  upload_link_ids?: LinkID[];
 }
 
 /**

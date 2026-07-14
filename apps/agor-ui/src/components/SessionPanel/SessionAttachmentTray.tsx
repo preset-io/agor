@@ -45,7 +45,7 @@ export const SessionAttachmentTray: React.FC<SessionAttachmentTrayProps> = ({
       <Space orientation="vertical" style={{ width: '100%' }} size={6}>
         {disabled && (
           <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-            Sending prompt. Attachment changes are locked until sending finishes.
+            Files are uploading. Attachment changes are locked until upload finishes.
           </Typography.Text>
         )}
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: token.paddingSM }}>
@@ -148,7 +148,7 @@ export const SessionAttachmentTray: React.FC<SessionAttachmentTrayProps> = ({
                       </div>
                     )}
                   </button>
-                  <Tooltip title={disabled ? 'Sending prompt…' : 'Remove file'}>
+                  <Tooltip title={disabled ? 'Files are uploading…' : 'Remove file'}>
                     <Button
                       aria-label={`Remove ${attachment.file.name}`}
                       icon={<CloseOutlined />}

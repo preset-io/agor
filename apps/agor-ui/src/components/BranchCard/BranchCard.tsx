@@ -14,8 +14,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useProgressiveMount } from '../../hooks/useProgressiveMount';
-import { useAgorStore } from '../../store/agorStore';
-import { makeLinksForBranchSelector } from '../../store/selectors';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
@@ -24,8 +22,6 @@ import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { EnvironmentPill } from '../EnvironmentPill';
-import { buildLinkDisplayItems, type LinkDisplayItem, useLinkMutations } from '../Links';
-import { PinnedLinkList } from '../Links/PinnedLinkList';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -36,25 +32,6 @@ import { estimateBranchSessionSectionsHeight } from './branchCardLayout';
 const _BRANCH_CARD_MAX_WIDTH = 600;
 const NOTES_MAX_LENGTH = 200; // Character limit for truncated notes
 const PEEK_SESSIONS_STORAGE_KEY_PREFIX = 'agor:branch-card:peeked-session-ids:';
-function BranchCardPinnedLinksBlock({
-  items,
-  onTogglePinned,
-  pinningKeys,
-}: {
-  items: LinkDisplayItem[];
-  onTogglePinned?: (item: LinkDisplayItem) => void | Promise<void>;
-  pinningKeys?: ReadonlySet<string>;
-}) {
-  return (
-    <PinnedLinkList
-      items={items}
-      className={REACT_FLOW_NO_DRAG_CLASS}
-      data-testid="branch-card-pinned-links"
-      onTogglePinned={onTogglePinned}
-      pinningKeys={pinningKeys}
-    />
-  );
-}
 
 interface BranchCardProps {
   branch: Branch;
@@ -132,11 +109,6 @@ const BranchCardComponent = ({
 }: BranchCardProps) => {
   const { token } = theme.useToken();
   const connectionDisabled = useConnectionDisabled();
-  const branchLinksSelector = useMemo(
-    () => makeLinksForBranchSelector(branch.branch_id),
-    [branch.branch_id]
-  );
-  const branchLinks = useAgorStore(branchLinksSelector) ?? [];
 
   const branchBoardId = (branch as { board_id?: string | null }).board_id;
 
@@ -156,10 +128,6 @@ const BranchCardComponent = ({
   // Archive/Delete modal state
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [archiveDeleteModalMounted, setArchiveDeleteModalMounted] = useState(false);
-  const { pinningKeys, togglePinned: handleToggleLinkPinned } = useLinkMutations({
-    client,
-    branchId: branch.branch_id,
-  });
 
   // Notes expansion state
   const [notesExpanded, setNotesExpanded] = useState(false);
@@ -265,14 +233,6 @@ const BranchCardComponent = ({
   }, [activeSessions, branch.needs_attention, isFocused]);
 
   const isDarkMode = isDarkTheme(token);
-  const pinnedLinkItems = useMemo(
-    () =>
-      buildLinkDisplayItems({
-        links: branchLinks.filter((link) => link.is_pinned),
-        includeBranchLinks: false,
-      }).filter((item) => item.ownerScope === 'branch' && item.isPinned),
-    [branchLinks]
-  );
   // AntD exposes `colorPrimaryBg` as the subtle primary surface token.
   // In dark mode it can still read a bit bright on a large card, so mix it
   // with the base background while staying in the primary token family.
@@ -613,14 +573,6 @@ const BranchCardComponent = ({
             </Button>
           )}
         </div>
-      )}
-
-      {pinnedLinkItems.length > 0 && (
-        <BranchCardPinnedLinksBlock
-          items={pinnedLinkItems}
-          onTogglePinned={client ? handleToggleLinkPinned : undefined}
-          pinningKeys={pinningKeys}
-        />
       )}
 
       {/* Sessions & Scheduled Runs - composable content shared with the teammate panel */}

@@ -9,7 +9,7 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
-import type { AgorClient, Link, StreamingMessageState } from '@agor-live/client';
+import type { AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
   type Message,
   MessageRole,
@@ -99,8 +99,6 @@ interface TaskBlockProps {
   teammateEmoji?: string;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
   client?: AgorClient | null;
-  /** Upload links keyed by source user-message id. */
-  attachmentLinksByMessageId?: Map<string, Link[]>;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
 }
@@ -421,7 +419,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     teammateEmoji,
     isLatestTask = false,
     client = null,
-    attachmentLinksByMessageId,
   }) => {
     const { token } = theme.useToken();
 
@@ -736,9 +733,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               taskId={task.task_id}
                               teammateEmoji={teammateEmoji}
                               client={client}
-                              attachmentLinks={attachmentLinksByMessageId?.get(
-                                block.message.message_id
-                              )}
                             />
                           </div>
                         );

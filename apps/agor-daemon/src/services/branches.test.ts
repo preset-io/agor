@@ -189,6 +189,10 @@ async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
   return runWithTenantDatabaseScope(createTenantScopeTestDb() as never, 'tenant-test', work);
 }
 
+function waitForDeferredWork(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
 const mockedRunExecutorCommand = vi.mocked(runExecutorCommand);
 
@@ -311,7 +315,7 @@ describe('BranchesService environment start async behavior', () => {
     expect(result).not.toBe('timed-out');
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(mockedSpawnExecutor).toHaveBeenCalledTimes(1));
+    await waitForDeferredWork();
 
     expect(mockedSpawnExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -388,7 +392,7 @@ describe('BranchesService environment start async behavior', () => {
     expect(kill).toHaveBeenCalledWith('SIGTERM');
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(mockedSpawnExecutor).toHaveBeenCalledTimes(1));
+    await waitForDeferredWork();
 
     expect(mockedSpawnExecutor).toHaveBeenCalledWith(
       expect.objectContaining({

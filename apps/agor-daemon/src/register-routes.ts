@@ -6,7 +6,6 @@
  * Extracted from index.ts for maintainability.
  */
 
-import fs from 'node:fs/promises';
 import {
   type AgorConfig,
   isTenantAgenticToolEnabled,
@@ -48,9 +47,6 @@ import { type PermissionDecision, PermissionService } from '@agor/core/permissio
 import type {
   AuthenticatedParams,
   HookContext,
-  Link,
-  LinkCreate,
-  LinkID,
   Message,
   MessageSource,
   Paginated,
@@ -105,8 +101,6 @@ import {
 import { registerHealthProbeRoutes } from './health/routes.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { GatewayService } from './services/gateway.js';
-import { registerLinkContentRoute } from './services/link-content.js';
-import { createLinkPromotionService } from './services/link-promotion.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -206,81 +200,6 @@ interface RouteParams extends Params {
     name?: string;
   };
   user?: User;
-  _trustedUploadLinkIds?: LinkID[];
-}
-
-export async function persistUploadLinksOrCleanup(args: {
-  uploadLinks: Partial<LinkCreate>[];
-  uploadedFiles: Array<{ path: string }>;
-  create: (links: Partial<LinkCreate>[]) => Promise<Link | Link[]>;
-}): Promise<Link[]> {
-  if (args.uploadLinks.length === 0) return [];
-  try {
-    const created = await args.create(args.uploadLinks);
-    return Array.isArray(created) ? created : [created];
-  } catch (error) {
-    await Promise.allSettled(args.uploadedFiles.map((file) => fs.unlink(file.path)));
-    throw error;
-  }
-}
-
-export function sanitizePromptTaskMetadata(
-  metadata?: Partial<import('@agor/core/types').TaskMetadata>
-): import('@agor/core/types').TaskMetadata {
-  if (!metadata) return {};
-  const { upload_link_ids: _ignoredUploadLinkIds, ...safeMetadata } = metadata;
-  return safeMetadata;
-}
-
-function trustedUploadTaskMetadata(
-  params: RouteParams
-): Pick<import('@agor/core/types').TaskMetadata, 'upload_link_ids'> | Record<string, never> {
-  const uploadLinkIds = params._trustedUploadLinkIds?.filter(
-    (linkId): linkId is LinkID => typeof linkId === 'string' && linkId.length > 0
-  );
-  return uploadLinkIds && uploadLinkIds.length > 0 ? { upload_link_ids: uploadLinkIds } : {};
-}
-
-export async function resolveTrustedPromptUploadLinkIds(
-  app: Application,
-  sessionId: SessionID,
-  requestedLinkIds: unknown,
-  params: RouteParams
-): Promise<LinkID[]> {
-  const trusted = new Set(params._trustedUploadLinkIds ?? []);
-  if (requestedLinkIds === undefined) return [...trusted];
-  if (
-    !Array.isArray(requestedLinkIds) ||
-    requestedLinkIds.length > 10 ||
-    requestedLinkIds.some((linkId) => typeof linkId !== 'string' || !linkId)
-  ) {
-    throw new BadRequest('uploadLinkIds must contain at most 10 link IDs');
-  }
-
-  const userId = params.user?.user_id;
-  if (!userId) throw new NotAuthenticated('Authentication required to attach uploads');
-  const linksService = app.service('links') as unknown as {
-    get(id: string, params?: Params): Promise<Link>;
-  };
-
-  for (const requestedLinkId of new Set(requestedLinkIds as string[])) {
-    const link = await linksService.get(requestedLinkId, {
-      ...params,
-      provider: undefined,
-    } as Params);
-    if (
-      link.source !== 'upload' ||
-      link.session_id !== sessionId ||
-      link.branch_id ||
-      link.source_message_id ||
-      link.created_by !== userId
-    ) {
-      throw new Forbidden('Upload link does not belong to this prompt');
-    }
-    trusted.add(link.link_id);
-  }
-
-  return [...trusted];
 }
 
 function isServiceAccountRoute(params: RouteParams): boolean {
@@ -792,24 +711,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     requireAuth
   );
-
-  registerAuthenticatedRoute(
-    app,
-    '/links/:sourceLinkId/promote',
-    createLinkPromotionService({
-      app,
-      db,
-      branchRepository,
-      branchRbacEnabled,
-      superadminOpts,
-    }),
-    {
-      create: { role: ROLES.MEMBER, action: 'promote links to assistant' },
-    },
-    requireAuth
-  );
-
-  registerLinkContentRoute(app);
 
   registerAuthenticatedRoute(
     app,
@@ -1517,7 +1418,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           permissionMode?: import('@agor/core/types').PermissionMode;
           stream?: boolean;
           messageSource?: MessageSource;
-          uploadLinkIds?: LinkID[];
           /**
            * Optional extra task metadata merged onto the queued/created task.
            * Used by internal callers (e.g. widget submissions) to stamp
@@ -1550,12 +1450,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         let session = await sessionsService.get(id, params);
         id = session.session_id;
-        params._trustedUploadLinkIds = await resolveTrustedPromptUploadLinkIds(
-          app,
-          id as SessionID,
-          data.uploadLinkIds,
-          params
-        );
 
         if (!(await isTenantAgenticToolEnabled(session.agentic_tool ?? 'claude-code', db))) {
           throw new Forbidden(
@@ -1641,7 +1535,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               queuedTasks.length > 0;
 
             if (shouldQueue) {
-              const safeTaskMetadata = sanitizePromptTaskMetadata(data.metadata);
               const queuedTask = await taskRepo.createPending({
                 session_id: id as SessionID,
                 full_prompt: data.prompt,
@@ -1650,8 +1543,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 metadata: {
                   ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
                   ...(messageSource ? { source: messageSource } : {}),
-                  ...safeTaskMetadata,
-                  ...trustedUploadTaskMetadata(params),
+                  ...(data.metadata ?? {}),
                 },
               });
 
@@ -1691,11 +1583,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             // writes the user-message row, and spawns the executor. Both this
             // path and processNextQueuedTask go through that helper so behavior
             // stays in lockstep.
-            const safeTaskMetadata = sanitizePromptTaskMetadata(data.metadata);
             const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
               ...(messageSource ? { source: messageSource } : {}),
-              ...safeTaskMetadata,
-              ...trustedUploadTaskMetadata(params),
+              ...(data.metadata ?? {}),
             };
             const task = await taskRepo.createPending({
               session_id: id as SessionID,
@@ -2146,7 +2036,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       const uploadedFiles = files.map((f) => ({
         filename: f.filename,
-        originalName: f.originalname,
         path: f.path,
         size: f.size,
         mimeType: f.mimetype,
@@ -2158,36 +2047,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           console.log(`     - ${f.filename} (${(f.size / 1024).toFixed(2)} KB)`);
         });
       }
-
-      const uploadLinks: Partial<LinkCreate>[] = uploadedFiles.map((file) => ({
-        session_id: sessionId as SessionID,
-        branch_id: null,
-        source: 'upload',
-        kind: file.mimeType.toLowerCase().startsWith('image/') ? 'image' : 'document',
-        // Persist only the upload-root-relative storage name. Absolute daemon
-        // paths are runtime details and must not cross the API boundary.
-        file_path: file.filename,
-        title: file.originalName || file.filename,
-        mime_type: file.mimeType,
-        metadata: {
-          filename: file.filename,
-          originalName: file.originalName,
-          size: file.size,
-        },
-        created_by: (params.user?.user_id as UUID | undefined) ?? null,
-      }));
-
-      // Multer has already committed these files to disk. Link rows are the
-      // ownership/authorization boundary, so a failed atomic row batch must not
-      // leave unowned bytes behind for a retry to duplicate.
-      const createdUploadLinks = await persistUploadLinksOrCleanup({
-        uploadLinks,
-        uploadedFiles,
-        create: (links) =>
-          app
-            .service('links')
-            .create(links, { ...params, provider: undefined } as Params) as Promise<Link | Link[]>,
-      });
 
       let notificationError: string | null = null;
       if ((notifyAgent === 'true' || notifyAgent === true) && message) {
@@ -2204,16 +2063,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const promptParams: any = {
             route: { id: sessionId },
             user: params.user,
-            _trustedUploadLinkIds: createdUploadLinks.map((link) => link.link_id),
             authentication: params.authentication,
             tenant: params.tenant,
           };
-          await promptService.create(
-            {
-              prompt: promptText,
-            },
-            promptParams
-          );
+          await promptService.create({ prompt: promptText }, promptParams);
         } catch (error) {
           console.error('❌ [Upload Handler] Failed to notify agent:', error);
           notificationError =
@@ -2221,15 +2074,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
       }
 
-      const uploadLinkByFilePath = new Map(
-        createdUploadLinks.flatMap((link) => (link.file_path ? [[link.file_path, link]] : []))
-      );
       res.json({
         success: true,
-        files: uploadedFiles.map((file) => ({
-          ...file,
-          linkId: uploadLinkByFilePath.get(file.filename)?.link_id,
-        })),
+        files: uploadedFiles,
         ...(notificationError && { warning: notificationError }),
       });
     } catch (error) {

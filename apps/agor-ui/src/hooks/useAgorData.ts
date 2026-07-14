@@ -23,7 +23,6 @@ import type {
   Branch,
   CardType,
   CardWithType,
-  Link,
   MCPServer,
   Repo,
   Session,
@@ -44,16 +43,10 @@ import {
   buildById,
   buildSessionMaps,
   buildSessionMcpMap,
-  reconcilePinnedBranchLinksIntoMaps,
   replaceIfChanged,
 } from '../store/agorMaps';
 import * as realtime from '../store/agorRealtimeActions';
-import {
-  agorStore,
-  getPinnedBranchLinkPreserveBranchIds,
-  shallow,
-  useStoreWithEqualityFn,
-} from '../store/agorStore';
+import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
 import {
   discardRealtimeNow,
   enqueueSessionPatch,
@@ -91,7 +84,6 @@ const INITIAL_LOAD_ITEMS = [
   { key: 'users', label: 'Users' },
   { key: 'cards', label: 'Cards' },
   { key: 'card-types', label: 'Card types' },
-  { key: 'links', label: 'Links' },
 ] as const;
 
 export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
@@ -638,7 +630,6 @@ export function useAgorData(
           boardObjectsList,
           commentsList,
           cardsList,
-          pinnedBranchLinksList,
           displayedBoardFull,
         ] = await Promise.all([
           track(
@@ -696,27 +687,6 @@ export function useAgorData(
                 ...(boardScope ? { board_id: boardScope } : {}),
               },
             })
-          ),
-          track(
-            'links',
-            boardScope
-              ? client.service('links').findAll({
-                  query: {
-                    board_id: boardScope,
-                    owner_scope: 'branch',
-                    is_pinned: true,
-                    $limit: PAGINATION.DEFAULT_LIMIT,
-                  },
-                })
-              : silent
-                ? client.service('links').findAll({
-                    query: {
-                      owner_scope: 'branch',
-                      is_pinned: true,
-                      $limit: PAGINATION.DEFAULT_LIMIT,
-                    },
-                  })
-                : Promise.resolve([] as Link[])
           ),
           // Displayed board's FULL record (with objects/custom_css) so its
           // zones/text/markdown paint at first load — the gated boards fetch
@@ -811,54 +781,22 @@ export function useAgorData(
         // sessionMcpServerIds / userAuthenticatedMcpServerIds — survive even if
         // their fire-and-forget fetches resolved before this gate did. Those
         // slices are owned by their background setters + realtime handlers.
-        agorStore.getState().applyMaps((prev) => {
-          const skippedPinnedBranchLinksFetch = !boardScope && !silent;
-          const pinnedBranchDomainBranchIds =
-            boardScope && !silent
-              ? new Set<string>()
-              : skippedPinnedBranchLinksFetch
-                ? new Set<string>()
-                : undefined;
-          if (boardScope && pinnedBranchDomainBranchIds) {
-            for (const branch of prev.branchById.values()) {
-              if (branch.board_id === boardScope) {
-                pinnedBranchDomainBranchIds.add(branch.branch_id);
-              }
-            }
-            for (const branch of branchesMap.values()) {
-              if (branch.board_id === boardScope) {
-                pinnedBranchDomainBranchIds.add(branch.branch_id);
-              }
-            }
-            for (const link of pinnedBranchLinksList) {
-              if (link.branch_id) pinnedBranchDomainBranchIds.add(link.branch_id);
-            }
-          }
-
-          return reconcilePinnedBranchLinksIntoMaps(
-            {
-              ...prev,
-              sessionById: sessionsById,
-              sessionsByBranch: sessionsByBranchId,
-              boardById: boardsMap,
-              boardObjectById: boardObjectsMap,
-              boardObjectsByBoardId: boardObjectsByBoardMap,
-              boardObjectByBranchId: boardObjectByBranchMap,
-              boardObjectByCardId: boardObjectByCardMap,
-              commentById: commentsMap,
-              cardById: cardsMap,
-              cardTypeById: cardTypesMap,
-              repoById: reposMap,
-              branchById: branchesMap,
-              userById: usersMap,
-            },
-            pinnedBranchLinksList,
-            {
-              branchIds: pinnedBranchDomainBranchIds,
-              preserveBranchIds: getPinnedBranchLinkPreserveBranchIds(agorStore.getState()),
-            }
-          );
-        });
+        agorStore.getState().applyMaps((prev) => ({
+          ...prev,
+          sessionById: sessionsById,
+          sessionsByBranch: sessionsByBranchId,
+          boardById: boardsMap,
+          boardObjectById: boardObjectsMap,
+          boardObjectsByBoardId: boardObjectsByBoardMap,
+          boardObjectByBranchId: boardObjectByBranchMap,
+          boardObjectByCardId: boardObjectByCardMap,
+          commentById: commentsMap,
+          cardById: cardsMap,
+          cardTypeById: cardTypesMap,
+          repoById: reposMap,
+          branchById: branchesMap,
+          userById: usersMap,
+        }));
         // This wholesale replace is NOT a `runHydration` apply, so it must bump
         // the revisions of every collection it overwrites — exactly like the
         // per-mutation realtime handlers do. Critical on the SILENT reconnect
@@ -953,24 +891,6 @@ export function useAgorData(
                 ...prev,
                 branchById: buildById(allBranches, 'branch_id', prev.branchById),
               }))
-          );
-          void runHydration(
-            'links',
-            ['links'],
-            () =>
-              client.service('links').findAll({
-                query: {
-                  owner_scope: 'branch',
-                  is_pinned: true,
-                  $limit: PAGINATION.DEFAULT_LIMIT,
-                },
-              }),
-            (pinnedBranchLinks) =>
-              agorStore.getState().applyMaps((prev) =>
-                reconcilePinnedBranchLinksIntoMaps(prev, pinnedBranchLinks, {
-                  preserveBranchIds: getPinnedBranchLinkPreserveBranchIds(agorStore.getState()),
-                })
-              )
           );
         }
 
@@ -1339,13 +1259,6 @@ export function useAgorData(
     commentsService.on('updated', realtime.commentPatched);
     commentsService.on('removed', realtime.commentRemoved);
 
-    // Subscribe to link events
-    const linksService = client.service('links');
-    linksService.on('created', realtime.linkCreated);
-    linksService.on('patched', realtime.linkPatched);
-    linksService.on('updated', realtime.linkPatched);
-    linksService.on('removed', realtime.linkRemoved);
-
     // Listen for OAuth completion events to update per-user token state in real-time.
     // Only update the per-user set when oauth_mode is 'per_user' (or unset, which defaults
     // to per_user). Shared-mode completions update the server record itself and don't need
@@ -1541,11 +1454,6 @@ export function useAgorData(
       commentsService.removeListener('patched', realtime.commentPatched);
       commentsService.removeListener('updated', realtime.commentPatched);
       commentsService.removeListener('removed', realtime.commentRemoved);
-
-      linksService.removeListener('created', realtime.linkCreated);
-      linksService.removeListener('patched', realtime.linkPatched);
-      linksService.removeListener('updated', realtime.linkPatched);
-      linksService.removeListener('removed', realtime.linkRemoved);
 
       gatewayChannelsService.removeListener('created', realtime.gatewayChannelCreated);
       gatewayChannelsService.removeListener('patched', realtime.gatewayChannelPatched);

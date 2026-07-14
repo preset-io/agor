@@ -11,7 +11,7 @@
  * one board's bucket: a patch to another board's objects leaves this board's
  * array reference untouched, so the subscription doesn't fire.
  */
-import type { Board, BoardEntityObject, Branch, Link, Repo, Session } from '@agor-live/client';
+import type { Board, BoardEntityObject, Branch, Repo, Session } from '@agor-live/client';
 import { SessionStatus } from '@agor-live/client';
 import type { AgorState } from './agorStore';
 
@@ -32,11 +32,6 @@ export const selectUserAuthenticatedMcpServerIds = (s: AgorState) =>
   s.userAuthenticatedMcpServerIds;
 export const selectArtifactById = (s: AgorState) => s.artifactById;
 export const selectSessionMcpServerIds = (s: AgorState) => s.sessionMcpServerIds;
-export const selectFetchAndReplaceFullSessionLinks = (s: AgorState) =>
-  s.fetchAndReplaceFullSessionLinks;
-export const selectFetchAndReplaceFullBranchLinks = (s: AgorState) =>
-  s.fetchAndReplaceFullBranchLinks;
-export const selectApplyLinkMutationResult = (s: AgorState) => s.applyLinkMutationResult;
 
 /**
  * Select a single board's board-object array. Curried so callers can memoize
@@ -208,14 +203,4 @@ export function makeBoardSessionActivitySelector(
     if (!hasRunning && !hasReady) return NO_BOARD_ACTIVITY;
     return { hasRunning, hasReady };
   };
-}
-
-export function makeLinksForBranchSelector(branchId: string): (s: AgorState) => Link[] | undefined {
-  return (s) => s.linksByBranch.get(branchId);
-}
-
-export function makeLinksForSessionSelector(
-  sessionId: string
-): (s: AgorState) => Link[] | undefined {
-  return (s) => s.linksBySession.get(sessionId);
 }

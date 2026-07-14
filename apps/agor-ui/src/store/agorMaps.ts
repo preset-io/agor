@@ -17,7 +17,6 @@ import type {
   CardType,
   CardWithType,
   GatewayChannel,
-  Link,
   MCPServer,
   Repo,
   Session,
@@ -53,9 +52,6 @@ export type DataMaps = {
   mcpServerById: Map<string, MCPServer>;
   gatewayChannelById: Map<string, GatewayChannel>;
   artifactById: Map<string, Artifact>;
-  linkById: Map<string, Link>;
-  linksByBranch: Map<string, Link[]>;
-  linksBySession: Map<string, Link[]>;
   sessionMcpServerIds: Map<string, string[]>;
   userAuthenticatedMcpServerIds: Set<string>;
 };
@@ -77,9 +73,6 @@ export const EMPTY_MAPS: DataMaps = {
   mcpServerById: new Map(),
   gatewayChannelById: new Map(),
   artifactById: new Map(),
-  linkById: new Map(),
-  linksByBranch: new Map(),
-  linksBySession: new Map(),
   sessionMcpServerIds: new Map(),
   userAuthenticatedMcpServerIds: new Set(),
 };
@@ -175,235 +168,6 @@ export function buildSessionMcpMap(
     else map.set(relationship.session_id, [relationship.mcp_server_id]);
   }
   return map;
-}
-
-function removeLinkFromBucket(
-  buckets: Map<string, Link[]>,
-  ownerId: string | null | undefined,
-  linkId: string
-): Map<string, Link[]> {
-  if (!ownerId) return buckets;
-  const bucket = buckets.get(ownerId);
-  if (!bucket?.some((item) => item.link_id === linkId)) return buckets;
-
-  const next = new Map(buckets);
-  const filtered = bucket.filter((item) => item.link_id !== linkId);
-  if (filtered.length > 0) next.set(ownerId, filtered);
-  else next.delete(ownerId);
-  return next;
-}
-
-function upsertLinkInBucket(
-  buckets: Map<string, Link[]>,
-  ownerId: string | null | undefined,
-  link: Link
-): Map<string, Link[]> {
-  if (!ownerId) return buckets;
-  const bucket = buckets.get(ownerId) ?? [];
-  const index = bucket.findIndex((item) => item.link_id === link.link_id);
-  if (index >= 0 && shallowEqualEntity(bucket[index], link)) return buckets;
-
-  const next = new Map(buckets);
-  if (index === -1) {
-    next.set(ownerId, [...bucket, link]);
-  } else {
-    const updated = [...bucket];
-    updated[index] = link;
-    next.set(ownerId, updated);
-  }
-  return next;
-}
-
-export function upsertLinkInMaps(prev: DataMaps, link: Link): DataMaps {
-  const existing = prev.linkById.get(link.link_id);
-  if (existing && shallowEqualEntity(existing, link)) return prev;
-
-  const linkById = new Map(prev.linkById);
-  linkById.set(link.link_id, link);
-
-  let linksByBranch = prev.linksByBranch;
-  let linksBySession = prev.linksBySession;
-
-  if (existing?.branch_id && existing.branch_id !== link.branch_id) {
-    linksByBranch = removeLinkFromBucket(linksByBranch, existing.branch_id, existing.link_id);
-  }
-  if (existing?.session_id && existing.session_id !== link.session_id) {
-    linksBySession = removeLinkFromBucket(linksBySession, existing.session_id, existing.link_id);
-  }
-
-  if (link.branch_id && !link.session_id) {
-    linksByBranch = upsertLinkInBucket(linksByBranch, link.branch_id, link);
-    if (existing?.session_id) {
-      linksBySession = removeLinkFromBucket(linksBySession, existing.session_id, existing.link_id);
-    }
-  } else if (link.session_id && !link.branch_id) {
-    linksBySession = upsertLinkInBucket(linksBySession, link.session_id, link);
-    if (existing?.branch_id) {
-      linksByBranch = removeLinkFromBucket(linksByBranch, existing.branch_id, existing.link_id);
-    }
-  }
-
-  return { ...prev, linkById, linksByBranch, linksBySession };
-}
-
-export function mergeLinksIntoMaps(prev: DataMaps, links: readonly Link[]): DataMaps {
-  let next = prev;
-  for (const link of links) next = upsertLinkInMaps(next, link);
-  return next;
-}
-
-type PinnedBranchLinkHydrationDomain = {
-  /**
-   * Optional owner branch scope for a partial pinned-branch snapshot (for
-   * example, the displayed board's branch ids). Omit for the global
-   * owner_scope=branch,is_pinned=true domain.
-   */
-  branchIds?: ReadonlySet<string> | readonly string[];
-  /**
-   * Branch owners with a newer full-owner link bucket that this pinned-only
-   * snapshot must not prune. Pinned snapshots may still upsert fetched links for
-   * these owners; they just are not authoritative for deleting absent ones.
-   */
-  preserveBranchIds?: ReadonlySet<string> | readonly string[];
-};
-
-function normalizeDomainBranchIds(
-  branchIds: PinnedBranchLinkHydrationDomain['branchIds']
-): ReadonlySet<string> | null {
-  if (!branchIds) return null;
-  return branchIds instanceof Set ? branchIds : new Set(branchIds);
-}
-
-function isPinnedBranchLinkInDomain(
-  link: Link,
-  domainBranchIds: ReadonlySet<string> | null
-): boolean {
-  if (!link.branch_id || link.session_id || !link.is_pinned) return false;
-  return !domainBranchIds || domainBranchIds.has(link.branch_id);
-}
-
-function isPinnedBranchLinkPrunable(
-  link: Link,
-  domainBranchIds: ReadonlySet<string> | null,
-  preserveBranchIds: ReadonlySet<string> | null
-): boolean {
-  return (
-    isPinnedBranchLinkInDomain(link, domainBranchIds) &&
-    (!link.branch_id || !preserveBranchIds?.has(link.branch_id))
-  );
-}
-
-/**
- * Reconcile a fetched `owner_scope=branch,is_pinned=true` snapshot into the
- * link maps. Unlike `mergeLinksIntoMaps`, this is domain-complete: cached
- * pinned branch links that are inside the fetched domain but absent from the
- * server snapshot are removed. Links outside that exact domain (session-owned,
- * unpinned branch links, or branch owners outside `branchIds`) are preserved.
- */
-export function reconcilePinnedBranchLinksIntoMaps(
-  prev: DataMaps,
-  links: readonly Link[],
-  domain: PinnedBranchLinkHydrationDomain = {}
-): DataMaps {
-  const domainBranchIds = normalizeDomainBranchIds(domain.branchIds);
-  const preserveBranchIds = normalizeDomainBranchIds(domain.preserveBranchIds);
-  const fetchedIds = new Set<string>();
-  for (const link of links) {
-    if (isPinnedBranchLinkInDomain(link, domainBranchIds)) {
-      fetchedIds.add(link.link_id);
-    }
-  }
-
-  let next = prev;
-  for (const link of prev.linkById.values()) {
-    if (
-      isPinnedBranchLinkPrunable(link, domainBranchIds, preserveBranchIds) &&
-      !fetchedIds.has(link.link_id)
-    ) {
-      next = removeLinkFromMaps(next, link.link_id);
-    }
-  }
-
-  return mergeLinksIntoMaps(next, links);
-}
-
-function sameLinkArray(left: readonly Link[] | undefined, right: readonly Link[]): boolean {
-  if (!left) return right.length === 0;
-  if (left.length !== right.length) return false;
-  return left.every((link, index) => shallowEqualEntity(link, right[index]));
-}
-
-function replaceLinkBucket(
-  buckets: Map<string, Link[]>,
-  ownerId: string,
-  links: readonly Link[]
-): Map<string, Link[]> {
-  const existing = buckets.get(ownerId);
-  if (sameLinkArray(existing, links)) return buckets;
-
-  const next = new Map(buckets);
-  if (links.length > 0) next.set(ownerId, [...links]);
-  else next.delete(ownerId);
-  return next;
-}
-
-function replaceFullOwnerLinksInMaps(
-  prev: DataMaps,
-  scope: 'branch' | 'session',
-  ownerId: string,
-  links: readonly Link[]
-): DataMaps {
-  const branchOwned = scope === 'branch';
-  const ownerLinks = links.filter((link) =>
-    branchOwned
-      ? link.branch_id === ownerId && !link.session_id
-      : link.session_id === ownerId && !link.branch_id
-  );
-  const fetchedIds = new Set(ownerLinks.map((link) => link.link_id));
-  const bucketKey = branchOwned ? 'linksByBranch' : 'linksBySession';
-
-  let next = prev;
-  for (const link of prev[bucketKey].get(ownerId) ?? []) {
-    if (!fetchedIds.has(link.link_id)) {
-      next = removeLinkFromMaps(next, link.link_id);
-    }
-  }
-  next = mergeLinksIntoMaps(next, ownerLinks);
-
-  const nextBuckets = replaceLinkBucket(next[bucketKey], ownerId, ownerLinks);
-  return nextBuckets === next[bucketKey] ? next : { ...next, [bucketKey]: nextBuckets };
-}
-
-export function replaceFullBranchLinksInMaps(
-  prev: DataMaps,
-  branchId: string,
-  links: readonly Link[]
-): DataMaps {
-  return replaceFullOwnerLinksInMaps(prev, 'branch', branchId, links);
-}
-
-export function replaceFullSessionLinksInMaps(
-  prev: DataMaps,
-  sessionId: string,
-  links: readonly Link[]
-): DataMaps {
-  return replaceFullOwnerLinksInMaps(prev, 'session', sessionId, links);
-}
-
-export function removeLinkFromMaps(prev: DataMaps, linkOrId: Link | string): DataMaps {
-  const linkId = typeof linkOrId === 'string' ? linkOrId : linkOrId.link_id;
-  const existing = prev.linkById.get(linkId);
-  if (!existing) return prev;
-
-  const linkById = new Map(prev.linkById);
-  linkById.delete(linkId);
-
-  return {
-    ...prev,
-    linkById,
-    linksByBranch: removeLinkFromBucket(prev.linksByBranch, existing.branch_id, linkId),
-    linksBySession: removeLinkFromBucket(prev.linksBySession, existing.session_id, linkId),
-  };
 }
 
 // Derived board-object index set, built once from a fetched list. Shared by

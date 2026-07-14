@@ -46,7 +46,6 @@ import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   BranchRepository,
   getCurrentTenantId,
-  isUniqueConstraintError,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -94,6 +93,24 @@ const ACTIVE_SESSION_STATUSES: ReadonlyArray<SessionStatus> = [
   SessionStatus.AWAITING_PERMISSION,
   SessionStatus.AWAITING_INPUT,
 ];
+
+/**
+ * Best-effort detection of the partial-unique-index conflict raised by
+ * `sessions_schedule_run_unique` when a concurrent spawn races past
+ * the dedup check. SQLite returns `SQLITE_CONSTRAINT_UNIQUE` /
+ * `SQLITE_CONSTRAINT`; postgres-js raises an error whose `.code` is
+ * `'23505'`. We match on the message too in case the underlying error
+ * is wrapped (the repo wraps insert errors in `RepositoryError`).
+ */
+function isUniqueConstraintError(err: unknown): boolean {
+  if (!err) return false;
+  const e = err as { code?: string; cause?: { code?: string }; message?: string };
+  const code = e.code ?? e.cause?.code ?? '';
+  if (code === '23505') return true; // postgres
+  if (code.startsWith('SQLITE_CONSTRAINT')) return true; // libsql / sqlite
+  const msg = (e.message ?? '').toLowerCase();
+  return msg.includes('unique constraint') || msg.includes('sqlite_constraint_unique');
+}
 
 /**
  * Render a Handlebars schedule-prompt template against the schedule's

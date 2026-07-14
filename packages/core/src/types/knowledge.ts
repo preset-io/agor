@@ -305,16 +305,11 @@ export function buildKnowledgeUri(namespaceSlug: string, path: string): string {
   return `${KNOWLEDGE_URI_PREFIX}${namespaceSlug}/${normalizeKnowledgePath(path)}`;
 }
 
-function startsWithIgnoreCase(value: string, prefix: string): boolean {
-  return value.slice(0, prefix.length).toLowerCase() === prefix.toLowerCase();
-}
-
 export function parseKnowledgeUri(
   uri?: string | null
 ): { namespace_slug: string; path: string } | null {
-  const trimmed = uri?.trim();
-  if (!trimmed || !startsWithIgnoreCase(trimmed, KNOWLEDGE_URI_PREFIX)) return null;
-  const rest = trimmed.slice(KNOWLEDGE_URI_PREFIX.length);
+  if (!uri?.startsWith(KNOWLEDGE_URI_PREFIX)) return null;
+  const rest = uri.slice(KNOWLEDGE_URI_PREFIX.length);
   const slash = rest.indexOf('/');
   if (slash <= 0 || slash === rest.length - 1) return null;
   return {
@@ -337,12 +332,11 @@ export type KnowledgeLinkRef =
   | { document_id: KnowledgeDocumentID; namespace_slug?: undefined; path?: undefined }
   | { document_id?: undefined; namespace_slug: string; path: string };
 
-// Matches canonical URIs (agor://kb/<slug>/<path>), the compact kb:// alias
-// used in agent-facing references, and in-app route links (/kb/<slug>/<path>
-// or /knowledge/<slug>/<path>) as inserted by the editor's `@` autocomplete.
-// Path segments may be percent-encoded.
+// Matches both canonical URIs (agor://kb/<slug>/<path>) and in-app route links
+// (/kb/<slug>/<path> or /knowledge/<slug>/<path>) as inserted by the editor's
+// `@` autocomplete. Path segments may be percent-encoded.
 const KNOWLEDGE_LINK_RE =
-  /(?:agor:\/\/kb\/|kb:\/\/|\/(?:kb|knowledge)\/)([A-Za-z0-9._~%-]+)\/([^\s)"'<>]+)/gi;
+  /(?:agor:\/\/kb\/|\/(?:kb|knowledge)\/)([A-Za-z0-9._~%-]+)\/([^\s)"'<>]+)/g;
 
 const safeDecodeSegment = (segment: string): string => {
   try {
@@ -368,7 +362,7 @@ export function extractKnowledgeLinks(markdown?: string | null): KnowledgeLinkRe
 
     // Rename-proof id reference: agor://kb/document/<uuid>. The `document` type
     // segment is reserved, so this never collides with a real namespace slug.
-    if (startsWithIgnoreCase(match[0], KNOWLEDGE_DOCUMENT_URI_PREFIX) && UUID_RE.test(rawPath)) {
+    if (match[0].startsWith(KNOWLEDGE_DOCUMENT_URI_PREFIX) && UUID_RE.test(rawPath)) {
       const documentId = rawPath.toLowerCase() as KnowledgeDocumentID;
       const key = `id:${documentId}`;
       if (seen.has(key)) continue;

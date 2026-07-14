@@ -260,13 +260,6 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   }
 
   /**
-   * Check whether a multi-record operation is enabled for a specific method.
-   */
-  private isMultiEnabled(method: string): boolean {
-    return this.multi === true || (Array.isArray(this.multi) && this.multi.includes(method));
-  }
-
-  /**
    * Resolve the candidate row set that `find` filters, sorts, and paginates.
    *
    * The base implementation reads the whole table and relies on `filterData` to
@@ -280,23 +273,10 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   }
 
   /**
-   * Query shape used by the generic in-memory filter after `fetchData`.
-   *
-   * Most services can re-apply the original Feathers query verbatim. Services
-   * that push derived, non-row fields into SQL (for example board-scoped
-   * predicates) may strip those keys here so the generic field-equality pass
-   * does not reject otherwise matching rows.
-   */
-  protected filterQueryForInMemory(query: Query): Query {
-    return query;
-  }
-
-  /**
    * Find records
    */
   async find(params?: P): Promise<Paginated<T> | T[]> {
     const query = this.getQuery(params);
-    const filterQuery = this.filterQueryForInMemory(query);
 
     // Get the candidate row set (whole table by default; subclasses may push
     // predicates into SQL — filterData below still applies every query filter)
@@ -308,7 +288,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
     }
 
     // Apply filters
-    data = this.filterData(data, filterQuery);
+    data = this.filterData(data, query);
 
     // Get total count after filtering (reflects the actual matching records)
     const total = data.length;
@@ -410,7 +390,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   async patch(id: NullableId, data: D, params?: P): Promise<T | T[]> {
     if (id === null) {
       // Multi-patch not supported in simple implementation
-      if (!this.isMultiEnabled('patch')) {
+      if (!this.multi) {
         throw new Error('Multi-patch is not enabled');
       }
 
@@ -451,7 +431,7 @@ export class DrizzleService<T = any, D = Partial<T>, P extends Params = Params> 
   async remove(id: NullableId, params?: P): Promise<T | T[]> {
     if (id === null) {
       // Multi-remove not supported in simple implementation
-      if (!this.isMultiEnabled('remove')) {
+      if (!this.multi) {
         throw new Error('Multi-remove is not enabled');
       }
 
