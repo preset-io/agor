@@ -12,6 +12,8 @@ export interface SeedOnboardingTeammateInput {
   teammateEmoji?: string;
   /** Agent chosen in the LLM step; defaults to claude-code. */
   agent?: AgenticToolName | null;
+  /** Persona-tailored MCP integration names to suggest in the bootstrap prompt. */
+  suggestedIntegrations?: string[];
   user?: { name?: string | null; email?: string | null; persona?: string | null } | null;
   client: AgorClient | null;
   repoById: TeammateCreationDeps['repoById'];
@@ -78,6 +80,7 @@ export async function seedOnboardingTeammate(
           userName: input.user?.name,
           userEmail: input.user?.email,
           persona: input.user?.persona,
+          suggestedIntegrations: input.suggestedIntegrations,
         }),
       },
       onCreateSession: input.onCreateSession,

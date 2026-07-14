@@ -451,7 +451,11 @@ export interface OnboardingWizardProps {
     teammateEmoji?: string;
     /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
     agent?: AgenticToolName | null;
-  }) => void;
+    /** Persona-tailored MCP integration names to seed into the bootstrap prompt. */
+    suggestedIntegrations?: string[];
+    // May run async (teammate creation) — the wizard awaits it and shows a
+    // loading state until it resolves, so the modal covers the whole operation.
+  }) => void | Promise<void>;
   /** Called when the user dismisses the wizard without completing it. */
   onDismiss?: () => void;
 
@@ -539,6 +543,11 @@ export function OnboardingWizard({
 
   // ── Step 4: integrations ─────────────────────────────────────────────────
 
+  // ── Step 5: completion ────────────────────────────────────────────────────
+  // True while the async onComplete (teammate creation + navigation) runs, so
+  // the final step shows a spinner + copy instead of vanishing the modal.
+  const [completing, setCompleting] = useState(false);
+
   // ── Reset on open ────────────────────────────────────────────────────────
   // Reset wizard state when modal opens. Clears all local state so re-opens are
   // always fresh. Excludes `user` to avoid resetting mid-flow on live user refreshes.
@@ -558,6 +567,7 @@ export function OnboardingWizard({
     setCreatedBoardId(null);
     setBoardError(null);
     setBoardCreating(false);
+    setCompleting(false);
     // Force seed effect to re-run on every open for the same user
     userSeedRef.current = null;
     authCheckInFlightRef.current.clear();
@@ -768,10 +778,11 @@ export function OnboardingWizard({
       case 'integrations':
         return 'Connect when done →';
       case 'done':
-        return 'Open my board →';
+        return completing ? 'Setting up your AI teammate…' : 'Open my board →';
     }
   }, [
     currentStep,
+    completing,
     hasExistingBoard,
     selectedPersona,
     selectedAgent,
@@ -914,16 +925,28 @@ export function OnboardingWizard({
       case 'done': {
         // existingBoard is null if mainBoardId points to a deleted board — don't pass stale IDs
         const boardIdToUse = createdBoardId || (existingBoard ? existingBoardId : '') || '';
-        onComplete({
-          branchId: '',
-          sessionId: '',
-          boardId: boardIdToUse,
-          path: 'teammate',
-          // Naming details for the first AI teammate, seeded on completion.
-          teammateName: teammateName.trim() || undefined,
-          teammateEmoji,
-          agent: selectedAgent,
-        });
+        // Suggested MCP integrations for the chosen persona (same set shown on
+        // the integrations step) — threaded into the teammate's bootstrap prompt.
+        const recs = PERSONA_MCP_RECS[selectedPersona ?? '_default'] ?? PERSONA_MCP_RECS._default;
+        const suggestedIntegrations = recs.map((rec) => rec.name);
+        // Keep the modal up in a loading state until creation + navigation
+        // finish (onComplete may run async), then it closes from the parent.
+        setCompleting(true);
+        try {
+          await onComplete({
+            branchId: '',
+            sessionId: '',
+            boardId: boardIdToUse,
+            path: 'teammate',
+            // Naming details for the first AI teammate, seeded on completion.
+            teammateName: teammateName.trim() || undefined,
+            teammateEmoji,
+            agent: selectedAgent,
+            suggestedIntegrations,
+          });
+        } finally {
+          setCompleting(false);
+        }
         break;
       }
     }
@@ -1810,7 +1833,7 @@ export function OnboardingWizard({
 
   // ─── Footer ───────────────────────────────────────────────────────────────
 
-  const isPrimaryLoading = llmSaving || boardCreating;
+  const isPrimaryLoading = llmSaving || boardCreating || completing;
   const effectivePrimaryEnabled = primaryEnabled && !isPrimaryLoading;
 
   const footer = (
@@ -1831,6 +1854,7 @@ export function OnboardingWizard({
             type="text"
             icon={<LeftOutlined />}
             onClick={handleBack}
+            disabled={completing}
             style={{ color: TEXT_SECONDARY, paddingLeft: 0 }}
           >
             Back

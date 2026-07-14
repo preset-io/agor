@@ -8,6 +8,8 @@ export interface TeammateBootstrapPromptInput {
   userEmail?: string | null;
   /** Onboarding persona id (see ONBOARDING_PERSONAS); shapes how the teammate introduces itself. */
   persona?: string | null;
+  /** Persona-tailored MCP integration names surfaced in the onboarding wizard. */
+  suggestedIntegrations?: string[] | null;
 }
 
 export interface TeammateBootstrapPromptContext {
@@ -21,6 +23,7 @@ export interface TeammateBootstrapPromptContext {
     email?: string;
   };
   persona?: { id: string; title?: string };
+  suggestedIntegrations?: string[];
   firstSession: true;
 }
 
@@ -49,6 +52,10 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
     lines.push(`- User persona: ${context.persona.id}${suffix}`);
   }
 
+  if (context.suggestedIntegrations?.length) {
+    lines.push(`- Suggested integrations: ${context.suggestedIntegrations.join(', ')}`);
+  }
+
   lines.push('');
   lines.push(
     'Read BOOTSTRAP.md, then say hello and ask only the next useful questions to shape this AI teammate.'
@@ -64,11 +71,15 @@ export function buildTeammateBootstrapPromptContext({
   userName,
   userEmail,
   persona,
+  suggestedIntegrations,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
   const personaId = persona?.trim();
   const personaProfile = findOnboardingPersona(personaId);
+  const normalizedIntegrations = suggestedIntegrations
+    ?.map((name) => name.trim())
+    .filter((name) => name.length > 0);
 
   return {
     teammate: {
@@ -87,6 +98,7 @@ export function buildTeammateBootstrapPromptContext({
     ...(personaId
       ? { persona: { id: personaId, ...(personaProfile ? { title: personaProfile.title } : {}) } }
       : {}),
+    ...(normalizedIntegrations?.length ? { suggestedIntegrations: normalizedIntegrations } : {}),
     firstSession: true,
   };
 }

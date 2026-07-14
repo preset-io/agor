@@ -23,6 +23,7 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     teammateName: 'Rusty',
     teammateEmoji: '🤖',
     agent: 'claude-code',
+    suggestedIntegrations: ['Slack', 'GitHub'],
     user: { name: 'Ada', email: 'ada@example.com', persona: 'developer' },
     client: {} as SeedOnboardingTeammateInput['client'],
     repoById: new Map(),
@@ -73,6 +74,7 @@ describe('seedOnboardingTeammate', () => {
     const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
     expect(initialPrompt).toContain('Rusty');
     expect(initialPrompt).toContain('developer');
+    expect(initialPrompt).toContain('- Suggested integrations: Slack, GitHub');
 
     expect(result).toEqual({ sessionId: 'session-1' });
     expect(onWarn).not.toHaveBeenCalled();

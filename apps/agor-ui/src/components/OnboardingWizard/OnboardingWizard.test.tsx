@@ -403,6 +403,8 @@ describe('OnboardingWizard', () => {
       teammateName: 'Rusty',
       teammateEmoji: '🤖',
       agent: 'claude-code',
+      // Persona was skipped → the default MCP suggestion set flows through.
+      suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
     });
     // The teammate branch/session is created by the app shell on completion, not
     // by the wizard — the wizard itself never invokes these provisioning props.
@@ -442,7 +444,32 @@ describe('OnboardingWizard', () => {
       teammateName: undefined,
       teammateEmoji: '🤖',
       agent: null,
+      suggestedIntegrations: ['Slack', 'GitHub', 'Linear', 'Notion'],
     });
+  });
+
+  it('shows a loading state on the final step while onComplete is in flight', async () => {
+    // onComplete stays pending until we resolve it — mirrors the app shell
+    // creating the teammate + navigating before the modal closes.
+    let resolveComplete: () => void = () => {};
+    const onComplete = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveComplete = resolve;
+        })
+    );
+    renderWizard({ onComplete, initialStep: 'done' });
+
+    clickButton(/open my board/i);
+
+    // Loading affordance is visible and the button is disabled while pending.
+    expect(await screen.findByText(/setting up your ai teammate/i)).toBeInTheDocument();
+    const button = screen.getByText(/setting up your ai teammate/i).closest('button');
+    expect(button).toBeDisabled();
+
+    // Resolving completion lets the flow finish (parent closes the modal).
+    resolveComplete();
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
   });
 
   it('Back navigates to the previous step and preserves prior selections', async () => {

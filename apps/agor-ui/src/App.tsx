@@ -628,10 +628,16 @@ function AppContent() {
     teammateName?: string;
     teammateEmoji?: string;
     agent?: AgenticToolName | null;
+    suggestedIntegrations?: string[];
   }) => {
-    setOnboardingWizardOpen(false);
-
-    if (!currentUser) return;
+    // The wizard awaits this and stays open in a loading state until it
+    // resolves, so we do the teammate creation + navigation FIRST and only
+    // close the modal at the very end — otherwise the user stares at a blank
+    // homepage while the async work runs.
+    if (!currentUser) {
+      setOnboardingWizardOpen(false);
+      return;
+    }
 
     // Silent + fire-and-forget: wizard closing + navigation is the confirmation here.
     // Non-critical — if the preference save fails the wizard just re-opens on next login.
@@ -669,6 +675,7 @@ function AppContent() {
       teammateName: result.teammateName,
       teammateEmoji: result.teammateEmoji,
       agent: result.agent,
+      suggestedIntegrations: result.suggestedIntegrations,
       user: {
         name: currentUser.name,
         email: currentUser.email,
@@ -699,6 +706,10 @@ function AppContent() {
     } else {
       navigate('/');
     }
+
+    // Close the wizard only now that creation + navigation are done, so the
+    // loading affordance stayed visible for the whole operation.
+    setOnboardingWizardOpen(false);
   };
 
   const handleCheckAuth = useCallback(
