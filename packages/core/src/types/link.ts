@@ -90,12 +90,33 @@ export type LinkOwner =
 
 export const LINK_PROMOTION_TARGET = {
   branch: 'branch',
-  session: 'session',
   teammate: 'teammate',
 } as const;
 export const LINK_PROMOTION_TARGETS = Object.values(LINK_PROMOTION_TARGET);
 export type LinkPromotionTarget =
   (typeof LINK_PROMOTION_TARGET)[keyof typeof LINK_PROMOTION_TARGET];
+
+export const LINK_CONTEXT_KIND = {
+  session: 'session',
+  branch: 'branch',
+  teammate: 'teammate',
+} as const;
+export type LinkContextKind = (typeof LINK_CONTEXT_KIND)[keyof typeof LINK_CONTEXT_KIND];
+
+export const LINK_PROMOTION_TRANSITIONS = {
+  [LINK_CONTEXT_KIND.session]: [LINK_PROMOTION_TARGET.branch, LINK_PROMOTION_TARGET.teammate],
+  [LINK_CONTEXT_KIND.branch]: [LINK_PROMOTION_TARGET.teammate],
+  [LINK_CONTEXT_KIND.teammate]: [],
+} as const satisfies Record<LinkContextKind, readonly LinkPromotionTarget[]>;
+
+export function canPromoteLink(
+  sourceContext: LinkContextKind,
+  destination: LinkPromotionTarget
+): boolean {
+  return (LINK_PROMOTION_TRANSITIONS[sourceContext] as readonly LinkPromotionTarget[]).includes(
+    destination
+  );
+}
 
 export type LinkPromotionRequest =
   | {
@@ -109,12 +130,6 @@ export type LinkPromotionRequest =
       branch_id?: never;
       session_id?: never;
       teammate_branch_id: BranchID;
-    }
-  | {
-      target: typeof LINK_PROMOTION_TARGET.session;
-      branch_id?: never;
-      session_id: SessionID;
-      teammate_branch_id?: never;
     };
 
 export type LinkTarget =
@@ -386,6 +401,24 @@ export function normalizeFileTargetKey(filePath: string): string {
 
 export const TEAMMATE_PROMOTION_METADATA_KEY = 'teammate_promotion';
 export const LINK_PROMOTION_SOURCE_METADATA_KEY = 'promoted_from_owner';
+
+function promotionRootIdFromMetadata(metadata?: LinkMetadata | null): string | null {
+  const promotedFromOwner = metadata?.[LINK_PROMOTION_SOURCE_METADATA_KEY];
+  if (!promotedFromOwner || typeof promotedFromOwner !== 'object') return null;
+  const linkId = (promotedFromOwner as { link_id?: unknown }).link_id;
+  return typeof linkId === 'string' && linkId.trim() ? linkId : null;
+}
+
+export function getLinkPromotionRootId(link: Pick<Link, 'link_id' | 'metadata'>): string {
+  return promotionRootIdFromMetadata(link.metadata) ?? String(link.link_id);
+}
+
+export function isLinkPlacementFromPromotionRoot(
+  link: Pick<Link, 'metadata'>,
+  promotionRootLinkId: string
+): boolean {
+  return promotionRootIdFromMetadata(link.metadata) === promotionRootLinkId;
+}
 
 export function isTeammatePromotionLink(link: Pick<Link, 'metadata'>): boolean {
   const metadata = link.metadata;

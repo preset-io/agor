@@ -16,6 +16,7 @@ function linkItem(overrides: Partial<LinkDisplayItem> = {}): LinkDisplayItem {
   return {
     key: 'link:source',
     linkId: 'source',
+    promotionRootLinkId: 'source',
     name: 'Runbook',
     targetKey: 'url:https://example.com/runbook',
     category: 'url',
@@ -73,12 +74,27 @@ describe('getLinkPromotionActions', () => {
     ]);
   });
 
+  it('promotes a session inside a teammate only to that teammate', () => {
+    expect(
+      getLinkPromotionActions(linkItem(), {
+        branchId: TEAMMATE_BRANCH_ID,
+        teammateBranchId: TEAMMATE_BRANCH_ID,
+      })
+    ).toEqual([
+      expect.objectContaining({
+        destination: LINK_PROMOTION_DESTINATION.teammate,
+        branchId: TEAMMATE_BRANCH_ID,
+      }),
+    ]);
+  });
+
   it('offers removal when the target already has a teammate placement', () => {
     const teammatePlacement = {
       link_id: 'teammate-link',
       branch_id: TEAMMATE_BRANCH_ID,
       session_id: null,
       target_key: 'url:https://example.com/runbook',
+      metadata: { promoted_from_owner: { link_id: 'source' } },
     } as Link;
 
     expect(
@@ -95,6 +111,36 @@ describe('getLinkPromotionActions', () => {
       disabled: false,
       operation: LINK_PLACEMENT_OPERATION.remove,
     });
+  });
+
+  it('does not offer removal for an independently curated matching teammate link', () => {
+    const curatedPlacement = {
+      link_id: 'curated-link',
+      branch_id: TEAMMATE_BRANCH_ID,
+      session_id: null,
+      target_key: 'url:https://example.com/runbook',
+      metadata: { teammate_owned: true },
+    } as Link;
+
+    expect(
+      getLinkPromotionActions(linkItem(), {
+        branchId: BRANCH_ID,
+        teammateBranchId: TEAMMATE_BRANCH_ID,
+        placements: [curatedPlacement],
+      })
+    ).toEqual([expect.objectContaining({ destination: LINK_PROMOTION_DESTINATION.branch })]);
+  });
+
+  it('does not offer downward promotion actions for teammate-owned links', () => {
+    expect(
+      getLinkPromotionActions(
+        linkItem({ ownerScope: 'branch', ownerBranchId: TEAMMATE_BRANCH_ID }),
+        {
+          branchId: TEAMMATE_BRANCH_ID,
+          teammateBranchId: TEAMMATE_BRANCH_ID,
+        }
+      )
+    ).toEqual([]);
   });
 
   it('keeps uploaded files promotable and internal references owner-local', () => {

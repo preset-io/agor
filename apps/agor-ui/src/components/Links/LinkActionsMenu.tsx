@@ -9,12 +9,6 @@ import {
   LINK_CONFIRM_COPY,
 } from './linkUiConstants';
 
-export interface LinkMenuAction {
-  key: string;
-  label: string;
-  disabled?: boolean;
-}
-
 interface LinkActionsMenuProps {
   item: LinkDisplayItem;
   busy?: boolean;
@@ -24,8 +18,6 @@ interface LinkActionsMenuProps {
   placementActions?: readonly LinkPromotionAction[];
   onPlacementAction?: (action: LinkPromotionAction) => Promise<unknown>;
   onOpenPlacements?: () => unknown | Promise<unknown>;
-  additionalActions?: readonly LinkMenuAction[];
-  onAdditionalAction?: (action: LinkMenuAction) => void;
 }
 
 export function LinkActionsMenu({
@@ -37,18 +29,11 @@ export function LinkActionsMenu({
   placementActions = [],
   onPlacementAction,
   onOpenPlacements,
-  additionalActions = [],
-  onAdditionalAction,
 }: LinkActionsMenuProps) {
   const { modal } = App.useApp();
   const items: NonNullable<MenuProps['items']> = [
     { key: LINK_ACTION_KEY.edit, label: LINK_ACTION_LABEL.edit, disabled: busy },
     ...placementActions.map((action) => ({
-      key: action.key,
-      label: action.label,
-      disabled: busy || action.disabled,
-    })),
-    ...additionalActions.map((action) => ({
       key: action.key,
       label: action.label,
       disabled: busy || action.disabled,
@@ -70,8 +55,6 @@ export function LinkActionsMenu({
     if (key === LINK_ACTION_KEY.edit) onEdit();
     const placementAction = placementActions.find((action) => action.key === key);
     if (placementAction && onPlacementAction) void onPlacementAction(placementAction);
-    const additionalAction = additionalActions.find((action) => action.key === key);
-    if (additionalAction) onAdditionalAction?.(additionalAction);
     if (key === LINK_ACTION_KEY.delete && onDelete) {
       modal.confirm({
         title: LINK_CONFIRM_COPY.deleteTitle,

@@ -1,5 +1,12 @@
-import { LINK_PROMOTION_TARGET, type LinkPromotionRequest } from '@agor/core/types';
-import type { AgorClient, BranchID, Link, SessionID } from '@agor-live/client';
+import {
+  canPromoteLink,
+  isLinkPlacementFromPromotionRoot,
+  LINK_CONTEXT_KIND,
+  LINK_PROMOTION_TARGET,
+  type LinkContextKind,
+  type LinkPromotionRequest,
+} from '@agor/core/types';
+import type { AgorClient, BranchID, Link } from '@agor-live/client';
 import type { LinkDisplayItem } from './linkDisplay';
 import { ensurePersistedLink } from './linkPinning';
 import {
@@ -27,8 +34,7 @@ function placementsService(client: AgorClient, linkId: string): LinkPlacementsCl
 
 export interface LinkPromotionSelection {
   destination: LinkPromotionDestination;
-  branchId?: string;
-  sessionId?: string;
+  branchId: string;
 }
 
 export interface LinkPromotionAction extends LinkPromotionSelection {
@@ -47,80 +53,80 @@ interface LinkPromotionContext {
 
 const LINK_PROMOTION_LABEL = {
   [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_LABEL.promoteToBranch,
-  [LINK_PROMOTION_DESTINATION.session]: LINK_ACTION_LABEL.promoteToSession,
   [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_LABEL.promoteToTeammate,
 } as const satisfies Record<LinkPromotionDestination, string>;
 
 const LINK_PROMOTION_ACTION_KEY = {
   [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_KEY.promoteToBranch,
-  [LINK_PROMOTION_DESTINATION.session]: LINK_ACTION_KEY.promoteToSession,
   [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_KEY.promoteToTeammate,
 } as const satisfies Record<LinkPromotionDestination, string>;
 
 const LINK_REMOVAL_LABEL = {
   [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_LABEL.removeFromBranch,
-  [LINK_PROMOTION_DESTINATION.session]: LINK_ACTION_LABEL.removeFromSession,
   [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_LABEL.removeFromTeammate,
 } as const satisfies Record<LinkPromotionDestination, string>;
 
 const LINK_REMOVAL_ACTION_KEY = {
   [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_KEY.removeFromBranch,
-  [LINK_PROMOTION_DESTINATION.session]: LINK_ACTION_KEY.removeFromSession,
   [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_KEY.removeFromTeammate,
 } as const satisfies Record<LinkPromotionDestination, string>;
+
+function promotionSourceContext(
+  item: LinkDisplayItem,
+  context: LinkPromotionContext
+): LinkContextKind {
+  if (item.ownerScope === LINK_CONTEXT_KIND.session) return LINK_CONTEXT_KIND.session;
+  const ownerBranchId = item.ownerBranchId ?? context.branchId ?? null;
+  return ownerBranchId && ownerBranchId === context.teammateBranchId
+    ? LINK_CONTEXT_KIND.teammate
+    : LINK_CONTEXT_KIND.branch;
+}
 
 function promotionCandidates(
   item: LinkDisplayItem,
   context: LinkPromotionContext
 ): LinkPromotionSelection[] {
   const ownerBranchId = item.ownerBranchId ?? context.branchId ?? null;
-  if (item.ownerScope === 'branch') {
-    return context.teammateBranchId && context.teammateBranchId !== ownerBranchId
-      ? [
-          {
-            destination: LINK_PROMOTION_DESTINATION.teammate,
-            branchId: context.teammateBranchId,
-          },
-        ]
-      : [];
+  const sourceContext = promotionSourceContext(item, context);
+  const candidates: LinkPromotionSelection[] = [];
+
+  if (item.ownerScope === LINK_CONTEXT_KIND.session && context.branchId) {
+    candidates.push({
+      destination:
+        context.branchId === context.teammateBranchId
+          ? LINK_PROMOTION_DESTINATION.teammate
+          : LINK_PROMOTION_DESTINATION.branch,
+      branchId: context.branchId,
+    });
+  }
+  if (context.teammateBranchId && context.teammateBranchId !== ownerBranchId) {
+    candidates.push({
+      destination: LINK_PROMOTION_DESTINATION.teammate,
+      branchId: context.teammateBranchId,
+    });
   }
 
-  if (context.teammateBranchId && context.teammateBranchId === context.branchId) {
-    return [
-      {
-        destination: LINK_PROMOTION_DESTINATION.teammate,
-        branchId: context.teammateBranchId,
-      },
-    ];
-  }
-
-  return [
-    ...(context.branchId
-      ? [{ destination: LINK_PROMOTION_DESTINATION.branch, branchId: context.branchId } as const]
-      : []),
-    ...(context.teammateBranchId
-      ? [
-          {
-            destination: LINK_PROMOTION_DESTINATION.teammate,
-            branchId: context.teammateBranchId,
-          } as const,
-        ]
-      : []),
-  ];
+  return candidates.filter((candidate) => canPromoteLink(sourceContext, candidate.destination));
 }
 
 function placementMatchesSelection(link: Link, selection: LinkPromotionSelection): boolean {
-  return selection.destination === LINK_PROMOTION_DESTINATION.session
-    ? link.session_id === selection.sessionId && !link.branch_id
-    : link.branch_id === selection.branchId && !link.session_id;
+  return link.branch_id === selection.branchId && !link.session_id;
 }
 
-export function getLinkPlacementAction(
+function getLinkPlacementAction(
+  item: LinkDisplayItem,
   selection: LinkPromotionSelection,
   placements: readonly Link[] = [],
   available = true
-): LinkPromotionAction {
+): LinkPromotionAction | null {
   const existing = placements.find((link) => placementMatchesSelection(link, selection));
+  if (
+    existing &&
+    (!item.promotionRootLinkId ||
+      !isLinkPlacementFromPromotionRoot(existing, item.promotionRootLinkId))
+  ) {
+    return null;
+  }
   const operation = existing ? LINK_PLACEMENT_OPERATION.remove : LINK_PLACEMENT_OPERATION.promote;
   return {
     ...selection,
@@ -142,18 +148,18 @@ export function getLinkPromotionActions(
   context: LinkPromotionContext
 ): LinkPromotionAction[] {
   if (item.kind === LINK_KIND.internal) return [];
-  return promotionCandidates(item, context).map((selection) =>
-    getLinkPlacementAction(selection, context.placements, context.available ?? true)
-  );
+  return promotionCandidates(item, context).flatMap((selection) => {
+    const action = getLinkPlacementAction(
+      item,
+      selection,
+      context.placements,
+      context.available ?? true
+    );
+    return action ? [action] : [];
+  });
 }
 
 function promotionRequest(selection: LinkPromotionSelection): LinkPromotionRequest {
-  if (selection.destination === LINK_PROMOTION_DESTINATION.session) {
-    return {
-      target: LINK_PROMOTION_TARGET.session,
-      session_id: selection.sessionId as SessionID,
-    };
-  }
   return selection.destination === LINK_PROMOTION_DESTINATION.teammate
     ? {
         target: LINK_PROMOTION_TARGET.teammate,

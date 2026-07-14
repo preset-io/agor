@@ -6,7 +6,6 @@ export * from './LinkCollectionControls';
 export * from './LinkContentPreviewModal';
 export * from './LinkEditorModal';
 export * from './LinkImageThumbnail';
-export * from './LinkPlacementDestinationModal';
 export * from './LinkVisual';
 export * from './linkContent';
 export * from './linkDisplay';

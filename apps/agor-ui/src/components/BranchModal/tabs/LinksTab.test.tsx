@@ -108,6 +108,7 @@ describe('LinksTab promotion actions', () => {
       link_id: 'teammate-link' as Link['link_id'],
       branch_id: 'teammate-1' as Link['branch_id'],
       is_pinned: true,
+      metadata: { promoted_from_owner: { link_id: source.link_id } },
       revision: (source.revision ?? 1) + 1,
     });
     seedStore([source]);
@@ -223,6 +224,7 @@ describe('LinksTab promotion actions', () => {
       link_id: 'teammate-link' as Link['link_id'],
       branch_id: 'teammate-1' as Link['branch_id'],
       is_pinned: true,
+      metadata: { promoted_from_owner: { link_id: source.link_id } },
     });
     seedStore([source], [destination]);
     const { client, calls } = makeClient({
@@ -256,7 +258,7 @@ describe('LinksTab promotion actions', () => {
     expect(agorStore.getState().linkById.has(destination.link_id)).toBe(false);
   });
 
-  it('offers destination selection and contextual removal for teammate-owned links', async () => {
+  it('keeps teammate-owned links curated locally without downward promotion actions', async () => {
     const teammateBranch = {
       ...branch,
       branch_id: 'teammate-1',
@@ -277,76 +279,10 @@ describe('LinksTab promotion actions', () => {
 
     await screen.findByText('Runbook');
     fireEvent.click(screen.getByLabelText('Actions for Runbook'));
-    expect(await screen.findByText('Promote to branch…')).toBeInTheDocument();
-    expect(screen.getByText('Promote to session…')).toBeInTheDocument();
-    expect(screen.getByText('Remove from teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Remove from teammate')).toBeInTheDocument();
+    expect(screen.queryByText(/Promote to/)).toBeNull();
     expect(calls.some((call) => call.method === 'remove')).toBe(false);
     expect(agorStore.getState().linkById.has('teammate-link')).toBe(true);
-  });
-
-  it('promotes a teammate-owned link to a selected session', async () => {
-    const teammateBranch = {
-      ...branch,
-      branch_id: 'teammate-1',
-      name: 'Helper',
-      custom_context: { teammate: { kind: 'teammate', displayName: 'Helper' } },
-    } as Branch;
-    const destinationBranch = {
-      ...branch,
-      branch_id: 'destination-branch',
-      name: 'Feature branch',
-    } as Branch;
-    const destinationSession = {
-      session_id: 'destination-session',
-      branch_id: destinationBranch.branch_id,
-      title: 'Implementation session',
-      archived: false,
-    } as Session;
-    const source = makeLink({
-      link_id: 'teammate-link' as Link['link_id'],
-      branch_id: teammateBranch.branch_id,
-    });
-    const promoted = makeLink({
-      link_id: 'session-link' as Link['link_id'],
-      branch_id: null,
-      session_id: destinationSession.session_id as Link['session_id'],
-    });
-    seedStore([], [source]);
-    agorStore.setState((state) => ({
-      ...state,
-      branchById: new Map([
-        [teammateBranch.branch_id, teammateBranch],
-        [destinationBranch.branch_id, destinationBranch],
-      ]),
-      sessionById: new Map([[destinationSession.session_id, destinationSession]]),
-    }));
-    const { client, calls } = makeClient({
-      branchLinks: [],
-      teammateLinks: [source],
-      promoted,
-    });
-
-    renderLinksTab(client, teammateBranch);
-
-    await screen.findByText('Runbook');
-    fireEvent.click(screen.getByLabelText('Actions for Runbook'));
-    fireEvent.click(await screen.findByText('Promote to session…'));
-    expect(await screen.findByText('Choose a session')).toBeInTheDocument();
-    expect(screen.getByText('Implementation session')).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Promote' }));
-
-    await waitFor(() =>
-      expect(calls).toContainEqual({
-        service: 'links/teammate-link/placements',
-        method: 'create',
-        args: [
-          {
-            target: LINK_PROMOTION_TARGET.session,
-            session_id: destinationSession.session_id,
-          },
-        ],
-      })
-    );
   });
 
   it('searches links and shows source session attribution from the centralized store', async () => {

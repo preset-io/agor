@@ -61,9 +61,6 @@ export const LINK_ACTION_LABEL = {
   edit: 'Edit link',
   delete: 'Delete link',
   promoteToBranch: 'Promote to branch',
-  promoteToBranchPicker: 'Promote to branch…',
-  promoteToSession: 'Promote to session',
-  promoteToSessionPicker: 'Promote to session…',
   promoteToTeammate: 'Promote to teammate',
   removeFromBranch: 'Remove from branch',
   removeFromSession: 'Remove from session',
@@ -75,24 +72,13 @@ export const LINK_ACTION_LABEL = {
   remove: 'Remove',
 } as const;
 
-export const LINK_DESTINATION_COPY = {
-  branchTitle: 'Choose a branch',
-  sessionTitle: 'Choose a session',
-  emptyBranches: 'No available branches.',
-  emptySessions: 'No available sessions.',
-} as const;
-
 export const LINK_ACTION_KEY = {
   default: 'action',
   edit: 'edit',
   delete: 'delete',
   promoteToBranch: 'promote-to-branch',
-  promoteToBranchPicker: 'promote-to-branch-picker',
-  promoteToSession: 'promote-to-session',
-  promoteToSessionPicker: 'promote-to-session-picker',
   promoteToTeammate: 'promote-to-teammate',
   removeFromBranch: 'remove-from-branch',
-  removeFromSession: 'remove-from-session',
   removeFromTeammate: 'remove-from-teammate',
 } as const;
 

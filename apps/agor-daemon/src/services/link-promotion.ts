@@ -4,15 +4,19 @@ import { BadRequest, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   Link,
+  LinkContextKind,
   LinkCreate,
   LinkOwner,
   LinkPromotionRequest,
-  Session,
-  SessionID,
+  LinkPromotionTarget,
   UUID,
 } from '@agor/core/types';
 import {
+  canPromoteLink,
+  getLinkPromotionRootId,
+  isLinkPlacementFromPromotionRoot,
   isTeammate,
+  LINK_CONTEXT_KIND,
   LINK_PROMOTION_SOURCE_METADATA_KEY,
   LINK_PROMOTION_TARGET,
   TEAMMATE_PROMOTION_METADATA_KEY,
@@ -30,9 +34,6 @@ interface LinkPlacementServiceOptions {
   db: TenantScopeAwareDatabase;
   branchRepository?: BranchRepository;
   branchRbacEnabled: boolean;
-  sessionsService?: {
-    get(id: string, params?: AuthenticatedParams): Promise<Session>;
-  };
   superadminOpts: { allowSuperadmin: boolean };
 }
 
@@ -54,14 +55,16 @@ function sourceLinkIdFromParams(params?: LinkPromotionRouteParams): string | nul
 
 const LINK_PROMOTION_ERROR = {
   sourceLinkIdRequired: 'Source link ID is required',
+  sourceOwnerRequired: 'Source link must belong to a branch or session',
   branchIdRequired: 'branch_id is required when promoting to a branch',
-  sessionIdRequired: 'session_id is required when promoting to a session',
   teammateBranchIdRequired: 'teammate_branch_id is required when promoting to a teammate',
-  invalidTarget: 'Link promotion target must be a branch, session, or teammate',
+  invalidTarget: 'Link promotion target must be a branch or teammate',
+  branchRequired: 'Target branch cannot be a teammate',
   teammateRequired: 'Target branch is not a teammate',
   archivedBranch: 'Links cannot be promoted to an archived branch',
-  archivedSession: 'Links cannot be promoted to an archived session',
-  sessionsUnavailable: 'Session-owned link placements are unavailable',
+  promotionNotAllowed: (source: LinkContextKind, target: LinkPromotionTarget) =>
+    `Links cannot be promoted from ${source} to ${target}`,
+  unrelatedPlacement: 'Destination link is not managed by this promotion',
 } as const;
 
 const LINKS_SERVICE = 'links';
@@ -73,6 +76,7 @@ const PROMOTED_UPLOAD_METADATA_KEYS = ['filename', 'originalName', 'size'] as co
 
 interface ResolvedPlacementDestination {
   owner: LinkOwner;
+  context: LinkPromotionTarget;
 }
 
 function promotedMetadata(source: Link, target: LinkPromotionRequest['target']) {
@@ -122,24 +126,8 @@ export class LinkPlacementService {
   }
 
   private async resolveDestination(
-    data: LinkPromotionRequest,
-    params?: LinkPromotionRouteParams
+    data: LinkPromotionRequest
   ): Promise<ResolvedPlacementDestination> {
-    if (data?.target === LINK_PROMOTION_TARGET.session) {
-      if (!data.session_id) throw new BadRequest(LINK_PROMOTION_ERROR.sessionIdRequired);
-      if (!this.options.sessionsService) {
-        throw new BadRequest(LINK_PROMOTION_ERROR.sessionsUnavailable);
-      }
-      const session = await this.options.sessionsService.get(data.session_id, {
-        ...params,
-        provider: undefined,
-      });
-      if (session.archived) throw new BadRequest(LINK_PROMOTION_ERROR.archivedSession);
-      return {
-        owner: { branch_id: null, session_id: session.session_id as SessionID },
-      };
-    }
-
     const targetBranchId =
       data?.target === LINK_PROMOTION_TARGET.branch
         ? data.branch_id
@@ -162,9 +150,33 @@ export class LinkPlacementService {
     if (data.target === LINK_PROMOTION_TARGET.teammate && !isTeammate(targetBranch)) {
       throw new BadRequest(LINK_PROMOTION_ERROR.teammateRequired);
     }
+    if (data.target === LINK_PROMOTION_TARGET.branch && isTeammate(targetBranch)) {
+      throw new BadRequest(LINK_PROMOTION_ERROR.branchRequired);
+    }
     return {
       owner: { branch_id: targetBranch.branch_id, session_id: null },
+      context: data.target,
     };
+  }
+
+  private async sourceContext(source: Link): Promise<LinkContextKind> {
+    if (source.session_id) return LINK_CONTEXT_KIND.session;
+    if (!source.branch_id) throw new BadRequest(LINK_PROMOTION_ERROR.sourceOwnerRequired);
+    const sourceBranch = await this.branchRepository.findById(String(source.branch_id));
+    if (!sourceBranch) throw new NotFound(`Branch not found: ${source.branch_id}`);
+    return isTeammate(sourceBranch) ? LINK_CONTEXT_KIND.teammate : LINK_CONTEXT_KIND.branch;
+  }
+
+  private async assertPromotionAllowed(
+    source: Link,
+    destination: ResolvedPlacementDestination
+  ): Promise<void> {
+    const sourceContext = await this.sourceContext(source);
+    if (!canPromoteLink(sourceContext, destination.context)) {
+      throw new BadRequest(
+        LINK_PROMOTION_ERROR.promotionNotAllowed(sourceContext, destination.context)
+      );
+    }
   }
 
   private async authorizeDestination(
@@ -177,7 +189,6 @@ export class LinkPlacementService {
       options: {
         branchRepository: this.branchRepository,
         branchRbacEnabled: this.options.branchRbacEnabled,
-        sessionsService: this.options.sessionsService,
         superadminOpts: this.options.superadminOpts,
       },
       params,
@@ -206,7 +217,8 @@ export class LinkPlacementService {
 
   async create(data: LinkPromotionRequest, params?: LinkPromotionRouteParams): Promise<Link> {
     const source = await this.sourceLink(params);
-    const destination = await this.resolveDestination(data, params);
+    const destination = await this.resolveDestination(data);
+    await this.assertPromotionAllowed(source, destination);
     await this.authorizeDestination(destination, params);
 
     const callerId = (params?.user?.user_id as UUID | undefined) ?? null;
@@ -242,10 +254,14 @@ export class LinkPlacementService {
     const data = params?.query as LinkPromotionRequest | undefined;
     if (!data) throw new BadRequest(LINK_PROMOTION_ERROR.invalidTarget);
     const source = await this.sourceLink(params);
-    const destination = await this.resolveDestination(data, params);
+    const destination = await this.resolveDestination(data);
+    await this.assertPromotionAllowed(source, destination);
     await this.authorizeDestination(destination, params);
     const existing = await this.findDestinationPlacement(source, destination);
     if (!existing) return null;
+    if (!isLinkPlacementFromPromotionRoot(existing, getLinkPromotionRootId(source))) {
+      throw new BadRequest(LINK_PROMOTION_ERROR.unrelatedPlacement);
+    }
     const { query: _query, ...mutationParams } = params ?? {};
     return this.linksService().remove(existing.link_id, {
       ...mutationParams,

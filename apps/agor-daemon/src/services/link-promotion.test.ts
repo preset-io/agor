@@ -1,6 +1,6 @@
 import { BranchRepository, LinksRepository } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
-import type { BranchID, Link, Session, UUID } from '@agor/core/types';
+import type { BranchID, Link, UUID } from '@agor/core/types';
 import { LINK_PROMOTION_TARGET } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import type { Database } from '../../../../packages/core/src/db/client';
@@ -25,10 +25,7 @@ async function seedBranch(
   });
 }
 
-function promotionService(
-  db: Database,
-  options: { branchRbacEnabled?: boolean; sessions?: Session[] } = {}
-) {
+function promotionService(db: Database, options: { branchRbacEnabled?: boolean } = {}) {
   const linksService = new LinksService(db);
   const app = {
     service(path: string) {
@@ -42,15 +39,6 @@ function promotionService(
       app: app as never,
       db,
       branchRbacEnabled: options.branchRbacEnabled ?? false,
-      sessionsService: options.sessions
-        ? {
-            async get(id: string) {
-              const session = options.sessions?.find((candidate) => candidate.session_id === id);
-              if (!session) throw new Error(`Session not found: ${id}`);
-              return session;
-            },
-          }
-        : undefined,
       superadminOpts: { allowSuperadmin: true },
     }),
   };
@@ -167,24 +155,16 @@ describe('LinkPlacementService', () => {
     });
   });
 
-  dbTest('promotes a teammate link to a session without removing the source', async ({ db }) => {
+  dbTest('rejects promotion from a teammate into an ephemeral branch', async ({ db }) => {
     const teammate = await seedBranch(db, { teammate: true });
     const destinationBranch = await seedBranch(db);
-    const destinationSession = await seedSession(db, destinationBranch.branch_id);
     const repository = new LinksRepository(db);
     const source = await createUrl(db, teammate.branch_id, 'https://example.com/teammate-source');
 
-    const { service } = promotionService(db, { sessions: [destinationSession] });
-    const promoted = await service.create(
-      { target: LINK_PROMOTION_TARGET.session, session_id: destinationSession.session_id },
-      { route: { sourceLinkId: source.link_id } }
+    const { service } = promotionService(db);
+    await expect(promoteToBranch(service, source, destinationBranch.branch_id)).rejects.toThrow(
+      'Links cannot be promoted from teammate to branch'
     );
-
-    expect(promoted).toMatchObject({
-      branch_id: null,
-      session_id: destinationSession.session_id,
-      url: source.url,
-    });
     await expect(repository.findById(source.link_id)).resolves.toMatchObject({
       branch_id: teammate.branch_id,
       session_id: null,
@@ -219,6 +199,40 @@ describe('LinkPlacementService', () => {
       await expect(new LinksRepository(db).findById(promoted.link_id)).resolves.toBeNull();
     }
   );
+
+  dbTest('preserves promotion lineage from session through branch to teammate', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const session = await seedSession(db, branch.branch_id);
+    const teammate = await seedBranch(db, { teammate: true });
+    const repository = new LinksRepository(db);
+    const sessionSource = await repository.create({
+      session_id: session.session_id,
+      kind: 'url',
+      source: 'parsed',
+      url: 'https://example.com/promotion-lineage',
+    });
+    const { service } = promotionService(db);
+    const branchPlacement = await promoteToBranch(service, sessionSource, branch.branch_id);
+    const teammatePlacement = await promote(service, branchPlacement, teammate.branch_id);
+
+    expect(teammatePlacement.metadata).toMatchObject({
+      promoted_from_owner: {
+        link_id: sessionSource.link_id,
+        session_id: session.session_id,
+      },
+    });
+    await expect(
+      service.remove(null, {
+        route: { sourceLinkId: branchPlacement.link_id },
+        query: {
+          target: LINK_PROMOTION_TARGET.teammate,
+          teammate_branch_id: teammate.branch_id,
+        },
+      })
+    ).resolves.toMatchObject({ link_id: teammatePlacement.link_id });
+    await expect(repository.findById(sessionSource.link_id)).resolves.not.toBeNull();
+    await expect(repository.findById(branchPlacement.link_id)).resolves.not.toBeNull();
+  });
 
   dbTest('promotes uploaded files while preserving content metadata and source', async ({ db }) => {
     const branch = await seedBranch(db);
@@ -286,6 +300,40 @@ describe('LinkPlacementService', () => {
 
     const { service } = promotionService(db);
     await expect(promote(service, source, nonTeammate.branch_id)).rejects.toThrow(BadRequest);
+  });
+
+  dbTest('rejects branch promotion when the destination is actually a teammate', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const teammate = await seedBranch(db, { teammate: true });
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/wrong-target-kind');
+
+    const { service } = promotionService(db);
+    await expect(promoteToBranch(service, source, teammate.branch_id)).rejects.toThrow(
+      'Target branch cannot be a teammate'
+    );
+  });
+
+  dbTest('does not remove an independently curated matching teammate link', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const teammate = await seedBranch(db, { teammate: true });
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/curated-target');
+    const curated = await createUrl(db, teammate.branch_id, 'https://example.com/curated-target', {
+      metadata: { teammate_owned: true },
+    });
+    const { service } = promotionService(db);
+
+    await expect(
+      service.remove(null, {
+        route: { sourceLinkId: source.link_id },
+        query: {
+          target: LINK_PROMOTION_TARGET.teammate,
+          teammate_branch_id: teammate.branch_id,
+        },
+      })
+    ).rejects.toThrow('Destination link is not managed by this promotion');
+    await expect(new LinksRepository(db).findById(curated.link_id)).resolves.toMatchObject({
+      link_id: curated.link_id,
+    });
   });
 
   dbTest('requires all permission on teammate branch when RBAC is enabled', async ({ db }) => {
@@ -381,10 +429,11 @@ describe('LinkPlacementService', () => {
   dbTest(
     'uses caller params for source get but internal params for trusted create',
     async ({ db }) => {
+      const sourceBranch = await seedBranch(db);
       const teammate = await seedBranch(db, { teammate: true });
       const source = {
         link_id: generateId(),
-        branch_id: null,
+        branch_id: sourceBranch.branch_id,
         session_id: null,
         kind: 'url',
         source: 'manual',

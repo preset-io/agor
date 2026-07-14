@@ -7,7 +7,6 @@ import {
   getLinkPinActionLabel,
   LinkActionsMenu,
   type LinkDisplayItem,
-  type LinkMenuAction,
   LinkPinAction,
   type LinkPromotionAction,
 } from '../../Links';
@@ -27,8 +26,6 @@ interface BranchLinkListItemProps {
   onEdit: (item: LinkDisplayItem) => void;
   onDelete: (item: LinkDisplayItem) => Promise<unknown>;
   deleteLabel?: string;
-  additionalActions?: readonly LinkMenuAction[];
-  onAdditionalAction?: (action: LinkMenuAction) => void;
 }
 
 export function BranchLinkListItem(props: BranchLinkListItemProps) {
@@ -61,8 +58,6 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
               onEdit={() => props.onEdit(props.item)}
               onDelete={props.item.linkId ? () => props.onDelete(props.item) : undefined}
               deleteLabel={props.deleteLabel}
-              additionalActions={props.additionalActions}
-              onAdditionalAction={props.onAdditionalAction}
               placementActions={props.placementActions}
               onPlacementAction={(action) => props.onPlacementAction(props.item, action)}
               onOpenPlacements={() => props.onOpenPlacements(props.item)}

@@ -178,34 +178,26 @@ describe('link MCP tools', () => {
     );
   });
 
-  it('promotes to a session and removes only that placement', async () => {
-    const promote = vi.fn(async () => ({ link_id: 'session-link' }));
-    const remove = vi.fn(async () => ({ link_id: 'session-link' }));
+  it('removes only the resolved teammate placement', async () => {
+    const remove = vi.fn(async () => ({ link_id: 'teammate-link' }));
     const handlers = registerTools({
-      sessions: { get: vi.fn(async () => ({ session_id: 'session-full' })) },
-      '/links/:sourceLinkId/placements': { create: promote, remove },
+      branches: {
+        get: vi.fn(async () => ({ branch_id: 'teammate-full' })),
+      },
+      '/links/:sourceLinkId/placements': { remove },
       links: {},
     });
 
-    await handlers.get('agor_links_promote')?.({
-      linkId: 'link-1',
-      destination: LINK_PROMOTION_TARGET.session,
-      sessionId: 'session-full',
-    });
     await handlers.get('agor_links_remove_from')?.({
       linkId: 'link-1',
-      destination: LINK_PROMOTION_TARGET.session,
-      sessionId: 'session-full',
+      destination: LINK_PROMOTION_TARGET.teammate,
+      branchId: 'teammate-full',
     });
 
     const request = {
-      target: LINK_PROMOTION_TARGET.session,
-      session_id: 'session-full',
+      target: LINK_PROMOTION_TARGET.teammate,
+      teammate_branch_id: 'teammate-full',
     };
-    expect(promote).toHaveBeenCalledWith(request, {
-      authenticated: true,
-      route: { sourceLinkId: 'link-1' },
-    });
     expect(remove).toHaveBeenCalledWith(null, {
       authenticated: true,
       route: { sourceLinkId: 'link-1' },

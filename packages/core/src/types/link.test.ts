@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import type { Link } from './link';
 import {
+  canPromoteLink,
   countLinkTargets,
   extractLinksFromMessage,
+  getLinkPromotionRootId,
   getLinkTargetCompatibilityError,
   getLinkTargetField,
   isInternalLinkData,
+  isLinkPlacementFromPromotionRoot,
   isTeammatePromotionLink,
+  LINK_CONTEXT_KIND,
   LINK_KIND_TARGET_FIELD,
+  LINK_PROMOTION_TARGET,
   LINK_SOURCE_TARGET_FIELDS,
   normalizeLinkTargetKey,
 } from './link';
@@ -15,6 +21,50 @@ import type { Message } from './message';
 function message(content: Message['content']): Pick<Message, 'content'> {
   return { content };
 }
+
+describe('link promotion policy', () => {
+  it.each([
+    [LINK_CONTEXT_KIND.session, LINK_PROMOTION_TARGET.branch, true],
+    [LINK_CONTEXT_KIND.session, LINK_PROMOTION_TARGET.teammate, true],
+    [LINK_CONTEXT_KIND.branch, LINK_PROMOTION_TARGET.branch, false],
+    [LINK_CONTEXT_KIND.branch, LINK_PROMOTION_TARGET.teammate, true],
+    [LINK_CONTEXT_KIND.teammate, LINK_PROMOTION_TARGET.branch, false],
+    [LINK_CONTEXT_KIND.teammate, LINK_PROMOTION_TARGET.teammate, false],
+  ])('allows %s to promote to %s: %s', (source, destination, expected) => {
+    expect(canPromoteLink(source, destination)).toBe(expected);
+  });
+
+  it('tracks promotion lineage without treating an unrelated matching link as removable', () => {
+    const source = {
+      link_id: 'source-link',
+      metadata: null,
+    } as unknown as Link;
+    const promotedBranchLink = {
+      link_id: 'branch-link',
+      metadata: { promoted_from_owner: { link_id: source.link_id } },
+    } as unknown as Link;
+    const promotedTeammateLink = {
+      link_id: 'teammate-link',
+      metadata: { promoted_from_owner: { link_id: source.link_id } },
+    } as unknown as Link;
+    const curatedTeammateLink = {
+      link_id: 'curated-link',
+      metadata: { teammate_owned: true },
+    } as unknown as Link;
+
+    expect(getLinkPromotionRootId(source)).toBe(source.link_id);
+    expect(getLinkPromotionRootId(promotedBranchLink)).toBe(source.link_id);
+    expect(
+      isLinkPlacementFromPromotionRoot(
+        promotedTeammateLink,
+        getLinkPromotionRootId(promotedBranchLink)
+      )
+    ).toBe(true);
+    expect(
+      isLinkPlacementFromPromotionRoot(curatedTeammateLink, getLinkPromotionRootId(source))
+    ).toBe(false);
+  });
+});
 
 describe('extractLinksFromMessage', () => {
   it('extracts KB refs, generic URLs, and obvious GitHub issue/PR URLs from text', () => {

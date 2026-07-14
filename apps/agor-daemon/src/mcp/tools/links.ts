@@ -48,7 +48,6 @@ const LINK_TOOL_ERROR = {
   immutableTarget: 'Only manual links can change target.',
   httpTargetRequired: 'Only HTTP(S) targets are supported',
   targetBranchRequired: 'Provide branchId when promoting to a teammate.',
-  targetSessionRequired: 'Provide sessionId when the current session is not the destination.',
 } as const;
 const LINK_LIMIT = {
   titleLength: 200,
@@ -63,7 +62,6 @@ const PUBLIC_LINK_KINDS = [
 const linkKindSchema = z.enum(PUBLIC_LINK_KINDS);
 const linkPromotionDestinationSchema = z.enum([
   LINK_PROMOTION_TARGET.branch,
-  LINK_PROMOTION_TARGET.session,
   LINK_PROMOTION_TARGET.teammate,
 ]);
 const httpUrlSchema = z
@@ -117,18 +115,9 @@ async function resolvePlacementRequest(
   ctx: McpContext,
   args: {
     branchId?: string;
-    sessionId?: string;
     destination: LinkPromotionTarget;
   }
 ): Promise<LinkPromotionRequest> {
-  if (args.destination === LINK_PROMOTION_TARGET.session) {
-    const sessionId = args.sessionId ?? ctx.sessionId;
-    if (!sessionId) throw new Error(LINK_TOOL_ERROR.targetSessionRequired);
-    return {
-      target: LINK_PROMOTION_TARGET.session,
-      session_id: await resolveSessionId(ctx, sessionId),
-    };
-  }
   if (args.branchId) {
     const branchId = await resolveBranchId(ctx, args.branchId);
     return args.destination === LINK_PROMOTION_TARGET.teammate
@@ -323,12 +312,11 @@ export function registerLinkTools(server: McpServer, ctx: McpContext): void {
     LINK_TOOL.promote,
     {
       description:
-        'Promote a visible link to a branch, session, or teammate without removing it from its source owner. Branch promotion defaults to the current session branch; session promotion defaults to the current session; teammate promotion requires branchId.',
+        'Promote a visible link to a longer-lived branch or teammate context without removing it from its source owner. Branch promotion defaults to the current session branch; teammate promotion requires branchId.',
       inputSchema: z.strictObject({
         linkId: mcpRequiredId('linkId', 'Link'),
         destination: linkPromotionDestinationSchema,
         branchId: mcpOptionalId('branchId', 'Branch', 'Destination branch'),
-        sessionId: mcpOptionalId('sessionId', 'Session', 'Destination session'),
       }),
     },
     async (args) => {
@@ -346,13 +334,12 @@ export function registerLinkTools(server: McpServer, ctx: McpContext): void {
     LINK_TOOL.removeFrom,
     {
       description:
-        'Remove a visible link from one branch, session, or teammate context without removing its other placements.',
+        'Remove a branch or teammate placement created from a visible source link while preserving its other placements.',
       annotations: { destructiveHint: true },
       inputSchema: z.strictObject({
         linkId: mcpRequiredId('linkId', 'Link'),
         destination: linkPromotionDestinationSchema,
         branchId: mcpOptionalId('branchId', 'Branch', 'Context branch'),
-        sessionId: mcpOptionalId('sessionId', 'Session', 'Context session'),
       }),
     },
     async (args) => {

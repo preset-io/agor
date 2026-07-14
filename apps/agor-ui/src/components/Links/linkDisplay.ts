@@ -1,3 +1,4 @@
+import { getLinkPromotionRootId } from '@agor/core/types';
 import type { Branch, Link, LinkKind, LinkSource } from '@agor-live/client';
 import {
   LINK_PROMOTION_SOURCE_METADATA_KEY,
@@ -54,6 +55,7 @@ export interface LinkDisplayItem {
   mimeType?: string;
   title?: string;
   linkId?: string;
+  promotionRootLinkId?: string;
   ownerBranchId?: string;
   sessionId?: string;
   sourceSessionId?: string;
@@ -332,6 +334,7 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
     ownerScope: link.session_id ? 'session' : 'branch',
     isPinned: Boolean(link.is_pinned),
     linkId: String(link.link_id),
+    promotionRootLinkId: getLinkPromotionRootId(link),
     ownerBranchId: link.branch_id ?? undefined,
     sessionId: link.session_id ?? undefined,
     sourceSessionId: link.session_id ?? promotedFromSessionId,

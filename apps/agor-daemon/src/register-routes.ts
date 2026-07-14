@@ -801,7 +801,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       db,
       branchRepository,
       branchRbacEnabled,
-      sessionsService,
       superadminOpts,
     }),
     {
@@ -818,7 +817,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       db,
       branchRepository,
       branchRbacEnabled,
-      sessionsService,
       superadminOpts,
     }),
     {
