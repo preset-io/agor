@@ -22,8 +22,20 @@ import {
   LeftOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Input,
+  Modal,
+  Segmented,
+  Spin,
+  Steps,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById } from '../../store/selectors';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
@@ -940,70 +952,13 @@ export function OnboardingWizard({
   // ─── Progress stepper ────────────────────────────────────────────────────
 
   const renderProgressDots = () => (
-    <div style={{ textAlign: 'center', marginBottom: 4 }}>
-      <div
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 0,
-          marginBottom: 10,
-        }}
-      >
-        {STEPS.map((step, index) => {
-          const isCompleted = index < stepIndex;
-          const isCurrent = index === stepIndex;
-          const isLast = index === STEPS.length - 1;
-          return (
-            <Fragment key={step}>
-              <div
-                style={{
-                  width: 26,
-                  height: 26,
-                  borderRadius: '50%',
-                  background: isCompleted
-                    ? PRIMARY
-                    : isCurrent
-                      ? 'transparent'
-                      : 'rgba(255,255,255,0.05)',
-                  border: isCurrent
-                    ? `2px solid ${PRIMARY}`
-                    : isCompleted
-                      ? 'none'
-                      : '1px solid rgba(255,255,255,0.12)',
-                  boxShadow: isCurrent
-                    ? `0 0 0 3px rgba(46,154,146,0.2), 0 0 12px rgba(46,154,146,0.3)`
-                    : undefined,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 10,
-                  fontWeight: 700,
-                  color: isCompleted
-                    ? token.colorTextLightSolid
-                    : isCurrent
-                      ? PRIMARY
-                      : 'rgba(255,255,255,0.2)',
-                  transition: 'all 0.25s ease',
-                  flexShrink: 0,
-                }}
-              >
-                {isCompleted ? <CheckOutlined style={{ fontSize: 9 }} /> : STEP_META[step].number}
-              </div>
-              {!isLast && (
-                <div
-                  style={{
-                    height: 1,
-                    width: 22,
-                    flexShrink: 0,
-                    background: index < stepIndex ? PRIMARY : 'rgba(255,255,255,0.08)',
-                    transition: 'background 0.3s ease',
-                  }}
-                />
-              )}
-            </Fragment>
-          );
-        })}
-      </div>
+    <div style={{ marginBottom: 4 }}>
+      <Steps
+        size="small"
+        responsive={false}
+        current={stepIndex}
+        items={STEPS.map((step) => ({ title: STEP_META[step].label }))}
+      />
     </div>
   );
 
@@ -1267,55 +1222,21 @@ export function OnboardingWizard({
 
                     {/* Auth method toggle — Claude only */}
                     {option.agent === 'claude-code' && (
-                      <div
-                        style={{
-                          display: 'flex',
-                          marginTop: 12,
-                          marginBottom: 12,
-                          borderRadius: 8,
-                          border: '1px solid rgba(255,255,255,0.13)',
-                          overflow: 'hidden',
-                          background:
-                            'linear-gradient(180deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.2) 100%)',
-                          backdropFilter: 'blur(12px)',
-                          WebkitBackdropFilter: 'blur(12px)',
-                          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
+                      <Segmented
+                        block
+                        size="small"
+                        value={authMethod}
+                        onChange={(value) => {
+                          setAuthMethod(value as AuthMethod);
+                          setApiKey('');
+                          setLlmError(null);
                         }}
-                      >
-                        {(
-                          [
-                            { label: 'API key', value: 'api-key' },
-                            { label: 'Subscription token', value: 'claude-subscription-token' },
-                          ] as { label: string; value: AuthMethod }[]
-                        ).map((opt, idx) => {
-                          const active = authMethod === opt.value;
-                          return (
-                            <button
-                              key={opt.value}
-                              type="button"
-                              onClick={() => {
-                                setAuthMethod(opt.value);
-                                setApiKey('');
-                                setLlmError(null);
-                              }}
-                              style={{
-                                flex: 1,
-                                padding: '7px 10px',
-                                fontSize: 12,
-                                fontWeight: active ? 600 : 400,
-                                cursor: 'pointer',
-                                border: 'none',
-                                borderLeft: idx > 0 ? '1px solid rgba(255,255,255,0.08)' : 'none',
-                                background: active ? 'rgba(46,154,146,0.18)' : 'transparent',
-                                color: active ? PRIMARY : TEXT_MUTED,
-                                transition: 'background 0.15s ease, color 0.15s ease',
-                              }}
-                            >
-                              {opt.label}
-                            </button>
-                          );
-                        })}
-                      </div>
+                        options={[
+                          { label: 'API key', value: 'api-key' },
+                          { label: 'Subscription token', value: 'claude-subscription-token' },
+                        ]}
+                        style={{ marginTop: 12, marginBottom: 12 }}
+                      />
                     )}
 
                     <div
