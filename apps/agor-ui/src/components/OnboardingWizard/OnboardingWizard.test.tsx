@@ -273,8 +273,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'llm', onUpdateUser });
 
     clickButton('Claude');
-    // AntD Segmented options render as labels, not buttons — click the label text
-    fireEvent.click(screen.getByText('Subscription token'));
+    clickButton('Subscription token');
     expect(screen.getByText(/claude setup-token/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Claude subscription token'), {
