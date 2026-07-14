@@ -11,7 +11,6 @@ import {
   type LinkDisplayItem,
   LinkPinAction,
   type LinkPromotionAction,
-  type LinkPromotionSelection,
 } from '../Links';
 import { getLinkItemIcon, LinkCategoryGlyph } from '../Links/LinkVisual';
 import {
@@ -23,18 +22,20 @@ import {
 
 type SessionAttachmentItem = LinkDisplayItem;
 
-export interface SessionAttachmentPromotionActions {
-  getPromotionActions?: (item: SessionAttachmentItem) => readonly LinkPromotionAction[];
-  onPromoteLink?: (
+export interface SessionAttachmentPlacementActions {
+  getPlacementActions?: (item: SessionAttachmentItem) => readonly LinkPromotionAction[];
+  onPlacementAction?: (
     item: SessionAttachmentItem,
-    selection: LinkPromotionSelection
+    action: LinkPromotionAction
   ) => Promise<unknown>;
+  onOpenPlacements?: (item: SessionAttachmentItem) => unknown | Promise<unknown>;
 }
 
 export interface SessionAttachmentLifecycleActions {
   lifecycleBusyKeys?: ReadonlySet<string>;
   onEditLink?: (item: SessionAttachmentItem) => void;
   onDeleteLink?: (item: SessionAttachmentItem) => Promise<unknown>;
+  deleteLabel?: string;
 }
 
 interface SharedProps {
@@ -46,7 +47,7 @@ interface SharedProps {
 
 interface DrawerProps
   extends SharedProps,
-    SessionAttachmentPromotionActions,
+    SessionAttachmentPlacementActions,
     SessionAttachmentLifecycleActions {}
 
 function attachmentIcon(item: SessionAttachmentItem, disabled: boolean): React.ReactNode {
@@ -93,8 +94,12 @@ function actionsMenu(props: DrawerProps) {
           ? async () => props.onDeleteLink?.(props.item)
           : undefined
       }
-      promotionActions={props.getPromotionActions?.(props.item)}
-      onPromote={(selection) => props.onPromoteLink?.(props.item, selection) ?? Promise.resolve()}
+      deleteLabel={props.deleteLabel}
+      placementActions={props.getPlacementActions?.(props.item)}
+      onPlacementAction={(action) =>
+        props.onPlacementAction?.(props.item, action) ?? Promise.resolve()
+      }
+      onOpenPlacements={() => props.onOpenPlacements?.(props.item)}
     />
   );
 }

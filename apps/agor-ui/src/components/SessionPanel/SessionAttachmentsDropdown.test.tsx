@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   LINK_ACTION_KEY,
   LINK_ACTION_LABEL,
+  LINK_PLACEMENT_OPERATION,
   LINK_PROMOTION_DESTINATION,
 } from '../Links/linkUiConstants';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
@@ -128,7 +129,7 @@ describe('SessionAttachmentsDropdown', () => {
   });
 
   it('keeps the action menu visible and promotes uploaded files', async () => {
-    const onPromoteLink = vi.fn();
+    const onPlacementAction = vi.fn();
     const item = {
       key: 'link:file-1',
       linkId: 'file-1',
@@ -147,16 +148,17 @@ describe('SessionAttachmentsDropdown', () => {
         <SessionAttachmentsDropdown
           items={[item]}
           onTogglePinned={vi.fn()}
-          getPromotionActions={() => [
+          getPlacementActions={() => [
             {
               destination: LINK_PROMOTION_DESTINATION.branch,
               branchId: 'branch-1',
               key: LINK_ACTION_KEY.promoteToBranch,
               label: LINK_ACTION_LABEL.promoteToBranch,
               disabled: false,
+              operation: LINK_PLACEMENT_OPERATION.promote,
             },
           ]}
-          onPromoteLink={onPromoteLink}
+          onPlacementAction={onPlacementAction}
         />
       </MemoryRouter>
     );
@@ -166,12 +168,13 @@ describe('SessionAttachmentsDropdown', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Actions for report.pdf' }));
     fireEvent.click(await screen.findByText(LINK_ACTION_LABEL.promoteToBranch));
-    expect(onPromoteLink).toHaveBeenCalledWith(item, {
+    expect(onPlacementAction).toHaveBeenCalledWith(item, {
       destination: LINK_PROMOTION_DESTINATION.branch,
       branchId: 'branch-1',
       key: LINK_ACTION_KEY.promoteToBranch,
       label: LINK_ACTION_LABEL.promoteToBranch,
       disabled: false,
+      operation: LINK_PLACEMENT_OPERATION.promote,
     });
   });
 });

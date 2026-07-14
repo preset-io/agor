@@ -36,7 +36,7 @@ import { LinkPreviewModal, useLinkFileActions } from '../Links/SessionLinksContr
 import {
   SessionAttachmentDrawerRow,
   type SessionAttachmentLifecycleActions,
-  type SessionAttachmentPromotionActions,
+  type SessionAttachmentPlacementActions,
   SessionAttachmentQuickRow,
 } from './SessionAttachmentRows';
 
@@ -50,7 +50,7 @@ function matchesAttachmentSearch(item: LinkDisplayItem, query: string): boolean 
 }
 
 interface Props
-  extends SessionAttachmentPromotionActions,
+  extends SessionAttachmentPlacementActions,
     Omit<SessionAttachmentLifecycleActions, 'onEditLink'> {
   items: SessionAttachmentItem[];
   loading?: boolean;
@@ -74,8 +74,9 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
   pinningKeys,
   onTogglePinned,
   onRegisterOpenPinnedManager,
-  getPromotionActions,
-  onPromoteLink,
+  getPlacementActions,
+  onPlacementAction,
+  onOpenPlacements,
   lifecycleBusyKeys,
   onDeleteLink,
   onCreateLink,
@@ -281,8 +282,9 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
                     pinningKeys={pinningKeys}
                     onOpen={openTarget}
                     onTogglePinned={onTogglePinned}
-                    getPromotionActions={getPromotionActions}
-                    onPromoteLink={onPromoteLink}
+                    getPlacementActions={getPlacementActions}
+                    onPlacementAction={onPlacementAction}
+                    onOpenPlacements={onOpenPlacements}
                     lifecycleBusyKeys={lifecycleBusyKeys}
                     onEditLink={openEditLink}
                     onDeleteLink={onDeleteLink}

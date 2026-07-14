@@ -248,6 +248,7 @@ export const linkQuerySchema = createQuerySchema(
     is_pinned: Type.Optional(CommonSchemas.boolean),
     target_object_type: Type.Optional(Type.String()),
     target_object_id: Type.Optional(CommonSchemas.uuid),
+    target_key: Type.Optional(Type.String({ maxLength: 4096 })),
     created_by: Type.Optional(CommonSchemas.uuid),
     created_at: Type.Optional(CommonSchemas.timestamp),
     updated_at: Type.Optional(CommonSchemas.timestamp),

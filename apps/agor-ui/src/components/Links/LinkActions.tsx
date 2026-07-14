@@ -40,6 +40,7 @@ interface LinkOverflowActionBaseProps {
   tooltip?: string;
   disabled?: boolean;
   loading?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 type LinkOverflowActionProps = LinkOverflowActionBaseProps &
@@ -67,12 +68,14 @@ export function LinkOverflowAction({
   tooltip = LINK_MANAGER_COPY.actionsTooltip,
   disabled = false,
   loading = false,
+  onOpenChange,
 }: LinkOverflowActionProps) {
   return (
     <Tooltip title={tooltip}>
       <Dropdown
         trigger={['click']}
         disabled={disabled}
+        onOpenChange={onOpenChange}
         menu={{
           items: items ?? [{ key: LINK_ACTION_KEY.default, label: actionLabel, disabled }],
           onClick:

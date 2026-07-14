@@ -4,11 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
 import { deferred } from '../../testUtils';
 import type { LinkDisplayItem } from './linkDisplay';
+import { LINK_PLACEMENT_OPERATION, LINK_PROMOTION_DESTINATION } from './linkUiConstants';
 import { useLinkMutations } from './useLinkMutations';
 
 const mocks = vi.hoisted(() => ({
   togglePinned: vi.fn(),
   promote: vi.fn(),
+  loadPlacements: vi.fn(),
+  removePlacement: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn(),
 }));
@@ -17,14 +20,28 @@ vi.mock('../../utils/message', () => ({
   useThemedMessage: () => ({ showSuccess: mocks.showSuccess, showError: mocks.showError }),
 }));
 vi.mock('./linkPinning', () => ({ toggleLinkDisplayItemPinned: mocks.togglePinned }));
-vi.mock('./linkPromotion', () => ({ promoteLinkDisplayItem: mocks.promote }));
+vi.mock('./linkPromotion', () => ({
+  loadLinkPlacements: mocks.loadPlacements,
+  promoteLinkDisplayItem: mocks.promote,
+  removeLinkPlacement: mocks.removePlacement,
+}));
 
 function item(linkId: string): LinkDisplayItem {
-  return { key: linkId, linkId, isPinned: false } as LinkDisplayItem;
+  return {
+    key: linkId,
+    linkId,
+    targetKey: `url:https://example.com/${linkId}`,
+    isPinned: false,
+  } as LinkDisplayItem;
 }
 
 function resultLink(linkId: string): Link {
-  return { link_id: linkId, branch_id: 'b1', session_id: null } as Link;
+  return {
+    link_id: linkId,
+    branch_id: 'b1',
+    session_id: null,
+    target_key: `url:https://example.com/${linkId}`,
+  } as Link;
 }
 
 describe('useLinkMutations concurrency', () => {
@@ -70,14 +87,21 @@ describe('useLinkMutations concurrency', () => {
     );
     const client = {} as AgorClient;
     const { result } = renderHook(() => useLinkMutations({ client, branchId: 'b1' }));
-    const selection = { destination: 'branch' as const, branchId: 'b1' };
+    const action = {
+      destination: LINK_PROMOTION_DESTINATION.branch,
+      branchId: 'b1',
+      operation: LINK_PLACEMENT_OPERATION.promote,
+      key: 'promote-to-branch',
+      label: 'Promote to branch',
+      disabled: false,
+    };
 
     let firstAction!: Promise<boolean>;
     let secondAction!: Promise<boolean>;
     act(() => {
-      firstAction = result.current.promoteLink(item('l1'), selection);
-      void result.current.promoteLink(item('l1'), selection);
-      secondAction = result.current.promoteLink(item('l2'), selection);
+      firstAction = result.current.applyPlacementAction(item('l1'), action);
+      void result.current.applyPlacementAction(item('l1'), action);
+      secondAction = result.current.applyPlacementAction(item('l2'), action);
     });
 
     expect(mocks.promote).toHaveBeenCalledTimes(2);
@@ -102,7 +126,14 @@ describe('useLinkMutations concurrency', () => {
     const { result } = renderHook(() => useLinkMutations({ client, branchId: 'b1' }));
 
     await act(() =>
-      result.current.promoteLink(item('source'), { destination: 'branch', branchId: 'b1' })
+      result.current.applyPlacementAction(item('source'), {
+        destination: LINK_PROMOTION_DESTINATION.branch,
+        branchId: 'b1',
+        operation: LINK_PLACEMENT_OPERATION.promote,
+        key: 'promote-to-branch',
+        label: 'Promote to branch',
+        disabled: false,
+      })
     );
 
     expect(agorStore.getState().linkById.get('source')).toEqual(source);

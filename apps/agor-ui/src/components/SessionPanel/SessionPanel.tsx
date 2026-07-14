@@ -71,6 +71,7 @@ import {
   buildLinkDisplayItems,
   getLinkPromotionActions,
   groupRenderableLinksByMessageId,
+  LINK_ACTION_LABEL,
   LINK_OWNER_SCOPE,
   type LinkDisplayItem,
   selectPinnedLinkDisplayItems,
@@ -347,16 +348,23 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const {
     pinningKeys,
     lifecycleBusyKeys,
+    placementLoadingKeys,
     togglePinned: handleToggleSessionLinkPinned,
     createLink: handleCreateSessionLink,
     updateLink: handleUpdateSessionLink,
     removeLink: handleDeleteSessionLink,
-    promoteLink: handlePromoteSessionLink,
+    placementsByTargetKey,
+    refreshPlacements: handleRefreshSessionLinkPlacements,
+    applyPlacementAction: handleSessionLinkPlacementAction,
   } = useLinkMutations({
     client,
     branchId: branch?.branch_id,
     sessionId: session?.session_id,
   });
+  const sessionLinkBusyKeys = React.useMemo(
+    () => new Set([...lifecycleBusyKeys, ...placementLoadingKeys]),
+    [lifecycleBusyKeys, placementLoadingKeys]
+  );
   const [sessionLinksLoading, setSessionLinksLoading] = React.useState(false);
   const [sessionLinksError, setSessionLinksError] = React.useState<string | null>(null);
   const linksLoadRequestRef = React.useRef(0);
@@ -1118,10 +1126,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const promotionActionsForSessionLink = (item: LinkDisplayItem) =>
+  const placementActionsForSessionLink = (item: LinkDisplayItem) =>
     getLinkPromotionActions(item, {
       branchId: branch?.branch_id,
       teammateBranchId,
+      placements: placementsByTargetKey.get(item.targetKey),
       available: Boolean(client && !connectionDisabled),
     });
 
@@ -1471,12 +1480,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               pinningKeys={pinningKeys}
               onTogglePinned={handleToggleSessionLinkPinned}
               onRegisterOpenPinnedManager={handleRegisterOpenPinnedManager}
-              getPromotionActions={promotionActionsForSessionLink}
-              onPromoteLink={handlePromoteSessionLink}
-              lifecycleBusyKeys={lifecycleBusyKeys}
+              getPlacementActions={placementActionsForSessionLink}
+              onPlacementAction={handleSessionLinkPlacementAction}
+              onOpenPlacements={handleRefreshSessionLinkPlacements}
+              lifecycleBusyKeys={sessionLinkBusyKeys}
               onCreateLink={(draft) => handleCreateSessionLink(draft, LINK_OWNER_SCOPE.session)}
               onUpdateLink={handleUpdateSessionLink}
               onDeleteLink={handleDeleteSessionLink}
+              deleteLabel={LINK_ACTION_LABEL.removeFromSession}
             />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">

@@ -52,6 +52,7 @@ export interface LinkFindFilter {
   isPinned?: boolean;
   targetObjectType?: LinkTargetObjectType;
   targetObjectId?: UUID;
+  targetKey?: string;
   visibleToUserId?: UUID;
   hideInternal?: boolean;
 }
@@ -375,6 +376,7 @@ export class LinksRepository {
     if (filter?.targetObjectType)
       conditions.push(eq(links.target_object_type, filter.targetObjectType));
     if (filter?.targetObjectId) conditions.push(eq(links.target_object_id, filter.targetObjectId));
+    if (filter?.targetKey) conditions.push(eq(links.target_key, filter.targetKey));
     if (filter?.visibleToUserId) {
       conditions.push(
         or(

@@ -16,7 +16,7 @@ import { textResult } from '../server.js';
 
 const LINKS_SERVICE = 'links';
 const SESSIONS_SERVICE = 'sessions';
-const LINK_PROMOTION_SERVICE = '/links/:sourceLinkId/promote';
+const LINK_PLACEMENTS_SERVICE = '/links/:sourceLinkId/placements';
 const LINK_SOURCE_MANUAL = 'manual';
 const LINK_KIND = {
   issue: 'issue',
@@ -30,6 +30,7 @@ const LINK_TOOL = {
   create: 'agor_links_create',
   update: 'agor_links_update',
   promote: 'agor_links_promote',
+  removeFrom: 'agor_links_remove_from',
   delete: 'agor_links_delete',
 } as const;
 const LINK_TARGET = {
@@ -47,6 +48,7 @@ const LINK_TOOL_ERROR = {
   immutableTarget: 'Only manual links can change target.',
   httpTargetRequired: 'Only HTTP(S) targets are supported',
   targetBranchRequired: 'Provide branchId when promoting to a teammate.',
+  targetSessionRequired: 'Provide sessionId when the current session is not the destination.',
 } as const;
 const LINK_LIMIT = {
   titleLength: 200,
@@ -61,6 +63,7 @@ const PUBLIC_LINK_KINDS = [
 const linkKindSchema = z.enum(PUBLIC_LINK_KINDS);
 const linkPromotionDestinationSchema = z.enum([
   LINK_PROMOTION_TARGET.branch,
+  LINK_PROMOTION_TARGET.session,
   LINK_PROMOTION_TARGET.teammate,
 ]);
 const httpUrlSchema = z
@@ -110,20 +113,34 @@ function normalizedTitle(title: string | null | undefined): string | null {
   return title?.trim() || null;
 }
 
-async function resolvePromotionBranchId(
+async function resolvePlacementRequest(
   ctx: McpContext,
   args: {
     branchId?: string;
+    sessionId?: string;
     destination: LinkPromotionTarget;
   }
-) {
-  if (args.branchId) return resolveBranchId(ctx, args.branchId);
+): Promise<LinkPromotionRequest> {
+  if (args.destination === LINK_PROMOTION_TARGET.session) {
+    const sessionId = args.sessionId ?? ctx.sessionId;
+    if (!sessionId) throw new Error(LINK_TOOL_ERROR.targetSessionRequired);
+    return {
+      target: LINK_PROMOTION_TARGET.session,
+      session_id: await resolveSessionId(ctx, sessionId),
+    };
+  }
+  if (args.branchId) {
+    const branchId = await resolveBranchId(ctx, args.branchId);
+    return args.destination === LINK_PROMOTION_TARGET.teammate
+      ? { target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: branchId }
+      : { target: LINK_PROMOTION_TARGET.branch, branch_id: branchId };
+  }
   if (args.destination === LINK_PROMOTION_TARGET.teammate) {
     throw new Error(LINK_TOOL_ERROR.targetBranchRequired);
   }
   if (!ctx.sessionId) throw new Error(LINK_TOOL_ERROR.ownerRequired);
   const session = await ctx.app.service(SESSIONS_SERVICE).get(ctx.sessionId, ctx.baseServiceParams);
-  return session.branch_id;
+  return { target: LINK_PROMOTION_TARGET.branch, branch_id: session.branch_id };
 }
 
 async function resolveOwner(
@@ -145,15 +162,6 @@ async function resolveOwner(
     return { branch_id: null, session_id: await resolveSessionId(ctx, sessionId) };
   }
   throw new Error(LINK_TOOL_ERROR.ownerRequired);
-}
-
-function promotionRequest(
-  destination: LinkPromotionTarget,
-  branchId: Awaited<ReturnType<typeof resolveBranchId>>
-): LinkPromotionRequest {
-  return destination === LINK_PROMOTION_TARGET.teammate
-    ? { target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: branchId }
-    : { target: LINK_PROMOTION_TARGET.branch, branch_id: branchId };
 }
 
 export function registerLinkTools(server: McpServer, ctx: McpContext): void {
@@ -315,23 +323,46 @@ export function registerLinkTools(server: McpServer, ctx: McpContext): void {
     LINK_TOOL.promote,
     {
       description:
-        'Promote a visible link to a branch or teammate without removing it from its source owner. Branch promotion defaults to the current session branch; teammate promotion requires branchId.',
+        'Promote a visible link to a branch, session, or teammate without removing it from its source owner. Branch promotion defaults to the current session branch; session promotion defaults to the current session; teammate promotion requires branchId.',
       inputSchema: z.strictObject({
         linkId: mcpRequiredId('linkId', 'Link'),
         destination: linkPromotionDestinationSchema,
         branchId: mcpOptionalId('branchId', 'Branch', 'Destination branch'),
+        sessionId: mcpOptionalId('sessionId', 'Session', 'Destination session'),
       }),
     },
     async (args) => {
-      const branchId = await resolvePromotionBranchId(ctx, args);
+      const request = await resolvePlacementRequest(ctx, args);
       return textResult(
-        await ctx.app
-          .service(LINK_PROMOTION_SERVICE)
-          .create(promotionRequest(args.destination, branchId), {
-            ...ctx.baseServiceParams,
-            route: { sourceLinkId: args.linkId },
-          })
+        await ctx.app.service(LINK_PLACEMENTS_SERVICE).create(request, {
+          ...ctx.baseServiceParams,
+          route: { sourceLinkId: args.linkId },
+        })
       );
+    }
+  );
+
+  server.registerTool(
+    LINK_TOOL.removeFrom,
+    {
+      description:
+        'Remove a visible link from one branch, session, or teammate context without removing its other placements.',
+      annotations: { destructiveHint: true },
+      inputSchema: z.strictObject({
+        linkId: mcpRequiredId('linkId', 'Link'),
+        destination: linkPromotionDestinationSchema,
+        branchId: mcpOptionalId('branchId', 'Branch', 'Context branch'),
+        sessionId: mcpOptionalId('sessionId', 'Session', 'Context session'),
+      }),
+    },
+    async (args) => {
+      const request = await resolvePlacementRequest(ctx, args);
+      const removed = await ctx.app.service(LINK_PLACEMENTS_SERVICE).remove(null, {
+        ...ctx.baseServiceParams,
+        route: { sourceLinkId: args.linkId },
+        query: request,
+      });
+      return textResult({ success: true, link: removed });
     }
   );
 

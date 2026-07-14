@@ -1,41 +1,72 @@
-import type { AgorClient, BranchID, Link, LinkPromotionRequest } from '@agor-live/client';
-import { LINK_PROMOTION_TARGET } from '@agor-live/client';
+import { LINK_PROMOTION_TARGET, type LinkPromotionRequest } from '@agor/core/types';
+import type { AgorClient, BranchID, Link, SessionID } from '@agor-live/client';
 import type { LinkDisplayItem } from './linkDisplay';
 import { ensurePersistedLink } from './linkPinning';
 import {
   LINK_ACTION_KEY,
   LINK_ACTION_LABEL,
   LINK_KIND,
+  LINK_PLACEMENT_OPERATION,
   LINK_PROMOTION_DESTINATION,
   LINK_ROUTE,
+  type LinkPlacementOperation,
   type LinkPromotionDestination,
 } from './linkUiConstants';
 
+interface LinkPlacementsClientService {
+  find(): Promise<Link[]>;
+  create(data: LinkPromotionRequest): Promise<Link>;
+  remove(id: null, params: { query: LinkPromotionRequest }): Promise<Link | null>;
+}
+
+function placementsService(client: AgorClient, linkId: string): LinkPlacementsClientService {
+  return client.service(
+    LINK_ROUTE.placements(linkId) as never
+  ) as unknown as LinkPlacementsClientService;
+}
+
 export interface LinkPromotionSelection {
   destination: LinkPromotionDestination;
-  branchId: string;
+  branchId?: string;
+  sessionId?: string;
 }
 
 export interface LinkPromotionAction extends LinkPromotionSelection {
   key: string;
   label: string;
   disabled: boolean;
+  operation: LinkPlacementOperation;
 }
 
 interface LinkPromotionContext {
   branchId?: string | null;
   teammateBranchId?: string | null;
+  placements?: readonly Link[];
   available?: boolean;
 }
 
 const LINK_PROMOTION_LABEL = {
   [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_LABEL.promoteToBranch,
+  [LINK_PROMOTION_DESTINATION.session]: LINK_ACTION_LABEL.promoteToSession,
   [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_LABEL.promoteToTeammate,
 } as const satisfies Record<LinkPromotionDestination, string>;
 
 const LINK_PROMOTION_ACTION_KEY = {
   [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_KEY.promoteToBranch,
+  [LINK_PROMOTION_DESTINATION.session]: LINK_ACTION_KEY.promoteToSession,
   [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_KEY.promoteToTeammate,
+} as const satisfies Record<LinkPromotionDestination, string>;
+
+const LINK_REMOVAL_LABEL = {
+  [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_LABEL.removeFromBranch,
+  [LINK_PROMOTION_DESTINATION.session]: LINK_ACTION_LABEL.removeFromSession,
+  [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_LABEL.removeFromTeammate,
+} as const satisfies Record<LinkPromotionDestination, string>;
+
+const LINK_REMOVAL_ACTION_KEY = {
+  [LINK_PROMOTION_DESTINATION.branch]: LINK_ACTION_KEY.removeFromBranch,
+  [LINK_PROMOTION_DESTINATION.session]: LINK_ACTION_KEY.removeFromSession,
+  [LINK_PROMOTION_DESTINATION.teammate]: LINK_ACTION_KEY.removeFromTeammate,
 } as const satisfies Record<LinkPromotionDestination, string>;
 
 function promotionCandidates(
@@ -78,20 +109,51 @@ function promotionCandidates(
   ];
 }
 
+function placementMatchesSelection(link: Link, selection: LinkPromotionSelection): boolean {
+  return selection.destination === LINK_PROMOTION_DESTINATION.session
+    ? link.session_id === selection.sessionId && !link.branch_id
+    : link.branch_id === selection.branchId && !link.session_id;
+}
+
+export function getLinkPlacementAction(
+  selection: LinkPromotionSelection,
+  placements: readonly Link[] = [],
+  available = true
+): LinkPromotionAction {
+  const existing = placements.find((link) => placementMatchesSelection(link, selection));
+  const operation = existing ? LINK_PLACEMENT_OPERATION.remove : LINK_PLACEMENT_OPERATION.promote;
+  return {
+    ...selection,
+    operation,
+    key:
+      operation === LINK_PLACEMENT_OPERATION.remove
+        ? LINK_REMOVAL_ACTION_KEY[selection.destination]
+        : LINK_PROMOTION_ACTION_KEY[selection.destination],
+    label:
+      operation === LINK_PLACEMENT_OPERATION.remove
+        ? LINK_REMOVAL_LABEL[selection.destination]
+        : LINK_PROMOTION_LABEL[selection.destination],
+    disabled: !available,
+  };
+}
+
 export function getLinkPromotionActions(
   item: LinkDisplayItem,
   context: LinkPromotionContext
 ): LinkPromotionAction[] {
   if (item.kind === LINK_KIND.internal) return [];
-  return promotionCandidates(item, context).map((selection) => ({
-    ...selection,
-    key: LINK_PROMOTION_ACTION_KEY[selection.destination],
-    label: LINK_PROMOTION_LABEL[selection.destination],
-    disabled: !(context.available ?? true),
-  }));
+  return promotionCandidates(item, context).map((selection) =>
+    getLinkPlacementAction(selection, context.placements, context.available ?? true)
+  );
 }
 
 function promotionRequest(selection: LinkPromotionSelection): LinkPromotionRequest {
+  if (selection.destination === LINK_PROMOTION_DESTINATION.session) {
+    return {
+      target: LINK_PROMOTION_TARGET.session,
+      session_id: selection.sessionId as SessionID,
+    };
+  }
   return selection.destination === LINK_PROMOTION_DESTINATION.teammate
     ? {
         target: LINK_PROMOTION_TARGET.teammate,
@@ -120,5 +182,24 @@ export async function promoteLinkDisplayItem(args: {
         isPinned: args.item.isPinned,
       });
   const linkId = args.item.linkId ?? String(persisted?.link_id);
-  return args.client.service(LINK_ROUTE.promote(linkId)).create(promotionRequest(args.selection));
+  return placementsService(args.client, linkId).create(promotionRequest(args.selection));
+}
+
+export async function loadLinkPlacements(args: {
+  client: AgorClient;
+  item: LinkDisplayItem;
+}): Promise<Link[]> {
+  if (!args.item.linkId) return [];
+  return placementsService(args.client, args.item.linkId).find();
+}
+
+export async function removeLinkPlacement(args: {
+  client: AgorClient;
+  item: LinkDisplayItem;
+  selection: LinkPromotionSelection;
+}): Promise<Link | null> {
+  if (!args.item.linkId) return null;
+  return placementsService(args.client, args.item.linkId).remove(null, {
+    query: promotionRequest(args.selection),
+  });
 }

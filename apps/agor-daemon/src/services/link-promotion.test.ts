@@ -1,6 +1,7 @@
 import { BranchRepository, LinksRepository } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
-import type { BranchID, Link, UUID } from '@agor/core/types';
+import type { BranchID, Link, Session, UUID } from '@agor/core/types';
+import { LINK_PROMOTION_TARGET } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import type { Database } from '../../../../packages/core/src/db/client';
 import {
@@ -10,7 +11,7 @@ import {
 } from '../../../../packages/core/src/db/repositories/links.test-helpers';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
-import { LinkPromotionService } from './link-promotion';
+import { LinkPlacementService } from './link-promotion';
 import { LinksService } from './links';
 
 async function seedBranch(
@@ -24,7 +25,10 @@ async function seedBranch(
   });
 }
 
-function promotionService(db: Database, options: { branchRbacEnabled?: boolean } = {}) {
+function promotionService(
+  db: Database,
+  options: { branchRbacEnabled?: boolean; sessions?: Session[] } = {}
+) {
   const linksService = new LinksService(db);
   const app = {
     service(path: string) {
@@ -34,10 +38,19 @@ function promotionService(db: Database, options: { branchRbacEnabled?: boolean }
   };
   return {
     linksService,
-    service: new LinkPromotionService({
+    service: new LinkPlacementService({
       app: app as never,
       db,
       branchRbacEnabled: options.branchRbacEnabled ?? false,
+      sessionsService: options.sessions
+        ? {
+            async get(id: string) {
+              const session = options.sessions?.find((candidate) => candidate.session_id === id);
+              if (!session) throw new Error(`Session not found: ${id}`);
+              return session;
+            },
+          }
+        : undefined,
       superadminOpts: { allowSuperadmin: true },
     }),
   };
@@ -53,21 +66,21 @@ function createUrl(db: Database, branchId: BranchID, url: string, patch: Partial
   });
 }
 
-function promote(service: LinkPromotionService, source: Link, teammateBranchId: BranchID) {
+function promote(service: LinkPlacementService, source: Link, teammateBranchId: BranchID) {
   return service.create(
-    { target: 'teammate', teammate_branch_id: teammateBranchId },
+    { target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: teammateBranchId },
     { route: { sourceLinkId: source.link_id } }
   );
 }
 
-function promoteToBranch(service: LinkPromotionService, source: Link, branchId: BranchID) {
+function promoteToBranch(service: LinkPlacementService, source: Link, branchId: BranchID) {
   return service.create(
-    { target: 'branch', branch_id: branchId },
+    { target: LINK_PROMOTION_TARGET.branch, branch_id: branchId },
     { route: { sourceLinkId: source.link_id } }
   );
 }
 
-describe('LinkPromotionService', () => {
+describe('LinkPlacementService', () => {
   dbTest('promotes URL links to teammate-owned pinned branch links', async ({ db }) => {
     const branch = await seedBranch(db);
     const teammate = await seedBranch(db, { teammate: true });
@@ -154,6 +167,59 @@ describe('LinkPromotionService', () => {
     });
   });
 
+  dbTest('promotes a teammate link to a session without removing the source', async ({ db }) => {
+    const teammate = await seedBranch(db, { teammate: true });
+    const destinationBranch = await seedBranch(db);
+    const destinationSession = await seedSession(db, destinationBranch.branch_id);
+    const repository = new LinksRepository(db);
+    const source = await createUrl(db, teammate.branch_id, 'https://example.com/teammate-source');
+
+    const { service } = promotionService(db, { sessions: [destinationSession] });
+    const promoted = await service.create(
+      { target: LINK_PROMOTION_TARGET.session, session_id: destinationSession.session_id },
+      { route: { sourceLinkId: source.link_id } }
+    );
+
+    expect(promoted).toMatchObject({
+      branch_id: null,
+      session_id: destinationSession.session_id,
+      url: source.url,
+    });
+    await expect(repository.findById(source.link_id)).resolves.toMatchObject({
+      branch_id: teammate.branch_id,
+      session_id: null,
+    });
+  });
+
+  dbTest(
+    'lists and removes a destination placement without removing its source',
+    async ({ db }) => {
+      const branch = await seedBranch(db);
+      const teammate = await seedBranch(db, { teammate: true });
+      const source = await createUrl(db, branch.branch_id, 'https://example.com/placement-state');
+      const { service } = promotionService(db);
+      const promoted = await promote(service, source, teammate.branch_id);
+
+      await expect(service.find({ route: { sourceLinkId: source.link_id } })).resolves.toEqual(
+        expect.arrayContaining([source, promoted])
+      );
+
+      await expect(
+        service.remove(null, {
+          route: { sourceLinkId: source.link_id },
+          query: {
+            target: LINK_PROMOTION_TARGET.teammate,
+            teammate_branch_id: teammate.branch_id,
+          },
+        })
+      ).resolves.toMatchObject({ link_id: promoted.link_id });
+      await expect(new LinksRepository(db).findById(source.link_id)).resolves.toMatchObject({
+        link_id: source.link_id,
+      });
+      await expect(new LinksRepository(db).findById(promoted.link_id)).resolves.toBeNull();
+    }
+  );
+
   dbTest('promotes uploaded files while preserving content metadata and source', async ({ db }) => {
     const branch = await seedBranch(db);
     const session = await seedSession(db, branch.branch_id);
@@ -237,12 +303,15 @@ describe('LinkPromotionService', () => {
     };
 
     await expect(
-      service.create({ target: 'teammate', teammate_branch_id: teammate.branch_id }, params)
+      service.create(
+        { target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: teammate.branch_id },
+        params
+      )
     ).rejects.toThrow(Forbidden);
 
     await new BranchRepository(db).addOwner(teammate.branch_id, userId);
     const promoted = await service.create(
-      { target: 'teammate', teammate_branch_id: teammate.branch_id },
+      { target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: teammate.branch_id },
       params
     );
     expect(promoted.branch_id).toBe(teammate.branch_id);
@@ -343,7 +412,7 @@ describe('LinkPromotionService', () => {
           return { get, create, patch };
         },
       };
-      const service = new LinkPromotionService({
+      const service = new LinkPlacementService({
         app: app as never,
         db,
         branchRbacEnabled: true,
@@ -355,7 +424,10 @@ describe('LinkPromotionService', () => {
         user: { user_id: generateId() as UUID, email: 'admin@example.com', role: 'superadmin' },
       };
 
-      await service.create({ target: 'teammate', teammate_branch_id: teammate.branch_id }, params);
+      await service.create(
+        { target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: teammate.branch_id },
+        params
+      );
 
       expect(get).toHaveBeenCalledWith(source.link_id, params);
       expect(create).toHaveBeenCalledWith(

@@ -1,4 +1,4 @@
-import { LINK_PROMOTION_TARGET, type LinkPromotionTarget } from '@agor-live/client';
+import { LINK_PROMOTION_TARGET, type LinkPromotionTarget } from '@agor/core/types';
 
 export const LINK_OWNER_SCOPE = {
   branch: 'branch',
@@ -6,6 +6,14 @@ export const LINK_OWNER_SCOPE = {
 } as const;
 
 export type LinkOwnerScope = (typeof LINK_OWNER_SCOPE)[keyof typeof LINK_OWNER_SCOPE];
+
+export const LINK_PLACEMENT_OPERATION = {
+  promote: 'promote',
+  remove: 'remove',
+} as const;
+
+export type LinkPlacementOperation =
+  (typeof LINK_PLACEMENT_OPERATION)[keyof typeof LINK_PLACEMENT_OPERATION];
 
 export const LINK_SERVICE = 'links';
 
@@ -34,7 +42,8 @@ export const LINK_PROMOTION_DESTINATION = LINK_PROMOTION_TARGET;
 export type LinkPromotionDestination = LinkPromotionTarget;
 
 export const LINK_ROUTE = {
-  promote: (linkId: string): `links/${string}/promote` => `${LINK_SERVICE}/${linkId}/promote`,
+  placements: (linkId: string): `links/${string}/placements` =>
+    `${LINK_SERVICE}/${linkId}/placements`,
 } as const;
 
 export const LINK_FORM_FIELD = {
@@ -52,10 +61,25 @@ export const LINK_ACTION_LABEL = {
   edit: 'Edit link',
   delete: 'Delete link',
   promoteToBranch: 'Promote to branch',
+  promoteToBranchPicker: 'Promote to branch…',
+  promoteToSession: 'Promote to session',
+  promoteToSessionPicker: 'Promote to session…',
   promoteToTeammate: 'Promote to teammate',
+  removeFromBranch: 'Remove from branch',
+  removeFromSession: 'Remove from session',
+  removeFromTeammate: 'Remove from teammate',
   saveChanges: 'Save changes',
   pin: 'Pin',
   unpin: 'Unpin',
+  promote: 'Promote',
+  remove: 'Remove',
+} as const;
+
+export const LINK_DESTINATION_COPY = {
+  branchTitle: 'Choose a branch',
+  sessionTitle: 'Choose a session',
+  emptyBranches: 'No available branches.',
+  emptySessions: 'No available sessions.',
 } as const;
 
 export const LINK_ACTION_KEY = {
@@ -63,7 +87,13 @@ export const LINK_ACTION_KEY = {
   edit: 'edit',
   delete: 'delete',
   promoteToBranch: 'promote-to-branch',
+  promoteToBranchPicker: 'promote-to-branch-picker',
+  promoteToSession: 'promote-to-session',
+  promoteToSessionPicker: 'promote-to-session-picker',
   promoteToTeammate: 'promote-to-teammate',
+  removeFromBranch: 'remove-from-branch',
+  removeFromSession: 'remove-from-session',
+  removeFromTeammate: 'remove-from-teammate',
 } as const;
 
 export function getLinkActionsAriaLabel(name: string): string {
@@ -106,6 +136,7 @@ export const LINK_MUTATION_MESSAGE = {
   updated: 'Link updated',
   deleted: 'Link deleted',
   promoted: 'Link promoted',
+  placementRemoved: 'Link removed from context',
 } as const;
 
 export const LINK_MUTATION_FAILURE_PREFIX = {
@@ -114,6 +145,7 @@ export const LINK_MUTATION_FAILURE_PREFIX = {
   update: 'Failed to update link',
   delete: 'Failed to delete link',
   promote: 'Failed to promote link',
+  removePlacement: 'Failed to remove link from context',
 } as const;
 
 export function formatLinkMutationFailure(prefix: string, error: unknown): string {

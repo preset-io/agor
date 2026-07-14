@@ -7,9 +7,9 @@ import {
   getLinkPinActionLabel,
   LinkActionsMenu,
   type LinkDisplayItem,
+  type LinkMenuAction,
   LinkPinAction,
   type LinkPromotionAction,
-  type LinkPromotionSelection,
 } from '../../Links';
 import { LinkCategoryGlyph } from '../../Links/LinkVisual';
 import { getLinkUnavailableReason } from '../../Links/linkContent';
@@ -17,14 +17,18 @@ import { getLinkUnavailableReason } from '../../Links/linkContent';
 interface BranchLinkListItemProps {
   item: LinkDisplayItem;
   sourceSessionLabel: string | null;
-  promotionActions: readonly LinkPromotionAction[];
+  placementActions: readonly LinkPromotionAction[];
   pinning: boolean;
   lifecycleBusy: boolean;
   onOpen: (item: LinkDisplayItem) => void;
   onTogglePinned: (item: LinkDisplayItem) => void | Promise<void>;
-  onPromote: (item: LinkDisplayItem, selection: LinkPromotionSelection) => Promise<unknown>;
+  onPlacementAction: (item: LinkDisplayItem, action: LinkPromotionAction) => Promise<unknown>;
+  onOpenPlacements: (item: LinkDisplayItem) => unknown | Promise<unknown>;
   onEdit: (item: LinkDisplayItem) => void;
   onDelete: (item: LinkDisplayItem) => Promise<unknown>;
+  deleteLabel?: string;
+  additionalActions?: readonly LinkMenuAction[];
+  onAdditionalAction?: (action: LinkMenuAction) => void;
 }
 
 export function BranchLinkListItem(props: BranchLinkListItemProps) {
@@ -56,8 +60,12 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
               busy={props.lifecycleBusy}
               onEdit={() => props.onEdit(props.item)}
               onDelete={props.item.linkId ? () => props.onDelete(props.item) : undefined}
-              promotionActions={props.promotionActions}
-              onPromote={(selection) => props.onPromote(props.item, selection)}
+              deleteLabel={props.deleteLabel}
+              additionalActions={props.additionalActions}
+              onAdditionalAction={props.onAdditionalAction}
+              placementActions={props.placementActions}
+              onPlacementAction={(action) => props.onPlacementAction(props.item, action)}
+              onOpenPlacements={() => props.onOpenPlacements(props.item)}
             />
           </>
         }

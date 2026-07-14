@@ -273,7 +273,7 @@ describe('SessionPanel session links', () => {
 
     await waitFor(() => {
       expect(calls).toContainEqual({
-        service: 'links/link-1/promote',
+        service: 'links/link-1/placements',
         method: 'create',
         args: [{ target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: 'teammate-1' }],
       });

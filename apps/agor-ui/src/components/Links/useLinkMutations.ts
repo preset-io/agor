@@ -6,13 +6,19 @@ import { useThemedMessage } from '../../utils/message';
 import type { LinkDisplayItem } from './linkDisplay';
 import { createManualLink, type ManualLinkDraft, updateLinkDisplayItem } from './linkLifecycle';
 import { toggleLinkDisplayItemPinned } from './linkPinning';
-import { type LinkPromotionSelection, promoteLinkDisplayItem } from './linkPromotion';
+import {
+  type LinkPromotionAction,
+  loadLinkPlacements,
+  promoteLinkDisplayItem,
+  removeLinkPlacement,
+} from './linkPromotion';
 import {
   formatLinkMutationFailure,
   LINK_BUSY_KEY,
   LINK_MUTATION_FAILURE_PREFIX,
   LINK_MUTATION_MESSAGE,
   LINK_OWNER_SCOPE,
+  LINK_PLACEMENT_OPERATION,
   LINK_SERVICE,
   type LinkOwnerScope,
 } from './linkUiConstants';
@@ -47,8 +53,13 @@ export function useLinkMutations({ client, branchId, sessionId }: UseLinkMutatio
   const { showSuccess, showError } = useThemedMessage();
   const [pinningKeys, setPinningKeys] = useState<ReadonlySet<string>>(new Set());
   const [lifecycleBusyKeys, setLifecycleBusyKeys] = useState<ReadonlySet<string>>(new Set());
+  const [placementLoadingKeys, setPlacementLoadingKeys] = useState<ReadonlySet<string>>(new Set());
+  const [placementsByTargetKey, setPlacementsByTargetKey] = useState<ReadonlyMap<string, Link[]>>(
+    new Map()
+  );
   const pinningRef = useRef(new Set<string>());
   const lifecycleBusyRef = useRef(new Set<string>());
+  const placementLoadingRef = useRef(new Set<string>());
 
   const togglePinned = useCallback(
     async (item: LinkDisplayItem) => {
@@ -147,23 +158,71 @@ export function useLinkMutations({ client, branchId, sessionId }: UseLinkMutatio
     [client, showError, showSuccess]
   );
 
-  const promoteLink = useCallback(
-    async (item: LinkDisplayItem, selection: LinkPromotionSelection): Promise<boolean> => {
+  const refreshPlacements = useCallback(
+    async (item: LinkDisplayItem): Promise<Link[]> => {
+      const key = item.linkId ?? item.key;
+      if (!client || !startBusy(placementLoadingRef, setPlacementLoadingKeys, key)) {
+        return placementsByTargetKey.get(item.targetKey) ?? [];
+      }
+      try {
+        const placements = await loadLinkPlacements({ client, item });
+        setPlacementsByTargetKey((current) => new Map(current).set(item.targetKey, placements));
+        return placements;
+      } catch (error) {
+        showError(formatLinkMutationFailure(LINK_MUTATION_FAILURE_PREFIX.promote, error));
+        return [];
+      } finally {
+        finishBusy(placementLoadingRef, setPlacementLoadingKeys, key);
+      }
+    },
+    [client, placementsByTargetKey, showError]
+  );
+
+  const applyPlacementAction = useCallback(
+    async (item: LinkDisplayItem, action: LinkPromotionAction): Promise<boolean> => {
       const key = item.linkId ?? item.key;
       if (!client || !startBusy(lifecycleBusyRef, setLifecycleBusyKeys, key)) return false;
       try {
+        if (action.operation === LINK_PLACEMENT_OPERATION.remove) {
+          const removed = await removeLinkPlacement({ client, item, selection: action });
+          if (removed) {
+            agorStore.getState().applyKnownLinkRemovedResult(removed);
+            setPlacementsByTargetKey((current) =>
+              new Map(current).set(
+                item.targetKey,
+                (current.get(item.targetKey) ?? []).filter(
+                  (placement) => placement.link_id !== removed.link_id
+                )
+              )
+            );
+          }
+          showSuccess(LINK_MUTATION_MESSAGE.placementRemoved);
+          return true;
+        }
+
         const promoted = await promoteLinkDisplayItem({
           client,
           item,
-          selection,
+          selection: action,
           branchId,
           sessionId,
         });
         agorStore.getState().applyKnownLinkCreatedResult(promoted);
+        setPlacementsByTargetKey((current) => {
+          const placements = current.get(item.targetKey) ?? [];
+          return new Map(current).set(item.targetKey, [
+            ...placements.filter((placement) => placement.link_id !== promoted.link_id),
+            promoted,
+          ]);
+        });
         showSuccess(LINK_MUTATION_MESSAGE.promoted);
         return true;
       } catch (error) {
-        showError(formatLinkMutationFailure(LINK_MUTATION_FAILURE_PREFIX.promote, error));
+        const prefix =
+          action.operation === LINK_PLACEMENT_OPERATION.remove
+            ? LINK_MUTATION_FAILURE_PREFIX.removePlacement
+            : LINK_MUTATION_FAILURE_PREFIX.promote;
+        showError(formatLinkMutationFailure(prefix, error));
         return false;
       } finally {
         finishBusy(lifecycleBusyRef, setLifecycleBusyKeys, key);
@@ -175,10 +234,13 @@ export function useLinkMutations({ client, branchId, sessionId }: UseLinkMutatio
   return {
     pinningKeys,
     lifecycleBusyKeys,
+    placementLoadingKeys,
+    placementsByTargetKey,
     togglePinned,
     createLink,
     updateLink,
     removeLink,
-    promoteLink,
+    refreshPlacements,
+    applyPlacementAction,
   };
 }

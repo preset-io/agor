@@ -269,6 +269,11 @@ export interface LinkPromotionService {
   create(data: LinkPromotionRequest, params?: Params): Promise<Link>;
 }
 
+export interface LinkPlacementsService extends LinkPromotionService {
+  find(params?: Params): Promise<Link[]>;
+  remove(id: null, params: Params & { query: LinkPromotionRequest }): Promise<Link | null>;
+}
+
 export type AgenticToolSettingsService = AgorService<
   TenantAgenticToolSettings,
   never,
@@ -609,6 +614,7 @@ export interface AgorClient extends Omit<Application<ServiceTypes>, 'service'> {
   service(path: 'boards'): BoardsService;
   service(path: 'links'): LinksService;
   service(path: `links/${string}/promote`): LinkPromotionService;
+  service(path: `links/${string}/placements`): LinkPlacementsService;
   service(path: 'agentic-tool-settings'): AgenticToolSettingsService;
   service(path: 'agentic-tool-presets'): AgenticToolPresetsService;
 

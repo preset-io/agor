@@ -1,3 +1,4 @@
+import { LINK_PROMOTION_TARGET } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 import { registerLinkTools } from './links.js';
@@ -39,6 +40,7 @@ describe('link MCP tools', () => {
       'agor_links_create',
       'agor_links_update',
       'agor_links_promote',
+      'agor_links_remove_from',
       'agor_links_delete',
     ]);
   });
@@ -131,16 +133,19 @@ describe('link MCP tools', () => {
         sessions: {
           get: vi.fn(async () => ({ session_id: 'session-full', branch_id: 'branch-1' })),
         },
-        '/links/:sourceLinkId/promote': { create: promote },
+        '/links/:sourceLinkId/placements': { create: promote },
         links: {},
       },
       'session-short'
     );
 
-    await handlers.get('agor_links_promote')?.({ linkId: 'link-1', destination: 'branch' });
+    await handlers.get('agor_links_promote')?.({
+      linkId: 'link-1',
+      destination: LINK_PROMOTION_TARGET.branch,
+    });
 
     expect(promote).toHaveBeenCalledWith(
-      { target: 'branch', branch_id: 'branch-1' },
+      { target: LINK_PROMOTION_TARGET.branch, branch_id: 'branch-1' },
       {
         authenticated: true,
         route: { sourceLinkId: 'link-1' },
@@ -154,22 +159,57 @@ describe('link MCP tools', () => {
       branches: {
         get: vi.fn(async () => ({ branch_id: 'teammate-full' })),
       },
-      '/links/:sourceLinkId/promote': { create: promote },
+      '/links/:sourceLinkId/placements': { create: promote },
       links: {},
     });
 
     await handlers.get('agor_links_promote')?.({
       linkId: 'link-1',
-      destination: 'teammate',
+      destination: LINK_PROMOTION_TARGET.teammate,
       branchId: 'teammate-full',
     });
 
     expect(promote).toHaveBeenCalledWith(
-      { target: 'teammate', teammate_branch_id: 'teammate-full' },
+      { target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: 'teammate-full' },
       {
         authenticated: true,
         route: { sourceLinkId: 'link-1' },
       }
     );
+  });
+
+  it('promotes to a session and removes only that placement', async () => {
+    const promote = vi.fn(async () => ({ link_id: 'session-link' }));
+    const remove = vi.fn(async () => ({ link_id: 'session-link' }));
+    const handlers = registerTools({
+      sessions: { get: vi.fn(async () => ({ session_id: 'session-full' })) },
+      '/links/:sourceLinkId/placements': { create: promote, remove },
+      links: {},
+    });
+
+    await handlers.get('agor_links_promote')?.({
+      linkId: 'link-1',
+      destination: LINK_PROMOTION_TARGET.session,
+      sessionId: 'session-full',
+    });
+    await handlers.get('agor_links_remove_from')?.({
+      linkId: 'link-1',
+      destination: LINK_PROMOTION_TARGET.session,
+      sessionId: 'session-full',
+    });
+
+    const request = {
+      target: LINK_PROMOTION_TARGET.session,
+      session_id: 'session-full',
+    };
+    expect(promote).toHaveBeenCalledWith(request, {
+      authenticated: true,
+      route: { sourceLinkId: 'link-1' },
+    });
+    expect(remove).toHaveBeenCalledWith(null, {
+      authenticated: true,
+      route: { sourceLinkId: 'link-1' },
+      query: request,
+    });
   });
 });

@@ -90,6 +90,7 @@ export type LinkOwner =
 
 export const LINK_PROMOTION_TARGET = {
   branch: 'branch',
+  session: 'session',
   teammate: 'teammate',
 } as const;
 export const LINK_PROMOTION_TARGETS = Object.values(LINK_PROMOTION_TARGET);
@@ -100,12 +101,20 @@ export type LinkPromotionRequest =
   | {
       target: typeof LINK_PROMOTION_TARGET.branch;
       branch_id: BranchID;
+      session_id?: never;
       teammate_branch_id?: never;
     }
   | {
       target: typeof LINK_PROMOTION_TARGET.teammate;
       branch_id?: never;
+      session_id?: never;
       teammate_branch_id: BranchID;
+    }
+  | {
+      target: typeof LINK_PROMOTION_TARGET.session;
+      branch_id?: never;
+      session_id: SessionID;
+      teammate_branch_id?: never;
     };
 
 export type LinkTarget =

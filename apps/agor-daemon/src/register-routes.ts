@@ -106,7 +106,7 @@ import { registerHealthProbeRoutes } from './health/routes.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import type { GatewayService } from './services/gateway.js';
 import { registerLinkContentRoute } from './services/link-content.js';
-import { createLinkPromotionService } from './services/link-promotion.js';
+import { createLinkPlacementService } from './services/link-promotion.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -796,15 +796,35 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerAuthenticatedRoute(
     app,
     '/links/:sourceLinkId/promote',
-    createLinkPromotionService({
+    createLinkPlacementService({
       app,
       db,
       branchRepository,
       branchRbacEnabled,
+      sessionsService,
       superadminOpts,
     }),
     {
       create: { role: ROLES.MEMBER, action: 'promote links between contexts' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/links/:sourceLinkId/placements',
+    createLinkPlacementService({
+      app,
+      db,
+      branchRepository,
+      branchRbacEnabled,
+      sessionsService,
+      superadminOpts,
+    }),
+    {
+      find: { role: ROLES.VIEWER, action: 'view link placements' },
+      create: { role: ROLES.MEMBER, action: 'promote links between contexts' },
+      remove: { role: ROLES.MEMBER, action: 'remove links from contexts' },
     },
     requireAuth
   );

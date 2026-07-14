@@ -1,4 +1,4 @@
-import { type AgorClient, type Branch, type Session, shortId } from '@agor-live/client';
+import { type AgorClient, type Branch, isTeammate, type Session, shortId } from '@agor-live/client';
 import { PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Empty, Flex, List, Space, Spin, theme } from 'antd';
 import type React from 'react';
@@ -8,6 +8,7 @@ import { useAgorStore } from '../../../store/agorStore';
 import {
   makeLinksForBranchSelector,
   selectBoardById,
+  selectBranchById,
   selectFetchAndReplaceFullBranchLinks,
   selectSessionById,
 } from '../../../store/selectors';
@@ -16,12 +17,19 @@ import {
   canEditLinkTarget,
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
+  getLinkPlacementAction,
   getLinkPromotionActions,
+  LINK_ACTION_KEY,
   LINK_ACTION_LABEL,
   LINK_OWNER_SCOPE,
+  LINK_PROMOTION_DESTINATION,
   type LinkCategoryTabKey,
   type LinkDisplayItem,
   LinkEditorModal,
+  type LinkMenuAction,
+  LinkPlacementDestinationModal,
+  type LinkPlacementDestinationOption,
+  type LinkPlacementDestinationScope,
   type LinkSortKey,
   type ManualLinkDraft,
   matchesLinkCategoryTab,
@@ -62,10 +70,22 @@ function itemMatchesSearch(
   return matchesLinkDisplaySearch(item, query, [getSourceSessionLabel(item, sessionById)]);
 }
 
+const TEAMMATE_DESTINATION_ACTIONS = [
+  {
+    key: LINK_ACTION_KEY.promoteToBranchPicker,
+    label: LINK_ACTION_LABEL.promoteToBranchPicker,
+  },
+  {
+    key: LINK_ACTION_KEY.promoteToSessionPicker,
+    label: LINK_ACTION_LABEL.promoteToSessionPicker,
+  },
+] as const satisfies readonly LinkMenuAction[];
+
 const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const boardById = useAgorStore(selectBoardById);
+  const branchById = useAgorStore(selectBranchById);
   const sessionById = useAgorStore(selectSessionById);
   const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
   const branchLinksSelector = useMemo(
@@ -82,11 +102,14 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   const {
     pinningKeys,
     lifecycleBusyKeys,
+    placementLoadingKeys,
     togglePinned: handleTogglePinned,
     createLink,
     updateLink,
     removeLink,
-    promoteLink: handlePromoteLink,
+    placementsByTargetKey,
+    refreshPlacements: handleRefreshPlacements,
+    applyPlacementAction: handlePlacementAction,
   } = useLinkMutations({
     client,
     branchId: branch.branch_id,
@@ -97,6 +120,10 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
   const [searchQuery, setSearchQuery] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorItem, setEditorItem] = useState<LinkDisplayItem | null>(null);
+  const [placementDestination, setPlacementDestination] = useState<{
+    item: LinkDisplayItem;
+    scope: LinkPlacementDestinationScope;
+  } | null>(null);
 
   const hydrate = useCallback(async () => {
     if (!client) return;
@@ -146,6 +173,75 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
     });
   };
 
+  const openPlacementDestination = (item: LinkDisplayItem, action: LinkMenuAction) => {
+    const scope: LinkPlacementDestinationScope =
+      action.key === LINK_ACTION_KEY.promoteToSessionPicker
+        ? LINK_OWNER_SCOPE.session
+        : LINK_OWNER_SCOPE.branch;
+    setPlacementDestination({ item, scope });
+    void handleRefreshPlacements(item);
+  };
+
+  const placementDestinationOptions = useMemo<LinkPlacementDestinationOption[]>(() => {
+    if (!placementDestination || !branch.board_id) return [];
+    const placements = placementsByTargetKey.get(placementDestination.item.targetKey) ?? [];
+    if (placementDestination.scope === LINK_OWNER_SCOPE.branch) {
+      return Array.from(branchById.values())
+        .filter(
+          (candidate) =>
+            candidate.board_id === branch.board_id &&
+            !candidate.archived &&
+            !isTeammate(candidate) &&
+            candidate.branch_id !== branch.branch_id
+        )
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map((candidate) => ({
+          key: candidate.branch_id,
+          label: candidate.name,
+          action: getLinkPlacementAction(
+            {
+              destination: LINK_PROMOTION_DESTINATION.branch,
+              branchId: candidate.branch_id,
+            },
+            placements,
+            Boolean(client)
+          ),
+        }));
+    }
+
+    return Array.from(sessionById.values())
+      .filter((candidate) => {
+        const ownerBranch = branchById.get(candidate.branch_id);
+        return ownerBranch?.board_id === branch.board_id && !candidate.archived;
+      })
+      .sort((left, right) =>
+        getSessionLabel(left, left.session_id).localeCompare(
+          getSessionLabel(right, right.session_id)
+        )
+      )
+      .map((candidate) => ({
+        key: candidate.session_id,
+        label: getSessionLabel(candidate, candidate.session_id),
+        description: branchById.get(candidate.branch_id)?.name,
+        action: getLinkPlacementAction(
+          {
+            destination: LINK_PROMOTION_DESTINATION.session,
+            sessionId: candidate.session_id,
+          },
+          placements,
+          Boolean(client)
+        ),
+      }));
+  }, [
+    branch.board_id,
+    branch.branch_id,
+    branchById,
+    client,
+    placementDestination,
+    placementsByTargetKey,
+    sessionById,
+  ]);
+
   return (
     <>
       <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
@@ -154,6 +250,26 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
         item={editorItem}
         onCancel={() => setEditorOpen(false)}
         onSubmit={submitEditor}
+      />
+      <LinkPlacementDestinationModal
+        open={Boolean(placementDestination)}
+        scope={placementDestination?.scope ?? LINK_OWNER_SCOPE.branch}
+        options={placementDestinationOptions}
+        busy={Boolean(
+          placementDestination &&
+            (lifecycleBusyKeys.has(
+              placementDestination.item.linkId ?? placementDestination.item.key
+            ) ||
+              placementLoadingKeys.has(
+                placementDestination.item.linkId ?? placementDestination.item.key
+              ))
+        )}
+        onClose={() => setPlacementDestination(null)}
+        onAction={(action) =>
+          placementDestination
+            ? handlePlacementAction(placementDestination.item, action)
+            : Promise.resolve(false)
+        }
       />
       <div data-testid="branch-links-tab" className={linkStyles.branchLinksTab}>
         <Space direction="vertical" size={token.sizeMD} className={linkStyles.branchLinksStack}>
@@ -197,18 +313,34 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       key={item.key}
                       item={item}
                       sourceSessionLabel={getSourceSessionLabel(item, sessionById)}
-                      promotionActions={getLinkPromotionActions(item, {
+                      placementActions={getLinkPromotionActions(item, {
                         branchId: branch.branch_id,
                         teammateBranchId,
+                        placements: placementsByTargetKey.get(item.targetKey),
                         available: Boolean(client),
                       })}
-                      lifecycleBusy={lifecycleBusyKeys.has(item.linkId ?? item.key)}
+                      lifecycleBusy={
+                        lifecycleBusyKeys.has(item.linkId ?? item.key) ||
+                        placementLoadingKeys.has(item.linkId ?? item.key)
+                      }
                       pinning={pinningKeys.has(item.linkId ?? item.key)}
                       onOpen={openItem}
                       onTogglePinned={handleTogglePinned}
-                      onPromote={handlePromoteLink}
+                      onPlacementAction={handlePlacementAction}
+                      onOpenPlacements={
+                        isTeammate(branch) ? () => undefined : handleRefreshPlacements
+                      }
                       onEdit={openEditLink}
                       onDelete={removeLink}
+                      deleteLabel={
+                        isTeammate(branch)
+                          ? LINK_ACTION_LABEL.removeFromTeammate
+                          : LINK_ACTION_LABEL.removeFromBranch
+                      }
+                      additionalActions={
+                        isTeammate(branch) ? TEAMMATE_DESTINATION_ACTIONS : undefined
+                      }
+                      onAdditionalAction={(action) => openPlacementDestination(item, action)}
                     />
                   )}
                 />
