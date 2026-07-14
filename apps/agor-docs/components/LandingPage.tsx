@@ -11,17 +11,17 @@ import {
   ClipboardList,
   Code2,
   DatabaseZap,
+  DoorOpen,
   DraftingCompass,
+  Eye,
   EyeOff,
-  GitPullRequest,
+  Hammer,
   Handshake,
   Hash,
   type LucideIcon,
-  Megaphone,
   MessagesSquare,
   Repeat,
   Scale,
-  ShieldCheck,
   SlidersHorizontal,
   Target,
   Unlink,
@@ -36,8 +36,6 @@ import Aurora from './Aurora/Aurora';
 import { HubSpotFormModal } from './HubSpotFormModal';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 import styles from './LandingPage.module.css';
-
-const LANDING_PRIVATE_BETA_URL = 'https://agor.live/blog/agor-cloud#lets-get-cooking';
 
 // "The problem" cards — the diagnosis before the pitch. Amber accents (see
 // .problemCard in the CSS module) mark these as the warning register; the
@@ -202,30 +200,15 @@ const featureCards: Array<{
     linkLabel: 'Agent modeling 101',
   },
 ];
+// Spatial boards, rich sessions, and the message gateway are deliberately
+// absent — the "So much more than a chat box" showcase above already tells
+// those stories with video.
 const productPreviews = [
-  {
-    title: 'Spatial boards',
-    body: 'Arrange branches, zones, sessions, and teammates on one spatial canvas for agentic workflows.',
-    image: '/screenshots/board-hero.png',
-    href: '/guide/boards',
-  },
-  {
-    title: 'Rich agent sessions',
-    body: 'Watch tool calls, decisions, session trees, forks, subsessions, and handoffs unfold with full context.',
-    image: '/screenshots/conversation_full_page.png',
-    href: '/guide/rich-chat-ux',
-  },
   {
     title: 'Persistent teammates',
     body: 'Give long-lived helpers memory, skills, schedules, and team-wide reach beyond one-off prompts.',
     image: '/screenshots/teammates-list.png',
     href: '/guide/teammates',
-  },
-  {
-    title: 'Message gateway',
-    body: 'Bring agents into Slack, GitHub, and the threads where your team already coordinates work.',
-    image: '/screenshots/marketing/agor-marketing-slack-thread.png',
-    href: '/guide/message-gateway',
   },
   {
     title: 'Scheduler',
@@ -343,26 +326,31 @@ function GitHubIcon() {
 const showcaseSlides = [
   {
     label: 'Multiplayer presence',
-    caption: 'live cursors · shared session · queued follow-up',
+    blurb:
+      'Humans and agents share the same board — live cursors, shared sessions, queued follow-ups.',
     video: '/videos/showcase-multiplayer.mp4',
+    videoSmall: '/videos/showcase-multiplayer-540.mp4',
     poster: '/videos/showcase-multiplayer-poster.jpg',
   },
   {
     label: 'Spatial boards',
-    caption: 'launch board · spatial canvas',
+    blurb: 'Arrange branches, zones, sessions, and teammates on one spatial canvas.',
     video: '/videos/showcase-boards.mp4',
+    videoSmall: '/videos/showcase-boards-540.mp4',
     poster: '/videos/showcase-boards-poster.jpg',
   },
   {
     label: 'Rich agent sessions',
-    caption: 'session · tool calls with full context',
+    blurb: 'Watch tool calls, decisions, and handoffs unfold with full context.',
     video: '/videos/showcase-sessions.mp4',
+    videoSmall: '/videos/showcase-sessions-540.mp4',
     poster: '/videos/showcase-sessions-poster.jpg',
   },
   {
     label: 'Message gateway',
-    caption: 'slack · @Agor picks up the ticket',
+    blurb: 'Bring agents into Slack, GitHub, and the threads where your team already works.',
     video: '/videos/showcase-gateway.mp4',
+    videoSmall: '/videos/showcase-gateway-540.mp4',
     poster: '/videos/showcase-gateway-poster.jpg',
   },
 ];
@@ -371,23 +359,22 @@ const showcaseSlides = [
 // jobs are the genuine article), rendered as blips on the Roster Radar.
 // `r`/`a` are polar coordinates (radius in radar units, angle in degrees)
 // around the scope's center; `status`/`mem` feed the hover tooltip.
-type RosterStatus = 'RUNNING' | 'BUSY' | 'IDLE';
-
+// Real teammates from the Preset Agor instance — names, jobs, and the meta
+// line are the genuine article (usage pulled from instance analytics,
+// 2026-07). `meta` is each agent's most interesting true fact.
 const rosterMembers: Array<{
   icon: LucideIcon;
   name: string;
   role: string;
-  status: RosterStatus;
-  mem: string;
+  meta: string;
   r: number;
   a: number;
 }> = [
   {
     icon: Code2,
     name: 'AgorClaw',
-    role: 'Main coding orchestrator',
-    status: 'RUNNING',
-    mem: '1.8 GB',
+    role: 'Main coding orchestrator — the first assistant in the instance',
+    meta: '55B tokens · 1,600+ tasks',
     r: 100,
     a: -90,
   },
@@ -395,17 +382,15 @@ const rosterMembers: Array<{
     icon: DraftingCompass,
     name: 'Preset Architect',
     role: 'Knows every repo and how they fit together',
-    status: 'RUNNING',
-    mem: '960 MB',
+    meta: 'weekly release health check',
     r: 170,
     a: -58,
   },
   {
-    icon: GitPullRequest,
-    name: 'GitHub Handler',
-    role: 'Tag it on any PR or issue — it takes it from there',
-    status: 'IDLE',
-    mem: '512 MB',
+    icon: Eye,
+    name: 'Princeton',
+    role: 'PR reviewer that learns from your human reviewers',
+    meta: 'learns from review comments',
     r: 190,
     a: 4,
   },
@@ -413,35 +398,31 @@ const rosterMembers: Array<{
     icon: ClipboardList,
     name: 'Milchick',
     role: 'Chief-of-staff orchestrator',
-    status: 'RUNNING',
-    mem: '1.2 GB',
+    meta: 'Slack-native · nightly 9pm run',
     r: 135,
     a: -28,
   },
   {
     icon: Target,
     name: 'Peyton Manning',
-    role: 'Sees the whole field, calls the right plays',
-    status: 'BUSY',
-    mem: '2.1 GB',
+    role: 'Sees the whole field, routes work to the right people',
+    meta: 'labels RC tickets every 4h',
     r: 110,
     a: 44,
   },
   {
     icon: Activity,
-    name: 'OpEx',
-    role: 'Observability & operational excellence',
-    status: 'RUNNING',
-    mem: '740 MB',
+    name: 'SRE',
+    role: 'Datadog triage, tickets, and production fixes',
+    meta: '3 daily crons',
     r: 155,
     a: 92,
   },
   {
-    icon: ShieldCheck,
-    name: 'patch-bot',
-    role: 'Watches new builds of our base images',
-    status: 'IDLE',
-    mem: '288 MB',
+    icon: Hammer,
+    name: 'Telchar',
+    role: 'Opens a ticket, branch, and PR per CVE',
+    meta: 'Snyk-fed · never merges alone',
     r: 195,
     a: 138,
   },
@@ -449,26 +430,23 @@ const rosterMembers: Array<{
     icon: Scale,
     name: 'Saul',
     role: 'Legal, contracts, redlines expert',
-    status: 'RUNNING',
-    mem: '1.1 GB',
+    meta: 'Slack-native · on call for redlines',
     r: 145,
     a: 182,
   },
   {
     icon: Handshake,
     name: 'Blake',
-    role: 'Deal desk expert',
-    status: 'BUSY',
-    mem: '1.4 GB',
+    role: 'Deal desk, contracts, and order forms',
+    meta: '@-mention him in Slack',
     r: 180,
     a: -134,
   },
   {
-    icon: Megaphone,
-    name: 'Peggy',
-    role: 'Proposes, optimizes, and reviews ad campaigns',
-    status: 'RUNNING',
-    mem: '890 MB',
+    icon: DoorOpen,
+    name: 'Hodor!',
+    role: 'Agor’s own PM — issues, roadmap, ritual notes',
+    meta: 'lives in #agor · attends rituals',
     r: 200,
     a: -158,
   },
@@ -512,12 +490,6 @@ const radarTooltip = (r: number, a: number): { style: CSSProperties; below: bool
   };
 };
 
-const rosterStatusColor: Record<RosterStatus, string> = {
-  RUNNING: '#5fe9d0',
-  BUSY: '#56c7e8',
-  IDLE: '#e8c468',
-};
-
 // Multiplayer numbered cards (mockup design language, our copy)
 const liveCards = [
   {
@@ -542,6 +514,12 @@ export function LandingPage() {
   const [activeSurface, setActiveSurface] = useState(0);
   const [activeFeature, setActiveFeature] = useState(0);
   const [hoveredMember, setHoveredMember] = useState<number | null>(null);
+  const [radarInView, setRadarInView] = useState(false);
+  const radarScopeRef = useRef<HTMLDivElement>(null);
+  const [scrollySurface, setScrollySurface] = useState(0);
+  const scrollyWrapRef = useRef<HTMLDivElement>(null);
+  const scrollyTrackRef = useRef<HTMLDivElement>(null);
+  const showcasePinRef = useRef<HTMLElement>(null);
   const slideVideoRefs = useRef<Array<HTMLVideoElement | null>>([]);
 
   // Showcase carousel playback gating: only the active slide's video plays;
@@ -587,19 +565,153 @@ export function LandingPage() {
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting) {
+          // Very tall sections (e.g. the scroll-locked surface carousel) can
+          // never reach the 14% ratio in a phone viewport, so also reveal
+          // once the visible slice fills a third of the screen.
+          if (
+            entry.isIntersecting &&
+            (entry.intersectionRatio >= 0.14 ||
+              entry.intersectionRect.height >= window.innerHeight * 0.34)
+          ) {
             entry.target.classList.add(styles.isVisible);
             observer.unobserve(entry.target);
           }
         }
       },
-      { rootMargin: '0px 0px -12% 0px', threshold: 0.14 }
+      { rootMargin: '0px 0px -12% 0px', threshold: [0, 0.07, 0.14] }
     );
 
     revealItems.forEach((item) => {
       observer.observe(item);
     });
 
+    return () => observer.disconnect();
+  }, []);
+
+  // Scroll-locked surface carousel (phones): while .surfaceScrolly's tall
+  // wrapper crosses the viewport, its sticky stage pins and vertical scroll
+  // progress maps onto the track's horizontal position. Sticky + transform
+  // only — native scrolling is never intercepted, so flicking straight
+  // through remains possible. Desktop and reduced-motion phones never match
+  // the media query (CSS shows the pill explorer instead).
+  useEffect(() => {
+    const wrap = scrollyWrapRef.current;
+    const track = scrollyTrackRef.current;
+    if (!wrap || !track) {
+      return;
+    }
+
+    const media = window.matchMedia(
+      '(max-width: 720px) and (prefers-reduced-motion: no-preference)'
+    );
+    const count = productPreviews.length;
+    let raf = 0;
+
+    const update = () => {
+      raf = 0;
+      if (!media.matches) {
+        track.style.transform = '';
+        return;
+      }
+      const rect = wrap.getBoundingClientRect();
+      const range = rect.height - window.innerHeight;
+      const progress = range > 0 ? Math.min(1, Math.max(0, -rect.top / range)) : 0;
+      // Dwell easing: each card parks flush for ~a third of its scroll
+      // segment before handing off, so pausing mid-scroll doesn't strand a
+      // card half off-screen.
+      const pos = progress * (count - 1);
+      const seg = Math.min(count - 2, Math.floor(pos));
+      const frac = pos - seg;
+      const dwell = 0.32;
+      const eased = seg + Math.min(1, Math.max(0, (frac - dwell / 2) / (1 - dwell)));
+      track.style.transform = `translateX(${(-eased * 100) / count}%)`;
+      setScrollySurface(Math.round(eased));
+    };
+    const schedule = () => {
+      if (!raf) {
+        raf = requestAnimationFrame(update);
+      }
+    };
+
+    update();
+    window.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    media.addEventListener('change', schedule);
+
+    return () => {
+      window.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      media.removeEventListener('change', schedule);
+      if (raf) {
+        cancelAnimationFrame(raf);
+      }
+    };
+  }, []);
+
+  // Scroll-locked showcase carousel (phones): the pinned section's scroll
+  // progress simply drives setActiveShot, so the track's existing 550ms
+  // transition, tab highlighting, caption, and active-video play/pause
+  // gating stay on the exact same code path as tap navigation. Rounding to
+  // the nearest slide gives natural dwell plateaus between transitions.
+  useEffect(() => {
+    const pin = showcasePinRef.current;
+    if (!pin) {
+      return;
+    }
+
+    const media = window.matchMedia(
+      '(max-width: 720px) and (prefers-reduced-motion: no-preference)'
+    );
+    const count = showcaseSlides.length;
+    let raf = 0;
+
+    const update = () => {
+      raf = 0;
+      if (!media.matches) {
+        return;
+      }
+      const rect = pin.getBoundingClientRect();
+      const range = rect.height - window.innerHeight;
+      if (range <= 0) {
+        return;
+      }
+      const progress = Math.min(1, Math.max(0, -rect.top / range));
+      setActiveShot(Math.round(progress * (count - 1)));
+    };
+    const schedule = () => {
+      if (!raf) {
+        raf = requestAnimationFrame(update);
+      }
+    };
+
+    window.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+
+    return () => {
+      window.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      if (raf) {
+        cancelAnimationFrame(raf);
+      }
+    };
+  }, []);
+
+  // Phones show the radar detail card as a fixed bottom overlay; fade it in
+  // only while the radar itself is on screen so it never floats over
+  // unrelated sections.
+  useEffect(() => {
+    const scope = radarScopeRef.current;
+    if (!scope) {
+      return;
+    }
+    // Ratio-based (not isIntersecting): the card retires as soon as most of
+    // the radar has scrolled away, instead of lingering until the last pixel
+    // exits underneath the next section.
+    const observer = new IntersectionObserver(
+      ([entry]) => setRadarInView(entry.intersectionRatio >= 0.35),
+      { threshold: [0, 0.35] }
+    );
+    observer.observe(scope);
     return () => observer.disconnect();
   }, []);
 
@@ -626,11 +738,7 @@ export function LandingPage() {
         </div>
         <section className={styles.heroSection}>
           <div className={styles.heroCopy} data-reveal>
-            <p className={styles.heroBadge}>
-              Agor
-              <span className={styles.badgeDot} aria-hidden="true" />
-              The command center for AI enablement
-            </p>
+            <p className={styles.heroBadge}>The command center for AI enablement</p>
             <h1>
               Empower your <span className={styles.headingStrong}>team</span> with{' '}
               <span className={styles.headingAccent}>AI teammates</span>
@@ -691,97 +799,148 @@ export function LandingPage() {
         </div>
         <p className={styles.problemPivot}>
           Agor helps your team avoid this{' '}
-          <span className={styles.headingAccent}>operational nightmare</span>
+          <span className={styles.headingAccentWarm}>operational nightmare</span>
         </p>
       </section>
 
-      <section className={styles.showcaseSection} data-reveal>
-        <div className={styles.showcaseHeader}>
-          <div className={styles.sectionHeader}>
-            <h2>
-              So much <span className={styles.headingStrong}>more</span> than a{' '}
-              <span className={styles.headingAccent}>chat box</span>
-            </h2>
-          </div>
-          <div className={styles.showcaseTabs}>
-            {showcaseSlides.map((slide, index) => (
-              <button
-                type="button"
-                key={slide.label}
-                className={
-                  index === activeShot
-                    ? `${styles.showcaseTab} ${styles.showcaseTabActive}`
-                    : styles.showcaseTab
-                }
-                onClick={() => setActiveShot(index)}
-              >
-                {slide.label}
-              </button>
-            ))}
-          </div>
+      <section className={styles.showcaseSection} data-reveal ref={showcasePinRef}>
+        {/* Section divider: the docs pages' mint aurora as a thin curtain
+            hanging from the seam with the problem section. */}
+        <div className={styles.showcaseDivider} aria-hidden="true">
+          <Aurora
+            colorStops={['#2e9a92', '#34e6c4', '#7ad9ff']}
+            amplitude={0.9}
+            blend={1}
+            speed={0.6}
+          />
         </div>
-        <div className={styles.showcaseFrame}>
-          <div className={styles.showcaseChrome}>
-            <span className={styles.chromeDot} style={{ background: '#ff6f5e' }} />
-            <span className={styles.chromeDot} style={{ background: '#ffd166' }} />
-            <span className={styles.chromeDot} style={{ background: '#34e6c4' }} />
-            <span className={styles.chromeCaption}>{showcaseSlides[activeShot].caption}</span>
-          </div>
-          <div className={styles.showcaseViewport}>
-            {/* Track is 400% wide with 25% slides — keep in sync with showcaseSlides.length */}
-            <div
-              className={styles.showcaseTrack}
-              style={{ transform: `translateX(-${activeShot * 25}%)` }}
-            >
+        {/* On phones the section pins and scroll steps through the slides
+            (same scroll-locked treatment as the surface carousel below);
+            this wrapper is the sticky stage there and a plain div on
+            desktop. */}
+        <div className={styles.showcaseSticky}>
+          <div className={styles.showcaseHeader}>
+            <div className={styles.sectionHeader}>
+              <h2>
+                So much <span className={styles.headingStrong}>more</span> than a{' '}
+                <span className={styles.headingAccent}>chat box</span>
+              </h2>
+            </div>
+            <div className={styles.showcaseTabs}>
               {showcaseSlides.map((slide, index) => (
-                <div className={styles.showcaseSlide} key={slide.label}>
-                  {/* Poster is the frame's background image so it shows under
+                <button
+                  type="button"
+                  key={slide.label}
+                  className={
+                    index === activeShot
+                      ? `${styles.showcaseTab} ${styles.showcaseTabActive}`
+                      : styles.showcaseTab
+                  }
+                  onClick={() => setActiveShot(index)}
+                >
+                  {slide.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Phone-only status line — mirrors the surface carousel below
+              (tab pills hide on phones; this is the slide indicator). */}
+          <div className={styles.showcaseStatus}>
+            <span className={styles.scrollyStatusCount}>
+              {String(activeShot + 1).padStart(2, '0')} /{' '}
+              {String(showcaseSlides.length).padStart(2, '0')}
+            </span>
+            <span className={styles.scrollyStatusTitle}>{showcaseSlides[activeShot].label}</span>
+          </div>
+          <div className={styles.showcaseFrame}>
+            <div className={styles.showcaseViewport}>
+              {/* Track is 400% wide with 25% slides — keep in sync with showcaseSlides.length */}
+              <div
+                className={styles.showcaseTrack}
+                style={{ transform: `translateX(-${activeShot * 25}%)` }}
+              >
+                {showcaseSlides.map((slide, index) => (
+                  <div className={styles.showcaseSlide} key={slide.label}>
+                    {/* Poster is the frame's background image so it shows under
                       prefers-reduced-motion (CSS hides the video) and with JS
                       off (no play() call ever fires). Only the first slide
                       preloads — four eager mp4s (~5MB) is real weight on a
                       phone; play() on the other slides triggers their fetch
                       when they're actually activated. */}
-                  <div
-                    className={styles.slideVideoFrame}
-                    style={{ backgroundImage: `url(${slide.poster})` }}
-                  >
-                    <video
-                      ref={(element) => {
-                        slideVideoRefs.current[index] = element;
-                      }}
-                      className={styles.slideVideo}
-                      muted
-                      loop
-                      playsInline
-                      preload={index === 0 ? 'auto' : 'none'}
-                      poster={slide.poster}
-                      aria-label={slide.label}
+                    <div
+                      className={styles.slideVideoFrame}
+                      style={{ backgroundImage: `url(${slide.poster})` }}
                     >
-                      <source src={slide.video} type="video/mp4" />
-                    </video>
+                      <video
+                        ref={(element) => {
+                          slideVideoRefs.current[index] = element;
+                        }}
+                        className={styles.slideVideo}
+                        muted
+                        loop
+                        playsInline
+                        preload={index === 0 ? 'auto' : 'none'}
+                        poster={slide.poster}
+                        aria-label={slide.label}
+                      >
+                        <source
+                          src={slide.videoSmall}
+                          type="video/mp4"
+                          media="(max-width: 720px)"
+                        />
+                        <source src={slide.video} type="video/mp4" />
+                      </video>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
+            {/* Invisible click layer: clicking the video advances the reel
+                (arrows sit above it at a higher z-index). Hidden on phones,
+                where scroll drives the carousel. */}
+            <button
+              type="button"
+              aria-label="Next example"
+              className={styles.frameAdvance}
+              onClick={() => setActiveShot((activeShot + 1) % showcaseSlides.length)}
+            />
+            <button
+              type="button"
+              aria-label="Previous example"
+              className={`${styles.showcaseArrow} ${styles.showcaseArrowLeft}`}
+              onClick={() =>
+                setActiveShot((activeShot + showcaseSlides.length - 1) % showcaseSlides.length)
+              }
+            >
+              <ChevronLeft size={22} aria-hidden />
+            </button>
+            <button
+              type="button"
+              aria-label="Next example"
+              className={`${styles.showcaseArrow} ${styles.showcaseArrowRight}`}
+              onClick={() => setActiveShot((activeShot + 1) % showcaseSlides.length)}
+            >
+              <ChevronRight size={22} aria-hidden />
+            </button>
           </div>
-          <button
-            type="button"
-            aria-label="Previous example"
-            className={`${styles.showcaseArrow} ${styles.showcaseArrowLeft}`}
-            onClick={() =>
-              setActiveShot((activeShot + showcaseSlides.length - 1) % showcaseSlides.length)
-            }
-          >
-            <ChevronLeft size={22} aria-hidden />
-          </button>
-          <button
-            type="button"
-            aria-label="Next example"
-            className={`${styles.showcaseArrow} ${styles.showcaseArrowRight}`}
-            onClick={() => setActiveShot((activeShot + 1) % showcaseSlides.length)}
-          >
-            <ChevronRight size={22} aria-hidden />
-          </button>
+          {/* Phone-only: header + blurb below the video (mirrors the surface
+              carousel's card text), with matching dots. */}
+          <div className={styles.showcaseSlideInfo}>
+            <h3>{showcaseSlides[activeShot].label}</h3>
+            <p>{showcaseSlides[activeShot].blurb}</p>
+          </div>
+          <div className={styles.showcaseDots} aria-hidden="true">
+            {showcaseSlides.map((slide, index) => (
+              <span
+                key={slide.label}
+                className={
+                  index === activeShot
+                    ? `${styles.scrollyDot} ${styles.scrollyDotActive}`
+                    : styles.scrollyDot
+                }
+              />
+            ))}
+          </div>
         </div>
       </section>
 
@@ -841,27 +1000,50 @@ export function LandingPage() {
             </div>
           </div>
         </div>
+        {/* Phone fallback for the ring (hover/click doesn't earn its keep on
+            touch): every feature expanded in a scrollable divider list —
+            icon left, content right, no interaction required. */}
+        <div className={styles.featureList} data-reveal>
+          {featureCards.map((feature) => (
+            <article key={feature.title} className={styles.featureListItem}>
+              <span className={styles.featureListIcon} aria-hidden>
+                <feature.icon size={15} />
+              </span>
+              <div>
+                <h3>{feature.title}</h3>
+                <p>{feature.body}</p>
+                <Link href={feature.href} className={styles.featureListLink}>
+                  {feature.linkLabel} <span aria-hidden="true">→</span>
+                </Link>
+              </div>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className={styles.productShowcase} data-reveal>
         <div className={styles.sectionHeader}>
           <span className={styles.eyebrow}>Let power users get down to business</span>
           <h2>
-            Every surface <span className={styles.headingStrong}>AI enablers</span> need to{' '}
+            Every capability <span className={styles.headingStrong}>AI enablers</span> need to{' '}
             <span className={styles.headingAccent}>orchestrate AI</span>
           </h2>
         </div>
+        {/* Desktop: same carousel grammar as the showcase above — tab pills,
+            chrome frame, sliding track, arrows, click-the-shot-to-advance.
+            Track/slide widths are inline because they depend on the entry
+            count. Phones hide this and use the scroll-locked treatment
+            below. */}
         <div className={styles.surfaceExplorer} data-reveal>
-          <div className={styles.surfaceRail}>
-            <span className={styles.surfaceRailLabel}>Product surfaces</span>
+          <div className={styles.showcaseTabs}>
             {productPreviews.map((preview, index) => (
               <button
                 type="button"
                 key={preview.title}
                 className={
                   index === activeSurface
-                    ? `${styles.surfaceRailItem} ${styles.surfaceRailItemActive}`
-                    : styles.surfaceRailItem
+                    ? `${styles.showcaseTab} ${styles.showcaseTabActive}`
+                    : styles.showcaseTab
                 }
                 onClick={() => setActiveSurface(index)}
               >
@@ -869,23 +1051,124 @@ export function LandingPage() {
               </button>
             ))}
           </div>
-          <div className={styles.surfaceStage}>
-            <div className={styles.surfaceInfo}>
-              <div>
-                <h3>{productPreviews[activeSurface].title}</h3>
-                <p>{productPreviews[activeSurface].body}</p>
+          <div className={styles.showcaseFrame}>
+            <div className={styles.showcaseViewport}>
+              <div
+                className={styles.showcaseTrack}
+                style={{
+                  width: `${productPreviews.length * 100}%`,
+                  transform: `translateX(-${activeSurface * (100 / productPreviews.length)}%)`,
+                }}
+              >
+                {productPreviews.map((preview, index) => (
+                  <div
+                    className={styles.surfaceSlide}
+                    key={preview.title}
+                    style={{ width: `${100 / productPreviews.length}%` }}
+                  >
+                    <div className={styles.surfaceInfo}>
+                      <div>
+                        <h3>{preview.title}</h3>
+                        <p>{preview.body}</p>
+                      </div>
+                      <Link href={preview.href} className={styles.secondaryButton}>
+                        Learn more →
+                      </Link>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.surfaceShotButton}
+                      aria-label="Next capability"
+                      onClick={() => setActiveSurface((index + 1) % productPreviews.length)}
+                    >
+                      {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+                      <img
+                        className={styles.surfaceShot}
+                        src={preview.image}
+                        alt={preview.title}
+                        loading={index === 0 ? 'eager' : 'lazy'}
+                      />
+                    </button>
+                  </div>
+                ))}
               </div>
-              <Link href={productPreviews[activeSurface].href} className={styles.secondaryButton}>
-                Learn more →
-              </Link>
             </div>
-            {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
-            <img
-              key={productPreviews[activeSurface].image}
-              className={styles.surfaceShot}
-              src={productPreviews[activeSurface].image}
-              alt={productPreviews[activeSurface].title}
-            />
+            <button
+              type="button"
+              aria-label="Previous capability"
+              className={`${styles.showcaseArrow} ${styles.showcaseArrowLeft}`}
+              onClick={() =>
+                setActiveSurface(
+                  (activeSurface + productPreviews.length - 1) % productPreviews.length
+                )
+              }
+            >
+              <ChevronLeft size={22} aria-hidden />
+            </button>
+            <button
+              type="button"
+              aria-label="Next capability"
+              className={`${styles.showcaseArrow} ${styles.showcaseArrowRight}`}
+              onClick={() => setActiveSurface((activeSurface + 1) % productPreviews.length)}
+            >
+              <ChevronRight size={22} aria-hidden />
+            </button>
+          </div>
+        </div>
+        {/* Phone treatment (Claude Design scroll-lock-carousel mock): the
+            stage pins while vertical scroll drives the cards sideways, then
+            hands scrolling back to the page. Heights are inline because they
+            depend on the surface count. */}
+        <div
+          className={styles.surfaceScrolly}
+          ref={scrollyWrapRef}
+          style={{ height: `calc(${productPreviews.length * 55}dvh + 100dvh)` }}
+        >
+          <div className={styles.scrollySticky}>
+            <div className={styles.scrollyStatus}>
+              <span className={styles.scrollyStatusCount}>
+                {String(scrollySurface + 1).padStart(2, '0')} /{' '}
+                {String(productPreviews.length).padStart(2, '0')}
+              </span>
+              <span className={styles.scrollyStatusTitle}>
+                {productPreviews[scrollySurface].title}
+              </span>
+            </div>
+            <div
+              className={styles.scrollyTrack}
+              ref={scrollyTrackRef}
+              style={{ width: `${productPreviews.length * 100}%` }}
+            >
+              {productPreviews.map((preview) => (
+                <article
+                  key={preview.title}
+                  className={styles.scrollyCard}
+                  style={{ width: `${100 / productPreviews.length}%` }}
+                >
+                  {/* biome-ignore lint/performance/noImgElement: Static product screenshot */}
+                  <img
+                    className={styles.scrollyShot}
+                    src={preview.image}
+                    alt={preview.title}
+                    loading="lazy"
+                  />
+                  <h3>{preview.title}</h3>
+                  <p>{preview.body}</p>
+                </article>
+              ))}
+            </div>
+            <div className={styles.scrollyDots} aria-hidden="true">
+              {productPreviews.map((preview, index) => (
+                <span
+                  key={preview.title}
+                  className={
+                    index === scrollySurface
+                      ? `${styles.scrollyDot} ${styles.scrollyDotActive}`
+                      : styles.scrollyDot
+                  }
+                />
+              ))}
+            </div>
           </div>
         </div>
       </section>
@@ -916,7 +1199,7 @@ export function LandingPage() {
               className={styles.secondaryButton}
               onClick={() => setIsDemoFormOpen(true)}
             >
-              Talk to us about enterprise
+              Book an Agor demo
             </button>
           </div>
         </div>
@@ -1023,7 +1306,8 @@ export function LandingPage() {
           <div className={styles.sectionHeader}>
             <span className={styles.eyebrow}>Meet the Preset agent team</span>
             <h2>
-              Full agentic <span className={styles.headingAccent}>coverage</span> for your org.
+              Full agentic <span className={styles.headingAccent}>coverage</span> for{' '}
+              <span className={styles.headingStrong}>any</span> org
             </h2>
           </div>
           <p className={styles.rosterBody}>
@@ -1032,10 +1316,10 @@ export function LandingPage() {
           </p>
           <p className={styles.rosterStatusLine}>
             <span className={styles.rosterStatusDot} aria-hidden="true" />
-            {rosterMembers.length} contacts tracked — hover to scan
+            {rosterMembers.length} contacts tracked — hover or tap to scan
           </p>
         </div>
-        <div className={styles.radarScope}>
+        <div className={styles.radarScope} ref={radarScopeRef}>
           <svg className={styles.radarSvg} viewBox="0 0 560 560" aria-hidden="true">
             <circle cx="280" cy="280" r="100" fill="none" stroke="rgba(94, 233, 208, 0.14)" />
             <circle cx="280" cy="280" r="190" fill="none" stroke="rgba(94, 233, 208, 0.12)" />
@@ -1097,26 +1381,41 @@ export function LandingPage() {
                 <p className={styles.tooltipName}>{member.name}</p>
                 <p className={styles.tooltipRole}>{member.role}</p>
                 <div className={styles.tooltipMeta}>
-                  <span
-                    className={styles.tooltipStatus}
-                    style={{ color: rosterStatusColor[member.status] }}
-                  >
-                    <span className={styles.tooltipStatusDot} />
-                    {member.status}
-                  </span>
-                  <span className={styles.tooltipMem}>mem {member.mem}</span>
+                  <span className={styles.tooltipMem}>{member.meta}</span>
                 </div>
               </div>
             );
           })}
+        </div>
+        {/* Phone-only: the floating tooltips clip against the scope edge on
+            small screens, so the active member's card renders in a fixed
+            panel below the radar instead (tapping a blip focuses it, which
+            drives hoveredMember). Desktop keeps the tooltips. */}
+        <div
+          className={
+            radarInView ? `${styles.radarDetail} ${styles.radarDetailVisible}` : styles.radarDetail
+          }
+          aria-live="polite"
+        >
+          {hoveredMember !== null ? (
+            <>
+              <p className={styles.tooltipName}>{rosterMembers[hoveredMember].name}</p>
+              <p className={styles.tooltipRole}>{rosterMembers[hoveredMember].role}</p>
+              <div className={styles.tooltipMeta}>
+                <span className={styles.tooltipMem}>{rosterMembers[hoveredMember].meta}</span>
+              </div>
+            </>
+          ) : (
+            <p className={styles.radarDetailHint}>Tap a teammate to scan</p>
+          )}
         </div>
       </section>
 
       <section className={styles.finalCta} data-reveal>
         <div className={styles.ctaCard}>
           <h2>
-            Give your <span className={styles.headingStrong}>AI teammates</span> a place to{' '}
-            <span className={styles.headingAccent}>work</span>
+            Give your <span className={styles.headingAccent}>AI teammates</span> a place to{' '}
+            <span className={styles.headingStrong}>work</span>
           </h2>
           <p>
             Agor Cloud is opening to teams now — or onboard your first AI teammate in three minutes
@@ -1178,9 +1477,13 @@ export function LandingPage() {
             <Link href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
               Discord
             </Link>
-            <Link href={LANDING_PRIVATE_BETA_URL} target="_blank" rel="noopener noreferrer">
+            <button
+              type="button"
+              className={styles.footerLinkButton}
+              onClick={() => setIsBetaFormOpen(true)}
+            >
               Sign up for Agor Cloud
-            </Link>
+            </button>
           </div>
         </div>
         <p className={styles.footerCredit}>

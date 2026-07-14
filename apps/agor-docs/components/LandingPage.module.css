@@ -21,10 +21,12 @@
   color: var(--landing-ink);
   font-family: var(--font-body-stack);
   background:
-    radial-gradient(circle at 18% 12%, rgba(52, 230, 196, 0.14), transparent 30rem),
     radial-gradient(circle at 82% 8%, rgba(46, 154, 146, 0.12), transparent 34rem),
     linear-gradient(180deg, #07100f 0%, #0a1614 36%, #081210 72%, #07100f 100%);
-  overflow: hidden;
+  /* clip (not hidden): still contains the problem-section fly-ins, but does
+   * not create a scroll container — position: sticky inside the shell (the
+   * scroll-locked surface carousel) must stick to the VIEWPORT. */
+  overflow: clip;
 }
 
 /* Hero banner — looping product-demo video behind the hero copy */
@@ -127,6 +129,13 @@
   padding-top: 128px;
 }
 
+/* The teammates ring is dense — give the section extra air on both sides so
+ * it doesn't read as packed between the showcase and the capabilities. */
+.workspaceSection {
+  padding-top: clamp(120px, 14vh, 190px);
+  padding-bottom: clamp(120px, 14vh, 190px);
+}
+
 .heroCopy {
   position: relative;
   max-width: 1040px;
@@ -168,33 +177,6 @@
   font-weight: 500;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-}
-
-.badgeDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--landing-teal);
-  box-shadow: 0 0 10px var(--landing-teal);
-  animation: badgePulse 2.4s ease-in-out infinite;
-}
-
-@keyframes badgePulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.45;
-    transform: scale(0.82);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .badgeDot {
-    animation: none;
-  }
 }
 
 .eyebrow {
@@ -459,6 +441,12 @@
   justify-content: center;
 }
 
+/* Phone-only expanded feature list (see the 600px media block) — the ring's
+ * hover/click interaction doesn't earn its keep on touch. */
+.featureList {
+  display: none;
+}
+
 .ringStage {
   position: relative;
   width: 100%;
@@ -637,59 +625,64 @@
 /* A ring can't breathe at phone widths — collapse to a stacked list of title
  * pills with the active card's panel beneath (tab-list / panel pattern). */
 @media (max-width: 600px) {
-  .ringStage {
-    position: static;
-    width: 100%;
-    max-width: 440px;
-    aspect-ratio: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .ringStage::before {
+  /* The ring needs hover/click; phones get the expanded .featureList
+   * instead — no cards, thin dividers, icon left / content right. */
+  .featureRing {
     display: none;
   }
-  .ringNode {
-    position: static;
-    width: 100%;
-    height: auto;
-    aspect-ratio: auto;
-    transform: none;
-    padding: 15px 20px;
-    border-radius: 14px;
-    font-size: 1rem;
-    gap: 10px;
+
+  .featureList {
+    display: block;
+    max-width: 480px;
+    margin: 8px auto 0;
   }
-  /* Pills, not circles, at this width — icon badge goes back inline. */
-  .ringNodeIcon {
-    position: static;
-    transform: none;
-    width: 26px;
-    height: 26px;
-    border-width: 0;
+
+  .featureListItem {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 14px;
+    padding: 18px 2px;
   }
-  .ringNodeActive {
-    transform: none;
+
+  .featureListItem + .featureListItem {
+    border-top: 1px solid rgba(52, 230, 196, 0.12);
   }
-  .ringHub {
-    order: 1;
-    position: static;
-    width: 100%;
-    aspect-ratio: auto;
-    transform: none;
-    padding: 24px 22px;
-    border-radius: 18px;
+
+  .featureListIcon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #2ea78f, #1f7c68);
+    color: #fff;
   }
-  .ringHubInner {
-    max-width: 100%;
-    gap: 16px;
+
+  .featureListItem h3 {
+    margin: 4px 0 6px;
+    color: var(--landing-ink);
+    font-family: var(--font-display-stack);
+    font-size: 1.05rem;
+    font-weight: 600;
   }
-  .ringHubInner p {
+
+  .featureListItem p {
+    margin: 0 0 8px;
+    color: var(--landing-muted);
     font-size: 0.94rem;
+    line-height: 1.55;
   }
-  .ringButton {
-    white-space: normal;
-    font-size: 0.78rem;
+
+  .featureListLink {
+    color: var(--landing-teal);
+    font-family: var(--font-mono-stack);
+    font-size: 0.82rem;
+    text-decoration: none;
+  }
+
+  .featureListLink:hover {
+    text-decoration: underline;
   }
 }
 
@@ -711,82 +704,43 @@
 }
 
 /* Product-surfaces explorer: side rail + large screenshot stage */
+/* Phone-only scroll-locked surface carousel (see the compound media block at
+ * the end of the file) — desktop and reduced-motion phones never show it. */
+.surfaceScrolly {
+  display: none;
+}
+
+/* Capabilities carousel — same grammar as the showcase reel above (tab
+ * pills, chrome frame, sliding track, arrows). Slides stack an info bar over
+ * the screenshot; clicking the screenshot advances. */
 .surfaceExplorer {
-  display: grid;
-  grid-template-columns: minmax(240px, 0.28fr) 1fr;
-  margin-top: 42px;
-  overflow: hidden;
-  border: 1px solid rgba(52, 230, 196, 0.14);
-  border-radius: 20px;
-  background: #081210;
-  box-shadow: 0 50px 120px -50px rgba(0, 0, 0, 0.8);
+  margin-top: 10px;
 }
 
-.surfaceRail {
-  display: flex;
-  flex-direction: column;
-  padding: 22px 0;
-  border-right: 1px solid rgba(52, 230, 196, 0.1);
-  background: rgba(7, 16, 15, 0.6);
+.surfaceSlide {
+  flex-shrink: 0;
+  min-width: 0;
 }
 
-.surfaceRailLabel {
-  padding: 8px 26px 14px;
-  color: var(--landing-teal);
-  font-family: var(--font-mono-stack);
-  font-size: 0.72rem;
-  font-weight: 500;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.surfaceRailItem {
-  padding: 14px 26px;
+.surfaceShotButton {
+  display: block;
+  width: 100%;
+  padding: 0;
   border: 0;
   background: none;
-  color: var(--landing-ink);
-  font-family: var(--font-display-stack);
-  font-size: 1.02rem;
-  font-weight: 600;
-  text-align: left;
   cursor: pointer;
-  transition:
-    color 0.25s ease,
-    background 0.25s ease;
-}
-
-.surfaceRailItem:hover {
-  background: rgba(52, 230, 196, 0.05);
-}
-
-.surfaceRailItemActive,
-.surfaceRailItemActive:hover {
-  color: var(--landing-teal);
-  background: rgba(52, 230, 196, 0.07);
-}
-
-.surfaceStage {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
 }
 
 .surfaceShot {
   display: block;
-  width: 100%;
-  height: clamp(380px, 42vw, 600px);
-  object-fit: cover;
-  object-position: center top;
-  animation: surfaceShotIn 0.35s ease;
-}
-
-@keyframes surfaceShotIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  /* Viewport-aware ceiling: header + tabs + info bar + nav cost
+   * ~533px, so the shot scales to the largest size that keeps the WHOLE
+   * section on screen — natural aspect ratio, never cropped. */
+  max-height: clamp(230px, calc(100dvh - 533px), 600px);
+  margin: 0 auto;
 }
 
 .surfaceInfo {
@@ -1087,6 +1041,26 @@
   color: var(--landing-teal);
 }
 
+/* Footer entry that opens the beta modal instead of navigating — dressed
+ * exactly like the sibling anchors. */
+.footerLinkButton {
+  display: block;
+  margin-bottom: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--landing-muted);
+  font-family: inherit;
+  font-size: 0.95rem;
+  text-align: left;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.footerLinkButton:hover {
+  color: var(--landing-teal);
+}
+
 /* "Built by Preset" credit — last line of the footer, spanning both grid
  * columns. Same dim-to-mint hover register as the footer links. */
 .footerCredit {
@@ -1133,12 +1107,17 @@
 
 .landingShell .isVisible {
   opacity: 1;
-  transform: translateY(0) scale(1);
+  /* `none`, not translateY(0), and will-change released: an identity
+   * transform OR a standing will-change: transform would make the section
+   * the containing block for position: fixed descendants (the radar's phone
+   * detail card must pin to the VIEWPORT). Dropping the hint post-reveal
+   * also releases the compositor layer. */
+  transform: none;
+  will-change: auto;
 }
 
 :global(.dark) .landingShell {
   background:
-    radial-gradient(circle at 18% 12%, rgba(52, 230, 196, 0.14), transparent 30rem),
     radial-gradient(circle at 82% 8%, rgba(46, 154, 146, 0.12), transparent 34rem),
     linear-gradient(180deg, #07100f 0%, #0a1614 36%, #081210 72%, #07100f 100%);
 }
@@ -1161,6 +1140,35 @@
   max-width: 1180px;
   margin: 0 auto;
   padding: 88px 28px 0;
+}
+
+/* Top-edge divider glow — hands off from the problem section's dark band
+ * into the showcase (relocated from the shell's old corner radial). */
+.showcaseSection {
+  position: relative;
+}
+
+/* Mint aurora curtain (same ReactBits shader as the docs pages) hanging just
+ * below the seam with the problem section. Masked so it dissolves at the
+ * strip's edges instead of ending in a hard canvas boundary. */
+.showcaseDivider {
+  position: absolute;
+  top: -30px;
+  left: 50%;
+  /* Full-bleed: the section is max-width-capped, so break out to the
+   * viewport. Only the top/bottom need dissolving — the sides end at the
+   * page edges. */
+  width: 100vw;
+  height: 420px;
+  transform: translateX(-50%);
+  z-index: 0;
+  pointer-events: none;
+  /* Dimmed so the headline stays the loudest thing in the region. */
+  opacity: 0.55;
+  /* Hard top edge — reads as light cast downward from behind the section
+   * above; only the bottom dissolves into the page. */
+  mask-image: linear-gradient(180deg, #000, #000 55%, transparent 96%);
+  -webkit-mask-image: linear-gradient(180deg, #000, #000 55%, transparent 96%);
 }
 
 .showcaseHeader {
@@ -1215,6 +1223,18 @@
   box-shadow: 0 50px 120px -50px rgba(0, 0, 0, 0.8);
 }
 
+/* Invisible click layer over a carousel frame: clicking the media advances.
+ * Arrows sit above it (z-index 2). Hidden on phones (scroll drives). */
+.frameAdvance {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
 /* Prev/next carousel arrows — circular glass buttons hugging the stage edges.
  * They sit inside the data-reveal section but not ON the reveal element, so
  * they own their transition list (hover animates instead of snapping). */
@@ -1257,27 +1277,6 @@
   right: 14px;
 }
 
-.showcaseChrome {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(52, 230, 196, 0.1);
-}
-
-.chromeDot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-}
-
-.chromeCaption {
-  margin-left: 8px;
-  color: #6f928c;
-  font-family: var(--font-mono-stack);
-  font-size: 0.74rem;
-}
-
 .showcaseViewport {
   overflow: hidden;
 }
@@ -1286,6 +1285,15 @@
   display: flex;
   width: 400%;
   transition: transform 0.55s cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* Phone-only showcase indicator pieces (styled in the compound media block
+ * at the end of the file) — hidden on desktop, where the tab pills and the
+ * chrome-bar caption do this job. */
+.showcaseStatus,
+.showcaseSlideInfo,
+.showcaseDots {
+  display: none;
 }
 
 .showcaseSlide {
@@ -1761,7 +1769,8 @@
   aspect-ratio: 1;
   /* Query container so tooltip arrows can offset in cqw (% of scope width) */
   container-type: inline-size;
-  overflow: hidden;
+  /* No overflow clip: tooltips near the rim must render past the circle.
+   * The sweep clips itself (its own border-radius bounds the gradient). */
   border: 1px solid rgba(94, 233, 208, 0.18);
   border-radius: 50%;
   background: radial-gradient(circle, #0a1c17 0%, #061114 78%);
@@ -1942,27 +1951,16 @@
   margin-top: 9px;
 }
 
-.tooltipStatus {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-mono-stack);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-}
-
-.tooltipStatusDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentcolor;
-}
-
 .tooltipMem {
   color: #5b6d68;
   font-family: var(--font-mono-stack);
   font-size: 10px;
+}
+
+/* Phone-only radar detail panel (shown from the 720px media block) — the
+ * floating tooltips clip against the scope edge on small screens. */
+.radarDetail {
+  display: none;
 }
 
 @media (max-width: 720px) {
@@ -1987,6 +1985,12 @@
 .heroBanner .heroSection {
   position: relative;
   z-index: 1;
+}
+
+/* Above sibling sections (which sit at z-index 1): the radar's fixed phone
+ * detail card must never be painted over by the CTA scrolling in beneath it. */
+.landingShell .rosterSection {
+  z-index: 2;
 }
 
 /* Active ring node brightens its icon badge with it. */
@@ -2100,33 +2104,6 @@
     animation: none;
   }
 
-  .surfaceExplorer {
-    grid-template-columns: 1fr;
-  }
-
-  .surfaceRail {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 16px;
-    border-right: 0;
-    border-bottom: 1px solid rgba(52, 230, 196, 0.1);
-  }
-
-  .surfaceRailLabel {
-    width: 100%;
-    padding: 0 10px 10px;
-  }
-
-  .surfaceRailItem {
-    /* Pill height clears the 40px touch-target floor. */
-    min-height: 40px;
-    padding: 8px 14px;
-    border: 1px solid rgba(52, 230, 196, 0.16);
-    border-radius: 999px;
-    font-size: 0.88rem;
-  }
-
   .surfaceShot {
     height: clamp(240px, 52vw, 420px);
   }
@@ -2179,8 +2156,96 @@
     padding: 64px 24px;
   }
 
+  /* Problem entries drop the card chrome on phones: icon rides left of the
+   * text so each entry is shorter, and thin dividers replace the boxes. */
   .problemScatter {
     grid-template-columns: 1fr;
+    gap: 0;
+    margin-top: 32px;
+  }
+
+  .problemCard {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 14px;
+    row-gap: 2px;
+    padding: 18px 2px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+
+  .problemIcon {
+    grid-row: 1 / span 2;
+    align-self: start;
+    margin-bottom: 0;
+  }
+
+  .problemCard h3,
+  .problemCard p {
+    grid-column: 2;
+    margin: 0;
+  }
+
+  .problemCard h3 {
+    align-self: center;
+  }
+
+  .problemCard:hover {
+    border-color: rgba(232, 196, 104, 0.14);
+    translate: none;
+  }
+
+  .problemSlot + .problemSlot .problemCard {
+    border-top: 1px solid rgba(232, 196, 104, 0.14);
+  }
+
+  /* Radar: tooltips clip against the scope circle — swap them for the
+   * fixed detail panel below the radar. */
+  .radarTooltip {
+    display: none;
+  }
+
+  /* Fixed bottom overlay so the card is always in reach of the thumb; it
+   * fades in only while the radar is on screen (see radarInView). */
+  .radarDetail {
+    position: fixed;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+    left: 16px;
+    right: 16px;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 96px;
+    padding: 14px 18px;
+    border: 1px solid rgba(94, 233, 208, 0.22);
+    border-radius: 14px;
+    background: rgba(8, 18, 16, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    text-align: center;
+    opacity: 0;
+    transform: translateY(14px);
+    pointer-events: none;
+    transition:
+      opacity 280ms ease,
+      transform 280ms ease;
+  }
+
+  .radarDetailVisible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .radarDetailHint {
+    margin: 0;
+    color: #6f928c;
+    font-family: var(--font-mono-stack);
+    font-size: 0.78rem;
+    letter-spacing: 0.05em;
   }
 
   .heroSection {
@@ -2278,5 +2343,233 @@
    * .slideVideoFrame's background shows instead (mirrors the hero video). */
   .slideVideo {
     display: none;
+  }
+}
+
+/* --- Scroll-locked surface carousel: phones with motion allowed. The tall
+ * wrapper provides the scroll budget (~55dvh per card transition, heights set
+ * inline in the TSX); this block swaps the pill explorer for the pinned
+ * stage. Reduced-motion phones keep the pill explorer above. --- */
+@media (max-width: 720px) and (prefers-reduced-motion: no-preference) {
+  /* Showcase carousel pins too: 4 slides x 55dvh of scroll budget + the
+   * pinned screen itself. Keep the multiplier in sync with
+   * showcaseSlides.length. */
+  .showcaseSection {
+    height: 320dvh;
+    padding-top: 0;
+  }
+
+  .showcaseSticky {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    height: 100dvh;
+    padding-top: 56px;
+    overflow: hidden;
+  }
+
+  /* Match the surface carousel's look: status line + dots instead of tab
+   * pills; the chrome caption moves below the video. */
+  .showcaseTabs {
+    display: none;
+  }
+
+  /* Scroll drives the carousels on phones — no click layer. */
+  .frameAdvance {
+    display: none;
+  }
+
+  .showcaseFrame {
+    margin-top: 12px;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .showcaseSlide {
+    padding: 0;
+  }
+
+  .slideVideoFrame {
+    border-radius: 14px;
+  }
+
+  .showcaseStatus {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin: 14px 0 16px;
+  }
+
+  .showcaseSlideInfo {
+    display: block;
+    margin-top: 16px;
+  }
+
+  .showcaseSlideInfo h3 {
+    margin: 0 0 8px;
+    color: var(--landing-ink);
+    font-family: var(--font-display-stack);
+    font-size: 1.35rem;
+    font-weight: 600;
+  }
+
+  .showcaseSlideInfo p {
+    margin: 0;
+    color: var(--landing-muted);
+    font-size: 0.94rem;
+    line-height: 1.55;
+  }
+
+  .showcaseDots {
+    display: flex;
+    justify-content: center;
+    gap: 7px;
+    margin-top: 18px;
+  }
+
+  .surfaceExplorer {
+    display: none;
+  }
+
+  .surfaceScrolly {
+    display: block;
+    position: relative;
+    margin-top: 8px;
+  }
+
+  .scrollySticky {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    height: 100dvh;
+    padding: 76px 0 40px;
+    overflow: hidden;
+  }
+
+  .scrollyStatus {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 0 24px;
+    margin-bottom: 16px;
+  }
+
+  .scrollyStatusCount {
+    color: var(--landing-teal);
+    font-family: var(--font-mono-stack);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+  }
+
+  .scrollyStatusTitle {
+    color: var(--landing-muted);
+    font-family: var(--font-mono-stack);
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .scrollyTrack {
+    display: flex;
+    will-change: transform;
+  }
+
+  .scrollyCard {
+    flex-shrink: 0;
+    padding: 0 24px;
+  }
+
+  .scrollyShot {
+    width: 100%;
+    max-height: 44dvh;
+    object-fit: cover;
+    object-position: top left;
+    border: 1px solid rgba(52, 230, 196, 0.16);
+    border-radius: 16px;
+    background: #081210;
+  }
+
+  .scrollyCard h3 {
+    margin: 18px 0 8px;
+    color: var(--landing-ink);
+    font-family: var(--font-display-stack);
+    font-size: 1.35rem;
+    font-weight: 600;
+  }
+
+  .scrollyCard p {
+    margin: 0;
+    color: var(--landing-muted);
+    font-size: 0.94rem;
+    line-height: 1.55;
+  }
+
+  .scrollyDots {
+    display: flex;
+    justify-content: center;
+    gap: 7px;
+    margin-top: 22px;
+  }
+
+  .scrollyDot {
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(238, 244, 241, 0.22);
+    transition:
+      width 150ms ease,
+      background 150ms ease;
+  }
+
+  .scrollyDotActive {
+    width: 22px;
+    background: var(--landing-teal);
+  }
+}
+
+/* --- Short desktop viewports: the capability slide goes side-by-side (info
+ * rail left, screenshot right) so the image keeps real size without pushing
+ * the section past one screen. Tall viewports keep info stacked above. --- */
+@media (min-width: 721px) and (max-height: 980px) {
+  .surfaceSlide {
+    display: grid;
+    grid-template-columns: minmax(280px, 0.34fr) 1fr;
+    align-items: stretch;
+  }
+
+  .surfaceInfo {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 14px;
+    /* Left padding clears the floating prev-arrow at the frame's edge. */
+    padding: 16px 28px 16px 86px;
+    border-bottom: 0;
+    border-right: 1px solid rgba(52, 230, 196, 0.1);
+  }
+
+  .surfaceInfo p {
+    margin-top: 6px;
+  }
+
+  .surfaceShotButton {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+  }
+
+  .surfaceShot {
+    /* Less vertical overhead with the info rail beside the image; the
+     * 300px floor keeps squat windows from shrinking the shot to a stamp
+     * (the section scrolls a little instead). */
+    max-height: max(300px, calc(100dvh - 438px));
   }
 }
