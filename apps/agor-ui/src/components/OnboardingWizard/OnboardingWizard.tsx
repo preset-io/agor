@@ -25,7 +25,6 @@ import {
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
-import { selectBoardById } from '../../store/selectors';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 
@@ -494,11 +493,6 @@ export function OnboardingWizard({
   onCheckAuth,
   initialStep,
 }: OnboardingWizardProps) {
-  // Self-subscribe to the board entity map this wizard reads (needed to detect
-  // whether the user already has a board). Subscribing here — rather than
-  // receiving it as a prop from the outer App shell — keeps the shell from
-  // re-rendering on every board write.
-  const boardById = useAgorStore(selectBoardById);
   const { token } = useToken();
 
   // ── Token-derived styles (live, theme-aware) ────────────────────────────
@@ -671,7 +665,12 @@ export function OnboardingWizard({
   }, [currentStep, onCheckAuth, agentHasKey]);
 
   const existingBoardId = user?.preferences?.mainBoardId || null;
-  const existingBoard = existingBoardId ? boardById.get(existingBoardId) : null;
+  // Subscribe to only THIS board rather than the whole boardById map, so the
+  // wizard re-renders on changes to the user's own board, not on every board
+  // write anywhere. Self-subscribing (vs a prop) still keeps the App shell out.
+  const existingBoard = useAgorStore((store) =>
+    existingBoardId ? (store.boardById.get(existingBoardId) ?? null) : null
+  );
   const hasExistingBoard = !!(existingBoard || createdBoardId);
 
   const primaryEnabled = useMemo(() => {
