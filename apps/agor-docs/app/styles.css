@@ -189,3 +189,15 @@ html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https:
 html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https://discord.gg"] {
   color: var(--agor-teal-light);
 }
+
+/* ---------------------------------------------------------------------------
+ * WCAG AA fix: the shiki github-dark comment token (#6A737D) only reaches
+ * 4.03:1 on the dark code-block background (#050f0f); AA needs 4.5:1. The
+ * token colors are inlined as custom properties on each span, so !important
+ * is required for an author rule to beat the inline declaration. #8b949e
+ * (GitHub's current dark-theme comment gray) measures 6.31:1.
+ */
+code span[style*="--shiki-dark:#6A737D"] {
+  /* biome-ignore lint/complexity/noImportantStyles: must beat the inline style attribute that carries the token color. */
+  --shiki-dark: #8b949e !important;
+}

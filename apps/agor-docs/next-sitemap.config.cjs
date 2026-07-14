@@ -12,7 +12,9 @@ module.exports = {
   changefreq: 'weekly',
   priority: 0.7,
   sitemapSize: 5000,
-  exclude: ['/404', '/_app', '/_document'],
+  // /guide/assistants is a meta-refresh redirect stub to /guide/teammates —
+  // redirect pages don't belong in the sitemap.
+  exclude: ['/404', '/_app', '/_document', '/guide/assistants'],
 
   // Include static LLM-related files
   additionalPaths: async () => [

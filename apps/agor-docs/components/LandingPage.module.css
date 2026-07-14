@@ -1,3 +1,17 @@
+/* Visually-hidden utility for screen-reader-only text (e.g. the carousel
+ * "Slide N of M" wording behind the decorative "01 / 04" counters). */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .landingShell {
   /* Marketing type system — fonts loaded via next/font in app/layout.tsx */
   --font-display-stack: var(--font-display), "Space Grotesk", system-ui, sans-serif;
@@ -455,18 +469,16 @@
   aspect-ratio: 1 / 1;
 }
 
-/* Faint guide circle through the node centers (diameter = 2 × node radius). */
-.ringStage::before {
-  content: "";
+/* ReactBits orb behind the nodes — its rim is the new guide circle (the
+ * old 1px dashed ring). Pointer events stay ON so the orb's rotate-on-hover
+ * works; interactive nodes/hub are later siblings and paint above. */
+.ringOrb {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 75%;
-  height: 75%;
+  width: 94%;
+  height: 94%;
   transform: translate(-50%, -50%);
-  border: 1px dashed rgba(52, 230, 196, 0.14);
-  border-radius: 50%;
-  pointer-events: none;
 }
 
 .ringNode {
@@ -1018,7 +1030,7 @@
   gap: 32px;
 }
 
-.footerLinks h4 {
+.footerLinks h3 {
   margin: 0 0 14px;
   color: var(--landing-ink);
   font-family: var(--font-display-stack);
@@ -1069,7 +1081,7 @@
   align-items: center;
   gap: 8px;
   margin: 12px 0 0;
-  color: #5b6d68;
+  color: #6f928c;
   font-size: 0.85rem;
 }
 
@@ -1746,7 +1758,7 @@
   align-items: center;
   gap: 10px;
   margin: 26px 0 0;
-  color: #5b6d68;
+  color: #6f928c;
   font-family: var(--font-mono-stack);
   font-size: 0.8rem;
   letter-spacing: 0.04em;
@@ -1952,7 +1964,7 @@
 }
 
 .tooltipMem {
-  color: #5b6d68;
+  color: #6f928c;
   font-family: var(--font-mono-stack);
   font-size: 10px;
 }
@@ -2307,7 +2319,7 @@
     gap: 18px;
   }
 
-  .footerLinks h4 {
+  .footerLinks h3 {
     letter-spacing: 0.06em;
   }
 }

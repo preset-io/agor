@@ -3,7 +3,7 @@ import 'nextra-theme-docs/style.css';
 import { Hanken_Grotesk, JetBrains_Mono, Space_Grotesk } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
-import { GITHUB_REPO_URL } from '../lib/links';
+import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import {
   BRAND_NAME,
   DEFAULT_DESCRIPTION,
@@ -12,6 +12,7 @@ import {
   getSiteUrl,
   LOGO_MARK_PATH,
   THEME_COLOR,
+  toAbsoluteUrl,
 } from '../lib/siteMetadata';
 import './styles.css';
 
@@ -78,28 +79,49 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <link rel="icon" type="image/svg+xml" href={`${basePath}${LOGO_MARK_PATH}`} />
         {/* PNG fallback for browsers without SVG favicon support */}
         <link rel="alternate icon" type="image/png" href={`${basePath}${FAVICON_PATH}`} />
+        <link rel="apple-touch-icon" sizes="180x180" href={`${basePath}/apple-touch-icon.png`} />
         <script
           type="application/ld+json"
           // biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD is static and controlled, not user-provided.
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
               '@context': 'https://schema.org',
-              '@type': 'SoftwareApplication',
-              name: 'agor',
-              description: DEFAULT_DESCRIPTION,
-              applicationCategory: 'DeveloperApplication',
-              operatingSystem: 'macOS, Linux, Windows',
-              offers: {
-                '@type': 'Offer',
-                price: '0',
-                priceCurrency: 'USD',
-              },
-              url: siteUrl,
-              codeRepository: GITHUB_REPO_URL,
-              author: {
-                '@type': 'Organization',
-                name: 'Preset Inc.',
-              },
+              '@graph': [
+                {
+                  '@type': 'Organization',
+                  '@id': `${siteUrl}/#organization`,
+                  name: 'Preset Inc.',
+                  url: 'https://preset.io',
+                  logo: toAbsoluteUrl('/preset-logo.svg'),
+                  sameAs: [GITHUB_REPO_URL, DISCORD_INVITE_URL],
+                },
+                {
+                  '@type': 'WebSite',
+                  '@id': `${siteUrl}/#website`,
+                  name: BRAND_NAME,
+                  url: siteUrl,
+                  publisher: { '@id': `${siteUrl}/#organization` },
+                },
+                {
+                  '@type': 'SoftwareApplication',
+                  '@id': `${siteUrl}/#software`,
+                  name: 'Agor',
+                  description: DEFAULT_DESCRIPTION,
+                  applicationCategory: 'DeveloperApplication',
+                  operatingSystem: 'macOS, Linux, Windows',
+                  // Open-source (BSL 1.1) build is free to self-host.
+                  offers: {
+                    '@type': 'Offer',
+                    price: '0',
+                    priceCurrency: 'USD',
+                  },
+                  url: siteUrl,
+                  screenshot: toAbsoluteUrl('/screenshots/board-hero.png'),
+                  softwareHelp: toAbsoluteUrl('/guide'),
+                  codeRepository: GITHUB_REPO_URL,
+                  author: { '@id': `${siteUrl}/#organization` },
+                },
+              ],
             }),
           }}
         />

@@ -196,12 +196,26 @@ export default function Aurora(props: AuroraProps) {
         renderer.render({ scene: mesh });
       }
     };
-    animateId = requestAnimationFrame(update);
+
+    // Only burn GPU while the canvas is actually on screen — the render loop
+    // pauses when the container scrolls out of view and resumes on re-entry.
+    let running = false;
+    const visibility = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && !running) {
+        running = true;
+        animateId = requestAnimationFrame(update);
+      } else if (!entry.isIntersecting && running) {
+        running = false;
+        cancelAnimationFrame(animateId);
+      }
+    });
+    visibility.observe(ctn);
 
     resize();
 
     return () => {
       cancelAnimationFrame(animateId);
+      visibility.disconnect();
       window.removeEventListener('resize', resize);
       if (ctn && gl.canvas.parentNode === ctn) {
         ctn.removeChild(gl.canvas);

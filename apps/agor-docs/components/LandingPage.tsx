@@ -36,6 +36,7 @@ import Aurora from './Aurora/Aurora';
 import { HubSpotFormModal } from './HubSpotFormModal';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 import styles from './LandingPage.module.css';
+import Orb from './Orb/Orb';
 
 // "The problem" cards — the diagnosis before the pitch. Amber accents (see
 // .problemCard in the CSS module) mark these as the warning register; the
@@ -507,7 +508,7 @@ const liveCards = [
 ];
 
 export function LandingPage() {
-  const landingRef = useRef<HTMLDivElement>(null);
+  const landingRef = useRef<HTMLElement>(null);
   const [isBetaFormOpen, setIsBetaFormOpen] = useState(false);
   const [isDemoFormOpen, setIsDemoFormOpen] = useState(false);
   const [activeShot, setActiveShot] = useState(0);
@@ -716,7 +717,11 @@ export function LandingPage() {
   }, []);
 
   return (
-    <div ref={landingRef} className={styles.landingShell}>
+    // <main> (not div): the landing page uses Nextra's "full" layout, which
+    // provides no main landmark of its own — this is the page's only one.
+    // id matches Nextra's "Skip to Content" anchor (#nextra-skip-nav) — the
+    // full-page layout omits the docs content wrapper that normally carries it.
+    <main ref={landingRef} id="nextra-skip-nav" className={styles.landingShell}>
       <div className={styles.heroBanner}>
         {/* Looping product demo as the hero backdrop. Sources are a viewport
             ladder — browsers pick the first matching media query. Falls back
@@ -836,6 +841,7 @@ export function LandingPage() {
                       ? `${styles.showcaseTab} ${styles.showcaseTabActive}`
                       : styles.showcaseTab
                   }
+                  aria-pressed={index === activeShot}
                   onClick={() => setActiveShot(index)}
                 >
                   {slide.label}
@@ -846,9 +852,14 @@ export function LandingPage() {
           {/* Phone-only status line — mirrors the surface carousel below
               (tab pills hide on phones; this is the slide indicator). */}
           <div className={styles.showcaseStatus}>
-            <span className={styles.scrollyStatusCount}>
+            {/* The "01 / 04" ornament reads poorly aloud; screen readers get a
+                plain "Slide 1 of 4" instead. */}
+            <span className={styles.scrollyStatusCount} aria-hidden="true">
               {String(activeShot + 1).padStart(2, '0')} /{' '}
               {String(showcaseSlides.length).padStart(2, '0')}
+            </span>
+            <span className={styles.srOnly}>
+              Slide {activeShot + 1} of {showcaseSlides.length}
             </span>
             <span className={styles.scrollyStatusTitle}>{showcaseSlides[activeShot].label}</span>
           </div>
@@ -897,10 +908,13 @@ export function LandingPage() {
             </div>
             {/* Invisible click layer: clicking the video advances the reel
                 (arrows sit above it at a higher z-index). Hidden on phones,
-                where scroll drives the carousel. */}
+                where scroll drives the carousel. Mouse-only affordance — the
+                visible arrows are the accessible controls, so this stays out
+                of the tab order and the accessibility tree. */}
             <button
               type="button"
-              aria-label="Next example"
+              tabIndex={-1}
+              aria-hidden="true"
               className={styles.frameAdvance}
               onClick={() => setActiveShot((activeShot + 1) % showcaseSlides.length)}
             />
@@ -964,6 +978,13 @@ export function LandingPage() {
         </div>
         <div className={styles.featureRing} data-reveal>
           <div className={styles.ringStage}>
+            {/* ReactBits orb: its glowing rim threads through the node
+                centers, replacing the old 1px dashed guide circle. Sized so
+                the rim (~80% of the orb's half-width) lands on the 37.5%
+                node radius. */}
+            <div className={styles.ringOrb} aria-hidden="true">
+              <Orb hue={41} hoverIntensity={0} rotateOnHover forceHoverState={false} />
+            </div>
             {featureCards.map((feature, index) => {
               const angle = ((-90 + index * (360 / featureCards.length)) * Math.PI) / 180;
               const radius = 37.5; // percent of stage, from center to node center
@@ -1045,6 +1066,7 @@ export function LandingPage() {
                     ? `${styles.showcaseTab} ${styles.showcaseTabActive}`
                     : styles.showcaseTab
                 }
+                aria-pressed={index === activeSurface}
                 onClick={() => setActiveSurface(index)}
               >
                 {preview.title}
@@ -1085,7 +1107,7 @@ export function LandingPage() {
                       <img
                         className={styles.surfaceShot}
                         src={preview.image}
-                        alt={preview.title}
+                        alt={`Screenshot of ${preview.title} in Agor`}
                         loading={index === 0 ? 'eager' : 'lazy'}
                       />
                     </button>
@@ -1126,9 +1148,14 @@ export function LandingPage() {
         >
           <div className={styles.scrollySticky}>
             <div className={styles.scrollyStatus}>
-              <span className={styles.scrollyStatusCount}>
+              {/* Same treatment as the showcase status: numeric ornament is
+                  hidden from screen readers in favor of plain wording. */}
+              <span className={styles.scrollyStatusCount} aria-hidden="true">
                 {String(scrollySurface + 1).padStart(2, '0')} /{' '}
                 {String(productPreviews.length).padStart(2, '0')}
+              </span>
+              <span className={styles.srOnly}>
+                Slide {scrollySurface + 1} of {productPreviews.length}
               </span>
               <span className={styles.scrollyStatusTitle}>
                 {productPreviews[scrollySurface].title}
@@ -1149,7 +1176,7 @@ export function LandingPage() {
                   <img
                     className={styles.scrollyShot}
                     src={preview.image}
-                    alt={preview.title}
+                    alt={`Screenshot of ${preview.title} in Agor`}
                     loading="lazy"
                   />
                   <h3>{preview.title}</h3>
@@ -1457,20 +1484,20 @@ export function LandingPage() {
         </div>
         <div className={styles.footerLinks}>
           <div>
-            <h4>Product</h4>
+            <h3>Product</h3>
             <Link href="/guide/boards">Boards</Link>
             <Link href="/guide/sessions">Sessions</Link>
             <Link href="/guide/teammates">Teammates</Link>
             <Link href="/guide/internal-mcp">MCP control</Link>
           </div>
           <div>
-            <h4>Resources</h4>
+            <h3>Resources</h3>
             <Link href="/guide/getting-started">Get started</Link>
             <Link href="/guide">Documentation</Link>
             <Link href="/blog/agor-cloud">Agor Cloud</Link>
           </div>
           <div>
-            <h4>Community</h4>
+            <h3>Community</h3>
             <Link href={GITHUB_REPO_URL} target="_blank" rel="noopener noreferrer">
               GitHub
             </Link>
@@ -1507,6 +1534,6 @@ export function LandingPage() {
         title="Join the Agor Cloud private beta"
       />
       <HubSpotMeetingModal isOpen={isDemoFormOpen} onClose={() => setIsDemoFormOpen(false)} />
-    </div>
+    </main>
   );
 }
