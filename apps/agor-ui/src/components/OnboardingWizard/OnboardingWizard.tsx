@@ -445,6 +445,12 @@ export interface OnboardingWizardProps {
     sessionId: string;
     boardId: string;
     path: 'teammate';
+    /** Name of the first AI teammate to create on completion. */
+    teammateName?: string;
+    /** Avatar emoji for the first AI teammate (defaults to 🤖). */
+    teammateEmoji?: string;
+    /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
+    agent?: AgenticToolName | null;
   }) => void;
   /** Called when the user dismisses the wizard without completing it. */
   onDismiss?: () => void;
@@ -522,9 +528,11 @@ export function OnboardingWizard({
     {}
   );
 
-  // ── Step 3: workspace ───────────────────────────────────────────────────
-  const [boardName, setBoardName] = useState('');
-  const [boardEmoji, setBoardEmoji] = useState('📋');
+  // ── Step 3: workspace — name the user's first AI teammate ─────────────────
+  // The teammate's name/emoji also names the board the wizard creates for them,
+  // which the teammate is later seeded onto (see App.handleOnboardingComplete).
+  const [teammateName, setTeammateName] = useState('');
+  const [teammateEmoji, setTeammateEmoji] = useState('🤖');
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const [boardCreating, setBoardCreating] = useState(false);
   const [boardError, setBoardError] = useState<string | null>(null);
@@ -545,8 +553,8 @@ export function OnboardingWizard({
     setLlmSaving(false);
     setLlmAuthChecking(null);
     setLlmAuthVerified({});
-    setBoardName('');
-    setBoardEmoji('📋');
+    setTeammateName('');
+    setTeammateEmoji('🤖');
     setCreatedBoardId(null);
     setBoardError(null);
     setBoardCreating(false);
@@ -588,11 +596,11 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
-    // Seed board name from user's name — never seed createdBoardId from preferences
+    // Teammate name is personal ("Rusty", "Ada"…) so we leave it empty and let
+    // the placeholder guide the user. Never seed createdBoardId from preferences
     // because the preference may point to a deleted board (stale mainBoardId).
     // hasExistingBoard uses boardById to verify the board actually exists.
-    const firstName = user?.name?.split(' ')[0];
-    setBoardName(firstName ? `${firstName}'s board` : '');
+    setTeammateName('');
     setCreatedBoardId(null);
   }, [open, user]);
 
@@ -689,7 +697,7 @@ export function OnboardingWizard({
         return validateLlmKeyPattern(selectedAgent, apiKey.trim()) === null;
       }
       case 'workspace':
-        return boardName.trim().length > 0;
+        return hasExistingBoard || teammateName.trim().length > 0;
       case 'integrations':
         return true;
       case 'done':
@@ -704,7 +712,8 @@ export function OnboardingWizard({
     llmAuthVerified,
     apiKey,
     authMethod,
-    boardName,
+    hasExistingBoard,
+    teammateName,
   ]);
 
   const disabledReason = useMemo((): string | null => {
@@ -721,7 +730,8 @@ export function OnboardingWizard({
         return err ?? null;
       }
       case 'workspace':
-        return boardName.trim().length === 0 ? 'Enter a board name to continue' : null;
+        if (hasExistingBoard) return null;
+        return teammateName.trim().length === 0 ? 'Name your AI teammate to continue' : null;
       default:
         return null;
     }
@@ -733,7 +743,8 @@ export function OnboardingWizard({
     agentHasKey,
     llmAuthVerified,
     apiKey,
-    boardName,
+    hasExistingBoard,
+    teammateName,
     llmSaving,
     boardCreating,
   ]);
@@ -753,7 +764,7 @@ export function OnboardingWizard({
         return 'Connect →';
       }
       case 'workspace':
-        return hasExistingBoard ? 'Keep going →' : 'Create board →';
+        return hasExistingBoard ? 'Keep going →' : 'Continue →';
       case 'integrations':
         return 'Connect when done →';
       case 'done':
@@ -873,13 +884,13 @@ export function OnboardingWizard({
           goToStep('integrations');
           return;
         }
-        if (!client || !boardName.trim()) return;
+        if (!client || !teammateName.trim()) return;
         setBoardCreating(true);
         setBoardError(null);
         try {
           const board = await client.service('boards').create({
-            name: boardName.trim(),
-            icon: boardEmoji,
+            name: teammateName.trim(),
+            icon: teammateEmoji,
           });
           const newBoardId = board?.board_id ?? null;
           if (!newBoardId) {
@@ -908,6 +919,10 @@ export function OnboardingWizard({
           sessionId: '',
           boardId: boardIdToUse,
           path: 'teammate',
+          // Naming details for the first AI teammate, seeded on completion.
+          teammateName: teammateName.trim() || undefined,
+          teammateEmoji,
+          agent: selectedAgent,
         });
         break;
       }
@@ -926,8 +941,8 @@ export function OnboardingWizard({
     onUpdateUser,
     hasExistingBoard,
     client,
-    boardName,
-    boardEmoji,
+    teammateName,
+    teammateEmoji,
     saveOnboardingProgress,
     createdBoardId,
     existingBoardId,
@@ -1428,9 +1443,10 @@ export function OnboardingWizard({
 
   const renderWorkspace = () => (
     <div>
-      {renderStepBadge('Set up your workspace')}
+      {renderStepBadge('Name your AI teammate')}
       <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 20 }}>
-        Name your board. You can link repos and change everything anytime.
+        Give your AI teammate a name and an avatar. They get their own board to work on - you can
+        change everything anytime.
       </Paragraph>
 
       {/* Concept pills */}
@@ -1490,15 +1506,19 @@ export function OnboardingWizard({
             <Text
               style={{ color: TEXT_SECONDARY, fontSize: 13, display: 'block', marginBottom: 6 }}
             >
-              Board name
+              Teammate name
             </Text>
             <div style={{ display: 'flex', gap: 0 }}>
-              <EmojiPickerInput value={boardEmoji} onChange={setBoardEmoji} defaultEmoji="📋" />
+              <EmojiPickerInput
+                value={teammateEmoji}
+                onChange={setTeammateEmoji}
+                defaultEmoji="🤖"
+              />
               <Input
-                aria-label="Board name"
-                placeholder="e.g. Backend API, Mobile app..."
-                value={boardName}
-                onChange={(e) => setBoardName(e.target.value)}
+                aria-label="Teammate name"
+                placeholder="e.g. Rusty, Ada, Scout…"
+                value={teammateName}
+                onChange={(e) => setTeammateName(e.target.value)}
                 style={{
                   background: 'rgba(0,0,0,0.3)',
                   borderColor: 'rgba(255,255,255,0.12)',

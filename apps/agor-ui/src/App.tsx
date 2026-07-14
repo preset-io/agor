@@ -53,6 +53,7 @@ import {
   useServerVersion,
   useSessionActions,
 } from './hooks';
+import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { agorStore, useAgorStore } from './store/agorStore';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
@@ -68,6 +69,9 @@ import { isMobileDevice } from './utils/deviceDetection';
 import { completeForcedPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
+import { startTeammateBootstrapSession } from './utils/startTeammateBootstrapSession';
+import { buildTeammateBootstrapPrompt } from './utils/teammateBootstrapPrompt';
+import { createTeammateBranch } from './utils/teammateCreation';
 import { getRouterBasename } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
@@ -464,6 +468,21 @@ function AppContent() {
   const [onboardingWizardOpen, setOnboardingWizardOpen] = useState(false);
   const [onboardingWizardInstance, setOnboardingWizardInstance] = useState(0);
 
+  // Auto-clone the AI-teammate framework repo in the background while the user
+  // walks through onboarding, so it's ready to seed the first teammate by the
+  // time they finish. `handleCreateRepo` is defined further down, so we route
+  // the clone through a ref to keep this hook above the early returns.
+  const repoById = useAgorStore((s) => s.repoById);
+  const frameworkRepoList = useMemo(() => Array.from(repoById.values()), [repoById]);
+  const createRepoRef = useRef<((data: CreateRepoRequest) => unknown) | null>(null);
+  const cloneFrameworkRepo = useCallback(
+    (data: CreateRepoRequest) => createRepoRef.current?.(data),
+    []
+  );
+  const { frameworkRepo } = useEnsureFrameworkRepo(frameworkRepoList, cloneFrameworkRepo, {
+    enabled: onboardingWizardOpen,
+  });
+
   // Trigger wizard when user is loaded and hasn't completed onboarding
   useEffect(() => {
     if (
@@ -491,6 +510,9 @@ function AppContent() {
     sessionId: string;
     boardId: string;
     path: 'teammate' | 'own-repo';
+    teammateName?: string;
+    teammateEmoji?: string;
+    agent?: AgenticToolName | null;
   }) => {
     setOnboardingWizardOpen(false);
 
@@ -498,6 +520,8 @@ function AppContent() {
 
     // Silent + fire-and-forget: wizard closing + navigation is the confirmation here.
     // Non-critical — if the preference save fails the wizard just re-opens on next login.
+    // Marked complete up front so a slow/failed teammate bootstrap below never
+    // strands the user back in onboarding.
     handleUpdateUser(
       currentUser.user_id,
       {
@@ -516,11 +540,75 @@ function AppContent() {
       { silent: true }
     ).catch(() => {});
 
+    // Seed the user's first AI teammate on the board they just named. The
+    // framework repo has been cloning in the background since the wizard opened
+    // (useEnsureFrameworkRepo above). This is best-effort: any failure must NOT
+    // block completion — we fall back to opening the board with a non-fatal
+    // warning so the user can always finish and add a teammate later. We reuse
+    // the wizard's board (createTeammateBranch's optional `boardId`) so the user
+    // never ends up with two boards for one teammate.
+    let sessionId = result.sessionId;
+    const teammateName = result.teammateName?.trim();
+    if (teammateName && result.boardId) {
+      if (!frameworkRepo) {
+        showWarning(
+          "Your board is ready, but your AI teammate's workspace is still finishing setup. You can add a teammate from the board in a moment.",
+          { key: 'onboarding-teammate', duration: 8 }
+        );
+      } else {
+        try {
+          const branch = await createTeammateBranch(
+            {
+              displayName: teammateName,
+              emoji: result.teammateEmoji,
+              repoId: frameworkRepo.repo_id,
+              boardId: result.boardId,
+            },
+            {
+              client,
+              repoById: agorStore.getState().repoById,
+              onCreateBranch: handleCreateBranch,
+              onUpdateBranch: (branchId, updates) =>
+                handleUpdateBranch(branchId, updates as BranchUpdate, { silent: true }),
+            }
+          );
+
+          if (branch) {
+            sessionId = await startTeammateBootstrapSession({
+              client,
+              branchId: branch.branch_id,
+              boardId: branch.board_id || result.boardId,
+              sessionConfig: {
+                branch_id: branch.branch_id,
+                agent: result.agent ?? 'claude-code',
+                title: `${result.teammateEmoji ? `${result.teammateEmoji} ` : ''}${teammateName} bootstrap`,
+                initialPrompt: buildTeammateBootstrapPrompt({
+                  displayName: teammateName,
+                  emoji: result.teammateEmoji,
+                  userName: currentUser.name,
+                  userEmail: currentUser.email,
+                  persona: currentUser.preferences?.onboarding?.persona,
+                }),
+              },
+              onCreateSession: handleCreateSession,
+            });
+          }
+        } catch (error) {
+          showWarning(
+            `Your board is ready, but we couldn't start your AI teammate: ${
+              error instanceof Error ? error.message : String(error)
+            }. You can create one from the board anytime.`,
+            { key: 'onboarding-teammate', duration: 8 }
+          );
+        }
+      }
+    }
+
     // Navigate to the user's board + session, or to the boards list if they
     // skipped. Use the centralized path builders — the old
     // `/b/<board>/<session>/` shape was removed when we flattened entity URLs.
-    if (result.sessionId) {
-      navigate(sessionPath(result.sessionId as SessionID));
+    if (sessionId) {
+      navigate(sessionPath(sessionId as SessionID));
     } else if (result.boardId) {
       navigate(
         boardPath(
@@ -1143,6 +1231,10 @@ function AppContent() {
       throw error;
     }
   };
+
+  // Expose the latest handleCreateRepo to the framework-repo auto-clone hook,
+  // which is declared above the early returns (rules of hooks).
+  createRepoRef.current = handleCreateRepo;
 
   const handleCreateLocalRepo = async (data: CreateLocalRepoRequest) => {
     if (!client) {

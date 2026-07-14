@@ -224,7 +224,7 @@ describe('OnboardingWizard', () => {
         })
       );
     });
-    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
   });
 
   it('proceeds to save on an unknown auth result (transient) rather than rejecting the key', async () => {
@@ -246,7 +246,7 @@ describe('OnboardingWizard', () => {
         })
       );
     });
-    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
   });
 
   it('blocks with the provider hint on a definitive unauthenticated result', async () => {
@@ -309,22 +309,23 @@ describe('OnboardingWizard', () => {
 
     clickButton(/^continue/i);
 
-    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
     // Continuing with an already-verified key does not re-save it.
     expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
-  it('workspace step creates a board and saves progress when no board exists yet', async () => {
+  it('workspace step names the teammate, creates their board and saves progress when no board exists yet', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     const { boardsService } = renderWizard({ initialStep: 'workspace', onUpdateUser });
 
-    expect(screen.getByText('Set up your workspace')).toBeInTheDocument();
-    expect(screen.getByDisplayValue("New's board")).toBeInTheDocument();
+    expect(screen.getByText('Name your AI teammate')).toBeInTheDocument();
+    // The teammate name is empty by default — the user names their teammate.
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
 
-    clickButton(/create board/i);
+    clickButton(/^continue →/i);
 
     await waitFor(() => {
-      expect(boardsService.create).toHaveBeenCalledWith({ name: "New's board", icon: '📋' });
+      expect(boardsService.create).toHaveBeenCalledWith({ name: 'Rusty', icon: '🤖' });
     });
     await waitFor(() => {
       expect(onUpdateUser).toHaveBeenCalledWith(
@@ -378,10 +379,11 @@ describe('OnboardingWizard', () => {
       target: { value: validKey },
     });
     clickButton(/^connect →/i);
-    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
 
-    // workspace
-    clickButton(/create board/i);
+    // workspace — name the teammate, which creates their board
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    clickButton(/^continue →/i);
     expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
 
     // integrations
@@ -391,14 +393,19 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
     clickButton(/open my board/i);
 
+    // The wizard emits the teammate naming details + selected agent so the app
+    // shell can seed the first AI teammate on the created board.
     expect(onComplete).toHaveBeenCalledWith({
       branchId: '',
       sessionId: '',
       boardId: 'board-1',
       path: 'teammate',
+      teammateName: 'Rusty',
+      teammateEmoji: '🤖',
+      agent: 'claude-code',
     });
-    // Repo/branch/session provisioning is deferred to normal app flows now —
-    // the wizard itself never invokes these.
+    // The teammate branch/session is created by the app shell on completion, not
+    // by the wizard — the wizard itself never invokes these provisioning props.
     expect(onCreateRepo).not.toHaveBeenCalled();
     expect(onCreateBranch).not.toHaveBeenCalled();
     expect(onCreateSession).not.toHaveBeenCalled();
@@ -414,7 +421,7 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
-    expect(await screen.findByText('Set up your workspace')).toBeInTheDocument();
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your tools via MCP')).toBeInTheDocument();
@@ -425,11 +432,16 @@ describe('OnboardingWizard', () => {
     expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
 
     clickButton(/open my board/i);
+    // Skipping the workspace step leaves the teammate unnamed — no teammateName
+    // is emitted, so the app shell skips teammate creation and just opens the board.
     expect(onComplete).toHaveBeenCalledWith({
       branchId: '',
       sessionId: '',
       boardId: '',
       path: 'teammate',
+      teammateName: undefined,
+      teammateEmoji: '🤖',
+      agent: null,
     });
   });
 
