@@ -80,6 +80,10 @@ interface PendingEnvironmentToast {
   requestedAt: number;
 }
 
+// Stable reference — an inline object here re-processes the modal on every App
+// render (flicker). The onboarding surface is always dark.
+const ONBOARDING_DARK_THEME = { algorithm: theme.darkAlgorithm };
+
 const ENV_ACTION_COPY: Record<EnvironmentAction, { present: string; gerund: string }> = {
   start: { present: 'start', gerund: 'Starting' },
   stop: { present: 'stop', gerund: 'Stopping' },
@@ -1749,7 +1753,7 @@ function AppContent() {
             impersonate), React tears down + remounts the wizard with fresh
             state, eliminating any chance of one user's onboarding progress
             leaking into another user's session. */}
-      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <ConfigProvider theme={ONBOARDING_DARK_THEME}>
         <OnboardingWizard
           key={`${currentUser?.user_id ?? '__anon__'}:${onboardingWizardInstance}`}
           open={onboardingWizardOpen}
