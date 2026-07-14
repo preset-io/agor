@@ -22,10 +22,10 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole, PROVIDER_CREDENTIAL_FIELDS, TaskStatus } from '@agor/core/types';
+import { MessageRole, PROVIDER_CREDENTIAL_FIELDS, PULSE_KIND, TaskStatus } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
-import { type AgenticToolRuntime, PULSE_KIND } from '../../runtime-overseer.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type {
   TasksService,
   TasksStreamingService,

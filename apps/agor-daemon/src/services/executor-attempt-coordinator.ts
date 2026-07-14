@@ -34,16 +34,40 @@ const CLEANUP_MODE = {
   SKIP: 'skip',
   TERMINATE: 'terminate',
 } as const;
-const FINISH_CAUSES = new Set<ExecutorTerminalCause>([
-  EXECUTOR_TERMINAL_CAUSE.EXECUTOR_REPORTED,
-  EXECUTOR_TERMINAL_CAUSE.UNEXPECTED_EXIT,
-  EXECUTOR_TERMINAL_CAUSE.PERMISSION_TIMEOUT,
-]);
-const DIRECT_TERMINATION_CAUSES = new Set<ExecutorTerminalCause>([
-  EXECUTOR_TERMINAL_CAUSE.USER_STOP,
-  EXECUTOR_TERMINAL_CAUSE.DISPATCH_TIMEOUT,
-  EXECUTOR_TERMINAL_CAUSE.HEARTBEAT_LOST,
-]);
+
+interface SettlementPolicy {
+  cleanupMode: (typeof CLEANUP_MODE)[keyof typeof CLEANUP_MODE];
+  terminationReason: ExecutorTerminationReason;
+}
+
+function settlementPolicy(
+  cleanupMode: SettlementPolicy['cleanupMode'],
+  terminationReason: ExecutorTerminationReason = EXECUTOR_TERMINATION_REASONS.RECONCILIATION
+): SettlementPolicy {
+  return { cleanupMode, terminationReason };
+}
+
+/** Every durable terminal cause declares its cleanup policy exactly once. */
+const SETTLEMENT_POLICY_BY_CAUSE: Record<ExecutorTerminalCause, SettlementPolicy> = {
+  [EXECUTOR_TERMINAL_CAUSE.EXECUTOR_REPORTED]: settlementPolicy(CLEANUP_MODE.FINISH),
+  [EXECUTOR_TERMINAL_CAUSE.UNEXPECTED_EXIT]: settlementPolicy(CLEANUP_MODE.FINISH),
+  [EXECUTOR_TERMINAL_CAUSE.USER_STOP]: settlementPolicy(
+    CLEANUP_MODE.TERMINATE,
+    EXECUTOR_TERMINATION_REASONS.USER_STOP
+  ),
+  [EXECUTOR_TERMINAL_CAUSE.DISPATCH_TIMEOUT]: settlementPolicy(
+    CLEANUP_MODE.TERMINATE,
+    EXECUTOR_TERMINATION_REASONS.DISPATCH_TIMEOUT
+  ),
+  [EXECUTOR_TERMINAL_CAUSE.HEARTBEAT_LOST]: settlementPolicy(
+    CLEANUP_MODE.TERMINATE,
+    EXECUTOR_TERMINATION_REASONS.HEARTBEAT_LOST
+  ),
+  [EXECUTOR_TERMINAL_CAUSE.PERMISSION_TIMEOUT]: settlementPolicy(CLEANUP_MODE.FINISH),
+  [EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_ABSENT]: settlementPolicy(CLEANUP_MODE.SKIP),
+  [EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_UNKNOWN]: settlementPolicy(CLEANUP_MODE.TERMINATE),
+  [EXECUTOR_TERMINAL_CAUSE.DAEMON_RESTART]: settlementPolicy(CLEANUP_MODE.TERMINATE),
+};
 
 function terminalCause(task: Task): ExecutorTerminalCause {
   if (task.executor_terminal_cause) return task.executor_terminal_cause;
@@ -56,15 +80,7 @@ function terminalCause(task: Task): ExecutorTerminalCause {
 function settlementPlan(task: Task) {
   const cause = terminalCause(task);
   return {
-    cleanupMode:
-      cause === EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_ABSENT
-        ? CLEANUP_MODE.SKIP
-        : FINISH_CAUSES.has(cause)
-          ? CLEANUP_MODE.FINISH
-          : CLEANUP_MODE.TERMINATE,
-    terminationReason: DIRECT_TERMINATION_CAUSES.has(cause)
-      ? (cause as ExecutorTerminationReason)
-      : EXECUTOR_TERMINATION_REASONS.RECONCILIATION,
+    ...SETTLEMENT_POLICY_BY_CAUSE[cause],
     statePersistenceRequired:
       !!task.executor_connected_at &&
       task.executor_finalization?.state_persistence_requirement ===

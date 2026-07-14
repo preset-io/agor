@@ -7,6 +7,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { EXECUTOR_TERMINATION_REASONS } from '../utils/executor-workload.js';
 import { ExecutorAttemptCoordinator } from './executor-attempt-coordinator.js';
 
 const TASK_ID = '018f0000-0000-7000-8000-000000000601';
@@ -67,12 +68,39 @@ describe('ExecutorAttemptCoordinator', () => {
       expected: 'finish',
     },
     {
+      name: 'unexpected exit',
+      overrides: {
+        status: TaskStatus.FAILED,
+        executor_terminal_cause: EXECUTOR_TERMINAL_CAUSE.UNEXPECTED_EXIT,
+      },
+      expected: 'finish',
+    },
+    {
       name: 'user stop',
       overrides: {
         status: TaskStatus.STOPPED,
         executor_terminal_cause: EXECUTOR_TERMINAL_CAUSE.USER_STOP,
       },
       expected: 'terminate',
+      expectedReason: EXECUTOR_TERMINATION_REASONS.USER_STOP,
+    },
+    {
+      name: 'dispatch timeout',
+      overrides: {
+        status: TaskStatus.FAILED,
+        executor_terminal_cause: EXECUTOR_TERMINAL_CAUSE.DISPATCH_TIMEOUT,
+      },
+      expected: 'terminate',
+      expectedReason: EXECUTOR_TERMINATION_REASONS.DISPATCH_TIMEOUT,
+    },
+    {
+      name: 'heartbeat loss',
+      overrides: {
+        status: TaskStatus.FAILED,
+        executor_terminal_cause: EXECUTOR_TERMINAL_CAUSE.HEARTBEAT_LOST,
+      },
+      expected: 'terminate',
+      expectedReason: EXECUTOR_TERMINATION_REASONS.HEARTBEAT_LOST,
     },
     {
       name: 'permission timeout',
@@ -90,7 +118,25 @@ describe('ExecutorAttemptCoordinator', () => {
       },
       expected: 'skip',
     },
-  ])('applies state-driven cleanup for $name', async ({ overrides, expected }) => {
+    {
+      name: 'unknown launch failure',
+      overrides: {
+        status: TaskStatus.FAILED,
+        executor_terminal_cause: EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_UNKNOWN,
+      },
+      expected: 'terminate',
+      expectedReason: EXECUTOR_TERMINATION_REASONS.RECONCILIATION,
+    },
+    {
+      name: 'daemon restart',
+      overrides: {
+        status: TaskStatus.STOPPED,
+        executor_terminal_cause: EXECUTOR_TERMINAL_CAUSE.DAEMON_RESTART,
+      },
+      expected: 'terminate',
+      expectedReason: EXECUTOR_TERMINATION_REASONS.RECONCILIATION,
+    },
+  ])('applies state-driven cleanup for $name', async ({ overrides, expected, expectedReason }) => {
     const { app, tasks } = makeHarness(overrides as Partial<Task>);
     const finishAttempt = vi.fn(async () => EXECUTOR_CLEANUP_STATUS.VERIFIED);
     const terminateAttempt = vi.fn(async () => EXECUTOR_CLEANUP_STATUS.VERIFIED);
@@ -106,6 +152,9 @@ describe('ExecutorAttemptCoordinator', () => {
 
     expect(finishAttempt).toHaveBeenCalledTimes(expected === 'finish' ? 1 : 0);
     expect(terminateAttempt).toHaveBeenCalledTimes(expected === 'terminate' ? 1 : 0);
+    if (expectedReason) {
+      expect(terminateAttempt).toHaveBeenCalledWith(SESSION_ID, ATTEMPT_ID, expectedReason);
+    }
     expect(recoverAttempt).not.toHaveBeenCalled();
     expect(evidenceFrom(tasks)).toMatchObject({
       cleanup_status: EXECUTOR_CLEANUP_STATUS.VERIFIED,

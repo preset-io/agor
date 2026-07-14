@@ -2,24 +2,13 @@
  * Helpers for finding "active" tasks for a session — DISPATCHING / RUNNING / STOPPING /
  * AWAITING_PERMISSION / AWAITING_INPUT — sorted by recency.
  *
- * Background: `TasksService.find()` short-circuits on `session_id: string`
- * (see `services/tasks.ts:65-110`) and returns ALL session tasks in
- * `created_at` ASC, ignoring any `status` filter or `$sort` passed in the
- * same query. So callers can't write `{ session_id, status: RUNNING }`
- * and trust the result. We instead fetch the full session task list once
- * and filter/sort in process.
- *
- * Without this helper, multiple sites (widget MCP tool, stop route,
- * potentially more) end up with parallel hand-rolled workarounds that
- * drift. Keep this as the single source.
+ * Centralizes the session query and recency ordering shared by Stop and widget
+ * hosting so those callers do not rebuild subtly different task selection.
  */
 
 import type { Application } from '@agor/core/feathers';
 import type { Paginated, Params, SessionID, Task } from '@agor/core/types';
 import { EXECUTING_TASK_STATUSES, isTaskExecuting } from '@agor/core/types';
-
-/** Statuses considered "active" — an executor may still be doing work. */
-export const ACTIVE_TASK_STATUSES = EXECUTING_TASK_STATUSES;
 
 function recencyKey(t: Task): number {
   return new Date(t.started_at || t.created_at).getTime();
@@ -29,7 +18,7 @@ function recencyKey(t: Task): number {
  * All tasks for the session, returned in recency-DESC order (most recently
  * started/created first). Useful when callers want a fallback path.
  */
-export async function findTasksForSession(
+async function findTasksForSession(
   app: Application,
   sessionId: SessionID,
   params?: Params,
@@ -59,7 +48,7 @@ export async function findActiveTasksForSession(
   sessionId: SessionID,
   params?: Params
 ): Promise<Task[]> {
-  return findTasksForSession(app, sessionId, params, ACTIVE_TASK_STATUSES);
+  return findTasksForSession(app, sessionId, params, EXECUTING_TASK_STATUSES);
 }
 
 /**

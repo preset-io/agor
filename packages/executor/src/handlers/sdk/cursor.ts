@@ -21,11 +21,11 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole, TaskStatus } from '@agor/core/types';
+import { MessageRole, PULSE_KIND, TaskStatus } from '@agor/core/types';
 import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
-import { type AgenticToolRuntime, PULSE_KIND } from '../../runtime-overseer.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import type { AgorClient } from '../../services/feathers-client.js';

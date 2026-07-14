@@ -131,23 +131,25 @@ export interface ContextUsageSnapshot {
   percentage: number;
 }
 
-export const PULSE_KINDS = [
-  'executor.connected',
-  'sdk.started',
-  'sdk.first_event',
-  'sdk.progress',
-  'sdk.unknown',
-  'assistant.message',
-  'assistant.stream',
-  'thinking.progress',
-  'tool.started',
-  'tool.progress',
-  'tool.finished',
-  'permission.wait_started',
-  'permission.wait_ended',
-] as const;
+export const PULSE_KIND = {
+  EXECUTOR_CONNECTED: 'executor.connected',
+  SDK_STARTED: 'sdk.started',
+  SDK_FIRST_EVENT: 'sdk.first_event',
+  SDK_PROGRESS: 'sdk.progress',
+  SDK_UNKNOWN: 'sdk.unknown',
+  ASSISTANT_MESSAGE: 'assistant.message',
+  ASSISTANT_STREAM: 'assistant.stream',
+  THINKING_PROGRESS: 'thinking.progress',
+  TOOL_STARTED: 'tool.started',
+  TOOL_PROGRESS: 'tool.progress',
+  TOOL_FINISHED: 'tool.finished',
+  PERMISSION_WAIT_STARTED: 'permission.wait_started',
+  PERMISSION_WAIT_ENDED: 'permission.wait_ended',
+} as const;
 
-export type PulseKind = (typeof PULSE_KINDS)[number];
+export type PulseKind = (typeof PULSE_KIND)[keyof typeof PULSE_KIND];
+
+export const PULSE_KINDS: readonly PulseKind[] = Object.values(PULSE_KIND);
 
 export interface Pulse {
   kind: PulseKind;
@@ -176,7 +178,7 @@ export function sanitizePulse(value: unknown): Pulse | undefined {
   const kind =
     candidateKind && VALID_PULSE_KINDS.has(candidateKind)
       ? (candidateKind as PulseKind)
-      : 'sdk.unknown';
+      : PULSE_KIND.SDK_UNKNOWN;
   const id = trimPulseString(pulse.id, MAX_PULSE_ID_LENGTH);
   const label = trimPulseString(pulse.label, MAX_PULSE_LABEL_LENGTH);
 
@@ -189,7 +191,7 @@ export function sanitizePulse(value: unknown): Pulse | undefined {
 
 /** Keep generic SDK chatter from replacing semantic assistant/tool progress. */
 export function isMeaningfulPulse(pulse: Pulse): boolean {
-  return pulse.kind !== 'sdk.unknown' && pulse.kind !== 'sdk.progress';
+  return pulse.kind !== PULSE_KIND.SDK_UNKNOWN && pulse.kind !== PULSE_KIND.SDK_PROGRESS;
 }
 
 function trimPulseString(value: unknown, maxLength: number): string | undefined {

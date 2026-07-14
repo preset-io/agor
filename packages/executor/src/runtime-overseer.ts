@@ -2,7 +2,7 @@ import { EXECUTOR_HEARTBEAT_DEFAULT_INTERVAL_MS } from '@agor/core/config';
 import {
   type ExecutorTelemetryReport,
   isMeaningfulPulse,
-  PULSE_KINDS,
+  PULSE_KIND,
   type Pulse,
   sanitizePulse,
   type TaskID,
@@ -11,24 +11,6 @@ import type { AgorClient } from './services/feathers-client.js';
 
 const DEFAULT_FLUSH_TIMEOUT_MS = 3_000;
 const TERMINAL_LEASE_ERROR_CODES = new Set([401, 403, 409]);
-
-/** Named view over the canonical ordered pulse contract exported by core. */
-export const PULSE_KIND = {
-  EXECUTOR_CONNECTED: PULSE_KINDS[0],
-  SDK_STARTED: PULSE_KINDS[1],
-  SDK_FIRST_EVENT: PULSE_KINDS[2],
-  SDK_PROGRESS: PULSE_KINDS[3],
-  ASSISTANT_MESSAGE: PULSE_KINDS[5],
-  ASSISTANT_STREAM: PULSE_KINDS[6],
-  THINKING_PROGRESS: PULSE_KINDS[7],
-  TOOL_STARTED: PULSE_KINDS[8],
-  TOOL_PROGRESS: PULSE_KINDS[9],
-  TOOL_FINISHED: PULSE_KINDS[10],
-  PERMISSION_WAIT_STARTED: PULSE_KINDS[11],
-  PERMISSION_WAIT_ENDED: PULSE_KINDS[12],
-} as const;
-
-export { sanitizePulse } from '@agor/core/types';
 
 export interface AgenticToolRuntime {
   pulse(pulse: Pulse): void;

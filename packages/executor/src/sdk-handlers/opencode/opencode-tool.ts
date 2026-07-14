@@ -18,7 +18,7 @@ import { generateId, shortId } from '@agor/core';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, PULSE_KIND } from '@agor/core/types';
 import type { Part as OpenCodePart } from '@opencode-ai/sdk';
 import { createOpencodeClient } from '@opencode-ai/sdk';
 import { getDaemonUrl } from '../../config.js';
@@ -27,7 +27,7 @@ import type {
   MCPServerRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
-import { type AgenticToolRuntime, PULSE_KIND } from '../../runtime-overseer.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {

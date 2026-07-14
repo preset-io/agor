@@ -14,7 +14,8 @@
  * This mapper wires the relevant events to StreamingCallbacks for real-time UI updates.
  */
 
-import { type AgenticToolRuntime, PULSE_KIND } from '../../runtime-overseer.js';
+import { PULSE_KIND } from '@agor/core/types';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { MessageID, SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { StreamingCallbacks } from '../base/index.js';

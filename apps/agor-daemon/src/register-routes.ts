@@ -68,6 +68,7 @@ import {
   MessageRole,
   ROLES,
   SessionStatus,
+  sessionCanStartTask,
   TaskStatus,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
@@ -139,7 +140,6 @@ import {
   runWithSessionQueueTenantScope,
 } from './utils/session-queue-tenant-scope.js';
 import { stopSessionPreserveQueue } from './utils/session-stop.js';
-import { sessionCanStartTask } from './utils/session-task-state.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';

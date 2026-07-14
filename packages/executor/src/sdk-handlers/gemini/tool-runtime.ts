@@ -1,4 +1,5 @@
-import { type AgenticToolRuntime, PULSE_KIND } from '../../runtime-overseer.js';
+import { PULSE_KIND } from '@agor/core/types';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 
 interface GeminiToolRequest {
   callId: string;

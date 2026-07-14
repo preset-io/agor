@@ -33,7 +33,7 @@ import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { CodexSandboxMode, ContextUsageSnapshot, EffortLevel } from '@agor/core/types';
-import { isGatewaySession } from '@agor/core/types';
+import { isGatewaySession, PULSE_KIND } from '@agor/core/types';
 import { getDefaultCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -46,7 +46,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
-import { type AgenticToolRuntime, PULSE_KIND } from '../../runtime-overseer.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';

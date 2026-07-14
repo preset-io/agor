@@ -11,9 +11,8 @@
 
 import { generateId, shortId } from '@agor/core';
 import type { MessageID } from '@agor/core/types';
-import { MessageRole, TaskStatus } from '@agor/core/types';
+import { MessageRole, PULSE_KIND, TaskStatus } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
-import { PULSE_KIND } from '../../runtime-overseer.js';
 import { OpenCodeTool } from '../../sdk-handlers/opencode/index.js';
 import {
   commitExecutorTerminalOutcome,

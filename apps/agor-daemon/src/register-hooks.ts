@@ -71,6 +71,7 @@ import {
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
   ROLES,
+  sessionCanStartTask,
   TaskStatus,
 } from '@agor/core/types';
 import {
@@ -147,7 +148,6 @@ import {
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
 import { deferWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
-import { sessionCanStartTask } from './utils/session-task-state.js';
 import {
   createServiceToken,
   getDaemonUrl,
