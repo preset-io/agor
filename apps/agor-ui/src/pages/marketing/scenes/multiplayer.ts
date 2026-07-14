@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: demo-only marketing fixture palette
 // Scene — "multiplayer" (8s, loop-perfect showcase cut).
 // ONE collaborative story told in a single session, using the board + staged
 // session-panel composition (DemoSessionStage's 'collab' variant):

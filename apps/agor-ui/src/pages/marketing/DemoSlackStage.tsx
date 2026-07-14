@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: demo-only marketing fixture palette
 // Hand-rolled Slack-style chat stage for the "gateway" showcase scene.
 //
 // Deliberately NOT a pixel clone and NOT a third-party embed — just enough

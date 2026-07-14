@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: demo-only marketing fixture palette
 import type {
   ActiveUser,
   Board,

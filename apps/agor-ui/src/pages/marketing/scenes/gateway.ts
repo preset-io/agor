@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: demo-only marketing fixture palette
 // Scene — "gateway" (8s, loop-perfect).
 // Split-screen message-gateway story: the LEFT half is a hand-rolled
 // Slack-style channel panel (DemoSlackStage — aubergine sidebar, #eng-support

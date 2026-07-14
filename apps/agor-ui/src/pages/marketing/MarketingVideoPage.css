@@ -1,3 +1,5 @@
+/* biome-ignore-all lint/plugin/noHardcodedCssColor: demo-only marketing video fixture palette */
+/* biome-ignore-all lint/plugin/noFirstPartyCss: demo-only video capture overrides require page and third-party selectors */
 .marketing-video-page {
   min-height: 100vh;
   overflow: hidden;

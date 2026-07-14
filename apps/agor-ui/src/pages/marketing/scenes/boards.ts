@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: demo-only marketing fixture palette
 // Scene — "boards" (8s, loop-perfect).
 // The cinematic camera piece over the launch-board fixtures, with every
 // cursor doing something PURPOSEFUL where the camera is looking:

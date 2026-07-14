@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: demo-only marketing fixture palette
 // Staged session panel for the demo-video "session" scene.
 //
 // Everything visible is a REAL product component — TaskBlock (→ MessageBlock /

@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: demo-only marketing fixture palette
 // Demo-video staging route (/demo/marketing-video?scene=multiplayer|artifact|settings).
 // Fork of MarketingScreenshotPage where ALL motion — cursors, card drags,
 // typed text, viewport, overlays — is a pure function of a virtual clock `t`.
