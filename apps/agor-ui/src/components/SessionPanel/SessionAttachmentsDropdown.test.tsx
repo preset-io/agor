@@ -128,6 +128,30 @@ describe('SessionAttachmentsDropdown', () => {
     expect(screen.getByRole('radio', { name: 'Issues/PRs 0' })).toBeInTheDocument();
   });
 
+  it('places the add-link action beside the drawer category filters', async () => {
+    render(
+      <MemoryRouter>
+        <SessionAttachmentsDropdown items={[]} onCreateLink={vi.fn(async () => true)} />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open links organizer' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage links' }));
+
+    const categoryFilters = await screen.findByRole('radiogroup', {
+      name: 'segmented control',
+    });
+    const addLinkButton = screen.getByRole('button', { name: LINK_ACTION_LABEL.add });
+    const categoryRow = categoryFilters.parentElement?.parentElement;
+
+    expect(categoryRow).toContainElement(addLinkButton);
+
+    fireEvent.click(addLinkButton);
+    expect(
+      await screen.findByPlaceholderText('https://example.com or agor://kb/team/document.md')
+    ).toBeInTheDocument();
+  });
+
   it('keeps the action menu visible and promotes uploaded files', async () => {
     const onPlacementAction = vi.fn();
     const item = {

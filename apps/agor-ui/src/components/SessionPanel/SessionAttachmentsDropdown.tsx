@@ -252,13 +252,6 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
         rootClassName={linkStyles.linkManagerDrawer}
         size={720}
         onClose={() => setDrawerOpen(false)}
-        extra={
-          onCreateLink ? (
-            <Button type="primary" icon={<PlusOutlined />} onClick={openAddLink}>
-              {LINK_ACTION_LABEL.add}
-            </Button>
-          ) : undefined
-        }
       >
         <div data-testid="links-organizer-manage" className={linkStyles.linkManagerBody}>
           <Flex vertical gap={token.sizeMD} className={linkStyles.linkManagerStack}>
@@ -270,6 +263,15 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
               onSearchChange={setSearchQuery}
               sortOrder={sortOrder}
               onSortChange={setSortOrder}
+              categoryAction={
+                onCreateLink
+                  ? {
+                      label: LINK_ACTION_LABEL.add,
+                      icon: <PlusOutlined />,
+                      onClick: openAddLink,
+                    }
+                  : undefined
+              }
             />
             {drawerItems.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links in this view." />
