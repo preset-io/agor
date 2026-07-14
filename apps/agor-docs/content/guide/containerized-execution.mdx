@@ -407,9 +407,10 @@ command should be idempotent and return successfully only after it has verified 
 the workload is gone. If the command fails or times out, Agor keeps the session fenced
 and does not drain its queue.
 
-For local executors, restart recovery verifies the inherited attempt marker through
-`/proc` on Linux. Other platforms remain fenced after an unclean daemon restart because
-Agor cannot prove that the previous process tree is gone safely.
+For local executors running as the daemon user, restart recovery verifies the inherited
+attempt marker through `/proc` on Linux. Other platforms and impersonated local workloads
+remain fenced after an unclean daemon restart because Agor cannot prove that the previous
+process tree is gone safely.
 
 The daemon also fences launches that never connect. The default deadline is two
 minutes and can be adjusted independently of heartbeat monitoring:

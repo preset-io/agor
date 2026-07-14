@@ -212,9 +212,10 @@ async function waitForProcessesToExit(
 
 async function collectOwnedPids(
   rootPid: number,
-  attemptId: string | undefined
+  attemptId: string | undefined,
+  includeRoot: boolean
 ): Promise<Set<number>> {
-  const ownedPids = new Set<number>([rootPid]);
+  const ownedPids = new Set<number>(includeRoot ? [rootPid] : []);
   const [descendants, groupMembers, marked] = await Promise.all([
     listDescendantPids(rootPid).catch(() => []),
     listProcessGroupPids(rootPid).catch(() => []),
@@ -254,14 +255,17 @@ async function terminateOwnedPids(
 async function terminateLocalWorkload(
   pid: number,
   attemptId: string | undefined,
-  gracePeriodMs: number
+  gracePeriodMs: number,
+  includeRoot = true
 ): Promise<void> {
-  let ownedPids = new Set([pid]);
+  let ownedPids = new Set(includeRoot ? [pid] : []);
   try {
-    ownedPids = await collectOwnedPids(pid, attemptId);
+    ownedPids = await collectOwnedPids(pid, attemptId, includeRoot);
   } catch (error) {
     console.warn('[executor-workload] Failed to inspect executor workload:', error);
   }
+
+  if (ownedPids.size === 0) return;
 
   await terminateOwnedPids(pid, ownedPids, gracePeriodMs, async () => {
     // Capture children created during graceful shutdown. The marker scan also
@@ -274,33 +278,16 @@ async function terminateLocalWorkload(
   });
 }
 
-/** Clean children that outlived a normally completed executor. */
-async function finishLocalWorkload(
-  pid: number,
-  attemptId: string | undefined,
-  gracePeriodMs: number
-): Promise<void> {
-  const [groupMembers, markedPids] = await Promise.all([
-    listProcessGroupPids(pid).catch(() => []),
-    listMarkedAttemptPids(attemptId).catch(() => []),
-  ]);
-  const ownedPids = new Set([...groupMembers, ...markedPids]);
-  ownedPids.delete(pid);
-  if (ownedPids.size === 0) return;
-
-  // The original process group may still contain ordinary children after its
-  // leader exits. Linux ownership markers also recover children that called
-  // setsid() and were reparented before task completion.
-  await terminateOwnedPids(pid, ownedPids, gracePeriodMs);
-}
-
 export function createExecutorWorkloadHandle(
-  child: Pick<ChildProcess, 'pid'>,
+  child: Pick<ChildProcess, 'pid'> & Partial<Pick<ChildProcess, 'exitCode' | 'signalCode'>>,
   options: ExecutorWorkloadOptions = {}
 ): ExecutorWorkloadHandle | null {
   if (!child.pid) return null;
 
   const pid = child.pid;
+  const hasExited = () =>
+    (child.exitCode !== undefined && child.exitCode !== null) ||
+    (child.signalCode !== undefined && child.signalCode !== null);
   const gracePeriodMs = options.gracePeriodMs ?? DEFAULT_TERMINATION_GRACE_PERIOD_MS;
   let cleanup: Promise<void> | undefined;
   const runOnce = (work: () => Promise<void>): Promise<void> => {
@@ -324,7 +311,7 @@ export function createExecutorWorkloadHandle(
     finish() {
       return runOnce(() =>
         runCleanup(
-          () => finishLocalWorkload(pid, options.attemptId, gracePeriodMs),
+          () => terminateLocalWorkload(pid, options.attemptId, gracePeriodMs, !hasExited()),
           EXECUTOR_TERMINATION_REASONS.RECONCILIATION
         )
       );

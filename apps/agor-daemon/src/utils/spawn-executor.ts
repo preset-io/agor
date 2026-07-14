@@ -988,10 +988,17 @@ export interface RecoverExecutorAttemptOptions {
 export async function recoverConfiguredExecutorAttempt(
   options: RecoverExecutorAttemptOptions
 ): Promise<boolean> {
-  const localCleanupVerified = await terminateMarkedExecutorAttempt(options.executorAttemptId);
   const templatedWorkload = options.workload
     ? options.workload.kind === EXECUTOR_WORKLOAD_KIND.TEMPLATED
     : configuredExecutorDefaults.executorCommandTemplate !== undefined;
+  // A daemon running under a different Unix identity cannot prove absence by
+  // scanning the executor user's /proc entries. The tracked workload handle
+  // may still clean it through sudo's live process tree, but restart/fallback
+  // recovery must remain fenced instead of treating unreadable markers as gone.
+  const localCleanupVerified =
+    !templatedWorkload && options.workload?.unix_user
+      ? false
+      : await terminateMarkedExecutorAttempt(options.executorAttemptId);
   if (!templatedWorkload) {
     return localCleanupVerified;
   }

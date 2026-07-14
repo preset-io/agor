@@ -55,6 +55,23 @@ describe('executor workload', () => {
     }
   });
 
+  it('does not verify finish while the executor root is still alive', async () => {
+    if (process.platform === 'win32') return;
+
+    const launcher = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    const workload = createExecutorWorkloadHandle(launcher, { gracePeriodMs: 100 })!;
+
+    try {
+      await workload.finish();
+      expect(processExists(launcher.pid!)).toBe(false);
+    } finally {
+      if (launcher.pid && processExists(launcher.pid)) process.kill(-launcher.pid, 'SIGKILL');
+    }
+  });
+
   it('force-kills a TERM-resistant descendant that created its own process group', async () => {
     if (process.platform === 'win32') return;
 

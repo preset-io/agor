@@ -180,6 +180,21 @@ describe('configured executor spawning', () => {
     expect(runStopCommandMock).not.toHaveBeenCalled();
   });
 
+  it('keeps untracked impersonated local workloads fenced', async () => {
+    const { recoverConfiguredExecutorAttempt } = await import('./spawn-executor');
+
+    await expect(
+      recoverConfiguredExecutorAttempt({
+        executorAttemptId: 'attempt-3',
+        reason: 'reconciliation',
+        templateVariables: { task_id: 'task-3', unix_user: 'executor-user' },
+        workload: { kind: EXECUTOR_WORKLOAD_KIND.LOCAL, unix_user: 'executor-user' },
+      })
+    ).resolves.toBe(false);
+
+    expect(terminateMarkedMock).not.toHaveBeenCalled();
+  });
+
   it('lets explicit spawn options override configured defaults', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
