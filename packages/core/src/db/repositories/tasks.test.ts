@@ -1587,12 +1587,7 @@ describe('TaskRepository.createPending', () => {
       // createQueued TOCTOU race that existed before the read-then-insert was
       // wrapped in a transaction.
       //
-      // libsql serializes concurrent write transactions, so under contention
-      // some inserts may surface SQLITE_BUSY. Either outcome (success with
-      // unique position OR transient BUSY) is correct — what we forbid is
-      // *committed* duplicates. Successful rows must therefore have distinct,
-      // monotonically-increasing positions starting at 1.
-      const settled = await Promise.allSettled([
+      const queued = await Promise.all([
         taskRepo.createPending(
           createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
         ),
@@ -1604,16 +1599,7 @@ describe('TaskRepository.createPending', () => {
         ),
       ]);
 
-      const successes = settled
-        .filter((r): r is PromiseFulfilledResult<Task> => r.status === 'fulfilled')
-        .map((r) => r.value);
-
-      expect(successes.length).toBeGreaterThan(0);
-
-      const positions = successes.map((t) => t.queue_position).sort();
-      const unique = new Set(positions);
-      expect(unique.size).toBe(positions.length); // no duplicates
-      expect(positions[0]).toBe(1); // numbering starts at 1
+      expect(queued.map((task) => task.queue_position).sort()).toEqual([1, 2, 3]);
     }
   );
 });

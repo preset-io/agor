@@ -79,6 +79,19 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     await lockRowForUpdate(txDb, this.db, tasks, eq(tasks.task_id, taskId));
   }
 
+  /** Serialize queue-position allocation for one session across both dialects. */
+  private async lockSessionQueue(txDb: Database, sessionId: string): Promise<void> {
+    if (isSQLiteDatabase(this.db)) {
+      await update(txDb, sessions)
+        .set({ status: sql`${sessions.status}` })
+        .where(eq(sessions.session_id, sessionId))
+        .run();
+      return;
+    }
+
+    await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, sessionId));
+  }
+
   /** Retry an entire SQLite mutation so a contending writer re-reads fresh state. */
   private async runTaskMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
     try {
@@ -771,27 +784,33 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     // callers can't both observe the same `max(queue_position)` and produce
     // duplicate positions. Two prompts arriving in the same tick now order
     // deterministically instead of racing.
-    return this.runTaskTransaction(async (txDb) => {
-      const positionRow = await select(txDb, {
-        maxPos: sql<number | null>`max(${tasks.queue_position})`,
+    return this.runTaskMutation(() =>
+      this.runTaskTransaction(async (txDb) => {
+        await this.lockSessionQueue(txDb, input.session_id);
+        const positionRow = await select(txDb, {
+          maxPos: sql<number | null>`max(${tasks.queue_position})`,
+        })
+          .from(tasks)
+          .where(and(eq(tasks.session_id, input.session_id), eq(tasks.status, TaskStatus.QUEUED)))
+          .one();
+
+        const nextPosition = (positionRow?.maxPos ?? 0) + 1;
+        const insertData = this.taskToInsert({
+          ...taskBase,
+          queue_position: nextPosition,
+        });
+        await insert(txDb, tasks).values(insertData).run();
+
+        const row = await select(txDb)
+          .from(tasks)
+          .where(eq(tasks.task_id, insertData.task_id))
+          .one();
+        if (!row) {
+          throw new RepositoryError('Failed to retrieve created queued task');
+        }
+        return this.rowToTask(row);
       })
-        .from(tasks)
-        .where(and(eq(tasks.session_id, input.session_id), eq(tasks.status, TaskStatus.QUEUED)))
-        .one();
-
-      const nextPosition = (positionRow?.maxPos ?? 0) + 1;
-      const insertData = this.taskToInsert({
-        ...taskBase,
-        queue_position: nextPosition,
-      });
-      await insert(txDb, tasks).values(insertData).run();
-
-      const row = await select(txDb).from(tasks).where(eq(tasks.task_id, insertData.task_id)).one();
-      if (!row) {
-        throw new RepositoryError('Failed to retrieve created queued task');
-      }
-      return this.rowToTask(row);
-    });
+    );
   }
 
   /**
