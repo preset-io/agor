@@ -57,7 +57,7 @@ export const DOMAIN_DESCRIPTIONS: Record<string, string> = {
   widgets:
     'In-conversation interactive widgets — agents render small forms/buttons inline in the transcript to capture user input that never enters the LLM context',
   knowledge: 'DB-backed markdown knowledge documents, version history, search, and graph links',
-  links: 'Session and branch links, labels, pin state, ownership moves, and compatibility saves',
+  links: 'Session and branch links, labels, pin state, and additive promotion',
   schedules: 'Cron-based branch schedules that create sessions from prompt templates',
 };
 

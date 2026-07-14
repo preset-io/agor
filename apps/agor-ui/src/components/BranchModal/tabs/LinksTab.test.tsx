@@ -1,5 +1,5 @@
-import type { AgorClient, Board, Branch, Link, LinkMoveResult, Session } from '@agor-live/client';
-import { LINK_MOVE_TARGET } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Link, Session } from '@agor-live/client';
+import { LINK_PROMOTION_TARGET } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
@@ -45,9 +45,8 @@ function seedStore(branchLinks: Link[], teammateLinks: Link[] = []) {
 function makeClient(args: {
   branchLinks: Link[];
   teammateLinks: Link[];
-  moved: Link;
+  promoted: Link;
   materialized?: Link;
-  moveResult?: LinkMoveResult;
 }) {
   const calls: Array<{ service: string; method: string; args: unknown[] }> = [];
   const client = {
@@ -61,16 +60,7 @@ function makeClient(args: {
         async create(body: unknown) {
           calls.push({ service: path, method: 'create', args: [body] });
           if (path === 'links' && args.materialized) return args.materialized;
-          if (path.endsWith('/move')) {
-            return (
-              args.moveResult ?? {
-                link: args.moved,
-                previous_link: args.branchLinks[0] ?? args.materialized,
-                merged: false,
-              }
-            );
-          }
-          return args.moved;
+          return args.promoted;
         },
         async patch(id: string, body: Record<string, unknown>) {
           calls.push({ service: path, method: 'patch', args: [id, body] });
@@ -81,7 +71,7 @@ function makeClient(args: {
         },
         async remove(id: string) {
           calls.push({ service: path, method: 'remove', args: [id] });
-          return args.moved;
+          return args.promoted;
         },
       };
     },
@@ -99,38 +89,39 @@ function renderLinksTab(client: AgorClient, targetBranch: Branch = branch) {
   );
 }
 
-describe('LinksTab move actions', () => {
+describe('LinksTab promotion actions', () => {
   beforeEach(() => {
     agorStore.setState({ ...EMPTY_MAPS });
   });
 
-  it('hydrates branch links, then moves a branch link to the teammate', async () => {
+  it('hydrates branch links, then promotes a branch link to the teammate', async () => {
     const source = makeLink();
-    const moved = makeLink({
+    const promoted = makeLink({
+      link_id: 'teammate-link' as Link['link_id'],
       branch_id: 'teammate-1' as Link['branch_id'],
       is_pinned: true,
       revision: (source.revision ?? 1) + 1,
     });
     seedStore([source]);
-    const { client, calls } = makeClient({ branchLinks: [source], teammateLinks: [], moved });
+    const { client, calls } = makeClient({ branchLinks: [source], teammateLinks: [], promoted });
 
     renderLinksTab(client);
 
     await screen.findByText('Runbook');
 
     fireEvent.click(screen.getByLabelText('Actions for Runbook'));
-    fireEvent.click(await screen.findByText('Move to teammate'));
+    fireEvent.click(await screen.findByText('Promote to teammate'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
-        service: 'links/link-1/move',
+        service: 'links/link-1/promote',
         method: 'create',
-        args: [{ target: LINK_MOVE_TARGET.branch, branch_id: 'teammate-1' }],
+        args: [{ target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: 'teammate-1' }],
       });
     });
-    expect(agorStore.getState().linksByBranch.get(branch.branch_id)).toBeUndefined();
-    expect(agorStore.getState().linkById.get(source.link_id)).toEqual(moved);
-    expect(agorStore.getState().linksByBranch.get('teammate-1')).toEqual([moved]);
+    expect(agorStore.getState().linksByBranch.get(branch.branch_id)).toEqual([source]);
+    expect(agorStore.getState().linkById.get(source.link_id)).toEqual(source);
+    expect(agorStore.getState().linksByBranch.get('teammate-1')).toEqual([promoted]);
   });
 
   it('adds a newly materialized branch pin to the store immediately', async () => {
@@ -150,7 +141,7 @@ describe('LinksTab move actions', () => {
     const { client, calls } = makeClient({
       branchLinks: [],
       teammateLinks: [],
-      moved: pinnedIssue,
+      promoted: pinnedIssue,
     });
 
     renderLinksTab(client, branchWithIssue);
@@ -173,7 +164,7 @@ describe('LinksTab move actions', () => {
     ).toBe(true);
   });
 
-  it('materializes generated branch metadata before moving it to a teammate', async () => {
+  it('materializes generated branch metadata before promoting it to a teammate', async () => {
     const branchWithIssue = {
       ...branch,
       issue_url: 'https://github.com/preset-io/agor/issues/154',
@@ -184,8 +175,9 @@ describe('LinksTab move actions', () => {
       url: branchWithIssue.issue_url,
       target_key: 'url:https://github.com/preset-io/agor/issues/154',
     });
-    const moved = makeLink({
+    const promoted = makeLink({
       ...materialized,
+      link_id: 'teammate-issue' as Link['link_id'],
       branch_id: 'teammate-1' as Link['branch_id'],
       session_id: null,
       revision: (materialized.revision ?? 1) + 1,
@@ -195,13 +187,13 @@ describe('LinksTab move actions', () => {
       branchLinks: [],
       teammateLinks: [],
       materialized,
-      moved,
+      promoted,
     });
 
     renderLinksTab(client, branchWithIssue);
 
     fireEvent.click(await screen.findByLabelText('Actions for Issue: preset-io/agor#154'));
-    fireEvent.click(await screen.findByText('Move to teammate'));
+    fireEvent.click(await screen.findByText('Promote to teammate'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
@@ -210,14 +202,14 @@ describe('LinksTab move actions', () => {
         args: [expect.objectContaining({ url: branchWithIssue.issue_url, is_pinned: false })],
       });
       expect(calls).toContainEqual({
-        service: 'links/issue-source/move',
+        service: 'links/issue-source/promote',
         method: 'create',
-        args: [{ target: LINK_MOVE_TARGET.branch, branch_id: 'teammate-1' }],
+        args: [{ target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: 'teammate-1' }],
       });
     });
   });
 
-  it('coalesces a move into an existing teammate destination', async () => {
+  it('reuses an existing teammate promotion destination without removing the source', async () => {
     const source = makeLink();
     const destination = makeLink({
       link_id: 'teammate-link' as Link['link_id'],
@@ -228,24 +220,23 @@ describe('LinksTab move actions', () => {
     const { client, calls } = makeClient({
       branchLinks: [source],
       teammateLinks: [destination],
-      moved: destination,
-      moveResult: { link: destination, previous_link: source, merged: true },
+      promoted: destination,
     });
 
     renderLinksTab(client);
 
     await screen.findByText('Runbook');
     fireEvent.click(screen.getByLabelText('Actions for Runbook'));
-    fireEvent.click(await screen.findByText('Move to teammate'));
+    fireEvent.click(await screen.findByText('Promote to teammate'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
-        service: 'links/link-1/move',
+        service: 'links/link-1/promote',
         method: 'create',
-        args: [{ target: LINK_MOVE_TARGET.branch, branch_id: 'teammate-1' }],
+        args: [{ target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: 'teammate-1' }],
       });
     });
-    expect(agorStore.getState().linkById.has(source.link_id)).toBe(false);
+    expect(agorStore.getState().linkById.get(source.link_id)).toEqual(source);
     expect(agorStore.getState().linkById.get(destination.link_id)).toEqual(destination);
   });
 
@@ -259,15 +250,15 @@ describe('LinksTab move actions', () => {
     const { client, calls } = makeClient({
       branchLinks: [],
       teammateLinks: [ownedLink],
-      moved: ownedLink,
+      promoted: ownedLink,
     });
 
     renderLinksTab(client, teammateBranch);
 
     await screen.findByText('Runbook');
     fireEvent.click(screen.getByLabelText('Actions for Runbook'));
-    expect(screen.queryByText(/already (saved|moved)/i)).toBeNull();
-    expect(screen.queryByText(/move to/i)).toBeNull();
+    expect(screen.queryByText(/already (saved|promoted)/i)).toBeNull();
+    expect(screen.queryByText(/promote to/i)).toBeNull();
     expect(calls.some((call) => call.method === 'remove')).toBe(false);
     expect(agorStore.getState().linkById.has('teammate-link')).toBe(true);
   });
@@ -293,7 +284,7 @@ describe('LinksTab move actions', () => {
     const { client } = makeClient({
       branchLinks: [runbook, apiLink],
       teammateLinks: [],
-      moved: apiLink,
+      promoted: apiLink,
     });
 
     renderLinksTab(client);
@@ -312,7 +303,7 @@ describe('LinksTab move actions', () => {
     const { client, calls } = makeClient({
       branchLinks: [],
       teammateLinks: [],
-      moved: makeLink(),
+      promoted: makeLink(),
     });
 
     renderLinksTab(client);

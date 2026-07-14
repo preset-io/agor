@@ -1,3 +1,5 @@
+import { LINK_PROMOTION_TARGET, type LinkPromotionTarget } from '@agor-live/client';
+
 export const LINK_OWNER_SCOPE = {
   branch: 'branch',
   session: 'session',
@@ -27,17 +29,12 @@ export const LINK_TARGET = {
   githubHost: 'github.com',
 } as const;
 
-export const LINK_MOVE_DESTINATION = {
-  branch: 'branch',
-  session: 'session',
-  teammate: 'teammate',
-} as const;
+export const LINK_PROMOTION_DESTINATION = LINK_PROMOTION_TARGET;
 
-export type LinkMoveDestination =
-  (typeof LINK_MOVE_DESTINATION)[keyof typeof LINK_MOVE_DESTINATION];
+export type LinkPromotionDestination = LinkPromotionTarget;
 
 export const LINK_ROUTE = {
-  move: (linkId: string): `links/${string}/move` => `${LINK_SERVICE}/${linkId}/move`,
+  promote: (linkId: string): `links/${string}/promote` => `${LINK_SERVICE}/${linkId}/promote`,
 } as const;
 
 export const LINK_FORM_FIELD = {
@@ -54,9 +51,8 @@ export const LINK_ACTION_LABEL = {
   add: 'Add link',
   edit: 'Edit link',
   delete: 'Delete link',
-  moveToBranch: 'Move to branch',
-  moveToSession: 'Move to this session',
-  moveToTeammate: 'Move to teammate',
+  promoteToBranch: 'Promote to branch',
+  promoteToTeammate: 'Promote to teammate',
   saveChanges: 'Save changes',
   pin: 'Pin',
   unpin: 'Unpin',
@@ -66,9 +62,8 @@ export const LINK_ACTION_KEY = {
   default: 'action',
   edit: 'edit',
   delete: 'delete',
-  moveToBranch: 'move-to-branch',
-  moveToSession: 'move-to-session',
-  moveToTeammate: 'move-to-teammate',
+  promoteToBranch: 'promote-to-branch',
+  promoteToTeammate: 'promote-to-teammate',
 } as const;
 
 export function getLinkActionsAriaLabel(name: string): string {
@@ -110,7 +105,7 @@ export const LINK_MUTATION_MESSAGE = {
   added: 'Link added',
   updated: 'Link updated',
   deleted: 'Link deleted',
-  moved: 'Link moved',
+  promoted: 'Link promoted',
 } as const;
 
 export const LINK_MUTATION_FAILURE_PREFIX = {
@@ -118,20 +113,13 @@ export const LINK_MUTATION_FAILURE_PREFIX = {
   add: 'Failed to add link',
   update: 'Failed to update link',
   delete: 'Failed to delete link',
-  move: 'Failed to move link',
+  promote: 'Failed to promote link',
 } as const;
 
 export function formatLinkMutationFailure(prefix: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
   return `${prefix}: ${detail}`;
 }
-
-export const LINK_MOVE_UNAVAILABLE_REASON = {
-  disconnected: 'Link actions are unavailable while disconnected',
-  missingTarget: 'This link has no movable target',
-  fileLifetime: 'Files cannot move until retention and cleanup rules are defined',
-  internalAccess: 'Internal references cannot move without target access checks',
-} as const;
 
 export const LINK_BUSY_KEY = {
   create: (ownerScope: LinkOwnerScope) => `create:${ownerScope}`,

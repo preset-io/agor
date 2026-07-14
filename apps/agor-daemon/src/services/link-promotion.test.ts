@@ -60,6 +60,13 @@ function promote(service: LinkPromotionService, source: Link, teammateBranchId: 
   );
 }
 
+function promoteToBranch(service: LinkPromotionService, source: Link, branchId: BranchID) {
+  return service.create(
+    { target: 'branch', branch_id: branchId },
+    { route: { sourceLinkId: source.link_id } }
+  );
+}
+
 describe('LinkPromotionService', () => {
   dbTest('promotes URL links to teammate-owned pinned branch links', async ({ db }) => {
     const branch = await seedBranch(db);
@@ -80,35 +87,74 @@ describe('LinkPromotionService', () => {
       url: 'https://example.com/promote-me',
       is_pinned: true,
       title: 'Promote me',
-      metadata: { teammate_promotion: true },
+      metadata: {
+        teammate_promotion: true,
+        promoted_from_owner: { branch_id: branch.branch_id, link_id: source.link_id },
+      },
     });
   });
 
-  dbTest('promotes knowledge references without copying source metadata', async ({ db }) => {
+  dbTest(
+    'promotes knowledge references without carrying private source metadata',
+    async ({ db }) => {
+      const branch = await seedBranch(db);
+      const teammate = await seedBranch(db, { teammate: true });
+      const source = await new LinksRepository(db).create({
+        branch_id: branch.branch_id,
+        kind: 'kb_ref',
+        source: 'parsed',
+        ref_uri: 'agor://kb/team/runbook.md',
+        metadata: { private_source_context: true },
+      });
+
+      const { service } = promotionService(db);
+      const promoted = await promote(service, source, teammate.branch_id);
+
+      expect(promoted).toMatchObject({
+        branch_id: teammate.branch_id,
+        kind: 'kb_ref',
+        source: 'manual',
+        ref_uri: 'agor://kb/team/runbook.md',
+        is_pinned: true,
+        metadata: {
+          teammate_promotion: true,
+          promoted_from_owner: { branch_id: branch.branch_id, link_id: source.link_id },
+        },
+      });
+    }
+  );
+
+  dbTest('promotes a session link to its branch without removing the source', async ({ db }) => {
     const branch = await seedBranch(db);
-    const teammate = await seedBranch(db, { teammate: true });
-    const source = await new LinksRepository(db).create({
-      branch_id: branch.branch_id,
-      kind: 'kb_ref',
+    const session = await seedSession(db, branch.branch_id);
+    const repository = new LinksRepository(db);
+    const source = await repository.create({
+      session_id: session.session_id,
+      kind: 'url',
       source: 'parsed',
-      ref_uri: 'agor://kb/team/runbook.md',
-      metadata: { private_source_context: true },
+      url: 'https://example.com/session-source',
+      title: 'Session source',
     });
 
     const { service } = promotionService(db);
-    const promoted = await promote(service, source, teammate.branch_id);
+    const promoted = await promoteToBranch(service, source, branch.branch_id);
 
     expect(promoted).toMatchObject({
-      branch_id: teammate.branch_id,
-      kind: 'kb_ref',
+      branch_id: branch.branch_id,
+      session_id: null,
       source: 'manual',
-      ref_uri: 'agor://kb/team/runbook.md',
-      is_pinned: true,
-      metadata: { teammate_promotion: true },
+      url: source.url,
+      metadata: {
+        promoted_from_owner: { session_id: session.session_id, link_id: source.link_id },
+      },
+    });
+    await expect(repository.findById(source.link_id)).resolves.toMatchObject({
+      session_id: session.session_id,
+      branch_id: null,
     });
   });
 
-  dbTest('rejects file-backed promotion until file lifetime is defined', async ({ db }) => {
+  dbTest('promotes uploaded files while preserving content metadata and source', async ({ db }) => {
     const branch = await seedBranch(db);
     const session = await seedSession(db, branch.branch_id);
     const teammate = await seedBranch(db, { teammate: true });
@@ -119,13 +165,33 @@ describe('LinkPromotionService', () => {
       file_path: '/tmp/agor-upload/image.png',
       title: 'image.png',
       mime_type: 'image/png',
-      metadata: { filename: 'stored.png', size: 123 },
+      metadata: { filename: 'stored.png', originalName: 'image.png', size: 123, private: true },
     });
 
     const { service } = promotionService(db);
-    await expect(promote(service, source, teammate.branch_id)).rejects.toThrow(
-      'File-backed links cannot be promoted'
-    );
+    const promoted = await promote(service, source, teammate.branch_id);
+
+    expect(promoted).toMatchObject({
+      branch_id: teammate.branch_id,
+      session_id: null,
+      kind: 'image',
+      source: 'upload',
+      file_path: source.file_path,
+      title: source.title,
+      mime_type: source.mime_type,
+      metadata: {
+        filename: 'stored.png',
+        originalName: 'image.png',
+        size: 123,
+        teammate_promotion: true,
+        promoted_from_owner: { session_id: session.session_id, link_id: source.link_id },
+      },
+    });
+    expect(promoted.metadata).not.toHaveProperty('private');
+    await expect(new LinksRepository(db).findById(source.link_id)).resolves.toMatchObject({
+      session_id: session.session_id,
+      file_path: source.file_path,
+    });
   });
 
   dbTest('rejects internal links until target access checks are enforced', async ({ db }) => {
@@ -229,11 +295,11 @@ describe('LinkPromotionService', () => {
     }
   });
 
-  dbTest('removing teammate-owned copy leaves source link intact', async ({ db }) => {
+  dbTest('removing the teammate association leaves the source link intact', async ({ db }) => {
     const branch = await seedBranch(db);
     const teammate = await seedBranch(db, { teammate: true });
     const repo = new LinksRepository(db);
-    const source = await createUrl(db, branch.branch_id, 'https://example.com/remove-copy');
+    const source = await createUrl(db, branch.branch_id, 'https://example.com/remove-association');
 
     const { service, linksService } = promotionService(db);
     const promoted = await promote(service, source, teammate.branch_id);

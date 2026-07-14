@@ -1,5 +1,5 @@
-import type { AgorClient, Board, Branch, Link, LinkMoveResult, Session } from '@agor-live/client';
-import { LINK_MOVE_TARGET } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Link, Session } from '@agor-live/client';
+import { LINK_PROMOTION_TARGET } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
@@ -99,11 +99,6 @@ const branch = {
   archived: false,
 } as unknown as Branch;
 
-const branchWithIssue = {
-  ...branch,
-  issue_url: 'https://github.com/preset-io/agor/issues/154',
-} as Branch;
-
 const makeLink = (overrides: Partial<Link> = {}) =>
   makeTestLink({
     url: 'https://example.com/session-runbook',
@@ -112,20 +107,19 @@ const makeLink = (overrides: Partial<Link> = {}) =>
     ...overrides,
   });
 
-interface MoveClientOptions {
+interface PromotionClientOptions {
   sessionLinks: Link[];
   branchLinks?: Link[];
   teammateLinks?: Link[];
-  moved: Link;
+  promoted: Link;
   materialized?: Link;
-  moveResult?: LinkMoveResult;
 }
 
-function makeClient(input: Link[] | MoveClientOptions) {
-  const move = Array.isArray(input) ? null : input;
+function makeClient(input: Link[] | PromotionClientOptions) {
+  const promotion = Array.isArray(input) ? null : input;
   const sessionLinks = Array.isArray(input) ? input : input.sessionLinks;
-  const branchLinks = move?.branchLinks ?? [];
-  const teammateLinks = move?.teammateLinks ?? [];
+  const branchLinks = promotion?.branchLinks ?? [];
+  const teammateLinks = promotion?.teammateLinks ?? [];
   const links = [...sessionLinks, ...branchLinks, ...teammateLinks];
   const calls: Array<{ service: string; method: string; args: unknown[] }> = [];
   const linksById = new Map(links.map((link) => [link.link_id, link]));
@@ -139,7 +133,7 @@ function makeClient(input: Link[] | MoveClientOptions) {
         },
         async findAll(params?: { query?: { owner_scope?: string; branch_id?: string } }) {
           calls.push({ service: path, method: 'findAll', args: [params] });
-          if (!move) return path === 'links' ? links : [];
+          if (!promotion) return path === 'links' ? links : [];
           if (params?.query?.owner_scope !== 'branch') return sessionLinks;
           return params.query.branch_id === branch.branch_id ? branchLinks : teammateLinks;
         },
@@ -148,20 +142,11 @@ function makeClient(input: Link[] | MoveClientOptions) {
           const existing = linksById.get(id);
           return { ...existing, ...(body as object), link_id: id };
         },
-        ...(move && {
+        ...(promotion && {
           async create(body: unknown) {
             calls.push({ service: path, method: 'create', args: [body] });
-            if (path === 'links') return move.materialized ?? move.moved;
-            if (path.endsWith('/move')) {
-              return (
-                move.moveResult ?? {
-                  link: move.moved,
-                  previous_link: sessionLinks[0] ?? branchLinks[0] ?? move.materialized,
-                  merged: false,
-                }
-              );
-            }
-            return move.moved;
+            if (path === 'links') return promotion.materialized ?? promotion.promoted;
+            return promotion.promoted;
           },
         }),
         on: vi.fn(),
@@ -172,7 +157,7 @@ function makeClient(input: Link[] | MoveClientOptions) {
   return { client, calls };
 }
 
-function makeMoveClient(options: MoveClientOptions) {
+function makePromotionClient(options: PromotionClientOptions) {
   return makeClient(options);
 }
 
@@ -233,7 +218,7 @@ describe('SessionPanel session links', () => {
     expect(agorStore.getState().linksBySession.get('session-1')).toEqual([link]);
   });
 
-  it('shows the same mixed branch and session pins in the conversation strip', async () => {
+  it('keeps branch-owned links out of the session strip and manager', async () => {
     const sessionPin = makeLink({ title: 'Session Runbook' });
     const branchPin = makeLink({
       link_id: 'branch-pin' as Link['link_id'],
@@ -243,167 +228,39 @@ describe('SessionPanel session links', () => {
       url: 'https://example.com/branch-runbook',
       target_key: 'url:https://example.com/branch-runbook',
     });
-    const { client } = makeMoveClient({
+    const { client } = makePromotionClient({
       sessionLinks: [sessionPin],
       branchLinks: [branchPin],
-      moved: branchPin,
+      promoted: branchPin,
     });
 
     renderPanel(client);
 
     expect(await screen.findByText('Session Runbook')).toBeInTheDocument();
-    expect(await screen.findByText('Branch Runbook')).toBeInTheDocument();
+    expect(screen.queryByText('Branch Runbook')).toBeNull();
     fireEvent.click(screen.getByLabelText('Open links organizer'));
     const popover = await screen.findByTestId('links-organizer-popover');
     expect(within(popover).getByText('Session Runbook')).toBeInTheDocument();
-    expect(within(popover).getByText('Branch Runbook')).toBeInTheDocument();
+    expect(within(popover).queryByText('Branch Runbook')).toBeNull();
+    fireEvent.click(within(popover).getByLabelText('Manage links'));
+    const drawer = await screen.findByTestId('links-organizer-manage');
+    expect(within(drawer).getByText('Session Runbook')).toBeInTheDocument();
+    expect(within(drawer).queryByText('Branch Runbook')).toBeNull();
   });
 
-  it('deduplicates same-target session and branch pins before rendering the strip', async () => {
-    const sessionPin = makeLink({ title: 'Session Runbook' });
-    const duplicateBranchPin = makeLink({
-      link_id: 'branch-pin' as Link['link_id'],
-      branch_id: branch.branch_id,
-      session_id: null,
-      title: 'Branch duplicate',
-    });
-    const { client } = makeMoveClient({
-      sessionLinks: [sessionPin],
-      branchLinks: [duplicateBranchPin],
-      moved: duplicateBranchPin,
-    });
-
-    renderPanel(client);
-
-    expect(await screen.findByText('Session Runbook')).toBeInTheDocument();
-    await waitFor(() =>
-      expect(agorStore.getState().linksByBranch.get(branch.branch_id)).toEqual([duplicateBranchPin])
-    );
-    expect(screen.queryByText('Branch duplicate')).toBeNull();
-  });
-
-  it('adds a branch link materialized from the session organizer to the store', async () => {
-    const pinnedIssue = makeLink({
-      link_id: 'issue-link' as Link['link_id'],
-      branch_id: branch.branch_id,
-      session_id: null,
-      kind: 'issue',
-      title: 'preset-io/agor#154',
-      url: branchWithIssue.issue_url,
-      target_key: 'url:https://github.com/preset-io/agor/issues/154',
-      is_pinned: true,
-    });
-    const { client, calls } = makeMoveClient({
-      sessionLinks: [],
-      moved: pinnedIssue,
-    });
-
-    renderPanel(client, branchWithIssue);
-
-    fireEvent.click(await screen.findByLabelText('Open links organizer'));
-    fireEvent.click(await screen.findByLabelText('Manage links'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Pin preset-io/agor#154' }));
-
-    await waitFor(() =>
-      expect(calls).toContainEqual({
-        service: 'links',
-        method: 'create',
-        args: [expect.objectContaining({ is_pinned: true, url: branchWithIssue.issue_url })],
-      })
-    );
-    expect(agorStore.getState().linkById.get(pinnedIssue.link_id)).toEqual(pinnedIssue);
-    expect(agorStore.getState().linksByBranch.get(branch.branch_id)).toEqual([pinnedIssue]);
-  });
-
-  it('hydrates an existing branch URL so it can be moved from the session organizer', async () => {
-    const existingIssue = makeLink({
-      link_id: 'issue-link' as Link['link_id'],
-      branch_id: branch.branch_id,
-      session_id: null,
-      kind: 'issue',
-      title: 'preset-io/agor#154',
-      url: branchWithIssue.issue_url,
-      target_key: 'url:https://github.com/preset-io/agor/issues/154',
-      is_pinned: true,
-    });
-    const movedIssue = makeLink({
-      ...existingIssue,
-      branch_id: 'teammate-1' as Link['branch_id'],
-      revision: (existingIssue.revision ?? 1) + 1,
-    });
-    seedPrimaryTeammate();
-    const { client, calls } = makeMoveClient({
-      sessionLinks: [],
-      branchLinks: [existingIssue],
-      moved: movedIssue,
-      moveResult: { link: movedIssue, previous_link: existingIssue, merged: false },
-    });
-
-    renderPanel(client, branchWithIssue);
-
-    fireEvent.click(await screen.findByLabelText('Open links organizer'));
-    fireEvent.click(await screen.findByLabelText('Manage links'));
-    fireEvent.click(await screen.findByLabelText('Actions for preset-io/agor#154'));
-    fireEvent.click(await screen.findByText('Move to teammate'));
-
-    await waitFor(() =>
-      expect(calls).toContainEqual({
-        service: 'links/issue-link/move',
-        method: 'create',
-        args: [{ target: LINK_MOVE_TARGET.branch, branch_id: 'teammate-1' }],
-      })
-    );
-    expect(agorStore.getState().linksByBranch.get(branch.branch_id)).toBeUndefined();
-    expect(agorStore.getState().linksByBranch.get('teammate-1')).toEqual([movedIssue]);
-  });
-
-  it('patches an existing branch URL when pinning it from the session organizer', async () => {
-    const existingIssue = makeLink({
-      link_id: 'issue-link' as Link['link_id'],
-      branch_id: branch.branch_id,
-      session_id: null,
-      kind: 'issue',
-      title: 'preset-io/agor#154',
-      url: branchWithIssue.issue_url,
-      target_key: 'url:https://github.com/preset-io/agor/issues/154',
-      is_pinned: false,
-    });
-    const { client, calls } = makeMoveClient({
-      sessionLinks: [],
-      branchLinks: [existingIssue],
-      moved: existingIssue,
-    });
-
-    renderPanel(client, branchWithIssue);
-
-    fireEvent.click(await screen.findByLabelText('Open links organizer'));
-    fireEvent.click(await screen.findByLabelText('Manage links'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Pin preset-io/agor#154' }));
-
-    await waitFor(() =>
-      expect(calls).toContainEqual({
-        service: 'links',
-        method: 'patch',
-        args: ['issue-link', { is_pinned: true }],
-      })
-    );
-    expect(agorStore.getState().linkById.get(existingIssue.link_id)?.is_pinned).toBe(true);
-    expect(calls.some((call) => call.service === 'links' && call.method === 'create')).toBe(false);
-  });
-
-  it('moves a session link to the board primary teammate', async () => {
+  it('promotes a session link to the board primary teammate without removing it', async () => {
     const source = makeLink();
-    const moved = makeLink({
+    const promoted = makeLink({
       ...source,
+      link_id: 'teammate-link' as Link['link_id'],
       branch_id: 'teammate-1' as Link['branch_id'],
       session_id: null,
       revision: (source.revision ?? 1) + 1,
     });
     seedPrimaryTeammate();
-    const { client, calls } = makeMoveClient({
+    const { client, calls } = makePromotionClient({
       sessionLinks: [source],
-      moved,
-      moveResult: { link: moved, previous_link: source, merged: false },
+      promoted,
     });
 
     renderPanel(client);
@@ -412,56 +269,17 @@ describe('SessionPanel session links', () => {
     fireEvent.click(screen.getByLabelText('Open links organizer'));
     fireEvent.click(await screen.findByLabelText('Manage links'));
     fireEvent.click(await screen.findByLabelText('Actions for Session Runbook'));
-    fireEvent.click(await screen.findByText('Move to teammate'));
+    fireEvent.click(await screen.findByText('Promote to teammate'));
 
     await waitFor(() => {
       expect(calls).toContainEqual({
-        service: 'links/link-1/move',
+        service: 'links/link-1/promote',
         method: 'create',
-        args: [{ target: LINK_MOVE_TARGET.branch, branch_id: 'teammate-1' }],
+        args: [{ target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: 'teammate-1' }],
       });
     });
-    expect(agorStore.getState().linksBySession.get(session.session_id)).toBeUndefined();
-    expect(agorStore.getState().linksByBranch.get('teammate-1')).toEqual([moved]);
-  });
-
-  it('moves a branch link into the current session instead of disabling the action', async () => {
-    const source = makeLink({
-      branch_id: branch.branch_id,
-      session_id: null,
-      title: 'Branch Runbook',
-    });
-    const moved = makeLink({
-      ...source,
-      branch_id: null,
-      session_id: session.session_id,
-      revision: (source.revision ?? 1) + 1,
-    });
-    seedPrimaryTeammate();
-    const { client, calls } = makeMoveClient({
-      sessionLinks: [],
-      branchLinks: [source],
-      moved,
-      moveResult: { link: moved, previous_link: source, merged: false },
-    });
-
-    renderPanel(client);
-
-    await screen.findByText('Branch Runbook');
-    fireEvent.click(screen.getByLabelText('Open links organizer'));
-    fireEvent.click(await screen.findByLabelText('Manage links'));
-    fireEvent.click(await screen.findByLabelText('Actions for Branch Runbook'));
-    fireEvent.click(await screen.findByText('Move to this session'));
-
-    await waitFor(() => {
-      expect(calls).toContainEqual({
-        service: 'links/link-1/move',
-        method: 'create',
-        args: [{ target: LINK_MOVE_TARGET.session, session_id: session.session_id }],
-      });
-    });
-    expect(agorStore.getState().linksByBranch.get(branch.branch_id)).toBeUndefined();
-    expect(agorStore.getState().linksBySession.get(session.session_id)).toEqual([moved]);
+    expect(agorStore.getState().linksBySession.get(session.session_id)).toEqual([source]);
+    expect(agorStore.getState().linksByBranch.get('teammate-1')).toEqual([promoted]);
   });
 
   it('opens the manage drawer from the header gear and searches drawer links', async () => {

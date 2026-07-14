@@ -1,11 +1,10 @@
-import { type BoardID, type LinkOwner, MessageRole, type UUID } from '@agor/core/types';
+import type { BoardID, LinkOwner, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { LinksRepository } from './links';
 import { seedLinkBoard, seedLinkBranch, seedLinkSession, seedLinkUser } from './links.test-helpers';
-import { MessagesRepository } from './messages';
 import { SessionRepository } from './sessions';
 
 function createUrl(repo: LinksRepository, owner: LinkOwner, slug: string, isPinned = false) {
@@ -19,96 +18,6 @@ function createUrl(repo: LinksRepository, owner: LinkOwner, slug: string, isPinn
 }
 
 describe('LinksRepository lifecycle and visibility', () => {
-  dbTest(
-    'moves a link between owners without changing its identity or public fields',
-    async ({ db }) => {
-      const repo = new LinksRepository(db);
-      const branch = await seedLinkBranch(db);
-      const session = await seedLinkSession(db, branch.branch_id, 'owner' as UUID);
-      const source = await repo.create({
-        session_id: session.session_id,
-        kind: 'url',
-        source: 'manual',
-        url: 'https://example.com/move-me',
-        is_pinned: true,
-        title: 'Move me',
-        metadata: { public_note: 'preserved' },
-      });
-
-      const result = await repo.move(
-        source.link_id,
-        { branch_id: branch.branch_id },
-        { expectedRevision: source.revision }
-      );
-
-      expect(result.merged).toBe(false);
-      expect(result.previous_link).toEqual(source);
-      expect(result.link).toMatchObject({
-        link_id: source.link_id,
-        branch_id: branch.branch_id,
-        session_id: null,
-        title: 'Move me',
-        is_pinned: true,
-        metadata: { public_note: 'preserved' },
-        revision: (source.revision ?? 1) + 1,
-      });
-      expect(await repo.findAll({ sessionId: session.session_id })).toEqual([]);
-      expect(await repo.findAll({ branchId: branch.branch_id })).toEqual([result.link]);
-    }
-  );
-
-  dbTest(
-    'coalesces a move into an existing destination target without overwriting it',
-    async ({ db }) => {
-      const repo = new LinksRepository(db);
-      const branch = await seedLinkBranch(db);
-      const session = await seedLinkSession(db, branch.branch_id, 'owner' as UUID);
-      const message = await new MessagesRepository(db).create({
-        message_id: generateId(),
-        session_id: session.session_id,
-        type: 'user',
-        role: MessageRole.USER,
-        index: 0,
-        timestamp: new Date().toISOString(),
-        content_preview: 'Source link',
-        content: 'https://example.com/existing',
-      });
-      const source = await repo.create({
-        session_id: session.session_id,
-        source_message_id: message.message_id,
-        kind: 'url',
-        source: 'manual',
-        url: 'https://example.com/existing#source',
-        title: 'Source label',
-      });
-      const destination = await repo.create({
-        branch_id: branch.branch_id,
-        kind: 'url',
-        source: 'manual',
-        url: 'https://example.com/existing#destination',
-        title: 'Destination label',
-        is_pinned: true,
-      });
-
-      const result = await repo.move(source.link_id, { branch_id: branch.branch_id });
-
-      expect(result).toMatchObject({
-        merged: true,
-        link: { link_id: destination.link_id, title: 'Destination label', is_pinned: true },
-        previous_link: { link_id: source.link_id },
-      });
-      expect(await repo.findById(source.link_id)).toBeNull();
-      expect(await repo.findById(destination.link_id)).toMatchObject({
-        link_id: destination.link_id,
-        branch_id: destination.branch_id,
-        title: destination.title,
-        is_pinned: destination.is_pinned,
-        source_message_id: source.source_message_id,
-        revision: (destination.revision ?? 1) + 1,
-      });
-    }
-  );
-
   dbTest('filters by session and branch owner scopes', async ({ db }) => {
     const repo = new LinksRepository(db);
     const branchA = await seedLinkBranch(db);

@@ -38,8 +38,7 @@ describe('link MCP tools', () => {
       'agor_links_get',
       'agor_links_create',
       'agor_links_update',
-      'agor_links_move',
-      'agor_links_save',
+      'agor_links_promote',
       'agor_links_delete',
     ]);
   });
@@ -125,62 +124,31 @@ describe('link MCP tools', () => {
     );
   });
 
-  it('saves a visible link to the current session branch without overwriting an existing copy', async () => {
-    const source = {
-      link_id: 'link-1',
-      kind: 'url',
-      url: 'https://example.com/runbook',
-      title: 'Runbook',
-    };
-    const create = vi.fn(async (payload) => ({ link_id: 'branch-link', ...payload }));
+  it('promotes a visible link to the current session branch through the guarded service', async () => {
+    const promote = vi.fn(async () => ({ link_id: 'branch-link' }));
     const handlers = registerTools(
       {
         sessions: {
           get: vi.fn(async () => ({ session_id: 'session-full', branch_id: 'branch-1' })),
         },
-        links: { get: vi.fn(async () => source), create },
+        '/links/:sourceLinkId/promote': { create: promote },
+        links: {},
       },
       'session-short'
     );
 
-    await handlers.get('agor_links_save')?.({ linkId: 'link-1', destination: 'branch' });
+    await handlers.get('agor_links_promote')?.({ linkId: 'link-1', destination: 'branch' });
 
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        branch_id: 'branch-1',
-        session_id: null,
-        source: 'manual',
-        url: source.url,
-        title: source.title,
-      }),
-      { authenticated: true, _agorPreserveExistingOnCreate: true }
-    );
-  });
-
-  it('moves a link to a resolved session owner through the guarded move route', async () => {
-    const move = vi.fn(async (payload) => ({ link: payload, merged: false }));
-    const handlers = registerTools({
-      sessions: { get: vi.fn(async () => ({ session_id: 'session-full' })) },
-      '/links/:linkId/move': { create: move },
-      links: {},
-    });
-
-    await handlers.get('agor_links_move')?.({
-      linkId: 'link-1',
-      destination: 'session',
-      sessionId: 'session-full',
-    });
-
-    expect(move).toHaveBeenCalledWith(
-      { target: 'session', session_id: 'session-full' },
+    expect(promote).toHaveBeenCalledWith(
+      { target: 'branch', branch_id: 'branch-1' },
       {
         authenticated: true,
-        route: { linkId: 'link-1' },
+        route: { sourceLinkId: 'link-1' },
       }
     );
   });
 
-  it('uses the guarded promotion service when saving to a teammate', async () => {
+  it('promotes a visible link to a resolved teammate through the guarded service', async () => {
     const promote = vi.fn(async () => ({ link_id: 'teammate-link' }));
     const handlers = registerTools({
       branches: {
@@ -190,7 +158,7 @@ describe('link MCP tools', () => {
       links: {},
     });
 
-    await handlers.get('agor_links_save')?.({
+    await handlers.get('agor_links_promote')?.({
       linkId: 'link-1',
       destination: 'teammate',
       branchId: 'teammate-full',

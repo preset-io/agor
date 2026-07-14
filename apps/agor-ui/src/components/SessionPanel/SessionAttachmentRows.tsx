@@ -9,9 +9,9 @@ import {
   isKnowledgeLinkDisplayItem,
   LinkActionsMenu,
   type LinkDisplayItem,
-  type LinkMoveAction,
-  type LinkMoveSelection,
   LinkPinAction,
+  type LinkPromotionAction,
+  type LinkPromotionSelection,
 } from '../Links';
 import { getLinkItemIcon, LinkCategoryGlyph } from '../Links/LinkVisual';
 import {
@@ -23,9 +23,12 @@ import {
 
 type SessionAttachmentItem = LinkDisplayItem;
 
-export interface SessionAttachmentMoveActions {
-  getMoveActions?: (item: SessionAttachmentItem) => readonly LinkMoveAction[];
-  onMoveLink?: (item: SessionAttachmentItem, selection: LinkMoveSelection) => Promise<unknown>;
+export interface SessionAttachmentPromotionActions {
+  getPromotionActions?: (item: SessionAttachmentItem) => readonly LinkPromotionAction[];
+  onPromoteLink?: (
+    item: SessionAttachmentItem,
+    selection: LinkPromotionSelection
+  ) => Promise<unknown>;
 }
 
 export interface SessionAttachmentLifecycleActions {
@@ -43,7 +46,7 @@ interface SharedProps {
 
 interface DrawerProps
   extends SharedProps,
-    SessionAttachmentMoveActions,
+    SessionAttachmentPromotionActions,
     SessionAttachmentLifecycleActions {}
 
 function attachmentIcon(item: SessionAttachmentItem, disabled: boolean): React.ReactNode {
@@ -90,8 +93,8 @@ function actionsMenu(props: DrawerProps) {
           ? async () => props.onDeleteLink?.(props.item)
           : undefined
       }
-      moveActions={props.getMoveActions?.(props.item)}
-      onMove={(selection) => props.onMoveLink?.(props.item, selection) ?? Promise.resolve()}
+      promotionActions={props.getPromotionActions?.(props.item)}
+      onPromote={(selection) => props.onPromoteLink?.(props.item, selection) ?? Promise.resolve()}
     />
   );
 }

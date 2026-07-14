@@ -123,14 +123,8 @@ export async function backfillLegacySessionLinks(args: {
   if (messages.length === 0) return false;
 
   const linksRepository = new LinksRepository(args.db);
-  const messageIds = messages.map((message) => message.message_id);
-  const [sessionLinks, linksMovedFromMessages] = await Promise.all([
-    linksRepository.findAll({ sessionId: args.sessionId }),
-    linksRepository.findAll({ sourceMessageIds: messageIds }),
-  ]);
-  const existingTargetKeys = new Set(
-    [...sessionLinks, ...linksMovedFromMessages].map((link) => link.target_key)
-  );
+  const sessionLinks = await linksRepository.findAll({ sessionId: args.sessionId });
+  const existingTargetKeys = new Set(sessionLinks.map((link) => link.target_key));
   const uploadRoot = args.uploadRoot ?? getUploadDirectory();
   const uploadRootReal = await fs.realpath(uploadRoot).catch(() => null);
   const drafts: Partial<LinkCreate>[] = [];

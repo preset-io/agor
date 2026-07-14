@@ -5,8 +5,8 @@ import { agorStore } from '../../store/agorStore';
 import { useThemedMessage } from '../../utils/message';
 import type { LinkDisplayItem } from './linkDisplay';
 import { createManualLink, type ManualLinkDraft, updateLinkDisplayItem } from './linkLifecycle';
-import { type LinkMoveSelection, moveLinkDisplayItem } from './linkMove';
 import { toggleLinkDisplayItemPinned } from './linkPinning';
+import { type LinkPromotionSelection, promoteLinkDisplayItem } from './linkPromotion';
 import {
   formatLinkMutationFailure,
   LINK_BUSY_KEY,
@@ -147,25 +147,23 @@ export function useLinkMutations({ client, branchId, sessionId }: UseLinkMutatio
     [client, showError, showSuccess]
   );
 
-  const moveLink = useCallback(
-    async (item: LinkDisplayItem, selection: LinkMoveSelection): Promise<boolean> => {
+  const promoteLink = useCallback(
+    async (item: LinkDisplayItem, selection: LinkPromotionSelection): Promise<boolean> => {
       const key = item.linkId ?? item.key;
       if (!client || !startBusy(lifecycleBusyRef, setLifecycleBusyKeys, key)) return false;
       try {
-        const result = await moveLinkDisplayItem({
+        const promoted = await promoteLinkDisplayItem({
           client,
           item,
           selection,
           branchId,
           sessionId,
         });
-        const state = agorStore.getState();
-        state.applyKnownLinkRemovedResult(result.previous_link);
-        state.applyKnownLinkCreatedResult(result.link);
-        showSuccess(LINK_MUTATION_MESSAGE.moved);
+        agorStore.getState().applyKnownLinkCreatedResult(promoted);
+        showSuccess(LINK_MUTATION_MESSAGE.promoted);
         return true;
       } catch (error) {
-        showError(formatLinkMutationFailure(LINK_MUTATION_FAILURE_PREFIX.move, error));
+        showError(formatLinkMutationFailure(LINK_MUTATION_FAILURE_PREFIX.promote, error));
         return false;
       } finally {
         finishBusy(lifecycleBusyRef, setLifecycleBusyKeys, key);
@@ -181,6 +179,6 @@ export function useLinkMutations({ client, branchId, sessionId }: UseLinkMutatio
     createLink,
     updateLink,
     removeLink,
-    moveLink,
+    promoteLink,
   };
 }

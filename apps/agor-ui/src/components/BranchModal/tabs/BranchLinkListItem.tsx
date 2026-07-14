@@ -7,9 +7,9 @@ import {
   getLinkPinActionLabel,
   LinkActionsMenu,
   type LinkDisplayItem,
-  type LinkMoveAction,
-  type LinkMoveSelection,
   LinkPinAction,
+  type LinkPromotionAction,
+  type LinkPromotionSelection,
 } from '../../Links';
 import { LinkCategoryGlyph } from '../../Links/LinkVisual';
 import { getLinkUnavailableReason } from '../../Links/linkContent';
@@ -17,12 +17,12 @@ import { getLinkUnavailableReason } from '../../Links/linkContent';
 interface BranchLinkListItemProps {
   item: LinkDisplayItem;
   sourceSessionLabel: string | null;
-  moveActions: readonly LinkMoveAction[];
+  promotionActions: readonly LinkPromotionAction[];
   pinning: boolean;
   lifecycleBusy: boolean;
   onOpen: (item: LinkDisplayItem) => void;
   onTogglePinned: (item: LinkDisplayItem) => void | Promise<void>;
-  onMove: (item: LinkDisplayItem, selection: LinkMoveSelection) => Promise<unknown>;
+  onPromote: (item: LinkDisplayItem, selection: LinkPromotionSelection) => Promise<unknown>;
   onEdit: (item: LinkDisplayItem) => void;
   onDelete: (item: LinkDisplayItem) => Promise<unknown>;
 }
@@ -56,8 +56,8 @@ export function BranchLinkListItem(props: BranchLinkListItemProps) {
               busy={props.lifecycleBusy}
               onEdit={() => props.onEdit(props.item)}
               onDelete={props.item.linkId ? () => props.onDelete(props.item) : undefined}
-              moveActions={props.moveActions}
-              onMove={(selection) => props.onMove(props.item, selection)}
+              promotionActions={props.promotionActions}
+              onPromote={(selection) => props.onPromote(props.item, selection)}
             />
           </>
         }

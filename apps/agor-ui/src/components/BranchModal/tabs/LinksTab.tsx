@@ -16,7 +16,7 @@ import {
   canEditLinkTarget,
   compareLinkDisplayItemsBySort,
   getLinkCategoryCounts,
-  getLinkMoveActions,
+  getLinkPromotionActions,
   LINK_ACTION_LABEL,
   LINK_OWNER_SCOPE,
   type LinkCategoryTabKey,
@@ -86,7 +86,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
     createLink,
     updateLink,
     removeLink,
-    moveLink: handleMoveLink,
+    promoteLink: handlePromoteLink,
   } = useLinkMutations({
     client,
     branchId: branch.branch_id,
@@ -197,7 +197,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       key={item.key}
                       item={item}
                       sourceSessionLabel={getSourceSessionLabel(item, sessionById)}
-                      moveActions={getLinkMoveActions(item, {
+                      promotionActions={getLinkPromotionActions(item, {
                         branchId: branch.branch_id,
                         teammateBranchId,
                         available: Boolean(client),
@@ -206,7 +206,7 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                       pinning={pinningKeys.has(item.linkId ?? item.key)}
                       onOpen={openItem}
                       onTogglePinned={handleTogglePinned}
-                      onMove={handleMoveLink}
+                      onPromote={handlePromoteLink}
                       onEdit={openEditLink}
                       onDelete={removeLink}
                     />

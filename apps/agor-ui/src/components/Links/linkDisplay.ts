@@ -1,6 +1,6 @@
 import type { Branch, Link, LinkKind, LinkSource } from '@agor-live/client';
 import {
-  isTeammatePromotionLink,
+  LINK_PROMOTION_SOURCE_METADATA_KEY,
   normalizeFileTargetKey,
   normalizeRefTargetKey,
   normalizeUrlTargetKey,
@@ -48,7 +48,6 @@ export interface LinkDisplayItem {
   source?: LinkDisplaySource;
   ownerScope: 'branch' | 'session';
   isPinned: boolean;
-  isPromoted?: boolean;
   url?: string;
   refUri?: string;
   filePath?: string;
@@ -293,7 +292,7 @@ export function getPinnedLinkDisplayName(
 
 function getPromotedFromSessionId(metadata?: Link['metadata'] | null): string | undefined {
   if (!metadata || typeof metadata !== 'object') return undefined;
-  const promotedFromOwner = metadata.promoted_from_owner;
+  const promotedFromOwner = metadata[LINK_PROMOTION_SOURCE_METADATA_KEY];
   if (!promotedFromOwner || typeof promotedFromOwner !== 'object') return undefined;
   const sessionId = (promotedFromOwner as { session_id?: unknown }).session_id;
   return typeof sessionId === 'string' && sessionId.trim() ? sessionId : undefined;
@@ -332,7 +331,6 @@ export function linkToDisplayItem(link: Link): LinkDisplayItem | null {
     source: link.source,
     ownerScope: link.session_id ? 'session' : 'branch',
     isPinned: Boolean(link.is_pinned),
-    isPromoted: isTeammatePromotionLink(link),
     linkId: String(link.link_id),
     ownerBranchId: link.branch_id ?? undefined,
     sessionId: link.session_id ?? undefined,

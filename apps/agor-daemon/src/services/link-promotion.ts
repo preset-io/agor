@@ -6,20 +6,20 @@ import type {
   BranchID,
   Link,
   LinkCreate,
-  Params,
+  LinkPromotionRequest,
   UUID,
 } from '@agor/core/types';
-import { isTeammate, TEAMMATE_PROMOTION_METADATA_KEY } from '@agor/core/types';
+import {
+  isTeammate,
+  LINK_PROMOTION_SOURCE_METADATA_KEY,
+  LINK_PROMOTION_TARGET,
+  TEAMMATE_PROMOTION_METADATA_KEY,
+} from '@agor/core/types';
 import { ensureLinkOwnerAccess, LINK_OWNER_ACCESS_MODE } from './link-owner-authorization.js';
-import { getTrustedTransferTarget } from './link-transfer-policy.js';
+import { getPromotableLinkTarget } from './link-promotion-policy.js';
 
 interface LinkPromotionRouteParams extends AuthenticatedParams {
   route?: Record<string, string | undefined>;
-}
-
-interface LinkPromotionData {
-  target?: 'teammate';
-  teammate_branch_id?: BranchID | string;
 }
 
 interface LinkPromotionServiceOptions {
@@ -31,10 +31,10 @@ interface LinkPromotionServiceOptions {
 }
 
 type LinksCrudService = {
-  get(id: string, params?: Params): Promise<Link>;
+  get(id: string, params?: AuthenticatedParams): Promise<Link>;
   create(
     data: Partial<LinkCreate>,
-    params?: Params & { _agorPreserveExistingOnCreate?: boolean }
+    params?: AuthenticatedParams & { _agorPreserveExistingOnCreate?: boolean }
   ): Promise<Link>;
 };
 
@@ -42,11 +42,55 @@ function sourceLinkIdFromParams(params?: LinkPromotionRouteParams): string | nul
   return params?.route?.sourceLinkId ?? params?.route?.id ?? null;
 }
 
-const LINK_PROMOTION_TRANSFER_ERROR = {
-  fileLifetime: 'File-backed links cannot be promoted until file lifetime is defined',
-  internalAccess: 'Internal links cannot be promoted until target access checks are enforced',
-  missingTarget: 'Source link has no trusted target to promote',
+const LINK_PROMOTION_ERROR = {
+  sourceLinkIdRequired: 'Source link ID is required',
+  branchIdRequired: 'branch_id is required when promoting to a branch',
+  teammateBranchIdRequired: 'teammate_branch_id is required when promoting to a teammate',
+  invalidTarget: 'Link promotion target must be branch or teammate',
+  teammateRequired: 'Target branch is not a teammate',
+  archivedBranch: 'Links cannot be promoted to an archived branch',
 } as const;
+
+const LINKS_SERVICE = 'links';
+const LINK_SOURCE = {
+  manual: 'manual',
+  upload: 'upload',
+} as const;
+const PROMOTED_UPLOAD_METADATA_KEYS = ['filename', 'originalName', 'size'] as const;
+
+function destinationBranchId(data: LinkPromotionRequest): BranchID {
+  if (data?.target === LINK_PROMOTION_TARGET.branch) {
+    if (!data.branch_id) throw new BadRequest(LINK_PROMOTION_ERROR.branchIdRequired);
+    return data.branch_id;
+  }
+  if (data?.target === LINK_PROMOTION_TARGET.teammate) {
+    if (!data.teammate_branch_id) {
+      throw new BadRequest(LINK_PROMOTION_ERROR.teammateBranchIdRequired);
+    }
+    return data.teammate_branch_id;
+  }
+  throw new BadRequest(LINK_PROMOTION_ERROR.invalidTarget);
+}
+
+function promotedMetadata(source: Link, target: LinkPromotionRequest['target']) {
+  const metadata: Record<string, unknown> = {
+    [LINK_PROMOTION_SOURCE_METADATA_KEY]: {
+      link_id: source.link_id,
+      ...(source.branch_id ? { branch_id: source.branch_id } : {}),
+      ...(source.session_id ? { session_id: source.session_id } : {}),
+    },
+    ...(target === LINK_PROMOTION_TARGET.teammate
+      ? { [TEAMMATE_PROMOTION_METADATA_KEY]: true }
+      : {}),
+  };
+  if (source.source === LINK_SOURCE.upload && source.metadata) {
+    for (const key of PROMOTED_UPLOAD_METADATA_KEYS) {
+      const value = source.metadata[key];
+      if (value !== undefined) metadata[key] = value;
+    }
+  }
+  return metadata;
+}
 
 export class LinkPromotionService {
   private branchRepository: BranchRepository;
@@ -58,28 +102,27 @@ export class LinkPromotionService {
   }
 
   private linksService(): LinksCrudService {
-    return this.options.app.service('links') as unknown as LinksCrudService;
+    return this.options.app.service(LINKS_SERVICE) as unknown as LinksCrudService;
   }
 
-  async create(data: LinkPromotionData, params?: LinkPromotionRouteParams): Promise<Link> {
+  async create(data: LinkPromotionRequest, params?: LinkPromotionRouteParams): Promise<Link> {
     const sourceLinkId = sourceLinkIdFromParams(params);
-    if (!sourceLinkId) throw new BadRequest('Source link ID is required');
-    if (data?.target !== 'teammate') {
-      throw new BadRequest("links promote target must be 'teammate'");
-    }
-    const teammateBranchId = data.teammate_branch_id;
-    if (!teammateBranchId) throw new BadRequest('teammate_branch_id is required');
+    if (!sourceLinkId) throw new BadRequest(LINK_PROMOTION_ERROR.sourceLinkIdRequired);
+    const targetBranchId = destinationBranchId(data);
 
     // Important: load through links.get with the original caller params so the
     // source link's normal visibility hooks decide whether this caller can see it.
     const source = await this.linksService().get(sourceLinkId, params);
-    const teammateBranch = await this.branchRepository.findById(String(teammateBranchId));
-    if (!teammateBranch) throw new NotFound(`Teammate branch not found: ${teammateBranchId}`);
-    if (!isTeammate(teammateBranch)) throw new BadRequest('Target branch is not a teammate');
+    const targetBranch = await this.branchRepository.findById(String(targetBranchId));
+    if (!targetBranch) throw new NotFound(`Branch not found: ${targetBranchId}`);
+    if (targetBranch.archived) throw new BadRequest(LINK_PROMOTION_ERROR.archivedBranch);
+    if (data.target === LINK_PROMOTION_TARGET.teammate && !isTeammate(targetBranch)) {
+      throw new BadRequest(LINK_PROMOTION_ERROR.teammateRequired);
+    }
 
     await ensureLinkOwnerAccess({
       mode: LINK_OWNER_ACCESS_MODE.mutate,
-      owner: { branch_id: teammateBranch.branch_id },
+      owner: { branch_id: targetBranch.branch_id },
       options: {
         branchRepository: this.branchRepository,
         branchRbacEnabled: this.options.branchRbacEnabled,
@@ -89,9 +132,9 @@ export class LinkPromotionService {
     });
 
     const callerId = (params?.user?.user_id as UUID | undefined) ?? null;
-    const targetFields = getTrustedTransferTarget(source, LINK_PROMOTION_TRANSFER_ERROR);
+    const targetFields = getPromotableLinkTarget(source);
     const existing = await this.linksRepository.findByOwnerAndTarget({
-      branch_id: teammateBranch.branch_id,
+      branch_id: targetBranch.branch_id,
       session_id: null,
       ...targetFields,
     });
@@ -100,20 +143,21 @@ export class LinkPromotionService {
     }
 
     const createData = {
-      branch_id: teammateBranch.branch_id,
+      branch_id: targetBranch.branch_id,
       session_id: null,
+      source_message_id: source.source_message_id ?? null,
       kind: source.kind,
-      source: 'manual' as const,
+      source: source.source === LINK_SOURCE.upload ? LINK_SOURCE.upload : LINK_SOURCE.manual,
       ...targetFields,
       is_pinned: true,
       title: source.title ?? null,
-      mime_type: null,
-      metadata: { [TEAMMATE_PROMOTION_METADATA_KEY]: true },
+      mime_type: source.source === LINK_SOURCE.upload ? (source.mime_type ?? null) : null,
+      metadata: promotedMetadata(source, data.target),
       created_by: callerId,
     } satisfies LinkCreate;
 
-    // Promotion is an explicit user action, so the teammate-owned copy starts
-    // with manual provenance and no metadata from the source ownership boundary.
+    // TODO: Add shared-upload reference counting before any future link cleanup
+    // is allowed to delete bytes. Promoted upload links intentionally share file_path.
     return this.linksService().create(createData, {
       ...params,
       provider: undefined,

@@ -88,25 +88,25 @@ export type LinkOwner =
   | { branch_id: BranchID; session_id?: null }
   | { branch_id?: null; session_id: SessionID };
 
-export const LINK_MOVE_TARGET = {
+export const LINK_PROMOTION_TARGET = {
   branch: 'branch',
-  session: 'session',
+  teammate: 'teammate',
 } as const;
-export const LINK_MOVE_TARGETS = Object.values(LINK_MOVE_TARGET);
-export type LinkMoveTarget = (typeof LINK_MOVE_TARGET)[keyof typeof LINK_MOVE_TARGET];
+export const LINK_PROMOTION_TARGETS = Object.values(LINK_PROMOTION_TARGET);
+export type LinkPromotionTarget =
+  (typeof LINK_PROMOTION_TARGET)[keyof typeof LINK_PROMOTION_TARGET];
 
-export type LinkMoveRequest =
-  | { target: typeof LINK_MOVE_TARGET.branch; branch_id: BranchID; session_id?: never }
-  | { target: typeof LINK_MOVE_TARGET.session; branch_id?: never; session_id: SessionID };
-
-export interface LinkMoveResult {
-  /** The canonical link now owned by the destination. */
-  link: Link;
-  /** The source snapshot removed from its previous owner. */
-  previous_link: Link;
-  /** True when the destination already owned the same target and was retained. */
-  merged: boolean;
-}
+export type LinkPromotionRequest =
+  | {
+      target: typeof LINK_PROMOTION_TARGET.branch;
+      branch_id: BranchID;
+      teammate_branch_id?: never;
+    }
+  | {
+      target: typeof LINK_PROMOTION_TARGET.teammate;
+      branch_id?: never;
+      teammate_branch_id: BranchID;
+    };
 
 export type LinkTarget =
   | {
@@ -376,13 +376,15 @@ export function normalizeFileTargetKey(filePath: string): string {
 }
 
 export const TEAMMATE_PROMOTION_METADATA_KEY = 'teammate_promotion';
+export const LINK_PROMOTION_SOURCE_METADATA_KEY = 'promoted_from_owner';
 
 export function isTeammatePromotionLink(link: Pick<Link, 'metadata'>): boolean {
   const metadata = link.metadata;
   return Boolean(
     metadata &&
       (metadata[TEAMMATE_PROMOTION_METADATA_KEY] === true ||
-        (metadata.promoted_from_owner && typeof metadata.promoted_from_owner === 'object'))
+        (metadata[LINK_PROMOTION_SOURCE_METADATA_KEY] &&
+          typeof metadata[LINK_PROMOTION_SOURCE_METADATA_KEY] === 'object'))
   );
 }
 

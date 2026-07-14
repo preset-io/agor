@@ -1,7 +1,7 @@
-import { App, Flex, type MenuProps, Typography } from 'antd';
+import { App, type MenuProps } from 'antd';
 import { LinkOverflowAction } from './LinkActions';
 import type { LinkDisplayItem } from './linkDisplay';
-import type { LinkMoveAction, LinkMoveSelection } from './linkMove';
+import type { LinkPromotionAction, LinkPromotionSelection } from './linkPromotion';
 import {
   getLinkActionsAriaLabel,
   LINK_ACTION_KEY,
@@ -14,18 +14,8 @@ interface LinkActionsMenuProps {
   busy?: boolean;
   onEdit: () => void;
   onDelete?: () => Promise<unknown>;
-  moveActions?: readonly LinkMoveAction[];
-  onMove?: (selection: LinkMoveSelection) => Promise<unknown>;
-}
-
-function actionLabel(label: string, reason?: string | null) {
-  if (!reason) return label;
-  return (
-    <Flex vertical gap={0}>
-      <span>{label}</span>
-      <Typography.Text type="secondary">{reason}</Typography.Text>
-    </Flex>
-  );
+  promotionActions?: readonly LinkPromotionAction[];
+  onPromote?: (selection: LinkPromotionSelection) => Promise<unknown>;
 }
 
 export function LinkActionsMenu({
@@ -33,15 +23,15 @@ export function LinkActionsMenu({
   busy = false,
   onEdit,
   onDelete,
-  moveActions = [],
-  onMove,
+  promotionActions = [],
+  onPromote,
 }: LinkActionsMenuProps) {
   const { modal } = App.useApp();
   const items: NonNullable<MenuProps['items']> = [
     { key: LINK_ACTION_KEY.edit, label: LINK_ACTION_LABEL.edit, disabled: busy },
-    ...moveActions.map((action) => ({
+    ...promotionActions.map((action) => ({
       key: action.key,
-      label: actionLabel(action.label, action.reason),
+      label: action.label,
       disabled: busy || action.disabled,
     })),
     ...(onDelete
@@ -59,8 +49,8 @@ export function LinkActionsMenu({
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     if (key === LINK_ACTION_KEY.edit) onEdit();
-    const moveAction = moveActions.find((action) => action.key === key);
-    if (moveAction && onMove) void onMove(moveAction);
+    const promotionAction = promotionActions.find((action) => action.key === key);
+    if (promotionAction && onPromote) void onPromote(promotionAction);
     if (key === LINK_ACTION_KEY.delete && onDelete) {
       modal.confirm({
         title: LINK_CONFIRM_COPY.deleteTitle,

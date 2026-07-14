@@ -54,11 +54,10 @@ Agents can manage the same persisted link properties exposed in the UI:
 | `agor_links_get` | Read a link's owner, target, label, pin state, provenance, and metadata |
 | `agor_links_create` | Create a manual HTTP(S) or knowledge link on a session or branch |
 | `agor_links_update` | Change a label, pin state, metadata, or the target of a manual link |
-| `agor_links_move` | Move a web or knowledge link to a session or branch owner |
-| `agor_links_save` | Save a link to the current branch or through the guarded teammate-promotion flow |
+| `agor_links_promote` | Promote a visible link to the current branch or a teammate while preserving its source owner |
 | `agor_links_delete` | Remove the saved link without changing its target or source message |
 
-Parsed and uploaded links keep their source-owned targets read-only. Their label and pin state remain editable after the link is persisted. Web and knowledge links can move between owners. File and internal links stay with their owner until their lifetime and access rules are defined.
+Parsed and uploaded links keep their source-owned targets read-only. Their label and pin state remain editable after the link is persisted. Web, knowledge, and uploaded-file links can be promoted to a branch or teammate without removing the source link. Internal references remain with their owner.
 
 ## Self-Aware Agents Inside Agor
 

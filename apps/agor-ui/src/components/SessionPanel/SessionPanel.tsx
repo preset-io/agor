@@ -53,10 +53,8 @@ import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
 import {
-  makeLinksForBranchSelector,
   makeLinksForSessionSelector,
   selectBoardById,
-  selectFetchAndReplaceFullBranchLinks,
   selectFetchAndReplaceFullSessionLinks,
   selectMcpServerById,
   selectUserAuthenticatedMcpServerIds,
@@ -71,7 +69,7 @@ import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import {
   buildLinkDisplayItems,
-  getLinkMoveActions,
+  getLinkPromotionActions,
   groupRenderableLinksByMessageId,
   LINK_OWNER_SCOPE,
   type LinkDisplayItem,
@@ -337,17 +335,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     [session?.session_id]
   );
   const sessionLinks = useAgorStore(sessionLinksSelector) ?? [];
-  const currentBranchLinksSelector = React.useMemo(
-    () => makeLinksForBranchSelector(branch?.branch_id ?? ''),
-    [branch?.branch_id]
-  );
-  const currentBranchLinks = useAgorStore(currentBranchLinksSelector) ?? [];
   const boardById = useAgorStore(selectBoardById);
   const teammateBranchId = branch?.board_id
     ? (boardById.get(branch.board_id)?.primary_teammate_id ?? null)
     : null;
   const fetchAndReplaceFullSessionLinks = useAgorStore(selectFetchAndReplaceFullSessionLinks);
-  const fetchAndReplaceFullBranchLinks = useAgorStore(selectFetchAndReplaceFullBranchLinks);
   // The ref blocks same-tick re-entry; reactive state locks composer mutations
   // for the full lifetime of every prompt, fork, BTW, or spawn action.
   const composerActionInFlightRef = React.useRef(false);
@@ -359,7 +351,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     createLink: handleCreateSessionLink,
     updateLink: handleUpdateSessionLink,
     removeLink: handleDeleteSessionLink,
-    moveLink: handleMoveSessionLink,
+    promoteLink: handlePromoteSessionLink,
   } = useLinkMutations({
     client,
     branchId: branch?.branch_id,
@@ -547,29 +539,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     const requestId = ++linksLoadRequestRef.current;
     setSessionLinksLoading(true);
     setSessionLinksError(null);
-    const requests = [fetchAndReplaceFullSessionLinks(client, session.session_id)];
-    if (branch?.branch_id) {
-      requests.push(fetchAndReplaceFullBranchLinks(client, branch.branch_id));
-    }
-    const results = await Promise.allSettled(requests);
-    if (requestId !== linksLoadRequestRef.current) return;
-    const failure = results.find(
-      (result): result is PromiseRejectedResult => result.status === 'rejected'
-    );
-    if (failure) {
-      const detail =
-        failure.reason instanceof Error ? failure.reason.message : String(failure.reason);
+    try {
+      await fetchAndReplaceFullSessionLinks(client, session.session_id);
+    } catch (error) {
+      if (requestId !== linksLoadRequestRef.current) return;
+      const detail = error instanceof Error ? error.message : String(error);
       setSessionLinksError(`Failed to load links: ${detail}`);
     }
+    if (requestId !== linksLoadRequestRef.current) return;
     setSessionLinksLoading(false);
-  }, [
-    branch?.branch_id,
-    client,
-    fetchAndReplaceFullBranchLinks,
-    fetchAndReplaceFullSessionLinks,
-    open,
-    session?.session_id,
-  ]);
+  }, [client, fetchAndReplaceFullSessionLinks, open, session?.session_id]);
 
   React.useEffect(() => {
     void loadSessionLinks();
@@ -693,13 +672,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const linkDisplayItems = React.useMemo(
     () =>
       buildLinkDisplayItems({
-        branch: branch ?? undefined,
-        links: [...sessionLinks, ...currentBranchLinks],
+        links: sessionLinks,
+        includeBranchLinks: false,
       }),
-    [branch, currentBranchLinks, sessionLinks]
+    [sessionLinks]
   );
-  const attachmentItems = linkDisplayItems;
-
   const pinnedContextLinkItems = React.useMemo(
     () => selectPinnedLinkDisplayItems(linkDisplayItems),
     [linkDisplayItems]
@@ -1141,10 +1118,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const moveActionsForSessionLink = (item: LinkDisplayItem) =>
-    getLinkMoveActions(item, {
+  const promotionActionsForSessionLink = (item: LinkDisplayItem) =>
+    getLinkPromotionActions(item, {
       branchId: branch?.branch_id,
-      sessionId: session.session_id,
       teammateBranchId,
       available: Boolean(client && !connectionDisabled),
     });
@@ -1488,15 +1464,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           </div>
           <Space size={4}>
             <SessionAttachmentsDropdown
-              items={attachmentItems}
+              items={linkDisplayItems}
               loading={sessionLinksLoading}
               error={sessionLinksError}
               onRetry={() => void loadSessionLinks()}
               pinningKeys={pinningKeys}
               onTogglePinned={handleToggleSessionLinkPinned}
               onRegisterOpenPinnedManager={handleRegisterOpenPinnedManager}
-              getMoveActions={moveActionsForSessionLink}
-              onMoveLink={handleMoveSessionLink}
+              getPromotionActions={promotionActionsForSessionLink}
+              onPromoteLink={handlePromoteSessionLink}
               lifecycleBusyKeys={lifecycleBusyKeys}
               onCreateLink={(draft) => handleCreateSessionLink(draft, LINK_OWNER_SCOPE.session)}
               onUpdateLink={handleUpdateSessionLink}

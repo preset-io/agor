@@ -1,5 +1,12 @@
-import type { Link, LinkCreate, LinkKind, LinkMoveRequest, LinkPatch } from '@agor/core/types';
-import { LINK_MOVE_TARGET } from '@agor/core/types';
+import type {
+  Link,
+  LinkCreate,
+  LinkKind,
+  LinkPatch,
+  LinkPromotionRequest,
+  LinkPromotionTarget,
+} from '@agor/core/types';
+import { LINK_PROMOTION_TARGET } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { resolveBranchId, resolveSessionId } from '../resolve-ids.js';
@@ -10,7 +17,6 @@ import { textResult } from '../server.js';
 const LINKS_SERVICE = 'links';
 const SESSIONS_SERVICE = 'sessions';
 const LINK_PROMOTION_SERVICE = '/links/:sourceLinkId/promote';
-const LINK_MOVE_SERVICE = '/links/:linkId/move';
 const LINK_SOURCE_MANUAL = 'manual';
 const LINK_KIND = {
   issue: 'issue',
@@ -23,17 +29,8 @@ const LINK_TOOL = {
   get: 'agor_links_get',
   create: 'agor_links_create',
   update: 'agor_links_update',
-  move: 'agor_links_move',
-  save: 'agor_links_save',
+  promote: 'agor_links_promote',
   delete: 'agor_links_delete',
-} as const;
-const LINK_SAVE_DESTINATION = {
-  branch: 'branch',
-  teammate: 'teammate',
-} as const;
-const LINK_MOVE_DESTINATION = {
-  branch: 'branch',
-  session: 'session',
 } as const;
 const LINK_TARGET = {
   knowledgePrefix: 'agor://kb/',
@@ -49,10 +46,7 @@ const LINK_TOOL_ERROR = {
   emptyPatch: 'Provide at least one mutable field to update.',
   immutableTarget: 'Only manual links can change target.',
   httpTargetRequired: 'Only HTTP(S) targets are supported',
-  targetBranchRequired: 'Provide branchId when saving to a teammate.',
-  moveBranchConflict: 'Do not provide sessionId when moving to a branch.',
-  moveSessionConflict: 'Do not provide branchId when moving to a session.',
-  reusableTargetRequired: 'Only web and knowledge links can be saved to another owner.',
+  targetBranchRequired: 'Provide branchId when promoting to a teammate.',
 } as const;
 const LINK_LIMIT = {
   titleLength: 200,
@@ -65,13 +59,9 @@ const PUBLIC_LINK_KINDS = [
   LINK_KIND.url,
 ] as const;
 const linkKindSchema = z.enum(PUBLIC_LINK_KINDS);
-const linkSaveDestinationSchema = z.enum([
-  LINK_SAVE_DESTINATION.branch,
-  LINK_SAVE_DESTINATION.teammate,
-]);
-const linkMoveDestinationSchema = z.enum([
-  LINK_MOVE_DESTINATION.branch,
-  LINK_MOVE_DESTINATION.session,
+const linkPromotionDestinationSchema = z.enum([
+  LINK_PROMOTION_TARGET.branch,
+  LINK_PROMOTION_TARGET.teammate,
 ]);
 const httpUrlSchema = z
   .string()
@@ -116,27 +106,19 @@ function targetFields(url?: string, refUri?: string): PublicLinkTarget {
   return { url: null, ref_uri: refUri as string, file_path: null };
 }
 
-function reusableTargetFields(link: Link): PublicLinkTarget {
-  if (link.url) return { url: link.url, ref_uri: null, file_path: null };
-  if (link.kind === LINK_KIND.knowledge && link.ref_uri) {
-    return { url: null, ref_uri: link.ref_uri, file_path: null };
-  }
-  throw new Error(LINK_TOOL_ERROR.reusableTargetRequired);
-}
-
 function normalizedTitle(title: string | null | undefined): string | null {
   return title?.trim() || null;
 }
 
-async function resolveSaveBranchId(
+async function resolvePromotionBranchId(
   ctx: McpContext,
   args: {
     branchId?: string;
-    destination: (typeof LINK_SAVE_DESTINATION)[keyof typeof LINK_SAVE_DESTINATION];
+    destination: LinkPromotionTarget;
   }
 ) {
   if (args.branchId) return resolveBranchId(ctx, args.branchId);
-  if (args.destination === LINK_SAVE_DESTINATION.teammate) {
+  if (args.destination === LINK_PROMOTION_TARGET.teammate) {
     throw new Error(LINK_TOOL_ERROR.targetBranchRequired);
   }
   if (!ctx.sessionId) throw new Error(LINK_TOOL_ERROR.ownerRequired);
@@ -165,31 +147,13 @@ async function resolveOwner(
   throw new Error(LINK_TOOL_ERROR.ownerRequired);
 }
 
-async function resolveMoveRequest(
-  ctx: McpContext,
-  args: {
-    destination: (typeof LINK_MOVE_DESTINATION)[keyof typeof LINK_MOVE_DESTINATION];
-    branchId?: string;
-    sessionId?: string;
-  }
-): Promise<LinkMoveRequest> {
-  if (args.destination === LINK_MOVE_DESTINATION.branch) {
-    if (args.sessionId) throw new Error(LINK_TOOL_ERROR.moveBranchConflict);
-    return {
-      target: LINK_MOVE_TARGET.branch,
-      branch_id: await resolveSaveBranchId(ctx, {
-        branchId: args.branchId,
-        destination: LINK_SAVE_DESTINATION.branch,
-      }),
-    };
-  }
-  if (args.branchId) throw new Error(LINK_TOOL_ERROR.moveSessionConflict);
-  const sessionId = args.sessionId ?? ctx.sessionId;
-  if (!sessionId) throw new Error(LINK_TOOL_ERROR.ownerRequired);
-  return {
-    target: LINK_MOVE_TARGET.session,
-    session_id: await resolveSessionId(ctx, sessionId),
-  };
+function promotionRequest(
+  destination: LinkPromotionTarget,
+  branchId: Awaited<ReturnType<typeof resolveBranchId>>
+): LinkPromotionRequest {
+  return destination === LINK_PROMOTION_TARGET.teammate
+    ? { target: LINK_PROMOTION_TARGET.teammate, teammate_branch_id: branchId }
+    : { target: LINK_PROMOTION_TARGET.branch, branch_id: branchId };
 }
 
 export function registerLinkTools(server: McpServer, ctx: McpContext): void {
@@ -348,72 +312,26 @@ export function registerLinkTools(server: McpServer, ctx: McpContext): void {
   );
 
   server.registerTool(
-    LINK_TOOL.move,
+    LINK_TOOL.promote,
     {
       description:
-        'Move a visible web or knowledge link to a branch or session owner. The current branch or session is used when the matching destination ID is omitted.',
+        'Promote a visible link to a branch or teammate without removing it from its source owner. Branch promotion defaults to the current session branch; teammate promotion requires branchId.',
       inputSchema: z.strictObject({
         linkId: mcpRequiredId('linkId', 'Link'),
-        destination: linkMoveDestinationSchema,
+        destination: linkPromotionDestinationSchema,
         branchId: mcpOptionalId('branchId', 'Branch', 'Destination branch'),
-        sessionId: mcpOptionalId('sessionId', 'Session', 'Destination session'),
       }),
     },
     async (args) => {
-      const request = await resolveMoveRequest(ctx, args);
+      const branchId = await resolvePromotionBranchId(ctx, args);
       return textResult(
-        await ctx.app.service(LINK_MOVE_SERVICE).create(request, {
-          ...ctx.baseServiceParams,
-          route: { linkId: args.linkId },
-        })
-      );
-    }
-  );
-
-  server.registerTool(
-    LINK_TOOL.save,
-    {
-      description:
-        'Save a visible web or knowledge link to a branch, or use the guarded teammate-promotion route. Branch saves default to the current session branch; teammate saves require branchId.',
-      inputSchema: z.strictObject({
-        linkId: mcpRequiredId('linkId', 'Link'),
-        destination: linkSaveDestinationSchema,
-        branchId: mcpOptionalId('branchId', 'Branch', 'Destination branch'),
-      }),
-    },
-    async (args) => {
-      const branchId = await resolveSaveBranchId(ctx, args);
-      if (args.destination === LINK_SAVE_DESTINATION.teammate) {
-        const saved = await ctx.app.service(LINK_PROMOTION_SERVICE).create(
-          {
-            target: LINK_SAVE_DESTINATION.teammate,
-            teammate_branch_id: branchId,
-          },
-          {
+        await ctx.app
+          .service(LINK_PROMOTION_SERVICE)
+          .create(promotionRequest(args.destination, branchId), {
             ...ctx.baseServiceParams,
             route: { sourceLinkId: args.linkId },
-          }
-        );
-        return textResult(saved);
-      }
-
-      const linksService = ctx.app.service(LINKS_SERVICE);
-      const source = (await linksService.get(args.linkId, ctx.baseServiceParams)) as Link;
-      const payload = {
-        branch_id: branchId,
-        session_id: null,
-        ...reusableTargetFields(source),
-        kind: source.kind,
-        source: LINK_SOURCE_MANUAL,
-        is_pinned: false,
-        title: source.title ?? null,
-        metadata: null,
-      } satisfies LinkCreate;
-      const createParams = {
-        ...ctx.baseServiceParams,
-        _agorPreserveExistingOnCreate: true,
-      };
-      return textResult(await linksService.create(payload, createParams));
+          })
+      );
     }
   );
 
