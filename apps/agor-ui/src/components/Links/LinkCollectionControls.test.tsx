@@ -1,3 +1,4 @@
+import { PlusOutlined } from '@ant-design/icons';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { getLinkCategoryOptions, LinkCollectionControls } from './LinkCollectionControls';
@@ -41,5 +42,26 @@ describe('LinkCollectionControls', () => {
       'knowledge',
       'issues',
     ]);
+  });
+
+  it('renders an optional category action without owning its behavior', () => {
+    const onAction = vi.fn();
+
+    render(
+      <LinkCollectionControls
+        categoryCounts={counts}
+        activeCategory="all"
+        onCategoryChange={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        sortOrder="az"
+        onSortChange={vi.fn()}
+        categoryAction={{ label: 'Add link', icon: <PlusOutlined />, onClick: onAction }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add link' }));
+
+    expect(onAction).toHaveBeenCalledOnce();
   });
 });

@@ -330,11 +330,12 @@ describe('LinksTab promotion actions', () => {
 
     renderLinksTab(client);
 
+    await screen.findByText(/No durable branch links yet/i);
     fireEvent.click(screen.getByRole('button', { name: /add link/i }));
-    expect(await screen.findByRole('dialog', { name: 'Add link' })).toBeInTheDocument();
     expect(
-      screen.getByPlaceholderText('https://example.com or agor://kb/team/document.md')
+      await screen.findByPlaceholderText('https://example.com or agor://kb/team/document.md')
     ).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toHaveTextContent('Add link');
     fireEvent.change(screen.getByPlaceholderText('Optional display label'), {
       target: { value: 'Architecture' },
     });

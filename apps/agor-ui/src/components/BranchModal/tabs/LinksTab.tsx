@@ -1,6 +1,6 @@
 import { type AgorClient, type Branch, isTeammate, type Session, shortId } from '@agor-live/client';
 import { PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, Empty, Flex, List, Space, Spin, theme } from 'antd';
+import { Alert, Empty, Flex, List, Space, Spin, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -167,11 +167,20 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
           )}
 
           <div className={linkStyles.branchLinksSection}>
-            <Flex justify="flex-end">
-              <Button type="primary" icon={<PlusOutlined />} onClick={openAddLink}>
-                {LINK_ACTION_LABEL.add}
-              </Button>
-            </Flex>
+            <LinkCollectionControls
+              categoryCounts={categoryCounts}
+              activeCategory={activeCategory}
+              onCategoryChange={setActiveCategory}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              sortOrder={sortOrder}
+              onSortChange={setSortOrder}
+              categoryAction={{
+                label: LINK_ACTION_LABEL.add,
+                icon: <PlusOutlined />,
+                onClick: openAddLink,
+              }}
+            />
           </div>
 
           {loading ? (
@@ -180,17 +189,6 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
             </Flex>
           ) : items.length > 0 ? (
             <Space direction="vertical" size={token.sizeMD} className={linkStyles.branchLinksStack}>
-              <div className={linkStyles.branchLinksSection}>
-                <LinkCollectionControls
-                  categoryCounts={categoryCounts}
-                  activeCategory={activeCategory}
-                  onCategoryChange={setActiveCategory}
-                  searchQuery={searchQuery}
-                  onSearchChange={setSearchQuery}
-                  sortOrder={sortOrder}
-                  onSortChange={setSortOrder}
-                />
-              </div>
               {visibleItems.length > 0 ? (
                 <List
                   className={linkStyles.branchLinksSection}

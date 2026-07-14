@@ -22,6 +22,40 @@
   min-height: 180px;
 }
 
+.linkCollectionControls,
+.linkCategoryRow,
+.linkSecondaryControls {
+  width: 100%;
+}
+
+.linkCategoryScroller {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+}
+
+.linkCategoryTabs {
+  min-width: 520px;
+}
+
+.linkCategoryAction,
+.linkSortControls {
+  flex: 0 0 auto;
+}
+
+.linkSearchInput {
+  min-width: 220px;
+  flex: 1 1 320px;
+}
+
+.linkSortLabel {
+  font-size: var(--ant-font-size-sm);
+}
+
+.linkSortSelect {
+  width: 128px;
+}
+
 .linkManagerDrawer :global(.ant-drawer-body) {
   display: flex;
   flex-direction: column;
