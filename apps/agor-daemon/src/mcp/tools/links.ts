@@ -6,7 +6,7 @@ import type {
   LinkPromotionRequest,
   LinkPromotionTarget,
 } from '@agor/core/types';
-import { LINK_PROMOTION_TARGET } from '@agor/core/types';
+import { inferManualLinkKind, LINK_PROMOTION_TARGET } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { resolveBranchId, resolveSessionId } from '../resolve-ids.js';
@@ -37,7 +37,6 @@ const LINK_TARGET = {
   knowledgePrefix: 'agor://kb/',
   httpProtocol: 'http:',
   httpsProtocol: 'https:',
-  githubHost: 'github.com',
 } as const;
 const LINK_TOOL_ERROR = {
   ownerConflict: 'Provide either branchId or sessionId, not both.',
@@ -73,29 +72,6 @@ const httpUrlSchema = z
   }, LINK_TOOL_ERROR.httpTargetRequired);
 const nullableTitleSchema = z.string().max(LINK_LIMIT.titleLength).nullable().optional();
 const nullableMetadataSchema = z.record(z.string(), z.unknown()).nullable().optional();
-
-function inferLinkKind(url?: string, refUri?: string): LinkKind {
-  if (refUri) return LINK_KIND.knowledge;
-  if (!url) return LINK_KIND.url;
-  try {
-    const parsed = new URL(url);
-    if (
-      parsed.hostname.toLowerCase() === LINK_TARGET.githubHost &&
-      /^\/[^/]+\/[^/]+\/issues\/\d+(?:\/|$)/i.test(parsed.pathname)
-    ) {
-      return LINK_KIND.issue;
-    }
-    if (
-      parsed.hostname.toLowerCase() === LINK_TARGET.githubHost &&
-      /^\/[^/]+\/[^/]+\/pull\/\d+(?:\/|$)/i.test(parsed.pathname)
-    ) {
-      return LINK_KIND.pullRequest;
-    }
-  } catch {
-    return LINK_KIND.url;
-  }
-  return LINK_KIND.url;
-}
 
 type PublicLinkTarget =
   | { url: string; ref_uri: null; file_path: null }
@@ -251,7 +227,7 @@ export function registerLinkTools(server: McpServer, ctx: McpContext): void {
       const payload = {
         ...owner,
         ...target,
-        kind: args.kind ?? inferLinkKind(args.url, args.refUri),
+        kind: args.kind ?? inferManualLinkKind({ url: args.url, ref_uri: args.refUri }),
         source: LINK_SOURCE_MANUAL,
         title: normalizedTitle(args.title),
         is_pinned: args.pinned ?? false,
@@ -292,7 +268,7 @@ export function registerLinkTools(server: McpServer, ctx: McpContext): void {
       if (metadata !== undefined) patch.metadata = metadata;
       if (hasTargetPatch) {
         Object.assign(patch, targetFields(url, refUri));
-        if (kind === undefined) patch.kind = inferLinkKind(url, refUri);
+        if (kind === undefined) patch.kind = inferManualLinkKind({ url, ref_uri: refUri });
       }
       if (Object.keys(patch).length === 0) throw new Error(LINK_TOOL_ERROR.emptyPatch);
       if (hasTargetPatch || kind !== undefined) {

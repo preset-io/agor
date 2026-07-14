@@ -16,7 +16,7 @@ import {
 interface LinkActionsMenuProps {
   item: LinkDisplayItem;
   busy?: boolean;
-  onEdit: () => void;
+  onEdit?: () => void;
   onDelete?: () => Promise<unknown>;
   deleteLabel?: string;
   placementItems?: readonly LinkPlacementMenuItem[];
@@ -36,7 +36,9 @@ export function LinkActionsMenu({
 }: LinkActionsMenuProps) {
   const { modal } = App.useApp();
   const items: NonNullable<MenuProps['items']> = [
-    { key: LINK_ACTION_KEY.edit, label: LINK_ACTION_LABEL.edit, disabled: busy },
+    ...(onEdit
+      ? [{ key: LINK_ACTION_KEY.edit, label: LINK_ACTION_LABEL.edit, disabled: busy }]
+      : []),
     ...placementItems.map((item) => ({
       key: item.key,
       label: item.label,
@@ -56,7 +58,7 @@ export function LinkActionsMenu({
   ];
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
-    if (key === LINK_ACTION_KEY.edit) onEdit();
+    if (key === LINK_ACTION_KEY.edit) onEdit?.();
     const placementItem = placementItems.find((item) => item.key === key);
     if (placementItem && isLinkPromotionAction(placementItem) && onPlacementAction) {
       void onPlacementAction(placementItem);

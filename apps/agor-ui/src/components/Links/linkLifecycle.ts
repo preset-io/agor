@@ -1,3 +1,4 @@
+import { inferManualLinkKind } from '@agor/core/types';
 import type {
   AgorClient,
   BranchID,
@@ -47,15 +48,7 @@ export function getManualLinkTarget(
     throw new Error(LINK_FORM_COPY.targetProtocol);
   }
 
-  const pathname = parsed.pathname;
-  const kind: LinkKind =
-    parsed.hostname.toLowerCase() === LINK_TARGET.githubHost &&
-    /\/issues\/\d+(?:\/|$)/i.test(pathname)
-      ? LINK_KIND.issue
-      : parsed.hostname.toLowerCase() === LINK_TARGET.githubHost &&
-          /\/pull\/\d+(?:\/|$)/i.test(pathname)
-        ? LINK_KIND.pullRequest
-        : LINK_KIND.url;
+  const kind = inferManualLinkKind({ url: parsed.toString() });
   return { kind, url: parsed.toString(), ref_uri: null, file_path: null };
 }
 

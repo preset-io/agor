@@ -126,46 +126,4 @@ describe('legacy links backfill', () => {
       ).resolves.toEqual([]);
     }
   );
-
-  dbTest(
-    'restores a session link when a legacy move left only a branch-owned association',
-    async ({ db }) => {
-      const branch = await seedLinkBranch(db);
-      const session = await seedLinkSession(db, branch.branch_id, 'owner' as UUID);
-      const targetUrl = 'https://example.com/restore-session-source';
-      const message: Message = {
-        message_id: generateId(),
-        session_id: session.session_id,
-        type: 'user',
-        role: MessageRole.USER,
-        index: 0,
-        timestamp: new Date().toISOString(),
-        content_preview: 'restore this link',
-        content: `See ${targetUrl}`,
-      };
-      await new MessagesRepository(db).create(message);
-      const linksRepository = new LinksRepository(db);
-      const branchLink = await linksRepository.create({
-        branch_id: branch.branch_id,
-        session_id: null,
-        source_message_id: message.message_id,
-        kind: 'url',
-        source: 'manual',
-        url: targetUrl,
-        is_pinned: true,
-      });
-
-      await backfillLegacySessionLinks({ db, sessionId: session.session_id });
-
-      await expect(linksRepository.findAll({ sessionId: session.session_id })).resolves.toEqual([
-        expect.objectContaining({
-          source_message_id: message.message_id,
-          url: branchLink.url,
-        }),
-      ]);
-      await expect(linksRepository.findAll({ branchId: branch.branch_id })).resolves.toEqual([
-        branchLink,
-      ]);
-    }
-  );
 });

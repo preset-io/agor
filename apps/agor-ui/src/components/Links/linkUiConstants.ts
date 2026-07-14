@@ -34,7 +34,6 @@ export const LINK_TARGET = {
   knowledgePrefix: 'agor://kb/',
   httpProtocol: 'http:',
   httpsProtocol: 'https:',
-  githubHost: 'github.com',
 } as const;
 
 export const LINK_PROMOTION_DESTINATION = LINK_PROMOTION_TARGET;

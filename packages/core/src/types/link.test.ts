@@ -8,6 +8,7 @@ import {
   getLinkPromotionRootId,
   getLinkTargetCompatibilityError,
   getLinkTargetField,
+  inferManualLinkKind,
   isInternalLinkData,
   isLinkPlacementFromPromotionRoot,
   isPromotionManagedLink,
@@ -68,18 +69,47 @@ describe('link promotion policy', () => {
   });
 
   it('classifies absent, current, legacy, and independently owned placements', () => {
-    expect(getLinkPlacementRelationship()).toBe(LINK_PLACEMENT_RELATIONSHIP.available);
+    expect(getLinkPlacementRelationship(undefined, 'source-link')).toBe(
+      LINK_PLACEMENT_RELATIONSHIP.available
+    );
     expect(
-      getLinkPlacementRelationship({
-        metadata: { promoted_from_owner: { link_id: 'source-link' } },
-      })
+      getLinkPlacementRelationship(
+        {
+          metadata: { promoted_from_owner: { link_id: 'source-link' } },
+        },
+        'source-link'
+      )
     ).toBe(LINK_PLACEMENT_RELATIONSHIP.promotionManaged);
-    expect(getLinkPlacementRelationship({ metadata: { teammate_promotion: true } })).toBe(
-      LINK_PLACEMENT_RELATIONSHIP.promotionManaged
-    );
-    expect(getLinkPlacementRelationship({ metadata: { teammate_owned: true } })).toBe(
-      LINK_PLACEMENT_RELATIONSHIP.independentlyOwned
-    );
+    expect(
+      getLinkPlacementRelationship(
+        { metadata: { promoted_from_owner: { link_id: 'different-source' } } },
+        'source-link'
+      )
+    ).toBe(LINK_PLACEMENT_RELATIONSHIP.independentlyOwned);
+    expect(
+      getLinkPlacementRelationship({ metadata: { teammate_promotion: true } }, 'source-link')
+    ).toBe(LINK_PLACEMENT_RELATIONSHIP.promotionManaged);
+    expect(
+      getLinkPlacementRelationship({ metadata: { teammate_owned: true } }, 'source-link')
+    ).toBe(LINK_PLACEMENT_RELATIONSHIP.independentlyOwned);
+    expect(
+      getLinkPlacementRelationship(
+        { metadata: { promoted_from_owner: { session_id: 'missing-root' } } },
+        'source-link'
+      )
+    ).toBe(LINK_PLACEMENT_RELATIONSHIP.independentlyOwned);
+  });
+});
+
+describe('manual link classification', () => {
+  it.each([
+    [{ url: 'https://github.com/preset-io/agor/issues/90' }, 'issue'],
+    [{ url: 'https://github.com/preset-io/agor/pull/1906' }, 'pr'],
+    [{ url: 'https://github.com/issues/90' }, 'url'],
+    [{ url: 'https://example.com/guide' }, 'url'],
+    [{ ref_uri: 'agor://kb/team/runbook' }, 'kb_ref'],
+  ] as const)('classifies $0 as $1', (target, expected) => {
+    expect(inferManualLinkKind(target)).toBe(expected);
   });
 });
 
@@ -246,7 +276,7 @@ describe('link target semantics', () => {
     expect(isPromotionManagedLink({ metadata: { teammate_promotion: true } })).toBe(true);
     expect(
       isPromotionManagedLink({ metadata: { promoted_from_owner: { session_id: 's1' } } })
-    ).toBe(true);
+    ).toBe(false);
     expect(isPromotionManagedLink({ metadata: { teammate_owned: true } })).toBe(false);
     expect(isPromotionManagedLink({ metadata: null })).toBe(false);
   });

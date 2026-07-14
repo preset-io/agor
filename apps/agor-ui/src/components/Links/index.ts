@@ -3,6 +3,7 @@ export * from './LinkActions';
 export * from './LinkActionsMenu';
 export * from './LinkAttachmentCard';
 export * from './LinkCollectionControls';
+export * from './LinkCollectionRow';
 export * from './LinkContentPreviewModal';
 export * from './LinkEditorModal';
 export * from './LinkImageThumbnail';

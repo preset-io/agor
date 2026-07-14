@@ -1,4 +1,4 @@
-/* biome-ignore-all lint/plugin/noFirstPartyCss: native SPA link states need pseudo selectors; shared pinned-list layout intentionally avoids duplicated inline styles. */
+/* biome-ignore-all lint/plugin/noFirstPartyCss: native SPA link states need pseudo selectors; shared link-row and pinned-list layout intentionally avoid duplicated inline styles. */
 
 .actionRowLink:hover,
 .actionRowLink:focus-visible {
@@ -20,6 +20,27 @@
 
 .branchLinksLoading {
   min-height: 180px;
+}
+
+.branchLinksListItem {
+  padding-block: 0;
+}
+
+.collectionRowBody,
+.collectionRowText {
+  min-width: 0;
+}
+
+.collectionRowText {
+  flex: 1;
+}
+
+.collectionRowTitle {
+  line-height: 1.25;
+}
+
+.collectionRowDetail {
+  font-size: var(--ant-font-size-sm);
 }
 
 .linkCollectionControls,
@@ -56,7 +77,7 @@
   width: 128px;
 }
 
-.linkManagerDrawer :global(.ant-drawer-body) {
+.linkManagerDrawerBody {
   display: flex;
   flex-direction: column;
   min-height: 0;

@@ -20,6 +20,7 @@ import {
   LINK_ACTION_LABEL,
   LINK_OWNER_SCOPE,
   type LinkCategoryTabKey,
+  LinkCollectionRow,
   type LinkDisplayItem,
   LinkEditorModal,
   type LinkSortKey,
@@ -31,7 +32,6 @@ import {
 import { LinkCollectionControls } from '../../Links/LinkCollectionControls';
 import linkStyles from '../../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../../Links/SessionLinksControl';
-import { BranchLinkListItem } from './BranchLinkListItem';
 
 interface LinksTabProps {
   branch: Branch;
@@ -194,36 +194,35 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
                   className={linkStyles.branchLinksSection}
                   dataSource={visibleItems}
                   renderItem={(item) => (
-                    <BranchLinkListItem
-                      key={item.key}
-                      item={item}
-                      sourceSessionLabel={getSourceSessionLabel(item, sessionById)}
-                      placementItems={getLinkPlacementMenuItems(item, {
-                        branchId: branch.branch_id,
-                        teammateBranchId,
-                        placements: placementsByTargetKey.get(item.targetKey),
-                        placementsLoaded: placementsByTargetKey.has(item.targetKey),
-                        available: Boolean(client),
-                      })}
-                      lifecycleBusy={
-                        lifecycleBusyKeys.has(item.linkId ?? item.key) ||
-                        placementLoadingKeys.has(item.linkId ?? item.key)
-                      }
-                      pinning={pinningKeys.has(item.linkId ?? item.key)}
-                      onOpen={openItem}
-                      onTogglePinned={handleTogglePinned}
-                      onPlacementAction={handlePlacementAction}
-                      onOpenPlacements={
-                        isTeammate(branch) ? () => undefined : handleRefreshPlacements
-                      }
-                      onEdit={openEditLink}
-                      onDelete={removeLink}
-                      deleteLabel={
-                        isTeammate(branch)
-                          ? LINK_ACTION_LABEL.removeFromTeammate
-                          : LINK_ACTION_LABEL.removeFromBranch
-                      }
-                    />
+                    <List.Item key={item.key} className={linkStyles.branchLinksListItem}>
+                      <LinkCollectionRow
+                        item={item}
+                        sourceLabel={getSourceSessionLabel(item, sessionById)}
+                        placementItems={getLinkPlacementMenuItems(item, {
+                          branchId: branch.branch_id,
+                          teammateBranchId,
+                          placements: placementsByTargetKey.get(item.targetKey),
+                          placementsLoaded: placementsByTargetKey.has(item.targetKey),
+                          available: Boolean(client),
+                        })}
+                        lifecycleBusy={
+                          lifecycleBusyKeys.has(item.linkId ?? item.key) ||
+                          placementLoadingKeys.has(item.linkId ?? item.key)
+                        }
+                        pinning={pinningKeys.has(item.linkId ?? item.key)}
+                        onOpen={openItem}
+                        onTogglePinned={handleTogglePinned}
+                        onPlacementAction={handlePlacementAction}
+                        onOpenPlacements={isTeammate(branch) ? undefined : handleRefreshPlacements}
+                        onEdit={openEditLink}
+                        onDelete={removeLink}
+                        deleteLabel={
+                          isTeammate(branch)
+                            ? LINK_ACTION_LABEL.removeFromTeammate
+                            : LINK_ACTION_LABEL.removeFromBranch
+                        }
+                      />
+                    </List.Item>
                   )}
                 />
               ) : (

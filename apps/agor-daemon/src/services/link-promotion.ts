@@ -14,6 +14,7 @@ import type {
 import {
   canPromoteLink,
   getLinkPlacementRelationship,
+  getLinkPromotionRootId,
   isTeammate,
   LINK_CONTEXT_KIND,
   LINK_PLACEMENT_RELATIONSHIP,
@@ -259,7 +260,10 @@ export class LinkPlacementService {
     await this.authorizeDestination(destination, params);
     const existing = await this.findDestinationPlacement(source, destination);
     if (!existing) return null;
-    if (getLinkPlacementRelationship(existing) !== LINK_PLACEMENT_RELATIONSHIP.promotionManaged) {
+    if (
+      getLinkPlacementRelationship(existing, getLinkPromotionRootId(source)) !==
+      LINK_PLACEMENT_RELATIONSHIP.promotionManaged
+    ) {
       throw new BadRequest(LINK_PROMOTION_ERROR.unrelatedPlacement);
     }
     const { query: _query, ...mutationParams } = params ?? {};

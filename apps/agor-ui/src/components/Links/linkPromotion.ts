@@ -139,11 +139,12 @@ function placementMatchesSelection(link: Link, selection: LinkPromotionSelection
 
 function getLinkPlacementAction(
   selection: LinkPromotionSelection,
+  promotionRootLinkId: string,
   placements: readonly Link[] = [],
   available = true
 ): LinkPlacementMenuItem {
   const existing = placements.find((link) => placementMatchesSelection(link, selection));
-  const relationship = getLinkPlacementRelationship(existing);
+  const relationship = getLinkPlacementRelationship(existing, promotionRootLinkId);
   if (relationship === LINK_PLACEMENT_RELATIONSHIP.independentlyOwned) {
     return {
       key: LINK_EXISTING_ACTION_KEY[selection.destination],
@@ -185,8 +186,14 @@ export function getLinkPlacementMenuItems(
       },
     ];
   }
+  const promotionRootLinkId = item.promotionRootLinkId ?? item.linkId ?? item.key;
   return candidates.map((selection) =>
-    getLinkPlacementAction(selection, context.placements, context.available ?? true)
+    getLinkPlacementAction(
+      selection,
+      promotionRootLinkId,
+      context.placements,
+      context.available ?? true
+    )
   );
 }
 

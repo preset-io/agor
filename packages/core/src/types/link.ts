@@ -16,6 +16,29 @@ export type LinkKind = (typeof LINK_KINDS)[number];
 export const LINK_SOURCES = ['manual', 'parsed', 'upload'] as const;
 export type LinkSource = (typeof LINK_SOURCES)[number];
 
+const MANUAL_LINK_TARGET = {
+  githubHost: 'github.com',
+  issuePath: /^\/[^/]+\/[^/]+\/issues\/\d+(?:\/|$)/i,
+  pullRequestPath: /^\/[^/]+\/[^/]+\/pull\/\d+(?:\/|$)/i,
+} as const;
+
+export function inferManualLinkKind(target: {
+  url?: string | null;
+  ref_uri?: string | null;
+}): LinkKind {
+  if (target.ref_uri) return 'kb_ref';
+  if (!target.url) return 'url';
+  try {
+    const parsed = new URL(target.url);
+    if (parsed.hostname.toLowerCase() !== MANUAL_LINK_TARGET.githubHost) return 'url';
+    if (MANUAL_LINK_TARGET.issuePath.test(parsed.pathname)) return 'issue';
+    if (MANUAL_LINK_TARGET.pullRequestPath.test(parsed.pathname)) return 'pr';
+  } catch {
+    return 'url';
+  }
+  return 'url';
+}
+
 export const LINK_OWNER_SCOPES = ['branch', 'session', 'all'] as const;
 export type LinkOwnerScope = (typeof LINK_OWNER_SCOPES)[number];
 
@@ -424,9 +447,7 @@ export function isPromotionManagedLink(link: Pick<Link, 'metadata'>): boolean {
   const metadata = link.metadata;
   return Boolean(
     metadata &&
-      (metadata[TEAMMATE_PROMOTION_METADATA_KEY] === true ||
-        (metadata[LINK_PROMOTION_SOURCE_METADATA_KEY] &&
-          typeof metadata[LINK_PROMOTION_SOURCE_METADATA_KEY] === 'object'))
+      (metadata[TEAMMATE_PROMOTION_METADATA_KEY] === true || promotionRootIdFromMetadata(metadata))
   );
 }
 
@@ -440,10 +461,17 @@ export type LinkPlacementRelationship =
   (typeof LINK_PLACEMENT_RELATIONSHIP)[keyof typeof LINK_PLACEMENT_RELATIONSHIP];
 
 export function getLinkPlacementRelationship(
-  placement?: Pick<Link, 'metadata'> | null
+  placement: Pick<Link, 'metadata'> | null | undefined,
+  promotionRootLinkId: string
 ): LinkPlacementRelationship {
   if (!placement) return LINK_PLACEMENT_RELATIONSHIP.available;
-  return isPromotionManagedLink(placement)
+  const placementRootLinkId = promotionRootIdFromMetadata(placement.metadata);
+  if (placementRootLinkId) {
+    return placementRootLinkId === promotionRootLinkId
+      ? LINK_PLACEMENT_RELATIONSHIP.promotionManaged
+      : LINK_PLACEMENT_RELATIONSHIP.independentlyOwned;
+  }
+  return placement.metadata?.[TEAMMATE_PROMOTION_METADATA_KEY] === true
     ? LINK_PLACEMENT_RELATIONSHIP.promotionManaged
     : LINK_PLACEMENT_RELATIONSHIP.independentlyOwned;
 }

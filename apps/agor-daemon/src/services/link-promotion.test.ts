@@ -362,6 +362,32 @@ describe('LinkPlacementService', () => {
     });
   });
 
+  dbTest('does not remove a matching placement promoted from another source', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const otherBranch = await seedBranch(db);
+    const teammate = await seedBranch(db, { teammate: true });
+    const url = 'https://example.com/unrelated-promotion';
+    const source = await createUrl(db, branch.branch_id, url);
+    const otherSource = await createUrl(db, otherBranch.branch_id, url);
+    const unrelatedPlacement = await createUrl(db, teammate.branch_id, url, {
+      metadata: { promoted_from_owner: { link_id: otherSource.link_id } },
+    });
+    const { service } = promotionService(db);
+
+    await expect(
+      service.remove(null, {
+        route: { sourceLinkId: source.link_id },
+        query: {
+          target: LINK_PROMOTION_TARGET.teammate,
+          teammate_branch_id: teammate.branch_id,
+        },
+      })
+    ).rejects.toThrow('Destination link is not managed by this promotion');
+    await expect(
+      new LinksRepository(db).findById(unrelatedPlacement.link_id)
+    ).resolves.toMatchObject({ link_id: unrelatedPlacement.link_id });
+  });
+
   dbTest('requires all permission on teammate branch when RBAC is enabled', async ({ db }) => {
     const userId = generateId() as UUID;
     await seedUser(db, userId, 'link-promoter@example.com');

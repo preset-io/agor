@@ -162,6 +162,31 @@ describe('getLinkPlacementMenuItems', () => {
     ]);
   });
 
+  it('does not offer removal for a matching placement promoted from another source', () => {
+    const unrelatedPlacement = {
+      link_id: 'other-promotion',
+      branch_id: TEAMMATE_BRANCH_ID,
+      session_id: null,
+      target_key: 'url:https://example.com/runbook',
+      metadata: { promoted_from_owner: { link_id: 'different-source' } },
+    } as Link;
+
+    expect(
+      getLinkPlacementMenuItems(linkItem(), {
+        branchId: BRANCH_ID,
+        teammateBranchId: TEAMMATE_BRANCH_ID,
+        placements: [unrelatedPlacement],
+      })
+    ).toEqual([
+      expect.objectContaining({ destination: LINK_PROMOTION_DESTINATION.branch }),
+      {
+        key: LINK_ACTION_KEY.alreadyInTeammate,
+        label: LINK_ACTION_LABEL.alreadyInTeammate,
+        disabled: true,
+      },
+    ]);
+  });
+
   it('shows a stable status while destination placements are loading', () => {
     expect(
       getLinkPlacementMenuItems(linkItem(), {

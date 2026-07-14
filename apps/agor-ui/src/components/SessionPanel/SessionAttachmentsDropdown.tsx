@@ -250,7 +250,7 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
       <Drawer
         title={pinnedOnly ? LINK_MANAGER_COPY.pinnedTitle : LINK_MANAGER_COPY.title}
         open={drawerOpen}
-        rootClassName={linkStyles.linkManagerDrawer}
+        classNames={{ body: linkStyles.linkManagerDrawerBody }}
         size={720}
         onClose={() => setDrawerOpen(false)}
       >
