@@ -31,7 +31,6 @@ import {
 } from '../Links';
 import { LinkCollectionControls } from '../Links/LinkCollectionControls';
 import { getLinkUnavailableReason, getSafeLinkContentLabel } from '../Links/linkContent';
-import linkStyles from '../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../Links/SessionLinksControl';
 import {
   SessionAttachmentDrawerRow,
@@ -250,54 +249,57 @@ export const SessionAttachmentsDropdown: React.FC<Props> = ({
       <Drawer
         title={pinnedOnly ? LINK_MANAGER_COPY.pinnedTitle : LINK_MANAGER_COPY.title}
         open={drawerOpen}
-        classNames={{ body: linkStyles.linkManagerDrawerBody }}
+        styles={{ body: { display: 'flex', flexDirection: 'column', minHeight: 0 } }}
         size={720}
         onClose={() => setDrawerOpen(false)}
       >
-        <div data-testid="links-organizer-manage" className={linkStyles.linkManagerBody}>
-          <Flex vertical gap={token.sizeMD} className={linkStyles.linkManagerStack}>
-            <LinkCollectionControls
-              categoryCounts={categoryCounts}
-              activeCategory={activeCategory}
-              onCategoryChange={setActiveCategory}
-              searchQuery={searchQuery}
-              onSearchChange={setSearchQuery}
-              sortOrder={sortOrder}
-              onSortChange={setSortOrder}
-              categoryAction={
-                onCreateLink
-                  ? {
-                      label: LINK_ACTION_LABEL.add,
-                      icon: <PlusOutlined />,
-                      onClick: openAddLink,
-                    }
-                  : undefined
-              }
-            />
-            {drawerItems.length === 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links in this view." />
-            ) : (
-              <div className={linkStyles.linkManagerList}>
-                {drawerItems.map((item) => (
-                  <SessionAttachmentDrawerRow
-                    key={item.key}
-                    item={item}
-                    pinningKeys={pinningKeys}
-                    onOpen={openTarget}
-                    onTogglePinned={onTogglePinned}
-                    getPlacementItems={getPlacementItems}
-                    onPlacementAction={onPlacementAction}
-                    onOpenPlacements={onOpenPlacements}
-                    lifecycleBusyKeys={lifecycleBusyKeys}
-                    onEditLink={openEditLink}
-                    onDeleteLink={onDeleteLink}
-                    deleteLabel={deleteLabel}
-                  />
-                ))}
-              </div>
-            )}
-          </Flex>
-        </div>
+        <Flex
+          data-testid="links-organizer-manage"
+          vertical
+          gap={token.sizeMD}
+          style={{ width: '100%', flex: 1, minHeight: 0 }}
+        >
+          <LinkCollectionControls
+            categoryCounts={categoryCounts}
+            activeCategory={activeCategory}
+            onCategoryChange={setActiveCategory}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            sortOrder={sortOrder}
+            onSortChange={setSortOrder}
+            categoryAction={
+              onCreateLink
+                ? {
+                    label: LINK_ACTION_LABEL.add,
+                    icon: <PlusOutlined />,
+                    onClick: openAddLink,
+                  }
+                : undefined
+            }
+          />
+          {drawerItems.length === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links in this view." />
+          ) : (
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+              {drawerItems.map((item) => (
+                <SessionAttachmentDrawerRow
+                  key={item.key}
+                  item={item}
+                  pinningKeys={pinningKeys}
+                  onOpen={openTarget}
+                  onTogglePinned={onTogglePinned}
+                  getPlacementItems={getPlacementItems}
+                  onPlacementAction={onPlacementAction}
+                  onOpenPlacements={onOpenPlacements}
+                  lifecycleBusyKeys={lifecycleBusyKeys}
+                  onEditLink={openEditLink}
+                  onDeleteLink={onDeleteLink}
+                  deleteLabel={deleteLabel}
+                />
+              ))}
+            </div>
+          )}
+        </Flex>
       </Drawer>
     </>
   );

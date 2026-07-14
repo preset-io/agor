@@ -1,6 +1,7 @@
 import { Button, Flex, Typography, theme } from 'antd';
 import type React from 'react';
-import styles from './linkUi.module.css';
+
+const PINNED_LINK_MAX_WIDTH = 156;
 
 interface PinnedLinkButtonProps {
   label: string;
@@ -25,17 +26,17 @@ export function PinnedLinkButton({
       shape="round"
       disabled={disabled}
       aria-label={disabled ? `${label}: ${disabledReason}` : `Open pinned ${label}`}
-      className={styles.pinnedLinkButton}
+      style={{ minWidth: 0, maxWidth: PINNED_LINK_MAX_WIDTH, flex: '0 1 auto' }}
       onClick={(event) => {
         event.stopPropagation();
         onOpen();
       }}
     >
-      <Flex align="center" gap={token.sizeXXS} className={styles.pinnedLinkContent}>
-        <span aria-hidden="true" className={styles.pinnedLinkIcon}>
+      <Flex align="center" gap={token.sizeXXS} style={{ minWidth: 0 }}>
+        <span aria-hidden="true" style={{ display: 'inline-flex', flex: '0 0 auto' }}>
           {icon}
         </span>
-        <Typography.Text ellipsis disabled={disabled} className={styles.pinnedLinkLabel}>
+        <Typography.Text ellipsis disabled={disabled} style={{ minWidth: 0 }}>
           {label}
         </Typography.Text>
       </Flex>

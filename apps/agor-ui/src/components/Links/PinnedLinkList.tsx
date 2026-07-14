@@ -1,8 +1,7 @@
 import { PushpinFilled, SettingOutlined } from '@ant-design/icons';
-import { Button, Flex, Space, Spin, Tooltip, Typography } from 'antd';
+import { Button, Flex, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { useMemo } from 'react';
 import type { LinkDisplayItem } from './linkDisplay';
-import styles from './linkUi.module.css';
 import { LINK_MANAGER_COPY } from './linkUiConstants';
 import { LinkPreviewModal, LinkRow, useLinkFileActions } from './SessionLinksControl';
 
@@ -35,6 +34,7 @@ export function PinnedLinkList({
   className,
   'data-testid': dataTestId,
 }: PinnedLinkListProps) {
+  const { token } = theme.useToken();
   const { preview, setPreview, openPreview, downloadItem } = useLinkFileActions();
   const pinnedItems = useMemo(() => items.filter((item) => item.isPinned), [items]);
   const inlineItems = pinnedItems.slice(0, INLINE_LIMIT);
@@ -44,28 +44,34 @@ export function PinnedLinkList({
 
   return (
     <>
-      <div
-        className={[styles.pinnedList, className].filter(Boolean).join(' ')}
+      <Flex
+        vertical
+        className={className}
         data-testid={dataTestId}
+        style={{
+          marginBlock: `${token.marginXXS}px ${token.marginMD}px`,
+          paddingBlock: `${token.paddingXXS}px ${token.paddingSM}px`,
+          borderBottom: `1px dashed ${token.colorBorderSecondary}`,
+        }}
       >
         <Flex
           align="center"
           justify="space-between"
           gap="small"
-          className={styles.pinnedListHeader}
+          style={{ marginBottom: token.marginXS }}
         >
           <Flex align="center" gap="small">
-            <PushpinFilled className={styles.pinnedListIcon} />
-            <Typography.Text type="secondary" strong className={styles.pinnedListText}>
+            <PushpinFilled style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }} />
+            <Typography.Text type="secondary" strong style={{ fontSize: token.fontSizeSM }}>
               {LINK_MANAGER_COPY.pinnedTitle}
             </Typography.Text>
             {pinnedItems.length > 0 && countMode === 'total' && (
-              <Typography.Text type="secondary" className={styles.pinnedListText}>
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 {pinnedItems.length}
               </Typography.Text>
             )}
             {hiddenCount > 0 && countMode === 'hidden' && (
-              <Typography.Text type="secondary" className={styles.pinnedListText}>
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 +{hiddenCount} more
               </Typography.Text>
             )}
@@ -90,11 +96,11 @@ export function PinnedLinkList({
         </Flex>
 
         {error ? (
-          <Typography.Text type="danger" className={styles.pinnedListText}>
+          <Typography.Text type="danger" style={{ fontSize: token.fontSizeSM }}>
             {error}
           </Typography.Text>
         ) : inlineItems.length > 0 ? (
-          <Space direction="vertical" size="small" className={styles.pinnedListItems}>
+          <Space direction="vertical" size="small" style={{ width: '100%' }}>
             {inlineItems.map((item) => (
               <LinkRow
                 key={item.key}
@@ -113,11 +119,11 @@ export function PinnedLinkList({
             )}
           </Space>
         ) : loading ? (
-          <Typography.Text type="secondary" className={styles.pinnedListText}>
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             {loadingLabel}
           </Typography.Text>
         ) : null}
-      </div>
+      </Flex>
       <LinkPreviewModal preview={preview} onClose={() => setPreview(null)} />
     </>
   );

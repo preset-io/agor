@@ -23,7 +23,6 @@ import { getEnvironmentState } from '../../utils/environmentState';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
 import { ENTITY_PILL_COLORS } from '../Pill/Pill';
 import { Tag } from '../Tag';
-import styles from './BranchHeaderPill.module.css';
 
 interface BranchHeaderPillProps {
   repo: Repo;
@@ -246,7 +245,6 @@ export function BranchHeaderPill({
   return (
     <Tag
       color={ENTITY_PILL_COLORS.branch}
-      className={fluid ? styles.constrained : undefined}
       style={{
         userSelect: 'none',
         padding: 0,
@@ -255,7 +253,9 @@ export function BranchHeaderPill({
         display: fluid ? 'flex' : 'inline-flex',
         alignItems: 'stretch',
         cursor: 'default',
-        ...(fluid ? { minWidth: 0, maxWidth: '100%' } : {}),
+        ...(fluid
+          ? { width: 'fit-content', minWidth: 0, maxWidth: '100%', alignSelf: 'flex-start' }
+          : {}),
       }}
     >
       {/* Section 1: Repo + Branch — click opens either the supplied identity URL or the branch modal. */}

@@ -1,4 +1,4 @@
-import { Flex, Typography } from 'antd';
+import { Flex, Typography, theme } from 'antd';
 import { ActionLinkRow } from './ActionLinkRow';
 import { LinkPinAction } from './LinkActions';
 import { LinkActionsMenu } from './LinkActionsMenu';
@@ -11,7 +11,6 @@ import {
 } from './linkDisplay';
 import { canPersistLinkPin, getLinkPinActionLabel } from './linkPinning';
 import type { LinkPlacementMenuItem, LinkPromotionAction } from './linkPromotion';
-import styles from './linkUi.module.css';
 
 interface LinkCollectionRowProps {
   item: LinkDisplayItem;
@@ -46,6 +45,7 @@ export function LinkCollectionRow({
   onDelete,
   deleteLabel,
 }: LinkCollectionRowProps) {
+  const { token } = theme.useToken();
   const disabledReason = getLinkUnavailableReason(item);
   const disabled = Boolean(disabledReason);
   const title = getCompactLinkDisplayName(item);
@@ -84,14 +84,14 @@ export function LinkCollectionRow({
         </>
       }
     >
-      <Flex component="span" align="flex-start" gap="small" className={styles.collectionRowBody}>
+      <Flex component="span" align="flex-start" gap="small" style={{ minWidth: 0 }}>
         <LinkCategoryGlyph category={item.category} disabled={disabled} variant="row" />
-        <Flex component="span" vertical className={styles.collectionRowText}>
+        <Flex component="span" vertical gap={token.sizeXXS} style={{ minWidth: 0, flex: 1 }}>
           <Typography.Text
             strong
             ellipsis
             disabled={disabled}
-            className={styles.collectionRowTitle}
+            style={{ lineHeight: token.lineHeightSM }}
           >
             {title}
           </Typography.Text>
@@ -101,12 +101,12 @@ export function LinkCollectionRow({
             </Typography.Text>
           )}
           {sourceLabel && (
-            <Typography.Text type="secondary" ellipsis className={styles.collectionRowDetail}>
+            <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
               From {sourceLabel}
             </Typography.Text>
           )}
           {disabledReason && (
-            <Typography.Text type="warning" className={styles.collectionRowDetail}>
+            <Typography.Text type="warning" style={{ fontSize: token.fontSizeSM }}>
               {disabledReason}
             </Typography.Text>
           )}

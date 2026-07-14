@@ -8,7 +8,6 @@ import {
   getPinnedLinkDisplayName,
   type LinkDisplayItem,
 } from './linkDisplay';
-import styles from './linkUi.module.css';
 import { PinnedLinkButton } from './PinnedLinkButton';
 import { LinkPreviewModal, useLinkFileActions } from './SessionLinksControl';
 
@@ -44,7 +43,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
         align="center"
         gap={token.sizeXXS}
         data-testid={dataTestId}
-        className={styles.pinnedLinksRow}
+        style={{ minWidth: 0, maxWidth: 500, flexWrap: 'nowrap', overflow: 'hidden' }}
       >
         {visibleItems.map((item) => {
           const disabledReason = getLinkUnavailableReason(item);
@@ -77,7 +76,7 @@ export const PromotedPinnedLinks: React.FC<PromotedPinnedLinksProps> = ({
                 event.stopPropagation();
                 onOverflow?.();
               }}
-              className={styles.pinnedLinksOverflow}
+              style={{ flex: '0 0 auto', color: token.colorPrimary }}
             >
               +{hiddenCount}
             </Button>

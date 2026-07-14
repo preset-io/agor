@@ -109,7 +109,10 @@ function SessionAttachmentRow({ drawer, ...props }: DrawerProps & { drawer: bool
           component="span"
           align="center"
           justify="center"
-          style={{ width: 26, flex: '0 0 auto' }}
+          style={{
+            width: token.controlHeightSM,
+            flex: `0 0 ${token.controlHeightSM}px`,
+          }}
         >
           {attachmentIcon(props.item, disabled)}
         </Flex>

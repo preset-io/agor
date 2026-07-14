@@ -174,7 +174,12 @@ describe('BranchHeaderPill', () => {
       minWidth: '0',
     });
     expect(identity.parentElement).not.toHaveStyle({ width: '100%' });
-    expect(identity.parentElement?.className).toContain('constrained');
+    expect(identity.parentElement).toHaveStyle({
+      width: 'fit-content',
+      maxWidth: '100%',
+      minWidth: '0',
+      alignSelf: 'flex-start',
+    });
 
     expect(screen.getByText(repo.slug)).toHaveStyle({
       overflow: 'hidden',

@@ -18,7 +18,6 @@ import {
   type LinkDisplayItem,
 } from './linkDisplay';
 import { getLinkPinActionLabel } from './linkPinning';
-import styles from './linkUi.module.css';
 
 type PreviewState = {
   item: LinkDisplayItem;
@@ -91,7 +90,7 @@ export function LinkRow({
             </Typography.Text>
             {item.isPinned && !canTogglePin && (
               <Tooltip title="Pinned">
-                <PushpinFilled className={styles.activePinIcon} />
+                <PushpinFilled style={{ color: token.colorPrimary, fontSize: token.fontSizeSM }} />
               </Tooltip>
             )}
           </Flex>

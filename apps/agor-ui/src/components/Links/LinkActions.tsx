@@ -1,6 +1,5 @@
 import { EllipsisOutlined, PushpinFilled, PushpinOutlined } from '@ant-design/icons';
-import { Button, Dropdown, type MenuProps, Tooltip } from 'antd';
-import styles from './linkUi.module.css';
+import { Button, Dropdown, type MenuProps, Tooltip, theme } from 'antd';
 import { LINK_ACTION_KEY, LINK_ACTION_LABEL, LINK_MANAGER_COPY } from './linkUiConstants';
 
 interface LinkPinActionProps {
@@ -18,6 +17,8 @@ export function LinkPinAction({
   disabled = false,
   loading = false,
 }: LinkPinActionProps) {
+  const { token } = theme.useToken();
+
   return (
     <Tooltip title={pinned ? LINK_ACTION_LABEL.unpin : LINK_ACTION_LABEL.pin}>
       <Button
@@ -27,9 +28,14 @@ export function LinkPinAction({
         disabled={disabled}
         loading={loading}
         aria-label={ariaLabel}
-        icon={pinned ? <PushpinFilled /> : <PushpinOutlined />}
+        icon={
+          pinned ? (
+            <PushpinFilled style={{ color: token.colorPrimary }} />
+          ) : (
+            <PushpinOutlined style={{ color: token.colorTextTertiary }} />
+          )
+        }
         onClick={() => void onToggle()}
-        className={pinned ? styles.activePinButton : styles.inactivePinButton}
       />
     </Tooltip>
   );

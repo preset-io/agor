@@ -1,6 +1,6 @@
 import { type AgorClient, type Branch, isTeammate, type Session, shortId } from '@agor-live/client';
 import { PlusOutlined } from '@ant-design/icons';
-import { Alert, Empty, Flex, List, Space, Spin, theme } from 'antd';
+import { Alert, Empty, Flex, List, Spin, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -30,8 +30,10 @@ import {
   useLinkMutations,
 } from '../../Links';
 import { LinkCollectionControls } from '../../Links/LinkCollectionControls';
-import linkStyles from '../../Links/linkUi.module.css';
 import { LinkPreviewModal, useLinkFileActions } from '../../Links/SessionLinksControl';
+
+const LINKS_TAB_MIN_HEIGHT = 240;
+const LINKS_LOADING_MIN_HEIGHT = 180;
 
 interface LinksTabProps {
   branch: Branch;
@@ -158,88 +160,86 @@ const LinksTabInner: React.FC<LinksTabProps> = ({ branch, client, active, open }
         onCancel={() => setEditorOpen(false)}
         onSubmit={submitEditor}
       />
-      <div data-testid="branch-links-tab" className={linkStyles.branchLinksTab}>
-        <Space direction="vertical" size={token.sizeMD} className={linkStyles.branchLinksStack}>
-          {error && (
-            <div className={linkStyles.branchLinksSection}>
-              <Alert message="Error" description={error} type="error" showIcon />
-            </div>
-          )}
-
-          <div className={linkStyles.branchLinksSection}>
-            <LinkCollectionControls
-              categoryCounts={categoryCounts}
-              activeCategory={activeCategory}
-              onCategoryChange={setActiveCategory}
-              searchQuery={searchQuery}
-              onSearchChange={setSearchQuery}
-              sortOrder={sortOrder}
-              onSortChange={setSortOrder}
-              categoryAction={{
-                label: LINK_ACTION_LABEL.add,
-                icon: <PlusOutlined />,
-                onClick: openAddLink,
-              }}
-            />
+      <Flex
+        vertical
+        gap={token.sizeMD}
+        data-testid="branch-links-tab"
+        style={{ width: '100%', minHeight: LINKS_TAB_MIN_HEIGHT }}
+      >
+        {error && (
+          <div style={{ paddingInline: token.paddingLG }}>
+            <Alert message="Error" description={error} type="error" showIcon />
           </div>
+        )}
 
-          {loading ? (
-            <Flex align="center" justify="center" className={linkStyles.branchLinksLoading}>
-              <Spin />
-            </Flex>
-          ) : items.length > 0 ? (
-            <Space direction="vertical" size={token.sizeMD} className={linkStyles.branchLinksStack}>
-              {visibleItems.length > 0 ? (
-                <List
-                  className={linkStyles.branchLinksSection}
-                  dataSource={visibleItems}
-                  renderItem={(item) => (
-                    <List.Item key={item.key} className={linkStyles.branchLinksListItem}>
-                      <LinkCollectionRow
-                        item={item}
-                        sourceLabel={getSourceSessionLabel(item, sessionById)}
-                        placementItems={getLinkPlacementMenuItems(item, {
-                          branchId: branch.branch_id,
-                          teammateBranchId,
-                          placements: placementsByTargetKey.get(item.targetKey),
-                          placementsLoaded: placementsByTargetKey.has(item.targetKey),
-                          available: Boolean(client),
-                        })}
-                        lifecycleBusy={
-                          lifecycleBusyKeys.has(item.linkId ?? item.key) ||
-                          placementLoadingKeys.has(item.linkId ?? item.key)
-                        }
-                        pinning={pinningKeys.has(item.linkId ?? item.key)}
-                        onOpen={openItem}
-                        onTogglePinned={handleTogglePinned}
-                        onPlacementAction={handlePlacementAction}
-                        onOpenPlacements={isTeammate(branch) ? undefined : handleRefreshPlacements}
-                        onEdit={openEditLink}
-                        onDelete={removeLink}
-                        deleteLabel={
-                          isTeammate(branch)
-                            ? LINK_ACTION_LABEL.removeFromTeammate
-                            : LINK_ACTION_LABEL.removeFromBranch
-                        }
-                      />
-                    </List.Item>
-                  )}
-                />
-              ) : (
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="No links match this view."
-                />
+        <div style={{ paddingInline: token.paddingLG }}>
+          <LinkCollectionControls
+            categoryCounts={categoryCounts}
+            activeCategory={activeCategory}
+            onCategoryChange={setActiveCategory}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            sortOrder={sortOrder}
+            onSortChange={setSortOrder}
+            categoryAction={{
+              label: LINK_ACTION_LABEL.add,
+              icon: <PlusOutlined />,
+              onClick: openAddLink,
+            }}
+          />
+        </div>
+
+        {loading ? (
+          <Flex align="center" justify="center" style={{ minHeight: LINKS_LOADING_MIN_HEIGHT }}>
+            <Spin />
+          </Flex>
+        ) : items.length > 0 ? (
+          visibleItems.length > 0 ? (
+            <List
+              style={{ paddingInline: token.paddingLG }}
+              dataSource={visibleItems}
+              renderItem={(item) => (
+                <List.Item key={item.key} style={{ paddingBlock: 0 }}>
+                  <LinkCollectionRow
+                    item={item}
+                    sourceLabel={getSourceSessionLabel(item, sessionById)}
+                    placementItems={getLinkPlacementMenuItems(item, {
+                      branchId: branch.branch_id,
+                      teammateBranchId,
+                      placements: placementsByTargetKey.get(item.targetKey),
+                      placementsLoaded: placementsByTargetKey.has(item.targetKey),
+                      available: Boolean(client),
+                    })}
+                    lifecycleBusy={
+                      lifecycleBusyKeys.has(item.linkId ?? item.key) ||
+                      placementLoadingKeys.has(item.linkId ?? item.key)
+                    }
+                    pinning={pinningKeys.has(item.linkId ?? item.key)}
+                    onOpen={openItem}
+                    onTogglePinned={handleTogglePinned}
+                    onPlacementAction={handlePlacementAction}
+                    onOpenPlacements={isTeammate(branch) ? undefined : handleRefreshPlacements}
+                    onEdit={openEditLink}
+                    onDelete={removeLink}
+                    deleteLabel={
+                      isTeammate(branch)
+                        ? LINK_ACTION_LABEL.removeFromTeammate
+                        : LINK_ACTION_LABEL.removeFromBranch
+                    }
+                  />
+                </List.Item>
               )}
-            </Space>
-          ) : (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="No durable branch links yet. Add branch-owned links here when they should persist with the branch."
             />
-          )}
-        </Space>
-      </div>
+          ) : (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No links match this view." />
+          )
+        ) : (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="No durable branch links yet. Add branch-owned links here when they should persist with the branch."
+          />
+        )}
+      </Flex>
     </>
   );
 };

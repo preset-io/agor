@@ -1,4 +1,4 @@
-import { Button, Flex, Input, Segmented, Select, Space, Tooltip, Typography } from 'antd';
+import { Button, Flex, Input, Segmented, Select, Space, Tooltip, Typography, theme } from 'antd';
 import type { ReactNode } from 'react';
 import {
   LINK_CATEGORY_TAB_LABELS,
@@ -6,9 +6,12 @@ import {
   type LinkCategoryTabKey,
   type LinkSortKey,
 } from './linkOrganizer';
-import styles from './linkUi.module.css';
 
 const CATEGORY_KEYS: LinkCategoryTabKey[] = ['all', 'files', 'links', 'knowledge', 'issues'];
+const CATEGORY_TABS_MIN_WIDTH = 520;
+const SEARCH_MIN_WIDTH = 220;
+const SEARCH_FLEX_BASIS = 320;
+const SORT_SELECT_WIDTH = 128;
 
 export function getLinkCategoryOptions(counts: Record<LinkCategoryTabKey, number>) {
   return CATEGORY_KEYS.map((value) => ({
@@ -42,20 +45,22 @@ export function LinkCollectionControls({
   onSortChange,
   categoryAction,
 }: LinkCollectionControlsProps) {
+  const { token } = theme.useToken();
+
   return (
-    <Flex vertical gap="middle" className={styles.linkCollectionControls}>
-      <Flex align="center" gap="small" className={styles.linkCategoryRow}>
-        <div className={styles.linkCategoryScroller}>
+    <Flex vertical gap="middle" style={{ width: '100%' }}>
+      <Flex align="center" gap="small" style={{ width: '100%' }}>
+        <div style={{ minWidth: 0, flex: '1 1 auto', overflowX: 'auto' }}>
           <Segmented<LinkCategoryTabKey>
             block
-            className={styles.linkCategoryTabs}
+            style={{ minWidth: CATEGORY_TABS_MIN_WIDTH }}
             value={activeCategory}
             options={getLinkCategoryOptions(categoryCounts)}
             onChange={onCategoryChange}
           />
         </div>
         {categoryAction && (
-          <div className={styles.linkCategoryAction}>
+          <Flex flex="0 0 auto">
             <Tooltip title={categoryAction.label}>
               <Button
                 type="primary"
@@ -64,25 +69,25 @@ export function LinkCollectionControls({
                 onClick={categoryAction.onClick}
               />
             </Tooltip>
-          </div>
+          </Flex>
         )}
       </Flex>
-      <Flex align="center" gap="small" wrap className={styles.linkSecondaryControls}>
+      <Flex align="center" gap="small" wrap style={{ width: '100%' }}>
         <Input.Search
           allowClear
-          className={styles.linkSearchInput}
+          style={{ minWidth: SEARCH_MIN_WIDTH, flex: `1 1 ${SEARCH_FLEX_BASIS}px` }}
           value={searchQuery}
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder="Search links"
           aria-label="Search links"
         />
-        <Space size="small" className={styles.linkSortControls}>
-          <Typography.Text type="secondary" className={styles.linkSortLabel}>
+        <Space size="small" style={{ flex: '0 0 auto' }}>
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             Sort
           </Typography.Text>
           <Select<LinkSortKey>
             size="small"
-            className={styles.linkSortSelect}
+            style={{ width: SORT_SELECT_WIDTH }}
             value={sortOrder}
             options={(Object.keys(LINK_SORT_LABELS) as LinkSortKey[]).map((value) => ({
               value,
