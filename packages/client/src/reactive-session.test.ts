@@ -898,14 +898,15 @@ describe('session-streams capability announce', () => {
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
   });
 
-  // Fail-on-revert: drop the announce wire-up from attachReactiveSessionApi and this goes red.
-  it('arms the capability announce through attachReactiveSessionApi', async () => {
+  // Library stays neutral: attaching the reactive API must not announce, so a
+  // bare raw-listener consumer keeps the owner fallback. Fail-on-revert:
+  // re-adding the announce into attachReactiveSessionApi turns this red.
+  it('does not announce from attachReactiveSessionApi alone', async () => {
     const { client, create, fireAuth } = makeAnnounceClient();
     attachReactiveSessionApi(client);
 
-    expect(create).not.toHaveBeenCalled();
     fireAuth();
-    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    expect(create).toHaveBeenCalledWith({ capability: true });
+    await Promise.resolve();
+    expect(create).not.toHaveBeenCalled();
   });
 });

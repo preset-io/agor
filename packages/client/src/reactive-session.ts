@@ -1118,9 +1118,6 @@ export function attachReactiveSessionApi(client: AgorClient): ReactiveAgorClient
     return new ReactiveSessionHandle(client, sessionId, options);
   };
 
-  // Announce capability once per connection so idle tabs (no transcript) are also excluded from the owner fallback.
-  ensureSessionStreamsCapabilityAnnounce(client);
-
   return reactiveClient;
 }
 

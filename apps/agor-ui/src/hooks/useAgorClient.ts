@@ -6,7 +6,7 @@
  */
 
 import type { AgorClient } from '@agor-live/client';
-import { createClient } from '@agor-live/client';
+import { createClient, ensureSessionStreamsCapabilityAnnounce } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { isDefiniteAuthFailure } from '../utils/authErrors';
@@ -123,6 +123,11 @@ export function useAgorClient(options: UseAgorClientOptions = {}): UseAgorClient
       // Create client (autoConnect: false, so we control connection timing)
       client = createClient(url, false);
       clientRef.current = client;
+
+      // UI-scoped: announce session-streams awareness post-auth so idle home /
+      // board tabs are excluded from the owner fallback. Left off the library
+      // (createClient) so bare raw-listener consumers keep the fallback.
+      ensureSessionStreamsCapabilityAnnounce(client);
 
       // Register an around-hook that transparently recovers from mid-session
       // access-token expiry. Any service call that fails with NotAuthenticated

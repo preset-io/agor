@@ -15,6 +15,7 @@ import {
 } from '@agor/core/client';
 import {
   attachReactiveSessionApi,
+  ensureSessionStreamsCapabilityAnnounce,
   type ReactiveAgorClient,
   type ReactiveLoadedTaskIds,
   type ReactiveMessagesByTask,
@@ -79,6 +80,7 @@ export async function createRestClient(
 
 export {
   attachReactiveSessionApi,
+  ensureSessionStreamsCapabilityAnnounce,
   getApiKeyFromEnv,
   isDaemonRunning,
   releaseReactiveSession,
