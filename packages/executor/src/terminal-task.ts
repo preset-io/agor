@@ -17,7 +17,7 @@
  */
 import { shortId } from '@agor/core/db';
 import type { Task } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, type TaskStatus } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
 /**
@@ -26,13 +26,6 @@ import type { AgorClient } from './services/feathers-client.js';
  * doesn't overwrite a permission/input timeout with `FAILED` or
  * `STOPPED`.
  */
-export const TERMINAL_STATUSES: ReadonlySet<Task['status']> = new Set<Task['status']>([
-  TaskStatus.COMPLETED,
-  TaskStatus.FAILED,
-  TaskStatus.STOPPED,
-  TaskStatus.TIMED_OUT,
-]);
-
 /**
  * Patch a task to a terminal status, but ONLY if the task is not already
  * terminal. Reads the task first and bails on terminal — the inner SDK
@@ -47,7 +40,7 @@ export async function tryMarkTaskTerminal(
 ): Promise<void> {
   try {
     const current = (await client.service('tasks').get(taskId)) as Task;
-    if (TERMINAL_STATUSES.has(current.status)) {
+    if (isTerminalTaskStatus(current.status)) {
       console.log(
         `[executor] Task ${shortId(taskId)} already terminal (${current.status}), skipping ${status} patch`
       );

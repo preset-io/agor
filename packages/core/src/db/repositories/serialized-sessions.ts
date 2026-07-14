@@ -26,6 +26,7 @@ export interface SerializedSession {
   turn_index: number;
   created_at: number;
   md5: string;
+  relative_path: string | null;
   status: SerializedSessionStatus;
   payload: Buffer | null;
 }
@@ -39,6 +40,7 @@ function rowToSerializedSession(row: SerializedSessionRow): SerializedSession {
     turn_index: row.turn_index,
     created_at: new Date(row.created_at).getTime(),
     md5: row.md5,
+    relative_path: row.relative_path ?? null,
     status: row.status as SerializedSessionStatus,
     payload: row.payload ?? null,
   };
@@ -101,6 +103,7 @@ export class SerializedSessionRepository {
     taskId?: string;
     turnIndex: number;
     md5: string;
+    relativePath?: string | null;
   }): Promise<SerializedSession> {
     try {
       const id = params.id ?? generateId();
@@ -114,6 +117,7 @@ export class SerializedSessionRepository {
         turn_index: params.turnIndex,
         created_at: new Date(now),
         md5: params.md5,
+        relative_path: params.relativePath ?? null,
         status: 'processing',
         payload: null,
       };
@@ -128,6 +132,7 @@ export class SerializedSessionRepository {
         turn_index: params.turnIndex,
         created_at: now,
         md5: params.md5,
+        relative_path: params.relativePath ?? null,
         status: 'processing',
         payload: null,
       };

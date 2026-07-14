@@ -10,7 +10,7 @@
 
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createGunzip, createGzip } from 'node:zlib';
@@ -54,8 +54,8 @@ export function getSessionFilePath(
     }
     case 'codex': {
       // homeOverride here is the executor user's HOME dir (not CODEX_HOME).
-      // Codex stores threads at $CODEX_HOME/sessions, default $CODEX_HOME=$HOME/.codex.
-      // The Codex CLI searches for threads by ID, so a flat path works for restore.
+      // This flat path is retained only as a deterministic legacy lookup. New
+      // snapshots persist and restore Codex's actual dated rollout location.
       const codexHome = getCodexHome(homeOverride);
       return path.join(codexHome, 'sessions', `${sdkSessionId}.jsonl`);
     }
@@ -64,13 +64,38 @@ export function getSessionFilePath(
   }
 }
 
+/** Return a portable provider-home-relative locator for a Codex rollout. */
+export function getCodexSessionRelativePath(codexHome: string, filePath: string): string {
+  const relativePath = path.relative(codexHome, filePath).split(path.sep).join('/');
+  return validateCodexSessionRelativePath(relativePath);
+}
+
+/** Resolve a persisted Codex locator while preventing traversal outside its sessions root. */
+export function resolveCodexSessionRelativePath(codexHome: string, relativePath: string): string {
+  const validated = validateCodexSessionRelativePath(relativePath);
+  return path.join(codexHome, ...validated.split('/'));
+}
+
+function validateCodexSessionRelativePath(relativePath: string): string {
+  const normalized = path.posix.normalize(relativePath);
+  if (
+    normalized !== relativePath ||
+    !normalized.startsWith('sessions/') ||
+    normalized.includes('\\') ||
+    !normalized.endsWith('.jsonl')
+  ) {
+    throw new Error('Invalid Codex session relative path');
+  }
+  return normalized;
+}
+
 /**
  * Find the actual session file on disk for Codex.
  * Codex stores sessions in date-based directories:
  *   $CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<threadId>.jsonl
  *
- * For push (after execution), the file may be at a dated path OR the canonical
- * flat path (if restored by pull). This function searches both.
+ * For push (after execution), prefer Codex's dated rollout and use the legacy
+ * flat path only when no dated file exists.
  *
  * Returns the absolute path if found, or null.
  */
@@ -80,18 +105,18 @@ export async function findCodexSessionFile(
 ): Promise<string | null> {
   const sessionsDir = path.join(codexHome, 'sessions');
 
-  // First check the canonical flat path (used by pull/restore)
-  const canonicalPath = path.join(sessionsDir, `${threadId}.jsonl`);
-  try {
-    await stat(canonicalPath);
-    return canonicalPath;
-  } catch {
-    // Not at canonical path, search in date directories
-  }
-
   // Recursively search for *-{threadId}.jsonl in the sessions directory tree
   try {
-    return await findFileRecursive(sessionsDir, threadId);
+    const datedPath = await findFileRecursive(sessionsDir, threadId);
+    if (datedPath) return datedPath;
+  } catch {
+    // The sessions directory may not exist yet.
+  }
+
+  const legacyPath = path.join(sessionsDir, `${threadId}.jsonl`);
+  try {
+    await stat(legacyPath);
+    return legacyPath;
   } catch {
     return null;
   }
@@ -107,7 +132,7 @@ async function findFileRecursive(dir: string, threadId: string): Promise<string 
     if (entry.isDirectory()) {
       const found = await findFileRecursive(fullPath, threadId);
       if (found) return found;
-    } else if (entry.isFile() && entry.name.endsWith('.jsonl') && entry.name.includes(threadId)) {
+    } else if (entry.isFile() && entry.name.endsWith(`-${threadId}.jsonl`)) {
       return fullPath;
     }
   }
@@ -155,14 +180,24 @@ export async function serializeFile(filePath: string): Promise<Buffer> {
  */
 export async function restoreFile(filePath: string, payload: Buffer): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
+  );
 
-  return new Promise((resolve, reject) => {
-    const gunzip = createGunzip();
-    const out = createWriteStream(filePath);
-    gunzip.pipe(out);
-    out.on('finish', resolve);
-    out.on('error', reject);
-    gunzip.on('error', reject);
-    gunzip.end(payload);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const gunzip = createGunzip();
+      const out = createWriteStream(tempPath, { flags: 'wx' });
+      gunzip.pipe(out);
+      out.on('finish', resolve);
+      out.on('error', reject);
+      gunzip.on('error', reject);
+      gunzip.end(payload);
+    });
+    await rename(tempPath, filePath);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }

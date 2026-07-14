@@ -369,6 +369,7 @@ function validateConfig(config: AgorConfig): void {
     'permission_timeout_ms',
     'stateless_fs_mode',
     'executor_command_template',
+    'executor_stop_command_template',
     'required_user_env_vars',
     'managed_envs_minimum_role',
     'managed_envs_execution_mode',
@@ -378,6 +379,7 @@ function validateConfig(config: AgorConfig): void {
     'enabled',
     'interval_ms',
     'stale_after_ms',
+    'connection_timeout_ms',
     'callback',
   ]);
   only(config.execution?.executor_heartbeat?.callback, 'execution.executor_heartbeat.callback', [

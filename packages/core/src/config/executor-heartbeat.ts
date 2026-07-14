@@ -3,11 +3,13 @@ import type { AgorExecutionSettings } from './types';
 export const EXECUTOR_HEARTBEAT_DEFAULT_INTERVAL_MS = 10_000;
 export const EXECUTOR_HEARTBEAT_MIN_STALE_AFTER_MS = 30_000;
 export const EXECUTOR_HEARTBEAT_DEFAULT_CALLBACK_TIMEOUT_MS = 3_000;
+export const EXECUTOR_CONNECTION_DEFAULT_TIMEOUT_MS = 120_000;
 
 export interface ResolvedExecutorHeartbeatConfig {
   enabled: boolean;
   interval_ms: number;
   stale_after_ms: number;
+  connection_timeout_ms: number;
   callback: {
     command_template: string | null;
     timeout_ms: number;
@@ -36,6 +38,10 @@ export function resolveExecutorHeartbeatConfig(
     raw?.callback?.timeout_ms,
     EXECUTOR_HEARTBEAT_DEFAULT_CALLBACK_TIMEOUT_MS
   );
+  const connectionTimeoutMs = positiveIntegerOrDefault(
+    raw?.connection_timeout_ms,
+    EXECUTOR_CONNECTION_DEFAULT_TIMEOUT_MS
+  );
 
   return {
     // Default enabled: the heartbeat is a lightweight task-row timestamp patch,
@@ -43,6 +49,7 @@ export function resolveExecutorHeartbeatConfig(
     enabled: raw?.enabled ?? true,
     interval_ms: intervalMs,
     stale_after_ms: staleAfterMs,
+    connection_timeout_ms: connectionTimeoutMs,
     callback: {
       command_template: raw?.callback?.command_template ?? null,
       timeout_ms: timeoutMs,

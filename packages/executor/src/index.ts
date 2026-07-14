@@ -8,6 +8,7 @@
  * 4. Exits when task completes
  */
 
+import type { ResolvedExecutorHeartbeatConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type {
   MessageSource,
@@ -18,10 +19,11 @@ import type {
 } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
-import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import { RuntimeOverseer } from './runtime-overseer.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
+import { ExecutorShutdown } from './shutdown.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
 
 patchConsole();
@@ -39,6 +41,8 @@ export interface ExecutorConfig {
   sessionToken: string;
   sessionId: string;
   taskId: string;
+  /** Daemon-minted launch attempt bound to the task and runtime token. */
+  executorAttemptId: string;
   prompt: string;
   tool: 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
   permissionMode?: PermissionMode;
@@ -51,11 +55,18 @@ export interface ExecutorConfig {
 export class AgorExecutor {
   private client: AgorClient | null = null;
   private abortController: AbortController;
+  private readonly executorAttemptId: string;
   private isRunning = false;
-  private heartbeat: ExecutorHeartbeatHandle | null = null;
-
+  private shutdown: ExecutorShutdown;
   constructor(private config: ExecutorConfig) {
+    this.executorAttemptId = config.executorAttemptId;
     this.abortController = new AbortController();
+    this.shutdown = new ExecutorShutdown({
+      abortController: this.abortController,
+      isRunning: () => this.isRunning,
+      markStopped: () => this.tryMarkTaskTerminal(TaskStatus.STOPPED),
+      log: (message) => console.log(message),
+    });
   }
 
   /**
@@ -75,6 +86,7 @@ export class AgorExecutor {
    * Start the executor process
    */
   async start(): Promise<void> {
+    let taskClaimed = false;
     const uid = typeof process.getuid === 'function' ? process.getuid() : 'N/A';
     console.log(
       `[executor] Starting ${this.config.tool} task ${shortId(this.config.taskId)} ` +
@@ -87,6 +99,15 @@ export class AgorExecutor {
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken);
       executorDebug('[executor] Connected to daemon');
 
+      // Authentication is complete. Atomically claim the daemon-dispatched task
+      // before starting heartbeats or SDK work; a late executor cannot revive a
+      // stopped or terminal task.
+      await this.client.service('tasks').connectExecutor({
+        task_id: this.config.taskId,
+        executor_attempt_id: this.executorAttemptId,
+      });
+      taskClaimed = true;
+
       // Setup event listeners
       this.setupEventListeners();
 
@@ -96,15 +117,24 @@ export class AgorExecutor {
       // Execute the task
       await this.executeTask();
 
+      if (await this.shutdown.finishGracefully()) return;
+
       // Exit successfully
       console.log('[executor] Task completed, exiting');
       process.exit(0);
     } catch (error) {
+      if (this.shutdown.requested) {
+        await this.shutdown.finishGracefully();
+        return;
+      }
+
       console.error('[executor] Fatal error:', error);
-      await this.tryMarkTaskTerminal(
-        TaskStatus.FAILED,
-        error instanceof Error ? error.message : String(error)
-      );
+      if (taskClaimed) {
+        await this.tryMarkTaskTerminal(
+          TaskStatus.FAILED,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
       process.exit(1);
     }
   }
@@ -159,13 +189,18 @@ export class AgorExecutor {
 
     this.isRunning = true;
 
-    const heartbeatConfig = this.config.resolvedConfig?.execution?.executor_heartbeat;
-    this.heartbeat = startExecutorHeartbeat({
+    const heartbeatConfig: Partial<ResolvedExecutorHeartbeatConfig> | undefined =
+      this.config.resolvedConfig?.execution?.executor_heartbeat;
+    const runtime = new RuntimeOverseer({
       client: this.client,
       taskId: this.config.taskId,
+      executorAttemptId: this.executorAttemptId,
       enabled: heartbeatConfig?.enabled ?? true,
-      intervalMs: heartbeatConfig?.interval_ms,
+      heartbeatIntervalMs: heartbeatConfig?.interval_ms,
+      heartbeatStaleAfterMs: heartbeatConfig?.stale_after_ms,
+      onLeaseLost: () => void this.shutdown.loseLease(),
     });
+    runtime.start();
 
     executorDebug(`[executor] Executing task with ${this.config.tool}...`);
 
@@ -186,10 +221,13 @@ export class AgorExecutor {
         abortController: this.abortController,
         messageSource: this.config.messageSource,
         resolvedConfig: this.config.resolvedConfig,
+        runtime,
       });
     } finally {
-      this.heartbeat?.stop();
-      this.heartbeat = null;
+      // Every exit path joins the same bounded telemetry tail before a
+      // signal fallback can write terminal state and revoke this attempt.
+      await runtime.flush();
+      runtime.stop();
       this.isRunning = false;
     }
   }
@@ -198,26 +236,8 @@ export class AgorExecutor {
    * Setup graceful shutdown handlers
    */
   private setupShutdownHandlers(): void {
-    const shutdown = async (signal: string) => {
-      console.log(`[executor] Received ${signal}, shutting down...`);
-
-      // Abort any running task
-      if (this.isRunning) {
-        this.abortController.abort();
-      }
-      this.heartbeat?.stop();
-      this.heartbeat = null;
-
-      // The daemon's stop route already patches the task to STOPPED before
-      // sending the signal — this fallback only fires if we received an
-      // out-of-band signal and the task is still active.
-      await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
-
-      process.exit(0);
-    };
-
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => void this.shutdown.trigger('SIGTERM'));
+    process.on('SIGINT', () => void this.shutdown.trigger('SIGINT'));
 
     process.on('uncaughtException', async (error) => {
       console.error('[executor] Uncaught exception:', error);

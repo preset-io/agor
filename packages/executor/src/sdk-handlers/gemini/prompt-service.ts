@@ -34,6 +34,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -42,6 +43,7 @@ import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import { convertConversationToHistory } from './conversation-converter.js';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models.js';
 import { mapPermissionMode } from './permission-mapper.js';
+import { scheduleGeminiTools } from './tool-runtime.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
 /**
@@ -116,7 +118,8 @@ export class GeminiPromptService {
     useNativeAuth?: boolean, // Flag from base-executor indicating OAuth should be used
     _usersRepo?: UsersRepository,
     private tasksService?: TasksService,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private runtime?: AgenticToolRuntime
   ) {
     this.apiKey = apiKey;
     this.useNativeAuth = useNativeAuth ?? false; // Default to false if not provided
@@ -414,7 +417,11 @@ export class GeminiPromptService {
         );
 
         // Execute all tool calls via Scheduler (handles validation, confirmation, execution)
-        const completedCalls = await scheduler.schedule(toolCallRequests, abortController.signal);
+        const completedCalls = await scheduleGeminiTools(
+          toolCallRequests,
+          () => scheduler.schedule(toolCallRequests, abortController.signal),
+          this.runtime
+        );
         console.debug(`[Gemini Loop] Scheduler completed ${completedCalls.length} tool calls`);
 
         // Convert completed calls to function response parts for Gemini

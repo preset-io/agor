@@ -18,6 +18,10 @@ import type {
   AuthenticatedUser as CoreAuthenticatedUser,
   CreateHookContext as CoreCreateHookContext,
   HookContext as CoreHookContext,
+  ExecutorClaim,
+  ExecutorFinalizationEvidence,
+  ExecutorLeaseTerminalCause,
+  ExecutorTelemetryReport,
   Params as FeathersParams,
   Message,
   Repo,
@@ -120,6 +124,8 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
  * Tasks service with custom methods (server-side implementation)
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
+  connectExecutor(data: ExecutorClaim, params?: FeathersParams): Promise<Task>;
+  reportExecutorTelemetry(data: ExecutorTelemetryReport, params?: FeathersParams): Promise<Task>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,
@@ -128,12 +134,30 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   ): Promise<Task>;
   fail(id: string, data: { error?: string }, params?: FeathersParams): Promise<Task>;
   getOrphaned(params?: FeathersParams): Promise<Task[]>;
-  getActiveWithExecutorHeartbeat(params?: FeathersParams): Promise<Task[]>;
-  failForLostHeartbeat(
+  failExpiredExecutorAttempt(
     id: string,
-    data: { completed_at?: string; error_message: string },
+    data: {
+      executor_attempt_id: string;
+      stale_before: string;
+      completed_at?: string;
+      error_message: string;
+      terminal_cause: ExecutorLeaseTerminalCause;
+    },
     params?: FeathersParams
-  ): Promise<Task>;
+  ): Promise<{ task: Task; transitioned: boolean }>;
+  finalizeExecutorAttempt(
+    taskId: string,
+    executorAttemptId: string,
+    options: {
+      evidence: ExecutorFinalizationEvidence;
+    },
+    params?: FeathersParams
+  ): Promise<{ finalized: boolean; released: boolean }>;
+  ownsExecutorFinalizationFence(
+    taskId: string,
+    executorAttemptId: string,
+    params?: FeathersParams
+  ): Promise<boolean>;
 }
 
 /**

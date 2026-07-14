@@ -309,12 +309,14 @@ export const tasks = sqliteTable(
       .references(() => sessions.session_id, { onDelete: 'cascade' }),
     created_at: t.timestamp('created_at').notNull(),
     started_at: t.timestamp('started_at'),
+    executor_connected_at: t.timestamp('executor_connected_at'),
     completed_at: t.timestamp('completed_at'),
     last_executor_heartbeat_at: t.timestamp('last_executor_heartbeat_at'),
     status: text('status', {
       enum: [
         'queued',
         'created',
+        'dispatching',
         'running',
         'stopping',
         'awaiting_permission',
@@ -366,6 +368,10 @@ export const tasks = sqliteTable(
 
         report?: Task['report'];
         permission_request?: Task['permission_request'];
+        executor_attempt_id?: Task['executor_attempt_id'];
+        executor_terminal_cause?: Task['executor_terminal_cause'];
+        executor_finalization?: Task['executor_finalization'];
+        latest_executor_pulse?: Task['latest_executor_pulse'];
 
         // Generic metadata (e.g., is_agor_callback, source, child_session_id)
         metadata?: Task['metadata'];
@@ -409,6 +415,7 @@ export const serializedSessions = sqliteTable(
     turn_index: integer('turn_index').notNull().default(0),
     created_at: t.timestamp('created_at').notNull(),
     md5: text('md5').notNull(),
+    relative_path: text('relative_path'), // provider-home-relative transcript path
     status: text('status').notNull(), // 'processing' | 'done' — validated at app layer
     payload: blob('payload', { mode: 'buffer' }), // gzipped; NULL while status='processing'
   },

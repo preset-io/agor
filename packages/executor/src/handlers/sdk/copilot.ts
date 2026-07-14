@@ -5,29 +5,18 @@
  * Includes interactive permission handling via PermissionService (same as Claude Code).
  */
 
-import type { MessageSource, PermissionMode, SessionID, TaskID } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
 import { globalPermissionManager } from '../../permissions/permission-manager.js';
 import { PermissionService } from '../../permissions/permission-service.js';
 import { CopilotTool } from '../../sdk-handlers/copilot/index.js';
-import type { AgorClient } from '../../services/feathers-client.js';
+import type { ToolRunnerParams } from './tool-registry.js';
 
 /**
  * Execute Copilot task (Feathers/WebSocket architecture)
  *
  * Used by ephemeral executor - no IPC, direct Feathers client passed in
  */
-export async function executeCopilotTask(params: {
-  client: AgorClient;
-  sessionId: SessionID;
-  taskId: TaskID;
-  prompt: string;
-  permissionMode?: PermissionMode;
-  abortController: AbortController;
-  messageSource?: MessageSource;
-  resolvedConfig?: ResolvedConfigSlice;
-}): Promise<void> {
+export async function executeCopilotTask(params: ToolRunnerParams): Promise<void> {
   const { client, sessionId } = params;
 
   // Import base executor helper
@@ -66,7 +55,8 @@ export async function executeCopilotTask(params: {
           repos.users,
           permissionService,
           repos.sessionsService,
-          repos.mcpOAuthAuthHeaders
+          repos.mcpOAuthAuthHeaders,
+          params.runtime
         ),
     });
   } finally {

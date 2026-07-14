@@ -738,6 +738,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     sessionMCPServersService: services.sessionMCPServersService,
     sessionEnvSelectionsService: services.sessionEnvSelectionsService,
     terminalsService: services.terminalsService,
+    executorAttemptCoordinator: services.executorAttemptCoordinator,
   });
 
   // --------------------------------------------------------------------------
@@ -753,6 +754,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
     getSocketServer: socketIOConfig.getSocketServer,
     sessionsService: services.sessionsService,
     terminalsService: services.terminalsService,
+    executorAttemptCoordinator: services.executorAttemptCoordinator,
   });
 
   // --------------------------------------------------------------------------

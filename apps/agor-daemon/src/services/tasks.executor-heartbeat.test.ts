@@ -1,411 +1,213 @@
-import { TaskStatus } from '@agor/core/types';
+import {
+  EXECUTOR_CLEANUP_STATUS,
+  EXECUTOR_STATE_PERSISTENCE_STATUS,
+  EXECUTOR_TERMINAL_CAUSE,
+  TaskStatus,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
 
-describe('TasksService executor heartbeat helpers', () => {
-  it('fails lost heartbeat tasks and marks the session failed without draining its queue', async () => {
-    const taskId = '018f0000-0000-7000-8000-000000000001';
-    const sessionId = '018f0000-0000-7000-8000-000000000002';
-    const currentTask = {
-      task_id: taskId,
-      session_id: sessionId,
-      status: TaskStatus.RUNNING,
-      created_at: '2026-01-01T00:00:00.000Z',
-    };
+const TASK_ID = '018f0000-0000-7000-8000-000000000001';
+const SESSION_ID = '018f0000-0000-7000-8000-000000000002';
+const ATTEMPT_ID = '018f0000-0000-7000-8000-000000000003';
+
+function task(status: string, executor = true) {
+  return {
+    task_id: TASK_ID,
+    session_id: SESSION_ID,
+    status,
+    created_at: '2026-01-01T00:00:00.000Z',
+    started_at: '2026-01-01T00:00:01.000Z',
+    ...(executor ? { executor_attempt_id: ATTEMPT_ID } : {}),
+  };
+}
+
+function serviceHarness(currentTask: ReturnType<typeof task>) {
+  const sessionsGet = vi.fn().mockResolvedValue({
+    session_id: SESSION_ID,
+    status: 'running',
+    ready_for_prompt: false,
+    tasks: [TASK_ID],
+  });
+  const sessionsPatch = vi.fn(async (_id, data) => ({
+    session_id: SESSION_ID,
+    tasks: [TASK_ID],
+    ...data,
+  }));
+  const repositoryUpdate = vi.fn(async (_id, patch) => ({ ...currentTask, ...patch }));
+  const service = Object.create(TasksService.prototype) as TasksService & {
+    app: unknown;
+    get: ReturnType<typeof vi.fn>;
+    repository: { update: ReturnType<typeof vi.fn> };
+    taskRepo: { failExpiredExecutorAttempt: ReturnType<typeof vi.fn> };
+    id: string;
+    emit: ReturnType<typeof vi.fn>;
+    ownsExecutorFinalizationFence: ReturnType<typeof vi.fn>;
+    dispatchCompletionSideEffectsAfterCommit: ReturnType<typeof vi.fn>;
+  };
+  service.get = vi.fn().mockResolvedValue(currentTask);
+  service.repository = { update: repositoryUpdate };
+  service.taskRepo = { failExpiredExecutorAttempt: vi.fn() };
+  service.id = 'task_id';
+  service.emit = vi.fn();
+  service.ownsExecutorFinalizationFence = vi.fn().mockResolvedValue(true);
+  service.dispatchCompletionSideEffectsAfterCommit = vi.fn();
+  service.app = {
+    service: (name: string) => {
+      if (name === 'sessions') return { get: sessionsGet, patch: sessionsPatch };
+      if (name === 'tasks') return { emit: service.emit };
+      if (name === 'branches') return { get: vi.fn() };
+      throw new Error(`unexpected service ${name}`);
+    },
+  };
+  return { service, sessionsPatch, repositoryUpdate };
+}
+
+describe('TasksService executor settlement boundary', () => {
+  it.each([
+    [EXECUTOR_TERMINAL_CAUSE.HEARTBEAT_LOST, 'heartbeat lost'],
+    [EXECUTOR_TERMINAL_CAUSE.DISPATCH_TIMEOUT, 'dispatch timeout'],
+  ] as const)('publishes the winning %s lease expiry', async (terminalCause, errorMessage) => {
     const failedTask = {
-      ...currentTask,
-      status: TaskStatus.FAILED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-      error_message: 'Executor heartbeat lost',
+      ...task(TaskStatus.FAILED),
+      executor_terminal_cause: terminalCause,
+      error_message: errorMessage,
     };
-    const sessionsPatch = vi.fn().mockResolvedValue(undefined);
-    const triggerQueueProcessing = vi.fn();
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      app: unknown;
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(currentTask);
-    service.repository = { update: vi.fn().mockResolvedValue(failedTask) };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-    service.app = {
-      service: (name: string) => {
-        if (name === 'sessions') {
-          return {
-            get: vi.fn().mockResolvedValue({
-              session_id: sessionId,
-              status: 'running',
-              tasks: [taskId],
-            }),
-            patch: sessionsPatch,
-            triggerQueueProcessing,
-          };
-        }
-        throw new Error(`unexpected service ${name}`);
-      },
-    };
+    const { service, sessionsPatch } = serviceHarness(failedTask);
+    service.taskRepo.failExpiredExecutorAttempt.mockResolvedValue({
+      task: failedTask,
+      transitioned: true,
+    });
 
-    const result = await service.failForLostHeartbeat(
-      taskId,
-      {
+    await expect(
+      service.failExpiredExecutorAttempt(TASK_ID, {
+        executor_attempt_id: ATTEMPT_ID,
+        stale_before: '2026-01-01T00:00:02.000Z',
         completed_at: '2026-01-01T00:00:05.000Z',
-        error_message: 'Executor heartbeat lost',
-      },
-      {
-        user: { user_id: '018f0000-0000-7000-8000-000000000009' },
-      }
-    );
-
-    expect(result).toMatchObject({
-      task_id: '018f0000-0000-7000-8000-000000000001',
-      status: TaskStatus.FAILED,
-    });
-    expect(service.repository.update).toHaveBeenCalledWith(taskId, {
-      status: TaskStatus.FAILED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-      error_message: 'Executor heartbeat lost',
-      duration_ms: 5000,
-    });
-    expect(sessionsPatch).toHaveBeenCalledWith(
-      sessionId,
-      { status: 'failed', ready_for_prompt: true },
-      expect.objectContaining({
-        user: { user_id: '018f0000-0000-7000-8000-000000000009' },
-        suppressTerminalQueueProcessing: true,
+        error_message: errorMessage,
+        terminal_cause: terminalCause,
       })
-    );
-    expect(triggerQueueProcessing).not.toHaveBeenCalled();
-  });
+    ).resolves.toMatchObject({ transitioned: true, task: { status: TaskStatus.FAILED } });
 
-  it('does not mark session failed when heartbeat failure loses to normal completion', async () => {
-    const taskId = '018f0000-0000-7000-8000-000000000003';
-    const completedTask = {
-      task_id: taskId,
-      session_id: '018f0000-0000-7000-8000-000000000004',
-      status: TaskStatus.COMPLETED,
-      created_at: '2026-01-01T00:00:00.000Z',
-      completed_at: '2026-01-01T00:00:04.000Z',
-    };
-    const sessionsPatch = vi.fn();
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      app: unknown;
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(completedTask);
-    service.repository = { update: vi.fn() };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-    service.app = {
-      service: (name: string) => {
-        if (name === 'sessions') {
-          return { patch: sessionsPatch };
-        }
-        throw new Error(`unexpected service ${name}`);
-      },
-    };
-
-    const result = await service.failForLostHeartbeat(taskId, {
-      completed_at: '2026-01-01T00:00:05.000Z',
-      error_message: 'Executor heartbeat lost',
+    expect(service.taskRepo.failExpiredExecutorAttempt).toHaveBeenCalledWith(TASK_ID, {
+      executorAttemptId: ATTEMPT_ID,
+      staleBefore: '2026-01-01T00:00:02.000Z',
+      completedAt: '2026-01-01T00:00:05.000Z',
+      errorMessage,
+      terminalCause,
     });
-
-    expect(result).toBe(completedTask);
-    expect(service.repository.update).not.toHaveBeenCalled();
     expect(sessionsPatch).not.toHaveBeenCalled();
   });
 
-  it('does not mark session failed when heartbeat failure loses to an earlier task failure', async () => {
-    const taskId = '018f0000-0000-7000-8000-000000000005';
-    const failedTask = {
-      task_id: taskId,
-      session_id: '018f0000-0000-7000-8000-000000000006',
-      status: TaskStatus.FAILED,
-      created_at: '2026-01-01T00:00:00.000Z',
-      completed_at: '2026-01-01T00:00:04.000Z',
-      error_message: 'Executor exited with code 1',
-    };
-    const sessionsPatch = vi.fn();
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      app: unknown;
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(failedTask);
-    service.repository = { update: vi.fn() };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-    service.app = {
-      service: (name: string) => {
-        if (name === 'sessions') {
-          return { patch: sessionsPatch };
-        }
-        throw new Error(`unexpected service ${name}`);
-      },
-    };
+  it('preserves timed-out session state when cleanup releases the turn', async () => {
+    const timedOutTask = task(TaskStatus.TIMED_OUT);
+    const { service, sessionsPatch } = serviceHarness(timedOutTask);
 
-    const result = await service.failForLostHeartbeat(taskId, {
-      completed_at: '2026-01-01T00:00:05.000Z',
-      error_message: 'Executor heartbeat lost',
+    await service.finalizeExecutorAttempt(TASK_ID, ATTEMPT_ID, {
+      evidence: {
+        cleanup_status: EXECUTOR_CLEANUP_STATUS.VERIFIED,
+        state_persistence_status: EXECUTOR_STATE_PERSISTENCE_STATUS.SKIPPED,
+        cleanup_error: null,
+        state_persistence_error: null,
+        cleanup_verified_at: '2026-01-01T00:00:05.000Z',
+      },
     });
 
-    expect(result).toBe(failedTask);
-    expect(service.repository.update).not.toHaveBeenCalled();
-    expect(sessionsPatch).not.toHaveBeenCalled();
-  });
-
-  it('does not let a late terminal executor patch rewrite a heartbeat failure', async () => {
-    const taskId = '018f0000-0000-7000-8000-000000000007';
-    const failedTask = {
-      task_id: taskId,
-      session_id: '018f0000-0000-7000-8000-000000000008',
-      status: TaskStatus.FAILED,
-      created_at: '2026-01-01T00:00:00.000Z',
-      completed_at: '2026-01-01T00:00:05.000Z',
-      error_message: 'Executor heartbeat lost',
-    };
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(failedTask);
-    service.repository = { update: vi.fn() };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-
-    const result = await service.patch(taskId, {
-      status: TaskStatus.COMPLETED,
-      completed_at: '2026-01-01T00:00:06.000Z',
-    });
-
-    expect(result).toBe(failedTask);
-    expect(service.repository.update).not.toHaveBeenCalled();
-    expect(service.emit).not.toHaveBeenCalled();
-  });
-
-  it('supports administrative stopped patches without callbacks or queue draining', async () => {
-    const taskId = '018f0000-0000-7000-8000-000000000010';
-    const sessionId = '018f0000-0000-7000-8000-000000000011';
-    const currentTask = {
-      task_id: taskId,
-      session_id: sessionId,
-      status: TaskStatus.RUNNING,
-      created_at: '2026-01-01T00:00:00.000Z',
-      started_at: '2026-01-01T00:00:00.000Z',
-    };
-    const stoppedTask = {
-      ...currentTask,
-      status: TaskStatus.STOPPED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-      duration_ms: 5000,
-    };
-    const sessionsPatch = vi.fn();
-    const triggerQueueProcessing = vi.fn();
-    const dispatchCompletionCallbacks = vi.fn();
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      app: unknown;
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-      dispatchCompletionCallbacks: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(currentTask);
-    service.repository = { update: vi.fn().mockResolvedValue(stoppedTask) };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-    service.dispatchCompletionCallbacks = dispatchCompletionCallbacks;
-    service.app = {
-      service: (name: string) => {
-        if (name === 'sessions') {
-          return {
-            get: vi.fn().mockResolvedValue({
-              session_id: sessionId,
-              status: 'running',
-              ready_for_prompt: false,
-              tasks: [taskId],
-            }),
-            patch: sessionsPatch,
-            triggerQueueProcessing,
-          };
-        }
-        if (name === 'branches') {
-          return { get: vi.fn() };
-        }
-        throw new Error(`unexpected service ${name}`);
-      },
-    };
-
-    const result = await service.patch(
-      taskId,
-      {
-        status: TaskStatus.STOPPED,
-        completed_at: '2026-01-01T00:00:05.000Z',
-      },
-      {
-        suppressTerminalQueueProcessing: true,
-        suppressCompletionCallbacks: true,
-      }
-    );
-
-    expect(result).toMatchObject({ task_id: taskId, status: TaskStatus.STOPPED });
-    expect(dispatchCompletionCallbacks).not.toHaveBeenCalled();
-    expect(sessionsPatch).not.toHaveBeenCalled();
-    expect(triggerQueueProcessing).not.toHaveBeenCalled();
-  });
-
-  it('marks directly stopped tasks promptable and triggers queue processing', async () => {
-    const taskId = '018f0000-0000-7000-8000-000000000030';
-    const sessionId = '018f0000-0000-7000-8000-000000000031';
-    const currentTask = {
-      task_id: taskId,
-      session_id: sessionId,
-      status: TaskStatus.RUNNING,
-      created_at: '2026-01-01T00:00:00.000Z',
-      started_at: '2026-01-01T00:00:00.000Z',
-    };
-    const stoppedTask = {
-      ...currentTask,
-      status: TaskStatus.STOPPED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-      duration_ms: 5000,
-    };
-    const sessionsPatch = vi.fn().mockResolvedValue({
-      session_id: sessionId,
-      status: 'idle',
-      ready_for_prompt: true,
-      tasks: [taskId],
-    });
-    const triggerQueueProcessing = vi.fn().mockResolvedValue(undefined);
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      app: unknown;
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-      dispatchCompletionCallbacks: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(currentTask);
-    service.repository = { update: vi.fn().mockResolvedValue(stoppedTask) };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-    service.dispatchCompletionCallbacks = vi.fn();
-    service.app = {
-      service: (name: string) => {
-        if (name === 'sessions') {
-          return {
-            get: vi.fn().mockResolvedValue({
-              session_id: sessionId,
-              status: 'running',
-              ready_for_prompt: false,
-              tasks: [taskId],
-            }),
-            patch: sessionsPatch,
-            triggerQueueProcessing,
-          };
-        }
-        if (name === 'branches') return { get: vi.fn() };
-        throw new Error(`unexpected service ${name}`);
-      },
-    };
-
-    const result = await service.patch(taskId, {
-      status: TaskStatus.STOPPED,
-      completed_at: '2026-01-01T00:00:05.000Z',
-    });
-
-    expect(result).toMatchObject({ task_id: taskId, status: TaskStatus.STOPPED });
     expect(sessionsPatch).toHaveBeenCalledWith(
-      sessionId,
+      SESSION_ID,
+      { status: 'timed_out', ready_for_prompt: true },
+      undefined
+    );
+  });
+
+  it.each([
+    [EXECUTOR_CLEANUP_STATUS.VERIFIED, true],
+    [EXECUTOR_CLEANUP_STATUS.UNRESOLVED, false],
+  ] as const)('releases only after cleanup is %s', async (cleanupStatus, released) => {
+    const failedTask = task(TaskStatus.FAILED);
+    const { service, sessionsPatch } = serviceHarness(failedTask);
+
+    await expect(
+      service.finalizeExecutorAttempt(TASK_ID, ATTEMPT_ID, {
+        evidence: {
+          cleanup_status: cleanupStatus,
+          state_persistence_status: EXECUTOR_STATE_PERSISTENCE_STATUS.SKIPPED,
+          cleanup_error: released ? null : 'cleanup unresolved',
+          state_persistence_error: null,
+          cleanup_verified_at: released ? '2026-01-01T00:00:05.000Z' : null,
+        },
+      })
+    ).resolves.toEqual({ finalized: true, released });
+
+    expect(sessionsPatch).toHaveBeenCalledWith(
+      SESSION_ID,
+      { status: 'failed', ready_for_prompt: released },
+      undefined
+    );
+    expect(service.dispatchCompletionSideEffectsAfterCommit).toHaveBeenCalledTimes(
+      released ? 1 : 0
+    );
+  });
+
+  it.each([
+    TaskStatus.COMPLETED,
+    TaskStatus.STOPPED,
+    TaskStatus.FAILED,
+  ])('never rewrites terminal task %s', async (status) => {
+    const terminalTask = task(status);
+    const { service, repositoryUpdate } = serviceHarness(terminalTask);
+
+    await expect(service.patch(TASK_ID, { status: TaskStatus.RUNNING })).resolves.toBe(
+      terminalTask
+    );
+    expect(repositoryUpdate).not.toHaveBeenCalled();
+  });
+
+  it('cancels queued work without releasing the active session', async () => {
+    const queuedTask = task(TaskStatus.QUEUED, false);
+    const { service, sessionsPatch } = serviceHarness(queuedTask);
+    service.repository.update.mockResolvedValue({ ...queuedTask, status: TaskStatus.STOPPED });
+
+    await service.patch(TASK_ID, { status: TaskStatus.STOPPED });
+
+    expect(sessionsPatch).not.toHaveBeenCalled();
+  });
+
+  it('releases a non-executor stop through the session transition only', async () => {
+    const runningTask = task(TaskStatus.RUNNING, false);
+    const { service, sessionsPatch } = serviceHarness(runningTask);
+    service.repository.update.mockResolvedValue({ ...runningTask, status: TaskStatus.STOPPED });
+
+    await service.patch(TASK_ID, { status: TaskStatus.STOPPED });
+
+    expect(sessionsPatch).toHaveBeenCalledWith(
+      SESSION_ID,
       { status: 'idle', ready_for_prompt: true },
       undefined
     );
-    expect(service.dispatchCompletionCallbacks).not.toHaveBeenCalled();
-    expect(triggerQueueProcessing).toHaveBeenCalledWith(sessionId, undefined);
   });
 
-  it('ignores late executor attempts to revive a stopped task as awaiting permission', async () => {
-    const taskId = '018f0000-0000-7000-8000-000000000022';
-    const sessionId = '018f0000-0000-7000-8000-000000000023';
-    const stoppedTask = {
-      task_id: taskId,
-      session_id: sessionId,
-      status: TaskStatus.STOPPED,
-      created_at: '2026-01-01T00:00:00.000Z',
-      started_at: '2026-01-01T00:00:00.000Z',
-      completed_at: '2026-01-01T00:00:05.000Z',
-    };
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      app: unknown;
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(stoppedTask);
-    service.repository = { update: vi.fn() };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-    service.app = {
-      service: (_name: string) => {
-        throw new Error(`unexpected service ${_name}`);
-      },
-    };
-
-    const result = await service.patch(taskId, {
-      status: TaskStatus.AWAITING_PERMISSION,
-      last_executor_heartbeat_at: '2026-01-01T00:00:06.000Z',
+  it.each([
+    [TaskStatus.COMPLETED, EXECUTOR_TERMINAL_CAUSE.EXECUTOR_REPORTED],
+    [TaskStatus.TIMED_OUT, EXECUTOR_TERMINAL_CAUSE.PERMISSION_TIMEOUT],
+  ] as const)('leaves executor %s release to the coordinator after claiming the terminal winner', async (status, terminalCause) => {
+    const runningTask = task(TaskStatus.RUNNING);
+    const { service, sessionsPatch } = serviceHarness(runningTask);
+    const transitionOwnedExecutorAttemptToTerminal = vi.fn().mockResolvedValue({
+      task: { ...runningTask, status },
+      transitioned: true,
     });
+    service.taskRepo = {
+      failExpiredExecutorAttempt: vi.fn(),
+      transitionOwnedExecutorAttemptToTerminal,
+    } as never;
 
-    expect(result).toBe(stoppedTask);
-    expect(service.repository.update).not.toHaveBeenCalled();
-    expect(service.emit).not.toHaveBeenCalled();
-  });
+    await service.patch(TASK_ID, { status });
 
-  it('ignores late executor attempts to revive a stopped task as running', async () => {
-    const taskId = '018f0000-0000-7000-8000-000000000020';
-    const sessionId = '018f0000-0000-7000-8000-000000000021';
-    const stoppedTask = {
-      task_id: taskId,
-      session_id: sessionId,
-      status: TaskStatus.STOPPED,
-      created_at: '2026-01-01T00:00:00.000Z',
-      started_at: '2026-01-01T00:00:00.000Z',
-      completed_at: '2026-01-01T00:00:05.000Z',
-    };
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      app: unknown;
-      get: ReturnType<typeof vi.fn>;
-      repository: { update: ReturnType<typeof vi.fn> };
-      id: string;
-      emit: ReturnType<typeof vi.fn>;
-    };
-    service.get = vi.fn().mockResolvedValue(stoppedTask);
-    service.repository = { update: vi.fn() };
-    service.id = 'task_id';
-    service.emit = vi.fn();
-    service.app = {
-      service: (_name: string) => {
-        throw new Error(`unexpected service ${_name}`);
-      },
-    };
-
-    const result = await service.patch(taskId, {
-      status: TaskStatus.RUNNING,
-      last_executor_heartbeat_at: '2026-01-01T00:00:06.000Z',
-    });
-
-    expect(result).toBe(stoppedTask);
-    expect(service.repository.update).not.toHaveBeenCalled();
-    expect(service.emit).not.toHaveBeenCalled();
+    expect(transitionOwnedExecutorAttemptToTerminal).toHaveBeenCalledWith(
+      TASK_ID,
+      expect.objectContaining({ terminalCause })
+    );
+    expect(sessionsPatch).not.toHaveBeenCalled();
   });
 });

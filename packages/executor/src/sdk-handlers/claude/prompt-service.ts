@@ -17,11 +17,13 @@ import type {
   UsersRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
+import { pulseClaudeToolProgress } from './runtime-progress.js';
 
 export interface PromptResult {
   /** Assistant messages (can be multiple: tool invocation, then response) */
@@ -78,7 +80,8 @@ export class ClaudePromptService {
     private messagesService?: MessagesService, // FeathersJS Messages service for creating permission requests
     private mcpEnabled?: boolean,
     private usersRepo?: UsersRepository,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private runtime?: AgenticToolRuntime
   ) {
     // No client initialization needed - Agent SDK is stateless
   }
@@ -230,6 +233,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
     try {
       for await (const msg of result) {
+        pulseClaudeToolProgress(msg, this.runtime);
         // Check for timeout - throw error to trigger proper cleanup
         if (processor.hasTimedOut()) {
           const state = processor.getState();
@@ -416,6 +420,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
     try {
       for await (const msg of result) {
+        pulseClaudeToolProgress(msg, this.runtime);
         const events = await processor.process(msg);
 
         for (const event of events) {

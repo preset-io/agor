@@ -157,6 +157,8 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     sessionId: z.string().uuid(),
     taskId: z.string().uuid(),
+    /** Daemon-minted launch attempt bound to the task and runtime token. */
+    executorAttemptId: z.string().uuid(),
     prompt: z.string(),
     tool: ToolTypeSchema,
     permissionMode: PermissionModeSchema.optional(),

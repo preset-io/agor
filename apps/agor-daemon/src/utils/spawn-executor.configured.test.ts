@@ -3,13 +3,20 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
+import { EXECUTOR_WORKLOAD_KIND } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { spawnMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(),
-}));
+const { createWorkloadMock, execFileMock, runStopCommandMock, spawnMock, terminateMarkedMock } =
+  vi.hoisted(() => ({
+    createWorkloadMock: vi.fn(),
+    execFileMock: vi.fn(),
+    runStopCommandMock: vi.fn(),
+    spawnMock: vi.fn(),
+    terminateMarkedMock: vi.fn(),
+  }));
 
 vi.mock('node:child_process', () => ({
+  execFile: execFileMock,
   spawn: spawnMock,
 }));
 
@@ -25,6 +32,12 @@ vi.mock('./build-resolved-config-slice.js', () => ({
     ...payload,
     resolvedConfig: {},
   }),
+}));
+
+vi.mock('./executor-workload.js', () => ({
+  createExecutorWorkloadHandle: createWorkloadMock,
+  runExecutorStopCommand: runStopCommandMock,
+  terminateMarkedExecutorAttempt: terminateMarkedMock,
 }));
 
 function createMockProcess() {
@@ -50,6 +63,15 @@ describe('configured executor spawning', () => {
   beforeEach(async () => {
     vi.resetModules();
     spawnMock.mockReset();
+    createWorkloadMock.mockReset();
+    runStopCommandMock.mockReset();
+    runStopCommandMock.mockResolvedValue(undefined);
+    terminateMarkedMock.mockReset();
+    terminateMarkedMock.mockResolvedValue(true);
+    createWorkloadMock.mockImplementation((_child, options) => ({
+      pid: 123,
+      terminate: (reason: string) => options?.remoteStop?.(reason) ?? Promise.resolve(),
+    }));
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -89,6 +111,75 @@ describe('configured executor spawning', () => {
     });
   });
 
+  it('pairs a templated workload with its configured remote stop command', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    let workload: { terminate(reason: string): Promise<void> } | undefined;
+    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+
+    configureExecutor({
+      executor_command_template: 'kubectl run executor-{task_id}',
+      executor_stop_command_template:
+        'kubectl delete pod executor-{task_id} --reason={termination_reason}',
+    });
+    spawnExecutor(
+      { command: 'prompt' },
+      {
+        templateVariables: { task_id: 'task-1' },
+        onSpawn: (spawned) => {
+          workload = spawned;
+        },
+      }
+    );
+
+    await workload?.terminate('heartbeat_lost');
+
+    expect(runStopCommandMock).toHaveBeenCalledWith(
+      'kubectl delete pod executor-task-1 --reason=heartbeat_lost'
+    );
+  });
+
+  it('recovers using the workload mode persisted at launch', async () => {
+    const { configureExecutor, recoverConfiguredExecutorAttempt } = await import(
+      './spawn-executor'
+    );
+    configureExecutor({
+      executor_stop_command_template: 'kubectl delete pod executor-{task_id}',
+    });
+
+    await expect(
+      recoverConfiguredExecutorAttempt({
+        executorAttemptId: 'attempt-1',
+        reason: 'reconciliation',
+        templateVariables: { task_id: 'task-1' },
+        workload: { kind: EXECUTOR_WORKLOAD_KIND.TEMPLATED },
+      })
+    ).resolves.toBe(true);
+
+    expect(runStopCommandMock).toHaveBeenCalledWith('kubectl delete pod executor-task-1');
+  });
+
+  it('does not run a newly configured remote stop for a persisted local workload', async () => {
+    const { configureExecutor, recoverConfiguredExecutorAttempt } = await import(
+      './spawn-executor'
+    );
+    configureExecutor({
+      executor_command_template: 'kubectl run executor-{task_id}',
+      executor_stop_command_template: 'kubectl delete pod executor-{task_id}',
+    });
+
+    await expect(
+      recoverConfiguredExecutorAttempt({
+        executorAttemptId: 'attempt-2',
+        reason: 'reconciliation',
+        templateVariables: { task_id: 'task-2' },
+        workload: { kind: EXECUTOR_WORKLOAD_KIND.LOCAL },
+      })
+    ).resolves.toBe(true);
+
+    expect(runStopCommandMock).not.toHaveBeenCalled();
+  });
+
   it('lets explicit spawn options override configured defaults', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
@@ -126,6 +217,26 @@ describe('configured executor spawning', () => {
     proc.emit('exit', 17);
 
     expect(onExit).toHaveBeenCalledWith(17);
+  });
+
+  it('observes rejected async exit handlers', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+
+    configureExecutor({ executor_command_template: 'echo {command}' });
+    spawnExecutor(
+      { command: 'git.clone' },
+      { onExit: async () => Promise.reject(new Error('exit cleanup failed')) }
+    );
+    proc.emit('exit', 1);
+    await vi.waitFor(() =>
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[Executor] Exit handler failed:',
+        expect.objectContaining({ message: 'exit cleanup failed' })
+      )
+    );
   });
 
   it('keeps createConfiguredSpawner isolated from module-level defaults', async () => {

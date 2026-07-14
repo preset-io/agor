@@ -20,6 +20,8 @@ import type {
   ContextFileDetail,
   ContextFileListItem,
   CreateAgenticToolPreset,
+  ExecutorClaim,
+  ExecutorTelemetryReport,
   Group,
   GroupMembership,
   KnowledgeDocument,
@@ -69,6 +71,7 @@ const BOARDS_SERVICE_EXTENDED = Symbol('agor.boardsServiceExtended');
 const USERS_SERVICE_EXTENDED = Symbol('agor.usersServiceExtended');
 const REPOS_SERVICE_EXTENDED = Symbol('agor.reposServiceExtended');
 const BRANCHES_SERVICE_EXTENDED = Symbol('agor.branchesServiceExtended');
+const TASKS_SERVICE_EXTENDED = Symbol('agor.tasksServiceExtended');
 const SERVICE_FIND_ALL_EXTENDED = Symbol('agor.serviceFindAllExtended');
 const CLIENT_SERVICE_FACTORY_EXTENDED = Symbol('agor.clientServiceFactoryExtended');
 const CLIENT_SESSIONS_HELPERS_EXTENDED = Symbol('agor.clientSessionsHelpersExtended');
@@ -151,7 +154,8 @@ export interface TasksClientHelpers {
   /**
    * Trigger executor pickup for an already-created task. Pure-REST harnesses
    * use this after `POST /tasks` to avoid needing an MCP client. Returns the
-   * Task with `status: 'running'`. Only `'created'` tasks on idle sessions
+   * Task with `status: 'dispatching'` for non-CLI executors (or `'running'`
+   * for `claude-code-cli`). Only `'created'` tasks on idle sessions
    * are accepted — `'queued'` tasks drain automatically in queue-position
    * order via the queue processor, and busy sessions should be prompted via
    * `client.sessions.prompt()` (which creates and queues the task atomically).
@@ -293,6 +297,10 @@ export interface SessionsService extends AgorService<Session> {
  * Tasks service with bulk creation support
  */
 export interface TasksService extends AgorService<Task> {
+  /** Claim a daemon-dispatched task after executor authentication. */
+  connectExecutor(data: ExecutorClaim, params?: Params): Promise<Task>;
+  /** Report bounded executor liveness and progress through a daemon-owned path. */
+  reportExecutorTelemetry(data: ExecutorTelemetryReport, params?: Params): Promise<Task>;
   /**
    * Create multiple tasks in a single request
    * Returns array of created tasks with IDs
@@ -869,6 +877,18 @@ function extendBranchesService(client: AgorClient): void {
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }
 
+function extendTasksService(client: AgorClient): void {
+  const tasksService = client.service('tasks') as AgorService<Task> & {
+    [TASKS_SERVICE_EXTENDED]?: boolean;
+    methods?: (...names: string[]) => unknown;
+  };
+  if (tasksService[TASKS_SERVICE_EXTENDED]) return;
+  if (typeof tasksService.methods === 'function') {
+    tasksService.methods('connectExecutor', 'reportExecutorTelemetry');
+  }
+  tasksService[TASKS_SERVICE_EXTENDED] = true;
+}
+
 function extendServiceFactory(client: AgorClient): void {
   const augmentedClient = client as AgorClient & {
     [CLIENT_SERVICE_FACTORY_EXTENDED]?: boolean;
@@ -999,6 +1019,7 @@ export async function createRestClient(
   extendUsersService(client);
   extendReposService(client);
   extendBranchesService(client);
+  extendTasksService(client);
   extendSessionsHelpers(client);
   extendTasksHelpers(client);
 
@@ -1090,6 +1111,7 @@ export function createClient(
   extendUsersService(client);
   extendReposService(client);
   extendBranchesService(client);
+  extendTasksService(client);
   extendSessionsHelpers(client);
   extendTasksHelpers(client);
 

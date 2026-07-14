@@ -17,25 +17,27 @@ import type {
   Message,
   MessageID,
   MessageSource,
-  PermissionMode,
   SessionID,
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, TaskStatus } from '@agor/core/types';
 import { Agent, type McpServerConfig, type Run, type SDKMessage } from '@cursor/sdk';
 import { getDaemonUrl } from '../../config.js';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
-import type { ResolvedConfigSlice } from '../../payload-types.js';
+import { type AgenticToolRuntime, PULSE_KIND } from '../../runtime-overseer.js';
 import { getMcpServersForSession } from '../../sdk-handlers/base/mcp-scoping.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import {
   captureGitStateAtTaskEnd,
+  commitExecutorTerminalOutcome,
+  createRuntimeAwareStreamingCallbacks,
   createStreamingCallbacks,
   stampGitStateAtTaskStart,
 } from './base-executor.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
+import type { ToolRunnerParams } from './tool-registry.js';
 
 type CursorKeyResolution = {
   apiKey?: string;
@@ -246,6 +248,27 @@ async function buildCursorMcpServers(args: {
   return count > 0 ? mcpServers : undefined;
 }
 
+const CURSOR_TOOL_STATUS = {
+  COMPLETED: 'completed',
+  ERROR: 'error',
+  RUNNING: 'running',
+} as const;
+
+function pulseCursorEvent(event: SDKMessage, runtime: AgenticToolRuntime): void {
+  runtime.pulse({ kind: PULSE_KIND.SDK_PROGRESS, label: event.type });
+
+  if (event.type !== 'tool_call') return;
+
+  const label = normalizeCursorToolName(event.name);
+  if (event.status === CURSOR_TOOL_STATUS.COMPLETED || event.status === CURSOR_TOOL_STATUS.ERROR) {
+    runtime.pulse({ kind: PULSE_KIND.TOOL_FINISHED, id: event.call_id, label });
+  } else if (event.status === CURSOR_TOOL_STATUS.RUNNING) {
+    runtime.pulse({ kind: PULSE_KIND.TOOL_STARTED, id: event.call_id, label });
+  } else {
+    runtime.pulse({ kind: PULSE_KIND.TOOL_PROGRESS, id: event.call_id, label });
+  }
+}
+
 async function getSessionMessages(client: AgorClient, sessionId: SessionID): Promise<Message[]> {
   const existingMessages = await client.service('messages').find({
     query: {
@@ -425,19 +448,11 @@ async function createSystemErrorMessage(args: {
 /**
  * Execute Cursor task (Feathers/WebSocket architecture).
  */
-export async function executeCursorTask(params: {
-  client: AgorClient;
-  sessionId: SessionID;
-  taskId: TaskID;
-  prompt: string;
-  permissionMode?: PermissionMode;
-  abortController: AbortController;
-  messageSource?: MessageSource;
-  resolvedConfig?: ResolvedConfigSlice;
-}): Promise<void> {
+export async function executeCursorTask(params: ToolRunnerParams): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
 
   console.log(`[cursor] Executing task ${shortId(taskId)}...`);
+  params.runtime.pulse({ kind: PULSE_KIND.SDK_STARTED, label: 'cursor' });
   if (params.permissionMode && params.permissionMode !== 'bypassPermissions') {
     console.warn(
       `[cursor] Ignoring permission mode "${params.permissionMode}"; @cursor/sdk currently runs autonomously in Agor.`
@@ -461,7 +476,10 @@ export async function executeCursorTask(params: {
     const apiKey = await resolveCursorApiKey(client, taskId);
     const session = await client.service('sessions').get(sessionId);
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId);
+    const callbacks = createRuntimeAwareStreamingCallbacks(
+      createStreamingCallbacks(client, 'cursor', sessionId),
+      params.runtime
+    );
 
     if (!session.branch_id) {
       throw new Error('Cursor sessions require a branch_id so the local runtime has a cwd.');
@@ -539,6 +557,7 @@ export async function executeCursorTask(params: {
 
       for await (const event of currentRun.stream()) {
         rawMessages.push(event);
+        pulseCursorEvent(event, params.runtime);
         if (params.abortController.signal.aborted) {
           await currentRun.cancel();
           break;
@@ -602,9 +621,10 @@ export async function executeCursorTask(params: {
 
       const failed = runResult.status === 'error';
       const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
+      if (stopped && params.abortController.signal.aborted) return;
       const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
       const taskPatch: Partial<Task> = {
-        status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
+        status: stopped ? TaskStatus.STOPPED : failed ? TaskStatus.FAILED : TaskStatus.COMPLETED,
         completed_at: new Date().toISOString(),
         ...(recordedModel ? { model: recordedModel } : {}),
         raw_sdk_response: {
@@ -618,16 +638,17 @@ export async function executeCursorTask(params: {
         // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
         taskPatch.git_state = { sha_at_end: shaAtEnd };
       }
-      await client.service('tasks').patch(taskId, taskPatch);
+      await commitExecutorTerminalOutcome(client, params.runtime, taskId, taskPatch);
     } finally {
       agent.close();
     }
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error('[cursor] Execution failed:', err);
+    if (params.abortController.signal.aborted) return;
     const shaAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
     const taskPatch: Partial<Task> = {
-      status: 'failed',
+      status: TaskStatus.FAILED,
       completed_at: new Date().toISOString(),
       error_message: err.message,
     };
@@ -635,7 +656,7 @@ export async function executeCursorTask(params: {
       // @ts-expect-error - Partial update of nested git_state object is handled by repository deep merge
       taskPatch.git_state = { sha_at_end: shaAtEnd };
     }
-    await client.service('tasks').patch(taskId, taskPatch);
+    await commitExecutorTerminalOutcome(client, params.runtime, taskId, taskPatch);
     await createSystemErrorMessage({ client, sessionId, taskId, message: err.message });
     throw err;
   } finally {

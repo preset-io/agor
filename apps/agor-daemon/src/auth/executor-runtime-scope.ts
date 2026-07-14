@@ -1,5 +1,16 @@
 import { Forbidden } from '@agor/core/feathers';
-import type { AuthenticatedParams, HookContext, Params } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  ExecutorFinalizationEvidence,
+  HookContext,
+  Params,
+} from '@agor/core/types';
+import {
+  isExecutorFinalizationReleasable,
+  isTerminalTaskStatus,
+  SessionStatus,
+  type TaskStatus,
+} from '@agor/core/types';
 import {
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
@@ -33,6 +44,7 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
       type: EXECUTOR_SESSION_TOKEN_TYPE,
       purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
       task_id: params.task_id,
+      executor_attempt_id: params.executor_attempt_id,
       session_id: params.session_id,
       sessionId: params.sessionId,
       branch_id: params.branch_id,
@@ -41,6 +53,160 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
 
   if (payload?.type !== undefined) return null;
   return null;
+}
+
+/** Whether this authenticated transport request carries executor scope for one task. */
+export function isTaskScopedExecutorRequest(
+  context: HookContext,
+  taskId: string,
+  executorAttemptId?: string
+): boolean {
+  const payload = scopedPayload(context);
+  return (
+    payload?.task_id === taskId &&
+    (executorAttemptId === undefined || payload.executor_attempt_id === executorAttemptId)
+  );
+}
+
+/** Params-only form for service methods that defer executor-owned side effects. */
+export function isTaskScopedExecutorParams(
+  params: Params,
+  taskId: string,
+  executorAttemptId?: string
+): boolean {
+  const payload = scopedPayload({ params } as HookContext);
+  return (
+    payload?.task_id === taskId &&
+    (executorAttemptId === undefined || payload.executor_attempt_id === executorAttemptId)
+  );
+}
+
+const MUTATING_METHODS = new Set(['create', 'update', 'patch', 'remove']);
+const EPHEMERAL_STREAMING_PATHS = new Set(['messages/streaming', 'tasks/streaming']);
+const TASK_SCOPED_SERVICE_METHODS: Record<string, ReadonlySet<string>> = {
+  sessions: new Set(['find', 'get', 'patch']),
+  tasks: new Set(['find', 'get', 'patch', 'connectExecutor', 'reportExecutorTelemetry']),
+  branches: new Set(['find', 'get']),
+};
+
+const TASK_SCOPED_PATCH_FIELDS: Record<string, ReadonlySet<string>> = {
+  sessions: new Set(['status', 'git_state', 'sdk_session_id']),
+  tasks: new Set([
+    'status',
+    'completed_at',
+    'error_message',
+    'report',
+    'git_state',
+    'model',
+    'raw_sdk_response',
+    'normalized_sdk_response',
+    'computed_context_window',
+  ]),
+};
+
+const EXECUTOR_MUTABLE_SESSION_STATUSES = new Set<SessionStatus>([
+  SessionStatus.RUNNING,
+  SessionStatus.AWAITING_PERMISSION,
+  SessionStatus.AWAITING_INPUT,
+]);
+
+function protectDaemonOwnedSessionSettlement(context: HookContext): void {
+  if (context.method !== 'patch') return;
+  const data = asRecord(context.data);
+  if (!data) return;
+
+  if (Object.hasOwn(data, 'ready_for_prompt')) {
+    throw new Forbidden('Executor tokens cannot release sessions');
+  }
+  if (
+    Object.hasOwn(data, 'status') &&
+    !EXECUTOR_MUTABLE_SESSION_STATUSES.has(data.status as SessionStatus)
+  ) {
+    throw new Forbidden('Executor tokens cannot settle sessions');
+  }
+}
+
+function requireTaskScopedServiceMethod(
+  context: HookContext,
+  payload: ExecutorSessionTokenPayload
+): void {
+  if (!payload.task_id) return;
+
+  const path = normalizePath(context.path);
+  const allowedMethods = TASK_SCOPED_SERVICE_METHODS[path];
+  if (allowedMethods && !allowedMethods.has(context.method)) {
+    throw new Forbidden(`Executor task token is not valid for this ${path} request`);
+  }
+}
+
+function requireTaskScopedPatchFields(
+  context: HookContext,
+  payload: ExecutorSessionTokenPayload
+): void {
+  if (!payload.task_id || context.method !== 'patch') return;
+
+  const path = normalizePath(context.path);
+  const allowedFields = TASK_SCOPED_PATCH_FIELDS[path];
+  if (!allowedFields) return;
+
+  for (const record of recordsFromData(context.data)) {
+    const forbiddenField = Object.keys(record).find((field) => !allowedFields.has(field));
+    if (forbiddenField) {
+      throw new Forbidden(`Executor task token cannot patch ${path}.${forbiddenField}`);
+    }
+  }
+}
+
+/** Require executor-owned lifecycle mutations to belong to the persisted attempt. */
+async function requirePersistedExecutorAttemptOwner(
+  context: HookContext,
+  payload: ExecutorSessionTokenPayload
+): Promise<void> {
+  const path = normalizePath(context.path);
+  // Streaming routes only relay transient socket events. Avoid a database read
+  // for every text/thinking chunk; their task/session envelope is still scoped below.
+  if (
+    !payload.task_id ||
+    !MUTATING_METHODS.has(context.method) ||
+    EPHEMERAL_STREAMING_PATHS.has(path)
+  ) {
+    return;
+  }
+
+  const executorAttemptId = expectClaim(payload.executor_attempt_id, 'executor attempt');
+  const task = asRecord(
+    await context.app.service('tasks').get(payload.task_id, {
+      ...context.params,
+      provider: undefined,
+    })
+  );
+  if (!task) {
+    throw new Forbidden('Executor token task ownership cannot be verified');
+  }
+  expectExistingMatch(executorAttemptId, task.executor_attempt_id, 'executor attempt');
+
+  const finalization = asRecord(task.executor_finalization);
+  if (
+    isTerminalTaskStatus(task.status as TaskStatus) &&
+    finalization &&
+    isExecutorFinalizationReleasable(finalization as unknown as ExecutorFinalizationEvidence)
+  ) {
+    throw new Forbidden('Executor attempt is already finalized');
+  }
+
+  if (path === 'sessions') {
+    const sessionId = expectClaim(getExecutorSessionTokenSessionId(payload), 'session');
+    expectExistingMatch(sessionId, task.session_id, 'session');
+
+    const session = asRecord(
+      await context.app.service('sessions').get(sessionId, {
+        ...context.params,
+        provider: undefined,
+      })
+    );
+    const latestTaskId = Array.isArray(session?.tasks) ? session.tasks.at(-1) : undefined;
+    expectExistingMatch(payload.task_id, latestTaskId, 'latest session task');
+  }
 }
 
 function expectClaim(claim: string | undefined, label: string): string {
@@ -173,6 +339,22 @@ export function scopeExecutorRuntimeAuth(requireAuth: AuthHook): AuthHook {
   };
 }
 
+/** Require this transport call to carry a task-scoped executor session token. */
+export function requireExecutorRuntimeToken() {
+  return async (context: HookContext): Promise<HookContext> => {
+    const payload = scopedPayload(context);
+    if (!payload?.task_id || !payload.executor_attempt_id) {
+      throw new Forbidden('A task-scoped executor token is required for this request');
+    }
+    const data = asRecord(context.data);
+    if (!data?.executor_attempt_id) {
+      throw new Forbidden('Executor attempt scope is required for this request');
+    }
+    expectMatch(payload.executor_attempt_id, data?.executor_attempt_id, 'executor attempt');
+    return context;
+  };
+}
+
 /**
  * Restrict executor-session JWTs to the resource claims minted for the
  * executor turn. Normal user/API-key/service auth is intentionally ignored.
@@ -193,6 +375,11 @@ export function executorRuntimeScopeGuard() {
 
     const payload = scopedPayload(context);
     if (!payload) return context;
+
+    requireTaskScopedServiceMethod(context, payload);
+    if (normalizePath(context.path) === 'sessions') protectDaemonOwnedSessionSettlement(context);
+    requireTaskScopedPatchFields(context, payload);
+    await requirePersistedExecutorAttemptOwner(context, payload);
 
     const scope = {
       sessionId: getExecutorSessionTokenSessionId(payload),

@@ -27,6 +27,7 @@ import type {
   MCPServerRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
+import { type AgenticToolRuntime, PULSE_KIND } from '../../runtime-overseer.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
@@ -44,6 +45,91 @@ import type { ITool } from '../base/tool.interface.js';
 export interface OpenCodeConfig {
   enabled: boolean;
   serverUrl: string;
+}
+
+const OPENCODE_RUNTIME_EVENT_TYPES = new Set([
+  'message.part.updated',
+  'message.updated',
+  'permission.asked',
+  'permission.updated',
+  'session.error',
+  'session.status',
+]);
+const OPENCODE_TOOL_TERMINAL_STATUSES = new Set(['completed', 'error', 'failed']);
+const OPENCODE_TOOL_PENDING_STATUS = 'pending';
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function pulseOpenCodeEvent(event: unknown, runtime?: AgenticToolRuntime): void {
+  if (!runtime) return;
+
+  const eventRecord = asRecord(event);
+  const eventType = typeof eventRecord?.type === 'string' ? eventRecord.type : 'unknown';
+  if (eventType === 'server.heartbeat') return;
+
+  const properties = asRecord(eventRecord?.properties);
+  const part = asRecord(properties?.part);
+  if (eventType === 'message.part.updated' && part?.type === 'tool') {
+    const state = asRecord(part.state);
+    const status = typeof state?.status === 'string' ? state.status : 'unknown';
+    const id =
+      typeof part.callID === 'string'
+        ? part.callID
+        : typeof part.id === 'string'
+          ? part.id
+          : undefined;
+    const label = typeof part.tool === 'string' ? part.tool : undefined;
+    runtime.pulse({
+      kind: OPENCODE_TOOL_TERMINAL_STATUSES.has(status)
+        ? PULSE_KIND.TOOL_FINISHED
+        : status === OPENCODE_TOOL_PENDING_STATUS
+          ? PULSE_KIND.TOOL_STARTED
+          : PULSE_KIND.TOOL_PROGRESS,
+      id,
+      label,
+    });
+    return;
+  }
+
+  runtime.pulse({
+    kind: PULSE_KIND.SDK_PROGRESS,
+    label: OPENCODE_RUNTIME_EVENT_TYPES.has(eventType) ? eventType : 'unknown',
+  });
+}
+
+function isOpenCodeEventForSession(
+  event: unknown,
+  sessionId: string,
+  assistantMessageId?: string
+): boolean {
+  const eventRecord = asRecord(event);
+  const eventType = eventRecord?.type;
+  const properties = asRecord(eventRecord?.properties);
+
+  if (eventType === 'message.updated') {
+    const info = asRecord(properties?.info);
+    return info?.sessionID === sessionId;
+  }
+
+  if (eventType === 'message.part.updated') {
+    const part = asRecord(properties?.part);
+    return assistantMessageId !== undefined && part?.messageID === assistantMessageId;
+  }
+
+  if (
+    eventType === 'permission.asked' ||
+    eventType === 'permission.updated' ||
+    eventType === 'session.error' ||
+    eventType === 'session.status'
+  ) {
+    return properties?.sessionID === sessionId;
+  }
+
+  return false;
 }
 
 /**
@@ -103,7 +189,8 @@ export class OpenCodeTool implements ITool {
     messagesService?: MessagesService,
     sessionMCPRepo?: SessionMCPServerRepository,
     mcpServerRepo?: MCPServerRepository,
-    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    private runtime?: AgenticToolRuntime
   ) {
     this.config = config;
     this.messagesService = messagesService;
@@ -572,6 +659,9 @@ export class OpenCodeTool implements ITool {
           if (eventType !== 'server.heartbeat') {
             console.log('[OpenCodeTool] Event:', eventType);
           }
+          if (isOpenCodeEventForSession(event, context.opencodeSessionId, assistantMessageId)) {
+            pulseOpenCodeEvent(event, this.runtime);
+          }
 
           // Check if this event is for our session
           if ('properties' in event) {
@@ -721,7 +811,11 @@ export class OpenCodeTool implements ITool {
             }
 
             // Check for session idle status - indicates response is complete
-            if (event.type === 'session.status' && event.properties.status.type === 'idle') {
+            if (
+              event.type === 'session.status' &&
+              event.properties.sessionID === context.opencodeSessionId &&
+              event.properties.status.type === 'idle'
+            ) {
               console.log('[OpenCodeTool] Session became idle, response complete');
               _responseCompleted = true;
               break; // Exit event loop

@@ -26,7 +26,8 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgorExecutionSettings } from '@agor/core/config';
-import type { AuthenticatedParams } from '@agor/core/types';
+import type { AuthenticatedParams, ExecutorFinalizationState } from '@agor/core/types';
+import { EXECUTOR_WORKLOAD_KIND } from '@agor/core/types';
 import {
   attachEnvFileCleanup,
   buildSpawnArgs,
@@ -37,6 +38,14 @@ import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeToken } from '../auth/runtime-tokens.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
+import {
+  createExecutorWorkloadHandle,
+  EXECUTOR_ATTEMPT_ENV_VAR,
+  type ExecutorTerminationReason,
+  type ExecutorWorkloadHandle,
+  runExecutorStopCommand,
+  terminateMarkedExecutorAttempt,
+} from './executor-workload.js';
 
 let configuredDaemonUrl: string | null = null;
 
@@ -67,6 +76,7 @@ let configuredExecutorDefaults: ExecutorSpawnDefaults = {};
 export function configureExecutor(config?: ExecutorConfig | null): void {
   configuredExecutorDefaults = {
     executorCommandTemplate: config?.executor_command_template || undefined,
+    executorStopCommandTemplate: config?.executor_stop_command_template || undefined,
     asUser: config?.executor_unix_user || undefined,
   };
 
@@ -90,7 +100,9 @@ export interface ExecutorTemplateVariables {
   unix_user_gid?: number;
   session_id?: string;
   branch_id?: string;
+  executor_attempt_id?: string;
   log_level?: string;
+  termination_reason?: ExecutorTerminationReason;
 }
 
 export interface SpawnExecutorOptions {
@@ -101,10 +113,12 @@ export interface SpawnExecutorOptions {
   asUser?: string | null;
   /** When set, uses template substitution instead of local subprocess. */
   executorCommandTemplate?: string | null;
+  /** Optional paired cleanup command for a templated remote/container workload. */
+  executorStopCommandTemplate?: string | null;
   templateVariables?: ExecutorTemplateVariables;
-  onExit?: (code: number | null) => void;
+  onExit?: (code: number | null) => void | Promise<void>;
   /** Fired after spawn, before stdin is written. Works for both local and templated paths. */
-  onSpawn?: (child: ChildProcess) => void;
+  onSpawn?: (workload: ExecutorWorkloadHandle, child: ChildProcess) => void;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
   preparedEnv?: Record<string, string>;
   /** Pre-written 0600 env file; bypasses prepareImpersonationEnv(). Only with asUser. */
@@ -119,6 +133,21 @@ export interface ExecutorCommandResult {
     message: string;
     details?: unknown;
   };
+}
+
+function runExitHandler(
+  onExit: SpawnExecutorOptions['onExit'],
+  code: number | null,
+  logPrefix: string
+): void {
+  if (!onExit) return;
+  try {
+    void Promise.resolve(onExit(code)).catch((error) =>
+      console.error(`${logPrefix} Exit handler failed:`, error)
+    );
+  } catch (error) {
+    console.error(`${logPrefix} Exit handler failed:`, error);
+  }
 }
 
 export interface RunExecutorCommandOptions
@@ -151,7 +180,9 @@ export function substituteTemplateVariables(
     unix_user_gid: variables.unix_user_gid,
     session_id: variables.session_id,
     branch_id: variables.branch_id,
+    executor_attempt_id: variables.executor_attempt_id,
     log_level: variables.log_level,
+    termination_reason: variables.termination_reason,
   };
 
   for (const [key, value] of Object.entries(substitutions)) {
@@ -230,6 +261,10 @@ export function spawnExecutor(
     options.executorCommandTemplate !== undefined
       ? options.executorCommandTemplate || undefined
       : configuredExecutorDefaults.executorCommandTemplate;
+  const executorStopCommandTemplate =
+    options.executorStopCommandTemplate !== undefined
+      ? options.executorStopCommandTemplate || undefined
+      : configuredExecutorDefaults.executorStopCommandTemplate;
   const asUser =
     options.asUser !== undefined ? options.asUser || undefined : configuredExecutorDefaults.asUser;
 
@@ -240,6 +275,7 @@ export function spawnExecutor(
       ...options,
       asUser,
       executorCommandTemplate,
+      executorStopCommandTemplate,
       templateVariables: {
         command: payloadWithConfig.command as string,
         task_id: generateTaskId(),
@@ -305,6 +341,8 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
           daemonUrl
         )
       : withDaemonExecutorEnv(env as Record<string, string>, daemonUrl);
+  const attemptId = options.templateVariables?.executor_attempt_id;
+  if (attemptId) envWithDaemonUrl[EXECUTOR_ATTEMPT_ENV_VAR] = attemptId;
 
   const prepared = asUser
     ? preparedEnvFilePath
@@ -355,7 +393,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     // (e.g. the clone-safety-net in repos.ts) run as expected. 127 is the
     // conventional "command not found" exit code; close enough semantically
     // for "the cwd is gone" without inventing a new one.
-    options.onExit?.(127);
+    runExitHandler(options.onExit, 127, logPrefix);
     return;
   }
 
@@ -363,14 +401,16 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code);
+    runExitHandler(options.onExit, code, logPrefix);
   };
 
   const executorProcess = spawn(cmd, args, {
     cwd,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
-    detached: false, // Don't detach - let daemon manage lifecycle
+    // A dedicated process group lets the attempt owner terminate the normal
+    // descendant tree. executor-workload also snapshots children that call setsid().
+    detached: process.platform !== 'win32',
   });
 
   // Best-effort safety-net cleanup: the inner bash script `rm -f`s the env
@@ -379,7 +419,8 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   // uses `sudo -u <asUser> rm -f` so it works under sticky /tmp.
   attachEnvFileCleanup(executorProcess, { envFilePath: prepared.envFilePath, asUser });
 
-  onSpawn?.(executorProcess);
+  const workload = createExecutorWorkloadHandle(executorProcess, { attemptId });
+  if (workload) onSpawn?.(workload, executorProcess);
 
   executorProcess.on('error', (error) => {
     console.error(`${logPrefix} Spawn error:`, error.message);
@@ -410,7 +451,12 @@ function spawnExecutorWithTemplate(
     templateVariables: ExecutorTemplateVariables;
   }
 ): void {
-  const { executorCommandTemplate, templateVariables, logPrefix = '[Executor]' } = options;
+  const {
+    executorCommandTemplate,
+    executorStopCommandTemplate,
+    templateVariables,
+    logPrefix = '[Executor]',
+  } = options;
   const logLevel = templateVariables.log_level ?? getCurrentLogLevel();
 
   const command = substituteTemplateVariables(executorCommandTemplate, templateVariables);
@@ -424,15 +470,34 @@ function spawnExecutorWithTemplate(
   const reportExit = (code: number | null): void => {
     if (reportedExit) return;
     reportedExit = true;
-    options.onExit?.(code);
+    runExitHandler(options.onExit, code, logPrefix);
   };
 
   const executorProcess = spawn('sh', ['-c', command], {
-    env: { ...process.env, LOG_LEVEL: logLevel },
+    env: {
+      ...process.env,
+      LOG_LEVEL: logLevel,
+      ...(templateVariables.executor_attempt_id
+        ? { [EXECUTOR_ATTEMPT_ENV_VAR]: templateVariables.executor_attempt_id }
+        : {}),
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
   });
 
-  options.onSpawn?.(executorProcess);
+  const workload = createExecutorWorkloadHandle(executorProcess, {
+    attemptId: templateVariables.executor_attempt_id,
+    remoteStop: executorStopCommandTemplate
+      ? async (reason) => {
+          const stopCommand = substituteTemplateVariables(executorStopCommandTemplate, {
+            ...templateVariables,
+            termination_reason: reason,
+          });
+          await runExecutorStopCommand(stopCommand);
+        }
+      : undefined,
+  });
+  if (workload) options.onSpawn?.(workload, executorProcess);
 
   executorProcess.stdout?.on('data', (data) => {
     console.log(`${logPrefix} ${data.toString().trim()}`);
@@ -896,21 +961,60 @@ export function generateScopedServiceToken(
  */
 export type ExecutorConfig = Pick<
   AgorExecutionSettings,
-  'executor_command_template' | 'executor_unix_user'
+  'executor_command_template' | 'executor_stop_command_template' | 'executor_unix_user'
 >;
 
 interface ExecutorSpawnDefaults {
   /** Executor command template for containerized execution */
   executorCommandTemplate?: string;
+  /** Paired stop command for the remote/container executor */
+  executorStopCommandTemplate?: string;
   /** Unix user to run executors as */
   asUser?: string;
+}
+
+export interface RecoverExecutorAttemptOptions {
+  executorAttemptId: string;
+  reason: ExecutorTerminationReason;
+  templateVariables: ExecutorTemplateVariables;
+  workload?: ExecutorFinalizationState['workload'];
+}
+
+/**
+ * Reconstruct cleanup after a daemon restart. The configured remote stop
+ * command is the proof boundary for templated workloads; local Linux attempts
+ * are recovered through their inherited attempt marker.
+ */
+export async function recoverConfiguredExecutorAttempt(
+  options: RecoverExecutorAttemptOptions
+): Promise<boolean> {
+  const localCleanupVerified = await terminateMarkedExecutorAttempt(options.executorAttemptId);
+  const templatedWorkload = options.workload
+    ? options.workload.kind === EXECUTOR_WORKLOAD_KIND.TEMPLATED
+    : configuredExecutorDefaults.executorCommandTemplate !== undefined;
+  if (!templatedWorkload) {
+    return localCleanupVerified;
+  }
+
+  const stopTemplate = configuredExecutorDefaults.executorStopCommandTemplate;
+  if (!stopTemplate) return false;
+  const stopCommand = substituteTemplateVariables(stopTemplate, {
+    ...options.templateVariables,
+    executor_attempt_id: options.executorAttemptId,
+    termination_reason: options.reason,
+  });
+  await runExecutorStopCommand(stopCommand);
+  return process.platform === 'linux' ? localCleanupVerified : true;
 }
 
 /** DI-based factory that bakes execution config into a spawner, independent of module-level defaults. */
 export function createConfiguredSpawner(executionConfig?: ExecutorConfig) {
   return function configuredSpawnExecutor(
     payload: Record<string, unknown>,
-    options: Omit<SpawnExecutorOptions, 'executorCommandTemplate'> = {}
+    options: Omit<
+      SpawnExecutorOptions,
+      'executorCommandTemplate' | 'executorStopCommandTemplate'
+    > = {}
   ): void {
     spawnExecutor(payload, {
       ...options,
@@ -918,6 +1022,7 @@ export function createConfiguredSpawner(executionConfig?: ExecutorConfig) {
       // factory remains an explicit dependency-injection variant rather than
       // accidentally inheriting whatever configureExecutor() last installed.
       executorCommandTemplate: executionConfig?.executor_command_template ?? null,
+      executorStopCommandTemplate: executionConfig?.executor_stop_command_template ?? null,
       asUser:
         options.asUser !== undefined
           ? options.asUser

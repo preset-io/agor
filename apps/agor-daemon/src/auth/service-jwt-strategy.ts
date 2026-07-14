@@ -140,6 +140,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
           session_id?: string;
           sessionId?: string;
           task_id?: string;
+          executor_attempt_id?: string;
           branch_id?: string;
           purpose?: string;
         })
@@ -173,6 +174,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
       const sessionInfo = await this.sessionTokenService.validateToken(token, {
         sessionId,
         taskId: payload.task_id,
+        executorAttemptId: payload.executor_attempt_id,
         branchId: payload.branch_id,
       });
       if (!sessionInfo) {
@@ -183,6 +185,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
         ...result,
         session_id: sessionInfo.session_id,
         task_id: sessionInfo.task_id,
+        executor_attempt_id: sessionInfo.executor_attempt_id,
         branch_id: sessionInfo.branch_id,
       };
     }

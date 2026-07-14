@@ -53,7 +53,6 @@ import type {
   Params,
   PermissionRequestContent,
   ScheduleID,
-  Session,
   SessionID,
   SessionMCPServer,
   StreamingEventType,
@@ -64,6 +63,7 @@ import type {
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_CAPABILITIES,
+  EXECUTOR_TERMINAL_CAUSE,
   hasMinimumRole,
   MessageRole,
   ROLES,
@@ -90,7 +90,6 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
-import { killExecutorProcess } from './executor-tracking.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -128,6 +127,7 @@ import {
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
+import { runKeyedSingleFlight } from './utils/keyed-single-flight.js';
 import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
@@ -139,11 +139,9 @@ import {
   runWithSessionQueueTenantScope,
 } from './utils/session-queue-tenant-scope.js';
 import { stopSessionPreserveQueue } from './utils/session-stop.js';
-import {
-  sessionCanStartTask,
-  shouldReconcileSessionPromptState,
-} from './utils/session-task-state.js';
+import { sessionCanStartTask } from './utils/session-task-state.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
+import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
   createTenantDatabaseScopeAroundHook,
@@ -254,7 +252,10 @@ export interface RegisterRoutesContext {
     typeof import('./services/session-env-selections.js').createSessionEnvSelectionsService
   >;
   terminalsService: TerminalsService | null;
+  executorAttemptCoordinator: import('./services/executor-attempt-coordinator.js').ExecutorAttemptCoordinator;
 }
+
+const SESSION_STOPPING_PROMPT_ERROR = 'Cannot send prompt: session is currently stopping';
 
 /**
  * Register authentication configuration and custom REST routes.
@@ -283,6 +284,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionMCPServersService,
     sessionEnvSelectionsService,
     terminalsService: _terminalsService,
+    executorAttemptCoordinator,
   } = ctx;
 
   const usersService = app.service('users');
@@ -1035,36 +1037,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     }
   }
 
-  async function reconcileSessionPromptStateIfStuck(
-    session: Session,
-    taskRepo: TaskRepository,
-    params: RouteParams,
-    options: { ignoredTaskIds?: readonly string[] } = {}
-  ): Promise<Session> {
-    if (session.status !== SessionStatus.FAILED || session.ready_for_prompt === true) {
-      return session;
-    }
-
-    const sessionTasks = await taskRepo.findBySession(session.session_id);
-    if (!shouldReconcileSessionPromptState(session, sessionTasks, options)) return session;
-
-    console.warn(
-      `🧹 [PromptState] Repairing stuck session ${shortId(session.session_id)} ` +
-        `(status=${session.status}, ready_for_prompt=${session.ready_for_prompt})`
-    );
-    return (await app.service('sessions').patch(
-      session.session_id,
-      {
-        status: SessionStatus.IDLE,
-        ready_for_prompt: true,
-      },
-      params
-    )) as Session;
-  }
-
   /**
    * spawnTaskExecutor — sole transition point for `tasks.status` going from
-   * `created` / `queued` → `running`.
+   * `created` / `queued` → `dispatching` (or directly to `running` for CLI).
    *
    * Both the IDLE branch of POST /sessions/:id/prompt and the queued-task
    * drainer call this helper. Centralising the transition guarantees that:
@@ -1117,22 +1092,38 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       throw new Forbidden(`${loadedSession.agentic_tool} is disabled for this workspace`);
     }
     const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
+    const sessionId = task.session_id;
+    const taskId = task.task_id;
     const startTimestamp = new Date().toISOString();
 
-    // The daemon transitions the task to RUNNING and writes required sentinel
-    // git fields before executor spawn. The executor overwrites these with the
-    // authoritative task-start git state from inside the managed checkout.
+    // The daemon persists launch intent and writes required sentinel git fields
+    // before executor spawn. Non-CLI executors claim DISPATCHING → RUNNING after
+    // authenticating; claude-code-cli has no executor connection and stays direct.
     const gitStateAtStart = 'unknown';
     const refAtStart = 'unknown';
 
-    // Patch task: queued/created → running, with real ranges. queue_position
-    // is cleared here so a draining task is no longer considered queued.
+    const launchState = buildTaskLaunchState(
+      session.agentic_tool,
+      startTimestamp,
+      config.execution?.stateless_fs_mode === true
+    );
+
+    // Finish all fallible prompt preparation before persisting launch intent.
+    // Once the task becomes DISPATCHING/RUNNING, every later synchronous
+    // failure must go through failExecutorLaunch so no active row is orphaned.
+    const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
+      rawPrompt: task.full_prompt,
+      sessionCreatedBy: session.created_by,
+      prompterUserId: task.created_by,
+      usersRepo: bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db)),
+    });
+
+    // Patch task: queued/created → launch status, with real ranges. The task
+    // repository clears queue_position whenever a task leaves QUEUED.
     const updatedTask = (await app.service('tasks').patch(
       task.task_id,
       {
-        status: TaskStatus.RUNNING,
-        started_at: startTimestamp,
-        queue_position: undefined,
+        ...launchState,
         message_range: {
           start_index: messageStartIndex,
           end_index: messageStartIndex + 1,
@@ -1144,8 +1135,77 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sha_at_start: gitStateAtStart,
         },
       },
-      params
+      { ...params, provider: undefined }
     )) as Task;
+
+    const failExecutorLaunch = async (
+      error: unknown,
+      terminalCause:
+        | typeof EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_ABSENT
+        | typeof EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_UNKNOWN = EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_UNKNOWN
+    ): Promise<void> => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(
+        `❌ [Daemon] Executor launch failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
+        error
+      );
+      try {
+        const executorAttemptId = updatedTask.executor_attempt_id;
+        const patched = await safePatch(
+          'tasks',
+          taskId,
+          {
+            status: TaskStatus.FAILED,
+            completed_at: new Date().toISOString(),
+            executor_terminal_cause: terminalCause,
+            error_message: errorMessage,
+          },
+          'Task',
+          { ...params, provider: undefined }
+        );
+        if (patched && executorAttemptId) {
+          await executorAttemptCoordinator.reconcile({
+            taskId,
+            executorAttemptId,
+            params,
+          });
+        }
+      } catch (patchError) {
+        console.error(
+          `[Daemon] Failed to mark task ${shortId(taskId)} after launch failure:`,
+          patchError
+        );
+      }
+
+      // Synthesize a system message so the chat surfaces *why* the agent
+      // didn't respond. appendSystemMessage computes the live tail, so this
+      // remains collision-free whether the initial user-message write worked.
+      try {
+        const errorContent = `⚠️ The agent failed to start.\n\n${errorMessage}`;
+        await appendSystemMessage({
+          app,
+          db,
+          sessionId,
+          taskId,
+          content: errorContent,
+          role: MessageRole.ASSISTANT,
+          metadata: { is_meta: true },
+          params,
+        });
+      } catch (sysErr) {
+        console.warn('[Daemon] Failed to write system error message after launch failure:', sysErr);
+      }
+
+      try {
+        app.service('tasks').emit('failed', {
+          task_id: taskId,
+          session_id: sessionId,
+          error_message: errorMessage,
+        });
+      } catch (emitErr) {
+        console.warn('[Daemon] Failed to emit tasks:failed event:', emitErr);
+      }
+    };
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
@@ -1192,39 +1252,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     //
     // The session-status flip used to fall out of `TasksService.create` when
     // the IDLE path created a task with `status: RUNNING` directly. Now the
-    // IDLE path creates `status: CREATED` and we patch to RUNNING here, which
+    // IDLE path creates `status: CREATED` and we patch the task here, which
     // `TasksService.patch` does NOT mirror onto the session. Without this
     // explicit patch, `session.status` stays IDLE while a task is RUNNING,
     // causing the queue gate in the prompt route to wave subsequent prompts
     // through instead of queuing them.
-    await app.service('sessions').patch(
-      task.session_id,
-      {
-        status: SessionStatus.RUNNING,
-        ready_for_prompt: false,
-        tasks: [...session.tasks, task.task_id],
-      },
-      params
-    );
-
-    // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
-    // non-owner is prompting. The prompter identity comes from `task.created_by`
-    // (NOT `params.user`): every persisted Task row requires `created_by`
-    // (`createPending` for the prompt/queue/callback paths, `create`/`createMany`
-    // for pre-created tasks run via `/tasks/:id/run`), so it survives the queue
-    // / hook / drain hop intact. `params.user` can drop on hook-triggered drains
-    // that don't carry `queued_by_user_id` and is therefore not authoritative.
-    // See `./utils/build-prompter-prefix.ts` for the helper + tests.
-    const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
-      rawPrompt: task.full_prompt,
-      sessionCreatedBy: session.created_by,
-      prompterUserId: task.created_by,
-      usersRepo: bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db)),
-    });
+    try {
+      await app.service('sessions').patch(
+        sessionId,
+        {
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          tasks: [...session.tasks, taskId],
+        },
+        params
+      );
+    } catch (error) {
+      await failExecutorLaunch(error, EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_ABSENT);
+      throw error;
+    }
 
     const useStreaming = options.stream !== false;
-    const sessionId = task.session_id;
-    const taskId = task.task_id;
 
     // Claude Code CLI: there is no in-process executor. The `claude` REPL
     // is already running in the user's Zellij pane. "Prompting" the
@@ -1245,8 +1293,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       //
       // Import lazily to avoid pulling claude-cli-integration into the
       // hot-path of every non-CLI prompt.
-      const { setPendingCliTask } = await import('./services/claude-cli-integration.js');
-      setPendingCliTask(sessionId as SessionID, taskId as TaskID, messageStartIndex);
+      try {
+        const { setPendingCliTask } = await import('./services/claude-cli-integration.js');
+        setPendingCliTask(sessionId as SessionID, taskId as TaskID, messageStartIndex);
+      } catch (error) {
+        await failExecutorLaunch(error, EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_ABSENT);
+        throw error;
+      }
 
       deferInFreshTenantScope(params, async () => {
         try {
@@ -1317,6 +1370,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return updatedTask;
     }
 
+    const executorAttemptId = updatedTask.executor_attempt_id;
+    if (!executorAttemptId) {
+      const error = new Error(`Task ${shortId(taskId)} is missing its executor attempt ID`);
+      await failExecutorLaunch(error, EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_ABSENT);
+      throw error;
+    }
+
     // Background spawn + failure handling. Returning the patched Task to the
     // caller before this resolves matches the previous behavior — the HTTP
     // response should not block on the executor process being live.
@@ -1332,6 +1392,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionId,
           {
             taskId,
+            executorAttemptId,
             prompt: promptForExecutor,
             permissionMode: options.permissionMode,
             stream: useStreaming,
@@ -1344,60 +1405,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           `✅ [Daemon] Executor spawned for session ${shortId(sessionId)}, waiting for task completion`
         );
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(
-          `❌ [Daemon] Executor spawn failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
-          error
-        );
-        await safePatch(
-          'tasks',
-          taskId,
-          {
-            status: TaskStatus.FAILED,
-            completed_at: new Date().toISOString(),
-            error_message: errorMessage,
-          },
-          'Task',
-          params
-        );
-
-        // Synthesize a system message so the chat surfaces *why* the agent
-        // didn't respond. Without this the transcript shows only the user
-        // prompt and silence even though the task list reads FAILED.
-        try {
-          // Recompute the next index instead of trusting `messageStartIndex
-          // + 1` — the daemon-write user-message above is wrapped in a
-          // try/catch and may have been swallowed, leaving a gap at
-          // `messageStartIndex`. countMessages always reports the live row
-          // count, so it lands the system error at the true tail whether
-          // the user-message row exists or not (no gap, no collision).
-          const errorContent = `⚠️ The agent failed to start.\n\n${errorMessage}`;
-          await appendSystemMessage({
-            app,
-            db,
-            sessionId,
-            taskId,
-            content: errorContent,
-            role: MessageRole.ASSISTANT,
-            metadata: { is_meta: true },
-            params,
-          });
-        } catch (sysErr) {
-          console.warn(
-            '[Daemon] Failed to write system error message after spawn failure:',
-            sysErr
-          );
-        }
-
-        try {
-          app.service('tasks').emit('failed', {
-            task_id: taskId,
-            session_id: sessionId,
-            error_message: errorMessage,
-          });
-        } catch (emitErr) {
-          console.warn('[Daemon] Failed to emit tasks:failed event:', emitErr);
-        }
+        await failExecutorLaunch(error);
       }
     });
 
@@ -1493,7 +1501,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
 
         if (session.status === SessionStatus.STOPPING) {
-          throw new Error('Cannot send prompt: session is currently stopping');
+          throw new Conflict(SESSION_STOPPING_PROMPT_ERROR);
         }
 
         // The route is one path: always materialize a Task. Whether it runs
@@ -1517,18 +1525,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionTurnLocks,
           id as SessionID,
           async () => {
-            let lockedSession = await sessionsService.get(id, params);
+            const lockedSession = await sessionsService.get(id, params);
             if (lockedSession.status === SessionStatus.STOPPING) {
               // The earlier STOPPING check was against pre-lock state — re-check
               // here so a session that entered STOPPING while we waited for our
               // turn doesn't accept a prompt.
-              throw new Error('Cannot send prompt: session is currently stopping');
+              throw new Conflict(SESSION_STOPPING_PROMPT_ERROR);
             }
-            lockedSession = await reconcileSessionPromptStateIfStuck(
-              lockedSession,
-              taskRepo,
-              params
-            );
             const queuedTasks = await taskRepo.findQueued(id as SessionID);
             const shouldQueue =
               !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
@@ -1740,12 +1743,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           async () => {
             // Re-read session state inside the lock — it may have flipped to
             // RUNNING while we waited for our turn.
-            const session = await reconcileSessionPromptStateIfStuck(
-              await sessionsService.get(task.session_id, params),
-              taskRepo,
-              params,
-              { ignoredTaskIds: [task.task_id] }
-            );
+            const session = await sessionsService.get(task.session_id, params);
 
             if (session.status === SessionStatus.STOPPING) {
               throw new BadRequest('Cannot run task: session is currently stopping');
@@ -2211,6 +2209,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Stop endpoint
   // ============================================================================
 
+  const sessionStopRequests = new Map<SessionID, Promise<unknown>>();
+
   registerAuthenticatedRoute(
     app,
     '/sessions/:id/stop',
@@ -2218,42 +2218,49 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: unknown, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        const stopReason =
-          data && typeof data === 'object' && 'reason' in data && typeof data.reason === 'string'
-            ? data.reason
-            : undefined;
+        const sessionId = id as SessionID;
 
-        const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
+        return runKeyedSingleFlight(sessionStopRequests, sessionId, async () => {
+          const stopReason =
+            data && typeof data === 'object' && 'reason' in data && typeof data.reason === 'string'
+              ? data.reason
+              : undefined;
+          const sessionsServiceWithHooks = app.service(
+            'sessions'
+          ) as unknown as SessionsServiceImpl;
+          const result = await withSessionTurnLock(sessionTurnLocks, sessionId, async () =>
+            stopSessionPreserveQueue(
+              {
+                app,
+                taskRepo: new TaskRepository(db),
+                sessionsService: sessionsServiceWithHooks,
+                tasksService,
+              },
+              sessionId,
+              params,
+              { reason: stopReason }
+            )
+          );
 
-        const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
-          stopSessionPreserveQueue(
-            {
-              app,
-              taskRepo: new TaskRepository(db),
-              sessionsService: sessionsServiceWithHooks,
-              tasksService,
-              killExecutorProcess,
-            },
-            id as SessionID,
-            params,
-            { reason: stopReason }
-          )
-        );
-
-        if (result.success) {
-          deferInFreshTenantScope(params, async () => {
-            try {
-              await sessionsServiceWithHooks.triggerQueueProcessing(id as SessionID, params);
-            } catch (error) {
-              console.error(
-                `❌ [Stop] Failed to process queue after stopping session ${shortId(id)}:`,
-                error
-              );
+          if (result.executorAttempt) {
+            const settlement = await executorAttemptCoordinator.reconcile({
+              taskId: result.executorAttempt.taskId,
+              executorAttemptId: result.executorAttempt.executorAttemptId,
+              params,
+            });
+            if (!settlement.released) {
+              return {
+                ...result,
+                success: false,
+                reason: 'Executor cleanup could not be verified; session remains fenced',
+                executorAttempt: undefined,
+              };
             }
-          });
-        }
+            return { ...result, status: SessionStatus.IDLE, executorAttempt: undefined };
+          }
 
-        return result;
+          return result;
+        });
       },
     },
     {
@@ -2390,7 +2397,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // completes on the Node.js side (statement_timeout only fires if Postgres
     // actually received the query). Releasing the lock after 30s lets waiting
     // prompts make progress; the background drain will eventually fail and DB
-    // state will be reconciled by reconcileSessionPromptStateIfStuck.
+    // state remains fenced for the executor-attempt reconciler to inspect.
     const HOLDER_TIMEOUT_MS = 30_000;
     try {
       await Promise.race([
@@ -2447,10 +2454,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
     );
 
-    const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
+    const session = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
       sessionsService.get(sessionId, taskParams)
     );
-    const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
 
     if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
       console.log(

@@ -17,9 +17,13 @@ import {
   TaskRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import type {
   ContentBlock,
+  ExecutorClaim,
+  ExecutorFinalizationEvidence,
+  ExecutorLeaseTerminalCause,
+  ExecutorTelemetryReport,
   Paginated,
   QueryParams,
   Session,
@@ -29,63 +33,55 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  EXECUTOR_CLEANUP_STATUS,
+  EXECUTOR_FINALIZABLE_TASK_STATUSES,
+  EXECUTOR_STATE_PERSISTENCE_REQUIREMENT,
+  EXECUTOR_TERMINAL_CAUSE,
+  isExecutorFinalizationReleasable,
+  isMeaningfulPulse,
+  isNaturalCompletion,
   isTerminalTaskStatus,
+  normalizeTerminalTaskPatch,
   SessionStatus,
+  sanitizePulse,
   type TaskMetadata,
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { isTaskScopedExecutorParams } from '../auth/executor-runtime-scope.js';
+import { untrackExecutorAttempt } from '../executor-tracking.js';
 import { appendSystemMessage } from '../utils/append-system-message.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
   type ExecutorHeartbeatCallbackPayload,
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
-import type { TerminalQueueProcessingParams } from '../utils/session-task-state.js';
 import type { SessionsService } from './sessions';
+
+const TASKS_SERVICE_PATH = 'tasks';
+const TASK_PATCHED_EVENT = 'patched';
+const EXECUTOR_HEARTBEAT_ANALYTICS_EVENT = 'executor.heartbeat';
 
 /**
  * Task service params
  */
-const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
-  TaskStatus.COMPLETED,
-  TaskStatus.FAILED,
-  TaskStatus.STOPPED,
-]);
-
-function isAnalyticsTerminalTaskStatus(status: Task['status'] | undefined): boolean {
-  return isTerminalTaskStatus(status);
+function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): boolean {
+  return status !== undefined && (isNaturalCompletion(status) || status === TaskStatus.STOPPED);
 }
 
-function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): boolean {
-  return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
+function isValidExecutorAttemptId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  );
 }
 
 export type TaskParams = QueryParams<{
+  task_id?: string;
   session_id?: string;
   status?: Task['status'];
 }> & {
-  /**
-   * Internal-only: terminal task patches normally transition the owning session
-   * back to a promptable terminal state. Heartbeat-loss handling marks the session failed instead.
-   */
-  suppressTerminalSessionStateUpdate?: boolean;
-  /**
-   * Internal-only: terminal task patches normally drain queued work for the
-   * owning session. Heartbeat-loss handling must not auto-start queued prompts.
-   */
-  suppressTerminalQueueProcessing?: boolean;
-  /**
-   * Internal-only: skip parent callback dispatch for terminal transitions that
-   * are administrative cancellation, not agent output. Does not disable BTW
-   * fork archival; those ephemeral sessions should still be cleaned up.
-   */
-  suppressCompletionCallbacks?: boolean;
-  /**
-   * Internal-only escape hatch for preserving an ephemeral BTW fork after
-   * terminal transition. Most callers should leave this unset.
-   */
-  suppressBtwCleanup?: boolean;
   /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
   _agorSqlSessionAccessUserId?: UUID;
 };
@@ -138,8 +134,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // Note: `session_id` may be injected as `{ $in: [...] }` by the RBAC scoping
     // hook — in that case we fall through to `super.find`, whose adapter's
     // `filterData` handles $in natively.
-    if (typeof params?.query?.session_id === 'string') {
-      const tasks = await this.taskRepo.findBySession(params.query.session_id);
+    if (typeof params?.query?.session_id === 'string' && params.query.task_id === undefined) {
+      const statusQuery = params.query.status as TaskStatus | { $in?: TaskStatus[] } | undefined;
+      const requestedStatuses =
+        typeof statusQuery === 'string'
+          ? new Set([statusQuery])
+          : Array.isArray(statusQuery?.$in)
+            ? new Set(statusQuery.$in)
+            : undefined;
+      const sessionTasks = await this.taskRepo.findBySession(params.query.session_id);
+      const tasks = requestedStatuses
+        ? sessionTasks.filter((task) => requestedStatuses.has(task.status))
+        : sessionTasks;
 
       // Apply pagination if enabled
       if (this.paginate) {
@@ -223,7 +229,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         const patchResult = await this.app.service('sessions').patch(
           result.session_id,
           {
-            status: 'running',
+            status: SessionStatus.RUNNING,
             ready_for_prompt: false,
           },
           params
@@ -298,83 +304,139 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
-  async getActiveWithExecutorHeartbeat(): Promise<Task[]> {
-    return this.taskRepo.findActiveWithExecutorHeartbeat();
+  async failExpiredExecutorAttempt(
+    id: string,
+    data: {
+      executor_attempt_id: string;
+      stale_before: string;
+      completed_at?: string;
+      error_message: string;
+      terminal_cause: ExecutorLeaseTerminalCause;
+    },
+    params?: TaskParams
+  ): Promise<{ task: Task; transitioned: boolean }> {
+    const failure = await this.taskRepo.failExpiredExecutorAttempt(id, {
+      executorAttemptId: data.executor_attempt_id,
+      staleBefore: data.stale_before,
+      completedAt: data.completed_at ?? new Date().toISOString(),
+      errorMessage: data.error_message,
+      terminalCause: data.terminal_cause,
+    });
+    if (!failure.transitioned) {
+      console.log(
+        `⏭️ [TasksService] Skipping expired executor lease for task ${shortId(failure.task.task_id)} ` +
+          `(status=${failure.task.status})`
+      );
+      return failure;
+    }
+    this.publishExecutorLeaseFailure(failure.task, params);
+    return failure;
   }
 
-  async failForLostHeartbeat(
-    id: string,
-    data: { completed_at?: string; error_message: string },
+  private publishExecutorLeaseFailure(task: Task, params?: TaskParams): void {
+    this.trackTaskCompleted(task);
+    emitServiceEvent(this.app, {
+      path: TASKS_SERVICE_PATH,
+      event: TASK_PATCHED_EVENT,
+      data: task,
+      params,
+      id: task.task_id,
+    });
+  }
+
+  /** Whether this terminal attempt still owns the session readiness fence. */
+  async ownsExecutorFinalizationFence(
+    taskId: string,
+    executorAttemptId: string,
     params?: TaskParams
-  ): Promise<Task> {
-    const result = await this.patch(
-      id,
-      {
-        status: TaskStatus.FAILED,
-        completed_at: data.completed_at,
-        error_message: data.error_message,
-      },
-      {
-        ...params,
-        suppressTerminalSessionStateUpdate: true,
-        suppressTerminalQueueProcessing: true,
-        // Suppress callbacks here — dispatchCompletionCallbacks runs inside the
-        // tenantDatabaseScopeAround transaction (it does SELECT session_relationships +
-        // INSERT callback task), extending the transaction's idle time between statements.
-        // This triggered write CONNECTION_CLOSED + zombie idle-in-transaction connections.
-        // We dispatch manually below, after both patches commit, in their own transactions.
-        suppressCompletionCallbacks: true,
-      }
+  ): Promise<boolean> {
+    const task = await this.get(taskId, params);
+    if (
+      task.executor_attempt_id !== executorAttemptId ||
+      !EXECUTOR_FINALIZABLE_TASK_STATUSES.has(task.status)
+    ) {
+      return false;
+    }
+
+    const session = await this.app.service('sessions').get(task.session_id, params);
+    if (session.ready_for_prompt) return false;
+
+    const taskIndex = session.tasks?.indexOf(task.task_id) ?? -1;
+    if (taskIndex < 0) return false;
+    const laterTaskIds = session.tasks?.slice(taskIndex + 1) ?? [];
+    const laterTasks = await Promise.all(laterTaskIds.map((id: string) => this.get(id, params)));
+    return laterTasks.every(
+      (laterTask) =>
+        laterTask.status === TaskStatus.QUEUED ||
+        (laterTask.status === TaskStatus.STOPPED &&
+          !laterTask.started_at &&
+          !laterTask.executor_attempt_id)
     );
-    const failedTask = result as Task;
-    const heartbeatFailureWon =
-      failedTask.status === TaskStatus.FAILED &&
-      failedTask.error_message === data.error_message &&
-      (!data.completed_at || failedTask.completed_at === data.completed_at);
-    if (!heartbeatFailureWon) {
-      console.log(
-        `⏭️ [TasksService] Skipping heartbeat session failure for task ${shortId(failedTask.task_id)}; ` +
-          `heartbeat failure did not win (status=${failedTask.status})`
-      );
-      return failedTask;
+  }
+
+  /**
+   * The single release gate for executor-owned turns. Task status records the
+   * outcome; ready_for_prompt remains false until workload cleanup and any
+   * required state persistence are both proven.
+   */
+  async finalizeExecutorAttempt(
+    taskId: string,
+    executorAttemptId: string,
+    options: {
+      evidence: ExecutorFinalizationEvidence;
+    },
+    params?: TaskParams
+  ): Promise<{ finalized: boolean; released: boolean }> {
+    if (!(await this.ownsExecutorFinalizationFence(taskId, executorAttemptId, params))) {
+      const task = await this.get(taskId, params);
+      if (
+        task.executor_attempt_id === executorAttemptId &&
+        EXECUTOR_FINALIZABLE_TASK_STATUSES.has(task.status) &&
+        options.evidence.cleanup_status === EXECUTOR_CLEANUP_STATUS.VERIFIED
+      ) {
+        untrackExecutorAttempt(task.session_id, executorAttemptId);
+      }
+      return { finalized: false, released: false };
     }
-    const sessionPatchParams: TerminalQueueProcessingParams = {
-      ...params,
-      suppressTerminalQueueProcessing: true,
+
+    const task = await this.get(taskId, params);
+    const durableFinalization = {
+      ...task.executor_finalization,
+      state_persistence_requirement:
+        task.executor_finalization?.state_persistence_requirement ??
+        EXECUTOR_STATE_PERSISTENCE_REQUIREMENT.NOT_REQUIRED,
+      ...options.evidence,
     };
-    let updatedSession: Session | undefined;
-    await this.app
-      .service('sessions')
-      .patch(
-        failedTask.session_id,
-        {
-          status: SessionStatus.FAILED,
-          ready_for_prompt: true,
-        },
-        sessionPatchParams
-      )
-      .then((s) => {
-        updatedSession = s as Session;
-      })
-      .catch((error: unknown) => {
-        console.warn(
-          `[executor-heartbeat] Failed to mark session ${shortId(failedTask.session_id)} failed after stale heartbeat:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      });
-    // Dispatch completion callbacks outside the task-patch transaction.
-    // Both patches have committed at this point, so callbacks run in fresh transactions.
-    if (updatedSession) {
-      void this.dispatchCompletionCallbacksAfterCommit(failedTask, updatedSession, params).catch(
-        (error: unknown) => {
-          console.warn(
-            `[executor-heartbeat] Failed to dispatch completion callbacks for task ${shortId(failedTask.task_id)}:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        }
-      );
+    await super.patch(
+      taskId,
+      { executor_finalization: durableFinalization },
+      { ...params, provider: undefined }
+    );
+    const targetStatus =
+      task.status === TaskStatus.FAILED
+        ? SessionStatus.FAILED
+        : task.status === TaskStatus.TIMED_OUT
+          ? SessionStatus.TIMED_OUT
+          : SessionStatus.IDLE;
+    const released = isExecutorFinalizationReleasable(durableFinalization);
+    const sessionsService = this.app.service('sessions');
+    if (released) {
+      const session = (await sessionsService.get(task.session_id, params)) as Session;
+      await this.dispatchCompletionSideEffectsAfterCommit(task, session, params);
     }
-    return failedTask;
+    await sessionsService.patch(
+      task.session_id,
+      {
+        status: released ? targetStatus : SessionStatus.FAILED,
+        ready_for_prompt: released,
+      },
+      params
+    );
+
+    if (options.evidence.cleanup_status === EXECUTOR_CLEANUP_STATUS.VERIFIED) {
+      untrackExecutorAttempt(task.session_id, executorAttemptId);
+    }
+    return { finalized: true, released };
   }
 
   private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
@@ -398,6 +460,25 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     this.heartbeatCallbackRunner.run(payload);
+  }
+
+  private publishExecutorHeartbeat(task: Task, heartbeatAt: string): void {
+    analyticsLogger.track(
+      EXECUTOR_HEARTBEAT_ANALYTICS_EVENT,
+      {
+        task_id: task.task_id,
+        session_id: task.session_id,
+        status: task.status,
+        last_executor_heartbeat_at: heartbeatAt,
+      },
+      { userId: task.created_by }
+    );
+    this.handleExecutorHeartbeat(task, heartbeatAt).catch((error) => {
+      console.warn(
+        `⚠️  [TasksService] Executor heartbeat callback failed for task ${shortId(task.task_id)}:`,
+        error
+      );
+    });
   }
 
   private async runAfterTenantDatabaseCommit(
@@ -444,6 +525,55 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
+  /** Run terminal side effects that must not precede executor cleanup. */
+  private async dispatchCompletionSideEffectsAfterCommit(
+    task: Task,
+    session: Session,
+    params?: TaskParams
+  ): Promise<void> {
+    await this.runAfterTenantDatabaseCommit('dispatchCompletionSideEffects', async () => {
+      const hasCompletionOutput = isNaturalCompletion(task.status);
+
+      if (session.branch_id) {
+        this.app
+          .service('branches')
+          .get(session.branch_id, params)
+          .then((branch) => {
+            if (branch?.repo_id)
+              return ensureRepoOriginAlignedById(this.app, branch.repo_id, params);
+          })
+          .catch((error: unknown) => {
+            console.warn(
+              `⚠️  [TasksService] Failed to realign repo for session ${shortId(session.session_id)}:`,
+              error instanceof Error ? error.message : String(error)
+            );
+          });
+      }
+
+      if (hasCompletionOutput) {
+        await this.dispatchCompletionCallbacks(task, session, params);
+      }
+
+      if (session.fork_origin !== 'btw') return;
+
+      try {
+        await this.app.service('sessions').patch(session.session_id, {
+          archived: true,
+          archived_reason: 'btw_completed',
+        });
+        console.log(
+          `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
+        );
+      } catch (error) {
+        console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
+      }
+
+      if (hasCompletionOutput) {
+        await this.injectBtwResultMessage(task, session, params);
+      }
+    });
+  }
+
   /**
    * Override patch to detect task completion and:
    * 1. Atomically update session status to IDLE when task reaches terminal state
@@ -463,77 +593,77 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       return currentTask;
     }
     const isAnalyticsTerminalTransition =
-      isAnalyticsTerminalTaskStatus(nextStatus) &&
-      !isAnalyticsTerminalTaskStatus(currentTask?.status);
+      isTerminalTaskStatus(nextStatus) && !isTerminalTaskStatus(currentTask?.status);
     const isCompletionSideEffectTransition =
       isCompletionSideEffectTaskStatus(nextStatus) &&
       !isCompletionSideEffectTaskStatus(currentTask?.status);
+    const isExecutorCompletion =
+      !!currentTask?.executor_attempt_id &&
+      nextStatus !== undefined &&
+      EXECUTOR_FINALIZABLE_TASK_STATUSES.has(nextStatus);
+    const isQueuedCancellation =
+      currentTask?.status === TaskStatus.QUEUED && nextStatus === TaskStatus.STOPPED;
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
     // When transitioning to a terminal status, auto-compute duration, completed_at,
     // and end_timestamp. This ensures ALL code paths (complete, fail, stop handler)
     // get correct timing data without duplicating logic.
-    if (isAnalyticsTerminalTransition && currentTask) {
-      const completedAt = data.completed_at || new Date().toISOString();
-
-      // Ensure completed_at is always set
-      if (!data.completed_at) {
-        data.completed_at = completedAt;
-      }
-
-      // Compute duration_ms if not explicitly provided (null check, not falsy,
-      // so an explicit 0 is preserved)
-      if (data.duration_ms == null) {
-        const startTime =
-          currentTask.started_at ||
-          currentTask.message_range?.start_timestamp ||
-          currentTask.created_at;
-        if (startTime) {
-          data.duration_ms = Math.max(
-            0,
-            new Date(completedAt).getTime() - new Date(startTime).getTime()
-          );
-        }
-      }
-
-      // Set end_timestamp if not already meaningfully set
-      const endTs = currentTask.message_range?.end_timestamp;
-      const startTs = currentTask.message_range?.start_timestamp;
-      if (currentTask.message_range && (!endTs || endTs === startTs)) {
-        data.message_range = {
-          ...currentTask.message_range,
-          ...data.message_range,
-          end_timestamp: completedAt,
-        };
-      }
+    if (isAnalyticsTerminalTransition && currentTask && nextStatus !== undefined) {
+      data = normalizeTerminalTaskPatch(currentTask, { ...data, status: nextStatus });
     }
 
-    const result = await super.patch(id, data, params);
+    let result: Task | Task[];
+    if (
+      currentTask?.executor_attempt_id &&
+      nextStatus !== undefined &&
+      isTerminalTaskStatus(nextStatus)
+    ) {
+      const executorReported = isTaskScopedExecutorParams(
+        params ?? {},
+        currentTask.task_id,
+        currentTask.executor_attempt_id
+      );
+      const defaultCause =
+        nextStatus === TaskStatus.TIMED_OUT
+          ? EXECUTOR_TERMINAL_CAUSE.PERMISSION_TIMEOUT
+          : executorReported
+            ? EXECUTOR_TERMINAL_CAUSE.EXECUTOR_REPORTED
+            : nextStatus === TaskStatus.STOPPED
+              ? EXECUTOR_TERMINAL_CAUSE.USER_STOP
+              : nextStatus === TaskStatus.COMPLETED
+                ? EXECUTOR_TERMINAL_CAUSE.EXECUTOR_REPORTED
+                : EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_UNKNOWN;
+      const transition = await this.taskRepo.transitionOwnedExecutorAttemptToTerminal(id, {
+        executorAttemptId: currentTask.executor_attempt_id,
+        terminalCause: data.executor_terminal_cause ?? defaultCause,
+        patch: { ...data, status: nextStatus },
+      });
+      if (!transition.transitioned) {
+        console.warn(
+          `⏭️ [TasksService] Ignoring competing executor terminal outcome for task ${shortId(transition.task.task_id)} ` +
+            `(winner=${transition.task.status}/${transition.task.executor_terminal_cause ?? 'legacy'})`
+        );
+        return transition.task;
+      }
+      result = transition.task;
+      emitServiceEvent(this.app, {
+        path: TASKS_SERVICE_PATH,
+        event: TASK_PATCHED_EVENT,
+        data: transition.task,
+        params,
+        id: transition.task.task_id,
+      });
+    } else {
+      result = await super.patch(id, data, params);
+    }
 
     if (isRunningTransition && !Array.isArray(result)) {
       this.trackTaskStarted(result as Task);
     }
 
     if (data.last_executor_heartbeat_at && !Array.isArray(result)) {
-      analyticsLogger.track(
-        'executor.heartbeat',
-        {
-          task_id: (result as Task).task_id,
-          session_id: (result as Task).session_id,
-          status: (result as Task).status,
-          last_executor_heartbeat_at: data.last_executor_heartbeat_at,
-        },
-        { userId: (result as Task).created_by }
-      );
-      this.handleExecutorHeartbeat(result as Task, data.last_executor_heartbeat_at).catch(
-        (error) => {
-          console.warn(
-            `⚠️  [TasksService] Executor heartbeat callback failed for task ${shortId((result as Task).task_id)}:`,
-            error
-          );
-        }
-      );
+      this.publishExecutorHeartbeat(result as Task, data.last_executor_heartbeat_at);
     }
 
     // Emit analytics for terminal task transitions, including timeouts that do not
@@ -542,6 +672,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const task = result as Task;
       this.trackTaskCompleted(task);
     }
+
+    // Executor terminal heads only claim the durable winner. The coordinator
+    // owns cleanup, persistence, release, completion effects, and queue drain.
+    if (isExecutorCompletion || isQueuedCancellation) return result;
 
     // Run completion side effects only for statuses that historically completed
     // executor turns. Timeout paths patch session state separately and should not
@@ -556,30 +690,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           // If a new task has started, we must NOT set the session to IDLE
           const session = await this.app.service('sessions').get(task.session_id, params);
 
-          // Realign on terminal transition — decoupled from session-state
-          // updates and callback delivery so an error there doesn't skip it.
-          if (session.branch_id) {
-            this.app
-              .service('branches')
-              .get(session.branch_id, params)
-              .then((branch) => {
-                const repoId = branch?.repo_id;
-                if (!repoId) return;
-                return ensureRepoOriginAlignedById(this.app, repoId, params);
-              })
-              .catch((err: unknown) => {
-                const message = err instanceof Error ? err.message : String(err);
-                console.warn(
-                  `⚠️  [TasksService] ensureRepoOriginAlignedById failed for session ${task.session_id ? shortId(task.session_id) : 'unknown'}: ${message}`
-                );
-              });
-          }
-
           const latestTaskId = session.tasks?.[session.tasks.length - 1];
-
-          const suppressCompletionCallbacks = params?.suppressCompletionCallbacks === true;
-          const suppressBtwCleanup = params?.suppressBtwCleanup === true;
-
           // STOPPED tasks (user-cancelled or daemon-shutdown cleanup) never notify
           // parent sessions. A stopped child represents abandoned work — the parent
           // should not resume or be informed; it has its own lifecycle.
@@ -591,80 +702,25 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
             // Process completion callbacks only for naturally-terminal tasks (COMPLETED/FAILED).
             // STOPPED means the work was abandoned — don't notify the parent.
-            if (!suppressCompletionCallbacks && !isStop) {
+            if (!isStop) {
               await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
             }
             return result;
           }
 
-          // For stop-route/admin cleanup paths that explicitly suppress queue processing,
-          // the caller owns the follow-up session patch/drain. For an ordinary STOPPED
-          // terminal patch, still make the session promptable so queued work can drain.
-          if (isStop && params?.suppressTerminalQueueProcessing) {
-            console.log(
-              `⏭️ [TasksService] Skipping session terminal-state update for STOPPED task ${shortId(task.task_id)} — caller suppresses terminal queue processing`
-            );
-          } else if (params?.suppressTerminalSessionStateUpdate) {
-            console.log(
-              `⏭️ [TasksService] Skipping session terminal-state update for task ${shortId(task.task_id)} (${data.status}) due to internal patch params`
-            );
-          } else {
-            await this.app.service('sessions').patch(
-              task.session_id,
-              {
-                status:
-                  data.status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
-                ready_for_prompt: true,
-              },
-              params
-            );
+          await this.app.service('sessions').patch(
+            task.session_id,
+            {
+              status: task.status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+              ready_for_prompt: true,
+            },
+            params
+          );
 
-            console.log(
-              `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${data.status})`
-            );
-          }
-
-          if (!suppressCompletionCallbacks && !isStop) {
-            await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
-          }
-
-          // "btw" fork origin: auto-archive the ephemeral fork after task completion.
-          // Runs regardless of callback success — btw forks should always be cleaned up.
-          // Administrative terminal patches may suppress parent callbacks/result injection,
-          // but still archive the ephemeral session unless explicitly told not to.
-          if (session.fork_origin === 'btw') {
-            if (!suppressBtwCleanup) {
-              try {
-                await this.app.service('sessions').patch(session.session_id, {
-                  archived: true,
-                  archived_reason: 'btw_completed',
-                });
-                console.log(
-                  `📦 [TasksService] Auto-archived btw fork session ${shortId(session.session_id)}`
-                );
-              } catch (error) {
-                console.warn(`⚠️  [TasksService] Failed to auto-archive btw fork:`, error);
-              }
-            }
-
-            if (!suppressCompletionCallbacks && !isStop) {
-              // Inject a result message into the parent session's conversation.
-              // This is a non-prompt system message — it shows up in the UI but doesn't
-              // trigger a new prompt cycle. The parent's agent never sees it.
-              await this.injectBtwResultMessage(task, session, params);
-            }
-          }
-
-          // Fire queue processing after the outer transaction commits. spawnTaskExecutor
-          // (called inside the queue processor) does significant I/O that would otherwise
-          // extend this transaction and cause proxy CONNECTION_CLOSED kills.
-          if (!params?.suppressTerminalQueueProcessing) {
-            await this.triggerQueueProcessingAfterCommit(task.session_id, params);
-          } else if (params?.suppressTerminalQueueProcessing) {
-            console.log(
-              `⏭️  [TasksService] Queue trigger suppressed for session ${shortId(task.session_id)} (suppressTerminalQueueProcessing)`
-            );
-          }
+          console.log(
+            `✅ [TasksService] Session ${shortId(task.session_id)} released after terminal task ${shortId(task.task_id)} (${task.status})`
+          );
+          await this.dispatchCompletionSideEffectsAfterCommit(task, session, params);
         } catch (error) {
           console.error('❌ [TasksService] Failed to process task completion:', error);
         }
@@ -1164,10 +1220,94 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
-   * Custom method: Get orphaned tasks (running, stopping, awaiting permission)
+   * Custom method: Get orphaned tasks (dispatching, running, stopping, awaiting permission)
    */
   async getOrphaned(_params?: TaskParams): Promise<Task[]> {
     return this.taskRepo.findOrphaned();
+  }
+
+  /** Internal helper for hooks that must validate persisted executor connection state. */
+  async findByIdForScopeCheck(taskId: TaskID): Promise<Task | null> {
+    return this.taskRepo.findById(taskId);
+  }
+
+  /** Claim a DISPATCHING task after executor transport authentication. */
+  async connectExecutor(data: ExecutorClaim, params?: TaskParams): Promise<Task> {
+    if (!isValidExecutorAttemptId(data.executor_attempt_id)) {
+      throw new BadRequest('Invalid executor claim');
+    }
+
+    const connection = await this.taskRepo.connectExecutor(data.task_id, data.executor_attempt_id);
+    if (!connection) {
+      const current = await this.taskRepo.findById(data.task_id);
+      throw new Conflict(
+        `Task ${shortId(data.task_id)} cannot connect an executor from status ${current?.status ?? 'unknown'}`
+      );
+    }
+    if (connection.transitioned) {
+      const startedAt = Date.parse(connection.task.started_at ?? '');
+      const connectedAt = Date.parse(connection.task.executor_connected_at ?? '');
+      if (Number.isFinite(startedAt) && Number.isFinite(connectedAt)) {
+        console.log(
+          `🔌 [TasksService] Executor connected for task ${shortId(connection.task.task_id)} ` +
+            `in ${Math.max(0, connectedAt - startedAt)}ms`
+        );
+      }
+      this.trackTaskStarted(connection.task);
+      // The guarded repository transition bypasses the standard patch method,
+      // so publish the canonical patched event explicitly for reactive clients.
+      emitServiceEvent(this.app, {
+        path: TASKS_SERVICE_PATH,
+        event: TASK_PATCHED_EVENT,
+        data: connection.task,
+        params,
+        id: connection.task.task_id,
+      });
+    }
+    return connection.task;
+  }
+
+  /** Accept bounded executor telemetry and stamp it with daemon-observed time. */
+  async reportExecutorTelemetry(data: ExecutorTelemetryReport, params?: TaskParams): Promise<Task> {
+    if (
+      !isValidExecutorAttemptId(data.executor_attempt_id) ||
+      typeof data.heartbeat !== 'boolean'
+    ) {
+      throw new BadRequest('Invalid executor telemetry');
+    }
+
+    const pulse = data.pulse === undefined ? undefined : sanitizePulse(data.pulse);
+    if (data.pulse !== undefined && !pulse) {
+      throw new BadRequest('Invalid executor telemetry');
+    }
+    const meaningfulPulse = pulse && isMeaningfulPulse(pulse) ? pulse : undefined;
+    if (!data.heartbeat && !meaningfulPulse) {
+      throw new BadRequest('Executor telemetry must include a heartbeat or pulse');
+    }
+
+    const observedAt = new Date().toISOString();
+    const updated = await this.taskRepo.recordExecutorTelemetry(
+      data.task_id,
+      data.executor_attempt_id,
+      {
+        ...(data.heartbeat ? { last_executor_heartbeat_at: observedAt } : {}),
+        ...(meaningfulPulse
+          ? { latest_executor_pulse: { ...meaningfulPulse, at: observedAt } }
+          : {}),
+      }
+    );
+    if (!updated) {
+      throw new Conflict('Executor does not own this task or telemetry is no longer accepted');
+    }
+    emitServiceEvent(this.app, {
+      path: TASKS_SERVICE_PATH,
+      event: TASK_PATCHED_EVENT,
+      data: updated,
+      params,
+      id: updated.task_id,
+    });
+    if (data.heartbeat) this.publishExecutorHeartbeat(updated, observedAt);
+    return updated;
   }
 
   /**
@@ -1186,7 +1326,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     params?: TaskParams
   ): Promise<Task> {
     // duration_ms and end_timestamp are auto-computed by patch() hook
-    const completedTask = (await this.patch(
+    return (await this.patch(
       id,
       {
         status: TaskStatus.COMPLETED,
@@ -1195,27 +1335,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       },
       params
     )) as Task;
-
-    // Set the session's ready_for_prompt flag to true when task completes successfully
-    if (completedTask.session_id && this.app) {
-      try {
-        await this.app.service('sessions').patch(
-          completedTask.session_id,
-          {
-            ready_for_prompt: true,
-          },
-          params
-        );
-      } catch (error) {
-        console.error('❌ Failed to set ready_for_prompt flag:', error);
-      }
-    } else {
-      console.warn(
-        `⚠️ Cannot set ready_for_prompt: session_id=${completedTask.session_id}, app=${!!this.app}`
-      );
-    }
-
-    return completedTask;
   }
 
   /**

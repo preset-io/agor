@@ -1,7 +1,14 @@
 import { shortId, type TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Params, SessionID } from '@agor/core/types';
-import { isSessionExecuting, SessionStatus, TaskStatus } from '@agor/core/types';
+import type { Params, SessionID, Task } from '@agor/core/types';
+import {
+  EXECUTOR_TERMINAL_CAUSE,
+  isSessionExecuting,
+  isTerminalTaskStatus,
+  SessionStatus,
+  TaskStatus,
+  usesExecutorRuntime,
+} from '@agor/core/types';
 import type { SessionsServiceImpl, TasksServiceImpl } from '../declarations.js';
 import { findActiveTasksForSession } from './session-tasks.js';
 
@@ -11,49 +18,22 @@ export interface StopSessionResult {
   reason?: string;
   stoppedTaskId?: string;
   queuedTasksPreserved?: number;
+  executorAttempt?: { taskId: string; executorAttemptId: string };
 }
 
 export interface StopSessionDeps {
   app: Application;
   taskRepo: Pick<TaskRepository, 'findQueued'>;
   sessionsService: Pick<SessionsServiceImpl, 'get' | 'patch'>;
-  tasksService: Pick<TasksServiceImpl, 'patch'>;
-  killExecutorProcess: (sessionId: string) => boolean;
-}
-
-/**
- * Mark a stopped session promptable without letting the session after.patch
- * hook drain the queue while the Stop route still holds the turn lock.
- *
- * The route schedules queue processing after the lock is released. Doing it
- * here would deadlock/retry against the same in-flight lock.
- */
-export async function markStoppedSessionPromptableNoDrain(
-  sessionsService: Pick<SessionsServiceImpl, 'patch'>,
-  sessionId: SessionID,
-  params?: Params
-): Promise<void> {
-  await sessionsService.patch(
-    sessionId,
-    {
-      status: SessionStatus.IDLE,
-      ready_for_prompt: true,
-    },
-    {
-      ...(params ?? {}),
-      suppressTerminalQueueProcessing: true,
-    } as Params
-  );
+  tasksService: Pick<TasksServiceImpl, 'get' | 'patch'>;
 }
 
 /**
  * Stop semantics, in one place:
  * - target only the active task for the session;
  * - preserve queued work so it can drain after Stop;
- * - suppress task-terminal side effects that would independently drain or
- *   dispatch callbacks for a user-stopped turn;
- * - leave the session idle/promptable before the caller kicks the queue
- *   drainer after releasing the session turn lock.
+ * - persist STOPPING + the write-once terminal cause under the turn lock;
+ * - let the caller reconcile cleanup after releasing the lock.
  *
  * Callers must hold the session turn lock while invoking this function, and
  * must trigger queue processing only after the lock is released.
@@ -77,14 +57,28 @@ export async function stopSessionPreserveQueue(
   const queuedTasks = await deps.taskRepo.findQueued(sessionId);
 
   if (targetTasksArray.length === 0) {
-    console.warn(
-      `⚠️  [Stop] No active tasks for session ${shortId(sessionId)}, resetting to IDLE${options.reason ? ` (reason: ${options.reason})` : ''}`
+    if (!usesExecutorRuntime(session.agentic_tool)) {
+      await deps.sessionsService.patch(
+        sessionId,
+        { status: SessionStatus.IDLE, ready_for_prompt: true },
+        params
+      );
+      return {
+        success: true,
+        status: SessionStatus.IDLE,
+        reason: 'No active tasks found, session reset to idle',
+        queuedTasksPreserved: queuedTasks.length,
+      };
+    }
+
+    await deps.sessionsService.patch(
+      sessionId,
+      { status: SessionStatus.FAILED, ready_for_prompt: false },
+      params
     );
-    await markStoppedSessionPromptableNoDrain(deps.sessionsService, sessionId, params);
     return {
-      success: true,
-      status: SessionStatus.IDLE,
-      reason: 'No active tasks found, session reset to idle',
+      success: false,
+      reason: 'No active executor attempt found; session remains fenced',
       queuedTasksPreserved: queuedTasks.length,
     };
   }
@@ -95,36 +89,68 @@ export async function stopSessionPreserveQueue(
     `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(sessionId)}${options.reason ? ` (reason: ${options.reason})` : ''}`
   );
 
-  const processKilled = deps.killExecutorProcess(sessionId);
-  if (!processKilled) {
-    console.warn(
-      `⚠️  [Stop] No tracked process for session ${shortId(sessionId)} — executor may have already exited`
+  if (latestTask.executor_attempt_id) {
+    await deps.sessionsService.patch(
+      sessionId,
+      { status: SessionStatus.STOPPING, ready_for_prompt: false },
+      params
     );
   }
 
+  let stoppedTask: Task | Task[];
   try {
-    await deps.tasksService.patch(
+    stoppedTask = await deps.tasksService.patch(
       latestTask.task_id,
       {
         status: TaskStatus.STOPPED,
         completed_at: new Date().toISOString(),
+        ...(latestTask.executor_attempt_id
+          ? { executor_terminal_cause: EXECUTOR_TERMINAL_CAUSE.USER_STOP }
+          : {}),
       },
-      {
-        ...params,
-        suppressTerminalQueueProcessing: true,
-        suppressCompletionCallbacks: true,
-      } as Params
+      { ...params, provider: undefined }
     );
   } catch (error) {
-    console.error(`❌ [Stop] Failed to patch task to STOPPED:`, error);
+    const currentTask = latestTask.executor_attempt_id
+      ? await deps.tasksService.get(latestTask.task_id, { ...params, provider: undefined })
+      : undefined;
+    if (
+      !currentTask ||
+      currentTask.executor_attempt_id !== latestTask.executor_attempt_id ||
+      !isTerminalTaskStatus(currentTask.status)
+    ) {
+      if (latestTask.executor_attempt_id) {
+        await deps.sessionsService.patch(
+          sessionId,
+          { status: session.status, ready_for_prompt: session.ready_for_prompt },
+          params
+        );
+      }
+      throw error;
+    }
+    stoppedTask = currentTask;
   }
 
-  await markStoppedSessionPromptableNoDrain(deps.sessionsService, sessionId, params);
+  if (!latestTask.executor_attempt_id) {
+    await deps.sessionsService.patch(
+      sessionId,
+      { status: SessionStatus.IDLE, ready_for_prompt: true },
+      params
+    );
+  }
 
   return {
     success: true,
-    status: SessionStatus.IDLE,
+    ...(!latestTask.executor_attempt_id ? { status: SessionStatus.IDLE } : {}),
     stoppedTaskId: latestTask.task_id,
     queuedTasksPreserved: queuedTasks.length,
+    ...(latestTask.executor_attempt_id
+      ? {
+          executorAttempt: {
+            taskId: Array.isArray(stoppedTask) ? latestTask.task_id : stoppedTask.task_id,
+            executorAttemptId: latestTask.executor_attempt_id,
+          },
+        }
+      : {}),
   };
 }

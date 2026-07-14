@@ -6,6 +6,7 @@ import type { ReportPath, ReportTemplate } from './report';
 export const TaskStatus = {
   QUEUED: 'queued', // Task created but not yet running (waiting for executor to drain queue)
   CREATED: 'created',
+  DISPATCHING: 'dispatching', // Daemon persisted launch intent; executor has not connected yet
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for SDK to halt
   AWAITING_PERMISSION: 'awaiting_permission',
@@ -83,6 +84,9 @@ export const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatu
   TaskStatus.TIMED_OUT,
 ]);
 
+/** Every terminal executor outcome requires cleanup before releasing its session. */
+export const EXECUTOR_FINALIZABLE_TASK_STATUSES = TERMINAL_TASK_STATUSES;
+
 export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
   return status !== undefined && TERMINAL_TASK_STATUSES.has(status);
 }
@@ -94,6 +98,7 @@ export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
  * pre-executor row and QUEUED is waiting for a future turn.
  */
 export const EXECUTING_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  TaskStatus.DISPATCHING,
   TaskStatus.RUNNING,
   TaskStatus.STOPPING,
   TaskStatus.AWAITING_PERMISSION,
@@ -124,6 +129,182 @@ export interface ContextUsageSnapshot {
   maxTokens: number;
   /** 0–100, integer, ready to display */
   percentage: number;
+}
+
+export const PULSE_KINDS = [
+  'executor.connected',
+  'sdk.started',
+  'sdk.first_event',
+  'sdk.progress',
+  'sdk.unknown',
+  'assistant.message',
+  'assistant.stream',
+  'thinking.progress',
+  'tool.started',
+  'tool.progress',
+  'tool.finished',
+  'permission.wait_started',
+  'permission.wait_ended',
+] as const;
+
+export type PulseKind = (typeof PULSE_KINDS)[number];
+
+export interface Pulse {
+  kind: PulseKind;
+  /** Stable id when available: tool_use_id, call_id, native message id. */
+  id?: string;
+  /** Privacy-safe label: Bash, Read, Cursor tool_call, etc. */
+  label?: string;
+}
+
+export interface PulseSnapshot extends Pulse {
+  /** Added by the daemon when it accepts a new pulse. */
+  at: string;
+}
+
+const MAX_PULSE_KIND_LENGTH = 120;
+const MAX_PULSE_ID_LENGTH = 160;
+const MAX_PULSE_LABEL_LENGTH = 120;
+const VALID_PULSE_KINDS = new Set<string>(PULSE_KINDS);
+
+/** Keep executor telemetry bounded and free of provider payloads or other unmodeled data. */
+export function sanitizePulse(value: unknown): Pulse | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+
+  const pulse = value as Record<string, unknown>;
+  const candidateKind = trimPulseString(pulse.kind, MAX_PULSE_KIND_LENGTH);
+  const kind =
+    candidateKind && VALID_PULSE_KINDS.has(candidateKind)
+      ? (candidateKind as PulseKind)
+      : 'sdk.unknown';
+  const id = trimPulseString(pulse.id, MAX_PULSE_ID_LENGTH);
+  const label = trimPulseString(pulse.label, MAX_PULSE_LABEL_LENGTH);
+
+  return {
+    kind,
+    ...(id ? { id } : {}),
+    ...(label ? { label } : {}),
+  };
+}
+
+/** Keep generic SDK chatter from replacing semantic assistant/tool progress. */
+export function isMeaningfulPulse(pulse: Pulse): boolean {
+  return pulse.kind !== 'sdk.unknown' && pulse.kind !== 'sdk.progress';
+}
+
+function trimPulseString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+}
+
+export interface ExecutorClaim {
+  task_id: string;
+  executor_attempt_id: string;
+}
+
+export interface ExecutorTelemetryReport extends ExecutorClaim {
+  /** Heartbeats and final pulse flushes share one guarded transport method. */
+  heartbeat: boolean;
+  pulse?: Pulse;
+}
+
+export const EXECUTOR_CLEANUP_STATUS = {
+  UNRESOLVED: 'unresolved',
+  VERIFIED: 'verified',
+} as const;
+
+export type ExecutorCleanupStatus =
+  (typeof EXECUTOR_CLEANUP_STATUS)[keyof typeof EXECUTOR_CLEANUP_STATUS];
+
+export const EXECUTOR_STATE_PERSISTENCE_STATUS = {
+  PENDING: 'pending',
+  VERIFIED: 'verified',
+  SKIPPED: 'skipped',
+  FAILED: 'failed',
+} as const;
+
+export type ExecutorStatePersistenceStatus =
+  (typeof EXECUTOR_STATE_PERSISTENCE_STATUS)[keyof typeof EXECUTOR_STATE_PERSISTENCE_STATUS];
+
+export const EXECUTOR_STATE_PERSISTENCE_REQUIREMENT = {
+  NOT_REQUIRED: 'not_required',
+  REQUIRED: 'required',
+} as const;
+
+export type ExecutorStatePersistenceRequirement =
+  (typeof EXECUTOR_STATE_PERSISTENCE_REQUIREMENT)[keyof typeof EXECUTOR_STATE_PERSISTENCE_REQUIREMENT];
+
+/** The first terminal owner of an executor attempt. This value is write-once. */
+export const EXECUTOR_TERMINAL_CAUSE = {
+  EXECUTOR_REPORTED: 'executor_reported',
+  UNEXPECTED_EXIT: 'unexpected_exit',
+  USER_STOP: 'user_stop',
+  DISPATCH_TIMEOUT: 'dispatch_timeout',
+  HEARTBEAT_LOST: 'heartbeat_lost',
+  PERMISSION_TIMEOUT: 'permission_timeout',
+  LAUNCH_FAILED_ABSENT: 'launch_failed_absent',
+  LAUNCH_FAILED_UNKNOWN: 'launch_failed_unknown',
+  DAEMON_RESTART: 'daemon_restart',
+} as const;
+
+export type ExecutorTerminalCause =
+  (typeof EXECUTOR_TERMINAL_CAUSE)[keyof typeof EXECUTOR_TERMINAL_CAUSE];
+export type ExecutorLeaseTerminalCause =
+  | typeof EXECUTOR_TERMINAL_CAUSE.DISPATCH_TIMEOUT
+  | typeof EXECUTOR_TERMINAL_CAUSE.HEARTBEAT_LOST;
+
+export const EXECUTOR_WORKLOAD_KIND = {
+  LOCAL: 'local',
+  TEMPLATED: 'templated',
+} as const;
+
+export type ExecutorWorkloadKind =
+  (typeof EXECUTOR_WORKLOAD_KIND)[keyof typeof EXECUTOR_WORKLOAD_KIND];
+
+/** Durable evidence required before an executor-owned turn may release its session. */
+export interface ExecutorFinalizationEvidence {
+  cleanup_status: ExecutorCleanupStatus;
+  state_persistence_status: ExecutorStatePersistenceStatus;
+  cleanup_error: string | null;
+  state_persistence_error: string | null;
+  cleanup_verified_at: string | null;
+}
+
+export interface ExecutorWorkloadDescriptor {
+  kind: ExecutorWorkloadKind;
+  unix_user?: string;
+}
+
+export interface ExecutorFinalizationState extends ExecutorFinalizationEvidence {
+  workload?: ExecutorWorkloadDescriptor;
+  state_persistence_requirement: ExecutorStatePersistenceRequirement;
+}
+
+export function createPendingExecutorFinalization(
+  workload?: ExecutorWorkloadDescriptor,
+  statePersistenceRequirement: ExecutorStatePersistenceRequirement = EXECUTOR_STATE_PERSISTENCE_REQUIREMENT.NOT_REQUIRED
+): ExecutorFinalizationState {
+  return {
+    cleanup_status: EXECUTOR_CLEANUP_STATUS.UNRESOLVED,
+    state_persistence_status: EXECUTOR_STATE_PERSISTENCE_STATUS.PENDING,
+    cleanup_error: null,
+    state_persistence_error: null,
+    cleanup_verified_at: null,
+    state_persistence_requirement: statePersistenceRequirement,
+    ...(workload ? { workload } : {}),
+  };
+}
+
+export function isExecutorFinalizationReleasable(
+  evidence: Pick<ExecutorFinalizationEvidence, 'cleanup_status' | 'state_persistence_status'>
+): boolean {
+  return (
+    evidence.cleanup_status === EXECUTOR_CLEANUP_STATUS.VERIFIED &&
+    (evidence.state_persistence_status === EXECUTOR_STATE_PERSISTENCE_STATUS.VERIFIED ||
+      evidence.state_persistence_status === EXECUTOR_STATE_PERSISTENCE_STATUS.SKIPPED)
+  );
 }
 
 export interface Task {
@@ -240,6 +421,9 @@ export interface Task {
     generated_at: string;
   };
 
+  /** Latest meaningful SDK/tool pulse accepted and timestamped by the daemon. */
+  latest_executor_pulse?: PulseSnapshot;
+
   // Permission request (when task is awaiting user approval)
   permission_request?: {
     request_id: string;
@@ -256,8 +440,46 @@ export interface Task {
   session_md5?: string;
 
   created_at: string;
-  started_at?: string; // When task status changed to RUNNING (UTC ISO string)
+  started_at?: string; // When task execution was dispatched (UTC ISO string)
+  /** Server timestamp recorded when the authenticated executor claims the task. */
+  executor_connected_at?: string; // UTC ISO string
+  /** Daemon-minted launch attempt that owns this task's executor claim. */
+  executor_attempt_id?: string;
+  /** Durable, write-once reason this executor attempt became terminal. */
+  executor_terminal_cause?: ExecutorTerminalCause;
+  /** Durable cleanup/state evidence for the owning executor attempt. */
+  executor_finalization?: ExecutorFinalizationState;
   /** Latest heartbeat emitted by the executor while this task is active. */
   last_executor_heartbeat_at?: string; // UTC ISO string
   completed_at?: string; // When task reached terminal status (UTC ISO string)
+}
+
+/** Add the canonical timestamps for any task's first terminal transition. */
+export function normalizeTerminalTaskPatch(
+  current: Task,
+  patch: Partial<Task> & { status: TaskStatus }
+): Partial<Task> & { status: TaskStatus; completed_at: string } {
+  const completedAt = patch.completed_at ?? new Date().toISOString();
+  const startTime =
+    current.started_at ?? current.message_range?.start_timestamp ?? current.created_at;
+  const elapsed = Date.parse(completedAt) - Date.parse(startTime);
+  const currentRange = current.message_range;
+  const shouldCloseRange =
+    currentRange &&
+    (!currentRange.end_timestamp || currentRange.end_timestamp === currentRange.start_timestamp);
+
+  return {
+    ...patch,
+    completed_at: completedAt,
+    duration_ms: patch.duration_ms ?? (Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0),
+    ...(shouldCloseRange
+      ? {
+          message_range: {
+            ...currentRange,
+            ...patch.message_range,
+            end_timestamp: patch.message_range?.end_timestamp ?? completedAt,
+          },
+        }
+      : {}),
+  };
 }

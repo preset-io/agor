@@ -38,7 +38,6 @@ import type {
   HookContext,
   MCPAuth,
   MCPServerID,
-  MessageSource,
   Params,
   SessionID,
   UserID,
@@ -46,10 +45,10 @@ import type {
 } from '@agor/core/types';
 import {
   AGENTIC_TOOL_CAPABILITIES,
-  isSessionExecuting,
-  isTaskExecuting,
+  EXECUTOR_TERMINAL_CAUSE,
+  EXECUTOR_WORKLOAD_KIND,
+  isTerminalTaskStatus,
   ROLES,
-  SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
@@ -59,7 +58,7 @@ import type {
   MessagesServiceImpl,
   SessionsServiceImpl,
 } from './declarations.js';
-import { trackExecutorProcess, untrackExecutorProcess } from './executor-tracking.js';
+import { trackExecutorAttempt } from './executor-tracking.js';
 import { runInOAuthTenantScope } from './oauth-auth-helpers.js';
 import {
   cacheOAuth21Token,
@@ -84,6 +83,7 @@ import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { ExecutorAttemptCoordinator } from './services/executor-attempt-coordinator.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
@@ -120,7 +120,7 @@ import { createSchedulesService } from './services/schedules.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
-import { createSessionsService } from './services/sessions.js';
+import { createSessionsService, type ExecuteTaskData } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
@@ -136,13 +136,7 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
-import {
-  computeFileHash,
-  findCodexSessionFile,
-  getCodexHome,
-  getSessionFilePath,
-} from './utils/session-state.js';
-import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
+import { pullIfNeeded } from './utils/session-state-hooks.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
 
 /**
@@ -178,6 +172,7 @@ export interface RegisteredServices {
   terminalsService: TerminalsService | null;
   configService: ReturnType<typeof createConfigService>;
   boardCommentsService: unknown;
+  executorAttemptCoordinator: ExecutorAttemptCoordinator;
 }
 
 /**
@@ -219,13 +214,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // ============================================================================
 
   const sessionsService = createSessionsService(db, app) as unknown as SessionsServiceImpl;
+  const executorAttemptCoordinator = new ExecutorAttemptCoordinator(app, { db });
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
 
   // Wire up the execute handler for spawning executor processes
   sessionsService.setExecuteHandler(
-    createExecuteHandler(ctx, sessionsService, sessionTokenService)
+    createExecuteHandler(ctx, sessionsService, sessionTokenService, executorAttemptCoordinator)
   );
 
   // Realtime control-plane: browsers subscribe (create) / unsubscribe (remove)
@@ -242,6 +238,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/session-streams').publish(() => []);
 
   app.use('/tasks', createTasksService(db, app), {
+    methods: [
+      'find',
+      'get',
+      'create',
+      'update',
+      'patch',
+      'remove',
+      'connectExecutor',
+      'reportExecutorTelemetry',
+    ],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
     // clients. Keep this in sync with every `app.service('tasks').emit(...)`
@@ -710,6 +716,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     terminalsService,
     configService,
     boardCommentsService: safeService('board-comments'),
+    executorAttemptCoordinator,
   };
 }
 
@@ -720,19 +727,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 function createExecuteHandler(
   ctx: RegisterServicesContext,
   sessionsService: SessionsServiceImpl,
-  sessionTokenService: import('./services/session-token-service.js').SessionTokenService
+  sessionTokenService: import('./services/session-token-service.js').SessionTokenService,
+  executorAttemptCoordinator: ExecutorAttemptCoordinator
 ) {
   const { db, app, config, daemonUrl } = ctx;
 
   return async (
     sessionId: string,
-    data: {
-      taskId: string;
-      prompt: string;
-      permissionMode?: import('@agor/core/types').PermissionMode;
-      stream?: boolean;
-      messageSource?: MessageSource;
-    },
+    data: ExecuteTaskData,
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
   ) => {
@@ -775,6 +777,7 @@ function createExecuteHandler(
       (params as AuthenticatedParams).user!.user_id,
       {
         taskId: data.taskId,
+        executorAttemptId: data.executorAttemptId,
         branchId: session.branch_id,
         // Executor JWTs authenticate on every daemon API call over the runtime
         // connection, so low per-call max-use limits make normal execution
@@ -916,6 +919,7 @@ function createExecuteHandler(
       params: {
         sessionId,
         taskId,
+        executorAttemptId: data.executorAttemptId,
         prompt: data.prompt,
         tool: session.agentic_tool as
           | 'claude-code'
@@ -945,16 +949,31 @@ function createExecuteHandler(
           executorHomeDir,
         });
       } catch (err) {
-        console.error(
-          '[stateless-fs] pullIfNeeded failed:',
-          err instanceof Error ? err.message : err
-        );
-        // Don't block the executor — proceed with potentially stale/missing session file
+        appWithExecutor.sessionTokenService.revokeToken(sessionToken);
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Could not restore the stateless session: ${message}`, { cause: err });
       }
     }
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
+    const task = await app.service('tasks').get(taskId, params);
+    await app.service('tasks').patch(
+      taskId,
+      {
+        executor_finalization: {
+          ...task.executor_finalization!,
+          workload: {
+            kind: config.execution?.executor_command_template
+              ? EXECUTOR_WORKLOAD_KIND.TEMPLATED
+              : EXECUTOR_WORKLOAD_KIND.LOCAL,
+            ...(executorUnixUser ? { unix_user: executorUnixUser } : {}),
+          },
+        },
+      },
+      { ...params, provider: undefined }
+    );
 
+    let workloadSpawned = false;
     spawnExecutor(executorPayload, {
       cwd,
       asUser: executorUnixUser || undefined,
@@ -963,135 +982,48 @@ function createExecuteHandler(
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
+        executor_attempt_id: data.executorAttemptId,
         unix_user: executorUnixUser || undefined,
       },
-      onSpawn: (child) => {
-        if (child.pid) {
-          trackExecutorProcess(sessionId, child.pid);
-          console.log(`${logPrefix} PID: ${child.pid}`);
-        }
+      onSpawn: (workload) => {
+        workloadSpawned = true;
+        trackExecutorAttempt(sessionId, workload, data.executorAttemptId);
+        console.log(`${logPrefix} PID: ${workload.pid}`);
       },
       onExit: async (code) => {
         console.log(`${logPrefix} Exited with code ${code}`);
-        untrackExecutorProcess(sessionId);
-
-        // Safety net: check if task is still running
         try {
-          const currentSession = await app.service('sessions').get(sessionId, params);
-          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
-
-          if (latestTaskId && latestTaskId !== taskId) {
-            console.log(
-              `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
-            );
-          } else if (
-            isSessionExecuting(currentSession) ||
-            currentSession.status === SessionStatus.TIMED_OUT
-          ) {
-            try {
-              const currentTask = await app.service('tasks').get(taskId, params);
-              if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
-                await app.service('tasks').patch(
-                  taskId,
-                  {
-                    status: TaskStatus.FAILED,
-                    error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
-                  },
-                  params
-                );
-                console.log(
-                  `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
-                );
-              } else {
-                console.log(
-                  `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
-                );
-                await app
-                  .service('sessions')
-                  .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
-              }
-            } catch (taskError) {
-              console.error(
-                `⚠️  [Executor] Failed to mark task ${shortId(taskId)} as FAILED, falling back to session IDLE update:`,
-                taskError
-              );
-              await app
-                .service('sessions')
-                .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
-              console.log(
-                `✅ [Executor] Session ${shortId(sessionId)} status updated to IDLE after executor exit (was: ${currentSession.status})`
-              );
-            }
-          } else {
-            console.log(
-              `ℹ️  [Executor] Session ${shortId(sessionId)} already in ${currentSession.status} state, skipping IDLE update`
+          const task = await app.service('tasks').get(taskId, params);
+          if (!isTerminalTaskStatus(task.status)) {
+            await app.service('tasks').patch(
+              taskId,
+              {
+                status: TaskStatus.FAILED,
+                executor_terminal_cause: workloadSpawned
+                  ? EXECUTOR_TERMINAL_CAUSE.UNEXPECTED_EXIT
+                  : EXECUTOR_TERMINAL_CAUSE.LAUNCH_FAILED_ABSENT,
+                error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+              },
+              { ...params, provider: undefined }
             );
           }
+          await executorAttemptCoordinator.reconcile({
+            taskId,
+            executorAttemptId: data.executorAttemptId,
+            params,
+          });
         } catch (error) {
           console.error(`❌ [Executor] Failed to handle executor exit:`, error);
+        } finally {
+          appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
         }
-
-        // Stateless FS mode: serialize session file to DB after executor exits
-        if (config.execution?.stateless_fs_mode) {
-          try {
-            // Re-fetch session to get sdk_session_id (may have been set during execution)
-            const freshSession = await app.service('sessions').get(sessionId, params);
-            if (freshSession.sdk_session_id) {
-              pushAsync({
-                db,
-                sessionId,
-                branchId: freshSession.branch_id,
-                taskId,
-                sdkSessionId: freshSession.sdk_session_id,
-                branchPath: cwd,
-                tool: freshSession.agentic_tool,
-                executorHomeDir,
-              });
-
-              // Also compute and write session_md5 to the task record
-              try {
-                let filePath: string;
-                if (freshSession.agentic_tool === 'codex') {
-                  const codexHome = getCodexHome(executorHomeDir);
-                  const found = await findCodexSessionFile(codexHome, freshSession.sdk_session_id);
-                  filePath = found || '';
-                } else {
-                  filePath = getSessionFilePath(
-                    freshSession.agentic_tool,
-                    cwd,
-                    freshSession.sdk_session_id,
-                    executorHomeDir
-                  );
-                }
-                if (filePath) {
-                  const md5 = await computeFileHash(filePath);
-                  if (md5) {
-                    await app.service('tasks').patch(taskId, { session_md5: md5 }, params);
-                  }
-                }
-              } catch (md5Err) {
-                console.error(
-                  '[stateless-fs] Failed to write session_md5 to task:',
-                  md5Err instanceof Error ? md5Err.message : md5Err
-                );
-              }
-            }
-          } catch (pushErr) {
-            console.error(
-              '[stateless-fs] pushAsync setup failed:',
-              pushErr instanceof Error ? pushErr.message : pushErr
-            );
-          }
-        }
-
-        appWithExecutor.sessionTokenService?.revokeToken(sessionToken);
       },
     });
 
     return {
       success: true,
       taskId: taskId,
-      status: 'running',
+      status: TaskStatus.RUNNING,
       streaming: data.stream !== false,
     };
   };

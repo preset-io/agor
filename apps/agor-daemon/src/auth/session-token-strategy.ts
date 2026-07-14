@@ -140,6 +140,9 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
       },
       // Include session_id for downstream services
       session_id: sessionInfo.session_id,
+      task_id: sessionInfo.task_id,
+      executor_attempt_id: sessionInfo.executor_attempt_id,
+      branch_id: sessionInfo.branch_id,
     };
 
     console.debug('[SessionTokenStrategy] authenticate() returning:', {
@@ -182,6 +185,9 @@ export class SessionTokenStrategy extends AuthenticationBaseStrategy {
         role: ROLES.MEMBER, // Default role for session token auth
       },
       session_id: sessionInfo.session_id,
+      task_id: sessionInfo.task_id,
+      executor_attempt_id: sessionInfo.executor_attempt_id,
+      branch_id: sessionInfo.branch_id,
     };
   }
 

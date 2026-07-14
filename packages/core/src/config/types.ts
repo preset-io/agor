@@ -301,6 +301,9 @@ export interface AgorExecutorHeartbeatSettings {
   /** Stale threshold in milliseconds. Default: max(3 * interval_ms, 30000). */
   stale_after_ms?: number | null;
 
+  /** Maximum time a dispatched task may wait for its executor claim (default: 120000). */
+  connection_timeout_ms?: number;
+
   /** Optional external command callback invoked on each heartbeat. */
   callback?: {
     /** Shell command to run. Receives heartbeat JSON on stdin. Disabled when null/undefined. */
@@ -317,8 +320,8 @@ export interface AgorExecutionSettings {
   /**
    * Lightweight heartbeat settings for long-running executor tasks.
    *
-   * The executor patches `tasks.last_executor_heartbeat_at` immediately and
-   * then every `interval_ms` while a task is active. The daemon may mark stale
+   * The executor reports liveness immediately and then every `interval_ms`;
+   * the daemon stamps `tasks.last_executor_heartbeat_at`. The daemon may mark stale
    * active tasks failed after `stale_after_ms` without retrying automatically.
    * Optional callbacks are shell commands that receive a small JSON payload on
    * stdin; keep secrets out of the command argv.
@@ -431,6 +434,7 @@ export interface AgorExecutionSettings {
    * - {unix_user_gid} - Target Unix GID (for fsGroup)
    * - {session_id} - Session ID (if available)
    * - {branch_id} - Branch ID (if available)
+   * - {executor_attempt_id} - Daemon-minted launch attempt ID (prompt executors)
    *
    * The template command receives JSON payload via stdin and should pipe it
    * to `agor-executor --stdin`.
@@ -463,6 +467,17 @@ export interface AgorExecutionSettings {
    * ```
    */
   executor_command_template?: string;
+
+  /**
+   * Paired cleanup command for executor_command_template workloads.
+   *
+   * The daemon invokes this command whenever it settles a remote workload,
+   * including completion, Stop, lease loss, launch failure, and restart recovery.
+   * It supports the executor template variables plus {termination_reason}.
+   * A successful exit certifies that the remote workload is gone; commands must
+   * wait for deletion instead of returning after merely requesting it.
+   */
+  executor_stop_command_template?: string;
 
   /**
    * Required user environment variables.

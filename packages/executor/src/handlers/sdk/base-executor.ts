@@ -22,9 +22,14 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
+import { MessageRole, PROVIDER_CREDENTIAL_FIELDS, TaskStatus } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
+import { type AgenticToolRuntime, PULSE_KIND } from '../../runtime-overseer.js';
+import type {
+  TasksService,
+  TasksStreamingService,
+} from '../../sdk-handlers/base/service-clients.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -212,6 +217,105 @@ export function createStreamingCallbacks(
       });
     },
   };
+}
+
+export function createRuntimeAwareStreamingCallbacks(
+  callbacks: StreamingCallbacks,
+  runtime: AgenticToolRuntime
+): StreamingCallbacks {
+  return {
+    ...callbacks,
+    onStreamStart: async (messageId, metadata) => {
+      runtime.pulse({ kind: PULSE_KIND.ASSISTANT_MESSAGE, id: messageId });
+      await callbacks.onStreamStart(messageId, metadata);
+    },
+    onStreamChunk: async (messageId, chunk, sequence) => {
+      runtime.pulse({ kind: PULSE_KIND.ASSISTANT_STREAM, id: messageId });
+      await callbacks.onStreamChunk(messageId, chunk, sequence);
+    },
+    onThinkingChunk: callbacks.onThinkingChunk
+      ? async (messageId, chunk) => {
+          runtime.pulse({ kind: PULSE_KIND.THINKING_PROGRESS, id: messageId });
+          await callbacks.onThinkingChunk?.(messageId, chunk);
+        }
+      : undefined,
+  };
+}
+
+/** Final executor write boundary: the last pulse must precede token-revoking terminal state. */
+export async function commitExecutorTerminalOutcome(
+  client: AgorClient,
+  runtime: AgenticToolRuntime,
+  taskId: TaskID,
+  patch: Partial<Task>
+): Promise<Task> {
+  await runtime.flush?.();
+  return client.service('tasks').patch(taskId, patch);
+}
+
+function overrideBoundMethod<T extends object, K extends keyof T>(
+  target: T,
+  key: K,
+  replacement: T[K]
+): T {
+  return new Proxy(target, {
+    get(current, property, receiver) {
+      if (property === key) return replacement;
+      const value = Reflect.get(current, property, receiver);
+      return typeof value === 'function' ? value.bind(current) : value;
+    },
+  });
+}
+
+export function createRuntimeAwareTasksService<T extends TasksService>(
+  service: T,
+  runtime: AgenticToolRuntime
+): T {
+  return overrideBoundMethod(
+    service,
+    'patch',
+    async (id: string, data: Parameters<T['patch']>[1]) => {
+      if (isRecord(data) && data.status === TaskStatus.AWAITING_PERMISSION) {
+        runtime.pulse({ kind: PULSE_KIND.PERMISSION_WAIT_STARTED, id });
+      } else if (isRecord(data) && data.status === TaskStatus.RUNNING) {
+        runtime.pulse({ kind: PULSE_KIND.PERMISSION_WAIT_ENDED, id });
+      }
+      return service.patch(id, data);
+    }
+  );
+}
+
+export function createRuntimeAwareTasksStreamingService<T extends TasksStreamingService>(
+  service: T,
+  runtime: AgenticToolRuntime
+): T {
+  const toolLabelsById = new Map<string, string>();
+
+  return overrideBoundMethod(service, 'create', async (event: Parameters<T['create']>[0]) => {
+    const toolUseId = asString(event.data.tool_use_id);
+    if (event.event === 'tool:start') {
+      const label = asString(event.data.tool_name);
+      if (toolUseId && label) toolLabelsById.set(toolUseId, label);
+      runtime.pulse({ kind: PULSE_KIND.TOOL_STARTED, id: toolUseId, label });
+    } else if (event.event === 'tool:complete') {
+      const label = asString(event.data.tool_name) ?? (toolUseId && toolLabelsById.get(toolUseId));
+      runtime.pulse({ kind: PULSE_KIND.TOOL_FINISHED, id: toolUseId, label });
+      if (toolUseId) {
+        toolLabelsById.delete(toolUseId);
+      }
+    } else if (event.event === 'thinking:chunk') {
+      runtime.pulse({ kind: PULSE_KIND.THINKING_PROGRESS });
+    }
+    return service.create(event);
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 /**
@@ -403,6 +507,7 @@ export async function executeToolTask(params: {
   apiKeyEnvVar: ApiKeyName;
   toolName: AgenticToolName;
   messageSource?: MessageSource;
+  runtime: AgenticToolRuntime;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
     apiKey: string,
@@ -420,10 +525,9 @@ export async function executeToolTask(params: {
   // `git status` inside the agent shell still fails with dubious ownership.
   await configureSessionGitSafeDirectories(client, sessionId, `[${toolName} git.safe-directory]`);
 
-  // Capture and stamp task-start git state inside the executor as early as
-  // possible. The daemon transitions the task to RUNNING before spawn, but the
-  // authoritative branch git read belongs here with the rest of
-  // executor-mediated git work.
+  // Capture and stamp task-start git state after this executor has claimed the
+  // daemon's DISPATCHING task. The authoritative branch git read belongs here
+  // with the rest of executor-mediated git work.
   await stampGitStateAtTaskStart(client, sessionId, taskId);
 
   // Resolve one complete user-or-tenant provider connection.
@@ -455,10 +559,21 @@ export async function executeToolTask(params: {
 
   // Create execution context
   const ctx = createExecutionContext(client, toolName, sessionId);
+  const runtime = params.runtime;
+  runtime.pulse({ kind: PULSE_KIND.SDK_STARTED, label: toolName });
+  const callbacks = createRuntimeAwareStreamingCallbacks(ctx.callbacks, runtime);
+  const repos = {
+    ...ctx.repos,
+    tasksService: createRuntimeAwareTasksService(ctx.repos.tasksService, runtime),
+    tasksStreamingService: createRuntimeAwareTasksStreamingService(
+      ctx.repos.tasksStreamingService,
+      runtime
+    ),
+  };
 
   // Create tool instance using factory function
   // Pass the resolved key (or empty string) and useNativeAuth flag
-  const tool = createTool(ctx.repos, resolution.apiKey || '', resolution.useNativeAuth);
+  const tool = createTool(repos, resolution.apiKey || '', resolution.useNativeAuth);
 
   // Wire up abort signal to tool's stopTask method.
   // Triggered by SIGTERM handler calling abortController.abort().
@@ -487,7 +602,6 @@ export async function executeToolTask(params: {
 
   // Listen for abort signal
   params.abortController.signal.addEventListener('abort', abortHandler);
-
   try {
     // Execute prompt with streaming
     // Pass abortController directly to SDK for proper cancellation support
@@ -496,7 +610,7 @@ export async function executeToolTask(params: {
       prompt,
       taskId,
       permissionMode,
-      ctx.callbacks,
+      callbacks,
       params.abortController,
       params.messageSource
     );
@@ -505,13 +619,24 @@ export async function executeToolTask(params: {
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`
     );
 
+    // Signal-driven stop already asks the daemon to own STOPPED state and queue
+    // progression. Do not let the retiring executor race the next task's token
+    // by issuing redundant git/task writes during shutdown.
+    if (result.wasStopped && params.abortController.signal.aborted) {
+      return;
+    }
+
     // Capture git SHA at task end
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
 
     // Determine task status based on SDK result
     // - wasStopped: user explicitly stopped the task
     // - hadError: SDK returned an error subtype (e.g., error_during_execution)
-    const taskStatus = result.wasStopped ? 'stopped' : result.hadError ? 'failed' : 'completed';
+    const taskStatus = result.wasStopped
+      ? TaskStatus.STOPPED
+      : result.hadError
+        ? TaskStatus.FAILED
+        : TaskStatus.COMPLETED;
 
     if (result.hadError) {
       console.error(
@@ -605,11 +730,18 @@ export async function executeToolTask(params: {
       }
     }
 
+    // Flush the last short-turn pulse before the terminal patch can drain the
+    // queue and supersede this task-scoped executor token.
     // Update task status to completed/stopped with git SHA and SDK responses
     // Note: The stop endpoint may have already patched task to STOPPED via process kill.
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
-    await client.service('tasks').patch(taskId, patchData);
+    await commitExecutorTerminalOutcome(client, runtime, taskId, patchData);
   } catch (error) {
+    // A signal-driven Stop is an expected retirement path. The daemon already
+    // owns the STOPPED write and queue progression, so do not rewrite the task
+    // as FAILED or append a misleading system error if an SDK rejects on abort.
+    if (params.abortController.signal.aborted) return;
+
     const err = error as Error;
     console.error(`[${toolName}] Execution failed:`, err);
 
@@ -618,7 +750,7 @@ export async function executeToolTask(params: {
 
     // Build patch data
     const patchData: Partial<Task> = {
-      status: 'failed',
+      status: TaskStatus.FAILED,
       completed_at: new Date().toISOString(),
       // Surface the actual failure reason so the UI / DB show what went wrong,
       // instead of the task silently flipping to FAILED with no context.
@@ -634,10 +766,8 @@ export async function executeToolTask(params: {
       };
     }
 
-    // Update task status to failed with git SHA
-    await client.service('tasks').patch(taskId, patchData);
-
-    // Emit a system error message so the user sees what went wrong in the conversation
+    // Complete user-visible writes before the terminal patch transfers control
+    // to the daemon's finalization tail and may release this executor token.
     try {
       const existingMessages = await client.service('messages').find({
         query: { session_id: sessionId, $limit: 0 },
@@ -663,6 +793,8 @@ export async function executeToolTask(params: {
     } catch (msgErr) {
       console.error(`[${toolName}] Failed to create error message:`, msgErr);
     }
+
+    await commitExecutorTerminalOutcome(client, runtime, taskId, patchData);
 
     throw err;
   } finally {

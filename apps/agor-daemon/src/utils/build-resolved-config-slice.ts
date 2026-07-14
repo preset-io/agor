@@ -59,6 +59,7 @@ export function buildResolvedConfigSlice(): ResolvedConfigSlice {
     executionSlice.executor_heartbeat = {
       enabled: heartbeat.enabled,
       interval_ms: heartbeat.interval_ms,
+      stale_after_ms: heartbeat.stale_after_ms,
     };
     if (Object.keys(executionSlice).length > 0) {
       slice.execution = executionSlice;

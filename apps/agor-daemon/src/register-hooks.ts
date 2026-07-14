@@ -37,7 +37,7 @@ import {
   validateRenderedManagedEnvUrlFields,
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
-import type { Application } from '@agor/core/feathers';
+import type { Application, FeathersService } from '@agor/core/feathers';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
@@ -71,12 +71,18 @@ import {
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
   ROLES,
+  TaskStatus,
 } from '@agor/core/types';
-import { executorRuntimeScopeGuard } from './auth/executor-runtime-scope.js';
+import {
+  executorRuntimeScopeGuard,
+  isTaskScopedExecutorRequest,
+  requireExecutorRuntimeToken,
+} from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
   SessionsServiceImpl,
+  TasksServiceImpl,
 } from './declarations.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
@@ -141,10 +147,7 @@ import {
   validateScheduleConfig,
 } from './utils/schedule-hooks.js';
 import { deferWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
-import {
-  isTerminalQueueProcessingSuppressed,
-  sessionCanStartTask,
-} from './utils/session-task-state.js';
+import { sessionCanStartTask } from './utils/session-task-state.js';
 import {
   createServiceToken,
   getDaemonUrl,
@@ -322,12 +325,16 @@ export function shouldRunSessionPostTurnHooks(
 
 export function shouldDrainQueueAfterSessionPostTurnPatch(
   session: Pick<Session, 'status' | 'ready_for_prompt'>,
-  params?: Params
+  patch: unknown
 ): boolean {
   return (
     shouldRunSessionPostTurnHooks(session) &&
     session.ready_for_prompt === true &&
-    !isTerminalQueueProcessingSuppressed(params)
+    !!patch &&
+    !Array.isArray(patch) &&
+    typeof patch === 'object' &&
+    'ready_for_prompt' in patch &&
+    patch.ready_for_prompt === true
   );
 }
 
@@ -456,6 +463,75 @@ const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'cursor-models',
   'terminals',
 ] as const;
+
+const EXECUTOR_RESUMABLE_TASK_STATUSES = new Set<TaskStatus>([
+  TaskStatus.AWAITING_PERMISSION,
+  TaskStatus.AWAITING_INPUT,
+]);
+
+const SERVER_MANAGED_EXECUTOR_FIELDS = [
+  'executor_connected_at',
+  'executor_attempt_id',
+  'executor_terminal_cause',
+  'executor_finalization',
+  'last_executor_heartbeat_at',
+  'latest_executor_pulse',
+] as const;
+
+async function isConnectedExecutorResume(context: HookContext): Promise<boolean> {
+  if (context.method !== 'patch' || typeof context.id !== 'string') return false;
+  if (!isTaskScopedExecutorRequest(context, context.id)) return false;
+
+  const service = context.service as unknown as {
+    findByIdForScopeCheck?: (id: string) => Promise<unknown>;
+  };
+  const existing = await service.findByIdForScopeCheck?.(context.id);
+  if (!existing || typeof existing !== 'object') return false;
+
+  const task = existing as {
+    status?: unknown;
+    executor_attempt_id?: unknown;
+    executor_connected_at?: unknown;
+  };
+  return (
+    typeof task.executor_attempt_id === 'string' &&
+    isTaskScopedExecutorRequest(context, context.id, task.executor_attempt_id) &&
+    EXECUTOR_RESUMABLE_TASK_STATUSES.has(task.status as TaskStatus) &&
+    typeof task.executor_connected_at === 'string' &&
+    task.executor_connected_at.length > 0
+  );
+}
+
+/** Prevent callers on a Feathers transport from forging executor-owned task state. */
+export async function protectServerManagedTaskWrites(context: HookContext): Promise<HookContext> {
+  if (!context.params.provider) return context;
+
+  const writes = Array.isArray(context.data) ? context.data : [context.data];
+  const records = writes.filter(
+    (write): write is Record<string, unknown> => write !== null && typeof write === 'object'
+  );
+  if (
+    records.some((write) =>
+      SERVER_MANAGED_EXECUTOR_FIELDS.some((field) => Object.hasOwn(write, field))
+    )
+  ) {
+    throw new Forbidden('executor-owned task state is server-managed');
+  }
+  if (records.some((write) => write.status === TaskStatus.DISPATCHING)) {
+    throw new Forbidden('dispatching task status is server-managed');
+  }
+  if (records.some((write) => write.status === TaskStatus.RUNNING)) {
+    const isSingleRunningPatch =
+      records.length === 1 &&
+      records[0].status === TaskStatus.RUNNING &&
+      !Array.isArray(context.data);
+    if (!isSingleRunningPatch || !(await isConnectedExecutorResume(context))) {
+      throw new Forbidden('running task status is server-managed');
+    }
+  }
+
+  return context;
+}
 
 export function registerHooks(ctx: RegisterHooksContext): void {
   const {
@@ -2768,7 +2844,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               }
             });
 
-            if (shouldDrainQueueAfterSessionPostTurnPatch(session, context.params)) {
+            if (shouldDrainQueueAfterSessionPostTurnPatch(session, context.data)) {
               const sessionTenantId = getTrustedSessionTenantId(session);
               // Same fresh-scope pattern: queue processing must run outside the
               // outer transaction but still inside the session tenant for RLS.
@@ -2802,7 +2878,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               );
             } else {
               console.log(
-                `⏭️  [SessionsService.after.patch] Queue drain suppressed for session ${shortId(session.session_id)} (suppressTerminalQueueProcessing or not ready)`
+                `⏭️  [SessionsService.after.patch] Queue drain skipped for session ${shortId(session.session_id)} (patch did not release it)`
               );
             }
           }
@@ -2882,7 +2958,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Tasks hooks
   // ============================================================================
 
-  app.service('tasks').hooks({
+  const tasksService = app.service('tasks') as FeathersService<Application, TasksServiceImpl>;
+  tasksService.hooks({
     before: {
       all: [typedValidateQuery(taskQueryValidator), requireAuth, executorRuntimeScopeGuard()],
       find: [
@@ -2900,6 +2977,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       create: [
+        protectServerManagedTaskWrites,
         requireMinimumRole(ROLES.MEMBER, 'create tasks'),
         ...(branchRbacEnabled
           ? [
@@ -2912,7 +2990,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
         injectCreatedBy(),
       ],
+      update: [protectServerManagedTaskWrites],
       patch: [
+        protectServerManagedTaskWrites,
         ...(branchRbacEnabled
           ? [
               resolveSessionContext(),
@@ -2922,6 +3002,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ]
           : []),
       ],
+      connectExecutor: [requireExecutorRuntimeToken()],
+      reportExecutorTelemetry: [requireExecutorRuntimeToken()],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete tasks'),
         // RBAC: deleting a task requires 'all' permission on the branch

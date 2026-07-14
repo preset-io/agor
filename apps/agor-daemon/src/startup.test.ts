@@ -152,6 +152,7 @@ describe('stuck-idle sweep (IDLE + ready_for_prompt=false)', () => {
     const { ctx, sessionsService } = makeStartupContextWithGuardedDb({
       orphanedTasks: [task],
       idleNotReadySessions: [session],
+      tasksById: { 'task-1': task },
       sessionsById: { 'session-1': session },
     });
 
@@ -159,6 +160,38 @@ describe('stuck-idle sweep (IDLE + ready_for_prompt=false)', () => {
 
     expect(sessionsService.patch).toHaveBeenCalledWith(
       'session-1',
+      { ready_for_prompt: true },
+      expect.anything()
+    );
+  });
+
+  it('keeps an orphaned executor attempt fenced when cleanup cannot be reconstructed', async () => {
+    const task = makeTask({
+      task_id: 'task-executor',
+      session_id: 'session-executor',
+      executor_attempt_id: 'attempt-executor',
+    });
+    const session = makeSession({
+      session_id: 'session-executor',
+      agentic_tool: 'codex',
+      tasks: ['task-executor'] as Session['tasks'],
+    });
+    const { ctx, sessionsService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [task],
+      idleNotReadySessions: [session],
+      tasksById: { 'task-executor': task },
+      sessionsById: { 'session-executor': session },
+    });
+
+    await cleanupOrphanStatuses(ctx);
+
+    expect(sessionsService.patch).toHaveBeenCalledWith(
+      'session-executor',
+      { status: SessionStatus.STOPPING, ready_for_prompt: false },
+      expect.anything()
+    );
+    expect(sessionsService.patch).not.toHaveBeenCalledWith(
+      'session-executor',
       { ready_for_prompt: true },
       expect.anything()
     );

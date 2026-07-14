@@ -1,70 +1,83 @@
 import { shortId } from '@agor/core/db';
+import { EXECUTOR_CLEANUP_STATUS, type ExecutorCleanupStatus, type Task } from '@agor/core/types';
+import type {
+  ExecutorTerminationReason,
+  ExecutorWorkloadHandle,
+} from './utils/executor-workload.js';
 
 /**
- * Executor PID Tracking
+ * Executor Attempt Tracking
  *
- * In-memory map of session → executor process info for signal-based stopping.
- * When the user clicks Stop, we SIGTERM/SIGKILL the process directly instead of
- * relying on WebSocket ACK protocols.
+ * In-memory map of session → launch attempt → workload handle. A handle owns
+ * local process-tree cleanup and, when configured, remote/container cleanup.
  */
 
-const executorProcesses = new Map<string, { pid: number; startedAt: Date }>();
+const executorAttempts = new Map<string, Map<string, ExecutorWorkloadHandle>>();
+
+export { EXECUTOR_CLEANUP_STATUS, type ExecutorCleanupStatus } from '@agor/core/types';
 
 /**
- * Track an executor process for a session.
+ * Track an executor process for one session launch attempt.
  */
-export function trackExecutorProcess(sessionId: string, pid: number): void {
-  executorProcesses.set(sessionId, { pid, startedAt: new Date() });
+export function trackExecutorAttempt(
+  sessionId: string,
+  workload: ExecutorWorkloadHandle,
+  executorAttemptId: string
+): void {
+  const attempts = executorAttempts.get(sessionId) ?? new Map();
+  attempts.set(executorAttemptId, workload);
+  executorAttempts.set(sessionId, attempts);
 }
 
 /**
- * Remove tracking for a session's executor process.
+ * Remove tracking for one session launch attempt.
  */
-export function untrackExecutorProcess(sessionId: string): void {
-  executorProcesses.delete(sessionId);
-}
-
-/**
- * Kill an executor process for a session using Unix signals.
- *
- * Phase 1: SIGTERM (allows graceful shutdown — executor's SIGTERM handler
- *          calls abortController.abort() and patches task status)
- * Phase 2: After 3 seconds, SIGKILL (uncatchable, guaranteed death)
- *
- * @returns true if a process was found and signaled
- */
-export function killExecutorProcess(sessionId: string): boolean {
-  const proc = executorProcesses.get(sessionId);
-  if (!proc) return false;
-
-  try {
-    // Check if process is still alive
-    process.kill(proc.pid, 0);
-  } catch {
-    // Process already dead, clean up tracking
-    executorProcesses.delete(sessionId);
-    return false;
+export function untrackExecutorAttempt(sessionId: string, executorAttemptId: string): void {
+  const attempts = executorAttempts.get(sessionId);
+  attempts?.delete(executorAttemptId);
+  if (attempts?.size === 0) {
+    executorAttempts.delete(sessionId);
   }
+}
 
+export function hasTrackedExecutorAttempt(sessionId: string, executorAttemptId: string): boolean {
+  return executorAttempts.get(sessionId)?.has(executorAttemptId) === true;
+}
+
+/** Clean residual local processes; finalization owns durable release and untracking. */
+export async function finishExecutorAttempt(
+  sessionId: string,
+  executorAttemptId: string
+): Promise<ExecutorCleanupStatus> {
+  const workload = executorAttempts.get(sessionId)?.get(executorAttemptId);
+  if (!workload) return EXECUTOR_CLEANUP_STATUS.UNRESOLVED;
+  await workload.finish();
+  return EXECUTOR_CLEANUP_STATUS.VERIFIED;
+}
+
+/** Whether a spawned process attempt still owns the persisted task. */
+export function isExecutorAttemptOwner(
+  task: Pick<Task, 'executor_attempt_id'>,
+  executorAttemptId: string
+): boolean {
+  return task.executor_attempt_id === executorAttemptId;
+}
+
+/**
+ * Terminate the workload for a persisted session launch attempt.
+ * Returns unresolved when no matching workload is tracked or cleanup fails.
+ */
+export async function terminateExecutorAttempt(
+  sessionId: string,
+  executorAttemptId: string,
+  reason: ExecutorTerminationReason
+): Promise<ExecutorCleanupStatus> {
+  const workload = executorAttempts.get(sessionId)?.get(executorAttemptId);
+  if (!workload) return EXECUTOR_CLEANUP_STATUS.UNRESOLVED;
   console.log(
-    `🛑 [Stop] Sending SIGTERM to executor PID ${proc.pid} (session ${shortId(sessionId)})`
+    `🛑 [Executor] Terminating attempt ${shortId(executorAttemptId)} ` +
+      `(PID ${workload.pid}, session ${shortId(sessionId)}, reason ${reason})`
   );
-  try {
-    process.kill(proc.pid, 'SIGTERM');
-  } catch (err) {
-    console.warn(`⚠️  [Stop] SIGTERM failed for PID ${proc.pid}:`, err);
-  }
-
-  // Phase 2: SIGKILL after 3 seconds if still alive
-  setTimeout(() => {
-    try {
-      process.kill(proc.pid, 0); // Check if still alive
-      console.log(`🛑 [Stop] Process still alive after 3s, sending SIGKILL to PID ${proc.pid}`);
-      process.kill(proc.pid, 'SIGKILL');
-    } catch {
-      // Process already dead — good
-    }
-  }, 3000);
-
-  return true;
+  await workload.terminate(reason);
+  return EXECUTOR_CLEANUP_STATUS.VERIFIED;
 }

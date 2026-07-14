@@ -18,12 +18,14 @@
  * branch-authorization.test.ts), so here we only verify the classifier.
  */
 
+import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  protectServerManagedTaskWrites,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
   shouldValidateRepoEnvironmentPayload,
@@ -47,6 +49,162 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('protectServerManagedTaskWrites', () => {
+  const executorPayload = {
+    type: 'executor-session',
+    purpose: 'executor-task',
+    session_id: 'session-1',
+    task_id: 'task-1',
+    executor_attempt_id: 'attempt-1',
+    branch_id: 'branch-1',
+  };
+  const externalContext = (
+    method: 'create' | 'update' | 'patch',
+    data: unknown,
+    options: {
+      taskId?: string;
+      executorTaskId?: string;
+      persistedTask?: Record<string, unknown>;
+    } = {}
+  ): import('@agor/core/types').HookContext =>
+    ({
+      path: 'tasks',
+      method,
+      id: options.taskId,
+      data,
+      params: {
+        provider: 'rest',
+        ...(options.executorTaskId
+          ? {
+              authentication: {
+                payload: { ...executorPayload, task_id: options.executorTaskId },
+              },
+            }
+          : {}),
+      },
+      service: options.persistedTask
+        ? { findByIdForScopeCheck: async () => options.persistedTask }
+        : undefined,
+    }) as import('@agor/core/types').HookContext;
+
+  it.each([
+    'executor_connected_at',
+    'executor_attempt_id',
+    'executor_terminal_cause',
+    'executor_finalization',
+    'last_executor_heartbeat_at',
+    'latest_executor_pulse',
+  ] as const)('rejects server-owned field %s', async (field) => {
+    await expect(
+      protectServerManagedTaskWrites(externalContext('patch', { [field]: 'forged' }))
+    ).rejects.toThrow('executor-owned task state is server-managed');
+  });
+
+  it.each([
+    'create',
+    'update',
+    'patch',
+  ] as const)('applies server-owned field protection to external %s', async (method) => {
+    await expect(
+      protectServerManagedTaskWrites(
+        externalContext(method, { executor_connected_at: '2026-07-10T20:00:00.000Z' })
+      )
+    ).rejects.toThrow('executor-owned task state is server-managed');
+  });
+
+  it.each([
+    ['dispatching', { status: TaskStatus.DISPATCHING }, 'dispatching task status'],
+    ['running', { status: TaskStatus.RUNNING }, 'running task status'],
+    [
+      'bulk dispatching',
+      [{ status: TaskStatus.CREATED }, { status: TaskStatus.DISPATCHING }],
+      'dispatching task status',
+    ],
+    [
+      'bulk running',
+      [{ status: TaskStatus.CREATED }, { status: TaskStatus.RUNNING }],
+      'running task status',
+    ],
+  ] as const)('rejects external %s writes', async (_label, data, message) => {
+    await expect(protectServerManagedTaskWrites(externalContext('patch', data))).rejects.toThrow(
+      message
+    );
+  });
+
+  it.each([
+    ['pre-claim', undefined, TaskStatus.DISPATCHING, undefined, null, false],
+    [
+      'normal user',
+      undefined,
+      TaskStatus.AWAITING_PERMISSION,
+      'attempt-1',
+      '2026-07-10T20:00:00.000Z',
+      false,
+    ],
+    [
+      'stale attempt',
+      'task-1',
+      TaskStatus.AWAITING_PERMISSION,
+      'attempt-current',
+      '2026-07-10T20:00:00.000Z',
+      false,
+    ],
+    [
+      'awaiting permission owner',
+      'task-1',
+      TaskStatus.AWAITING_PERMISSION,
+      'attempt-1',
+      '2026-07-10T20:00:00.000Z',
+      true,
+    ],
+    [
+      'awaiting input owner',
+      'task-1',
+      TaskStatus.AWAITING_INPUT,
+      'attempt-1',
+      '2026-07-10T20:00:00.000Z',
+      true,
+    ],
+  ] as const)('%s resume is allowed only for the connected owning executor', async (_label, executorTaskId, status, attemptId, connectedAt, allowed) => {
+    const context = externalContext(
+      'patch',
+      { status: TaskStatus.RUNNING },
+      {
+        taskId: 'task-1',
+        executorTaskId,
+        persistedTask: {
+          task_id: 'task-1',
+          status,
+          executor_attempt_id: attemptId,
+          executor_connected_at: connectedAt,
+        },
+      }
+    );
+    const result = expect(protectServerManagedTaskWrites(context));
+    if (allowed) await result.resolves.toBe(context);
+    else await result.rejects.toThrow('running task status is server-managed');
+  });
+
+  it.each([
+    TaskStatus.COMPLETED,
+    TaskStatus.FAILED,
+    TaskStatus.STOPPED,
+  ])('allows externally reported terminal status %s', async (status) => {
+    await expect(
+      protectServerManagedTaskWrites(externalContext('patch', { status }))
+    ).resolves.toBeDefined();
+  });
+
+  it.each([
+    TaskStatus.RUNNING,
+    TaskStatus.DISPATCHING,
+  ])('preserves trusted internal %s writes', async (status) => {
+    const context = externalContext('patch', { status });
+    context.params.provider = undefined;
+    await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+  });
+});
 
 describe('tenant-owned service registration', () => {
   it('wraps gateway inbound routing in tenant database scope', () => {
@@ -129,25 +287,34 @@ describe('getTrustedSessionTenantId', () => {
 describe('shouldDrainQueueAfterSessionPostTurnPatch', () => {
   it('drains for promptable ready sessions by default', () => {
     expect(
-      shouldDrainQueueAfterSessionPostTurnPatch({ status: 'failed', ready_for_prompt: true })
+      shouldDrainQueueAfterSessionPostTurnPatch(
+        { status: 'failed', ready_for_prompt: true },
+        { ready_for_prompt: true }
+      )
     ).toBe(true);
     expect(
-      shouldDrainQueueAfterSessionPostTurnPatch({ status: 'idle', ready_for_prompt: true })
+      shouldDrainQueueAfterSessionPostTurnPatch(
+        { status: 'idle', ready_for_prompt: true },
+        { ready_for_prompt: true }
+      )
     ).toBe(true);
   });
 
-  it('does not drain when terminal queue processing is explicitly suppressed', () => {
+  it('drains only on the patch that releases the session', () => {
     expect(
       shouldDrainQueueAfterSessionPostTurnPatch(
         { status: 'failed', ready_for_prompt: true },
-        { suppressTerminalQueueProcessing: true }
+        { title: 'unrelated patch' }
       )
     ).toBe(false);
   });
 
   it('does not drain for promptable-but-not-ready acknowledgement states', () => {
     expect(
-      shouldDrainQueueAfterSessionPostTurnPatch({ status: 'idle', ready_for_prompt: false })
+      shouldDrainQueueAfterSessionPostTurnPatch(
+        { status: 'idle', ready_for_prompt: false },
+        { ready_for_prompt: true }
+      )
     ).toBe(false);
   });
 });

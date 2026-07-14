@@ -21,9 +21,16 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
-import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  EXECUTOR_TERMINAL_CAUSE,
+  isTerminalTaskStatus,
+  SessionStatus,
+  TaskStatus,
+  usesExecutorRuntime,
+} from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
-import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
+import type { ExecutorAttemptCoordinator } from './services/executor-attempt-coordinator.js';
+import { ExecutorAttemptReconciler } from './services/executor-attempt-reconciler.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
@@ -60,6 +67,7 @@ export interface StartupContext {
   /** Services returned from registerServices() */
   sessionsService: SessionsServiceImpl;
   terminalsService: TerminalsService | null;
+  executorAttemptCoordinator?: Pick<ExecutorAttemptCoordinator, 'reconcile'>;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +132,27 @@ function startupTenantParams(config: AgorConfig): { tenant: TenantContext } {
   };
 }
 
+async function reconcileInterruptedSession(
+  app: Application,
+  session: Session,
+  params: { tenant: TenantContext },
+  context: string
+): Promise<boolean> {
+  const cleanupVerified = !usesExecutorRuntime(session.agentic_tool);
+  await app.service('sessions').patch(
+    session.session_id,
+    {
+      status: cleanupVerified ? SessionStatus.IDLE : SessionStatus.FAILED,
+      ready_for_prompt: cleanupVerified,
+    },
+    params as never
+  );
+  startupDebug(
+    `   ✓ Reconciled session ${shortId(session.session_id)} ${context} (cleanup verified: ${cleanupVerified})`
+  );
+  return cleanupVerified;
+}
+
 async function runStartupTenantDatabaseScope<T>(
   ctx: Pick<StartupContext, 'config' | 'db'>,
   work: () => Promise<T>
@@ -164,28 +193,16 @@ async function cleanupOrphanStatusesInTenantScope(
   // Determine restart type before touching anything — sentinel is consumed here
   const wasGraceful = await readAndClearSentinel();
 
-  // Find all orphaned executor-owned tasks (running, stopping, awaiting_permission, awaiting_input)
+  // Find all orphaned executor-owned tasks (dispatching, running, stopping, awaiting_permission, awaiting_input)
   const orphanedTasks = await tasksService.getOrphaned(startupParams as never);
+  const executorOrphanSessionIds = new Set(
+    orphanedTasks
+      .filter((task) => task.executor_attempt_id)
+      .map((task) => task.session_id as string)
+  );
 
-  if (orphanedTasks.length > 0) {
-    for (const task of orphanedTasks) {
-      await tasksService.patch(
-        task.task_id,
-        {
-          status: TaskStatus.STOPPED,
-        },
-        startupParams as never
-      );
-      startupDebug(
-        `[startup] stopped orphaned task ${shortId(task.task_id)} (was: ${task.status})`
-      );
-    }
-  }
-
-  // Wipe the queue BEFORE making any session promptable. Running tasks are marked STOPPED above,
-  // which invalidates the ordering premise of anything waiting behind them — a queued prompt
-  // typically depends on whatever was running first. Wiping here prevents the session after-patch
-  // hook (triggered below) from draining queued tasks that should be discarded.
+  // Wipe queued work before any active task can release its session. A queued
+  // prompt commonly depends on the interrupted turn and must not survive a restart.
   const queuedResult = (await tasksService.find({
     query: { status: TaskStatus.QUEUED, $limit: 1000 },
     ...startupParams,
@@ -202,6 +219,37 @@ async function cleanupOrphanStatusesInTenantScope(
         startupParams as never
       );
     }
+  }
+
+  if (orphanedTasks.length > 0) {
+    for (const task of orphanedTasks) {
+      await tasksService.patch(
+        task.task_id,
+        {
+          status: TaskStatus.STOPPED,
+          ...(task.executor_attempt_id
+            ? { executor_terminal_cause: EXECUTOR_TERMINAL_CAUSE.DAEMON_RESTART }
+            : {}),
+        },
+        startupParams as never
+      );
+      startupDebug(
+        `[startup] stopped orphaned task ${shortId(task.task_id)} (was: ${task.status})`
+      );
+    }
+  }
+
+  // The task row is the ownership source of truth. Fence every session with
+  // an interrupted executor attempt even if its session status was already
+  // inconsistent (for example IDLE after a pre-fix executor-side release).
+  for (const sessionId of executorOrphanSessionIds) {
+    await app
+      .service('sessions')
+      .patch(
+        sessionId as SessionID,
+        { status: SessionStatus.STOPPING, ready_for_prompt: false },
+        startupParams as never
+      );
   }
 
   // Find all orphaned sessions (RUNNING, STOPPING, AWAITING_PERMISSION, AWAITING_INPUT, TIMED_OUT)
@@ -222,19 +270,8 @@ async function cleanupOrphanStatusesInTenantScope(
 
   if (orphanedSessions.length > 0) {
     for (const session of orphanedSessions) {
-      // IMPORTANT: Use app.service() instead of sessionsService to go through
-      // FeathersJS service layer and trigger app.publish() for WebSocket events
-      await app.service('sessions').patch(
-        session.session_id,
-        {
-          status: SessionStatus.IDLE,
-          ready_for_prompt: true,
-        },
-        startupParams as never
-      );
-      startupDebug(
-        `   ✓ Marked session ${shortId(session.session_id)} as idle (was: ${session.status})`
-      );
+      if (executorOrphanSessionIds.has(session.session_id)) continue;
+      await reconcileInterruptedSession(app, session, startupParams, 'after restart');
     }
   }
 
@@ -246,25 +283,16 @@ async function cleanupOrphanStatusesInTenantScope(
   if (sessionIdsWithOrphanedTasks.size > 0) {
     for (const sessionId of sessionIdsWithOrphanedTasks) {
       const session = await sessionsService.get(sessionId as Id, startupParams as never);
-      // If session is still in an active state after orphaned task cleanup, set to IDLE
+      if (executorOrphanSessionIds.has(sessionId)) continue;
+      // If the session is still active, release only runtimes whose cleanup is inherently local.
       if (
         session.status === SessionStatus.RUNNING ||
         session.status === SessionStatus.STOPPING ||
         session.status === SessionStatus.AWAITING_PERMISSION ||
         session.status === SessionStatus.TIMED_OUT
       ) {
-        await app.service('sessions').patch(
-          sessionId as Id,
-          {
-            status: SessionStatus.IDLE,
-            ready_for_prompt: true,
-          },
-          startupParams as never
-        );
+        await reconcileInterruptedSession(app, session, startupParams, 'with orphaned tasks');
         sessionsResetFromOrphanedTasks++;
-        startupDebug(
-          `   ✓ Marked session ${shortId(sessionId)} as idle (had orphaned tasks, was: ${session.status})`
-        );
       }
     }
   }
@@ -300,16 +328,23 @@ async function cleanupOrphanStatusesInTenantScope(
       continue; // never ran a task — nothing was interrupted
     }
 
-    let wasInterrupted = bootInterruptedTaskIds.has(latestTaskId as string);
-    if (!wasInterrupted) {
-      try {
-        const latestTask = await tasksService.get(latestTaskId, startupParams as never);
-        wasInterrupted = !isTerminalTaskStatus(latestTask.status);
-      } catch {
-        // Task row missing/unreadable — fail closed: don't re-flag the session.
-      }
+    let latestTask: Task;
+    try {
+      latestTask = await tasksService.get(latestTaskId, startupParams as never);
+    } catch {
+      // Task row missing/unreadable — fail closed: don't re-flag the session.
+      continue;
     }
+    const wasInterrupted =
+      bootInterruptedTaskIds.has(latestTaskId as string) ||
+      !isTerminalTaskStatus(latestTask.status);
     if (!wasInterrupted) {
+      continue;
+    }
+    if (usesExecutorRuntime(session.agentic_tool) && latestTask.executor_attempt_id) {
+      startupDebug(
+        `   ⏸ Kept session ${shortId(session.session_id)} fenced: orphaned executor cleanup is unverified`
+      );
       continue;
     }
 
@@ -609,15 +644,19 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 5. Start executor heartbeat stale supervisor
   const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);
-  const heartbeatSupervisor = new ExecutorHeartbeatSupervisor({ app, config: heartbeatConfig });
-  heartbeatSupervisor.start();
-  if (heartbeatConfig.enabled) {
-    console.log(
-      `💓 Executor heartbeat supervisor started (interval: ${heartbeatConfig.interval_ms}ms, stale after: ${heartbeatConfig.stale_after_ms}ms)`
-    );
-  } else {
-    console.log('💓 Executor heartbeat disabled');
-  }
+  const attemptReconciler = new ExecutorAttemptReconciler({
+    app,
+    config: heartbeatConfig,
+    db,
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    requireTenantParams: startupMultiTenancy.mode !== 'static',
+    coordinator: ctx.executorAttemptCoordinator,
+  });
+  attemptReconciler.start();
+  console.log(
+    `💓 Executor attempt reconciler started (interval: ${heartbeatConfig.interval_ms}ms, connect timeout: ${heartbeatConfig.connection_timeout_ms}ms, heartbeat: ${heartbeatConfig.enabled ? `stale after ${heartbeatConfig.stale_after_ms}ms` : 'disabled'})`
+  );
 
   // 6. Start scheduler service (background worker)
   let schedulerService: SchedulerService | null = null;
@@ -673,7 +712,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       healthMonitor.cleanup();
 
       // Stop heartbeat supervisor
-      heartbeatSupervisor.stop();
+      attemptReconciler.stop();
 
       // Clean up terminal sessions
       if (terminalsService) {

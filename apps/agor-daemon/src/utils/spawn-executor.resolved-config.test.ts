@@ -48,7 +48,7 @@ describe('buildResolvedConfigSlice', () => {
     });
   });
 
-  it('surfaces executor heartbeat enabled and interval fields', async () => {
+  it('surfaces the executor heartbeat lease fields', async () => {
     await writeConfigYaml(
       [
         'execution:',
@@ -62,8 +62,11 @@ describe('buildResolvedConfigSlice', () => {
       ].join('\n')
     );
     const slice = buildResolvedConfigSlice();
-    expect(slice.execution?.executor_heartbeat).toEqual({ enabled: false, interval_ms: 2500 });
-    expect(slice.execution?.executor_heartbeat).not.toHaveProperty('stale_after_ms');
+    expect(slice.execution?.executor_heartbeat).toEqual({
+      enabled: false,
+      interval_ms: 2500,
+      stale_after_ms: 9000,
+    });
     expect(slice.execution?.executor_heartbeat).not.toHaveProperty('callback');
   });
 
@@ -78,7 +81,9 @@ describe('buildResolvedConfigSlice', () => {
   it('returns only heartbeat defaults when no optional fields are configured', () => {
     const slice = buildResolvedConfigSlice();
     expect(slice).toEqual({
-      execution: { executor_heartbeat: { enabled: true, interval_ms: 10_000 } },
+      execution: {
+        executor_heartbeat: { enabled: true, interval_ms: 10_000, stale_after_ms: 30_000 },
+      },
     });
   });
 
@@ -121,7 +126,11 @@ describe('buildResolvedConfigSlice', () => {
     const slice = buildResolvedConfigSlice() as Record<string, Record<string, unknown>>;
     // Allowed fields surface.
     expect(slice.execution?.permission_timeout_ms).toBe(60_000);
-    expect(slice.execution?.executor_heartbeat).toEqual({ enabled: true, interval_ms: 10_000 });
+    expect(slice.execution?.executor_heartbeat).toEqual({
+      enabled: true,
+      interval_ms: 10_000,
+      stale_after_ms: 30_000,
+    });
     expect(slice.daemon?.host_ip_address).toBe('10.0.0.5');
     // Non-allowed top-level sections are absent — slice is a strict subset.
     expect(slice).not.toHaveProperty('analytics');

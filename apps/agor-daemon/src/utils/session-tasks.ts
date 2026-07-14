@@ -1,6 +1,6 @@
 /**
- * Helpers for finding "active" tasks for a session — RUNNING / STOPPING / AWAITING_PERMISSION /
- * AWAITING_INPUT — sorted by recency.
+ * Helpers for finding "active" tasks for a session — DISPATCHING / RUNNING / STOPPING /
+ * AWAITING_PERMISSION / AWAITING_INPUT — sorted by recency.
  *
  * Background: `TasksService.find()` short-circuits on `session_id: string`
  * (see `services/tasks.ts:65-110`) and returns ALL session tasks in
@@ -32,7 +32,8 @@ function recencyKey(t: Task): number {
 export async function findTasksForSession(
   app: Application,
   sessionId: SessionID,
-  params?: Params
+  params?: Params,
+  statuses?: ReadonlySet<Task['status']>
 ): Promise<Task[]> {
   const result = (await app.service('tasks').find({
     ...(params ?? {}),
@@ -41,6 +42,7 @@ export async function findTasksForSession(
     query: {
       ...(params?.query as Record<string, unknown> | undefined),
       session_id: sessionId,
+      ...(statuses ? { status: { $in: [...statuses] } } : {}),
       $limit: (params?.query as Record<string, unknown> | undefined)?.$limit ?? 1000,
     },
   })) as Paginated<Task> | Task[];
@@ -57,8 +59,7 @@ export async function findActiveTasksForSession(
   sessionId: SessionID,
   params?: Params
 ): Promise<Task[]> {
-  const all = await findTasksForSession(app, sessionId, params);
-  return all.filter((t) => isTaskExecuting(t));
+  return findTasksForSession(app, sessionId, params, ACTIVE_TASK_STATUSES);
 }
 
 /**

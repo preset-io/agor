@@ -368,6 +368,10 @@ execution:
         }
       }' \
       -- agor-executor --stdin
+
+  # Required to verify remote workload cleanup before any terminal release.
+  executor_stop_command_template: |
+    kubectl delete pod executor-{task_id} --ignore-not-found --wait=true --timeout=8s
 ```
 
 ### Template Variables
@@ -381,6 +385,8 @@ execution:
 | `{unix_user_gid}` | Target Unix GID                         | `1001`                |
 | `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
 | `{branch_id}`   | Branch ID (if available)              | `01xyz789...`         |
+| `{executor_attempt_id}` | Launch attempt ID (prompt executors) | `01def456...` |
+| `{termination_reason}` | Stop reason (stop template only) | `user_stop` |
 
 ### How It Works
 
@@ -393,6 +399,26 @@ execution:
 7. Executor connects back to daemon via WebSocket
 8. Executor performs work, updates database via Feathers API
 9. Pod terminates when executor exits
+
+For remote/container execution, the start command is only the launcher. Configure
+`executor_stop_command_template` so the daemon can delete the actual workload during
+completion, explicit Stop, lease loss, launch failure, or restart recovery. The stop
+command should be idempotent and return successfully only after it has verified that
+the workload is gone. If the command fails or times out, Agor keeps the session fenced
+and does not drain its queue.
+
+The daemon also fences launches that never connect. The default deadline is two
+minutes and can be adjusted independently of heartbeat monitoring:
+
+```yaml
+execution:
+  executor_heartbeat:
+    connection_timeout_ms: 120000
+```
+
+Setting `executor_heartbeat.enabled: false` disables running-task heartbeat expiry;
+the dispatch connection deadline remains active so launch failures cannot stay in
+`dispatching` indefinitely.
 
 ### Fire-and-Forget Design
 
@@ -1030,7 +1056,16 @@ execution:
       --rm -i --restart=Never \
       --overrides='{"spec":{"securityContext":{"runAsUser":{unix_user_uid},"fsGroup":{unix_user_gid}}}}' \
       -- agor-executor --stdin
+  executor_stop_command_template: |
+    kubectl delete pod executor-{task_id} --ignore-not-found --wait=true --timeout=8s
 ```
+
+### Upgrade Remote Executors with the Daemon
+
+Remote executors may be deployed independently, but they are part of the same
+runtime contract as the daemon. Upgrade remote executor images to the same Agor
+release when upgrading the daemon; mixed-version daemon/executor deployments are
+not a supported rollout mode.
 
 ### Step 5: Test Single Executor
 

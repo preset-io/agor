@@ -1,6 +1,17 @@
 import { runWithTenantDatabaseScope } from '@agor/core/db';
-import { type Session, type Task, TaskStatus } from '@agor/core/types';
+import {
+  EXECUTOR_STATE_PERSISTENCE_STATUS,
+  type Session,
+  type Task,
+  TaskStatus,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  EXECUTOR_CLEANUP_STATUS,
+  hasTrackedExecutorAttempt,
+  trackExecutorAttempt,
+  untrackExecutorAttempt,
+} from '../executor-tracking';
 import { TasksService } from './tasks';
 
 const childSessionId = '018f0000-0000-7000-8000-000000000101';
@@ -8,6 +19,14 @@ const parentSessionId = '018f0000-0000-7000-8000-000000000102';
 const taskId = '018f0000-0000-7000-8000-000000000201';
 const callbackTaskId = '018f0000-0000-7000-8000-000000000301';
 const userId = '018f0000-0000-7000-8000-000000000401';
+
+const VERIFIED_FINALIZATION_EVIDENCE = {
+  cleanup_status: EXECUTOR_CLEANUP_STATUS.VERIFIED,
+  state_persistence_status: EXECUTOR_STATE_PERSISTENCE_STATUS.SKIPPED,
+  cleanup_error: null,
+  state_persistence_error: null,
+  cleanup_verified_at: '2026-01-01T00:00:05.000Z',
+} as const;
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -102,6 +121,24 @@ function makeService(
     status: TaskStatus.QUEUED,
   });
   const createPending = vi.fn(async (data: Partial<Task>) => ({ ...callbackTask, ...data }));
+  const transitionOwnedExecutorAttemptToTerminal = vi.fn(
+    async (
+      id: string,
+      data: {
+        terminalCause: Task['executor_terminal_cause'];
+        patch: Partial<Task>;
+      }
+    ) => {
+      const current = tasksById.get(id)!;
+      const task = {
+        ...current,
+        ...data.patch,
+        executor_terminal_cause: data.terminalCause,
+      } as Task;
+      tasksById.set(id, task);
+      return { task, transitioned: true };
+    }
+  );
 
   const sessionsPatch = vi.fn(async (id: string, updates: Partial<Session>) => {
     const target = id === parentSessionId ? parentSession : childSession;
@@ -119,19 +156,23 @@ function makeService(
 
   const service = Object.create(TasksService.prototype) as TasksService & {
     repository: typeof repository;
-    taskRepo: typeof repository & { createPending: typeof createPending };
+    taskRepo: typeof repository & {
+      createPending: typeof createPending;
+      transitionOwnedExecutorAttemptToTerminal: typeof transitionOwnedExecutorAttemptToTerminal;
+    };
     id: string;
     emit: ReturnType<typeof vi.fn>;
     app: { service: ReturnType<typeof vi.fn> };
     completionCallbackDispatches: Map<string, Promise<unknown>>;
   };
   service.repository = repository;
-  service.taskRepo = { ...repository, createPending };
+  service.taskRepo = { ...repository, createPending, transitionOwnedExecutorAttemptToTerminal };
   service.id = 'task_id';
   service.emit = vi.fn();
   service.completionCallbackDispatches = new Map();
   service.app = {
     service: vi.fn((name: string) => {
+      if (name === 'tasks') return { emit: service.emit };
       if (name === 'sessions') {
         return {
           get: vi.fn(async (id: string) => (id === parentSessionId ? parentSession : childSession)),
@@ -158,6 +199,71 @@ function makeService(
 }
 
 describe('TasksService completion callbacks', () => {
+  it('defers executor terminal side effects until cleanup releases the fence', async () => {
+    const executorAttemptId = '018f0000-0000-7000-8000-000000000502';
+    const { service, createPending, childSession } = makeService({
+      task: { executor_attempt_id: executorAttemptId },
+    });
+    const executorParams = {
+      authentication: { strategy: 'jwt' },
+      task_id: taskId,
+      session_id: childSessionId,
+      executor_attempt_id: executorAttemptId,
+    };
+
+    await service.patch(taskId, { status: TaskStatus.COMPLETED }, executorParams as never);
+
+    expect(createPending).not.toHaveBeenCalled();
+
+    await service.finalizeExecutorAttempt(
+      taskId,
+      executorAttemptId,
+      {
+        evidence: VERIFIED_FINALIZATION_EVIDENCE,
+      },
+      executorParams as never
+    );
+
+    expect(createPending).toHaveBeenCalledTimes(1);
+    expect(childSession.ready_for_prompt).toBe(true);
+  });
+
+  it('retains cleanup evidence when the durable fence patch fails', async () => {
+    const executorAttemptId = '018f0000-0000-7000-8000-000000000503';
+    const { service, getStoredTask, sessionsPatch } = makeService({
+      task: {
+        status: TaskStatus.COMPLETED,
+        executor_attempt_id: executorAttemptId,
+      },
+      childSession: { status: 'idle', ready_for_prompt: false },
+    });
+    trackExecutorAttempt(
+      childSessionId,
+      {
+        pid: 503,
+        finish: vi.fn().mockResolvedValue(undefined),
+        terminate: vi.fn().mockResolvedValue(undefined),
+      },
+      executorAttemptId
+    );
+    sessionsPatch.mockImplementation(async (id, updates) => {
+      if (id === childSessionId && updates.ready_for_prompt === true) {
+        throw new Error('temporary database failure');
+      }
+      return makeSession({ session_id: id as Session['session_id'], ...updates });
+    });
+
+    await expect(
+      service.finalizeExecutorAttempt(taskId, executorAttemptId, {
+        evidence: VERIFIED_FINALIZATION_EVIDENCE,
+      })
+    ).rejects.toThrow('temporary database failure');
+
+    expect(getStoredTask()?.executor_finalization).toMatchObject(VERIFIED_FINALIZATION_EVIDENCE);
+    expect(hasTrackedExecutorAttempt(childSessionId, executorAttemptId)).toBe(true);
+    untrackExecutorAttempt(childSessionId, executorAttemptId);
+  });
+
   it('defers callback dispatch until after the tenant transaction commits', async () => {
     const events: string[] = [];
     const { service, createPending } = makeService();
@@ -199,8 +305,6 @@ describe('TasksService completion callbacks', () => {
       'tx:committed',
       'tx:start',
       'callback:queued',
-      'tx:committed',
-      'tx:start',
       'tx:committed',
       'tx:start',
       'tx:committed',

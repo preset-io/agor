@@ -269,6 +269,6 @@ describe('registerAuthenticatedRoute', () => {
 
     const hooks = installed.before?.create ?? [];
     expect(hooks).toHaveLength(3);
-    await expect(hooks[1](context)).rejects.toThrow(/task scope/);
+    await expect(hooks[1](context)).rejects.toThrow(/executor attempt scope/);
   });
 });

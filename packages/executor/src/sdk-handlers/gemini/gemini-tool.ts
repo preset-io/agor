@@ -22,6 +22,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import {
@@ -74,7 +75,8 @@ export class GeminiTool implements ITool {
     mcpEnabled?: boolean,
     useNativeAuth?: boolean, // Flag to use OAuth when no API key
     usersRepo?: UsersRepository,
-    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    runtime?: AgenticToolRuntime
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new GeminiPromptService(
@@ -89,7 +91,8 @@ export class GeminiTool implements ITool {
         useNativeAuth,
         usersRepo,
         this.tasksService,
-        mcpOAuthAuthHeadersRepo
+        mcpOAuthAuthHeadersRepo,
+        runtime
       );
     }
   }

@@ -130,6 +130,12 @@ describe('createCanUseToolCallback', () => {
       expect(result.updatedInput).toEqual({ command: 'ls' });
       // No persistence rule emitted when remember=false.
       expect(result.updatedPermissions).toBeUndefined();
+      expect(deps.tasksService.patch).toHaveBeenNthCalledWith(1, taskId, {
+        status: 'awaiting_permission',
+      });
+      expect(deps.tasksService.patch).toHaveBeenNthCalledWith(2, taskId, {
+        status: 'running',
+      });
       // Lock was acquired AND released.
       expect(deps.permissionLocks.size).toBe(0);
     });
@@ -173,14 +179,14 @@ describe('createCanUseToolCallback', () => {
       expect(result.behavior).toBe('deny');
       expect(result.message).toContain('Bash');
       expect(deps.permissionService.cancelPendingRequests).toHaveBeenCalledWith(sessionId);
-      // Session driven back to idle so the user can re-prompt.
-      expect(deps.sessionsService.patch).toHaveBeenCalledWith(
+      // Terminal session release belongs to daemon settlement.
+      expect(deps.sessionsService.patch).not.toHaveBeenCalledWith(
         sessionId,
         expect.objectContaining({ status: 'idle' })
       );
     });
 
-    it('marks task and session timed_out when the permission request times out', async () => {
+    it('marks the task timed_out and leaves session release to daemon settlement', async () => {
       const deps = createBaseDeps();
       deps.permissionService.waitForDecision.mockResolvedValue({
         allow: false,
@@ -198,7 +204,7 @@ describe('createCanUseToolCallback', () => {
         taskId,
         expect.objectContaining({ status: 'timed_out' })
       );
-      expect(deps.sessionsService.patch).toHaveBeenCalledWith(
+      expect(deps.sessionsService.patch).not.toHaveBeenCalledWith(
         sessionId,
         expect.objectContaining({ status: 'timed_out', ready_for_prompt: true })
       );

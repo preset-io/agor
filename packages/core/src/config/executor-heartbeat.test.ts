@@ -8,6 +8,7 @@ describe('resolveExecutorHeartbeatConfig', () => {
       enabled: true,
       interval_ms: 10_000,
       stale_after_ms: 30_000,
+      connection_timeout_ms: 120_000,
       callback: { command_template: null, timeout_ms: 3_000 },
     });
   });

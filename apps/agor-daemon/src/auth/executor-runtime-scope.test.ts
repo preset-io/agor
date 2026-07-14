@@ -1,17 +1,40 @@
 import type { HookContext } from '@agor/core/types';
+import {
+  EXECUTOR_CLEANUP_STATUS,
+  EXECUTOR_STATE_PERSISTENCE_REQUIREMENT,
+  EXECUTOR_STATE_PERSISTENCE_STATUS,
+  TaskStatus,
+} from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { executorRuntimeScopeGuard, scopeExecutorRuntimeAuth } from './executor-runtime-scope';
+import {
+  executorRuntimeScopeGuard,
+  requireExecutorRuntimeToken,
+  scopeExecutorRuntimeAuth,
+} from './executor-runtime-scope';
 
 const payload = {
   type: 'executor-session',
   purpose: 'executor-task',
   session_id: 'session-1',
   task_id: 'task-1',
+  executor_attempt_id: 'attempt-1',
   branch_id: 'branch-1',
 };
 
 function ctx(overrides: Partial<HookContext>): HookContext {
   return {
+    app: {
+      service: (path: string) => ({
+        get: async () =>
+          path === 'sessions'
+            ? { session_id: 'session-1', tasks: ['task-1'] }
+            : {
+                task_id: 'task-1',
+                session_id: 'session-1',
+                executor_attempt_id: 'attempt-1',
+              },
+      }),
+    },
     path: 'tasks',
     method: 'find',
     params: { authentication: { payload }, query: {}, provider: 'socketio' },
@@ -20,6 +43,220 @@ function ctx(overrides: Partial<HookContext>): HookContext {
 }
 
 describe('executorRuntimeScopeGuard', () => {
+  it('accepts the scoped executor connection method and rejects a different task', async () => {
+    const context = ctx({
+      path: 'tasks',
+      method: 'connectExecutor',
+      data: { task_id: 'task-1', executor_attempt_id: 'attempt-1' },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+    await expect(
+      executorRuntimeScopeGuard()(
+        ctx({
+          path: 'tasks',
+          method: 'connectExecutor',
+          data: { task_id: 'task-2', executor_attempt_id: 'attempt-1' },
+        })
+      )
+    ).rejects.toThrow(/task scope/);
+  });
+
+  it('requires the request attempt to match the executor token', async () => {
+    const matching = ctx({
+      method: 'connectExecutor',
+      data: { task_id: 'task-1', executor_attempt_id: 'attempt-1' },
+    });
+    const stale = ctx({
+      method: 'connectExecutor',
+      data: { task_id: 'task-1', executor_attempt_id: 'attempt-old' },
+    });
+
+    await expect(requireExecutorRuntimeToken()(matching)).resolves.toBe(matching);
+    await expect(requireExecutorRuntimeToken()(stale)).rejects.toThrow(/attempt scope/);
+  });
+
+  it('requires an executor token for the executor connection method', async () => {
+    const context = ctx({
+      method: 'connectExecutor',
+      data: { task_id: 'task-1' },
+      params: { provider: 'socketio', query: {}, user: { user_id: 'user-1' } },
+    });
+
+    await expect(requireExecutorRuntimeToken()(context)).rejects.toThrow(/executor token/);
+  });
+
+  it('scopes executor telemetry to the token task', async () => {
+    const matching = ctx({
+      path: 'tasks',
+      method: 'reportExecutorTelemetry',
+      data: {
+        task_id: 'task-1',
+        executor_attempt_id: 'attempt-1',
+        heartbeat: true,
+      },
+    });
+    const otherTask = ctx({
+      path: 'tasks',
+      method: 'reportExecutorTelemetry',
+      data: {
+        task_id: 'task-2',
+        executor_attempt_id: 'attempt-1',
+        heartbeat: true,
+      },
+    });
+
+    await expect(executorRuntimeScopeGuard()(matching)).resolves.toBe(matching);
+    await expect(executorRuntimeScopeGuard()(otherTask)).rejects.toThrow(/task scope/);
+  });
+
+  it('allows a patch only for the executor token task', async () => {
+    const matching = ctx({ method: 'patch', id: 'task-1', data: { status: 'running' } });
+    const otherTask = ctx({ method: 'patch', id: 'task-2', data: { status: 'running' } });
+
+    await expect(executorRuntimeScopeGuard()(matching)).resolves.toBe(matching);
+    await expect(executorRuntimeScopeGuard()(otherTask)).rejects.toThrow(/task scope/);
+  });
+
+  it.each([
+    ['sessions', 'update', 'session-1'],
+    ['sessions', 'remove', 'session-1'],
+    ['tasks', 'update', 'task-1'],
+    ['tasks', 'remove', 'task-1'],
+    ['branches', 'patch', 'branch-1'],
+    ['branches', 'remove', 'branch-1'],
+  ] as const)('rejects task-scoped executor %s.%s calls', async (path, method, id) => {
+    const context = ctx({ path, method, id, data: {} });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/task token is not valid/);
+  });
+
+  it('preserves branch mutations for non-task executor command tokens', async () => {
+    const commandPayload = {
+      type: 'executor-session',
+      purpose: 'executor-task',
+      session_id: 'branch-clean',
+      branch_id: 'branch-1',
+    };
+    const context = ctx({
+      path: 'branches',
+      method: 'patch',
+      id: 'branch-1',
+      data: { filesystem_status: 'ready' },
+      params: {
+        authentication: { payload: commandPayload },
+        query: {},
+        provider: 'socketio',
+      },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it('rejects ordinary mutations from a stale executor attempt', async () => {
+    const context = ctx({
+      method: 'patch',
+      id: 'task-1',
+      data: { status: 'failed' },
+      app: {
+        service: () => ({
+          get: async () => ({
+            task_id: 'task-1',
+            executor_attempt_id: 'attempt-current',
+          }),
+        }),
+      } as never,
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/executor attempt scope/);
+  });
+
+  it.each([
+    { path: 'tasks', method: 'patch', id: 'task-1', data: { report: 'late write' } },
+    {
+      path: 'messages',
+      method: 'create',
+      data: { task_id: 'task-1', session_id: 'session-1' },
+    },
+  ])('rejects late $path mutations after finalization releases', async (request) => {
+    const context = ctx({
+      ...request,
+      app: {
+        service: () => ({
+          get: async () => ({
+            task_id: 'task-1',
+            executor_attempt_id: 'attempt-1',
+            status: TaskStatus.STOPPED,
+            executor_finalization: {
+              cleanup_status: EXECUTOR_CLEANUP_STATUS.VERIFIED,
+              state_persistence_status: EXECUTOR_STATE_PERSISTENCE_STATUS.SKIPPED,
+              state_persistence_requirement: EXECUTOR_STATE_PERSISTENCE_REQUIREMENT.NOT_REQUIRED,
+            },
+          }),
+        }),
+      } as never,
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/already finalized/);
+  });
+
+  it('rejects session mutations from a task that is no longer latest', async () => {
+    const context = ctx({
+      path: 'sessions',
+      method: 'patch',
+      id: 'session-1',
+      data: { status: 'running' },
+      app: {
+        service: (path: string) => ({
+          get: async () =>
+            path === 'sessions'
+              ? { session_id: 'session-1', tasks: ['task-1', 'task-current'] }
+              : {
+                  task_id: 'task-1',
+                  session_id: 'session-1',
+                  executor_attempt_id: 'attempt-1',
+                },
+        }),
+      } as never,
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).rejects.toThrow(/latest session task scope/);
+  });
+
+  it.each([
+    { status: 'idle' },
+    { status: 'timed_out', ready_for_prompt: true },
+    { ready_for_prompt: true },
+  ])('reserves terminal session settlement for the daemon: %j', async (data) => {
+    await expect(
+      executorRuntimeScopeGuard()(ctx({ path: 'sessions', method: 'patch', id: 'session-1', data }))
+    ).rejects.toThrow(/cannot (release|settle) sessions/);
+  });
+
+  it.each([
+    'running',
+    'awaiting_permission',
+    'awaiting_input',
+  ])('allows the executor to report transient session status %s', async (status) => {
+    const context = ctx({
+      path: 'sessions',
+      method: 'patch',
+      id: 'session-1',
+      data: { status },
+    });
+
+    await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
+  });
+
+  it.each([
+    ['sessions', 'session-1', { name: 'forged' }],
+    ['tasks', 'task-1', { full_prompt: 'forged' }],
+  ] as const)('rejects unrelated task-token writes to %s', async (path, id, data) => {
+    await expect(
+      executorRuntimeScopeGuard()(ctx({ path, method: 'patch', id, data }))
+    ).rejects.toThrow(/cannot patch/);
+  });
+
   it('narrows find queries to executor token scope', async () => {
     const context = ctx({ path: 'messages', method: 'find' });
 
@@ -379,6 +616,7 @@ describe('executorRuntimeScopeGuard', () => {
       params: {
         authentication: { strategy: 'jwt' },
         task_id: 'task-1',
+        executor_attempt_id: 'attempt-1',
         session_id: 'session-1',
         branch_id: 'branch-1',
         query: {},

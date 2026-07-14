@@ -169,6 +169,7 @@ export function isRemoteRelationshipsEnrichedResult(result: unknown): boolean {
  */
 export type ExecuteTaskData = {
   taskId: string;
+  executorAttemptId: string;
   prompt: string;
   permissionMode?: import('@agor/core/types').PermissionMode;
   stream?: boolean;

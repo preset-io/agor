@@ -3,6 +3,7 @@ import {
   boardObjectQueryValidator,
   branchQueryValidator,
   mcpServerQueryValidator,
+  taskQueryValidator,
   typedValidateQuery,
   userQueryValidator,
 } from './feathers-validation';
@@ -57,6 +58,28 @@ describe('branchQueryValidator', () => {
       repo_id: '019e8e1c',
       zone_id: 'zone-review',
       archived: false,
+    });
+  });
+});
+
+describe('taskQueryValidator', () => {
+  it('preserves the multi-status filter used to locate active executor tasks', async () => {
+    const context = {
+      params: {
+        query: {
+          session_id: '019e8e1c',
+          status: { $in: ['dispatching', 'running', 'stopping'] },
+          $limit: 1000,
+        },
+      },
+    };
+
+    await typedValidateQuery(taskQueryValidator)(context);
+
+    expect(context.params.query).toEqual({
+      session_id: '019e8e1c',
+      status: { $in: ['dispatching', 'running', 'stopping'] },
+      $limit: 1000,
     });
   });
 });

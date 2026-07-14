@@ -11,6 +11,7 @@
  * built-in JWT authentication infrastructure, avoiding the complexity of custom strategies.
  */
 
+import { randomUUID } from 'node:crypto';
 import { getCurrentTenantId } from '@agor/core/db';
 import jwt from 'jsonwebtoken';
 import {
@@ -30,7 +31,9 @@ function sessionTokenDebug(...args: unknown[]): void {
 interface SessionTokenData {
   session_id: string;
   task_id?: string;
+  executor_attempt_id?: string;
   branch_id?: string;
+  tenant_id?: string;
   user_id: string;
   created_at: Date;
   expires_at: Date;
@@ -41,6 +44,7 @@ interface SessionTokenData {
 export interface SessionInfo {
   session_id: string;
   task_id?: string;
+  executor_attempt_id?: string;
   branch_id?: string;
   user_id: string;
 }
@@ -74,7 +78,12 @@ export class SessionTokenService {
   async generateToken(
     sessionId: string,
     userId: string,
-    scope: { taskId?: string; branchId?: string; maxUses?: number } = {}
+    scope: {
+      taskId?: string;
+      executorAttemptId?: string;
+      branchId?: string;
+      maxUses?: number;
+    } = {}
   ): Promise<string> {
     if (!this.jwtSecret) {
       throw new Error('SessionTokenService: JWT secret not set. Call setJwtSecret() first.');
@@ -90,8 +99,10 @@ export class SessionTokenService {
       sub: userId, // Standard JWT subject claim (used by Feathers for user lookup)
       type: EXECUTOR_SESSION_TOKEN_TYPE,
       purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
+      jti: randomUUID(),
       session_id: sessionId,
       task_id: scope.taskId,
+      executor_attempt_id: scope.executorAttemptId,
       branch_id: scope.branchId,
       ...(tenantId ? { tenant_id: tenantId } : {}),
       iat: Math.floor(now.getTime() / 1000), // Issued at
@@ -107,11 +118,24 @@ export class SessionTokenService {
       // No expiresIn here - we set exp directly in payload
     });
 
+    // A session has one active executor turn. Supersede older task-scoped
+    // credentials when the next turn launches so a stuck process cannot keep
+    // reading secrets or writing output until it eventually exits.
+    if (scope.taskId) {
+      for (const [activeToken, data] of this.tokens) {
+        if (data.task_id && data.session_id === sessionId && data.tenant_id === tenantId) {
+          this.tokens.delete(activeToken);
+        }
+      }
+    }
+
     // Track this token for revocation and use counting
     this.tokens.set(token, {
       session_id: sessionId,
       task_id: scope.taskId,
+      executor_attempt_id: scope.executorAttemptId,
       branch_id: scope.branchId,
+      tenant_id: tenantId,
       user_id: userId,
       created_at: now,
       expires_at: expiresAt,
@@ -135,7 +159,12 @@ export class SessionTokenService {
    */
   async validateToken(
     token: string,
-    expected?: { sessionId?: string; taskId?: string; branchId?: string }
+    expected?: {
+      sessionId?: string;
+      taskId?: string;
+      executorAttemptId?: string;
+      branchId?: string;
+    }
   ): Promise<SessionInfo | null> {
     // Get tracking data for this token
     const data = this.tokens.get(token);
@@ -156,6 +185,7 @@ export class SessionTokenService {
     if (
       (expected?.sessionId && data.session_id !== expected.sessionId) ||
       (expected?.taskId && data.task_id !== expected.taskId) ||
+      (expected?.executorAttemptId && data.executor_attempt_id !== expected.executorAttemptId) ||
       (expected?.branchId && data.branch_id !== expected.branchId)
     ) {
       console.warn(`[SessionTokenService] Token scope mismatch`);
@@ -184,6 +214,7 @@ export class SessionTokenService {
     return {
       session_id: data.session_id,
       task_id: data.task_id,
+      executor_attempt_id: data.executor_attempt_id,
       branch_id: data.branch_id,
       user_id: data.user_id,
     };

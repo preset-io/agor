@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { installProviderConnection, resolveApiKeyForTask } from './base-executor.js';
+import {
+  createRuntimeAwareTasksService,
+  createRuntimeAwareTasksStreamingService,
+  executeToolTask,
+  installProviderConnection,
+  resolveApiKeyForTask,
+} from './base-executor.js';
 
 function makeClient(error: unknown) {
   return {
@@ -138,5 +144,125 @@ describe('installProviderConnection', () => {
     const advertised = (process.env.AGOR_USER_ENV_KEYS ?? '').split(',');
     expect(advertised).not.toContain('GITHUB_TOKEN');
     expect(advertised).toContain('MY_CUSTOM_VAR');
+  });
+});
+
+describe('runtime-aware service wrappers', () => {
+  it('preserves tool labels between start and complete streaming events', async () => {
+    const pulse = vi.fn();
+    const create = vi.fn(async () => ({}));
+    const service = createRuntimeAwareTasksStreamingService({ create }, { pulse });
+
+    await service.create({
+      event: 'tool:start',
+      data: {
+        tool_use_id: 'tool-1',
+        tool_name: 'Bash',
+      },
+    });
+    await service.create({
+      event: 'tool:complete',
+      data: {
+        tool_use_id: 'tool-1',
+      },
+    });
+
+    expect(pulse).toHaveBeenNthCalledWith(1, {
+      kind: 'tool.started',
+      id: 'tool-1',
+      label: 'Bash',
+    });
+    expect(pulse).toHaveBeenNthCalledWith(2, {
+      kind: 'tool.finished',
+      id: 'tool-1',
+      label: 'Bash',
+    });
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('emits permission wait pulses without dropping the original task service surface', async () => {
+    const pulse = vi.fn();
+    const patch = vi.fn(async () => ({}));
+    const emit = vi.fn();
+    const service = createRuntimeAwareTasksService(
+      {
+        get: vi.fn(async () => ({})),
+        patch,
+        emit,
+      },
+      { pulse }
+    );
+
+    await service.patch('task-1', { status: 'awaiting_permission' });
+    service.emit('task.cancelled', { task_id: 'task-1' });
+
+    expect(pulse).toHaveBeenCalledWith({ kind: 'permission.wait_started', id: 'task-1' });
+    expect(patch).toHaveBeenCalledWith('task-1', { status: 'awaiting_permission' });
+    expect(emit).toHaveBeenCalledWith('task.cancelled', { task_id: 'task-1' });
+  });
+});
+
+describe('executeToolTask Stop retirement', () => {
+  it('does not write FAILED state or an error message when an SDK rejects after abort', async () => {
+    const savedEnv = { ...process.env };
+    const abortController = new AbortController();
+    abortController.abort();
+    const taskPatch = vi.fn(async () => ({}));
+    const messageCreate = vi.fn(async () => ({}));
+    const runtime = { pulse: vi.fn(), flush: vi.fn(async () => true) };
+    const genericService = {
+      create: vi.fn(async () => ({})),
+      emit: vi.fn(),
+      find: vi.fn(async () => []),
+      get: vi.fn(async () => ({})),
+      patch: vi.fn(async () => ({})),
+    };
+    const client = {
+      service: vi.fn((name: string) => {
+        if (name === 'sessions') {
+          return { ...genericService, get: vi.fn(async () => ({ branch_id: undefined })) };
+        }
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn(async () => ({ source: 'native', useNativeAuth: true })),
+          };
+        }
+        if (name === 'tasks') return { ...genericService, patch: taskPatch };
+        if (name === 'messages') return { ...genericService, create: messageCreate };
+        return genericService;
+      }),
+    };
+    const tool = {
+      executePromptWithStreaming: vi.fn(async () => {
+        throw new Error('SDK aborted');
+      }),
+      stopTask: vi.fn(async () => ({ success: true })),
+    };
+
+    try {
+      await expect(
+        executeToolTask({
+          client: client as never,
+          sessionId: 'session-1' as never,
+          taskId: 'task-1' as never,
+          prompt: 'test Stop',
+          abortController,
+          apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+          toolName: 'claude-code',
+          runtime,
+          createTool: () => tool as never,
+        })
+      ).resolves.toBeUndefined();
+
+      expect(tool.stopTask).toHaveBeenCalledOnce();
+      expect(taskPatch).not.toHaveBeenCalled();
+      expect(messageCreate).not.toHaveBeenCalled();
+      expect(runtime.flush).not.toHaveBeenCalled();
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (!(key in savedEnv)) delete process.env[key];
+      }
+      Object.assign(process.env, savedEnv);
+    }
   });
 });

@@ -8,6 +8,7 @@
 import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
+import { TaskStatus } from '../types/task';
 
 /**
  * Query validator with type coercion enabled
@@ -76,6 +77,8 @@ export const CommonSchemas = {
   boolean: Type.Boolean(),
 };
 
+const taskStatusSchema = Type.Enum(TaskStatus);
+
 /**
  * Helper to create query schemas with common Feathers operators
  */
@@ -125,16 +128,13 @@ export const taskQuerySchema = createQuerySchema(
     session_id: Type.Optional(CommonSchemas.uuid),
     status: Type.Optional(
       Type.Union([
-        Type.Literal('queued'),
-        Type.Literal('created'),
-        Type.Literal('running'),
-        Type.Literal('stopping'),
-        Type.Literal('awaiting_permission'),
-        Type.Literal('awaiting_input'),
-        Type.Literal('timed_out'),
-        Type.Literal('completed'),
-        Type.Literal('failed'),
-        Type.Literal('stopped'),
+        taskStatusSchema,
+        Type.Object(
+          {
+            $in: Type.Array(taskStatusSchema, { minItems: 1 }),
+          },
+          { additionalProperties: false }
+        ),
       ])
     ),
     created_at: Type.Optional(CommonSchemas.timestamp),

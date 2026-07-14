@@ -23,6 +23,7 @@ import type {
   SessionRepository,
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
+import type { AgenticToolRuntime } from '../../runtime-overseer.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 // Removed import of calculateModelContextWindowUsage - inlined instead
 import type { TokenUsage } from '../../types/token-usage.js';
@@ -149,7 +150,8 @@ export class ClaudeTool implements ITool {
     mcpEnabled?: boolean,
     _useNativeAuth?: boolean, // Claude supports `claude login` OAuth, but no special handling needed in tool
     usersRepo?: import('../../db/feathers-repositories').UsersRepository,
-    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
+    mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository,
+    runtime?: AgenticToolRuntime
   ) {
     if (messagesRepo && sessionsRepo) {
       this.promptService = new ClaudePromptService(
@@ -166,7 +168,8 @@ export class ClaudeTool implements ITool {
         messagesService,
         mcpEnabled,
         usersRepo,
-        mcpOAuthAuthHeadersRepo
+        mcpOAuthAuthHeadersRepo,
+        runtime
       );
     }
   }

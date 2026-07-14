@@ -21,7 +21,9 @@ import {
   computeFileHash,
   findCodexSessionFile,
   getCodexHome,
+  getCodexSessionRelativePath,
   getSessionFilePath,
+  resolveCodexSessionRelativePath,
   restoreFile,
   serializeFile,
 } from './session-state';
@@ -47,6 +49,8 @@ interface PushContext {
   branchPath: string;
   tool: AgenticToolName;
   lastKnownMd5?: string;
+  /** Revalidate turn ownership before work starts and after the snapshot is fixed. */
+  isCurrentTask?: () => Promise<boolean>;
   /** Override for the executor user's home directory (insulated/strict modes) */
   executorHomeDir?: string;
 }
@@ -66,16 +70,6 @@ interface PushContext {
 export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   const tenantId = getCurrentTenantId();
   if (!tenantId) throw new Error('Missing active tenant context for session state restore');
-
-  // Both claude-code and codex now resolve transcripts under the executor
-  // user's HOME (~/.claude or ~/.codex). For simple mode executorHomeDir is
-  // undefined and the helpers fall back to os.homedir().
-  const filePath = getSessionFilePath(
-    ctx.tool,
-    ctx.branchPath,
-    ctx.sdkSessionId,
-    ctx.executorHomeDir
-  );
 
   // Check latest row (any status)
   let latest = await runWithTenantDatabaseScope(ctx.db, tenantId, (tenantDb) =>
@@ -121,6 +115,10 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
   }
 
   // At this point, latest.status === 'done'
+  const filePath =
+    ctx.tool === 'codex' && latest.relative_path
+      ? resolveCodexSessionRelativePath(getCodexHome(ctx.executorHomeDir), latest.relative_path)
+      : getSessionFilePath(ctx.tool, ctx.branchPath, ctx.sdkSessionId, ctx.executorHomeDir);
   const localMd5 = await computeFileHash(filePath);
 
   // Case 3: MD5 matches → fast path
@@ -143,19 +141,25 @@ export async function pullIfNeeded(ctx: PullContext): Promise<void> {
 }
 
 /**
- * Push: run after SDK subprocess exits. Fire-and-forget (never awaited by caller).
- * Skips if file hash unchanged. Otherwise: insertProcessing → gzip → markDone → deletePreviousTurns.
+ * Push: run after SDK subprocess exits and return the persisted/current hash.
+ * Skips if file hash unchanged. Otherwise: insertProcessing → gzip → markDone.
+ * Previous-turn deletion is best-effort GC after the durable commit.
  */
-export function pushAsync(ctx: PushContext): void {
+export function pushAsync(ctx: PushContext): Promise<string | null> {
   const tenantId = getCurrentTenantId();
   if (!tenantId) throw new Error('Missing active tenant context for session state persistence');
-  // Fire and forget — errors are logged but never propagated
-  void doPush(ctx, tenantId).catch((err) => {
+  // Persistence failure must not make executor exit cleanup throw, but the
+  // null result prevents callers from claiming a task MD5 was stored.
+  return doPush(ctx, tenantId).catch((err) => {
     console.error('[session-state] pushAsync failed:', err instanceof Error ? err.message : err);
+    return null;
   });
 }
 
-async function doPush(ctx: PushContext, tenantId: string): Promise<void> {
+async function doPush(ctx: PushContext, tenantId: string): Promise<string | null> {
+  if (ctx.isCurrentTask && !(await ctx.isCurrentTask())) {
+    return null;
+  }
   // For Codex, find the actual session file (may be in a date-based subdirectory)
   let filePath: string;
   if (ctx.tool === 'codex') {
@@ -163,7 +167,7 @@ async function doPush(ctx: PushContext, tenantId: string): Promise<void> {
     const found = await findCodexSessionFile(codexHome, ctx.sdkSessionId);
     if (!found) {
       // No session file found — Codex may not have written one (e.g. error before first turn)
-      return;
+      return null;
     }
     filePath = found;
   } else {
@@ -175,13 +179,24 @@ async function doPush(ctx: PushContext, tenantId: string): Promise<void> {
 
   // Skip if file doesn't exist
   if (currentMd5 === '') {
-    return;
+    return null;
   }
 
   // Skip if hash unchanged
   if (ctx.lastKnownMd5 && currentMd5 === ctx.lastKnownMd5) {
-    return;
+    return currentMd5;
   }
+  const latestDone = await runWithTenantDatabaseScope(ctx.db, tenantId, (tenantDb) =>
+    new SerializedSessionRepository(tenantDb).findLatestDone(ctx.sessionId)
+  );
+  if (latestDone?.md5 === currentMd5) {
+    return currentMd5;
+  }
+
+  const relativePath =
+    ctx.tool === 'codex'
+      ? getCodexSessionRelativePath(getCodexHome(ctx.executorHomeDir), filePath)
+      : null;
 
   // Determine turn_index
   const { row, turnIndex } = await runWithTenantDatabaseScope(
@@ -197,6 +212,7 @@ async function doPush(ctx: PushContext, tenantId: string): Promise<void> {
         taskId: ctx.taskId,
         turnIndex,
         md5: currentMd5,
+        relativePath,
       });
       return { row, turnIndex };
     }
@@ -205,15 +221,44 @@ async function doPush(ctx: PushContext, tenantId: string): Promise<void> {
   // Gzip the file
   const payload = await serializeFile(filePath);
 
-  await runWithTenantDatabaseScope(ctx.db, tenantId, async (tenantDb) => {
-    const repo = new SerializedSessionRepository(tenantDb);
-    // Mark done with payload
-    await repo.markDone(row.id, payload);
-    // Only delete turns older than this one — safe against concurrent pushes.
-    await repo.deletePreviousTurns(ctx.sessionId, turnIndex);
-  });
+  // A newer task may start while the snapshot is being serialized. Validate
+  // after serialization so a stale turn can never commit the newer task's
+  // changing transcript. The payload is immutable after this boundary.
+  if (ctx.isCurrentTask) {
+    let isCurrentTask: boolean;
+    try {
+      isCurrentTask = await ctx.isCurrentTask();
+    } catch (error) {
+      await runWithTenantDatabaseScope(ctx.db, tenantId, (tenantDb) =>
+        new SerializedSessionRepository(tenantDb).deleteById(row.id)
+      );
+      throw error;
+    }
+    if (!isCurrentTask) {
+      await runWithTenantDatabaseScope(ctx.db, tenantId, (tenantDb) =>
+        new SerializedSessionRepository(tenantDb).deleteById(row.id)
+      );
+      return null;
+    }
+  }
+
+  await runWithTenantDatabaseScope(ctx.db, tenantId, (tenantDb) =>
+    new SerializedSessionRepository(tenantDb).markDone(row.id, payload)
+  );
+
+  try {
+    await runWithTenantDatabaseScope(ctx.db, tenantId, (tenantDb) =>
+      new SerializedSessionRepository(tenantDb).deletePreviousTurns(ctx.sessionId, turnIndex)
+    );
+  } catch (error) {
+    console.warn(
+      `[session-state] Previous-turn cleanup failed for session ${shortId(ctx.sessionId)}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
 
   console.log(
     `[session-state] Pushed session state (turn ${turnIndex}, ${payload.length} bytes gzipped)`
   );
+  return currentMd5;
 }
