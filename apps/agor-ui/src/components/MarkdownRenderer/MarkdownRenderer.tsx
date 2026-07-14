@@ -17,6 +17,7 @@ import { defaultRehypePlugins, Streamdown } from 'streamdown';
 import { rehypeHeadingAnchors } from '../../utils/headingAnchors';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 import { isDarkTheme } from '../../utils/theme';
+import { streamdownRemarkPlugins, streamdownRichContentPlugins } from './richContentPlugins';
 import './MarkdownRenderer.css';
 
 interface MarkdownRendererProps {
@@ -104,7 +105,10 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
     [headingAnchors]
   );
   const components = useMemo(
-    () => (headingAnchors ? { a: MarkdownAnchor } : undefined),
+    () => ({
+      blockquote: MarkdownBlockquote,
+      ...(headingAnchors ? { a: MarkdownAnchor } : {}),
+    }),
     [headingAnchors]
   );
 
@@ -117,13 +121,16 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
     <Typography style={mergedStyles} className={compact ? 'markdown-compact' : undefined}>
       <Streamdown
         key={isStreaming ? undefined : markdownContentKey(rawText, { headingAnchors })}
+        mode={isStreaming ? 'streaming' : 'static'}
         parseIncompleteMarkdown={isStreaming} // Parse incomplete syntax only while streaming
         className={inline ? 'inline-markdown' : 'markdown-content'}
         isAnimating={isStreaming} // Disable buttons during streaming
         controls={showControls} // Show/hide controls based on context
-        mermaidConfig={mermaidConfig} // Set Mermaid theme based on current theme mode
+        mermaid={{ config: mermaidConfig }} // Set Mermaid theme based on current theme mode
+        plugins={streamdownRichContentPlugins}
         components={components}
         rehypePlugins={rehypePlugins}
+        remarkPlugins={streamdownRemarkPlugins}
         // Keep anchored documents in one Streamdown block so the heading slugger
         // sees the whole document and duplicate headings are deduped globally.
         parseMarkdownIntoBlocksFn={headingAnchors ? parseMarkdownAsSingleBlock : undefined}
@@ -160,6 +167,61 @@ const parseMarkdownAsSingleBlock = (markdown: string) => [markdown];
 type MarkdownAnchorProps = React.AnchorHTMLAttributes<HTMLAnchorElement> & {
   node?: unknown;
 };
+
+type MarkdownBlockquoteProps = React.BlockquoteHTMLAttributes<HTMLQuoteElement> & {
+  node?: unknown;
+};
+
+const CALLOUT_TITLES = new Set(['NOTE', 'TIP', 'IMPORTANT', 'WARNING', 'CAUTION']);
+
+function MarkdownBlockquote({
+  children,
+  className,
+  node: _node,
+  ...props
+}: MarkdownBlockquoteProps) {
+  // remark-github-blockquote-alert inserts a title paragraph with dir="auto".
+  // Its classes are correctly removed by Streamdown's sanitizer, so restore
+  // only the five closed-set GitHub alert classes at the React boundary.
+  const firstChild = React.Children.toArray(children).find(React.isValidElement);
+  const firstProps = React.isValidElement(firstChild)
+    ? (firstChild.props as { children?: React.ReactNode; dir?: string })
+    : undefined;
+  const title =
+    firstProps?.dir === 'auto' ? reactText(firstProps.children).trim().toUpperCase() : '';
+  const calloutClass = CALLOUT_TITLES.has(title)
+    ? `markdown-alert-${title.toLowerCase()}`
+    : undefined;
+
+  return (
+    <blockquote
+      className={[
+        'my-4 border-muted-foreground/30 border-l-4 pl-4 text-muted-foreground italic',
+        calloutClass ? 'markdown-alert' : undefined,
+        calloutClass,
+        className,
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      data-streamdown="blockquote"
+      {...props}
+    >
+      {children}
+    </blockquote>
+  );
+}
+
+function reactText(value: React.ReactNode): string {
+  return React.Children.toArray(value)
+    .map((child) => {
+      if (typeof child === 'string' || typeof child === 'number') return String(child);
+      if (React.isValidElement(child)) {
+        return reactText((child.props as { children?: React.ReactNode }).children);
+      }
+      return '';
+    })
+    .join('');
+}
 
 function MarkdownAnchor({ children, className, href, node: _node, ...props }: MarkdownAnchorProps) {
   if (className?.split(/\s+/).includes('markdown-heading-anchor') && href?.startsWith('#')) {

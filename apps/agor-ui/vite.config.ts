@@ -83,6 +83,10 @@ export default defineConfig({
           if (id.includes('@tsparticles/')) return 'particles';
           if (id.includes('@xterm/')) return 'xterm';
           if (id.includes('@codesandbox/sandpack')) return 'sandpack';
+          // Vega is only reached through the fenced `vega-lite` renderer. Keep
+          // its full runtime in a named async chunk so static plugin
+          // registration can never pull it into the initial Streamdown chunk.
+          if (/node_modules\/(?:vega(?:-|\/))/.test(id)) return 'vega';
           if (id.includes('streamdown')) return 'streamdown';
           return undefined;
         },

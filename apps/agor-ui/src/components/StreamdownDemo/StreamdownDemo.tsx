@@ -19,6 +19,43 @@ const { Title } = Typography;
 
 const demoContent = `# Streamdown Feature Showcase
 
+## 📈 Vega-Lite (POC)
+
+The chart runtime loads only after Streamdown receives the complete fenced block:
+
+\`\`\`vega-lite
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "description": "Monthly revenue in thousands of dollars",
+  "width": "container",
+  "height": 240,
+  "data": {
+    "values": [
+      {"month": "Jan", "revenue": 28},
+      {"month": "Feb", "revenue": 55},
+      {"month": "Mar", "revenue": 43},
+      {"month": "Apr", "revenue": 91},
+      {"month": "May", "revenue": 81},
+      {"month": "Jun", "revenue": 53}
+    ]
+  },
+  "mark": {"type": "bar", "cornerRadiusTopLeft": 4, "cornerRadiusTopRight": 4},
+  "encoding": {
+    "x": {"field": "month", "type": "nominal", "axis": {"labelAngle": 0}},
+    "y": {"field": "revenue", "type": "quantitative", "title": "Revenue ($k)"},
+    "color": {"field": "month", "type": "nominal", "legend": null}
+  }
+}
+\`\`\`
+
+## 📣 GitHub-style callouts (POC)
+
+> [!NOTE]
+> This syntax stays a readable blockquote in ordinary Markdown and renders as an alert on GitHub.
+
+> [!CAUTION]
+> Conversation charts accept inline data only; remote data and image URLs are blocked.
+
 ## 🎨 Mermaid Diagrams
 
 Here's a flowchart showing the Agor architecture:
