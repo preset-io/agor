@@ -901,6 +901,45 @@ describe('terminal:* handler authorization', () => {
   });
 });
 
+describe('presence/cursor exclude the terminal-executor identity', () => {
+  it('does NOT join a terminal-executor socket to a board presence room', () => {
+    const { io } = buildHarness();
+    const s = makeSocket('exec-sock');
+    asServiceForUser(s, ALICE);
+    connect(io, s);
+    s.handlers.get('presence:watch-board')?.('board-1');
+    expect(s.joined.has(boardPresenceRoomName('board-1'))).toBe(false);
+  });
+
+  it('DOES join a normal authenticated user to a board presence room', () => {
+    const { io } = buildHarness();
+    const s = makeSocket('alice-sock');
+    asUser(s, ALICE);
+    connect(io, s);
+    s.handlers.get('presence:watch-board')?.('board-1');
+    expect(s.joined.has(boardPresenceRoomName('board-1'))).toBe(true);
+  });
+
+  it('drops cursor-move / cursor-leave from a terminal-executor socket (no broadcast)', () => {
+    const { io } = buildHarness();
+    const s = makeSocket('exec-sock', io);
+    asServiceForUser(s, ALICE);
+    connect(io, s);
+    s.handlers.get('cursor-move')?.({ boardId: 'board-1', x: 1, y: 2, timestamp: 1 });
+    s.handlers.get('cursor-leave')?.({ boardId: 'board-1', timestamp: 1 });
+    expect(io.emitted).toEqual([]);
+  });
+
+  it('still broadcasts cursor-move from a normal user', () => {
+    const { io } = buildHarness();
+    const s = makeSocket('alice-sock', io);
+    asUser(s, ALICE);
+    connect(io, s);
+    s.handlers.get('cursor-move')?.({ boardId: 'board-1', x: 1, y: 2, timestamp: 1 });
+    expect(io.emitted.some((e) => e.event === 'cursor-moved')).toBe(true);
+  });
+});
+
 describe('configureChannels tenant isolation', () => {
   function makeChannelHarness() {
     const handlers = new Map<string, (...args: any[]) => void>();

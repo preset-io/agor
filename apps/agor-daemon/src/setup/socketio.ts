@@ -500,9 +500,18 @@ export function createSocketIOConfig(
         return user?.user_id || 'unknown';
       };
 
+      // A terminal-executor identity has zero non-terminal daemon visibility:
+      // it must not watch board presence rooms or emit/receive cursor+presence
+      // activity (it would otherwise spoof presence and observe collaborators).
+      // Presence/cursor events run outside Feathers hooks, so they're guarded
+      // here directly, consistent with the channel-join exclusions.
+      const isTerminalExecutorSocket = () =>
+        isTerminalExecutorIdentity((socket as FeathersSocket).feathers?.user);
+
       socket.on('presence:watch-board', (boardId: string) => {
         const auth = getSocketAuthState(socket);
-        if (!isAuthenticated(auth) || typeof boardId !== 'string' || !boardId.trim()) return;
+        if (!isAuthenticated(auth) || isTerminalExecutorSocket()) return;
+        if (typeof boardId !== 'string' || !boardId.trim()) return;
         socket.join(boardPresenceRoomName(boardId));
       });
 
@@ -513,6 +522,7 @@ export function createSocketIOConfig(
 
       // Handle cursor movement events
       socket.on('cursor-move', (data: CursorMoveEvent) => {
+        if (isTerminalExecutorSocket()) return;
         const userId = getUserId();
         const fs = socket as FeathersSocket;
         const previousBoardId = fs.data.currentBoardId;
@@ -558,6 +568,7 @@ export function createSocketIOConfig(
 
       // Handle cursor leave events (user navigates away from board)
       socket.on('cursor-leave', (data: CursorLeaveEvent) => {
+        if (isTerminalExecutorSocket()) return;
         const userId = getUserId();
         const fs = socket as FeathersSocket;
 
