@@ -48,14 +48,16 @@ describe('session-streams service', () => {
     expect(result).toEqual({ session_id: 's1', subscribed: true });
   });
 
-  it('marks the connection session-streams aware on a real subscribe', async () => {
+  it('does not mark the connection aware on a real subscribe (room-scoped only)', async () => {
     const { app } = makeApp(async () => ({ session_id: 's1' }));
     const service = createSessionStreamsService(app);
     const conn = { id: 'socket-subscribe' } as Record<string, unknown>;
 
     await service.create({ session_id: 's1' }, { connection: conn, provider: 'socketio' } as never);
 
-    expect(conn[SESSION_STREAMS_AWARE_FLAG]).toBe(true);
+    // The connection-wide aware bit must stay unset: a subscribe covers only
+    // this session's room, so other owned sessions keep the owner fallback.
+    expect(conn[SESSION_STREAMS_AWARE_FLAG]).toBeUndefined();
   });
 
   it('capability announce marks the connection aware without joining a room or reading a session', async () => {

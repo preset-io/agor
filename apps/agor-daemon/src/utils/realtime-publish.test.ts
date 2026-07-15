@@ -1196,6 +1196,54 @@ describe('configureRealtimePublish streaming scope', () => {
     expect(unionConnections(result)).toEqual([ownerSubscribed]);
   });
 
+  it('keeps the owner fallback per-session: subscribing to A does not drop owned B', async () => {
+    // One owner connection subscribed to A's room, but only raw-listens to owned
+    // B (never joined B's room). B must still reach it via the fallback; A must
+    // reach it via the room exactly once (not doubled by the fallback).
+    const owner = { user: user('owner-user') };
+    const app = makeApp(
+      [owner],
+      {},
+      {
+        authenticated: [owner],
+        'session-stream:sA': [owner],
+        'session-stream:sB': [],
+      }
+    );
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'view')),
+      findExplicitViewUserIds: vi.fn(async () => []),
+    } as unknown as RealtimeAccessBranchRepository;
+    const sessionsRepository = {
+      findBranchIdBySessionId: vi.fn(async () => 'b1'),
+      findCreatedByBySessionId: vi.fn(async () => 'owner-user'),
+    } as unknown as RealtimeAccessSessionRepository;
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository,
+      sessionsRepository,
+    });
+
+    // B: connection is not in B's room → owner fallback still delivers.
+    const bResult = await app.runPublish(
+      { session_id: 'sB', message_id: 'm1', chunk: 'b' },
+      streamingContext
+    );
+    expect(unionConnections(bResult)).toEqual([owner]);
+
+    // A: connection is in A's room → delivered via the room exactly once, the
+    // fallback excludes it. Union hides a double, so count raw occurrences.
+    const aResult = await app.runPublish(
+      { session_id: 'sA', message_id: 'm2', chunk: 'a' },
+      streamingContext
+    );
+    const aChannels = Array.isArray(aResult) ? aResult : [aResult];
+    const aRaw = aChannels.flatMap((c) => (c as FakeChannel).connections);
+    expect(aRaw.filter((c) => c === owner)).toHaveLength(1);
+    expect(unionConnections(aResult)).toEqual([owner]);
+  });
+
   it('still bridges a stale owner connection that never announced (safety net)', async () => {
     const staleOwner = { user: user('owner-user') };
     const other = { user: user('other-user') };

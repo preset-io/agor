@@ -448,12 +448,20 @@ async function resolveStreamingDelivery(
     // Best-effort owner fallback; the session room + service connections still
     // deliver even if the owner lookup fails.
   }
+  // Connections already in THIS session's room receive via the room, so the
+  // owner fallback excludes them — room-scoped, not connection-wide (an owner
+  // subscribed to A still gets fallback for other owned sessions it never joined).
+  const roomConnections = new Set<unknown>(
+    room ? (room as unknown as { connections: unknown[] }).connections : []
+  );
   // Owner fallback: only owner connections that haven't announced awareness
-  // (aware clients get streaming via the room). Never widens.
+  // (aware clients get streaming via the room) and aren't in this room. Never widens.
   const ownerChannel = (): PublishChannel =>
     tenantScoped.filter(
       (connection: unknown) =>
-        userFromConnection(connection)?.user_id === ownerId && !isSessionStreamsAware(connection)
+        userFromConnection(connection)?.user_id === ownerId &&
+        !isSessionStreamsAware(connection) &&
+        !roomConnections.has(connection)
     );
 
   // RBAC off: no visibility model — deliver to subscribers + owner + service.

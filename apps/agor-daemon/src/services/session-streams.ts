@@ -81,8 +81,9 @@ export function createSessionStreamsService(app: Application) {
       // room publishers emit to (they carry the full UUID).
       const canonicalId = (await resolveAccessibleSessionId(sessionId, params)) ?? sessionId;
       joinSessionStreamChannel(app, canonicalId, connection);
-      // A real subscribe proves a modern client: mark aware so the owner fallback stops bridging it.
-      markConnectionSessionStreamsAware(connection);
+      // Do NOT mark the connection aware here: the aware bit is connection-wide,
+      // but a subscribe only covers THIS session's room. The owner fallback still
+      // bridges other owned sessions this connection raw-listens to but never joined.
       return { session_id: canonicalId, subscribed: true };
     },
 
