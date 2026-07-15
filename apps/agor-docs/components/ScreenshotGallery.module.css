@@ -1,0 +1,158 @@
+.wall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 1.5rem 0;
+}
+
+.item {
+  /* No grow: a short last row keeps tile width instead of stretching. */
+  flex: 0 1 calc(25% - 12px);
+  min-width: 210px;
+  margin: 0;
+}
+
+.thumb {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 1px solid rgba(52, 230, 196, 0.14);
+  border-radius: 8px;
+  overflow: hidden;
+  background: none;
+  cursor: zoom-in;
+  font-size: 0;
+  transition:
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.thumb:hover {
+  border-color: rgba(52, 230, 196, 0.45);
+  transform: translateY(-2px);
+}
+
+.thumb img {
+  display: block;
+  width: 100%;
+  /* Uniform tiles regardless of each screenshot's native aspect ratio —
+   * the full image is always available in the lightbox. */
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  object-position: top;
+}
+
+.caption {
+  margin-top: 6px;
+  opacity: 0.55;
+  text-align: center;
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  /* Extra top room so the enlarged image sits below the fixed navbar and
+   * clearly floats over — not replaces — the page. */
+  padding: 9vh 4vw 4vh;
+  /* More transparent than a typical lightbox so the page reads through and
+   * it's obvious you haven't navigated away. */
+  background: rgba(4, 10, 9, 0.62);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  animation: lightboxFadeIn 200ms ease both;
+}
+
+.closing {
+  animation: lightboxFadeOut 180ms ease both;
+}
+
+@keyframes lightboxFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lightboxFadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.lightbox {
+  position: relative;
+  max-width: min(1400px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  animation: lightboxRise 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.closing .lightbox {
+  animation: none;
+}
+
+@keyframes lightboxRise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop,
+  .closing,
+  .lightbox {
+    animation-duration: 1ms;
+  }
+}
+
+.lightbox img {
+  display: block;
+  max-width: 100%;
+  max-height: 82vh;
+  margin: 0 auto;
+  border: 1px solid rgba(52, 230, 196, 0.2);
+  border-radius: 10px;
+}
+
+.lightboxCaption {
+  margin: 12px 0 0;
+  color: #cfe0db;
+  text-align: center;
+  font-size: 0.95rem;
+}
+
+.close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(52, 230, 196, 0.3);
+  border-radius: 50%;
+  background: rgba(8, 18, 16, 0.85);
+  color: #cfe0db;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.close:hover {
+  border-color: rgba(52, 230, 196, 0.6);
+  color: #34e6c4;
+}

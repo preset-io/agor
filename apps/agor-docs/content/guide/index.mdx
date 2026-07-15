@@ -20,6 +20,7 @@ import { LOGO_MARK_PATH } from '../../lib/siteMetadata';
 Agor is a shared canvas where coding agents (Claude Code, Codex, Gemini) and long-lived AI teammates run side-by-side on isolated git branches — the anchor entity where sessions, dev environments, prompts, and PRs converge. Your whole team rallies around the same live work in real time, and the agents themselves drive Agor over MCP.
 
 import { GifGallery, YouTubeEmbed } from '../../components';
+import { ScreenshotGallery } from '../../components/ScreenshotGallery';
 
 ## In Action
 
@@ -58,96 +59,50 @@ Prefer Homebrew on macOS or Linux? See the [Getting Started Guide](/guide/gettin
 
 _Multiplayer spatial canvas with zones, branches, live cursors, notes, and agent-built dashboards_
 
-<div
-  style={{
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: '16px',
-    marginTop: '24px',
-    marginBottom: '24px',
-  }}
->
-  <div>
-    <img
-      src="/screenshots/conversation_full_page.png"
-      alt="Agor task-centric conversation UI showing AI agent messages, tool calls, and file changes in a structured timeline"
-      style={{ width: '100%', borderRadius: '8px' }}
-    />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Task-centric conversation UI</em>
-    </p>
-  </div>
-  <div>
-    <img
-      src="/screenshots/settings_modal.png"
-      alt="Agor settings modal for configuring MCP servers, managing branches, and agent preferences"
-      style={{ width: '100%', borderRadius: '8px' }}
-    />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>MCP server and branch management</em>
-    </p>
-  </div>
-  <div>
-    <img
-      src="/screenshots/zone-trigger.png"
-      alt="Agor zone trigger modal showing a templated prompt with mustache placeholders ({{ branch.name }}, {{ branch.pull_request_url }}) and Prompt/Fork/Spawn action choices"
-      style={{ width: '100%', borderRadius: '8px' }}
-    />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Zone trigger with templated prompt</em>
-    </p>
-  </div>
-  <div>
-    <img
-      src="/screenshots/tool-blocks.png"
-      alt="Agor chat showing structured tool blocks: collapsible thinking, Grep with pattern badge, Edit with red/green inline diff, and Bash with expandable output"
-      style={{ width: '100%', borderRadius: '8px' }}
-    />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Structured tool blocks with inline diffs</em>
-    </p>
-  </div>
-  <div>
-    <img
-      src="/screenshots/env-variants-full.png"
-      alt="Agor branch environment tab showing YAML config with named variants (docs, full, sqlite, postgres) and Docker compose commands"
-      style={{ width: '100%', borderRadius: '8px' }}
-    />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Branch environment with named variants</em>
-    </p>
-  </div>
-  <div>
-    <img
-      src="/screenshots/create-session-modal.png"
-      alt="Agor create session modal showing five agent runtime cards side-by-side: Claude Code, Codex, Gemini, OpenCode (BETA), GitHub Copilot (BETA)"
-      style={{ width: '100%', borderRadius: '8px' }}
-    />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Pick any SDK: Claude, Codex, Gemini, OpenCode, Copilot</em>
-    </p>
-  </div>
-  <div>
-    <img
-      src="/screenshots/baked_in_terminal.png"
-      alt="Agor built-in terminal with automatic branch context and environment variable injection"
-      style={{ width: '100%', borderRadius: '8px' }}
-    />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Built-in terminal with branch context</em>
-    </p>
-  </div>
-  <div>
-    <img
-      src="/screenshots/onboarding.png"
-      alt="Agor onboarding welcome screen showing team status, recent activity, and quick start guide"
-      style={{ width: '100%', borderRadius: '8px' }}
-    />
-    <p style={{ textAlign: 'center', marginTop: '8px', opacity: 0.5 }}>
-      <em>Welcome screen showing team status</em>
-    </p>
-  </div>
-</div>
+<ScreenshotGallery
+  shots={[
+    {
+      src: '/screenshots/conversation_full_page.png',
+      alt: "Agor task-centric conversation UI showing AI agent messages, tool calls, and file changes in a structured timeline",
+      caption: 'Task-centric conversation UI',
+    },
+    {
+      src: '/screenshots/settings_modal.png',
+      alt: "Agor settings modal for configuring MCP servers, managing branches, and agent preferences",
+      caption: 'MCP server and branch management',
+    },
+    {
+      src: '/screenshots/zone-trigger.png',
+      alt: "Agor zone trigger modal showing a templated prompt with mustache placeholders ({{ branch.name }}, {{ branch.pull_request_url }}) and Prompt/Fork/Spawn action choices",
+      caption: 'Zone trigger with templated prompt',
+    },
+    {
+      src: '/screenshots/tool-blocks.png',
+      alt: "Agor chat showing structured tool blocks: collapsible thinking, Grep with pattern badge, Edit with red/green inline diff, and Bash with expandable output",
+      caption: 'Structured tool blocks with inline diffs',
+    },
+    {
+      src: '/screenshots/env-variants-full.png',
+      alt: "Agor branch environment tab showing YAML config with named variants (docs, full, sqlite, postgres) and Docker compose commands",
+      caption: 'Branch environment with named variants',
+    },
+    {
+      src: '/screenshots/create-session-modal.png',
+      alt: "Agor create session modal showing five agent runtime cards side-by-side: Claude Code, Codex, Gemini, OpenCode (BETA), GitHub Copilot (BETA)",
+      caption: 'Pick any SDK: Claude, Codex, Gemini, OpenCode, Copilot',
+    },
+    {
+      src: '/screenshots/baked_in_terminal.png',
+      alt: "Agor built-in terminal with automatic branch context and environment variable injection",
+      caption: 'Built-in terminal with branch context',
+    },
+    {
+      src: '/screenshots/onboarding.png',
+      alt: "Agor onboarding welcome screen showing team status, recent activity, and quick start guide",
+      caption: 'Welcome screen showing team status',
+    },
+  ]}
+/>
 
 ---
 
