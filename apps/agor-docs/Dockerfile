@@ -6,7 +6,7 @@
 
 FROM node:22-alpine
 
-RUN corepack enable && corepack prepare pnpm@9.15.1 --activate
+RUN corepack enable && corepack prepare pnpm@11.13.0 --activate
 
 WORKDIR /app
 

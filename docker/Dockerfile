@@ -60,7 +60,7 @@ RUN curl -fsSL "$(curl -s https://api.github.com/repos/cli/cli/releases/latest |
 # Pinned versions for reproducibility across dev and prod
 # NOTE: Update these versions when upgrading Agor SDKs (see packages/core/package.json)
 RUN npm install -g \
-  pnpm@9.15.1 \
+  pnpm@11.13.0 \
   @anthropic-ai/claude-code@2.1.197 \
   @google/gemini-cli@0.31.0 \
   @openai/codex@0.141.0 \
@@ -201,9 +201,11 @@ ENV AGOR_BUILD_SHA=${AGOR_BUILD_SHA}
 # check:agor-live-deps and check:pack, which gate the build. dist/ is in the
 # package's `files` allowlist, so `pnpm deploy` carries it into the output, and
 # agor-live's postinstall re-creates the @agor/{core,git} → dist symlinks there.
+# pnpm 11's explicit legacy deploy mode preserves that established packaged layout;
+# injected workspace packages would replace it with copies of workspace projects.
 RUN pnpm install --frozen-lockfile \
   && bash packages/agor-live/build.sh --skip-install \
-  && pnpm --filter=agor-live deploy --prod /opt/agor-live
+  && pnpm --filter=agor-live deploy --prod --legacy /opt/agor-live
 
 # `pnpm deploy` runs agor-live's postinstall against the workspace copy, not the
 # deploy output — so the @agor/{core,git} → dist symlinks it creates never land
