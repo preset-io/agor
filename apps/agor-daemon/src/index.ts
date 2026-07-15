@@ -58,6 +58,7 @@ import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { scopeExecutorRuntimeAuth } from './auth/executor-runtime-scope.js';
+import { rejectTerminalExecutorIdentity } from './auth/terminal-executor-guard.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
@@ -212,6 +213,11 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   );
   const requireAuth = async (context: HookContext): Promise<HookContext> => {
     const authed = await authenticatedHook(context);
+    // A terminal-executor identity is valid ONLY for the Socket.IO terminal
+    // channel (handled outside Feathers); reject it from every REST/Feathers
+    // service call here, the shared auth chokepoint, so it can't ride the
+    // RBAC rank table's viewer-rank fallthrough into API access.
+    await rejectTerminalExecutorIdentity(authed);
     try {
       authed.params.tenant = resolveTenantContext(multiTenancy, { params: authed.params });
       return authed;

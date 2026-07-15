@@ -65,13 +65,14 @@ import {
  * service-token default would break reconnection). 30 days covers realistic
  * usage.
  *
- * SECURITY: the `terminal_user_id` claim makes this a RESTRICTED, low-privilege
- * identity — ServiceJWTStrategy resolves it to `_isTerminalExecutor` (not a
- * full `_isServiceAccount`), so it does NOT bypass RBAC on any REST/Feathers
- * path; it only authorizes its own user's terminal socket channel. That
- * confinement is what makes a long TTL acceptable (there's no revocation story
- * for a stateless JWT). A leaked token grants terminal-channel I/O for that one
- * user for its lifetime — no broader daemon access.
+ * SECURITY: the `terminal_user_id` claim makes this a RESTRICTED identity —
+ * ServiceJWTStrategy resolves it to `_isTerminalExecutor` (NOT a full
+ * `_isServiceAccount`), and `rejectTerminalExecutorIdentity` (composed into
+ * `requireAuth`) REJECTS it from every REST/Feathers service call. It is valid
+ * ONLY for its own user's Socket.IO terminal channel. That confinement is what
+ * makes a long TTL acceptable (there's no revocation story for a stateless
+ * JWT): a leaked token grants terminal-channel I/O for that one user for its
+ * lifetime — no broader daemon access.
  */
 const TERMINAL_EXECUTOR_TOKEN_TTL = '30d';
 
