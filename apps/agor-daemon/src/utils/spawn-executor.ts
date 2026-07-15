@@ -861,13 +861,14 @@ export function generateSessionToken(
   app: {
     settings: { authentication?: { secret?: string } };
   },
-  scope: Record<string, unknown> = {}
+  scope: Record<string, unknown> = {},
+  expiresIn?: SignOptions['expiresIn']
 ): string {
   const jwtSecret = app.settings.authentication?.secret;
   if (!jwtSecret) {
     throw new Error('JWT secret not configured in app settings');
   }
-  return createServiceToken(jwtSecret, undefined, scope);
+  return createServiceToken(jwtSecret, expiresIn, scope);
 }
 
 /**
@@ -882,9 +883,14 @@ export function generateScopedServiceToken(
     settings: { authentication?: { secret?: string } };
   },
   params?: Partial<AuthenticatedParams>,
-  extraScope: Record<string, unknown> = {}
+  extraScope: Record<string, unknown> = {},
+  expiresIn?: SignOptions['expiresIn']
 ): string {
-  return generateSessionToken(app, { ...serviceTokenScopeForParams(params), ...extraScope });
+  return generateSessionToken(
+    app,
+    { ...serviceTokenScopeForParams(params), ...extraScope },
+    expiresIn
+  );
 }
 
 // ============================================================================

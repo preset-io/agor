@@ -58,6 +58,15 @@ import {
   writeClaudeCliMcpConfigForSession,
 } from './claude-cli-integration.js';
 
+/**
+ * TTL for the terminal executor's scoped service token. Terminals are
+ * long-lived and the executor re-authenticates with the same token across
+ * reconnects, so this must comfortably exceed a session's lifetime (the 5m
+ * service-token default would break reconnection). 30 days covers realistic
+ * usage; a token grants only terminal-channel access for one user.
+ */
+const TERMINAL_EXECUTOR_TOKEN_TTL = '30d';
+
 interface CreateTerminalData {
   rows?: number;
   cols?: number;
@@ -828,10 +837,15 @@ export class TerminalsService {
           // fresh claude), falling back to a plain focus when only a
           // `focusTabName` was supplied.
           void this.awaitExecutorReady(userId).then(async (isReady) => {
+            // Strictly gated: if the ack never arrives (executor errored, or an
+            // adopted process never re-announced) we do NOT fire into a dead
+            // room. The executor's own terminal:error / the ready:false in the
+            // response already keep the browser out of a false "connected".
             if (!isReady) {
               console.warn(
-                `[TerminalsService] readiness ack not received for user ${shortId(userId)} — warm choreography best-effort`
+                `[TerminalsService] readiness ack not received for user ${shortId(userId)} — skipping warm choreography`
               );
+              return;
             }
             this.app.io?.to(channel).emit('terminal:tab', {
               userId,
@@ -948,10 +962,21 @@ export class TerminalsService {
       // (`terminal_user_id`) so the socket layer can scope this executor's
       // terminal:* emits to its own user — a tenant-scoped service token alone
       // can't act for the right user only. See socketio.ts terminal handlers.
+      //
+      // Terminal executors are long-lived and re-authenticate with THIS SAME
+      // token on every reconnect (network blip / daemon restart — the whole
+      // point of this feature). The default 5m service-token TTL would expire
+      // mid-session and make reconnection fail, so we issue it with a long TTL
+      // covering realistic session lifetimes. (A refresh-on-reconnect scheme
+      // would be more robust but there's no authenticated channel to fetch a
+      // new token on an expired socket; a long TTL fits the current auth model.)
       const daemonUrl = `http://localhost:${config.daemon?.port || 3030}`;
-      const sessionToken = generateScopedServiceToken(this.app, params, {
-        terminal_user_id: userId,
-      });
+      const sessionToken = generateScopedServiceToken(
+        this.app,
+        params,
+        { terminal_user_id: userId },
+        TERMINAL_EXECUTOR_TOKEN_TTL
+      );
 
       // File/process work stays outside the tenant database unit of work.
       const envFile = writeEnvFile(userId, userEnv, finalUnixUser);
@@ -1003,10 +1028,12 @@ export class TerminalsService {
       if (data.cliEnsure || data.focusTabName) {
         const { cliEnsure, focusTabName } = data;
         void this.awaitExecutorReady(userId).then((ready) => {
+          // Strictly gated on the readiness ack — no blind best-effort fire.
           if (!ready) {
             console.warn(
-              `[TerminalsService] readiness ack not received for user ${shortId(userId)} — dispatching tab focus best-effort`
+              `[TerminalsService] readiness ack not received for user ${shortId(userId)} — skipping cold-start tab focus`
             );
+            return;
           }
           return this.dispatchTabFocus(userId, { cliEnsure, focusTabName });
         });

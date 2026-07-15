@@ -235,6 +235,14 @@ function asServiceForUser(socket: FakeSocket, userId: string) {
     user: { user_id: 'executor-service', _isServiceAccount: true, terminal_user_id: userId },
   };
 }
+/** Handshake-token variant of a user-scoped terminal executor socket. */
+function asServiceHandshakeForUser(socket: FakeSocket, userId: string) {
+  socket.feathers = {
+    user: { user_id: 'executor-service', _isServiceAccount: true, terminal_user_id: userId },
+  };
+  socket.data.isService = true;
+  socket.data.terminalUserId = userId;
+}
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -508,13 +516,13 @@ describe('terminal:* handler authorization', () => {
       expect(io.emitted).toEqual([]);
     });
 
-    it('terminal:output accepts post-connect authed service sockets and relays to channel', () => {
+    it('terminal:output accepts post-connect authed, user-scoped service sockets and relays', () => {
       // Regression for executor flow: connect anonymously, then
-      // client.authenticate() attaches `_isServiceAccount: true` to feathers.user
-      // without ever setting socket.data.isService. Previous impl rejected this.
+      // client.authenticate() attaches `_isServiceAccount: true` +
+      // `terminal_user_id` to feathers.user without setting socket.data.isService.
       const { io } = buildHarness();
       const s = makeSocket('exec-sock', io);
-      asServicePostConnect(s);
+      asServiceForUser(s, ALICE);
       connect(io, s);
       s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
       expect(io.emitted).toEqual([
@@ -532,7 +540,7 @@ describe('terminal:* handler authorization', () => {
       // `socket.to` so the sender is excluded.
       const { io } = buildHarness();
       const s = makeSocket('exec-sock', io);
-      asServicePostConnect(s);
+      asServiceForUser(s, ALICE);
       connect(io, s);
       s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
       expect(io.emitted).toEqual([
@@ -553,7 +561,7 @@ describe('terminal:* handler authorization', () => {
       const channel = `user/${ALICE}/terminal`;
 
       const exec = makeSocket('exec-sock', io);
-      asServicePostConnect(exec);
+      asServiceForUser(exec, ALICE);
       connect(io, exec);
       exec.join(channel);
 
@@ -576,11 +584,11 @@ describe('terminal:* handler authorization', () => {
       expect(exec.received).toEqual([]);
     });
 
-    it('terminal:output also accepts handshake-token service sockets (socket.data.isService path)', () => {
+    it('terminal:output also accepts user-scoped handshake-token service sockets', () => {
       // Separately covers the fast-path: service token presented at handshake.
       const { io } = buildHarness();
       const s = makeSocket('exec-sock', io);
-      asServiceHandshake(s);
+      asServiceHandshakeForUser(s, ALICE);
       connect(io, s);
       s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hi' });
       expect(io.emitted).toEqual([
@@ -600,6 +608,22 @@ describe('terminal:* handler authorization', () => {
       s.handlers.get('terminal:output')?.({ userId: BOB, data: 'x' });
       s.handlers.get('terminal:tab')?.({ userId: BOB, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
+    });
+
+    it('an UNSCOPED service token may not forge output/exit/tab for any user', () => {
+      // Closes the "enforce-if-present" bypass: a generic service token with no
+      // terminal_user_id can no longer supply a victim userId on these events.
+      const { io } = buildHarness();
+      const s = makeSocket('exec-sock');
+      asServicePostConnect(s); // service, but no terminal scope
+      connect(io, s);
+      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'x' });
+      s.handlers.get('terminal:exit')?.({ userId: ALICE, exitCode: 0 });
+      s.handlers.get('terminal:tab')?.({ userId: ALICE, action: 'create', tabName: 't' });
+      expect(io.emitted).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('not scoped to a terminal user')
+      );
     });
 
     it('all three reject when allow_web_terminal is false even for service sockets', () => {
@@ -712,15 +736,27 @@ describe('terminal:* handler authorization', () => {
       expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(true);
     });
 
-    it('allows a service socket to join any user terminal channel', () => {
+    it('allows a user-scoped executor to join ONLY its own user terminal channel', () => {
       const { io } = buildHarness();
       const s = makeSocket('exec-sock');
-      asServicePostConnect(s);
+      asServiceForUser(s, ALICE);
       connect(io, s);
       s.handlers.get('join')?.(`user/${ALICE}/terminal`);
       s.handlers.get('join')?.(`user/${BOB}/terminal`);
       expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(true);
-      expect(s.joined.has(`user/${BOB}/terminal`)).toBe(true);
+      // Scoped to ALICE — must NOT be able to join BOB's channel and harvest
+      // his terminal traffic.
+      expect(s.joined.has(`user/${BOB}/terminal`)).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('may not join'));
+    });
+
+    it('rejects a join from an unscoped service token entirely', () => {
+      const { io } = buildHarness();
+      const s = makeSocket('exec-sock');
+      asServicePostConnect(s); // service, no terminal scope
+      connect(io, s);
+      s.handlers.get('join')?.(`user/${ALICE}/terminal`);
+      expect(s.joined.has(`user/${ALICE}/terminal`)).toBe(false);
     });
 
     it('rejects join when allow_web_terminal is false', () => {

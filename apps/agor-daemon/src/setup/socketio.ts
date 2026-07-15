@@ -635,20 +635,14 @@ export function createSocketIOConfig(
       };
 
       // Common preflight for executor-emitted terminal events
-      // (output/exit/tab/ready/error). Requires a service socket and a
-      // non-empty payload userId. Additionally, when the service token is
-      // terminal-scoped (`terminalUserId`, bound at spawn time), the payload
-      // userId MUST match it — otherwise one user's executor could emit for
-      // another user. `requireScope` forces the scope to be present at all
-      // (used for the new ready/error acks, which every terminal executor
-      // carries); output/exit/tab enforce-if-present to stay compatible with
-      // any generic service emitter while still scoping real terminal
-      // executors. Returns true when the event may proceed.
-      const requireServiceForOwnUserId = (
-        event: string,
-        payloadUserId: unknown,
-        opts: { requireScope: boolean } = { requireScope: false }
-      ): boolean => {
+      // (output/exit/tab/ready/error). Requires a service socket whose token is
+      // terminal-scoped (`terminalUserId`, bound at spawn time) AND whose scope
+      // matches the payload userId. The scope is required unconditionally: the
+      // only legitimate emitter of these events is the terminal executor, which
+      // always carries it, so a generic/unscoped service token has no business
+      // driving another user's terminal. Returns true when the event may
+      // proceed.
+      const requireServiceForOwnUserId = (event: string, payloadUserId: unknown): boolean => {
         if (!webTerminalEnabled) {
           rejectTerminal(event, 'web terminal disabled (allow_web_terminal=false)');
           return false;
@@ -662,11 +656,11 @@ export function createSocketIOConfig(
           rejectTerminal(event, 'missing userId');
           return false;
         }
-        if (opts.requireScope && !auth.terminalUserId) {
+        if (!auth.terminalUserId) {
           rejectTerminal(event, 'service token is not scoped to a terminal user');
           return false;
         }
-        if (auth.terminalUserId && auth.terminalUserId !== payloadUserId) {
+        if (auth.terminalUserId !== payloadUserId) {
           rejectTerminal(
             event,
             `service token scoped to ${shortId(auth.terminalUserId)}… may not act for ` +
@@ -693,10 +687,21 @@ export function createSocketIOConfig(
           rejectTerminal('join', `unauthenticated socket cannot join ${channel}`);
           return;
         }
-        // Service sockets (executor) are allowed to join any user's terminal
-        // channel — that's how they relay PTY I/O for the user they're
-        // proxying. User sockets may only join their OWN channel.
-        if (!auth.isService && auth.userId !== target) {
+        // Channel membership determines who RECEIVES a user's terminal traffic
+        // (output/input/resize), so it must be scoped to that user. A terminal
+        // executor's service token is bound to a single user (`terminalUserId`)
+        // and may only join THAT user's channel — not any user's. A service
+        // token with no terminal scope has no business on a terminal channel at
+        // all. User sockets may only join their own channel.
+        if (auth.isService) {
+          if (!auth.terminalUserId || auth.terminalUserId !== target) {
+            rejectTerminal(
+              'join',
+              `service token scoped to ${auth.terminalUserId ? shortId(auth.terminalUserId) : 'nothing'}… may not join ${shortId(target)}…'s channel`
+            );
+            return;
+          }
+        } else if (auth.userId !== target) {
           rejectTerminal(
             'join',
             `user ${auth.userId ? shortId(auth.userId) : 'unknown'}… tried to join ${shortId(target)}…'s channel`
@@ -707,9 +712,9 @@ export function createSocketIOConfig(
         socket.join(channel);
       });
 
-      // Handle explicit channel leaves. Same auth model as join: service
-      // sockets can leave any channel, users can only leave their own. We
-      // also reject for unauthenticated sockets to prevent noise / probing.
+      // Handle explicit channel leaves. Same scoping as join: a terminal
+      // executor may only leave its own user's channel, users only their own.
+      // We also reject for unauthenticated sockets to prevent noise / probing.
       socket.on('leave', (channel: string) => {
         const target = parseTerminalChannel(channel);
         if (target) {
@@ -718,7 +723,15 @@ export function createSocketIOConfig(
             rejectTerminal('leave', `unauthenticated socket cannot leave ${channel}`);
             return;
           }
-          if (!auth.isService && auth.userId !== target) {
+          if (auth.isService) {
+            if (!auth.terminalUserId || auth.terminalUserId !== target) {
+              rejectTerminal(
+                'leave',
+                `service token scoped to ${auth.terminalUserId ? shortId(auth.terminalUserId) : 'nothing'}… may not leave ${shortId(target)}…'s channel`
+              );
+              return;
+            }
+          } else if (auth.userId !== target) {
             rejectTerminal(
               'leave',
               `user ${auth.userId ? shortId(auth.userId) : 'unknown'}… tried to leave ${shortId(target)}…'s channel`
@@ -809,21 +822,14 @@ export function createSocketIOConfig(
       socket.on(
         'terminal:ready',
         (data: { userId: string; sessionName?: string; tabName?: string }) => {
-          // requireScope: the ready ack flips global per-user readiness state
-          // and triggers browser broadcasts, so we insist the emitting token is
-          // actually scoped to this user (not just any service token).
-          if (!requireServiceForOwnUserId('terminal:ready', data?.userId, { requireScope: true })) {
-            return;
-          }
+          if (!requireServiceForOwnUserId('terminal:ready', data?.userId)) return;
           app.emit('terminal:ready', data);
         }
       );
 
       // Executor attach-failure ack. Same user-scoped service trust as ready.
       socket.on('terminal:error', (data: { userId: string; message?: string }) => {
-        if (!requireServiceForOwnUserId('terminal:error', data?.userId, { requireScope: true })) {
-          return;
-        }
+        if (!requireServiceForOwnUserId('terminal:error', data?.userId)) return;
         app.emit('terminal:error', data);
       });
 

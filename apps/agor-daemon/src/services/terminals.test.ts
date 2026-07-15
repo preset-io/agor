@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
       throw new Error('not found');
     }),
     spawnExecutorFireAndForget: vi.fn(),
+    generateScopedServiceToken: vi.fn(() => 'session-token'),
     resolveUnixUserForImpersonation: vi.fn(() => ({ unixUser: null })),
     resolveUserEnvironment: vi.fn(async () => ({})),
     createUserProcessEnvironment: vi.fn(async () => ({})),
@@ -102,7 +103,7 @@ vi.mock('../utils/mcp-token-authorization.js', () => ({
 
 vi.mock('../utils/spawn-executor.js', () => ({
   generateSessionToken: () => 'session-token',
-  generateScopedServiceToken: () => 'session-token',
+  generateScopedServiceToken: mocks.generateScopedServiceToken,
   serviceTokenScopeForParams: () => ({}),
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
@@ -241,6 +242,21 @@ describe('TerminalsService readiness ack gating', () => {
       daemon: { port: 3030 },
       execution: { branch_rbac: false },
     });
+  });
+
+  it('binds terminal_user_id and a long TTL into the executor service token', async () => {
+    // Reconnection reuses this same token; the default 5m service-token TTL
+    // would expire mid-session and break reconnect (the whole point of the
+    // feature). The token must be user-scoped AND long-lived.
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    await service.create({ branchId: 'branch-1', rows: 24, cols: 80 }, params as never);
+
+    expect(mocks.generateScopedServiceToken).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { terminal_user_id: params.user.user_id },
+      '30d'
+    );
   });
 
   it('reports ready=false on cold start and ready=true once the executor acks', async () => {
@@ -455,6 +471,38 @@ describe('TerminalsService branch shell tabs', () => {
         expect.objectContaining({ action: 'create', tabName: 'adopt-me · 33333333' })
       );
     });
+  });
+
+  it('skips warm choreography entirely when the readiness ack never arrives (no best-effort)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.execSync.mockImplementation((cmd: string) => {
+        if (cmd === 'which zellij') return Buffer.from('/usr/bin/zellij\n');
+        if (cmd.startsWith('pgrep ')) return Buffer.from('4242\n'); // adopted
+        if (cmd.startsWith('sudo -n chown ')) return Buffer.from('');
+        throw new Error('not found');
+      });
+      const branch = {
+        ...mocks.branch,
+        branch_id: '44444444-4444-7444-8444-444444444444' as BranchID,
+        name: 'never-ready',
+        path: '/tmp/repo/never-ready',
+      };
+      mocks.branchesById.set(branch.branch_id, branch);
+
+      const app = makeApp();
+      const service = new TerminalsService(app as never, {} as never);
+      await service.create({ branchId: branch.branch_id, rows: 24, cols: 80 }, params as never);
+
+      // Advance well past the readiness timeout without any ack.
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      // Best-effort firing is gone: nothing is emitted into the dead room.
+      expect(app.emit).not.toHaveBeenCalledWith('terminal:tab', expect.anything());
+      expect(app.emit).not.toHaveBeenCalledWith('terminal:redraw', expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('falls back to branch.path when an impersonated same-name symlink resolves elsewhere', async () => {
