@@ -242,6 +242,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.service('/session-streams').publish(() => []);
 
   app.use('/tasks', createTasksService(db, app), {
+    methods: [
+      'find',
+      'get',
+      'create',
+      'update',
+      'patch',
+      'remove',
+      'connectExecutor',
+      'reportExecutorTelemetry',
+    ],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
     // clients. Keep this in sync with every `app.service('tasks').emit(...)`
@@ -728,6 +738,7 @@ function createExecuteHandler(
     sessionId: string,
     data: {
       taskId: string;
+      executorAttemptId: string;
       prompt: string;
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
@@ -775,6 +786,7 @@ function createExecuteHandler(
       (params as AuthenticatedParams).user!.user_id,
       {
         taskId: data.taskId,
+        executorAttemptId: data.executorAttemptId,
         branchId: session.branch_id,
         // Executor JWTs authenticate on every daemon API call over the runtime
         // connection, so low per-call max-use limits make normal execution
@@ -916,6 +928,7 @@ function createExecuteHandler(
       params: {
         sessionId,
         taskId,
+        executorAttemptId: data.executorAttemptId,
         prompt: data.prompt,
         tool: session.agentic_tool as
           | 'claude-code'
@@ -963,6 +976,7 @@ function createExecuteHandler(
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
+        executor_attempt_id: data.executorAttemptId,
         unix_user: executorUnixUser || undefined,
       },
       onSpawn: (child) => {

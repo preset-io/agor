@@ -5,7 +5,7 @@
  */
 
 import type { Task, UUID } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -1295,4 +1295,94 @@ describe('TaskRepository sentinel invariants', () => {
       }
     }
   });
+});
+
+describe('TaskRepository executor turn transitions', () => {
+  dbTest('admits one concurrent turn and queues the contender', async ({ db }) => {
+    const tasks = new TaskRepository(db);
+    const sessions = new SessionRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const [first, second] = await Promise.all([
+      tasks.create(createTaskData({ session_id: sessionId })),
+      tasks.create(createTaskData({ session_id: sessionId })),
+    ]);
+    const admit = (task: Task) => {
+      const attemptId = generateId();
+      return tasks.admitExecutorTurn({
+        taskId: task.task_id,
+        sessionId,
+        patch: {
+          status: TaskStatus.DISPATCHING,
+          started_at: new Date().toISOString(),
+          executor_attempt: { id: attemptId },
+        },
+      });
+    };
+
+    const admitted = await Promise.all([admit(first), admit(second)]);
+
+    expect(admitted.map((task) => task.status).sort()).toEqual([
+      TaskStatus.DISPATCHING,
+      TaskStatus.QUEUED,
+    ]);
+    const session = await sessions.findById(sessionId);
+    expect(session?.status).toBe(SessionStatus.RUNNING);
+    expect(session?.tasks).toHaveLength(1);
+  });
+
+  dbTest('connects only the winning attempt and projects runtime state', async ({ db }) => {
+    const tasks = new TaskRepository(db);
+    const sessions = new SessionRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await tasks.create(createTaskData({ session_id: sessionId }));
+    const attemptId = generateId();
+    await tasks.admitExecutorTurn({
+      taskId: task.task_id,
+      sessionId,
+      patch: {
+        status: TaskStatus.DISPATCHING,
+        started_at: new Date().toISOString(),
+        executor_attempt: { id: attemptId },
+      },
+    });
+
+    expect(await tasks.connectExecutor(task.task_id, generateId())).toBeNull();
+    expect((await tasks.connectExecutor(task.task_id, attemptId))?.transitioned).toBe(true);
+    expect((await tasks.connectExecutor(task.task_id, attemptId))?.transitioned).toBe(false);
+
+    const awaiting = await tasks.transitionExecutorRuntime(
+      task.task_id,
+      attemptId,
+      TaskStatus.AWAITING_PERMISSION
+    );
+    expect(awaiting?.status).toBe(TaskStatus.AWAITING_PERMISSION);
+    expect((await sessions.findById(sessionId))?.status).toBe(SessionStatus.AWAITING_PERMISSION);
+  });
+
+  dbTest(
+    'does not allow generic patches to bypass connection or revive terminal work',
+    async ({ db }) => {
+      const tasks = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const attemptId = generateId();
+      const created = await tasks.create(createTaskData({ session_id: sessionId }));
+      const dispatching = await tasks.admitExecutorTurn({
+        taskId: created.task_id,
+        sessionId,
+        patch: {
+          status: TaskStatus.DISPATCHING,
+          started_at: new Date().toISOString(),
+          executor_attempt: { id: attemptId },
+        },
+      });
+
+      await expect(
+        tasks.update(dispatching.task_id, { status: TaskStatus.RUNNING })
+      ).rejects.toThrow(/connectExecutor/);
+      await tasks.update(dispatching.task_id, { status: TaskStatus.FAILED });
+      await expect(
+        tasks.update(dispatching.task_id, { status: TaskStatus.RUNNING })
+      ).rejects.toThrow(/terminal task status/);
+    }
+  );
 });

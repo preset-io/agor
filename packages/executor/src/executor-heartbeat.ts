@@ -4,9 +4,9 @@ import type { AgorClient } from './services/feathers-client.js';
 export interface ExecutorHeartbeatOptions {
   client: AgorClient;
   taskId: TaskID | string;
+  executorAttemptId: string;
   enabled?: boolean;
   intervalMs?: number;
-  now?: () => Date;
   warn?: (...args: unknown[]) => void;
 }
 
@@ -28,7 +28,6 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     options.intervalMs > 0
       ? Math.floor(options.intervalMs)
       : DEFAULT_INTERVAL_MS;
-  const now = options.now ?? (() => new Date());
   const warn = options.warn ?? console.warn;
   let stopped = false;
   let inFlight = false;
@@ -38,8 +37,10 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     if (stopped || inFlight) return;
     inFlight = true;
     try {
-      await options.client.service('tasks').patch(options.taskId, {
-        last_executor_heartbeat_at: now().toISOString(),
+      await options.client.service('tasks').reportExecutorTelemetry({
+        task_id: options.taskId,
+        executor_attempt_id: options.executorAttemptId,
+        heartbeat: true,
       });
     } catch (error) {
       warn(

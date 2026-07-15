@@ -50,10 +50,19 @@ export async function runDatabaseTransaction<T>(
       ): Promise<T>;
     }
   ).transaction.bind(db);
-  return transaction(
-    (tx) => work(txAsDb(tx)),
-    isSQLiteDatabase(db) && options.sqliteImmediate ? { behavior: 'immediate' } : undefined
-  );
+  const config =
+    isSQLiteDatabase(db) && options.sqliteImmediate
+      ? { behavior: 'immediate' as const }
+      : undefined;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await transaction((tx) => work(txAsDb(tx)), config);
+    } catch (error) {
+      if (!config || (error as { code?: string }).code !== 'SQLITE_BUSY' || attempt >= 9)
+        throw error;
+      await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
+    }
+  }
 }
 
 /**

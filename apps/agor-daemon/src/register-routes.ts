@@ -53,7 +53,6 @@ import type {
   Params,
   PermissionRequestContent,
   ScheduleID,
-  Session,
   SessionID,
   SessionMCPServer,
   StreamingEventType,
@@ -134,15 +133,8 @@ import {
 } from './utils/mcp-header-secrets.js';
 import { canControlCliSession } from './utils/mcp-token-authorization.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
-import {
-  deferWithSessionQueueTenantScope,
-  runWithSessionQueueTenantScope,
-} from './utils/session-queue-tenant-scope.js';
+import { runWithSessionQueueTenantScope } from './utils/session-queue-tenant-scope.js';
 import { stopSessionPreserveQueue } from './utils/session-stop.js';
-import {
-  sessionCanStartTask,
-  shouldReconcileSessionPromptState,
-} from './utils/session-task-state.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import {
@@ -1035,33 +1027,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     }
   }
 
-  async function reconcileSessionPromptStateIfStuck(
-    session: Session,
-    taskRepo: TaskRepository,
-    params: RouteParams,
-    options: { ignoredTaskIds?: readonly string[] } = {}
-  ): Promise<Session> {
-    if (session.status !== SessionStatus.FAILED || session.ready_for_prompt === true) {
-      return session;
-    }
-
-    const sessionTasks = await taskRepo.findBySession(session.session_id);
-    if (!shouldReconcileSessionPromptState(session, sessionTasks, options)) return session;
-
-    console.warn(
-      `🧹 [PromptState] Repairing stuck session ${shortId(session.session_id)} ` +
-        `(status=${session.status}, ready_for_prompt=${session.ready_for_prompt})`
-    );
-    return (await app.service('sessions').patch(
-      session.session_id,
-      {
-        status: SessionStatus.IDLE,
-        ready_for_prompt: true,
-      },
-      params
-    )) as Session;
-  }
-
   /**
    * spawnTaskExecutor — sole transition point for `tasks.status` going from
    * `created` / `queued` → `running`.
@@ -1119,20 +1084,33 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const session = await sessionsService.materializeAgenticToolPreset(loadedSession, params);
     const startTimestamp = new Date().toISOString();
 
+    // Finish fallible prompt preparation before reserving the session turn.
+    const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
+      rawPrompt: task.full_prompt,
+      sessionCreatedBy: session.created_by,
+      prompterUserId: task.created_by,
+      usersRepo: bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db)),
+    });
+
     // The daemon transitions the task to RUNNING and writes required sentinel
     // git fields before executor spawn. The executor overwrites these with the
     // authoritative task-start git state from inside the managed checkout.
     const gitStateAtStart = 'unknown';
     const refAtStart = 'unknown';
 
-    // Patch task: queued/created → running, with real ranges. queue_position
-    // is cleared here so a draining task is no longer considered queued.
-    const updatedTask = (await app.service('tasks').patch(
-      task.task_id,
-      {
-        status: TaskStatus.RUNNING,
+    const usesExecutor = session.agentic_tool !== 'claude-code-cli';
+    const executorAttemptId = usesExecutor ? generateId() : undefined;
+    const updatedTask = await _tasksRepo.admitExecutorTurn({
+      taskId: task.task_id,
+      sessionId: task.session_id,
+      patch: {
+        status: usesExecutor ? TaskStatus.DISPATCHING : TaskStatus.RUNNING,
         started_at: startTimestamp,
-        queue_position: undefined,
+        ...(executorAttemptId
+          ? {
+              executor_attempt: { id: executorAttemptId },
+            }
+          : {}),
         message_range: {
           start_index: messageStartIndex,
           end_index: messageStartIndex + 1,
@@ -1144,8 +1122,26 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sha_at_start: gitStateAtStart,
         },
       },
-      params
-    )) as Task;
+    });
+    emitServiceEvent(app, {
+      path: 'tasks',
+      event: 'patched',
+      data: updatedTask,
+      params,
+      id: updatedTask.task_id,
+    });
+    if (updatedTask.status === TaskStatus.QUEUED) {
+      app.service('tasks').emit('queued', updatedTask);
+      return updatedTask;
+    }
+    const admittedSession = await sessionsService.get(task.session_id, params);
+    emitServiceEvent(app, {
+      path: 'sessions',
+      event: 'patched',
+      data: admittedSession,
+      params,
+      id: admittedSession.session_id,
+    });
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.
     // The executor's createUserMessage has a skip-if-exists guard so a duplicate
@@ -1186,41 +1182,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         );
       }
     }
-
-    // Flip session to RUNNING and append to session.tasks. Done here so both
-    // callers (idle prompt and queue drain) get this for free.
-    //
-    // The session-status flip used to fall out of `TasksService.create` when
-    // the IDLE path created a task with `status: RUNNING` directly. Now the
-    // IDLE path creates `status: CREATED` and we patch to RUNNING here, which
-    // `TasksService.patch` does NOT mirror onto the session. Without this
-    // explicit patch, `session.status` stays IDLE while a task is RUNNING,
-    // causing the queue gate in the prompt route to wave subsequent prompts
-    // through instead of queuing them.
-    await app.service('sessions').patch(
-      task.session_id,
-      {
-        status: SessionStatus.RUNNING,
-        ready_for_prompt: false,
-        tasks: [...session.tasks, task.task_id],
-      },
-      params
-    );
-
-    // Tag the bytes shipped to the executor with `[Prompted by: ...]` when a
-    // non-owner is prompting. The prompter identity comes from `task.created_by`
-    // (NOT `params.user`): every persisted Task row requires `created_by`
-    // (`createPending` for the prompt/queue/callback paths, `create`/`createMany`
-    // for pre-created tasks run via `/tasks/:id/run`), so it survives the queue
-    // / hook / drain hop intact. `params.user` can drop on hook-triggered drains
-    // that don't carry `queued_by_user_id` and is therefore not authoritative.
-    // See `./utils/build-prompter-prefix.ts` for the helper + tests.
-    const { prompt: promptForExecutor } = await buildPrompterPrefixedPrompt({
-      rawPrompt: task.full_prompt,
-      sessionCreatedBy: session.created_by,
-      prompterUserId: task.created_by,
-      usersRepo: bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db)),
-    });
 
     const useStreaming = options.stream !== false;
     const sessionId = task.session_id;
@@ -1332,6 +1293,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sessionId,
           {
             taskId,
+            executorAttemptId: executorAttemptId!,
             prompt: promptForExecutor,
             permissionMode: options.permissionMode,
             stream: useStreaming,
@@ -1496,125 +1458,41 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new Error('Cannot send prompt: session is currently stopping');
         }
 
-        // The route is one path: always materialize a Task. Whether it runs
-        // immediately or gets queued is the *response*, not a different code
-        // path. Sentinels and queue-position assignment live in
-        // `taskRepo.createPending` so callers don't reassemble them by hand.
-        //
-        // Wrapped in `withSessionTurnLock` so the queue-vs-idle decision and
-        // the subsequent spawn are atomic with respect to other entry points
-        // (`/tasks/:id/run`, the queue drainer). Without this, two concurrent
-        // prompts on an idle session could both observe `status === 'idle'`
-        // and both spawn executors. Inside the lock the session is re-read,
-        // so the decision is made against the freshest possible state.
+        // Every entry point creates the same pending shape and asks the
+        // repository to admit it. The database transition decides run vs queue.
         const taskRepo = new TaskRepository(db);
         if (!params.user?.user_id) {
           throw new NotAuthenticated('Authentication required to prompt a session');
         }
         const createdBy = params.user.user_id;
 
-        return await withSessionTurnLock(
-          sessionTurnLocks,
-          id as SessionID,
-          async () => {
-            let lockedSession = await sessionsService.get(id, params);
-            if (lockedSession.status === SessionStatus.STOPPING) {
-              // The earlier STOPPING check was against pre-lock state — re-check
-              // here so a session that entered STOPPING while we waited for our
-              // turn doesn't accept a prompt.
-              throw new Error('Cannot send prompt: session is currently stopping');
-            }
-            lockedSession = await reconcileSessionPromptStateIfStuck(
-              lockedSession,
-              taskRepo,
-              params
-            );
-            const queuedTasks = await taskRepo.findQueued(id as SessionID);
-            const shouldQueue =
-              !sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt) ||
-              queuedTasks.length > 0;
-
-            if (shouldQueue) {
-              const queuedTask = await taskRepo.createPending({
-                session_id: id as SessionID,
-                full_prompt: data.prompt,
-                created_by: createdBy,
-                status: TaskStatus.QUEUED,
-                metadata: {
-                  ...(params.user?.user_id ? { queued_by_user_id: params.user.user_id } : {}),
-                  ...(messageSource ? { source: messageSource } : {}),
-                  ...(data.metadata ?? {}),
-                },
-              });
-
-              console.log(
-                `📬 [Prompt] Auto-queued task for session ${shortId(id)} at position ${queuedTask.queue_position} ` +
-                  `(session status: ${lockedSession.status}, existing queue items: ${queuedTasks.length})`
-              );
-
-              app.service('tasks').emit('queued', queuedTask);
-
-              if (sessionCanStartTask(lockedSession.status, lockedSession.ready_for_prompt)) {
-                deferInFreshTenantScope(params, async () => {
-                  try {
-                    await sessionsService.triggerQueueProcessing(id as SessionID, params);
-                  } catch (error) {
-                    console.error(
-                      `❌ [Prompt] Failed to trigger queue processing after auto-queue:`,
-                      error
-                    );
-                  }
-                });
-              }
-
-              // Uniform response: the entity is always a Task. Caller inspects
-              // `task.status` (`'queued'` here) and `task.queue_position` to know
-              // what happened.
-              return queuedTask;
-            }
-
-            console.log(`   Session agent: ${lockedSession.agentic_tool}`);
-            console.log(
-              `   Session permission_config.mode: ${lockedSession.permission_config?.mode || 'not set'}`
-            );
-
-            // Idle path: create a CREATED task, then hand off to spawnTaskExecutor
-            // which is the sole place that populates message_range / git_state,
-            // writes the user-message row, and spawns the executor. Both this
-            // path and processNextQueuedTask go through that helper so behavior
-            // stays in lockstep.
-            const idleTaskMetadata: import('@agor/core/types').TaskMetadata = {
-              ...(messageSource ? { source: messageSource } : {}),
-              ...(data.metadata ?? {}),
-            };
-            const task = await taskRepo.createPending({
-              session_id: id as SessionID,
-              full_prompt: data.prompt,
-              created_by: createdBy,
-              status: TaskStatus.CREATED,
-              metadata: Object.keys(idleTaskMetadata).length > 0 ? idleTaskMetadata : undefined,
-            });
-            // Bypassing the service means no native 'created' emit; do it here
-            // so reactive clients see the new task before the executor spawns.
-            emitServiceEvent(app, {
-              path: 'tasks',
-              event: 'created',
-              data: task,
-              params,
-              id: task.task_id,
-            });
-
-            return await spawnTaskExecutor(
-              task,
-              {
-                permissionMode: data.permissionMode,
-                stream: data.stream !== false,
-                messageSource,
-              },
-              params
-            );
+        const metadata: import('@agor/core/types').TaskMetadata = {
+          queued_by_user_id: createdBy,
+          ...(messageSource ? { source: messageSource } : {}),
+          ...(data.metadata ?? {}),
+        };
+        const task = await taskRepo.createPending({
+          session_id: id as SessionID,
+          full_prompt: data.prompt,
+          created_by: createdBy,
+          status: TaskStatus.CREATED,
+          metadata,
+        });
+        emitServiceEvent(app, {
+          path: 'tasks',
+          event: 'created',
+          data: task,
+          params,
+          id: task.task_id,
+        });
+        return spawnTaskExecutor(
+          task,
+          {
+            permissionMode: data.permissionMode,
+            stream: data.stream !== false,
+            messageSource,
           },
-          { waiterTimeoutMs: 30_000 }
+          params
         );
       },
     },
@@ -1729,50 +1607,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           }
         }
 
-        // Acquire the session-turn lock before validating session state and
-        // spawning. This is what closes the race against concurrent
-        // /tasks/:id/run on different tasks of the same session, against
-        // /sessions/:id/prompt's idle branch, and against the queue
-        // drainer — they all serialize through `sessionTurnLocks`.
-        return await withSessionTurnLock(
-          sessionTurnLocks,
-          task.session_id,
-          async () => {
-            // Re-read session state inside the lock — it may have flipped to
-            // RUNNING while we waited for our turn.
-            const session = await reconcileSessionPromptStateIfStuck(
-              await sessionsService.get(task.session_id, params),
-              taskRepo,
-              params,
-              { ignoredTaskIds: [task.task_id] }
-            );
-
-            if (session.status === SessionStatus.STOPPING) {
-              throw new BadRequest('Cannot run task: session is currently stopping');
-            }
-            if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
-              throw new Conflict(
-                `Cannot run task ${shortId(taskId)}: session is '${session.status}'. ` +
-                  `To enqueue a prompt on a busy session, POST to /sessions/:id/prompt instead — ` +
-                  `it creates and queues a task atomically.`
-              );
-            }
-
-            return await runExistingTask(
-              task,
-              {
-                permissionMode: data.permissionMode,
-                stream: data.stream !== false,
-                messageSource: normalizeMessageSource(data.messageSource, params),
-              },
-              params,
-              {
-                findTaskById: (id) => taskRepo.findById(id),
-                spawnFn: spawnTaskExecutor,
-              }
-            );
+        return runExistingTask(
+          task,
+          {
+            permissionMode: data.permissionMode,
+            stream: data.stream !== false,
+            messageSource: normalizeMessageSource(data.messageSource, params),
           },
-          { waiterTimeoutMs: 30_000 }
+          params,
+          {
+            findTaskById: (id) => taskRepo.findById(id),
+            spawnFn: spawnTaskExecutor,
+          }
         );
       },
     },
@@ -2296,16 +2142,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // Queue processing implementation — task-centric. Acquires the shared
-  // `sessionTurnLocks` (declared near the top of registerRoutes) so the
-  // drainer can't race `/sessions/:id/prompt` or `/tasks/:id/run` for the
-  // same session. The retry-on-existing-lock indirection (vs. a plain
-  // `withSessionTurnLock` wrapper) preserves the original "if drain is in
-  // flight, schedule a retry instead of stacking concurrent drainers"
-  // semantics — important because callbacks can fire processNextQueuedTask
-  // from arbitrary points in the lifecycle.
-  const queueRetryScheduled = new Set<SessionID>();
-
   async function processNextQueuedTask(sessionId: SessionID, params: RouteParams): Promise<void> {
     await runWithSessionQueueTenantScope(
       {
@@ -2315,107 +2151,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         params,
         label: 'processNextQueuedTask',
       },
-      async (scopedParams) => processNextQueuedTaskInTenantScope(sessionId, scopedParams)
+      async (scopedParams) => processNextQueuedTaskInternal(sessionId, scopedParams)
     );
-  }
-
-  async function processNextQueuedTaskInTenantScope(
-    sessionId: SessionID,
-    params: RouteParams
-  ): Promise<void> {
-    const existingLock = sessionTurnLocks.get(sessionId);
-    if (existingLock) {
-      console.log(`⏳ [Queue] Session turn in progress for ${shortId(sessionId)}, waiting...`);
-
-      // Race the lock against a timeout. A half-open TCP connection can leave
-      // a DB query pending forever, which holds the lock indefinitely and
-      // deadlocks all subsequent prompts for this session. statement_timeout
-      // (60s) handles normal cases; this is the client-side backstop.
-      const LOCK_WAIT_TIMEOUT_MS = 65_000;
-      const outcome = await Promise.race([
-        existingLock.catch(() => undefined).then(() => 'released' as const),
-        new Promise<'timeout'>((resolve) =>
-          setTimeout(() => resolve('timeout'), LOCK_WAIT_TIMEOUT_MS)
-        ),
-      ]);
-
-      if (outcome === 'timeout') {
-        console.error(
-          `❌ [Queue] Session ${shortId(sessionId)}: turn lock held >${LOCK_WAIT_TIMEOUT_MS / 1000}s — ` +
-            `holder may be stuck on a broken DB connection. Skipping this drain trigger; ` +
-            `the next natural trigger (user prompt or task completion) will retry.`
-        );
-        return;
-      }
-
-      if (!queueRetryScheduled.has(sessionId)) {
-        queueRetryScheduled.add(sessionId);
-        deferWithSessionQueueTenantScope(
-          {
-            db,
-            config,
-            sessionId,
-            params,
-            label: 'processNextQueuedTask retry',
-          },
-          async (retryParams) => {
-            queueRetryScheduled.delete(sessionId);
-            try {
-              await processNextQueuedTask(sessionId, retryParams);
-            } catch (error) {
-              console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
-            }
-          },
-          (error) => {
-            queueRetryScheduled.delete(sessionId);
-            console.error(`❌ [Queue] Retry failed for session ${shortId(sessionId)}:`, error);
-          }
-        );
-      } else {
-        console.log(
-          `⏭️  [Queue] Retry already scheduled for session ${shortId(sessionId)}, not queueing another`
-        );
-      }
-      return;
-    }
-
-    let resolveLock!: () => void;
-    const lockPromise = new Promise<void>((resolve) => {
-      resolveLock = resolve;
-    });
-    sessionTurnLocks.set(sessionId, lockPromise);
-
-    // Race the drain against a holder timeout. A half-open TCP connection can
-    // keep spawnTaskExecutor waiting indefinitely on a DB query that never
-    // completes on the Node.js side (statement_timeout only fires if Postgres
-    // actually received the query). Releasing the lock after 30s lets waiting
-    // prompts make progress; the background drain will eventually fail and DB
-    // state will be reconciled by reconcileSessionPromptStateIfStuck.
-    const HOLDER_TIMEOUT_MS = 30_000;
-    try {
-      await Promise.race([
-        processNextQueuedTaskInternal(sessionId, params),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `processNextQueuedTaskInternal timed out for ${shortId(sessionId)} after ${HOLDER_TIMEOUT_MS / 1000}s`
-                )
-              ),
-            HOLDER_TIMEOUT_MS
-          )
-        ),
-      ]);
-    } catch (err) {
-      console.error(
-        `❌ [Queue] processNextQueuedTask holder error for ${shortId(sessionId)}:`,
-        err instanceof Error ? err.message : err
-      );
-    } finally {
-      sessionTurnLocks.delete(sessionId);
-      resolveLock();
-    }
   }
 
   async function processNextQueuedTaskInternal(
@@ -2447,34 +2184,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         `with user context: ${queuedByUser ? shortId(queuedByUser.user_id) : 'none'}`
     );
 
-    const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
-      sessionsService.get(sessionId, taskParams)
-    );
-    const session = await reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams);
-
-    if (!sessionCanStartTask(session.status, session.ready_for_prompt)) {
-      console.log(
-        `⏸️  [Queue] Session ${shortId(sessionId)} is ${session.status}, task ${shortId(nextTask.task_id)} waiting in queue ` +
-          `(will be processed when session becomes IDLE via patch hook)`
-      );
-      return;
-    }
-
-    // Re-read the task — defend against the case where it was already drained
-    // by a concurrent caller, or removed by an admin via DELETE /tasks/:id.
-    const stillQueued = await taskRepo.findById(nextTask.task_id);
-    if (!stillQueued || stillQueued.status !== TaskStatus.QUEUED) {
-      console.log(`⚠️  Queued task ${shortId(nextTask.task_id)} no longer queued, skipping`);
-      return;
-    }
-
-    // spawnTaskExecutor handles the QUEUED → RUNNING transition (recomputes
-    // message_range/git_state, writes the user-message row, appends to
-    // session.tasks, spawns the executor). We pass the messageSource from
-    // task.metadata so callback styling survives the queue → run hop.
+    // Admission revalidates both the queue head and active turn atomically.
     const source = nextTask.metadata?.source;
     await spawnTaskExecutor(
-      stillQueued,
+      nextTask,
       {
         stream: true,
         messageSource: source,

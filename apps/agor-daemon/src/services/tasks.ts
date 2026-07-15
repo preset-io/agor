@@ -17,9 +17,11 @@ import {
   TaskRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import type {
   ContentBlock,
+  ExecutorClaim,
+  ExecutorTelemetryReport,
   Paginated,
   QueryParams,
   Session,
@@ -88,6 +90,8 @@ export type TaskParams = QueryParams<{
   suppressBtwCleanup?: boolean;
   /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
   _agorSqlSessionAccessUserId?: UUID;
+  /** Authenticated executor attempt; injected by the runtime scope hook. */
+  executorAttemptId?: string;
 };
 
 interface CompletionCallbackDispatchResult {
@@ -400,6 +404,25 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.heartbeatCallbackRunner.run(payload);
   }
 
+  private publishExecutorHeartbeat(task: Task, heartbeatAt: string): void {
+    analyticsLogger.track(
+      'executor.heartbeat',
+      {
+        task_id: task.task_id,
+        session_id: task.session_id,
+        status: task.status,
+        last_executor_heartbeat_at: heartbeatAt,
+      },
+      { userId: task.created_by }
+    );
+    this.handleExecutorHeartbeat(task, heartbeatAt).catch((error) => {
+      console.warn(
+        `⚠️  [TasksService] Executor heartbeat callback failed for task ${shortId(task.task_id)}:`,
+        error
+      );
+    });
+  }
+
   private async runAfterTenantDatabaseCommit(
     label: string,
     work: () => Promise<void>
@@ -454,6 +477,23 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const nextStatus = data.status;
+    if (
+      params?.executorAttemptId &&
+      (nextStatus === TaskStatus.RUNNING ||
+        nextStatus === TaskStatus.AWAITING_PERMISSION ||
+        nextStatus === TaskStatus.AWAITING_INPUT)
+    ) {
+      const transitioned = await this.taskRepo.transitionExecutorRuntime(
+        id,
+        params.executorAttemptId,
+        nextStatus
+      );
+      if (!transitioned) throw new Conflict('Executor no longer owns this task state');
+      const { status: _status, ...rest } = data;
+      const result = Object.keys(rest).length ? await super.patch(id, rest, params) : transitioned;
+      if (nextStatus === TaskStatus.RUNNING) this.trackTaskStarted(result as Task);
+      return result;
+    }
     const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
     if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
       console.warn(
@@ -516,24 +556,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     if (data.last_executor_heartbeat_at && !Array.isArray(result)) {
-      analyticsLogger.track(
-        'executor.heartbeat',
-        {
-          task_id: (result as Task).task_id,
-          session_id: (result as Task).session_id,
-          status: (result as Task).status,
-          last_executor_heartbeat_at: data.last_executor_heartbeat_at,
-        },
-        { userId: (result as Task).created_by }
-      );
-      this.handleExecutorHeartbeat(result as Task, data.last_executor_heartbeat_at).catch(
-        (error) => {
-          console.warn(
-            `⚠️  [TasksService] Executor heartbeat callback failed for task ${shortId((result as Task).task_id)}:`,
-            error
-          );
-        }
-      );
+      this.publishExecutorHeartbeat(result as Task, data.last_executor_heartbeat_at);
     }
 
     // Emit analytics for terminal task transitions, including timeouts that do not
@@ -1168,6 +1191,44 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async getOrphaned(_params?: TaskParams): Promise<Task[]> {
     return this.taskRepo.findOrphaned();
+  }
+
+  async findByIdForScopeCheck(taskId: TaskID): Promise<Task | null> {
+    return this.taskRepo.findById(taskId);
+  }
+
+  /** Claim a dispatched task after task-scoped executor authentication. */
+  async connectExecutor(data: ExecutorClaim, _params?: TaskParams): Promise<Task> {
+    if (!data.task_id || !data.executor_attempt_id) throw new BadRequest('Invalid executor claim');
+    const connection = await this.taskRepo.connectExecutor(data.task_id, data.executor_attempt_id);
+    if (!connection) throw new Conflict('Executor does not own this dispatched task');
+    if (connection.transitioned) {
+      this.trackTaskStarted(connection.task);
+      this.emit?.('patched', connection.task);
+    }
+    return connection.task;
+  }
+
+  /** Stamp bounded executor liveness/progress with daemon time. */
+  async reportExecutorTelemetry(
+    data: ExecutorTelemetryReport,
+    _params?: TaskParams
+  ): Promise<Task> {
+    if (!data.task_id || !data.executor_attempt_id || typeof data.heartbeat !== 'boolean') {
+      throw new BadRequest('Invalid executor telemetry');
+    }
+    if (!data.heartbeat) throw new BadRequest('Executor telemetry is empty');
+
+    const observedAt = new Date().toISOString();
+    const task = await this.taskRepo.recordExecutorTelemetry(
+      data.task_id,
+      data.executor_attempt_id,
+      { last_executor_heartbeat_at: observedAt }
+    );
+    if (!task) throw new Conflict('Executor telemetry is no longer accepted');
+    this.emit?.('patched', task);
+    if (data.heartbeat) this.publishExecutorHeartbeat(task, observedAt);
+    return task;
   }
 
   /**

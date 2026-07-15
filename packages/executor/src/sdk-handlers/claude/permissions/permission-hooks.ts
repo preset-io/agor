@@ -192,14 +192,6 @@ export function createCanUseToolCallback(
       });
       console.log(`✅ [canUseTool] Task ${taskId} updated to awaiting_permission`);
 
-      // Update session status to 'awaiting_permission'
-      if (deps.sessionsService) {
-        await deps.sessionsService.patch(sessionId, {
-          status: 'awaiting_permission' as const,
-        });
-        console.log(`✅ [canUseTool] Session ${sessionId} updated to awaiting_permission`);
-      }
-
       // Emit WebSocket event for UI (broadcasts to ALL viewers)
       deps.permissionService.emitRequest(sessionId, {
         requestId,
@@ -296,14 +288,6 @@ export function createCanUseToolCallback(
           behavior: 'deny' as const,
           message: `Permission denied for tool: ${toolName}`,
         };
-      }
-
-      // Restore session status to running (only if approved)
-      if (deps.sessionsService) {
-        await deps.sessionsService.patch(sessionId, {
-          status: 'running' as const,
-        });
-        console.log(`✅ [canUseTool] Session ${sessionId} restored to running after approval`);
       }
 
       // Build response with SDK's updatedPermissions for persistence

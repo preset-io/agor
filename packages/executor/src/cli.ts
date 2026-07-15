@@ -190,6 +190,7 @@ async function handlePromptPayload(
     sessionToken: payload.sessionToken,
     sessionId: payload.params.sessionId,
     taskId: payload.params.taskId,
+    executorAttemptId: payload.params.executorAttemptId,
     prompt: payload.params.prompt,
     tool: payload.params.tool,
     permissionMode: payload.params.permissionMode,
@@ -208,6 +209,7 @@ async function handleLegacyMode(values: {
   'session-token'?: string;
   'session-id'?: string;
   'task-id'?: string;
+  'executor-attempt-id'?: string;
   prompt?: string;
   tool?: string;
   'permission-mode'?: string;
@@ -218,6 +220,7 @@ async function handleLegacyMode(values: {
     !values['session-token'] ||
     !values['session-id'] ||
     !values['task-id'] ||
+    !values['executor-attempt-id'] ||
     !values.prompt ||
     !values.tool
   ) {
@@ -245,6 +248,7 @@ async function handleLegacyMode(values: {
     sessionToken: values['session-token'] as string,
     sessionId: values['session-id'] as string,
     taskId: values['task-id'] as string,
+    executorAttemptId: values['executor-attempt-id'] as string,
     prompt: values.prompt as string,
     tool: values.tool as 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor',
     permissionMode: (values['permission-mode'] as 'ask' | 'auto' | 'allow-all') || undefined,
@@ -272,6 +276,7 @@ function printUsage(): void {
   console.error('  --session-token <jwt>    JWT for Feathers authentication');
   console.error('  --session-id <id>        Session ID to execute prompt for');
   console.error('  --task-id <id>           Task ID created by daemon');
+  console.error('  --executor-attempt-id    Attempt ID created by daemon');
   console.error('  --prompt <text>          User prompt to execute');
   console.error(
     '  --tool <name>            SDK tool (claude-code, gemini, codex, opencode, copilot)'
@@ -314,6 +319,9 @@ async function main() {
         type: 'string',
       },
       'task-id': {
+        type: 'string',
+      },
+      'executor-attempt-id': {
         type: 'string',
       },
       prompt: {

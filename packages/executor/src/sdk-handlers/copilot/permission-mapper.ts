@@ -266,13 +266,6 @@ export function createPermissionHandler(
         status: TaskStatus.AWAITING_PERMISSION,
       });
 
-      // Update session status to 'awaiting_permission'
-      if (deps.sessionsService) {
-        await deps.sessionsService.patch(sessionId, {
-          status: 'awaiting_permission' as const,
-        });
-      }
-
       // Emit WebSocket event for UI (broadcasts to ALL viewers)
       deps.permissionService.emitRequest(sessionId, {
         requestId,
@@ -371,12 +364,6 @@ export function createPermissionHandler(
       await deps.tasksService.patch(taskId, {
         status: TaskStatus.RUNNING,
       });
-
-      if (deps.sessionsService) {
-        await deps.sessionsService.patch(sessionId, {
-          status: 'running' as const,
-        });
-      }
 
       console.log(`✅ [Copilot Permission] Permission approved for ${toolName}`);
       return approved;

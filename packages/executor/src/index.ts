@@ -39,6 +39,7 @@ export interface ExecutorConfig {
   sessionToken: string;
   sessionId: string;
   taskId: string;
+  executorAttemptId: string;
   prompt: string;
   tool: 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
   permissionMode?: PermissionMode;
@@ -86,6 +87,11 @@ export class AgorExecutor {
       executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken);
       executorDebug('[executor] Connected to daemon');
+
+      await this.client.service('tasks').connectExecutor({
+        task_id: this.config.taskId,
+        executor_attempt_id: this.config.executorAttemptId,
+      });
 
       // Setup event listeners
       this.setupEventListeners();
@@ -163,6 +169,7 @@ export class AgorExecutor {
     this.heartbeat = startExecutorHeartbeat({
       client: this.client,
       taskId: this.config.taskId,
+      executorAttemptId: this.config.executorAttemptId,
       enabled: heartbeatConfig?.enabled ?? true,
       intervalMs: heartbeatConfig?.interval_ms,
     });

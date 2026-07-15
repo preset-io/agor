@@ -5,12 +5,24 @@
  */
 
 import type { SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import {
+  EXECUTING_TASK_STATUSES,
+  isTerminalTaskStatus,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, lockRowForUpdate, select, txAsDb, update } from '../database-wrapper';
-import { type TaskInsert, type TaskRow, tasks } from '../schema';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
+import { sessions, type TaskInsert, type TaskRow, tasks } from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -28,6 +40,14 @@ import { deepMerge } from './merge-utils';
 export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   constructor(private db: Database) {}
 
+  private lockTask(db: Database, taskId: string): Promise<void> {
+    return lockRowForUpdate(db, this.db, tasks, eq(tasks.task_id, taskId));
+  }
+
+  private lockSession(db: Database, sessionId: SessionID): Promise<void> {
+    return lockRowForUpdate(db, this.db, sessions, eq(sessions.session_id, sessionId));
+  }
+
   /**
    * Convert database row to Task type
    */
@@ -38,6 +58,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       status: row.status,
       queue_position: row.queue_position ?? undefined,
       created_at: new Date(row.created_at).toISOString(),
+      started_at: row.started_at ? new Date(row.started_at).toISOString() : undefined,
+      executor_connected_at: row.executor_connected_at
+        ? new Date(row.executor_connected_at).toISOString()
+        : undefined,
       completed_at: row.completed_at ? new Date(row.completed_at).toISOString() : undefined,
       last_executor_heartbeat_at: row.last_executor_heartbeat_at
         ? new Date(row.last_executor_heartbeat_at).toISOString()
@@ -72,6 +96,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       task_id: taskId,
       session_id: task.session_id,
       created_at: new Date(now), // Always use server timestamp, ignore client-provided value
+      started_at: task.started_at ? new Date(task.started_at) : undefined,
+      executor_connected_at: task.executor_connected_at
+        ? new Date(task.executor_connected_at)
+        : undefined,
       completed_at: task.completed_at ? new Date(task.completed_at) : undefined,
       last_executor_heartbeat_at: task.last_executor_heartbeat_at
         ? new Date(task.last_executor_heartbeat_at)
@@ -99,6 +127,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         computed_context_window: task.computed_context_window, // Cumulative context window (computed by tool.computeContextWindow())
         report: task.report,
         permission_request: task.permission_request, // Permission state for UI approval flow
+        executor_attempt: task.executor_attempt,
         metadata: task.metadata, // Generic metadata bag (e.g., is_agor_callback, source)
       },
     };
@@ -286,9 +315,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     try {
       const rows = await select(this.db)
         .from(tasks)
-        .where(
-          sql`${tasks.status} IN ('running', 'stopping', 'awaiting_permission', 'awaiting_input')`
-        )
+        .where(inArray(tasks.status, [...EXECUTING_TASK_STATUSES]))
         .all();
 
       return rows.map((row: TaskRow) => this.rowToTask(row));
@@ -341,6 +368,221 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  /** Atomically admit the queue head, or keep the contender durably queued. */
+  async admitExecutorTurn(input: {
+    taskId: string;
+    sessionId: SessionID;
+    patch: Partial<Task> & {
+      status: typeof TaskStatus.DISPATCHING | typeof TaskStatus.RUNNING;
+    };
+  }): Promise<Task> {
+    const fullId = await this.resolveId(input.taskId);
+    return runDatabaseTransaction(
+      this.db,
+      async (db) => {
+        await this.lockSession(db, input.sessionId);
+        await this.lockTask(db, fullId);
+
+        const session = await select(db)
+          .from(sessions)
+          .where(eq(sessions.session_id, input.sessionId))
+          .one();
+        const row = await select(db).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        if (!session || !row || row.session_id !== input.sessionId) {
+          throw new RepositoryError('Task and session no longer form a valid turn');
+        }
+
+        const current = this.rowToTask(row);
+        if (current.status !== TaskStatus.CREATED && current.status !== TaskStatus.QUEUED) {
+          throw new RepositoryError(`Task is not claimable (${current.status})`);
+        }
+
+        const active = await select(db, { task_id: tasks.task_id })
+          .from(tasks)
+          .where(
+            and(
+              eq(tasks.session_id, input.sessionId),
+              inArray(tasks.status, [...EXECUTING_TASK_STATUSES])
+            )
+          )
+          .limit(1)
+          .one();
+        const queueHead = await select(db, { task_id: tasks.task_id })
+          .from(tasks)
+          .where(and(eq(tasks.session_id, input.sessionId), eq(tasks.status, TaskStatus.QUEUED)))
+          .orderBy(tasks.queue_position)
+          .limit(1)
+          .one();
+        const canRun =
+          session.status !== SessionStatus.STOPPING &&
+          !active &&
+          (current.status === TaskStatus.QUEUED ? queueHead?.task_id === fullId : !queueHead);
+
+        if (!canRun) {
+          if (current.status === TaskStatus.QUEUED) return current;
+          const position = await select(db, {
+            max: sql<number | null>`max(${tasks.queue_position})`,
+          })
+            .from(tasks)
+            .where(eq(tasks.session_id, input.sessionId))
+            .one();
+          const queued = {
+            ...current,
+            status: TaskStatus.QUEUED,
+            queue_position: (position?.max ?? 0) + 1,
+          } satisfies Task;
+          const data = this.taskToInsert(queued);
+          await update(db, tasks)
+            .set({ status: data.status, queue_position: data.queue_position, data: data.data })
+            .where(eq(tasks.task_id, fullId))
+            .run();
+          return queued;
+        }
+
+        const admitted = deepMerge(current, input.patch);
+        admitted.queue_position = undefined;
+        const data = this.taskToInsert(admitted);
+        await update(db, tasks)
+          .set({
+            status: data.status,
+            queue_position: null,
+            started_at: data.started_at,
+            data: data.data,
+          })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+        await update(db, sessions)
+          .set({
+            status: SessionStatus.RUNNING,
+            ready_for_prompt: false,
+            updated_at: new Date(),
+            data: {
+              ...session.data,
+              tasks: session.data.tasks.includes(fullId)
+                ? session.data.tasks
+                : [...session.data.tasks, fullId],
+            },
+          })
+          .where(eq(sessions.session_id, input.sessionId))
+          .run();
+        return admitted;
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  /** Authenticated executor connection. Reconnect by the winning attempt is idempotent. */
+  async connectExecutor(
+    id: string,
+    attemptId: string
+  ): Promise<{ task: Task; transitioned: boolean } | null> {
+    const fullId = await this.resolveId(id);
+    return runDatabaseTransaction(
+      this.db,
+      async (db) => {
+        await this.lockTask(db, fullId);
+        const row = await select(db).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        if (!row) throw new EntityNotFoundError('Task', id);
+        const current = this.rowToTask(row);
+        if (current.executor_attempt?.id !== attemptId) return null;
+        if (current.status === TaskStatus.RUNNING && current.executor_connected_at) {
+          return { task: current, transitioned: false };
+        }
+        if (current.status !== TaskStatus.DISPATCHING) return null;
+
+        const connectedAt = new Date();
+        const task = {
+          ...current,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: connectedAt.toISOString(),
+        } satisfies Task;
+        await update(db, tasks)
+          .set({ status: task.status, executor_connected_at: connectedAt })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+        await update(db, sessions)
+          .set({ status: SessionStatus.RUNNING, ready_for_prompt: false, updated_at: new Date() })
+          .where(eq(sessions.session_id, current.session_id))
+          .run();
+        return { task, transitioned: true };
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  /** Project an executor runtime state onto its owning session atomically. */
+  async transitionExecutorRuntime(
+    id: string,
+    attemptId: string,
+    status:
+      | typeof TaskStatus.RUNNING
+      | typeof TaskStatus.AWAITING_PERMISSION
+      | typeof TaskStatus.AWAITING_INPUT
+  ): Promise<Task | null> {
+    const fullId = await this.resolveId(id);
+    return runDatabaseTransaction(
+      this.db,
+      async (db) => {
+        await this.lockTask(db, fullId);
+        const row = await select(db).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        if (!row) throw new EntityNotFoundError('Task', id);
+        const current = this.rowToTask(row);
+        if (
+          current.executor_attempt?.id !== attemptId ||
+          !current.executor_connected_at ||
+          isTerminalTaskStatus(current.status)
+        ) {
+          return null;
+        }
+        const task = { ...current, status } satisfies Task;
+        await update(db, tasks).set({ status }).where(eq(tasks.task_id, fullId)).run();
+        await update(db, sessions)
+          .set({ status, ready_for_prompt: false, updated_at: new Date() })
+          .where(eq(sessions.session_id, current.session_id))
+          .run();
+        return task;
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  /** Persist bounded executor telemetry only while the attempt owns an active task. */
+  async recordExecutorTelemetry(
+    id: string,
+    attemptId: string,
+    telemetry: Pick<Task, 'last_executor_heartbeat_at'>
+  ): Promise<Task | null> {
+    const fullId = await this.resolveId(id);
+    return runDatabaseTransaction(
+      this.db,
+      async (db) => {
+        await this.lockTask(db, fullId);
+        const row = await select(db).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        if (!row) throw new EntityNotFoundError('Task', id);
+        const current = this.rowToTask(row);
+        if (
+          current.executor_attempt?.id !== attemptId ||
+          !current.executor_connected_at ||
+          !EXECUTING_TASK_STATUSES.has(current.status) ||
+          current.status === TaskStatus.DISPATCHING
+        ) {
+          return null;
+        }
+        const task = { ...current, ...telemetry } satisfies Task;
+        const data = this.taskToInsert(task);
+        await update(db, tasks)
+          .set({
+            last_executor_heartbeat_at: data.last_executor_heartbeat_at,
+            data: data.data,
+          })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+        return task;
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
   /**
    * Update task by ID (atomic with database-level transaction)
    *
@@ -355,45 +597,51 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         `🔄 [TaskRepo] Updating task ${shortId(fullId)}${updates.status ? ` (status: ${updates.status})` : ''}`
       );
 
-      // Use transaction to make read-merge-write atomic
-      const result = await this.db.transaction(async (tx) => {
-        // Acquire row-level lock on PostgreSQL to prevent lost updates
+      const result = await runDatabaseTransaction(
+        this.db,
+        async (db) => {
+          await this.lockTask(db, fullId);
 
-        await lockRowForUpdate(txAsDb(tx), this.db, tasks, eq(tasks.task_id, fullId));
+          const currentRow = await select(db).from(tasks).where(eq(tasks.task_id, fullId)).one();
 
-        // STEP 1: Read current task (within transaction)
-        const currentRow = await select(txAsDb(tx))
-          .from(tasks)
-          .where(eq(tasks.task_id, fullId))
-          .one();
+          if (!currentRow) throw new EntityNotFoundError('Task', id);
 
-        if (!currentRow) {
-          throw new EntityNotFoundError('Task', id);
-        }
+          const current = this.rowToTask(currentRow);
 
-        const current = this.rowToTask(currentRow);
+          if (
+            isTerminalTaskStatus(current.status) &&
+            updates.status !== undefined &&
+            updates.status !== current.status
+          ) {
+            throw new RepositoryError(
+              `terminal task status cannot be changed from ${current.status}`
+            );
+          }
+          if (current.status === TaskStatus.DISPATCHING && updates.status === TaskStatus.RUNNING) {
+            throw new RepositoryError('dispatching tasks must connect through connectExecutor');
+          }
 
-        // STEP 2: Deep merge updates into current task (in memory)
-        // Preserves nested objects like message_range when doing partial updates
-        const merged = deepMerge(current, updates);
-        const insertData = this.taskToInsert(merged);
+          const merged = deepMerge(current, updates);
+          const insertData = this.taskToInsert(merged);
 
-        // STEP 3: Write merged task (within same transaction)
-        await update(txAsDb(tx), tasks)
-          .set({
-            status: insertData.status,
-            queue_position: insertData.queue_position,
-            completed_at: insertData.completed_at,
-            last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
-            session_md5: insertData.session_md5,
-            data: insertData.data,
-          })
-          .where(eq(tasks.task_id, fullId))
-          .run();
+          await update(db, tasks)
+            .set({
+              status: insertData.status,
+              queue_position: insertData.queue_position,
+              started_at: insertData.started_at,
+              executor_connected_at: insertData.executor_connected_at,
+              completed_at: insertData.completed_at,
+              last_executor_heartbeat_at: insertData.last_executor_heartbeat_at,
+              session_md5: insertData.session_md5,
+              data: insertData.data,
+            })
+            .where(eq(tasks.task_id, fullId))
+            .run();
 
-        // Return merged task (no need to re-fetch, we have it in memory)
-        return merged;
-      });
+          return merged;
+        },
+        { sqliteImmediate: true }
+      );
       return result;
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
@@ -478,30 +726,28 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     // callers can't both observe the same `max(queue_position)` and produce
     // duplicate positions. Two prompts arriving in the same tick now order
     // deterministically instead of racing.
-    return this.db.transaction(async (tx) => {
-      const positionRow = await select(txAsDb(tx), {
-        maxPos: sql<number | null>`max(${tasks.queue_position})`,
-      })
-        .from(tasks)
-        .where(sql`${tasks.session_id} = ${input.session_id} AND ${tasks.status} = 'queued'`)
-        .one();
+    return runDatabaseTransaction(
+      this.db,
+      async (db) => {
+        await this.lockSession(db, input.session_id);
+        const positionRow = await select(db, {
+          maxPos: sql<number | null>`max(${tasks.queue_position})`,
+        })
+          .from(tasks)
+          .where(and(eq(tasks.session_id, input.session_id), eq(tasks.status, TaskStatus.QUEUED)))
+          .one();
 
-      const nextPosition = (positionRow?.maxPos ?? 0) + 1;
-      const insertData = this.taskToInsert({
-        ...taskBase,
-        queue_position: nextPosition,
-      });
-      await insert(txAsDb(tx), tasks).values(insertData).run();
-
-      const row = await select(txAsDb(tx))
-        .from(tasks)
-        .where(eq(tasks.task_id, insertData.task_id))
-        .one();
-      if (!row) {
-        throw new RepositoryError('Failed to retrieve created queued task');
-      }
-      return this.rowToTask(row);
-    });
+        const insertData = this.taskToInsert({
+          ...taskBase,
+          queue_position: (positionRow?.maxPos ?? 0) + 1,
+        });
+        await insert(db, tasks).values(insertData).run();
+        const row = await select(db).from(tasks).where(eq(tasks.task_id, insertData.task_id)).one();
+        if (!row) throw new RepositoryError('Failed to retrieve created queued task');
+        return this.rowToTask(row);
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**

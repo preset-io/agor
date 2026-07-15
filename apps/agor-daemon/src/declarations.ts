@@ -18,6 +18,8 @@ import type {
   AuthenticatedUser as CoreAuthenticatedUser,
   CreateHookContext as CoreCreateHookContext,
   HookContext as CoreHookContext,
+  ExecutorClaim,
+  ExecutorTelemetryReport,
   Params as FeathersParams,
   Message,
   Repo,
@@ -120,6 +122,8 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
  * Tasks service with custom methods (server-side implementation)
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
+  connectExecutor(data: ExecutorClaim, params?: FeathersParams): Promise<Task>;
+  reportExecutorTelemetry(data: ExecutorTelemetryReport, params?: FeathersParams): Promise<Task>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,

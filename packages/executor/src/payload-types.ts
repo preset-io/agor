@@ -157,6 +157,7 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
   params: z.object({
     sessionId: z.string().uuid(),
     taskId: z.string().uuid(),
+    executorAttemptId: z.string().uuid(),
     prompt: z.string(),
     tool: ToolTypeSchema,
     permissionMode: PermissionModeSchema.optional(),

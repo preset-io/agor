@@ -29,6 +29,7 @@ describe('PromptPayloadSchema', () => {
       params: {
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
         taskId: '550e8400-e29b-41d4-a716-446655440001',
+        executorAttemptId: '550e8400-e29b-41d4-a716-446655440002',
         prompt: 'Hello, world!',
         tool: 'claude-code',
         cwd: '/home/user/project',
@@ -52,6 +53,7 @@ describe('PromptPayloadSchema', () => {
       params: {
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
         taskId: '550e8400-e29b-41d4-a716-446655440001',
+        executorAttemptId: '550e8400-e29b-41d4-a716-446655440002',
         prompt: 'Hello!',
         tool: 'gemini',
         permissionMode: 'auto',
@@ -73,6 +75,7 @@ describe('PromptPayloadSchema', () => {
       params: {
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
         taskId: '550e8400-e29b-41d4-a716-446655440001',
+        executorAttemptId: '550e8400-e29b-41d4-a716-446655440002',
         prompt: 'Hello!',
         tool: 'invalid-tool',
         cwd: '/home/user/project',
@@ -471,6 +474,7 @@ describe('ExecutorPayloadSchema (discriminated union)', () => {
       params: {
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
         taskId: '550e8400-e29b-41d4-a716-446655440001',
+        executorAttemptId: '550e8400-e29b-41d4-a716-446655440002',
         prompt: 'Hello',
         tool: 'claude-code',
         cwd: '/home/user',
@@ -514,6 +518,7 @@ describe('parseExecutorPayload', () => {
       params: {
         sessionId: '550e8400-e29b-41d4-a716-446655440000',
         taskId: '550e8400-e29b-41d4-a716-446655440001',
+        executorAttemptId: '550e8400-e29b-41d4-a716-446655440002',
         prompt: 'Hello',
         tool: 'claude-code',
         cwd: '/home/user',
@@ -545,6 +550,7 @@ describe('Type guards', () => {
     params: {
       sessionId: '550e8400-e29b-41d4-a716-446655440000',
       taskId: '550e8400-e29b-41d4-a716-446655440001',
+      executorAttemptId: '550e8400-e29b-41d4-a716-446655440002',
       prompt: 'Hello',
       tool: 'claude-code' as const,
       cwd: '/home/user',

@@ -183,16 +183,8 @@ export class TenantAgenticToolSettingsRepository {
 
     const ambientDb = getCurrentTenantDatabase();
     if (ambientDb && isPostgresDatabase(ambientDb)) return apply(ambientDb);
-    if (isSQLiteDatabase(this.db)) {
-      for (let attempt = 0; ; attempt++) {
-        try {
-          return await runDatabaseTransaction(this.db, apply, { sqliteImmediate: true });
-        } catch (error) {
-          if ((error as { code?: string }).code !== 'SQLITE_BUSY' || attempt >= 9) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
-        }
-      }
-    }
+    if (isSQLiteDatabase(this.db))
+      return runDatabaseTransaction(this.db, apply, { sqliteImmediate: true });
     return runDatabaseTransaction(this.db, apply);
   }
 }

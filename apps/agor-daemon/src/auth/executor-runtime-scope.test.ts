@@ -7,6 +7,7 @@ const payload = {
   purpose: 'executor-task',
   session_id: 'session-1',
   task_id: 'task-1',
+  executor_attempt_id: 'attempt-1',
   branch_id: 'branch-1',
 };
 
@@ -379,6 +380,7 @@ describe('executorRuntimeScopeGuard', () => {
       params: {
         authentication: { strategy: 'jwt' },
         task_id: 'task-1',
+        executor_attempt_id: 'attempt-1',
         session_id: 'session-1',
         branch_id: 'branch-1',
         query: {},
@@ -389,6 +391,7 @@ describe('executorRuntimeScopeGuard', () => {
     await executorRuntimeScopeGuard()(context);
 
     expect(context.data).toMatchObject({ taskId: 'task-1' });
+    expect(context.params).toMatchObject({ executorAttemptId: 'attempt-1' });
   });
 
   it('rejects API key resolution for another task under executor token auth', async () => {

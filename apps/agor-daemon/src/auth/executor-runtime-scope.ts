@@ -11,6 +11,7 @@ import {
 type Scope = {
   sessionId?: string;
   taskId?: string;
+  executorAttemptId?: string;
   branchId?: string;
 };
 
@@ -33,6 +34,7 @@ function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null
       type: EXECUTOR_SESSION_TOKEN_TYPE,
       purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
       task_id: params.task_id,
+      executor_attempt_id: params.executor_attempt_id,
       session_id: params.session_id,
       sessionId: params.sessionId,
       branch_id: params.branch_id,
@@ -197,8 +199,13 @@ export function executorRuntimeScopeGuard() {
     const scope = {
       sessionId: getExecutorSessionTokenSessionId(payload),
       taskId: payload.task_id,
+      executorAttemptId: payload.executor_attempt_id,
       branchId: payload.branch_id,
     };
+    if (scope.executorAttemptId) {
+      (context.params as Params & { executorAttemptId?: string }).executorAttemptId =
+        scope.executorAttemptId;
+    }
     const data = (context.data ?? {}) as Record<string, unknown>;
     const query = ((context.params as Params).query ?? {}) as Record<string, unknown>;
     (context.params as Params).query = query;
@@ -215,6 +222,14 @@ export function executorRuntimeScopeGuard() {
           setIfAbsent(query, 'branch_id', scope.branchId);
         }
       } else {
+        if (
+          context.method === 'patch' &&
+          (data.status === 'running' ||
+            data.status === 'awaiting_permission' ||
+            data.status === 'awaiting_input')
+        ) {
+          throw new Forbidden('Executor task state owns session runtime status');
+        }
         expectMatch(sessionId, id ?? data.session_id ?? query.session_id, 'session');
         if (!id && data.session_id === undefined && query.session_id === undefined) {
           throw new Forbidden('Executor token session scope is required for this request');
@@ -238,6 +253,13 @@ export function executorRuntimeScopeGuard() {
         }
         if (scope.sessionId)
           expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
+        if (context.method === 'connectExecutor' || context.method === 'reportExecutorTelemetry') {
+          expectMatch(
+            expectClaim(scope.executorAttemptId, 'attempt'),
+            data.executor_attempt_id,
+            'attempt'
+          );
+        }
       }
     } else if (path === 'messages') {
       const taskId = expectClaim(scope.taskId, 'task');

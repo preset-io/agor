@@ -6,6 +6,7 @@ import type { ReportPath, ReportTemplate } from './report';
 export const TaskStatus = {
   QUEUED: 'queued', // Task created but not yet running (waiting for executor to drain queue)
   CREATED: 'created',
+  DISPATCHING: 'dispatching', // Launch admitted; executor has not connected yet
   RUNNING: 'running',
   STOPPING: 'stopping', // Stop requested, waiting for SDK to halt
   AWAITING_PERMISSION: 'awaiting_permission',
@@ -94,6 +95,7 @@ export function isTerminalTaskStatus(status: TaskStatus | undefined): boolean {
  * pre-executor row and QUEUED is waiting for a future turn.
  */
 export const EXECUTING_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
+  TaskStatus.DISPATCHING,
   TaskStatus.RUNNING,
   TaskStatus.STOPPING,
   TaskStatus.AWAITING_PERMISSION,
@@ -126,6 +128,15 @@ export interface ContextUsageSnapshot {
   percentage: number;
 }
 
+export interface ExecutorClaim {
+  task_id: string;
+  executor_attempt_id: string;
+}
+
+export interface ExecutorTelemetryReport extends ExecutorClaim {
+  heartbeat: boolean;
+}
+
 export interface Task {
   /** Unique task identifier (UUIDv7) */
   task_id: TaskID;
@@ -140,6 +151,9 @@ export interface Task {
   full_prompt: string;
 
   status: TaskStatus;
+
+  /** Durable ownership, launch, cleanup, and post-turn evidence for this turn. */
+  executor_attempt?: { id: string };
 
   /**
    * Queue position when status is QUEUED. Lower values drain first.
@@ -256,7 +270,9 @@ export interface Task {
   session_md5?: string;
 
   created_at: string;
-  started_at?: string; // When task status changed to RUNNING (UTC ISO string)
+  started_at?: string; // When launch was admitted (UTC ISO string)
+  /** Server-authored timestamp for the authenticated executor connection. */
+  executor_connected_at?: string;
   /** Latest heartbeat emitted by the executor while this task is active. */
   last_executor_heartbeat_at?: string; // UTC ISO string
   completed_at?: string; // When task reached terminal status (UTC ISO string)

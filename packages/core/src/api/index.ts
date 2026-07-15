@@ -20,6 +20,8 @@ import type {
   ContextFileDetail,
   ContextFileListItem,
   CreateAgenticToolPreset,
+  ExecutorClaim,
+  ExecutorTelemetryReport,
   Group,
   GroupMembership,
   KnowledgeDocument,
@@ -69,6 +71,7 @@ const BOARDS_SERVICE_EXTENDED = Symbol('agor.boardsServiceExtended');
 const USERS_SERVICE_EXTENDED = Symbol('agor.usersServiceExtended');
 const REPOS_SERVICE_EXTENDED = Symbol('agor.reposServiceExtended');
 const BRANCHES_SERVICE_EXTENDED = Symbol('agor.branchesServiceExtended');
+const TASKS_SERVICE_EXTENDED = Symbol('agor.tasksServiceExtended');
 const SERVICE_FIND_ALL_EXTENDED = Symbol('agor.serviceFindAllExtended');
 const CLIENT_SERVICE_FACTORY_EXTENDED = Symbol('agor.clientServiceFactoryExtended');
 const CLIENT_SESSIONS_HELPERS_EXTENDED = Symbol('agor.clientSessionsHelpersExtended');
@@ -293,6 +296,8 @@ export interface SessionsService extends AgorService<Session> {
  * Tasks service with bulk creation support
  */
 export interface TasksService extends AgorService<Task> {
+  connectExecutor(data: ExecutorClaim, params?: Params): Promise<Task>;
+  reportExecutorTelemetry(data: ExecutorTelemetryReport, params?: Params): Promise<Task>;
   /**
    * Create multiple tasks in a single request
    * Returns array of created tasks with IDs
@@ -869,6 +874,16 @@ function extendBranchesService(client: AgorClient): void {
   branchesService[BRANCHES_SERVICE_EXTENDED] = true;
 }
 
+function extendTasksService(client: AgorClient): void {
+  const service = client.service('tasks') as AgorService<Task> & {
+    [TASKS_SERVICE_EXTENDED]?: boolean;
+    methods?: (...names: string[]) => unknown;
+  };
+  if (service[TASKS_SERVICE_EXTENDED]) return;
+  service.methods?.('connectExecutor', 'reportExecutorTelemetry');
+  service[TASKS_SERVICE_EXTENDED] = true;
+}
+
 function extendServiceFactory(client: AgorClient): void {
   const augmentedClient = client as AgorClient & {
     [CLIENT_SERVICE_FACTORY_EXTENDED]?: boolean;
@@ -999,6 +1014,7 @@ export async function createRestClient(
   extendUsersService(client);
   extendReposService(client);
   extendBranchesService(client);
+  extendTasksService(client);
   extendSessionsHelpers(client);
   extendTasksHelpers(client);
 
@@ -1090,6 +1106,7 @@ export function createClient(
   extendUsersService(client);
   extendReposService(client);
   extendBranchesService(client);
+  extendTasksService(client);
   extendSessionsHelpers(client);
   extendTasksHelpers(client);
 
