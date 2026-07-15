@@ -13,8 +13,8 @@ vi.mock('../BranchCard', () => ({
 }));
 
 vi.mock('../BranchHeaderPill', () => ({
-  BranchHeaderPill: ({ fluid }: { fluid?: boolean }) => (
-    <div data-testid="branch-header-pill" data-fluid={String(fluid)} />
+  BranchHeaderPill: ({ truncateToFit }: { truncateToFit?: boolean }) => (
+    <div data-testid="branch-header-pill" data-truncate-to-fit={String(truncateToFit)} />
   ),
 }));
 
@@ -51,6 +51,9 @@ describe('BoardTeammatePanel teammate tab', () => {
     expect(screen.getByTestId('teammate-session-sections')).toHaveTextContent(
       'defaultExpanded:true'
     );
-    expect(screen.getByTestId('branch-header-pill')).toHaveAttribute('data-fluid', 'true');
+    expect(screen.getByTestId('branch-header-pill')).toHaveAttribute(
+      'data-truncate-to-fit',
+      'true'
+    );
   });
 });

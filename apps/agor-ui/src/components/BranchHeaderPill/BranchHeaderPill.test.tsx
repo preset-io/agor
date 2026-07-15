@@ -107,8 +107,8 @@ const defaultProps = {
 };
 
 describe('BranchHeaderPill', () => {
-  it('keeps compact fluid actions at the default width and hides the destructive action', () => {
-    render(<BranchHeaderPill {...defaultProps} compact fluid />);
+  it('keeps compact truncateToFit actions at the default width and hides the destructive action', () => {
+    render(<BranchHeaderPill {...defaultProps} compact truncateToFit />);
 
     expect(
       screen.getByRole('button', {
@@ -167,9 +167,13 @@ describe('BranchHeaderPill', () => {
     expect(link).toHaveAttribute('href', '/ui/s/abc123/');
   });
 
-  it('keeps a fluid identity accessible and selects the narrow action-button variant', () => {
+  it('keeps a truncateToFit identity accessible and selects the narrow action-button variant', () => {
     render(
-      <BranchHeaderPill {...defaultProps} identityLink="https://agor.example/ui/s/abc123/" fluid />
+      <BranchHeaderPill
+        {...defaultProps}
+        identityLink="https://agor.example/ui/s/abc123/"
+        truncateToFit
+      />
     );
 
     const identity = screen.getByRole('link', {

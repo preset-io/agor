@@ -1,20 +1,18 @@
 import type { Branch, Repo } from '@agor-live/client';
 import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
   EditOutlined,
   FileTextOutlined,
   FireOutlined,
   GlobalOutlined,
   PlayCircleOutlined,
   StopOutlined,
-  WarningOutlined,
 } from '@ant-design/icons';
-import { Button, Space, Spin, Tooltip, theme } from 'antd';
+import { Button, Space, Tooltip, theme } from 'antd';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
+import { EnvironmentStatusIcon } from './EnvironmentStatusIcon';
 
 interface EnvironmentPillProps {
   repo: Repo; // Need repo for environment_config
@@ -83,32 +81,6 @@ export function EnvironmentPill({
 
   // Infer environment state by combining runtime status + health check
   const inferredState = getEnvironmentState(env);
-
-  // Case 2 & 3: Config exists - show status with health awareness
-  const getStatusIcon = () => {
-    switch (inferredState) {
-      case 'stopped':
-        return <StopOutlined style={{ color: token.colorTextDisabled, fontSize: 12 }} />;
-      case 'starting':
-      case 'stopping':
-        return (
-          <Spin
-            size="small"
-            style={{ display: 'inline-flex', alignItems: 'center', fontSize: 12 }}
-          />
-        );
-      case 'healthy':
-        return <CheckCircleOutlined style={{ color: token.colorSuccess, fontSize: 12 }} />;
-      case 'unhealthy':
-        return <WarningOutlined style={{ color: token.colorWarning, fontSize: 12 }} />;
-      case 'running':
-        return <CheckCircleOutlined style={{ color: token.colorInfo, fontSize: 12 }} />;
-      case 'error':
-        return <CloseCircleOutlined style={{ color: token.colorError, fontSize: 12 }} />;
-      default:
-        return <StopOutlined style={{ color: token.colorTextDisabled, fontSize: 12 }} />;
-    }
-  };
 
   const handleEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -223,7 +195,7 @@ export function EnvironmentPill({
               }}
             >
               <Space size={4} align="center">
-                {getStatusIcon()}
+                <EnvironmentStatusIcon state={inferredState} size={12} />
                 <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>env</span>
               </Space>
             </a>
@@ -239,7 +211,7 @@ export function EnvironmentPill({
               }}
             >
               <Space size={4} align="center">
-                {getStatusIcon()}
+                <EnvironmentStatusIcon state={inferredState} size={12} />
                 <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>env</span>
               </Space>
             </div>

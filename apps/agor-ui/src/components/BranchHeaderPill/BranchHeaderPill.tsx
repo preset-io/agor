@@ -3,25 +3,22 @@ import {
   ApartmentOutlined,
   BranchesOutlined,
   CalendarOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
   EditOutlined,
   FileTextOutlined,
   FireOutlined,
   FolderOutlined,
   GlobalOutlined,
-  LoadingOutlined,
   PlayCircleOutlined,
   StopOutlined,
   TeamOutlined,
-  WarningOutlined,
 } from '@ant-design/icons';
-import { Button, Spin, Tooltip, theme } from 'antd';
+import { Button, Tooltip, theme } from 'antd';
 import { Link } from 'react-router-dom';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
+import { EnvironmentStatusIcon } from '../EnvironmentPill';
 import { ENTITY_PILL_COLORS } from '../Pill/Pill';
 import { Tag } from '../Tag';
 
@@ -43,7 +40,7 @@ interface BranchHeaderPillProps {
   /** Optional link for the branch identity area. Used by session surfaces for deep links. */
   identityLink?: string | null;
   /** Cap the pill at the available row width and shrink the identity before action sections. */
-  fluid?: boolean;
+  truncateToFit?: boolean;
   /**
    * Compact rendering for constrained side panels.
    * Hides the repo slug in the identity section and omits destructive environment actions.
@@ -63,13 +60,14 @@ const DEFAULT_ACTION_BUTTON_STYLE: React.CSSProperties = {
 };
 
 // The configured environment and shortcut sections cannot shrink. Reclaim two
-// pixels per action only in the constrained, non-compact fluid layout so the
-// complete action row fits before identity text collapses to its ellipsis.
-const FLUID_ACTION_BUTTON_WIDTH = 20;
-const FLUID_ACTION_BUTTON_STYLE: React.CSSProperties = {
+// pixels per action only in the constrained, non-compact truncateToFit layout
+// so the complete action row fits before identity text collapses to its
+// ellipsis.
+const NARROW_ACTION_BUTTON_WIDTH = 20;
+const NARROW_ACTION_BUTTON_STYLE: React.CSSProperties = {
   height: ACTION_BUTTON_HEIGHT,
-  width: FLUID_ACTION_BUTTON_WIDTH,
-  minWidth: FLUID_ACTION_BUTTON_WIDTH,
+  width: NARROW_ACTION_BUTTON_WIDTH,
+  minWidth: NARROW_ACTION_BUTTON_WIDTH,
   padding: 0,
 };
 
@@ -87,7 +85,7 @@ export function BranchHeaderPill({
   showEnvButtons = true,
   showNukeEnvironment = true,
   identityLink,
-  fluid = false,
+  truncateToFit = false,
   compact = false,
 }: BranchHeaderPillProps) {
   const { token } = theme.useToken();
@@ -106,7 +104,7 @@ export function BranchHeaderPill({
     ? undefined
     : "Requires branch 'all' permission or admin access";
   const actionButtonStyle =
-    fluid && !compact ? FLUID_ACTION_BUTTON_STYLE : DEFAULT_ACTION_BUTTON_STYLE;
+    truncateToFit && !compact ? NARROW_ACTION_BUTTON_STYLE : DEFAULT_ACTION_BUTTON_STYLE;
 
   const status = env?.status || 'stopped';
   const isRunning = status === 'running';
@@ -147,7 +145,7 @@ export function BranchHeaderPill({
             style={{
               fontFamily: token.fontFamilyCode,
               fontSize: token.fontSizeSM,
-              ...(fluid
+              ...(truncateToFit
                 ? {
                     flex: '0 1 auto',
                     minWidth: 0,
@@ -167,7 +165,9 @@ export function BranchHeaderPill({
         style={{
           fontFamily: token.fontFamilyCode,
           fontSize: token.fontSizeSM,
-          ...(fluid ? { flex: '1 1 auto', minWidth: 0 } : { maxWidth: compact ? 220 : 180 }),
+          ...(truncateToFit
+            ? { flex: '1 1 auto', minWidth: 0 }
+            : { maxWidth: compact ? 220 : 180 }),
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -179,35 +179,6 @@ export function BranchHeaderPill({
   );
 
   // --- Environment status helpers ---
-
-  const getStatusIcon = () => {
-    const size = 11;
-    switch (inferredState) {
-      case 'stopped':
-        return <StopOutlined style={{ color: token.colorTextDisabled, fontSize: size }} />;
-      case 'starting':
-      case 'stopping':
-        // Match sibling status icons: the default dot indicator ignores
-        // fontSize and misaligns in the 22px pill row.
-        return (
-          <Spin
-            size="small"
-            indicator={<LoadingOutlined spin style={{ fontSize: size }} />}
-            style={{ display: 'inline-flex', alignItems: 'center' }}
-          />
-        );
-      case 'healthy':
-        return <CheckCircleOutlined style={{ color: token.colorSuccess, fontSize: size }} />;
-      case 'unhealthy':
-        return <WarningOutlined style={{ color: token.colorWarning, fontSize: size }} />;
-      case 'running':
-        return <CheckCircleOutlined style={{ color: token.colorInfo, fontSize: size }} />;
-      case 'error':
-        return <CloseCircleOutlined style={{ color: token.colorError, fontSize: size }} />;
-      default:
-        return <StopOutlined style={{ color: token.colorTextDisabled, fontSize: size }} />;
-    }
-  };
 
   const getEnvTooltip = () => {
     if (!hasConfig) return 'Click to configure environment';
@@ -245,7 +216,7 @@ export function BranchHeaderPill({
     height: PILL_HEIGHT,
     color: 'inherit',
     textDecoration: 'none',
-    ...(fluid ? { flex: '1 1 auto', minWidth: 0, overflow: 'hidden' } : {}),
+    ...(truncateToFit ? { flex: '1 1 auto', minWidth: 0, overflow: 'hidden' } : {}),
   };
   const isInternalIdentityLink = identityLink?.startsWith('/');
 
@@ -264,7 +235,7 @@ export function BranchHeaderPill({
         cursor: 'default',
         // Content-sized, but never wider than the row: the identity section
         // truncates before the action sections are pushed out of view.
-        ...(fluid ? { maxWidth: '100%', minWidth: 0 } : {}),
+        ...(truncateToFit ? { maxWidth: '100%', minWidth: 0 } : {}),
       }}
     >
       {/* Section 1: Repo + Branch — click opens either the supplied identity URL or the branch modal. */}
@@ -303,7 +274,7 @@ export function BranchHeaderPill({
               border: 'none',
               color: 'inherit',
               font: 'inherit',
-              ...(fluid ? { flex: '1 1 auto', minWidth: 0, overflow: 'hidden' } : {}),
+              ...(truncateToFit ? { flex: '1 1 auto', minWidth: 0, overflow: 'hidden' } : {}),
             }}
           >
             {identityContent}
@@ -343,7 +314,7 @@ export function BranchHeaderPill({
                       padding: '0 2px',
                     }}
                   >
-                    {getStatusIcon()}
+                    <EnvironmentStatusIcon state={inferredState} size={11} />
                     <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
                   </a>
                 </Tooltip>
@@ -364,7 +335,7 @@ export function BranchHeaderPill({
                       font: 'inherit',
                     }}
                   >
-                    {getStatusIcon()}
+                    <EnvironmentStatusIcon state={inferredState} size={11} />
                     <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>env</span>
                   </button>
                 </Tooltip>

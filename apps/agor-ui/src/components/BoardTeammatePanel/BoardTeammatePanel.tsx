@@ -6,7 +6,6 @@ import {
   App as AntApp,
   Button,
   Empty,
-  Flex,
   Select,
   Skeleton,
   Space,
@@ -30,11 +29,10 @@ import { mapToArray } from '../../utils/mapHelpers';
 import { BranchSessionSections } from '../BranchCard';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BoardSessionList } from '../BranchListDrawer';
+import { BranchMetadataRow } from '../BranchMetadataRow';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
 import { MarkdownRenderer } from '../MarkdownRenderer';
-import { CreatedByTag } from '../metadata';
-import { IssuePill, PullRequestPill } from '../Pill';
 
 export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'comments';
 
@@ -300,9 +298,13 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </div>
             </div>
 
-            {/* Branch pill first; metadata links flow after it on the same
-                line and wrap below when the row runs out of room. */}
-            <Flex wrap gap={token.sizeUnit} align="center" style={{ minWidth: 0 }}>
+            <BranchMetadataRow
+              branch={primaryTeammateBranch}
+              repo={primaryTeammateRepo}
+              userById={userById}
+              currentUserId={currentUserId}
+              style={{ minWidth: 0 }}
+            >
               <BranchHeaderPill
                 repo={primaryTeammateRepo}
                 branch={primaryTeammateBranch}
@@ -310,29 +312,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                 onOpenBranch={onOpenSettings}
                 showEnvButtons={false}
                 compact
-                fluid
+                truncateToFit
               />
-              {primaryTeammateBranch.created_by && (
-                <CreatedByTag
-                  createdBy={primaryTeammateBranch.created_by}
-                  currentUserId={currentUserId}
-                  userById={userById}
-                  prefix="Created by"
-                />
-              )}
-              {primaryTeammateBranch.issue_url && (
-                <IssuePill
-                  issueUrl={primaryTeammateBranch.issue_url}
-                  currentRepo={primaryTeammateRepo}
-                />
-              )}
-              {primaryTeammateBranch.pull_request_url && (
-                <PullRequestPill
-                  prUrl={primaryTeammateBranch.pull_request_url}
-                  currentRepo={primaryTeammateRepo}
-                />
-              )}
-            </Flex>
+            </BranchMetadataRow>
             {teammateDescription && (
               <div className="markdown-compact" style={{ color: token.colorTextSecondary }}>
                 <MarkdownRenderer content={teammateDescription} compact showControls={false} />

@@ -1,0 +1,1 @@
+export { BranchMetadataRow } from './BranchMetadataRow';
