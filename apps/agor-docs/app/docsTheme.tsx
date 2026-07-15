@@ -1,5 +1,6 @@
 import { DiscordIcon } from 'nextra/icons';
 import { Footer, Navbar } from 'nextra-theme-docs';
+import { NavbarCloudCTA } from '../components/NavbarCloudCTA';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 
@@ -39,7 +40,9 @@ export const navbar = (
     // Default chat icon ships without an accessible name (axe: link-name);
     // role="img" + aria-label makes the icon-only link announce as "Discord".
     chatIcon={<DiscordIcon width="24" role="img" aria-label="Discord" />}
-  />
+  >
+    <NavbarCloudCTA />
+  </Navbar>
 );
 
 export const footer = <Footer>BSL 1.1 © {new Date().getFullYear()} Preset Inc.</Footer>;

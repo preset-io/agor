@@ -5,3 +5,4 @@ export { CloudInviteCTA } from './CloudInviteCTA';
 export { GifGallery } from './GifGallery';
 export { JoinBetaCTA } from './JoinBetaCTA';
 export { LandingPage } from './LandingPage';
+export { YouTubeEmbed } from './YouTubeEmbed';

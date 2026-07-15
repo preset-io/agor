@@ -7,9 +7,11 @@ export default {
       layout: 'full', // Full page layout without sidebars/navbar
     },
   },
-  guide: 'Guide',
+  // type: 'page' lifts these into the top navbar (left of search); they
+  // also remain reachable from the mobile menu.
+  guide: { title: 'Docs', type: 'page' },
+  blog: { title: 'Blog', type: 'page' },
   'api-reference': 'API Reference',
-  blog: 'Blog',
   security: 'Security',
   faq: 'FAQ',
 };

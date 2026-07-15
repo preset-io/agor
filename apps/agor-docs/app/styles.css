@@ -207,3 +207,48 @@ code span[style*="--shiki-dark:#6A737D"] {
   /* biome-ignore lint/complexity/noImportantStyles: must beat the inline style attribute that carries the token color. */
   --shiki-dark: #8b949e !important;
 }
+
+/* Navbar "Agor Cloud" CTA — rendered as Navbar children (after search in the
+ * DOM); flex order slots it visually before the Docs/Blog items and search.
+ * Hidden on phones, where the mobile menu + in-page CTAs carry the flow. */
+/* Dressed as a plain nav item (matches the Docs/Blog links beside it) even
+ * though it's a button that pops the beta modal. */
+.navbar-cloud-cta {
+  order: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgb(61, 180, 170);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.navbar-cloud-cta:hover {
+  color: var(--agor-teal-light, #7fe8df);
+}
+
+@media (max-width: 767px) {
+  .navbar-cloud-cta {
+    display: none;
+  }
+}
+
+/* Slot the CTA between the nav items and search: nav flex order is
+ * [logo(auto) items(0) CTA(1) search(2) github/discord(3) menu(4)].
+ * The CTA renders last in the DOM (Navbar children), so everything that
+ * should follow it visually gets bumped. */
+.nextra-navbar nav > div:has(input) {
+  order: 2;
+}
+
+.nextra-navbar nav > a:not(:first-child) {
+  order: 3;
+}
+
+.nextra-navbar nav > button:not(.navbar-cloud-cta) {
+  order: 4;
+}

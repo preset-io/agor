@@ -30,7 +30,13 @@ import {
 import Link from 'next/link';
 import type { CSSProperties } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { AI_ENABLEMENT_POST_URL, DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
+import {
+  AI_ENABLEMENT_POST_URL,
+  DISCORD_INVITE_URL,
+  GITHUB_REPO_URL,
+  PRESET_URL,
+  presetUtm,
+} from '../lib/links';
 import { BRAND_NAME, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import Aurora from './Aurora/Aurora';
 import { HubSpotFormModal } from './HubSpotFormModal';
@@ -783,6 +789,13 @@ export function LandingPage() {
             Disconnected tools, solo wins, no line of sight.
           </span>
         </p>
+        {/* Sits ABOVE the pileup so "this operational nightmare" reads as
+            pointing at the cards below it, not at the next section. */}
+        <p className={styles.problemPivot}>
+          Agor helps your team avoid this{' '}
+          <span className={styles.headingAccentWarm}>operational nightmare</span>
+          <span aria-hidden="true"> ↓</span>
+        </p>
         {/* Collision composition: slots carry the static scatter pose (rotate/
             translate/negative margins/z-index via CSS vars) plus the crash
             entrance animation, keyed off .problemSection.isVisible — the inner
@@ -802,10 +815,6 @@ export function LandingPage() {
             </div>
           ))}
         </div>
-        <p className={styles.problemPivot}>
-          Agor helps your team avoid this{' '}
-          <span className={styles.headingAccentWarm}>operational nightmare</span>
-        </p>
       </section>
 
       <section className={styles.showcaseSection} data-reveal ref={showcasePinRef}>
@@ -1514,11 +1523,18 @@ export function LandingPage() {
           </div>
         </div>
         <p className={styles.footerCredit}>
-          {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
-          <img src="/preset-logo.svg" alt="Preset logo" className={styles.footerCreditLogo} />
+          <Link
+            href={`${PRESET_URL}${presetUtm('footer-logo')}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Preset website"
+          >
+            {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
+            <img src="/preset-logo.svg" alt="Preset logo" className={styles.footerCreditLogo} />
+          </Link>
           Built by{' '}
           <Link
-            href="https://preset.io"
+            href={`${PRESET_URL}${presetUtm('footer-credit')}`}
             target="_blank"
             rel="noopener noreferrer"
             className={styles.footerCreditLink}

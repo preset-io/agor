@@ -284,7 +284,7 @@ for the agent-oriented map of the codebase.
 
 ## About
 
-**Heavily prompted by [@mistercrunch](https://github.com/mistercrunch)** ([Preset](https://preset.io),
+**Heavily prompted by [@mistercrunch](https://github.com/mistercrunch)** ([Preset](https://preset.io?utm_source=agor&utm_medium=referral&utm_campaign=agor-readme),
 [Apache Superset](https://github.com/apache/superset), [Apache Airflow](https://github.com/apache/airflow)),
 built by an army of Claudes and Codexes.
 

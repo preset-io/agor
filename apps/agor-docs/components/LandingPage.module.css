@@ -1686,11 +1686,11 @@
   color: #e8c468;
 }
 
-/* Rhetorical hinge below the grid — the first mint on the page's own scroll
- * past the hero, marking the hand-off from problem to solution. */
+/* Rhetorical hinge ABOVE the pileup — "this operational nightmare" points
+ * down at the cards, so nobody reads it against the next section. */
 .problemPivot {
   max-width: 30ch;
-  margin: 60px auto 0;
+  margin: 48px auto 0;
   color: var(--landing-ink);
   font-family: var(--font-display-stack);
   font-size: clamp(1.55rem, 2.7vw, 2.3rem);
@@ -1771,7 +1771,7 @@
   border-radius: 50%;
   background: #5fe9d0;
   box-shadow: 0 0 10px rgba(94, 233, 208, 0.8);
-  animation: badgePulse 2.4s ease-in-out infinite;
+  animation: radarPulse 2.4s ease-in-out infinite;
 }
 
 .radarScope {
@@ -1814,32 +1814,52 @@
   }
 }
 
+/* Zero-size anchor at the exact crosshairs intersection: the dot centers on
+ * it and the label hangs below WITHOUT shifting the dot (a flex column here
+ * would center dot+label as a group, nudging the dot up half a label). */
 .radarOrigin {
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
   pointer-events: none;
 }
 
 .radarOriginDot {
+  position: absolute;
+  /* Centered via explicit offsets (not translate): the scale pulse composes
+   * around the pre-translate origin and would drag a translated dot ~0.6px
+   * off the crosshairs at mid-pulse. */
+  top: -7px;
+  left: -7px;
   width: 14px;
   height: 14px;
   border-radius: 50%;
   background: #5fe9d0;
   box-shadow: 0 0 18px rgba(94, 233, 208, 0.8);
-  animation: badgePulse 2.4s ease-in-out infinite;
+  animation: radarPulse 2.4s ease-in-out infinite;
 }
 
 .radarOriginLabel {
+  position: absolute;
+  top: 13px;
+  transform: translateX(-50%);
   color: rgba(207, 224, 219, 0.7);
   font-family: var(--font-mono-stack);
   font-size: 9px;
   letter-spacing: 0.16em;
+  white-space: nowrap;
+}
+
+@keyframes radarPulse {
+  0%,
+  100% {
+    opacity: 1;
+    scale: 1;
+  }
+  50% {
+    opacity: 0.45;
+    scale: 0.82;
+  }
 }
 
 .radarBlip {
