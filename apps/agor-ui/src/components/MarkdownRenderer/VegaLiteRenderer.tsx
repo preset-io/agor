@@ -8,6 +8,7 @@ import {
 } from 'streamdown';
 import { isDarkTheme } from '../../utils/theme';
 import { type ParsedVegaLiteSpec, parseVegaLiteSpec } from './vegaLiteSpec';
+import { loadVegaRuntime } from './vegaRuntime';
 
 const RENDER_TIMEOUT_MS = 5_000;
 
@@ -39,22 +40,24 @@ export function VegaLiteRenderer({ code, language }: CustomRendererProps) {
     let disposed = false;
     let view: { finalize: () => void } | undefined;
     let timedOut = false;
+    let timeout: number | undefined;
     const element = containerRef.current;
-    const timeout = window.setTimeout(() => {
-      timedOut = true;
-      if (!disposed) setRenderState({ status: 'error', message: 'Chart rendering timed out.' });
-    }, RENDER_TIMEOUT_MS);
 
     const render = async () => {
       try {
         // Nested dynamic imports are deliberate. The renderer component itself
         // is lazy, and the multi-megabyte Vega runtime is a second, chart-only
         // chunk that is never requested for ordinary Markdown.
-        const [{ default: vegaEmbed }, { loader }] = await Promise.all([
-          import('vega-embed'),
-          import('vega'),
-        ]);
-        if (disposed || timedOut) return;
+        const { loader, vegaEmbed } = await loadVegaRuntime();
+        if (disposed) return;
+
+        // Loading or cold-compiling the lazy Vega chunk can take more than five
+        // seconds in the Docker dev server. Start the safety timeout only once
+        // the runtime is present so it measures chart work, not network/tooling.
+        timeout = window.setTimeout(() => {
+          timedOut = true;
+          if (!disposed) setRenderState({ status: 'error', message: 'Chart rendering timed out.' });
+        }, RENDER_TIMEOUT_MS);
 
         const noNetworkLoader = loader();
         noNetworkLoader.load = async (uri) => {
@@ -91,10 +94,10 @@ export function VegaLiteRenderer({ code, language }: CustomRendererProps) {
           result.view.finalize();
           return;
         }
-        window.clearTimeout(timeout);
+        if (timeout !== undefined) window.clearTimeout(timeout);
         setRenderState({ status: 'ready' });
       } catch (error) {
-        window.clearTimeout(timeout);
+        if (timeout !== undefined) window.clearTimeout(timeout);
         if (!disposed && !timedOut) {
           setRenderState({
             status: 'error',
@@ -108,7 +111,7 @@ export function VegaLiteRenderer({ code, language }: CustomRendererProps) {
     void render();
     return () => {
       disposed = true;
-      window.clearTimeout(timeout);
+      if (timeout !== undefined) window.clearTimeout(timeout);
       view?.finalize();
       element.replaceChildren();
     };

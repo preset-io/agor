@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { ConfigProvider, theme } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VegaLiteRenderer } from './VegaLiteRenderer';
@@ -6,18 +6,14 @@ import { VegaLiteRenderer } from './VegaLiteRenderer';
 const mocks = vi.hoisted(() => ({
   embed: vi.fn(),
   finalize: vi.fn(),
+  loadRuntime: vi.fn(),
 }));
 
-vi.mock('vega-embed', () => ({ default: mocks.embed }));
-vi.mock('vega', () => ({
-  loader: () => ({
-    load: vi.fn(),
-    sanitize: vi.fn(),
-  }),
-}));
+vi.mock('./vegaRuntime', () => ({ loadVegaRuntime: mocks.loadRuntime }));
 
 const code = JSON.stringify({
   description: 'Monthly revenue',
+  width: 'container',
   data: { values: [{ month: 'Jan', revenue: 28 }] },
   mark: 'bar',
   encoding: {
@@ -34,6 +30,40 @@ describe('VegaLiteRenderer', () => {
       element.append(document.createElementNS('http://www.w3.org/2000/svg', 'svg'));
       return { view: { finalize: mocks.finalize } };
     });
+    mocks.loadRuntime.mockReset();
+    mocks.loadRuntime.mockResolvedValue(createMockRuntime());
+  });
+
+  it('does not count a cold lazy-runtime load toward the chart render timeout', async () => {
+    vi.useFakeTimers();
+    let resolveRuntime: ((runtime: ReturnType<typeof createMockRuntime>) => void) | undefined;
+    mocks.loadRuntime.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRuntime = resolve;
+      })
+    );
+
+    try {
+      render(<VegaLiteRenderer code={code} isIncomplete={false} language="vega-lite" />);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_100);
+      });
+
+      expect(screen.getByText('Loading Vega-Lite chart…')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      await act(async () => {
+        resolveRuntime?.(createMockRuntime());
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mocks.embed).toHaveBeenCalled();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders an accessible chart with CSP and network protections', async () => {
@@ -84,3 +114,10 @@ describe('VegaLiteRenderer', () => {
     expect(mocks.embed).not.toHaveBeenCalled();
   });
 });
+
+function createMockRuntime() {
+  return {
+    loader: () => ({ load: vi.fn(), sanitize: vi.fn() }),
+    vegaEmbed: mocks.embed,
+  };
+}

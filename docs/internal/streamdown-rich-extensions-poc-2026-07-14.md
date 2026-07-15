@@ -19,7 +19,7 @@ This is deliberately an integration POC, not a renderer rewrite.
 
 | Candidate                  | Decision                | Portable source                                                                                                                                      | Measured/expected cost                                                                                                                                                             | Maturity and reason                                                                                                                                                                                                                                                                        |
 | -------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Vega-Lite**              | **Implement POC**       | High: a `vega-lite` JSON fence remains readable/copyable; several Markdown tools already recognize the language name even when they do not render it | **225,508 B gzip lazy** (renderer + Vega runtime); **32,028 B gzip initial delta** over the Streamdown 2 build because Vega shares some D3 modules with the existing Mermaid graph | Vega 6.2.0, Vega-Lite 6.4.3, and Vega-Embed 7.1.0 were current and maintained at research time. Streamdown documents this exact custom-renderer use case, but does not publish an official Vega plugin. High value because it adds data analysis rather than another presentation variant. |
+| **Vega-Lite**              | **Implement POC**       | High: a `vega-lite` JSON fence remains readable/copyable; several Markdown tools already recognize the language name even when they do not render it | **225,545 B gzip lazy** (renderer + Vega runtime); **32,028 B gzip initial delta** over the Streamdown 2 build because Vega shares some D3 modules with the existing Mermaid graph | Vega 6.2.0, Vega-Lite 6.4.3, and Vega-Embed 7.1.0 were current and maintained at research time. Streamdown documents this exact custom-renderer use case, but does not publish an official Vega plugin. High value because it adds data analysis rather than another presentation variant. |
 | **JSON/YAML tree + table** | **Defer**               | High for the standard `json`/`yaml` fences                                                                                                           | Existing Streamdown code highlighting is already in the initial chunk; a second renderer would add interaction, virtualization, and schema decisions                               | Syntax highlighting and copy already work. “Table” is ambiguous for nested/mixed data, while a tree duplicates editor/inspector UI elsewhere in Agor. Revisit only with a specific conversation workflow and large-document accessibility design.                                          |
 | **Rich diff**              | **Defer**               | High for a standard `diff` fence                                                                                                                     | No new package is needed for highlighting; a richer viewer would need parsing and side-by-side/large-file behavior                                                                 | Streamdown already highlights `diff`. Agor's `DiffBlock` already renders structured Edit/Write results and Knowledge history, where old/new file semantics are known. A generic fence does not reliably carry those semantics.                                                             |
 | **ANSI terminal**          | **Defer**               | Medium: an `ansi` fence is readable only if the source contains printable text; raw escape bytes travel poorly                                       | `ansi-to-react` 6.2.6 is already installed (12,227 B package files), but promoting it to Markdown expands the untrusted-input surface                                              | Agor already uses ANSI rendering for terminal/tool output. Conversation Markdown should not interpret cursor movement, OSC links, OSC 52, or non-SGR terminal controls. A future renderer would need a strict SGR-only tokenizer, output caps, and plain-text copy.                        |
@@ -58,7 +58,7 @@ Conversation content is untrusted. The POC therefore accepts a deliberately cons
 - Vega-Embed receives an inline object, `actions: false`, `tooltip: false`, SVG output, and `ast: true`. Vega documents `ast: true` as the CSP-compatible expression-interpreter path; the default expression compiler otherwise uses `Function` construction.
 - A custom Vega loader rejects both `load` and `sanitize`, providing defense in depth if a resource-bearing property escapes validation. No chart-initiated fetch is allowed.
 - SVG is produced by the local Vega runtime rather than accepted as authored HTML. The normal Streamdown sanitizer still applies to surrounding Markdown.
-- Rendering has a five-second UI timeout and cleanup/finalization on unmount. This improves failure UX but **cannot preempt synchronous main-thread layout work**. The input caps reduce risk; production approval should still include adversarial profiling or a worker/isolated-render design if Vega proves able to monopolize the main thread.
+- Chart execution has a five-second UI timeout and cleanup/finalization on unmount. The timer starts after the lazy Vega runtime loads, so a cold Docker/Vite compile is not mistaken for expensive chart work. This improves failure UX but **cannot preempt synchronous main-thread layout work**. The input caps reduce risk; production approval should still include adversarial profiling or a worker/isolated-render design if Vega proves able to monopolize the main thread.
 - The figure exposes the spec's `description` as an accessible name. A generic accessible description is inserted if omitted. Vega SVG accessibility remains enabled by default. The loading state uses `aria-busy`/`aria-live`; errors use `role="alert"` and retain source.
 
 References: [Vega usage and CSP](https://vega.github.io/vega/usage/), [Vega data loading](https://vega.github.io/vega/docs/data/), [Vega-Embed options](https://vega.github.io/vega-embed/index.html), and [Vega-Lite accessibility configuration](https://vega.github.io/vega-lite/docs/config.html).
@@ -87,9 +87,9 @@ Final chart-only chunks:
 
 | Lazy chunk                              |           Raw |          Gzip |
 | --------------------------------------- | ------------: | ------------: |
-| `VegaLiteRenderer`                      |       6,388 B |       2,714 B |
-| `vega` runtime                          |     653,271 B |     222,794 B |
-| **Lazy total on first completed chart** | **659,659 B** | **225,508 B** |
+| `VegaLiteRenderer`                      |       6,507 B |       2,753 B |
+| `vega` runtime                          |     653,271 B |     222,792 B |
+| **Lazy total on first completed chart** | **659,778 B** | **225,545 B** |
 
 The final initial `streamdown` asset is 14,302,315 B raw / 3,012,709 B gzip. This remains the dominant pre-existing renderer cost and warrants separate optimization; this POC does not attempt that rewrite.
 
@@ -174,12 +174,13 @@ digraph G { agent -> task -> report }
 ## Focused validation
 
 - `pnpm --filter agor-ui test -- src/components/MarkdownRenderer/MarkdownRenderer.test.tsx src/components/MarkdownRenderer/VegaLiteRenderer.test.tsx src/components/MarkdownRenderer/vegaLiteSpec.test.ts`
-  - 3 files, 14 tests passing
-  - covers callout conversion, incomplete streaming fallback, malformed source, dark theme, loading/accessibility state, CSP mode, and network-loader rejection
+  - 3 files, 15 tests passing
+  - covers callout conversion, incomplete streaming fallback, malformed source, dark theme, cold lazy-runtime loading, loading/accessibility state, CSP mode, and network-loader rejection
+- `pnpm --filter @agor/core test -- src/templates/session-context.test.ts` — 1 test passing; verifies the shared agent Markdown guidance
 - `pnpm --filter agor-ui typecheck` — passing
 - `pnpm exec biome check` on all changed UI source/config/package files — passing
 - `pnpm --filter agor-ui build` — passing; measurements above
-- Managed SQLite environment at `/demo/streamdown` — visually inspected in dark mode: Vega SVG, source disclosure, and both callout styles rendered with no browser console errors; existing Mermaid, math, and highlighted code also rendered.
+- Managed SQLite environment at `/demo/streamdown` — visually inspected in dark mode: Vega SVG, source disclosure, and both callout styles rendered with no browser console errors; existing Mermaid, math, and highlighted code also rendered. After the Docker timeout fix, a fresh Chrome profile rendered the responsive chart in 4.99 seconds with no alert or console warning/error.
 
 ## Production follow-ups (not part of this POC)
 

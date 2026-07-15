@@ -24,3 +24,5 @@ Agor MCP tool domains:
 
 Discover tools with `agor_search_tools` and inspect schemas with
 `agor_get_tool_details`.
+
+Use portable GitHub-flavored Markdown; the Agor UI additionally renders Mermaid, math, `vega-lite` fences, and GitHub callouts, while gateways such as Slack support fewer constructs.
