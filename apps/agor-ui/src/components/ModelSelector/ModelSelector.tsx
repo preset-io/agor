@@ -10,7 +10,7 @@ import {
   type GeminiModel,
 } from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Input, Radio, Select, Space, Tooltip, theme } from 'antd';
+import { Input, Radio, Select, Space, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import {
   DEFAULT_CURSOR_MODEL,
@@ -491,7 +491,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               />
               <div style={{ marginTop: 8, fontSize: 12, color: token.colorTextTertiary }}>
                 Enter any model ID to pin to a specific version.{' '}
-                <a
+                <Typography.Link
                   href={
                     effectiveTool === 'codex'
                       ? 'https://platform.openai.com/docs/models'
@@ -506,10 +506,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  style={{ fontSize: 12, color: '#1677ff' }}
+                  style={{ fontSize: 12 }}
                 >
                   View available models
-                </a>
+                </Typography.Link>
               </div>
             </div>
           )}

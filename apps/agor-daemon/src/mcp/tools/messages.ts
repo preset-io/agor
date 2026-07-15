@@ -8,6 +8,7 @@ import {
   lte,
   messages as messagesTable,
   or,
+  type SQL,
   select,
   sql,
   visibleSessionReferenceAccessExists,
@@ -20,6 +21,7 @@ import { resolveSessionId, resolveTaskId } from '../resolve-ids.js';
 import { mcpLimit, mcpOffset, mcpOptionalId, mcpOptionalString } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 const BROAD_SEARCH_GUIDANCE =
   'Broad cross-session message search must be scoped to sessionId/taskId or bounded with createdAfter. Use a window of 31 days or less; add createdBefore for historical searches. Example: { "search": "SEO", "createdAfter": "2026-06-01T00:00:00Z", "createdBefore": "2026-06-15T00:00:00Z" }. This prevents full-table scans on large message databases.';
@@ -138,7 +140,7 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       const role = args.role === 'user' || args.role === 'assistant' ? args.role : undefined;
 
       // Build WHERE conditions
-      const conditions = [];
+      const conditions: SQL[] = [];
       if (sessionId) conditions.push(eq(messagesTable.session_id, sessionId));
       if (taskId) conditions.push(eq(messagesTable.task_id, taskId));
       if (role) conditions.push(eq(messagesTable.role, role));
@@ -171,28 +173,29 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       // to sessions the caller can access. Use the same SQL EXISTS predicate
       // as high-cardinality repository paths instead of materializing every
       // accessible session id into an IN (...) list.
-      if (isBranchRbacEnabled()) {
-        const userRole = ctx.authenticatedUser?.role as string | undefined;
-        if (!isSuperAdmin(userRole)) {
-          conditions.push(
-            visibleSessionReferenceAccessExists(ctx.db, ctx.userId, messagesTable.session_id)
-          );
-        }
-      }
-
       const orderCol = sessionId ? messagesTable.index : messagesTable.timestamp;
       const orderBy = order === 'desc' ? desc(orderCol) : asc(orderCol);
       // Keep every invocation bounded. The small over-fetch preserves the
       // existing "hide tool-only noise by default" behavior without loading
       // every matching row into daemon memory.
       const fetchLimit = Math.min(limit + 100, 200);
-      const allRows = await select(ctx.db)
-        .from(messagesTable)
-        .where(conditions.length > 0 ? and(...conditions) : undefined)
-        .orderBy(orderBy)
-        .limit(fetchLimit)
-        .offset(offset)
-        .all();
+      const allRows = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+        if (isBranchRbacEnabled()) {
+          const userRole = ctx.authenticatedUser?.role as string | undefined;
+          if (!isSuperAdmin(userRole)) {
+            conditions.push(
+              visibleSessionReferenceAccessExists(db, ctx.userId, messagesTable.session_id)
+            );
+          }
+        }
+        return select(db)
+          .from(messagesTable)
+          .where(conditions.length > 0 ? and(...conditions) : undefined)
+          .orderBy(orderBy)
+          .limit(fetchLimit)
+          .offset(offset)
+          .all();
+      });
 
       // Post-process
       type ProcessedMessage = {

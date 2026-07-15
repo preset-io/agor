@@ -61,15 +61,6 @@ describe('coerceJsonRecord', () => {
 });
 
 describe('MCP tool registry', () => {
-  it('mirrors runtime read-only service tier filtering', () => {
-    const registry = buildRegistry({ boards: 'readonly' });
-
-    expect(registry.get('agor_boards_get')).toBeDefined();
-    expect(registry.get('agor_boards_list')).toBeDefined();
-    expect(registry.get('agor_boards_update')).toBeUndefined();
-    expect(registry.get('agor_boards_create')).toBeUndefined();
-  });
-
   it('keeps representative tool detail schemas from degrading to bare object schemas', () => {
     const registry = buildRegistry();
     const expectedPropertiesByTool: Record<string, string[]> = {
@@ -317,13 +308,7 @@ describe('POST /mcp with personal API keys', () => {
       return svc;
     };
 
-    setupMCPRoutes(
-      webApp as never,
-      {} as never,
-      /* toolSearchEnabled */ false,
-      undefined,
-      multiTenancyConfig
-    );
+    setupMCPRoutes(webApp as never, {} as never, /* toolSearchEnabled */ false, multiTenancyConfig);
 
     const httpServer = webApp.listen(0);
     try {
@@ -898,13 +883,7 @@ describe('POST /mcp with personal API keys', () => {
       throw new Error(`Unexpected service lookup: ${name}`);
     };
 
-    setupMCPRoutes(
-      webApp as never,
-      {} as never,
-      /* toolSearchEnabled */ false,
-      undefined,
-      cloudMultiTenancy
-    );
+    setupMCPRoutes(webApp as never, {} as never, /* toolSearchEnabled */ false, cloudMultiTenancy);
 
     const httpServer = webApp.listen(0);
     try {
@@ -962,13 +941,7 @@ describe('POST /mcp with personal API keys', () => {
       return { get: getUser };
     };
 
-    setupMCPRoutes(
-      webApp as never,
-      {} as never,
-      /* toolSearchEnabled */ false,
-      undefined,
-      cloudMultiTenancy
-    );
+    setupMCPRoutes(webApp as never, {} as never, /* toolSearchEnabled */ false, cloudMultiTenancy);
 
     const httpServer = webApp.listen(0);
     try {

@@ -1,0 +1,13 @@
+engine biome(1.0)
+language js(typescript, jsx)
+
+// React code should consume the current typed theme with `theme.useToken()`.
+// Raw `--ant-*` strings are reserved for selector-based CSS and non-React
+// integration boundaries that carry a documented suppression.
+or {
+  JsStringLiteralExpression(),
+  JsTemplateExpression()
+} as $literal where {
+  $literal <: r"(?is)^[\"'`].*var\(\s*--ant-[a-z0-9-]+.*[\"'`]$",
+  register_diagnostic(span=$literal, message="Use theme.useToken() in React code instead of a raw --ant-* CSS variable. Non-React CSS-string boundaries require a documented plugin suppression.", severity="error")
+}

@@ -131,7 +131,7 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
           padding: token.sizeUnit,
           borderRadius: token.borderRadius,
           ...(isError && {
-            background: 'rgba(255, 77, 79, 0.05)',
+            background: token.colorErrorBg,
             border: `1px solid ${token.colorErrorBorder}`,
           }),
         }}

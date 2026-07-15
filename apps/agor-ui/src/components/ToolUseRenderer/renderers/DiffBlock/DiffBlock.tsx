@@ -16,6 +16,7 @@ import { useState } from 'react';
 import { copyToClipboard } from '@/utils/clipboard';
 import { useThemedMessage } from '@/utils/message';
 import { isDarkTheme } from '@/utils/theme';
+import { getDiffPalette } from './diffPalette';
 import { type DiffLine, type StructuredPatchHunk, useDiff, type WordSegment } from './useDiff';
 
 /** Lines of diff output before we collapse by default */
@@ -89,14 +90,8 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [showAll, setShowAll] = useState(false);
 
-  // Color tokens for diff
-  const addBg = isDark ? 'rgba(46, 160, 67, 0.15)' : 'rgba(46, 160, 67, 0.1)';
-  const removeBg = isDark ? 'rgba(218, 54, 51, 0.15)' : 'rgba(218, 54, 51, 0.1)';
-  const addColor = isDark ? '#3fb950' : '#1a7f37';
-  const removeColor = isDark ? '#f85149' : '#cf222e';
-  // Brighter backgrounds for word-level highlights (the "inner diff")
-  const addWordBg = isDark ? 'rgba(46, 160, 67, 0.4)' : 'rgba(46, 160, 67, 0.3)';
-  const removeWordBg = isDark ? 'rgba(218, 54, 51, 0.4)' : 'rgba(218, 54, 51, 0.3)';
+  const { addBg, removeBg, addColor, removeColor, addWordBg, removeWordBg } =
+    getDiffPalette(isDark);
   const contextColor = token.colorTextTertiary;
   const lineNumColor = token.colorTextQuaternary;
   const separatorColor = token.colorBorderSecondary;
@@ -107,7 +102,7 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
         style={{
           padding: token.sizeUnit,
           borderRadius: token.borderRadius,
-          background: 'rgba(255, 77, 79, 0.05)',
+          background: token.colorErrorBg,
           border: `1px solid ${token.colorErrorBorder}`,
         }}
       >

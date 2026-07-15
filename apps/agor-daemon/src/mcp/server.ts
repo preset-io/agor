@@ -23,8 +23,7 @@ import {
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { shortId, UserApiKeysRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { DaemonServicesConfig, ServiceGroupName, SessionID, UserID } from '@agor/core/types';
-import { getServiceTier, SERVICE_GROUP_TO_MCP_DOMAINS, SERVICE_TIER_RANK } from '@agor/core/types';
+import type { SessionID, UserID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -32,7 +31,7 @@ import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
-import { wrapRegisterTool } from './register-tool-proxy.js';
+import { tenantScopedToolProxy } from './tenant-scope.js';
 import { validateSessionToken } from './tokens.js';
 import { formatDomainDescriptionsForInstructions, ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
@@ -224,14 +223,11 @@ const DOMAIN_TOOL_REGISTRARS: DomainToolRegistrar[] = [
 function registerDomainTools(
   server: McpServer,
   ctx: McpContext,
-  servicesConfig?: DaemonServicesConfig,
   beforeRegister?: (domain: string) => void
 ): void {
   for (const { domain, register } of DOMAIN_TOOL_REGISTRARS) {
-    const access = getDomainAccess(domain, servicesConfig);
-    if (!access) continue;
     beforeRegister?.(domain);
-    register(access === 'readonly' ? readOnlyProxy(server) : server, ctx);
+    register(server, ctx);
   }
 }
 
@@ -240,7 +236,7 @@ function registerDomainTools(
  * Captures metadata (name, description, JSON Schema, annotations, domain)
  * without creating real handlers. Called once, cached forever.
  */
-export function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegistry {
+export function buildRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
 
   // Create a throwaway server just to run the registration code.
@@ -285,13 +281,8 @@ export function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegist
 
   // Register all domain tools with domain tracking.
   // Handlers receive a dummy context — they won't be called.
-  // The registry uses the same service-tier filtering as runtime registration,
-  // including read-only proxying, so search/details never advertise tools that
-  // agor_execute_tool cannot actually call in this server configuration.
   const dummyCtx = {} as McpContext;
-  registerDomainTools(tempServer, dummyCtx, servicesConfig, (domain) =>
-    registry.setCurrentDomain(domain)
-  );
+  registerDomainTools(tempServer, dummyCtx, (domain) => registry.setCurrentDomain(domain));
 
   // Search/execute tools always registered (meta-tools)
   registry.setCurrentDomain('discovery');
@@ -303,12 +294,12 @@ export function buildRegistry(servicesConfig?: DaemonServicesConfig): ToolRegist
 /**
  * Get or build the cached registry and tools/list response.
  */
-function getRegistry(servicesConfig?: DaemonServicesConfig): {
+function getRegistry(): {
   registry: ToolRegistry;
   toolsList: { tools: Array<Record<string, unknown>> };
 } {
   if (!cachedRegistry) {
-    cachedRegistry = buildRegistry(servicesConfig);
+    cachedRegistry = buildRegistry();
     // Pre-compute the tools/list response — frozen, deterministic
     cachedToolsList = {
       tools: cachedRegistry.getAlwaysVisible().map((entry) => ({
@@ -328,47 +319,7 @@ function getRegistry(servicesConfig?: DaemonServicesConfig): {
  * Tool handlers close over `ctx` for per-request user/session scope.
  * The registry and tools/list response are shared across all requests.
  */
-/**
- * Check if a MCP domain should have tools registered based on service config.
- * Returns false for 'off' or 'internal' tiers, 'readonly' or 'full' otherwise.
- */
-function getDomainAccess(
-  domain: string,
-  servicesConfig?: DaemonServicesConfig
-): false | 'readonly' | 'full' {
-  if (!servicesConfig) return 'full'; // default: all enabled
-
-  // Find which service group owns this domain
-  for (const [group, domains] of Object.entries(SERVICE_GROUP_TO_MCP_DOMAINS)) {
-    if (domains?.includes(domain)) {
-      const tier = getServiceTier(servicesConfig, group as ServiceGroupName);
-      if (SERVICE_TIER_RANK[tier] < SERVICE_TIER_RANK.readonly) return false;
-      return tier === 'on' ? 'full' : 'readonly';
-    }
-  }
-  return 'full'; // unknown domain = full access
-}
-
-/**
- * Create a proxy McpServer that silently skips tools without
- * `readOnlyHint: true`. Backs the read-only service tier where mutating
- * tools should not even appear in `tools/list`.
- */
-function readOnlyProxy(server: McpServer): McpServer {
-  return wrapRegisterTool(server, (register, name, config, handler) => {
-    const annotations = config.annotations as { readOnlyHint?: boolean } | undefined;
-    if (annotations?.readOnlyHint === true) {
-      return register(name, config, handler);
-    }
-    // Mutating tools: silently skipped in read-only mode.
-  });
-}
-
-function createMcpServer(
-  ctx: McpContext,
-  toolSearchEnabled: boolean,
-  servicesConfig?: DaemonServicesConfig
-): McpServer {
+function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer {
   const server = new McpServer(
     {
       name: 'agor',
@@ -383,14 +334,13 @@ function createMcpServer(
     }
   );
 
-  // Register domain tools conditionally based on service tier.
-  // 'off' / 'internal': no MCP tools
-  // 'readonly': only tools with readOnlyHint: true
-  // 'on': all tools
-  registerDomainTools(server, ctx, servicesConfig);
+  // MCP custom methods bypass Feathers around hooks. Scope every tool at this
+  // execution boundary so tenant-aware repositories and manual events share one
+  // consistent ambient context.
+  registerDomainTools(tenantScopedToolProxy(server, ctx), ctx);
 
   if (toolSearchEnabled) {
-    const { registry, toolsList } = getRegistry(servicesConfig);
+    const { registry, toolsList } = getRegistry();
 
     // Register search/execute tools with the shared cached registry
     registerSearchTools(server, registry);
@@ -413,12 +363,11 @@ export function setupMCPRoutes(
   app: Application,
   db: TenantScopeAwareDatabase,
   toolSearchEnabled = true,
-  servicesConfig?: DaemonServicesConfig,
   multiTenancyConfig?: ResolvedMultiTenancyConfig
 ): void {
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
-    getRegistry(servicesConfig);
+    getRegistry();
     console.log(`✅ MCP tool registry built (${cachedRegistry!.size} tools cached)`);
   }
 
@@ -758,7 +707,7 @@ export function setupMCPRoutes(
       if (req.method === 'POST' && isInitializeRequest(req.body)) {
         evictOldestStatefulTransportIfNeeded();
 
-        const mcpServer = createMcpServer(mcpContext, toolSearchEnabled, servicesConfig);
+        const mcpServer = createMcpServer(mcpContext, toolSearchEnabled);
         let transport: StreamableHTTPServerTransport;
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
@@ -804,7 +753,7 @@ export function setupMCPRoutes(
         });
       }
 
-      const mcpServer = createMcpServer(mcpContext, toolSearchEnabled, servicesConfig);
+      const mcpServer = createMcpServer(mcpContext, toolSearchEnabled);
 
       // Create stateless transport (one per request, no session tracking)
       const transport = new StreamableHTTPServerTransport({

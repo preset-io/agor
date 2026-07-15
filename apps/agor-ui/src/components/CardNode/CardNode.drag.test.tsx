@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: card-type color fixtures verify user-selectable canvas styling
 import type { CardWithType } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';

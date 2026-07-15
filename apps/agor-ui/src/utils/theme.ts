@@ -1,5 +1,12 @@
 import { AggregationColor } from 'antd/es/color-picker/color';
 
+// Contrast endpoints are physical display colors, not theme surfaces. They
+// must remain absolute so a dark algorithm cannot turn both candidates white.
+// biome-ignore lint/plugin/noHardcodedColorLiteral: absolute WCAG contrast endpoint
+const ABSOLUTE_BLACK = '#000000';
+// biome-ignore lint/plugin/noHardcodedColorLiteral: absolute WCAG contrast endpoint
+const ABSOLUTE_WHITE = '#ffffff';
+
 /**
  * Shared theme helpers.
  *
@@ -11,6 +18,27 @@ export const isDarkTheme = (token: { colorBgLayout?: string | undefined }): bool
   token.colorBgLayout?.startsWith?.('rgb(0') ||
   token.colorBgLayout?.startsWith?.('rgba(0') ||
   false;
+
+/** Pick a theme-aware foreground for an arbitrary user/data color. */
+export const getContrastingTextColor = (
+  background: string,
+  token: { colorText: string }
+): string => {
+  try {
+    const { r, g, b, a } = new AggregationColor(background).toRgb();
+    if (a < 0.3) return token.colorText;
+    const linearize = (channel: number) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b);
+    const blackContrast = (luminance + 0.05) / 0.05;
+    const whiteContrast = 1.05 / (luminance + 0.05);
+    return blackContrast >= whiteContrast ? ABSOLUTE_BLACK : ABSOLUTE_WHITE;
+  } catch {
+    return token.colorText;
+  }
+};
 
 /**
  * Ensures a color has sufficient visibility by adjusting brightness while preserving hue.
@@ -53,6 +81,6 @@ export const ensureColorVisible = (
     return colorObj.toHexString();
   } catch {
     // Fallback if color parsing fails
-    return isDark ? '#ffffff' : '#000000';
+    return isDark ? ABSOLUTE_WHITE : ABSOLUTE_BLACK;
   }
 };

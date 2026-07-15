@@ -9,6 +9,15 @@ export interface TeammateCreationInput {
   repoId: string;
   branchName?: string;
   sourceBranch?: string;
+  /**
+   * Reuse an existing board for the teammate instead of creating a new one.
+   * The onboarding wizard already creates a board in its workspace step, so it
+   * passes that board here to avoid ending up with two boards for one teammate.
+   * When omitted (e.g. the CreateDialog flow), a fresh board is created.
+   */
+  boardId?: string;
+  /** Tags the teammate as onboarding-seeded so its card shows the right copy. */
+  createdViaOnboarding?: boolean;
 }
 
 export interface TeammateCreationDeps {
@@ -52,11 +61,17 @@ export async function createTeammateBranch(
   }
 
   const displayName = input.displayName.trim() || 'My Teammate';
-  const newBoard = (await deps.client.service('boards').create({
-    name: `${displayName}'s Board`,
-    icon: input.emoji || '\u{1F916}',
-  })) as Board;
-  const boardId = newBoard.board_id;
+  // Reuse the caller's board (onboarding) or create a fresh one (CreateDialog).
+  let boardId: string;
+  if (input.boardId) {
+    boardId = input.boardId;
+  } else {
+    const newBoard = (await deps.client.service('boards').create({
+      name: `${displayName}'s Board`,
+      icon: input.emoji || '\u{1F916}',
+    })) as Board;
+    boardId = newBoard.board_id;
+  }
 
   await ensureTeammateWelcomeNote({
     client: deps.client,
@@ -70,7 +85,7 @@ export async function createTeammateBranch(
     displayName: input.displayName.trim(),
     emoji: input.emoji || undefined,
     frameworkRepo: repo?.slug,
-    createdViaOnboarding: false,
+    createdViaOnboarding: input.createdViaOnboarding ?? false,
   };
 
   // Create the branch with teammate metadata on the initial row. That keeps

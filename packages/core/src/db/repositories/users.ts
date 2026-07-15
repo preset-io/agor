@@ -43,6 +43,13 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
    * decrypted credentials never leave this repository.
    */
   private rowToUser(row: UserRow): InternalUser {
+    const legacyDefaultMcpServerIds = Object.values(
+      (row.data.default_agentic_config ?? {}) as Record<string, { mcpServerIds?: unknown }>
+    ).flatMap((config) =>
+      Array.isArray(config?.mcpServerIds)
+        ? config.mcpServerIds.filter((id): id is string => typeof id === 'string')
+        : []
+    );
     return {
       user_id: row.user_id as UUID,
       created_at: new Date(row.created_at),
@@ -63,6 +70,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       preferences: row.data.preferences as User['preferences'],
       // Convert encrypted per-tool credential blobs into boolean presence flags.
       agentic_tools: toAgenticToolsStatus(row.data.agentic_tools as StoredAgenticTools | undefined),
+      agentic_auth_methods: row.data.agentic_auth_methods,
       // Convert stored env vars to presence + scope metadata (never exposes secrets).
       // Handles both legacy string form and v0.5 object form via normalizeStoredEnvMap.
       // The schema stores `scope` as a generic string (no SQL CHECK constraint); the
@@ -79,6 +87,10 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
         return out;
       })(),
       default_agentic_config: row.data.default_agentic_config as User['default_agentic_config'],
+      default_agentic_selection: row.data.default_agentic_selection,
+      default_mcp_server_ids: row.data.default_mcp_server_ids ?? [
+        ...new Set(legacyDefaultMcpServerIds),
+      ],
     };
   }
 
@@ -127,11 +139,14 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
         // contract); StoredAgenticTools widens that to string values for shape
         // uniformity. Runtime never writes opencode, so the cast is safe.
         agentic_tools: user.agentic_tools_raw as SchemaUserInsert['data']['agentic_tools'],
+        agentic_auth_methods: user.agentic_auth_methods,
         // Same pass-through as agentic_tools: env_vars are encrypted blobs
         // not represented on the public DTO. `update()` threads the raw value
         // from the existing row so a generic field update doesn't wipe them.
         env_vars: user.env_vars_raw,
         default_agentic_config: user.default_agentic_config,
+        default_agentic_selection: user.default_agentic_selection,
+        default_mcp_server_ids: user.default_mcp_server_ids,
       },
     };
   }

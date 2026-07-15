@@ -165,18 +165,10 @@ describe('environment tool authorization plumbing', () => {
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
-    expect(runWithTenantDatabaseScope).toHaveBeenCalledWith(
-      ctx.db,
-      'tenant-a',
-      expect.any(Function)
-    );
     expect(startCalls).toEqual([['wt-1', params]]);
   });
 
   it('validates environment variants through tenant-scoped repo reads', async () => {
-    const { runWithTenantDatabaseScope } = await import('@agor/core/db');
-    vi.mocked(runWithTenantDatabaseScope).mockClear();
-
     const params = {
       provider: 'mcp',
       user: { user_id: 'user-1', role: 'member' },
@@ -213,11 +205,6 @@ describe('environment tool authorization plumbing', () => {
     const parsed = JSON.parse(result.content[0].text);
 
     expect(parsed.success).toBe(true);
-    expect(runWithTenantDatabaseScope).toHaveBeenCalledWith(
-      ctx.db,
-      'tenant-a',
-      expect.any(Function)
-    );
     expect(repoGetCalls).toEqual([['repo-1', params]]);
     expect(renderCalls).toEqual([['wt-1', { variant: 'e2e' }, params]]);
   });

@@ -1,3 +1,6 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: demo-only marketing screenshot palette
+
+import { GOLD_SHIMMER_BOARD_BACKGROUND } from '@agor/core/design/board-backgrounds';
 import type {
   ActiveUser,
   Board,
@@ -54,7 +57,7 @@ const board: Board = {
   created_by: users[0].user_id,
   archived: false,
   url: '/demo/marketing-screenshots',
-  background_color: 'linear-gradient(135deg, #f5af19 0%, #f12711 30%, #f5af19 60%, #f12711 100%)',
+  background_color: GOLD_SHIMMER_BOARD_BACKGROUND,
   objects: {
     'zone-ship': {
       type: 'zone',

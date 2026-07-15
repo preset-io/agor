@@ -1,26 +1,27 @@
+/* biome-ignore-all lint/plugin/noFirstPartyCss: React Flow integration, tool cursors, and resize hit areas require third-party selectors */
 /* Adjust MiniMap panel to have more bottom spacing */
 .react-flow__panel.react-flow__minimap.bottom.right {
   margin-bottom: 75px;
 }
 
-/* Dark mode styling for Controls */
+/* Theme-aware React Flow controls */
 .react-flow__controls {
-  background: rgba(20, 20, 20, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--ant-color-bg-elevated);
+  border: 1px solid var(--ant-color-border-secondary);
 }
 
 .react-flow__controls-button {
   background: transparent;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  color: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+  color: var(--ant-color-text);
 }
 
 .react-flow__controls-button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--ant-color-fill-secondary);
 }
 
 .react-flow__controls-button svg {
-  fill: rgba(255, 255, 255, 0.85);
+  fill: currentColor;
 }
 
 /* Tool mode cursors - override React Flow defaults */
@@ -29,6 +30,7 @@
 }
 
 .react-flow.tool-mode-comment .react-flow__pane {
+  /* biome-ignore lint/plugin/noHardcodedCssColor: embedded SVG cursor asset requires encoded fill colors */
   cursor:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='%231677ff'%3E%3Cpath d='M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z' fill='white'/%3E%3C/svg%3E")
     12 12,
@@ -36,6 +38,7 @@
 }
 
 .react-flow.tool-mode-comment .react-flow__node {
+  /* biome-ignore lint/plugin/noHardcodedCssColor: embedded SVG cursor asset requires encoded fill colors */
   cursor:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='%231677ff'%3E%3Cpath d='M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z' fill='white'/%3E%3C/svg%3E")
     12 12,
@@ -43,6 +46,7 @@
 }
 
 .react-flow.tool-mode-markdown .react-flow__pane {
+  /* biome-ignore lint/plugin/noHardcodedCssColor: embedded SVG cursor asset requires encoded fill and stroke colors */
   cursor:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M6 2h8l4 4v16H6z' fill='white' stroke='%231677ff' stroke-width='2'/%3E%3Cpath d='M14 2v5h5' fill='none' stroke='%231677ff' stroke-width='2'/%3E%3Cpath d='M8 12h8M8 16h8' stroke='%231677ff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E")
     12 12,
@@ -50,6 +54,7 @@
 }
 
 .react-flow.tool-mode-markdown .react-flow__node {
+  /* biome-ignore lint/plugin/noHardcodedCssColor: embedded SVG cursor asset requires encoded fill and stroke colors */
   cursor:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M6 2h8l4 4v16H6z' fill='white' stroke='%231677ff' stroke-width='2'/%3E%3Cpath d='M14 2v5h5' fill='none' stroke='%231677ff' stroke-width='2'/%3E%3Cpath d='M8 12h8M8 16h8' stroke='%231677ff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E")
     12 12,

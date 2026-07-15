@@ -28,6 +28,8 @@ vi.mock('../../utils/branch-authorization.js', () => ({
 }));
 
 vi.mock('@agor/core/db', () => ({
+  enqueueAfterTenantDatabaseCommit: () => false,
+  getCurrentTenantId: () => undefined,
   BranchRepository: class FakeBranchRepository {},
   SessionRelationshipRepository: class FakeSessionRelationshipRepository {
     create = vi.fn(async (data: Record<string, unknown>) => ({

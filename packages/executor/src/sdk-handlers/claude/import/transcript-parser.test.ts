@@ -329,7 +329,7 @@ describe('parseTranscript', () => {
 
     expect(result).toHaveLength(1);
     expect(Array.isArray(result[0].message?.content)).toBe(true);
-    expect((result[0].message?.content as Array<unknown>)[0]).toHaveProperty('type', 'text');
+    expect((result[0].message!.content as Array<unknown>)[0]).toHaveProperty('type', 'text');
   });
 
   it('should parse file-history-snapshot messages', async () => {

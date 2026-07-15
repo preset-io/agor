@@ -18,7 +18,7 @@ import { close, open, unlink, write } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { AgorConfig } from '@agor/core/config';
+import { type AgorConfig, RETIRED_CONFIG_KEYS } from '@agor/core/config';
 import {
   type AdminBootstrapResult,
   assertUsableBootstrapAdminPassword,
@@ -268,20 +268,45 @@ export function logFirstRunAdminBootstrap(result: DaemonBootstrapResult): void {
 const DEPRECATED_ANONYMOUS_KEYS = ['allowAnonymous', 'requireAuth'] as const;
 
 /**
- * Print a clear stderr banner if the loaded config still carries leftover
- * keys from the anonymous-mode path. The keys themselves have no runtime
- * effect anymore — this is purely an operator-UX nudge.
+ * Print a clear stderr banner if the loaded config still carries retired
+ * upgrade-only keys. The keys have no runtime effect anymore — this is purely
+ * an operator-UX nudge.
  *
  * Detected separately from the `AgorConfig` type because we deliberately
  * removed these fields from the interface; we reach into the raw object via
  * a Record cast to see what the YAML file actually contained.
  */
-export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
+export function warnDeprecatedConfig(config: AgorConfig): void {
+  const legacy = config as AgorConfig & {
+    defaults?: Record<string, unknown>;
+    display?: Record<string, unknown>;
+    onboarding?: Record<string, unknown>;
+  };
   const daemon = (config as { daemon?: Record<string, unknown> }).daemon;
-  if (!daemon) return;
+  const display = legacy.display;
 
-  const present = DEPRECATED_ANONYMOUS_KEYS.filter((key) => Object.hasOwn(daemon, key));
-  if (present.length === 0) return;
+  const present = daemon
+    ? DEPRECATED_ANONYMOUS_KEYS.filter((key) => Object.hasOwn(daemon, key))
+    : [];
+  const presentDisplay = display
+    ? RETIRED_CONFIG_KEYS.display.filter((key) => Object.hasOwn(display, key))
+    : [];
+  const presentDefaults = legacy.defaults
+    ? RETIRED_CONFIG_KEYS.defaults.filter((key) => Object.hasOwn(legacy.defaults!, key))
+    : [];
+  const presentOnboarding = legacy.onboarding
+    ? RETIRED_CONFIG_KEYS.onboarding.filter((key) => Object.hasOwn(legacy.onboarding!, key))
+    : [];
+  const hasLegacyFrameworkRepoUrl =
+    !!legacy.onboarding && Object.hasOwn(legacy.onboarding, 'frameworkRepoUrl');
+  if (
+    present.length === 0 &&
+    presentDisplay.length === 0 &&
+    presentDefaults.length === 0 &&
+    presentOnboarding.length === 0 &&
+    !hasLegacyFrameworkRepoUrl
+  )
+    return;
 
   const lines: string[] = [
     '',
@@ -291,19 +316,38 @@ export function warnDeprecatedAnonymousConfig(config: AgorConfig): void {
     '  Your config.yaml contains:',
   ];
   for (const key of present) {
-    lines.push(`    daemon.${key}: ${String(daemon[key])}`);
+    lines.push(`    daemon.${key}: ${String(daemon?.[key])}`);
+  }
+  for (const key of presentDisplay) {
+    lines.push(`    display.${key}: ${String(display?.[key])}`);
+  }
+  for (const key of presentDefaults) {
+    lines.push(`    defaults.${key}: ${String(legacy.defaults?.[key])}`);
+  }
+  for (const key of presentOnboarding) {
+    lines.push(`    onboarding.${key}: ${String(legacy.onboarding?.[key])}`);
+  }
+  if (hasLegacyFrameworkRepoUrl) {
+    lines.push(
+      `    onboarding.frameworkRepoUrl: ${String(legacy.onboarding?.frameworkRepoUrl)}`,
+      '      renamed to teammates.framework_repo_url (the legacy value still works)'
+    );
   }
   lines.push(
     '',
-    '  These keys no longer have any effect. Authentication is now',
-    '  always required — anonymous mode was removed.',
+    '  Retired keys no longer have any effect. Onboarding progress is stored',
+    '  per user. The renamed framework repository key remains a compatibility',
+    '  fallback, but new configuration should use the replacement shown above.',
     '',
-    '  Action: remove these keys from your config.yaml at your',
-    '  convenience. If you previously ran anonymously, the daemon',
-    `  has auto-generated admin credentials at ${getAdminCredentialsPath()}`,
-    '  (printed below if just created on this start).',
-    '================================================================',
-    ''
+    '  Action: remove these keys from your config.yaml at your convenience.'
   );
+  if (present.length > 0) {
+    lines.push(
+      '  If you previously ran anonymously, the daemon has auto-generated',
+      `  admin credentials at ${getAdminCredentialsPath()}`,
+      '  (printed below if just created on this start).'
+    );
+  }
+  lines.push('================================================================', '');
   process.stderr.write(lines.join('\n'));
 }

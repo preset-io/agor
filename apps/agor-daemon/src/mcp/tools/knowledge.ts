@@ -70,6 +70,7 @@ import {
   sessionContextRequiredResult,
   textResult,
 } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 const KnowledgeDocumentKindSchema = z.enum(KNOWLEDGE_DOCUMENT_KINDS);
 const KnowledgeDocumentStatusSchema = z.enum(KNOWLEDGE_DOCUMENT_STATUSES);
@@ -955,11 +956,12 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
   const teammateMemoryAppendHandler = async (args: z.infer<typeof teammateMemoryAppendSchema>) => {
     if (!ctx.sessionId) return sessionContextRequiredResult();
     const { branch, namespace } = await resolveTeammateKnowledgeContext(ctx);
-    const namespaceRepo = new KnowledgeNamespaceRepository(ctx.db);
-    const permission = await resolveKnowledgeNamespacePermission(
-      namespaceRepo,
-      namespace.namespace_id,
-      ctx.authenticatedUser as unknown as User
+    const permission = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+      resolveKnowledgeNamespacePermission(
+        new KnowledgeNamespaceRepository(db),
+        namespace.namespace_id,
+        ctx.authenticatedUser as unknown as User
+      )
     );
     if (!hasKnowledgeNamespacePermission(permission, 'write')) {
       throw new Error(
@@ -1838,23 +1840,30 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       if (!requestedSubpath) {
         throw new Error('subpath is required when the document namespace/path cannot be inferred');
       }
-      const branchRepo = new BranchRepository(ctx.db);
-      const workspace = await resolveBranchWorkspacePath({
-        branchRepo,
-        branchId: (await resolveBranchId(ctx, coerceString(args.branchId)!)) as BranchID,
-        subpath: requestedSubpath,
-        userId: ctx.userId,
-        userRole: ctx.authenticatedUser.role as UserRole,
-        requiredPermission: 'session',
-      });
-      const sidecarWorkspace = await resolveBranchWorkspacePath({
-        branchRepo,
-        branchId: workspace.branchId,
-        subpath: materializationSidecarSubpath(workspace.relative),
-        userId: ctx.userId,
-        userRole: ctx.authenticatedUser.role as UserRole,
-        requiredPermission: 'session',
-      });
+      const branchId = (await resolveBranchId(ctx, coerceString(args.branchId)!)) as BranchID;
+      const { sidecarWorkspace, workspace } = await runWithMcpTenantDatabaseScope(
+        ctx,
+        async (db) => {
+          const branchRepo = new BranchRepository(db);
+          const workspace = await resolveBranchWorkspacePath({
+            branchRepo,
+            branchId,
+            subpath: requestedSubpath,
+            userId: ctx.userId,
+            userRole: ctx.authenticatedUser.role as UserRole,
+            requiredPermission: 'session',
+          });
+          const sidecarWorkspace = await resolveBranchWorkspacePath({
+            branchRepo,
+            branchId: workspace.branchId,
+            subpath: materializationSidecarSubpath(workspace.relative),
+            userId: ctx.userId,
+            userRole: ctx.authenticatedUser.role as UserRole,
+            requiredPermission: 'session',
+          });
+          return { sidecarWorkspace, workspace };
+        }
+      );
       const sidecarPath = sidecarWorkspace.canonical;
       if (!args.overwrite && (fs.existsSync(workspace.absolute) || fs.existsSync(sidecarPath))) {
         throw new Error(
@@ -1937,27 +1946,34 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       }),
     },
     async (args) => {
-      const branchRepo = new BranchRepository(ctx.db);
-      const workspace = await resolveBranchWorkspacePath({
-        branchRepo,
-        branchId: (await resolveBranchId(ctx, coerceString(args.branchId)!)) as BranchID,
-        subpath: coerceString(args.subpath),
-        userId: ctx.userId,
-        userRole: ctx.authenticatedUser.role as UserRole,
-        requiredPermission: 'session',
-      });
+      const branchId = (await resolveBranchId(ctx, coerceString(args.branchId)!)) as BranchID;
+      const { sidecarWorkspace, workspace } = await runWithMcpTenantDatabaseScope(
+        ctx,
+        async (db) => {
+          const branchRepo = new BranchRepository(db);
+          const workspace = await resolveBranchWorkspacePath({
+            branchRepo,
+            branchId,
+            subpath: coerceString(args.subpath),
+            userId: ctx.userId,
+            userRole: ctx.authenticatedUser.role as UserRole,
+            requiredPermission: 'session',
+          });
+          const sidecarWorkspace = await resolveBranchWorkspacePath({
+            branchRepo,
+            branchId: workspace.branchId,
+            subpath: materializationSidecarSubpath(workspace.relative),
+            userId: ctx.userId,
+            userRole: ctx.authenticatedUser.role as UserRole,
+            requiredPermission: 'session',
+          });
+          return { sidecarWorkspace, workspace };
+        }
+      );
       if (!fs.existsSync(workspace.absolute)) {
         throw new Error(`File not found in branch worktree: ${workspace.relative}`);
       }
       const content = await readFile(workspace.absolute, 'utf-8');
-      const sidecarWorkspace = await resolveBranchWorkspacePath({
-        branchRepo,
-        branchId: workspace.branchId,
-        subpath: materializationSidecarSubpath(workspace.relative),
-        userId: ctx.userId,
-        userRole: ctx.authenticatedUser.role as UserRole,
-        requiredPermission: 'session',
-      });
       const sidecarPath = sidecarWorkspace.canonical;
       let sidecar: Record<string, unknown> = {};
       if (fs.existsSync(sidecarPath)) {

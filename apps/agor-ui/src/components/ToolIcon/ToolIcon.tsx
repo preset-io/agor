@@ -34,15 +34,16 @@ const toolLogos: Record<string, string> = {
   cursor: cursorLogo,
 };
 
-// Tools whose logos are drawn on a transparent / light background and need
-// a white plate rather than the default black to read well. The pixel-bot
-// CLI mascot already has its own white outline — black would clip it.
-const LIGHT_BG_TOOLS = new Set(['claude-code-cli']);
+// This is an image plate, not a UI surface: the transparent logo artwork was
+// authored against exact black and must not invert with the app theme. The
+// Claude Code CLI mascot's white outline is also clearest on this plate.
+// biome-ignore lint/plugin/noHardcodedColorLiteral: exact brand-asset image plate
+const DARK_LOGO_PLATE = '#000000';
 
 export const ToolIcon: React.FC<ToolIconProps> = ({ tool, size = 32, className = '' }) => {
   const { token } = useToken();
   const logoSrc = toolLogos[tool];
-  const bg = LIGHT_BG_TOOLS.has(tool) ? '#fff' : '#000';
+  const bg = DARK_LOGO_PLATE;
 
   // Fallback to emoji if no logo available
   const fallbackEmoji: Record<string, string> = {

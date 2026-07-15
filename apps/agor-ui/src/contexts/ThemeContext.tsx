@@ -1,3 +1,4 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: application theme seed definitions and document fallbacks
 import type { ThemeConfig } from 'antd';
 import { theme } from 'antd';
 import type React from 'react';

@@ -16,6 +16,7 @@ export const withAlpha = (color: string, alpha: number): string => {
       const r = (value >> 16) & 255;
       const g = (value >> 8) & 255;
       const b = value & 255;
+      // biome-ignore lint/plugin/noHardcodedColorLiteral: centralized theme-color alpha resolver emits CSS syntax from token channels
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     }
   }
@@ -27,6 +28,7 @@ export const withAlpha = (color: string, alpha: number): string => {
       .map((part) => part.trim())
       .slice(0, 3);
     if (r == null || g == null || b == null) return color;
+    // biome-ignore lint/plugin/noHardcodedColorLiteral: centralized theme-color alpha resolver emits CSS syntax from token channels
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
@@ -38,7 +40,7 @@ export const glassCardStyle = (
   alpha = 0.3
 ): React.CSSProperties => ({
   ...glassSurfaceStyle(token, alpha),
-  boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  boxShadow: `inset 0 1px 0 ${withAlpha(token.colorWhite, 0.12)}`,
 });
 
 /**

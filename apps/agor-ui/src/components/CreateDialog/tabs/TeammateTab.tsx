@@ -18,7 +18,11 @@ import { slugify } from '@/utils/repoSlug';
 import { useEnsureFrameworkRepo } from '../../../hooks/useEnsureFrameworkRepo';
 import { useTeammateForm } from '../../../hooks/useTeammateForm';
 import type { AgenticToolOption } from '../../../types';
-import { AgenticToolConfigForm, getFormValuesFromConfig } from '../../AgenticToolConfigForm';
+import { getFormValuesFromConfig } from '../../AgenticToolConfigForm';
+import {
+  AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
+} from '../../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
 import { TeammateFormFields } from '../../forms/TeammateFormFields';
 import type { ModelConfig } from '../../ModelSelector';
@@ -31,6 +35,7 @@ export interface TeammateTabResult {
   branchName?: string;
   sourceBranch?: string;
   agent: AgenticToolName;
+  agenticToolPresetId?: string;
   modelConfig?: ModelConfig;
   effort?: EffortLevel;
   mcpServerIds?: string[];
@@ -114,9 +119,13 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         branchName: values.name || `private-${slugify(values.displayName)}`,
         sourceBranch: values.sourceBranch || 'main',
         agent: selectedAgent,
+        agenticToolPresetId:
+          values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
+            ? undefined
+            : values.agenticToolPresetId,
         modelConfig: values.modelConfig ?? agentDefaults?.modelConfig,
         effort: (values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort,
-        mcpServerIds: values.mcpServerIds ?? agentDefaults?.mcpServerIds,
+        mcpServerIds: values.mcpServerIds ?? currentUser?.default_mcp_server_ids,
         permissionMode,
       };
 
@@ -194,11 +203,11 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
                             </Typography.Text>
                           ),
                           children: (
-                            <AgenticToolConfigForm
-                              agenticTool={selectedAgent}
+                            <AgenticToolConfigurationPicker
+                              tool={selectedAgent}
                               mcpServerById={mcpServerById}
                               showHelpText={false}
-                              client={client}
+                              client={client ?? null}
                             />
                           ),
                         },

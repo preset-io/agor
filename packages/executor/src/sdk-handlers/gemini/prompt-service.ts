@@ -91,7 +91,7 @@ export type GeminiStreamEvent =
 
 /** SDK invocation model — falls back to DEFAULT_GEMINI_MODEL. Never used for recording. */
 export function resolveGeminiInvocationModel(session: {
-  model_config?: { model?: string };
+  model_config?: { model?: string } | null;
 }): GeminiModel {
   return (session.model_config?.model as GeminiModel | undefined) ?? DEFAULT_GEMINI_MODEL;
 }

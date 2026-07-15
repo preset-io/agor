@@ -5,7 +5,22 @@
  * sending messages to and receiving messages from messaging platforms.
  */
 
-import type { ChannelType, GatewayEnvVar, SlackTestResult } from '../types/gateway';
+import type { ChannelType, GatewayEnvVar, SlackAppInfo, SlackTestResult } from '../types/gateway';
+
+/**
+ * File attached to an inbound message (provider-neutral shape).
+ *
+ * `url_private_download` is a platform URL that requires the channel's
+ * credentials to fetch; connectors pass it through verbatim and the gateway
+ * decides whether/how to download it.
+ */
+export interface InboundFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  size: number;
+  url_private_download: string;
+}
 
 /**
  * Inbound message from a messaging platform
@@ -15,6 +30,7 @@ export interface InboundMessage {
   text: string;
   userId: string;
   timestamp: string;
+  files?: InboundFile[];
   metadata?: Record<string, unknown>;
 }
 
@@ -123,4 +139,12 @@ export interface GatewayConnector {
    * connector should return safe service defaults.
    */
   sessionEnv?(): GatewayEnvVar[];
+
+  /**
+   * Best-effort resolution of the platform app behind the channel's stored
+   * credentials (e.g. Slack app id via `auth.test` → `bots.info`), so the UI
+   * can deep-link to the app's settings. Returns nulls on failure rather than
+   * throwing, and never includes token material.
+   */
+  getAppInfo?(): Promise<SlackAppInfo>;
 }

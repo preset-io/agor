@@ -3,12 +3,14 @@ import {
   AppVariableRepository,
   executeRaw,
   generateId,
+  getCurrentTenantId,
   inArray,
   insert,
   isPostgresDatabase,
   kbDocumentUnits,
   kbDocumentVersions,
   kbEmbeddingSpaces,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   select,
   shortId,
@@ -203,6 +205,10 @@ export class KnowledgeEmbeddingIndexer {
     this.variables = new AppVariableRepository(db);
   }
 
+  private withTenantDatabase<T>(work: () => Promise<T>): Promise<T> {
+    return runWithTenantDatabaseScope(this.db, getCurrentTenantId(), work);
+  }
+
   start(): void {
     if (this.intervalHandle) return;
     this.intervalHandle = setInterval(() => {
@@ -380,7 +386,7 @@ export class KnowledgeEmbeddingIndexer {
 
   async tick(): Promise<void> {
     if (this.options.tenantId) {
-      return runWithTenantDatabaseScope(this.db, this.options.tenantId, () => this.tickInScope());
+      return runWithTenantContext(this.options.tenantId, () => this.tickInScope());
     }
     return this.tickInScope();
   }
@@ -408,9 +414,8 @@ export class KnowledgeEmbeddingIndexer {
     const provider = semantic.provider ?? 'openai';
     if (provider !== 'openai') return this.idle();
 
-    const apiKey = await this.variables.getPlain(
-      KNOWLEDGE_EMBEDDINGS_NAMESPACE,
-      KNOWLEDGE_EMBEDDINGS_API_KEY
+    const apiKey = await this.withTenantDatabase(() =>
+      this.variables.getPlain(KNOWLEDGE_EMBEDDINGS_NAMESPACE, KNOWLEDGE_EMBEDDINGS_API_KEY)
     );
     if (!apiKey) return this.idle();
 
@@ -425,55 +430,62 @@ export class KnowledgeEmbeddingIndexer {
       );
     }
 
-    // Hot idle path: first ask the core Knowledge table whether there is
-    // anything to index. Avoid pgvector DDL/capability setup, embedding-space
-    // lookup, and provider work on ticks where no units are pending.
-    const pending = (await select(this.db, { unit_id: kbDocumentUnits.unit_id })
-      .from(kbDocumentUnits)
-      .where(
-        sql`${kbDocumentUnits.embedding_status} IN ('pending', 'stale') AND ${kbDocumentUnits.content_text} IS NOT NULL`
-      )
-      .orderBy(kbDocumentUnits.created_at)
-      .limit(1)
-      .one()) as { unit_id: string } | undefined;
-    if (!pending) return this.idle();
-
-    if (!this.pgvectorStorageReady) {
-      const pgvector = await ensureKnowledgePgvectorStorage(this.db);
-      if (!pgvector.available) {
-        this.lastError = pgvector.reason ?? 'Knowledge pgvector storage is unavailable';
-        return 0;
-      }
-      this.pgvectorStorageReady = true;
-    }
-
     const batchSize = Math.min(Math.max(semantic.indexing?.batch_size ?? 32, 1), 128);
     this.lastError = null;
+    const prepared = await this.withTenantDatabase(async () => {
+      // Hot idle path: avoid provider setup/work when no units are pending.
+      const pending = (await select(this.db, { unit_id: kbDocumentUnits.unit_id })
+        .from(kbDocumentUnits)
+        .where(
+          sql`${kbDocumentUnits.embedding_status} IN ('pending', 'stale') AND ${kbDocumentUnits.content_text} IS NOT NULL`
+        )
+        .orderBy(kbDocumentUnits.created_at)
+        .limit(1)
+        .one()) as { unit_id: string } | undefined;
+      if (!pending) return { kind: 'idle' as const };
 
-    const embeddingSpaceId = await this.ensureEmbeddingSpace({ provider, model, dimensions });
-    const reusedRows = await this.reuseExistingEmbeddings({
-      embeddingSpaceId,
-      model,
-      dimensions,
-      limit: batchSize,
-    });
-    await this.recordEmbeddingReuseIntoNext({
-      rows: reusedRows,
-      embeddingSpaceId,
-      provider,
-      model,
-      dimensions,
-    });
-    const reused = reusedRows.length;
+      if (!this.pgvectorStorageReady) {
+        const pgvector = await ensureKnowledgePgvectorStorage(this.db);
+        if (!pgvector.available) {
+          return {
+            kind: 'unavailable' as const,
+            reason: pgvector.reason ?? 'Knowledge pgvector storage is unavailable',
+          };
+        }
+        this.pgvectorStorageReady = true;
+      }
 
-    const rows = (await select(this.db)
-      .from(kbDocumentUnits)
-      .where(
-        sql`${kbDocumentUnits.embedding_status} IN ('pending', 'stale') AND ${kbDocumentUnits.content_text} IS NOT NULL`
-      )
-      .orderBy(kbDocumentUnits.created_at)
-      .limit(batchSize)
-      .all()) as PendingUnitRow[];
+      const embeddingSpaceId = await this.ensureEmbeddingSpace({ provider, model, dimensions });
+      const reusedRows = await this.reuseExistingEmbeddings({
+        embeddingSpaceId,
+        model,
+        dimensions,
+        limit: batchSize,
+      });
+      await this.recordEmbeddingReuseIntoNext({
+        rows: reusedRows,
+        embeddingSpaceId,
+        provider,
+        model,
+        dimensions,
+      });
+      const reused = reusedRows.length;
+      const rows = (await select(this.db)
+        .from(kbDocumentUnits)
+        .where(
+          sql`${kbDocumentUnits.embedding_status} IN ('pending', 'stale') AND ${kbDocumentUnits.content_text} IS NOT NULL`
+        )
+        .orderBy(kbDocumentUnits.created_at)
+        .limit(batchSize)
+        .all()) as PendingUnitRow[];
+      return { kind: 'ready' as const, embeddingSpaceId, reused, rows };
+    });
+    if (prepared.kind === 'idle') return this.idle();
+    if (prepared.kind === 'unavailable') {
+      this.lastError = prepared.reason;
+      return 0;
+    }
+    const { embeddingSpaceId, reused, rows } = prepared;
     if (rows.length === 0) {
       if (reused === 0) return this.idle();
       this.lastIndexedAt = new Date();
@@ -509,54 +521,58 @@ export class KnowledgeEmbeddingIndexer {
         { apiKey, model, dimensions }
       );
     } catch (error) {
-      await update(this.db, kbDocumentUnits)
-        .set({
-          embedding_status: 'error',
-          embedding_error: error instanceof Error ? error.message : String(error),
-          updated_at: new Date(),
-        })
-        .where(
-          inArray(
-            kbDocumentUnits.unit_id,
-            rows.map((row) => row.unit_id as KnowledgeDocumentUnitID)
+      await this.withTenantDatabase(() =>
+        update(this.db, kbDocumentUnits)
+          .set({
+            embedding_status: 'error',
+            embedding_error: error instanceof Error ? error.message : String(error),
+            updated_at: new Date(),
+          })
+          .where(
+            inArray(
+              kbDocumentUnits.unit_id,
+              rows.map((row) => row.unit_id as KnowledgeDocumentUnitID)
+            )
           )
-        )
-        .run();
+          .run()
+      );
       throw error;
     }
 
-    for (const result of results) {
-      const source = rows.find((row) => row.unit_id === result.id);
-      const content = source?.content_text ?? '';
-      const vector = embeddingToPgvector(result.embedding);
-      await executeRaw(
-        this.db,
-        sql`INSERT INTO kb_unit_embeddings (tenant_id, unit_id, embedding_space_id, content_sha256, embedding, token_count, created_at, updated_at)
+    await this.withTenantDatabase(async () => {
+      for (const result of results) {
+        const source = rows.find((row) => row.unit_id === result.id);
+        const content = source?.content_text ?? '';
+        const vector = embeddingToPgvector(result.embedding);
+        await executeRaw(
+          this.db,
+          sql`INSERT INTO kb_unit_embeddings (tenant_id, unit_id, embedding_space_id, content_sha256, embedding, token_count, created_at, updated_at)
             VALUES (COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default'), ${result.id}, ${embeddingSpaceId}, ${sha256Text(content)}, ${vector}::vector, ${result.tokenCount ?? null}, now(), now())
             ON CONFLICT (unit_id, embedding_space_id) DO UPDATE SET
               content_sha256 = EXCLUDED.content_sha256,
               embedding = EXCLUDED.embedding,
               token_count = EXCLUDED.token_count,
               updated_at = now()`
-      );
-    }
+        );
+      }
 
-    await update(this.db, kbDocumentUnits)
-      .set({
-        embedding_status: 'ready',
-        embedding_model: model,
-        embedding_dimensions: dimensions,
-        embedding_hash: sql`${kbDocumentUnits.content_md5}`,
-        embedding_error: null,
-        updated_at: new Date(),
-      })
-      .where(
-        inArray(
-          kbDocumentUnits.unit_id,
-          results.map((result) => result.id as KnowledgeDocumentUnitID)
+      await update(this.db, kbDocumentUnits)
+        .set({
+          embedding_status: 'ready',
+          embedding_model: model,
+          embedding_dimensions: dimensions,
+          embedding_hash: sql`${kbDocumentUnits.content_md5}`,
+          embedding_error: null,
+          updated_at: new Date(),
+        })
+        .where(
+          inArray(
+            kbDocumentUnits.unit_id,
+            results.map((result) => result.id as KnowledgeDocumentUnitID)
+          )
         )
-      )
-      .run();
+        .run();
+    });
 
     this.lastIndexedAt = new Date();
     return reused + results.length;

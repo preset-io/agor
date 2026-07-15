@@ -4,7 +4,10 @@ import { resolveSessionDefaults } from './resolve-session-defaults.js';
 
 const now = new Date('2026-05-03T00:00:00.000Z');
 
-function makeUser(partial: Partial<User['default_agentic_config']> = {}): User {
+function makeUser(
+  partial: Partial<User['default_agentic_config']> = {},
+  defaultMcpServerIds?: string[]
+): User {
   return {
     user_id: 'user-1' as UserID,
     email: 'a@b.c',
@@ -14,6 +17,7 @@ function makeUser(partial: Partial<User['default_agentic_config']> = {}): User {
     created_at: new Date(),
     scheduled_from_branch: false,
     default_agentic_config: partial,
+    default_mcp_server_ids: defaultMcpServerIds,
   } as unknown as User;
 }
 
@@ -257,7 +261,7 @@ describe('resolveSessionDefaults', () => {
     it('explicit override wins, including empty array (= "no MCPs")', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
-        user: makeUser({ 'claude-code': { mcpServerIds: ['user-1', 'user-2'] } }),
+        user: makeUser({}, ['user-1', 'user-2']),
         branch: { mcp_server_ids: ['wt-1'] },
         overrides: { mcpServerIds: [] },
       });
@@ -267,7 +271,7 @@ describe('resolveSessionDefaults', () => {
     it('branch config wins over user defaults when no override', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
-        user: makeUser({ 'claude-code': { mcpServerIds: ['user-1'] } }),
+        user: makeUser({}, ['user-1']),
         branch: { mcp_server_ids: ['wt-1'] },
       });
       expect(r.mcp_server_ids).toEqual(['wt-1']);
@@ -276,7 +280,7 @@ describe('resolveSessionDefaults', () => {
     it('falls through to user defaults when branch has no config', () => {
       const r = resolveSessionDefaults({
         agenticTool: 'claude-code',
-        user: makeUser({ 'claude-code': { mcpServerIds: ['user-1'] } }),
+        user: makeUser({}, ['user-1']),
         branch: { mcp_server_ids: [] },
       });
       expect(r.mcp_server_ids).toEqual(['user-1']);
@@ -349,7 +353,6 @@ describe('resolveSessionDefaults', () => {
             permissionMode: 'auto',
             codexSandboxMode: 'workspace-write',
             codexApprovalPolicy: 'on-request',
-            mcpServerIds: ['user-mcp'],
           },
         }),
         overrides: {

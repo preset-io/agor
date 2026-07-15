@@ -14,15 +14,6 @@ export {
   type CorsConfigResult,
   type CorsOrigin,
 } from './cors.js';
-export {
-  type CredentialsConfig,
-  type InitializedCredentials,
-  initializeAnthropicApiKey,
-  initializeAnthropicAuthToken,
-  initializeAnthropicBaseUrl,
-  initializeCredentials,
-  initializeGeminiApiKey,
-} from './credentials.js';
 export { type DatabaseInitResult, initializeDatabase } from './database.js';
 export {
   configureChannels,

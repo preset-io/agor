@@ -30,9 +30,12 @@ import {
 } from '@agor/core/config';
 import {
   BranchRepository,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -51,6 +54,7 @@ import { generateScopedServiceToken, spawnExecutorFireAndForget } from '../utils
 import {
   buildSpawnConfigForSession,
   isClaudeRunningFor,
+  resolveClaudeCliProviderSpawn,
   writeClaudeCliMcpConfigForSession,
 } from './claude-cli-integration.js';
 
@@ -249,6 +253,14 @@ export class TerminalsService {
     }
   }
 
+  private withTenantDatabase<T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>): Promise<T> {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) {
+      throw new Error('Missing active tenant context for terminal database access');
+    }
+    return runWithTenantDatabaseScope(this.db, tenantId, work);
+  }
+
   /**
    * Create a new terminal session
    *
@@ -265,6 +277,10 @@ export class TerminalsService {
     isNew: boolean;
     branchName?: string;
   }> {
+    if (!getCurrentTenantId()) {
+      throw new Error('Missing active tenant context for terminal creation');
+    }
+
     // Check if Zellij is available
     if (!this.zellijAvailable) {
       throw new Error(
@@ -285,30 +301,32 @@ export class TerminalsService {
         if (!userId) {
           throw new Forbidden('Authentication required to open terminals');
         }
-        const branchRepo = new BranchRepository(this.db);
-        const branch = await branchRepo.findById(data.branchId);
-        if (!branch) {
-          throw new Forbidden(`Branch not found: ${data.branchId}`);
-        }
-        const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
-        const effectivePermission = await branchRepo.resolveUserPermission(branch, userId);
-        const allowSuperadmin = config.execution?.allow_superadmin === true;
-        const userRole = params?.user?.role as string | undefined;
-        if (
-          !hasBranchPermission(
-            branch,
-            userId,
-            isOwner,
-            'session',
-            userRole,
-            allowSuperadmin,
-            effectivePermission
-          )
-        ) {
-          throw new Forbidden(
-            `You need 'session' permission on branch ${branch.name} to open a terminal there.`
-          );
-        }
+        await this.withTenantDatabase(async (tenantDb) => {
+          const branchRepo = new BranchRepository(tenantDb);
+          const branch = await branchRepo.findById(data.branchId!);
+          if (!branch) {
+            throw new Forbidden(`Branch not found: ${data.branchId}`);
+          }
+          const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
+          const effectivePermission = await branchRepo.resolveUserPermission(branch, userId);
+          const allowSuperadmin = config.execution?.allow_superadmin === true;
+          const userRole = params?.user?.role as string | undefined;
+          if (
+            !hasBranchPermission(
+              branch,
+              userId,
+              isOwner,
+              'session',
+              userRole,
+              allowSuperadmin,
+              effectivePermission
+            )
+          ) {
+            throw new Forbidden(
+              `You need 'session' permission on branch ${branch.name} to open a terminal there.`
+            );
+          }
+        });
       }
     }
 
@@ -441,9 +459,9 @@ export class TerminalsService {
     sessionId: string;
   } | null> {
     if (!sessionId) return null;
-    try {
-      const sessionRepo = new SessionRepository(this.db);
-      const session = await sessionRepo.findById(sessionId).catch(() => null);
+    const config = params?.provider ? await loadConfig() : undefined;
+    const resolved = await this.withTenantDatabase(async (tenantDb) => {
+      const session = await new SessionRepository(tenantDb).findById(sessionId);
       if (session?.agentic_tool !== 'claude-code-cli') return null;
       // Branch-spoofing guard: when the caller supplied a branchId,
       // it MUST match the session's. Otherwise the upstream RBAC
@@ -458,26 +476,24 @@ export class TerminalsService {
       // did, but against the *session's* branch id. This catches the
       // case where the caller omitted `branchId` entirely (so the
       // upstream check was skipped) and only passed `ensureCliSessionId`.
+      const branchRepo = new BranchRepository(tenantDb);
+      const branch = await branchRepo.findById(session.branch_id);
+      if (!branch?.path) return null;
+
       if (params?.provider) {
-        const config = await loadConfig();
-        const rbacEnabled = config.execution?.branch_rbac === true;
+        const rbacEnabled = config?.execution?.branch_rbac === true;
         if (rbacEnabled) {
           const callerUserId = params?.user?.user_id as UserID | undefined;
           if (!callerUserId) {
             throw new Forbidden('Authentication required to ensure a CLI tab');
           }
-          const branchRepo = new BranchRepository(this.db);
-          const wt = await branchRepo.findById(session.branch_id);
-          if (!wt) {
-            throw new Forbidden(`Session's branch not found: ${session.branch_id}`);
-          }
-          const isOwner = await branchRepo.isOwner(wt.branch_id, callerUserId);
-          const effectivePermission = await branchRepo.resolveUserPermission(wt, callerUserId);
-          const allowSuperadmin = config.execution?.allow_superadmin === true;
+          const isOwner = await branchRepo.isOwner(branch.branch_id, callerUserId);
+          const effectivePermission = await branchRepo.resolveUserPermission(branch, callerUserId);
+          const allowSuperadmin = config?.execution?.allow_superadmin === true;
           const userRole = params?.user?.role as string | undefined;
           if (
             !hasBranchPermission(
-              wt,
+              branch,
               callerUserId,
               isOwner,
               'session',
@@ -492,43 +508,42 @@ export class TerminalsService {
           }
         }
       }
-      if (
-        params?.provider &&
-        !canControlCliSession({
-          callerUserId: params.user?.user_id,
-          callerRole: params.user?.role,
-          sessionCreatedBy: session.created_by,
-        })
-      ) {
-        throw new Forbidden('You can only ensure CLI tabs for Claude CLI sessions you created.');
-      }
-      const branchRepo = new BranchRepository(this.db);
-      const branch = await branchRepo.findById(session.branch_id);
-      if (!branch?.path) return null;
-      const mcpConfigPath = await writeClaudeCliMcpConfigForSession(this.app, session, {
-        actor: params?.user ?? null,
-      });
-      const spawnCfg = buildSpawnConfigForSession(session, branch.path, { mcpConfigPath });
-      const built = buildClaudeCliSpawn(spawnCfg);
-      const tabName =
-        session.cli_state?.zellij_tab_name ??
-        spawnCfg.displayName ??
-        `cli-${shortId(session.session_id)}`;
-      return {
-        tabName,
-        cwd: branch.path,
-        command: built.bin,
-        commandArgs: built.args,
-        sessionId: session.session_id,
-      };
-    } catch (err) {
-      // Re-throw Forbidden so the caller sees the auth failure — only
-      // swallow unexpected errors (DB hiccup etc.) into a graceful
-      // "no ensure-create" fallback.
-      if (err instanceof Forbidden) throw err;
-      console.warn('[TerminalsService] resolveEnsureCliTab failed', err);
-      return null;
+      return { session, branch };
+    });
+    if (!resolved) return null;
+    const { session, branch } = resolved;
+
+    if (
+      params?.provider &&
+      !canControlCliSession({
+        callerUserId: params.user?.user_id,
+        callerRole: params.user?.role,
+        sessionCreatedBy: session.created_by,
+      })
+    ) {
+      throw new Forbidden('You can only ensure CLI tabs for Claude CLI sessions you created.');
     }
+    const mcpConfigPath = await writeClaudeCliMcpConfigForSession(this.app, session, {
+      actor: params?.user ?? null,
+    });
+    const spawnCfg = buildSpawnConfigForSession(session, branch.path, { mcpConfigPath });
+    const built = await resolveClaudeCliProviderSpawn(
+      this.app,
+      session,
+      buildClaudeCliSpawn(spawnCfg)
+    );
+    if (!built) return null;
+    const tabName =
+      session.cli_state?.zellij_tab_name ??
+      spawnCfg.displayName ??
+      `cli-${shortId(session.session_id)}`;
+    return {
+      tabName,
+      cwd: branch.path,
+      command: built.bin,
+      commandArgs: built.args,
+      sessionId: session.session_id,
+    };
   }
 
   private async createExecutorTerminal(
@@ -633,8 +648,9 @@ export class TerminalsService {
 
       // If branch specified, tell executor to create/focus tab
       if (data.branchId) {
-        const branchRepo = new BranchRepository(this.db);
-        const branch = await branchRepo.findById(data.branchId);
+        const branch = await this.withTenantDatabase((tenantDb) =>
+          new BranchRepository(tenantDb).findById(data.branchId!)
+        );
         if (branch) {
           const branchTabName = buildBranchShellTabName(branch);
           // Emit tab command via channel - executor will handle it
@@ -745,16 +761,10 @@ export class TerminalsService {
       const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
       const executorUser = config.execution?.executor_unix_user;
 
-      let impersonatedUser: string | null = null;
-      const usersRepo = new UsersRepository(this.db);
-      try {
-        const user = await usersRepo.findById(userId);
-        if (user?.unix_username) {
-          impersonatedUser = user.unix_username;
-        }
-      } catch (error) {
-        console.warn(`⚠️ Failed to load user ${userId}:`, error);
-      }
+      const user = await this.withTenantDatabase((tenantDb) =>
+        new UsersRepository(tenantDb).findById(userId)
+      );
+      const impersonatedUser = user?.unix_username ?? null;
 
       const impersonationResult = resolveUnixUserForImpersonation({
         mode: unixUserMode as UnixUserMode,
@@ -779,14 +789,22 @@ export class TerminalsService {
       let branchName: string | undefined;
       let branchTabName: string | undefined;
 
-      if (data.branchId) {
-        const branchRepo = new BranchRepository(this.db);
-        const branch = await branchRepo.findById(data.branchId);
-        if (branch) {
-          branchName = branch.name;
-          branchTabName = buildBranchShellTabName(branch);
-          cwd = resolveBranchShellCwd(branch, finalUnixUser);
-        }
+      const { branch, userEnv, executorEnv } = await this.withTenantDatabase(async (tenantDb) => ({
+        branch: data.branchId ? await new BranchRepository(tenantDb).findById(data.branchId) : null,
+        userEnv: await resolveUserEnvironment(userId, tenantDb),
+        // Get executor process environment (includes system vars). When
+        // impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them.
+        executorEnv: await createUserProcessEnvironment(
+          userId,
+          tenantDb,
+          undefined,
+          !!finalUnixUser
+        ),
+      }));
+      if (branch) {
+        branchName = branch.name;
+        branchTabName = buildBranchShellTabName(branch);
+        cwd = resolveBranchShellCwd(branch, finalUnixUser);
       }
 
       // Build Zellij session name
@@ -797,18 +815,8 @@ export class TerminalsService {
       const daemonUrl = `http://localhost:${config.daemon?.port || 3030}`;
       const sessionToken = generateScopedServiceToken(this.app, params);
 
-      // Get user environment and write env file for shell sourcing
-      const userEnv = await resolveUserEnvironment(userId, this.db);
+      // File/process work stays outside the tenant database unit of work.
       const envFile = writeEnvFile(userId, userEnv, finalUnixUser);
-
-      // Get executor process environment (includes system vars)
-      // When impersonating, strip HOME/USER/LOGNAME/SHELL so sudo -u can set them
-      const executorEnv = await createUserProcessEnvironment(
-        userId,
-        this.db,
-        undefined,
-        !!finalUnixUser
-      );
 
       // Spawn executor with zellij.attach command
       spawnExecutorFireAndForget(

@@ -43,6 +43,44 @@ describe('buildTeammateBootstrapPrompt', () => {
     expect(prompt).not.toContain('AI teammate description:');
     expect(prompt).not.toContain('- User:');
     expect(prompt).not.toContain('- User email:');
+    expect(prompt).not.toContain('- User persona:');
     expect(prompt).not.toMatch(/\{\{\s*#?\/?\s*(assistant|user)\b/);
+  });
+
+  it('renders a suggested-integrations line when names are provided, and omits it when empty', () => {
+    const withSuggestions = buildTeammateBootstrapPrompt({
+      displayName: 'Board Bot',
+      suggestedIntegrations: ['Slack', 'GitHub', 'Sentry'],
+    });
+    expect(withSuggestions).toContain('- Suggested integrations: Slack, GitHub, Sentry');
+
+    // Empty / whitespace-only lists drop the line entirely.
+    const emptyList = buildTeammateBootstrapPrompt({
+      displayName: 'Board Bot',
+      suggestedIntegrations: [],
+    });
+    expect(emptyList).not.toContain('Suggested integrations');
+
+    const whitespaceOnly = buildTeammateBootstrapPrompt({
+      displayName: 'Board Bot',
+      suggestedIntegrations: ['  ', ''],
+    });
+    expect(whitespaceOnly).not.toContain('Suggested integrations');
+
+    const absent = buildTeammateBootstrapPrompt({ displayName: 'Board Bot' });
+    expect(absent).not.toContain('Suggested integrations');
+  });
+
+  it('adds a persona line with the id (plus title when known) and dumps unknown ids raw', () => {
+    const known = buildTeammateBootstrapPrompt({ displayName: 'Board Bot', persona: 'developer' });
+    expect(known).toContain('- User persona: developer (I write code)');
+
+    // an id not in ONBOARDING_PERSONAS still flows through, without a title suffix
+    const unknown = buildTeammateBootstrapPrompt({
+      displayName: 'Board Bot',
+      persona: 'architect',
+    });
+    expect(unknown).toContain('- User persona: architect');
+    expect(unknown).not.toContain('architect (');
   });
 });

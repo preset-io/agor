@@ -1,5 +1,6 @@
 import {
   enqueueTenantDatabasePostCommitCallback,
+  getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
@@ -10,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import {
   createTenantDatabaseScopeAroundHook,
+  deferWithTenantContext,
   deferWithTenantDatabaseScope,
 } from './tenant-db-scope.js';
 
@@ -404,5 +406,38 @@ describe('createTenantDatabaseScopeAroundHook', () => {
       tenant_id: 'tenant-from-socket',
       source: 'auth_claim',
     });
+  });
+});
+
+describe('deferWithTenantContext', () => {
+  it('runs orchestration after commit with identity but no inherited database scope', async () => {
+    const events: string[] = [];
+    const completed = Promise.withResolvers<void>();
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+        events.push('transaction:start');
+        const result = await callback({ execute: vi.fn(async () => []) });
+        events.push('transaction:committed');
+        return result;
+      }),
+    };
+
+    await runWithTenantDatabaseScope(db as never, 'tenant-deferred', async () => {
+      deferWithTenantContext({}, async () => {
+        expect(getCurrentTenantId()).toBe('tenant-deferred');
+        expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+        events.push('deferred:work');
+        completed.resolve();
+      });
+      events.push('hook:return');
+    });
+    await completed.promise;
+
+    expect(events).toEqual([
+      'transaction:start',
+      'hook:return',
+      'transaction:committed',
+      'deferred:work',
+    ]);
   });
 });

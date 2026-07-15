@@ -1,5 +1,5 @@
 import { SmileOutlined } from '@ant-design/icons';
-import { Button, Form, Input, Popover } from 'antd';
+import { Button, Flex, Form, Input, Popover, Typography } from 'antd';
 import type { EmojiClickData, PickerProps } from 'emoji-picker-react';
 import { lazy, Suspense, useState } from 'react';
 
@@ -13,19 +13,9 @@ const AgorEmojiPickerInner = lazy(() => import('./AgorEmojiPickerInner'));
  * doesn't reflow when the lazy chunk resolves.
  */
 const EmojiPickerFallback: React.FC = () => (
-  <div
-    style={{
-      width: 350,
-      height: 400,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      color: 'var(--ant-color-text-secondary, #888)',
-      fontSize: 12,
-    }}
-  >
-    Loading…
-  </div>
+  <Flex align="center" justify="center" style={{ width: 350, height: 400 }}>
+    <Typography.Text type="secondary">Loading…</Typography.Text>
+  </Flex>
 );
 
 /**

@@ -352,16 +352,26 @@ export function useAgorData(
         // gate ignores them. We apply through the store's `applyMaps` (not the
         // per-entity setters), keeping fetchData's deps stable so the subscribe
         // effect doesn't re-fire.
+        void client
+          .service('agentic-tool-settings')
+          .findAll()
+          .then((settings) => agorStore.getState().setAgenticToolSettings(settings))
+          .catch((settingsError) =>
+            console.error('Failed to load workspace agentic-tool settings:', settingsError)
+          );
+
         void runHydration(
           'mcp-servers',
           ['mcpServers'],
           () =>
             client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) =>
+          (list) => {
             agorStore.getState().applyMaps((prev) => ({
               ...prev,
               mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
-            }))
+            }));
+            agorStore.getState().markHydrated('mcpServersHydrated');
+          }
         );
         void runHydration(
           'session-mcp-servers',
@@ -382,11 +392,13 @@ export function useAgorData(
             client
               .service('gateway-channels')
               .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) =>
+          (list) => {
             agorStore.getState().applyMaps((prev) => ({
               ...prev,
               gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
-            }))
+            }));
+            agorStore.getState().markHydrated('gatewayChannelsHydrated');
+          }
         );
         void runHydration(
           'artifacts',
@@ -1172,6 +1184,19 @@ export function useAgorData(
     usersService.on('updated', realtime.userPatched);
     usersService.on('removed', realtime.userRemoved);
 
+    const agenticToolSettingsService = client.service('agentic-tool-settings');
+    const agenticToolSettingsPatched = (
+      updated: import('@agor-live/client').TenantAgenticToolSettings
+    ) => {
+      const current = agorStore.getState().agenticToolSettingsByName;
+      agorStore
+        .getState()
+        .setAgenticToolSettings(
+          [...current.values()].filter((item) => item.tool !== updated.tool).concat(updated)
+        );
+    };
+    agenticToolSettingsService.on('patched', agenticToolSettingsPatched);
+
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
     mcpServersService.on('created', realtime.mcpServerCreated);
@@ -1414,6 +1439,8 @@ export function useAgorData(
       usersService.removeListener('patched', realtime.userPatched);
       usersService.removeListener('updated', realtime.userPatched);
       usersService.removeListener('removed', realtime.userRemoved);
+
+      agenticToolSettingsService.removeListener('patched', agenticToolSettingsPatched);
 
       mcpServersService.removeListener('created', realtime.mcpServerCreated);
       mcpServersService.removeListener('patched', realtime.mcpServerPatched);

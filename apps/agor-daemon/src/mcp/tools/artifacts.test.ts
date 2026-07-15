@@ -1,6 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it, vi } from 'vitest';
 
+let insideTenantDatabaseScope = false;
+
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class BranchRepository {},
 }));
@@ -21,6 +23,17 @@ vi.mock('../server.js', () => ({
   }),
 }));
 
+vi.mock('../tenant-scope.js', () => ({
+  runWithMcpTenantDatabaseScope: async (_ctx: unknown, work: () => Promise<unknown>) => {
+    insideTenantDatabaseScope = true;
+    try {
+      return await work();
+    } finally {
+      insideTenantDatabaseScope = false;
+    }
+  },
+}));
+
 const { registerArtifactTools } = await import('./artifacts.js');
 
 type ToolConfig = {
@@ -31,6 +44,23 @@ type ToolConfig = {
     };
   };
 };
+
+type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
+
+function captureHandler(
+  toolName: string,
+  ctx: Parameters<typeof registerArtifactTools>[1]
+): ToolHandler {
+  let handler: ToolHandler | undefined;
+  const fakeServer = {
+    registerTool: (name: string, _cfg: ToolConfig, cb: ToolHandler) => {
+      if (name === toolName) handler = cb;
+    },
+  } as unknown as McpServer;
+  registerArtifactTools(fakeServer, ctx);
+  if (!handler) throw new Error(`${toolName} was not registered`);
+  return handler;
+}
 
 function captureConfig(toolName: string): ToolConfig {
   let config: ToolConfig | undefined;
@@ -109,5 +139,49 @@ describe('artifact MCP tool input schemas', () => {
     });
 
     expect(parsed?.success).toBe(true);
+  });
+});
+
+describe('artifact MCP transaction boundaries', () => {
+  it('leaves publish filesystem work and browser waiting outside the DB scope', async () => {
+    const publishArtifact = vi.fn(async () => {
+      expect(insideTenantDatabaseScope).toBe(false);
+      return { artifact_id: 'artifact-1', name: 'Artifact', files: {} };
+    });
+    const waitForRuntimeStatus = vi.fn(async () => {
+      expect(insideTenantDatabaseScope).toBe(false);
+      return { ok: true, observed: true };
+    });
+    const service = {
+      publishArtifact,
+      waitForRuntimeStatus,
+      buildStatusDiagnostic: vi.fn(() => undefined),
+    };
+    const ctx = {
+      app: {
+        service: vi.fn((name: string) =>
+          name === 'boards' ? { get: async () => ({ board_id: 'board-1' }) } : service
+        ),
+      },
+      db: {},
+      userId: 'user-1',
+      authenticatedUser: { user_id: 'user-1', role: 'member' },
+      baseServiceParams: {
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      },
+    } as unknown as Parameters<typeof registerArtifactTools>[1];
+
+    await captureHandler(
+      'agor_artifacts_publish',
+      ctx
+    )({
+      folderPath: '/tmp/artifact',
+      boardId: 'board-1',
+      name: 'Artifact',
+      waitForStatus: true,
+    });
+
+    expect(publishArtifact).toHaveBeenCalledOnce();
+    expect(waitForRuntimeStatus).toHaveBeenCalledOnce();
   });
 });

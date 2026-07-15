@@ -63,11 +63,13 @@ describe('GatewayChannelRepository', () => {
       created_by: userId,
       target_branch_id: branch.branch_id as UUID,
       config: { bot_token: 'xoxb-test', app_token: 'xapp-test' },
+      mcp_server_ids: ['mcp-one'],
     });
 
     expect(channel.created_by).toBe(userId);
     expect(channel.name).toBe('Test Channel');
     expect(channel.id).toBeDefined();
+    expect(channel.mcp_server_ids).toEqual(['mcp-one']);
   });
 
   describe('enabled requires secrets invariant', () => {

@@ -8,6 +8,7 @@ import type {
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
+import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import {
   mcpLimit,
   mcpOptionalNonNegativeInt,
@@ -18,6 +19,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 const BOARD_OBJECT_TYPES = [
   'zone',
@@ -281,24 +283,35 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         typeof args.upsertObjects === 'object' &&
         !Array.isArray(args.upsertObjects)
       ) {
-        const updatedBoard = await boardsService.batchUpsertBoardObjects(
-          boardId,
-          args.upsertObjects as unknown as unknown[],
-          ctx.baseServiceParams
+        const updatedBoard = await runWithMcpTenantDatabaseScope(ctx, () =>
+          boardsService.batchUpsertBoardObjects(
+            boardId,
+            args.upsertObjects as unknown as unknown[],
+            ctx.baseServiceParams
+          )
         );
-        ctx.app.service('boards').emit('patched', updatedBoard);
+        emitServiceEvent(ctx.app, {
+          path: 'boards',
+          event: 'patched',
+          data: updatedBoard,
+          id: boardId,
+        });
       }
 
       if (args.removeObjects && Array.isArray(args.removeObjects)) {
         let finalBoard: Board | undefined;
         for (const objectId of args.removeObjects) {
-          finalBoard = await boardsService.removeBoardObject(
-            boardId,
-            objectId,
-            ctx.baseServiceParams
+          finalBoard = await runWithMcpTenantDatabaseScope(ctx, () =>
+            boardsService.removeBoardObject(boardId, objectId, ctx.baseServiceParams)
           );
         }
-        if (finalBoard) ctx.app.service('boards').emit('patched', finalBoard);
+        if (finalBoard)
+          emitServiceEvent(ctx.app, {
+            path: 'boards',
+            event: 'patched',
+            data: finalBoard,
+            id: boardId,
+          });
       }
 
       const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);

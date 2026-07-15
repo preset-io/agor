@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { useViewport } from 'reactflow';
 import { useBoardPresenceRoom } from '../../../hooks/useBoardPresenceRoom';
 import { usePresence } from '../../../hooks/usePresence';
+import { getContrastingTextColor } from '../../../utils/theme';
 import { UserIdentityAvatar } from '../../UserIdentityAvatar';
 
 export interface StaticRemoteCursor {
@@ -99,7 +100,7 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
                 xmlns="http://www.w3.org/2000/svg"
                 style={{
                   color: color ?? token.colorPrimary,
-                  filter: 'drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3))',
+                  filter: `drop-shadow(0 2px 4px ${token.colorBgMask})`,
                 }}
               >
                 <title>{`${user.name || user.email}'s cursor`}</title>
@@ -125,7 +126,7 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
                   fontSize: '12px',
                   whiteSpace: 'nowrap',
                   background: color ? color : token.colorBgElevated,
-                  color: color ? '#ffffff' : token.colorText,
+                  color: color ? getContrastingTextColor(color, token) : token.colorText,
                   boxShadow: token.boxShadowSecondary,
                 }}
               >

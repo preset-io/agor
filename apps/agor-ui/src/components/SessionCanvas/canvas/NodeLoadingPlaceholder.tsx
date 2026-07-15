@@ -1,3 +1,5 @@
+import { Flex, Typography, theme } from 'antd';
+
 /**
  * Neutral fill placeholder shown while a lazily-loaded React Flow node (e.g.
  * the Sandpack-backed AppNode / ArtifactNode) downloads its chunk. Sized to
@@ -14,27 +16,30 @@ export const NodeLoadingPlaceholder = ({
   title?: string;
   width?: number;
   height?: number;
-}) => (
-  <div
-    style={{
-      width: width ?? '100%',
-      height: height ?? '100%',
-      minWidth: width ?? 120,
-      minHeight: height ?? 80,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      boxSizing: 'border-box',
-      padding: 8,
-      borderRadius: 8,
-      border: '1px solid var(--ant-color-border, #424242)',
-      background: 'var(--ant-color-fill-alter, rgba(255,255,255,0.02))',
-      color: 'var(--ant-color-text-secondary, #888)',
-      fontSize: 12,
-      textAlign: 'center',
-      overflow: 'hidden',
-    }}
-  >
-    {title ? `Loading ${title}…` : 'Loading…'}
-  </div>
-);
+}) => {
+  const { token } = theme.useToken();
+
+  return (
+    <Flex
+      align="center"
+      justify="center"
+      style={{
+        width: width ?? '100%',
+        height: height ?? '100%',
+        minWidth: width ?? 120,
+        minHeight: height ?? 80,
+        boxSizing: 'border-box',
+        padding: token.paddingXS,
+        borderRadius: token.borderRadiusLG,
+        border: `${token.lineWidth}px ${token.lineType} ${token.colorBorder}`,
+        background: token.colorFillAlter,
+        textAlign: 'center',
+        overflow: 'hidden',
+      }}
+    >
+      <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+        {title ? `Loading ${title}…` : 'Loading…'}
+      </Typography.Text>
+    </Flex>
+  );
+};

@@ -164,3 +164,86 @@ EXPOSE ${DAEMON_PORT:-3030}
 
 # Use production entrypoint script
 ENTRYPOINT ["docker-entrypoint-prod.sh"]
+
+# ============================================================================
+# Stage 4a: Source builder (heavy; discarded — never shipped)
+# ============================================================================
+# Builds agor-live from THIS checkout via packages/agor-live/build.sh (turbo
+# build → copies each package's dist/ into agor-live/dist/{core,git,cli,daemon,
+# executor,ui} — the exact layout the npm package ships), then produces a
+# self-contained prod deployment with `pnpm deploy`: agor-live's bin/ + dist/ +
+# prod-only node_modules, with no monorepo source, dev deps, or pnpm store.
+FROM base AS source-builder
+
+USER root
+WORKDIR /app
+
+# Native-module toolchain (node-pty etc.) for the deploy step's install
+# lifecycle. Confined to this throwaway builder — never in the runtime image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential python3 \
+  && rm -rf /var/lib/apt/lists/*
+
+# Full monorepo source. .dockerignore keeps node_modules/, dist/ and .git out.
+COPY . .
+
+# Real commit SHA for the in-app build banner. .git is dockerignored, so the
+# daemon's stamp-build-info.mjs can't run `git rev-parse` — it reads
+# AGOR_BUILD_SHA instead and writes dist/.build-info, which loadBuildInfo()
+# surfaces at startup. CI passes --build-arg AGOR_BUILD_SHA=<github.sha>; left
+# empty (local builds) the stamp falls back to the 'dev' sentinel.
+ARG AGOR_BUILD_SHA=""
+ENV AGOR_BUILD_SHA=${AGOR_BUILD_SHA}
+
+# Install workspace deps (dev deps needed for the turbo build), build agor-live
+# from source, then deploy a prod-only, self-contained tree to /opt/agor-live.
+# build.sh --skip-install avoids a redundant install; it also runs
+# check:agor-live-deps and check:pack, which gate the build. dist/ is in the
+# package's `files` allowlist, so `pnpm deploy` carries it into the output, and
+# agor-live's postinstall re-creates the @agor/{core,git} → dist symlinks there.
+RUN pnpm install --frozen-lockfile \
+  && bash packages/agor-live/build.sh --skip-install \
+  && pnpm --filter=agor-live deploy --prod /opt/agor-live
+
+# `pnpm deploy` runs agor-live's postinstall against the workspace copy, not the
+# deploy output — so the @agor/{core,git} → dist symlinks it creates never land
+# in /opt/agor-live. Re-run the packaged postinstall (shipped via the package's
+# `files` allowlist) against the deployed tree so the symlink layout stays
+# defined in exactly one place. The script warns instead of failing, so assert
+# the links resolve — a broken image must fail the build, not the smoke test.
+RUN node /opt/agor-live/scripts/postinstall.js \
+  && test -e /opt/agor-live/node_modules/@agor/core \
+  && test -e /opt/agor-live/node_modules/@agor/git
+
+# ============================================================================
+# Stage 4b: Production from source (slim runtime — pinned to its git SHA)
+# ============================================================================
+# Same runtime shape as `production` (inherits base: Zellij, gh, and the
+# Claude/Codex/Gemini/OpenCode CLIs), but ships agor-live built from source
+# instead of `npm install -g agor-live@latest`. Only the deployed artifact is
+# copied in — the multi-GB builder (source + dev deps + store) is left behind.
+#
+#   docker build --target production-source -t agor:<sha> -f docker/Dockerfile .
+FROM base AS production-source
+
+USER root
+
+# The one thing we keep from the builder: the self-contained agor-live tree.
+# Copied to the SAME path so its internal (relative) symlinks stay valid.
+COPY --from=source-builder /opt/agor-live /opt/agor-live
+
+# Put the bins on PATH (shebang: #!/usr/bin/env node); they resolve deps + dist
+# entirely within /opt/agor-live.
+RUN ln -sf /opt/agor-live/bin/agor.js /usr/local/bin/agor \
+  && ln -sf /opt/agor-live/bin/agor-daemon.js /usr/local/bin/agor-daemon \
+  && chmod +x /opt/agor-live/bin/agor.js /opt/agor-live/bin/agor-daemon.js
+
+# Reuse the production entrypoint (agor init → db migrate → exec agor-daemon).
+COPY docker/docker-entrypoint-prod.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint-prod.sh
+
+# Drop back to the unprivileged runtime user.
+USER agor
+
+EXPOSE ${DAEMON_PORT:-3030}
+ENTRYPOINT ["docker-entrypoint-prod.sh"]

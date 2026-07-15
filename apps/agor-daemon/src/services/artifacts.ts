@@ -30,6 +30,7 @@ import {
   ArtifactTrustGrantRepository,
   BoardRepository,
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   shortId,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -43,6 +44,7 @@ import type {
   ArtifactPayload,
   ArtifactStatus,
   ArtifactTrustScopeType,
+  AuthenticatedParams,
   BoardID,
   BranchID,
   QueryParams,
@@ -71,6 +73,7 @@ import {
   matchRegisteredBranchPath,
   resolveBranchWorkspacePath,
 } from '../utils/branch-workspace-path.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
   detectLegacyFormat,
   effectiveTemplateForArtifact,
@@ -208,10 +211,11 @@ export type ArtifactParams = QueryParams<{
   board_id?: BoardID;
   branch_id?: BranchID;
   archived?: boolean;
-}> & {
-  /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
-  _agorSqlBranchAccessUserId?: UUID;
-};
+}> &
+  AuthenticatedParams & {
+    /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
+    _agorSqlBranchAccessUserId?: UUID;
+  };
 
 const MAX_CONSOLE_ENTRIES = 100;
 
@@ -337,7 +341,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   constructor(db: TenantScopeAwareDatabase, app: Application) {
-    const artifactRepo = new ArtifactRepository(db);
+    const artifactRepo = bindRepositoryToTenantUnitOfWork(db, new ArtifactRepository(db));
     super(artifactRepo, {
       id: 'artifact_id',
       resourceType: 'Artifact',
@@ -347,9 +351,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       },
     });
     this.artifactRepo = artifactRepo;
-    this.trustRepo = new ArtifactTrustGrantRepository(db);
-    this.branchRepo = new BranchRepository(db);
-    this.boardRepo = new BoardRepository(db);
+    this.trustRepo = bindRepositoryToTenantUnitOfWork(db, new ArtifactTrustGrantRepository(db));
+    this.branchRepo = bindRepositoryToTenantUnitOfWork(db, new BranchRepository(db));
+    this.boardRepo = bindRepositoryToTenantUnitOfWork(db, new BoardRepository(db));
     this.app = app;
     this.dbRef = db;
   }
@@ -409,7 +413,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
   // Direct Feathers create is intentionally rejected — artifacts require
   // the publishArtifact() lifecycle (folder → DB).
-  async create(_data: Partial<Artifact>, _params?: unknown): Promise<Artifact> {
+  async create(_data: Partial<Artifact>, _params?: ArtifactParams): Promise<Artifact> {
     throw new Error(
       'Direct artifact creation not supported. Use publishArtifact() or agor_artifacts_publish MCP tool.'
     );
@@ -426,12 +430,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return safeData;
   }
 
-  async update(id: string | number, data: Partial<Artifact>, params?: unknown): Promise<Artifact> {
-    return (await super.update(
-      id,
-      this.stripClientControlledProvenance(data),
-      params as never
-    )) as Artifact;
+  async update(
+    id: string | number,
+    data: Partial<Artifact>,
+    params?: ArtifactParams
+  ): Promise<Artifact> {
+    return (await super.update(id, this.stripClientControlledProvenance(data), params)) as Artifact;
   }
 
   /**
@@ -440,7 +444,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * row update. Plain metadata patches fall through to the default
    * DrizzleService patch.
    */
-  async patch(id: string | number, data: Partial<Artifact>, params?: unknown): Promise<Artifact> {
+  async patch(
+    id: string | number,
+    data: Partial<Artifact>,
+    params?: ArtifactParams
+  ): Promise<Artifact> {
     const d = data as Partial<Artifact> & {
       x?: number;
       y?: number;
@@ -479,7 +487,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return (await super.patch(
       id,
       this.stripClientControlledProvenance(data) as Partial<Artifact>,
-      params as never
+      params
     )) as Artifact;
   }
 
@@ -493,7 +501,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     return artifact.created_by === userId;
   }
 
-  async remove(id: string | number, params?: unknown): Promise<Artifact> {
+  async remove(id: string | number, params?: ArtifactParams): Promise<Artifact> {
     const artifactId = String(id);
     const callerParams = params as { user?: { user_id?: string; role?: UserRole } } | undefined;
     // Thread the authenticated caller through so deleteArtifact() can run
@@ -507,7 +515,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       callerParams?.user?.user_id,
       callerParams?.user?.role
     );
-    this.app.service('artifacts').emit('removed', artifact);
+    emitServiceEvent(this.app, {
+      path: 'artifacts',
+      event: 'removed',
+      data: artifact,
+      params,
+      id: artifactId,
+    });
     return artifact;
   }
 
@@ -653,7 +667,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       // across republishes.
       this.clearAllViewerBuffersFor(existing.artifact_id);
 
-      this.app.service('artifacts').emit('patched', updated);
+      emitServiceEvent(this.app, {
+        path: 'artifacts',
+        event: 'patched',
+        data: updated,
+        id: updated.artifact_id,
+      });
       return updated;
     }
 
@@ -698,7 +717,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       });
 
       if (this.app) {
-        this.app.service('boards').emit('patched', updatedBoard);
+        emitServiceEvent(this.app, {
+          path: 'boards',
+          event: 'patched',
+          data: updatedBoard,
+          id: resolvedBoardId,
+        });
       }
     } catch (boardError) {
       // Compensate: remove DB record if board placement fails.
@@ -713,7 +737,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       throw boardError;
     }
 
-    this.app.service('artifacts').emit('created', artifact);
+    emitServiceEvent(this.app, {
+      path: 'artifacts',
+      event: 'created',
+      data: artifact,
+      id: artifact.artifact_id,
+    });
     return artifact;
   }
 
@@ -824,7 +853,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
 
       try {
         const targetBoard = await this.boardRepo.upsertBoardObject(newBoardId, objectId, placement);
-        this.app.service('boards').emit('patched', targetBoard);
+        emitServiceEvent(this.app, {
+          path: 'boards',
+          event: 'patched',
+          data: targetBoard,
+          id: newBoardId,
+        });
       } catch (upsertError) {
         if (Object.keys(dbUpdates).length > 0) {
           try {
@@ -853,7 +887,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       if (moving) {
         try {
           const cleaned = await this.boardRepo.removeBoardObject(oldBoardId, objectId);
-          this.app.service('boards').emit('patched', cleaned);
+          emitServiceEvent(this.app, {
+            path: 'boards',
+            event: 'patched',
+            data: cleaned,
+            id: oldBoardId,
+          });
         } catch {
           // Old board may not have this object.
         }
@@ -869,7 +908,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       this.clearAllViewerBuffersFor(fullArtifactId);
     }
 
-    this.app.service('artifacts').emit('patched', updated);
+    emitServiceEvent(this.app, {
+      path: 'artifacts',
+      event: 'patched',
+      data: updated,
+      id: updated.artifact_id,
+    });
     return updated;
   }
 
@@ -2138,7 +2182,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     try {
       const updatedBoard = await this.boardRepo.removeBoardObject(artifact.board_id, objectId);
       if (this.app && updatedBoard) {
-        this.app.service('boards').emit('patched', updatedBoard);
+        emitServiceEvent(this.app, {
+          path: 'boards',
+          event: 'patched',
+          data: updatedBoard,
+          id: artifact.board_id,
+        });
       }
     } catch {
       // Board object may not exist or board may be deleted.

@@ -1,0 +1,144 @@
+# Build & push the Agor container image.
+#
+# Builds the `production-source` target of docker/Dockerfile and pushes it to
+# Docker Hub (Buildx + GHA cache + docker/metadata tags).
+#
+# `production-source` builds agor-live from THIS checkout (turbo build via
+# packages/agor-live/build.sh), so the image is pinned to the built commit
+# rather than `agor-live@latest` on npm.
+#
+# Publish model: the :<full-sha> image is built and pushed on pushes to
+# main, v* tags, AND every PR commit (tagged by the PR
+# *head* SHA, with :pr-<n> re-pointed on each update), so any commit is
+# deployable by its own SHA. Publishing unmerged PR builds under preset/agor
+# is intentional — pre-merge deploy testing needs it. The boot smoke test
+# below gates every publish. Plus a branch tag, and `latest` on main only.
+#
+# Pushes to Docker Hub (docker.io/preset/agor). Required repo secrets
+# (Settings → Secrets and variables → Actions):
+#   DOCKERHUB_USERNAME — Docker Hub account with push access to `preset`
+#   DOCKERHUB_TOKEN    — Docker Hub access token (Read/Write) for that account
+name: Build image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+# docker.io is docker/login-action's default registry, so no `registry:` needed.
+env:
+  IMAGE: preset/agor
+  # The commit we build, stamp, and tag: the PR head on pull_request events
+  # (github.sha is the ephemeral merge commit there), else the pushed commit.
+  # Keeps the checkout, the :<sha> tag, and the in-app build banner in lockstep.
+  IMAGE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  build:
+    name: Build & push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Build the PR's real head commit, not the ephemeral merge commit, so
+          # image contents match the :<sha> tag. No effect on push events.
+          ref: ${{ env.IMAGE_REVISION }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # We push on every event (including PRs), so always log in. preset-io/agor
+      # PRs come from in-repo branches, so the secrets are available.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        env:
+          # Make `type=sha` emit the PR *head* SHA, so the tag equals
+          # `git rev-parse HEAD` of the PR branch. No effect on push events.
+          DOCKER_METADATA_PR_HEAD_SHA: 'true'
+        with:
+          images: ${{ env.IMAGE }}
+          # Full commit SHA on every build (push + PR); a branch/PR ref tag;
+          # semver on git tags; `latest` only on the default branch.
+          tags: |
+            type=sha,prefix=,format=long
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=agor
+            org.opencontainers.image.revision=${{ env.IMAGE_REVISION }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      # Build once into the local Docker store so it can be smoke-tested before
+      # anything is published. The push step below reuses this build via the
+      # GHA layer cache, so it only re-exports layers.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: production-source
+          platforms: linux/amd64
+          # Real SHA for the in-app build banner (.git is dockerignored, so the
+          # daemon's stamp script can't derive it itself).
+          build-args: |
+            AGOR_BUILD_SHA=${{ env.IMAGE_REVISION }}
+          load: true
+          tags: ${{ env.IMAGE }}:smoke
+          cache-from: type=gha,scope=agor-image
+          cache-to: type=gha,mode=max,scope=agor-image
+
+      # Boot the container and require a healthy daemon: exercises the deployed
+      # tree end to end (entrypoint init, db migrate, @agor/* symlink
+      # resolution, native modules) — catches deploy omissions the build alone
+      # can't see.
+      - name: Smoke test
+        run: |
+          docker run -d --name agor-smoke -p 3030:3030 ${{ env.IMAGE }}:smoke
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3030/health > /dev/null 2>&1; then
+              echo "Daemon healthy."
+              docker rm -f agor-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Daemon did not become healthy within 120s"
+          docker logs agor-smoke
+          exit 1
+
+      # Publish on every event (push + PR), gated only by the smoke test
+      # above.
+      - name: Push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: production-source
+          platforms: linux/amd64
+          build-args: |
+            AGOR_BUILD_SHA=${{ env.IMAGE_REVISION }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=agor-image

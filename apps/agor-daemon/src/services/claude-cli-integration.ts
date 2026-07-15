@@ -51,11 +51,17 @@ import {
   permissionModeForCli,
   slugForCwd,
 } from '@agor/core/claude-cli';
-import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  isTenantAgenticToolEnabled,
+  resolveMultiTenancyConfig,
+  resolveProviderConnection,
+} from '@agor/core/config';
 import {
   generateId,
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
@@ -79,6 +85,7 @@ import {
 } from '@agor/core/unix';
 import { DrizzleService } from '../adapters/drizzle';
 import { buildInitialUserMessage } from '../utils/build-initial-user-message.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { canControlCliSession } from '../utils/mcp-token-authorization.js';
 import { getDaemonUrl } from '../utils/spawn-executor.js';
 import {
@@ -97,6 +104,109 @@ import {
 function getDb(app: Application): TenantScopeAwareDatabase | null {
   const db = (app.get('database') ?? app.get('db')) as TenantScopeAwareDatabase | undefined;
   return db ?? null;
+}
+
+function claudeCliProviderEnvPath(sessionId: SessionID): string {
+  return path.join(os.homedir(), '.agor', 'runtime', `claude-cli-provider-${sessionId}.sh`);
+}
+
+/** Overlay the session owner's scoped connection without exposing it to generic terminals. */
+export async function resolveClaudeCliProviderSpawn(
+  app: Application,
+  session: Session,
+  built: { bin: string; args: string[] }
+): Promise<{ bin: string; args: string[] } | null> {
+  const db = getDb(app) ?? undefined;
+  if (!db) return null;
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) {
+    throw new Error('Missing active tenant context for Claude CLI provider resolution');
+  }
+  const resolved = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+    if (!(await isTenantAgenticToolEnabled('claude-code', tenantDb))) return null;
+    return resolveProviderConnection('claude-code', {
+      userId: (session.created_by as import('@agor/core/types').UserID | null) ?? undefined,
+      db: tenantDb,
+    });
+  });
+  if (!resolved) return null;
+  const connection = resolved.connection as Record<string, string | undefined>;
+  const hasCredential = [
+    'ANTHROPIC_API_KEY',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_AUTH_TOKEN',
+  ].some((field) => connection[field]?.trim());
+  if (resolved.decryptionFailed || !hasCredential) return null;
+
+  const homeDir = resolveHomeDirForCliSession(session);
+  const envPath = session.unix_username
+    ? path.join(homeDir, '.agor', 'runtime', `claude-cli-provider-${session.session_id}.sh`)
+    : claudeCliProviderEnvPath(session.session_id);
+  const exports = Object.entries(connection).map(([key, value]) => {
+    const escaped = (value ?? '').replace(/'/g, "'\\''");
+    return `export ${key}='${escaped}'`;
+  });
+  const contents = `#!/bin/sh\n${exports.join('\n')}\n`;
+  if (session.unix_username) {
+    if (!isValidUnixUsername(session.unix_username)) {
+      throw new Error('Invalid Unix username for scoped Claude CLI credentials');
+    }
+    try {
+      const envDir = path.dirname(envPath);
+      childProcess.execFileSync(
+        'sudo',
+        ['-n', '-u', session.unix_username, 'mkdir', '-p', envDir],
+        {
+          stdio: 'pipe',
+          timeout: 2000,
+        }
+      );
+      // Create an empty file first. It may briefly inherit a permissive umask,
+      // but contains no secret until after ownership and mode are locked down.
+      childProcess.execFileSync('sudo', ['-n', 'tee', envPath], {
+        input: '',
+        stdio: 'pipe',
+        timeout: 2000,
+      });
+      childProcess.execFileSync('sudo', ['-n', 'chown', session.unix_username, envPath], {
+        stdio: 'pipe',
+        timeout: 2000,
+      });
+      childProcess.execFileSync('sudo', ['-n', 'chmod', '600', envPath], {
+        stdio: 'pipe',
+        timeout: 2000,
+      });
+      childProcess.execFileSync('sudo', ['-n', 'tee', envPath], {
+        input: contents,
+        stdio: 'pipe',
+        timeout: 2000,
+      });
+    } catch (error) {
+      try {
+        fs.rmSync(envPath, { force: true });
+      } catch {
+        // The file may already be owned by the isolated session user. Preserve
+        // the original preparation error rather than masking it with EACCES.
+      }
+      throw new Error(
+        `Failed to prepare scoped Claude CLI credentials for ${session.unix_username}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  } else {
+    fs.mkdirSync(path.dirname(envPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(envPath, contents, { mode: 0o600 });
+  }
+  return {
+    bin: '/bin/sh',
+    args: [
+      '-c',
+      '. "$1"; rm -f "$1"; shift; exec "$@"',
+      'agor-claude-cli',
+      envPath,
+      built.bin,
+      ...built.args,
+    ],
+  };
 }
 
 const cliWatcherTenantBySession = new Map<string, string>();
@@ -123,6 +233,15 @@ async function runCliCallbackDatabaseScope<T>(
   if (!db) return work();
   const tenantId = cliWatcherTenantBySession.get(sessionId) ?? captureCliWatcherTenantId(app);
   return runWithTenantDatabaseScope(db, tenantId, work);
+}
+
+async function runCliCallbackTenantContext<T>(
+  app: Application,
+  sessionId: string,
+  work: () => Promise<T>
+): Promise<T> {
+  const tenantId = cliWatcherTenantBySession.get(sessionId) ?? captureCliWatcherTenantId(app);
+  return runWithTenantContext(tenantId, work);
 }
 
 /** Per-turn accumulator used by the sink between `user_message` and `turn_end`. */
@@ -352,7 +471,7 @@ function startTaskWatchdog(app: Application, sessionId: SessionID): void {
   stopTaskWatchdog(sessionId);
   runWithoutTenantDatabaseScope(() => {
     const timer = setInterval(() => {
-      void runCliCallbackDatabaseScope(app, sessionId, async () => {
+      void runCliCallbackTenantContext(app, sessionId, async () => {
         const active = activeCliTurn.get(sessionId);
         if (!active) {
           // Turn already closed by some other path — stop watching.
@@ -563,7 +682,12 @@ export function buildCliEventSink(app: Application): CliWatcherEventSink {
         tool_use_count: 0,
         metadata: { source: 'cli-repl' },
       })) as Task;
-      app.service('tasks').emit('created', task);
+      emitServiceEvent(app, {
+        path: 'tasks',
+        event: 'created',
+        data: task,
+        id: task.task_id,
+      });
       // Patch session: RUNNING + append task id. The watcher's turn_end
       // handler flips it back to IDLE.
       await app
@@ -1300,13 +1424,31 @@ export async function writeClaudeCliMcpConfigForSession(
     return undefined;
   }
 
+  const db = getDb(app);
+  if (!db) throw new Error('Missing tenant database for Claude CLI MCP config generation');
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) {
+    throw new Error('Missing active tenant context for Claude CLI MCP config generation');
+  }
+  const { generateSessionToken } = await import('../mcp/tokens.js');
+  const mcpToken = await runWithTenantDatabaseScope(db, tenantId, async () => {
+    try {
+      return await generateSessionToken(
+        app,
+        session.session_id,
+        session.created_by as import('@agor/core/types').UserID
+      );
+    } catch (err) {
+      console.warn(
+        `[claude-cli-integration] failed to issue MCP token for session ${shortId(session.session_id)}; Agor MCP tools will be unavailable in Claude CLI/RemoteTrigger:`,
+        err instanceof Error ? err.message : String(err)
+      );
+      return undefined;
+    }
+  });
+  if (!mcpToken) return undefined;
+
   try {
-    const { generateSessionToken } = await import('../mcp/tokens.js');
-    const mcpToken = await generateSessionToken(
-      app,
-      session.session_id,
-      session.created_by as import('@agor/core/types').UserID
-    );
     const mcpConfig = buildClaudeCliAgorMcpConfig({
       daemonUrl: getDaemonUrl(),
       mcpToken,
@@ -1381,12 +1523,14 @@ export async function onCliSessionCreated(
   branchCwd: string
 ): Promise<void> {
   if (session.agentic_tool !== 'claude-code-cli') return;
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) throw new Error('Missing active tenant context for Claude CLI session startup');
   const homeDir = resolveHomeDirForCliSession(session);
   const slug = slugForCwd(branchCwd);
   const jsonlPath = claudeSessionJsonlPath(homeDir, branchCwd, session.session_id);
   const mcpConfigPath = await writeClaudeCliMcpConfigForSession(app, session);
   const spawnCfg = buildSpawnConfigForSession(session, branchCwd, { mcpConfigPath });
-  const built = buildClaudeCliSpawn(spawnCfg);
+  const built = await resolveClaudeCliProviderSpawn(app, session, buildClaudeCliSpawn(spawnCfg));
   const tabName = spawnCfg.displayName ?? `cli-${shortId(session.session_id)}`;
 
   // 1) Persist cli_state for diagnostics + restart recovery.
@@ -1407,20 +1551,22 @@ export async function onCliSessionCreated(
   try {
     const db = getDb(app);
     if (db) {
-      const repo = new SessionRepository(db);
-      const row = await repo.findById(session.session_id).catch(() => null);
-      if (row) {
-        const patch = {
-          sdk_session_id: session.session_id,
-          cli_state: {
-            ...(row.cli_state ?? {}),
-            slug,
-            jsonl_path: jsonlPath,
-            zellij_tab_name: tabName,
-          },
-        } satisfies Partial<Session>;
-        await repo.update(session.session_id, patch);
-      }
+      await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+        const repo = new SessionRepository(tenantDb);
+        const row = await repo.findById(session.session_id).catch(() => null);
+        if (row) {
+          const patch = {
+            sdk_session_id: session.session_id,
+            cli_state: {
+              ...(row.cli_state ?? {}),
+              slug,
+              jsonl_path: jsonlPath,
+              zellij_tab_name: tabName,
+            },
+          } satisfies Partial<Session>;
+          await repo.update(session.session_id, patch);
+        }
+      });
     }
   } catch (err) {
     console.warn('[claude-cli-integration] failed to persist initial cli_state', err);
@@ -1451,14 +1597,9 @@ export async function onCliSessionCreated(
   //    Best-effort — drops silently if the user hasn't opened the terminal
   //    modal yet. Log the attempt either way so we can see it in the
   //    daemon logs while testing.
-  const dispatched = dispatchZellijClaudeTab(
-    app,
-    session.created_by,
-    tabName,
-    branchCwd,
-    built.bin,
-    built.args
-  );
+  const dispatched = built
+    ? dispatchZellijClaudeTab(app, session.created_by, tabName, branchCwd, built.bin, built.args)
+    : false;
   console.log(
     JSON.stringify({
       layer: 'claude-cli-integration.onCliSessionCreated',
@@ -1466,7 +1607,7 @@ export async function onCliSessionCreated(
       slug,
       jsonl_path: jsonlPath,
       tab_dispatched: dispatched,
-      spawn: { bin: built.bin, args: built.args },
+      spawn: built ? { bin: built.bin, args: built.args } : { blocked: 'scoped-auth-required' },
     })
   );
 }

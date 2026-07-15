@@ -1,1 +1,1 @@
-export { OnboardingWizard, type OnboardingWizardProps } from './OnboardingWizard';
+export { OnboardingWizard, type OnboardingWizardProps, type WizardStep } from './OnboardingWizard';

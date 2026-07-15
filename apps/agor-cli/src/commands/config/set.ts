@@ -10,16 +10,13 @@ export default class ConfigSet extends Command {
   static description = 'Set a configuration value';
 
   static examples = [
-    '<%= config.bin %> <%= command.id %> defaults.board experiments',
-    '<%= config.bin %> <%= command.id %> defaults.agent claude-code',
-    '<%= config.bin %> <%= command.id %> credentials.ANTHROPIC_API_KEY sk-ant-...',
+    '<%= config.bin %> <%= command.id %> daemon.port 4000',
     '<%= config.bin %> <%= command.id %> daemon.port 4000',
   ];
 
   static args = {
     key: Args.string({
-      description:
-        'Configuration key in format: section.key (e.g., daemon.port, credentials.ANTHROPIC_API_KEY)',
+      description: 'Configuration key in format: section.key (e.g., daemon.port)',
       required: true,
     }),
     value: Args.string({

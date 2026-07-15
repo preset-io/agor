@@ -252,7 +252,7 @@ export function EnvironmentPill({
             size={2}
             style={{
               padding: '0 6px',
-              borderLeft: '1px solid rgba(255, 255, 255, 0.2)',
+              borderLeft: `1px solid ${token.colorBorderSecondary}`,
               height: '22px',
               display: 'inline-flex',
               alignItems: 'center',
@@ -394,7 +394,7 @@ export function EnvironmentPill({
               height: 22,
               width: 22,
               minWidth: 22,
-              borderLeft: '1px solid rgba(255, 255, 255, 0.2)',
+              borderLeft: `1px solid ${token.colorBorderSecondary}`,
             }}
           />
         </Tooltip>

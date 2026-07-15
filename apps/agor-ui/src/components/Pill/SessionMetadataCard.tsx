@@ -74,13 +74,7 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
           (we pass --session-id <agor> to the binary); for SDK adapters they
           typically differ. SDK row is hidden when no sdk_session_id has
           been captured yet (fresh SDK sessions before the first response). */}
-      <div
-        style={{
-          marginBottom: 12,
-          paddingTop: 12,
-          borderTop: `1px solid ${token.colorBorderSecondary}`,
-        }}
-      >
+      <div style={{ marginBottom: 12 }}>
         <SessionIdsList session={session} />
       </div>
 

@@ -1,39 +1,194 @@
-import type { User } from '@agor-live/client';
-import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import { OnboardingBanners } from './OnboardingBanners';
+import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
+import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
 
-function makeUser(overrides: Partial<User> = {}): User {
-  return {
-    user_id: 'user-1',
-    email: 'user@example.com',
-    name: 'User',
-    role: 'member',
-    onboarding_completed: true,
-    ...overrides,
-  } as User;
-}
+const onboardedUser = (userId: string, overrides: Partial<User> = {}): User =>
+  ({ user_id: userId, onboarding_completed: true, ...overrides }) as User;
 
-describe('OnboardingBanners', () => {
-  it('treats CLAUDE_CODE_OAUTH_TOKEN in user env vars as Claude auth', async () => {
-    const onCheckAuth = vi.fn(async () => ({ authenticated: true, method: 'oauth' as const }));
+const result = (status: AuthCheckResult['status']): AuthCheckResult => ({
+  status,
+  authenticated: status === 'authenticated',
+  method: 'none',
+});
 
+const baseProps = (over: Partial<OnboardingBannersProps>): OnboardingBannersProps => ({
+  user: onboardedUser('user-1'),
+  mcpServerCount: 1,
+  gatewayChannelCount: 0,
+  integrationsHydrated: true,
+  canManageMcp: false,
+  onOpenUserSettings: vi.fn(),
+  onOpenWorkspaceSettings: vi.fn(),
+  onCheckAuth: vi.fn(async () => result('unauthenticated')),
+  credentialVersion: 0,
+  ...over,
+});
+
+describe('OnboardingBanners probe effect', () => {
+  beforeEach(() => agorStore.getState().reset());
+
+  it('shows "No AI" once every probe positively reports unauthenticated', async () => {
+    render(
+      <OnboardingBanners {...baseProps({ onCheckAuth: async () => result('unauthenticated') })} />
+    );
+    await waitFor(() => expect(screen.getByText(/No AI connected/)).toBeInTheDocument());
+  });
+
+  it('shows no amber banner when the probe confirms authenticated', async () => {
+    render(
+      <OnboardingBanners {...baseProps({ onCheckAuth: async () => result('authenticated') })} />
+    );
+    // Give the effect a chance to resolve, then assert nothing scary rendered.
+    await waitFor(() => expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument());
+  });
+
+  it('shows no amber banner when the probe throws (fail safe → Unknown)', async () => {
+    const onCheckAuth = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalled());
+    expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument();
+  });
+
+  it('re-probes and resets state on a user-identity change', async () => {
+    const onCheckAuth = vi.fn(async (_tool: AgenticToolName) => result('authenticated'));
+    const { rerender } = render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(1));
+
+    onCheckAuth.mockImplementation(async () => result('unauthenticated'));
+    rerender(<OnboardingBanners {...baseProps({ user: onboardedUser('user-2'), onCheckAuth })} />);
+    await waitFor(() => expect(screen.getByText(/No AI connected/)).toBeInTheDocument());
+  });
+
+  it('treats CLAUDE_CODE_OAUTH_TOKEN in user env vars as Claude auth (probes claude-code, no banner)', async () => {
+    const onCheckAuth = vi.fn(async () => result('authenticated'));
     render(
       <OnboardingBanners
-        user={makeUser({
-          env_vars: {
-            CLAUDE_CODE_OAUTH_TOKEN: { set: true, scope: 'global', resource_id: null },
-          },
+        {...baseProps({
+          user: onboardedUser('user-1', {
+            env_vars: {
+              CLAUDE_CODE_OAUTH_TOKEN: { set: true, scope: 'global', resource_id: null },
+            },
+          } as Partial<User>),
+          onCheckAuth,
         })}
-        mcpServerCount={1}
-        canManageMcp={false}
-        onOpenUserSettings={vi.fn()}
-        onOpenWorkspaceSettings={vi.fn()}
-        onCheckAuth={onCheckAuth}
+      />
+    );
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code'));
+    expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument();
+  });
+
+  it('uses the standard alert action to open AI settings', async () => {
+    const onOpenUserSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          onCheckAuth: async () => result('unauthenticated'),
+          onOpenUserSettings,
+        })}
       />
     );
 
-    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code'));
-    expect(screen.queryByText(/connect an ai provider/i)).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect AI' }));
+    expect(onOpenUserSettings).toHaveBeenCalledWith('claude-code');
+  });
+
+  it('dismisses the integrations alert', async () => {
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          mcpServerCount: 0,
+          canManageMcp: true,
+          onCheckAuth: async () => result('authenticated'),
+        })}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
+    expect(screen.queryByText(/Connect Slack/)).not.toBeInTheDocument();
+  });
+
+  it('routes tenant-preferred credential failures to workspace agentic-tool settings', async () => {
+    agorStore.getState().setAgenticToolSettings([
+      {
+        tool: 'claude-code',
+        enabled: true,
+        resolution_policy: 'tenant_preferred',
+        inline_configuration_allowed: true,
+        connection: { ANTHROPIC_API_KEY: { configured: true } },
+      },
+    ]);
+    const onOpenUserSettings = vi.fn();
+    const onOpenWorkspaceSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('admin-1', { role: 'admin' }),
+          onOpenUserSettings,
+          onOpenWorkspaceSettings,
+          onCheckAuth: async () => result('unauthenticated'),
+        })}
+      />
+    );
+    fireEvent.click((await screen.findByText('Reconnect AI')).closest('button')!);
+    expect(onOpenWorkspaceSettings).toHaveBeenCalledWith('agentic-tools');
+    expect(onOpenUserSettings).not.toHaveBeenCalled();
+  });
+
+  it('routes members to user settings when tenant credentials are preferred', async () => {
+    agorStore.getState().setAgenticToolSettings([
+      {
+        tool: 'claude-code',
+        enabled: true,
+        resolution_policy: 'tenant_preferred',
+        inline_configuration_allowed: true,
+        connection: { ANTHROPIC_API_KEY: { configured: true } },
+      },
+    ]);
+    const onOpenUserSettings = vi.fn();
+    const onOpenWorkspaceSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('member-1', { role: 'member' }),
+          onOpenUserSettings,
+          onOpenWorkspaceSettings,
+          onCheckAuth: async () => result('unauthenticated'),
+        })}
+      />
+    );
+    fireEvent.click((await screen.findByText('Reconnect AI')).closest('button')!);
+    expect(onOpenUserSettings).toHaveBeenCalledWith('claude-code');
+    expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
+  });
+
+  it('routes user-preferred credential failures to the selected user tool tab', async () => {
+    agorStore.getState().setAgenticToolSettings([
+      {
+        tool: 'claude-code',
+        enabled: false,
+        resolution_policy: 'user_preferred',
+        inline_configuration_allowed: true,
+        connection: {},
+      },
+      {
+        tool: 'codex',
+        enabled: true,
+        resolution_policy: 'user_required',
+        inline_configuration_allowed: true,
+        connection: {},
+      },
+    ]);
+    const onOpenUserSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({ onOpenUserSettings, onCheckAuth: async () => result('unauthenticated') })}
+      />
+    );
+    fireEvent.click((await screen.findByText('Connect AI')).closest('button')!);
+    expect(onOpenUserSettings).toHaveBeenCalledWith('codex');
   });
 });

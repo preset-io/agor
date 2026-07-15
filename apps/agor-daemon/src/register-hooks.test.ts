@@ -53,6 +53,12 @@ describe('tenant-owned service registration', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toContain('gateway');
   });
 
+  it('wraps custom board archive routes in tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
+      expect.arrayContaining(['boards/:id/archive', 'boards/:id/unarchive'])
+    );
+  });
+
   it('wraps MCP OAuth/session helper services in tenant database scope', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
       expect.arrayContaining([

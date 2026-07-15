@@ -16,10 +16,12 @@ import {
   BoardRepository,
   BranchRepository,
   eq,
+  GatewayChannelRepository,
   getCurrentTenantId,
   inArray,
   isPostgresDatabase,
   MCPServerRepository,
+  runWithTenantDatabaseScope,
   SessionMCPServerRepository,
   type SessionMCPServerRow,
   select,
@@ -66,6 +68,7 @@ import {
   oauth21TokenCache,
   persistOAuthToken,
 } from './oauth-cache.js';
+import { createAgenticToolPresetsService } from './services/agentic-tool-presets.js';
 import { createArtifactsService } from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
@@ -81,10 +84,12 @@ import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
 import { createGatewayService } from './services/gateway.js';
 import { createGatewayChannelsService } from './services/gateway-channels.js';
+import { createGatewayChannelsAppInfoService } from './services/gateway-channels-app-info.js';
 import { createGatewayChannelsTestService } from './services/gateway-channels-test.js';
 import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
@@ -118,12 +123,14 @@ import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
 import { createTasksService } from './services/tasks.js';
 import { createTemplatesService } from './services/templates.js';
+import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
+import { emitServiceEvent } from './utils/emit-service-event.js';
 import { escapeHtml } from './utils/html.js';
 import {
   shouldExposeMCPServerSecrets,
@@ -145,7 +152,6 @@ export interface RegisterServicesContext {
   db: TenantScopeAwareDatabase;
   app: Application & { io?: import('socket.io').Server };
   config: AgorConfig;
-  svcEnabled: (group: string) => boolean;
   jwtSecret: string;
   daemonUrl: string;
   /** True when the daemon is serving the bundled UI itself at /ui (installed agor-live). */
@@ -178,12 +184,11 @@ export interface RegisteredServices {
  * Register all FeathersJS services on the app.
  */
 export async function registerServices(ctx: RegisterServicesContext): Promise<RegisteredServices> {
-  const { db, app, config, svcEnabled, jwtSecret, daemonUrl, branchRbacEnabled, allowSuperadmin } =
-    ctx;
+  const { db, app, config, jwtSecret, daemonUrl, branchRbacEnabled, allowSuperadmin } = ctx;
 
   const _superadminOpts = { allowSuperadmin };
 
-  // Helper: safely get a service (returns undefined if not registered due to tier=off)
+  // Helper for optional or conditionally registered integration services.
   const safeService = (path: string) => {
     try {
       return app.service(path);
@@ -250,9 +255,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     //      the executor for live tool/thinking visualization.
     events: ['queued', 'tool:start', 'tool:complete', 'thinking:chunk', 'failed'],
   });
-  if (svcEnabled('leaderboard')) {
-    app.use('/leaderboard', createLeaderboardService(db));
-  }
+  app.use('/leaderboard', createLeaderboardService(db));
   const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
 
   app.use('/messages', messagesService, {
@@ -301,58 +304,52 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
     // biome-ignore lint/suspicious/noExplicitAny: feathers-swagger docs option not typed in FeathersJS
   } as any);
-
-  // ============================================================================
-  // Boards, board-objects, cards, artifacts, board-comments
-  // ============================================================================
-
-  if (svcEnabled('boards')) {
-    app.use(
-      '/boards',
-      createBoardsService(db, (boardObject) => {
-        app.service('board-objects').emit('patched', boardObject);
-      }),
-      {
-        methods: [
-          'find',
-          'get',
-          'create',
-          'update',
-          'patch',
-          'remove',
-          'toBlob',
-          'fromBlob',
-          'toYaml',
-          'fromYaml',
-          'clone',
-          'setPrimaryTeammate',
-          'clearPrimaryTeammate',
-          'ensureTeammateWelcomeNote',
-        ],
-      }
-    );
-    app.use('/board-objects', createBoardObjectsService(db));
-  }
+  app.use(
+    '/boards',
+    createBoardsService(
+      db,
+      (boardObject, params) => {
+        emitServiceEvent(app, {
+          path: 'board-objects',
+          event: 'patched',
+          data: boardObject,
+          params,
+          id: boardObject.object_id,
+        });
+      },
+      (event) => emitServiceEvent(app, { path: 'boards', ...event })
+    ),
+    {
+      methods: [
+        'find',
+        'get',
+        'create',
+        'update',
+        'patch',
+        'remove',
+        'toBlob',
+        'fromBlob',
+        'toYaml',
+        'fromYaml',
+        'clone',
+        'setPrimaryTeammate',
+        'clearPrimaryTeammate',
+        'ensureTeammateWelcomeNote',
+      ],
+    }
+  );
+  app.use('/board-objects', createBoardObjectsService(db, app));
 
   const boardsService = safeService('boards') as unknown as BoardsServiceImpl | undefined;
-
-  if (svcEnabled('cards')) {
-    app.use('/card-types', createCardTypesService(db));
-    app.use('/cards', createCardsService(db));
-  }
-
-  if (svcEnabled('artifacts')) {
-    // `agor-query` is the runtime-introspection fan-out event (daemon →
-    // viewer's browser tab). Feathers' default `serviceEvents` is just
-    // ['created','updated','patched','removed'], so without this it
-    // fires locally on the server's EventEmitter and never reaches any
-    // socket. See queryArtifactRuntime in services/artifacts.ts.
-    app.use('/artifacts', createArtifactsService(db, app), { events: ['agor-query'] });
-  }
-
-  if (svcEnabled('boards')) {
-    app.use('/board-comments', createBoardCommentsService(db));
-  }
+  app.use('/card-types', createCardTypesService(db));
+  app.use('/cards', createCardsService(db));
+  // `agor-query` is the runtime-introspection fan-out event (daemon →
+  // viewer's browser tab). Feathers' default `serviceEvents` is just
+  // ['created','updated','patched','removed'], so without this it
+  // fires locally on the server's EventEmitter and never reaches any
+  // socket. See queryArtifactRuntime in services/artifacts.ts.
+  app.use('/artifacts', createArtifactsService(db, app), { events: ['agor-query'] });
+  app.use('/board-comments', createBoardCommentsService(db));
 
   // ============================================================================
   // Branches, repos
@@ -422,7 +419,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Knowledge (backend/data foundations)
   // ============================================================================
 
-  app.use('/kb/namespaces', createKnowledgeNamespacesService(db), {
+  app.use('/kb/namespaces', createKnowledgeNamespacesService(db, app), {
     methods: [
       'find',
       'get',
@@ -473,7 +470,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   let oauthCallbackHandler: ((req: express.Request, res: express.Response) => void) | null = null;
 
   // The OAuth callback middleware is registered in boot.ts; here we set the handler
-  if (svcEnabled('mcp_servers')) {
+  {
     const mcpResult = await registerMCPServices(ctx, sessionsService);
     oauthCallbackHandler = mcpResult.oauthCallbackHandler;
   }
@@ -482,7 +479,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Gateway services
   // ============================================================================
 
-  if (svcEnabled('gateway')) {
+  {
     app.use('/gateway-channels', createGatewayChannelsService(db));
 
     // Sub-path service for the connection probe. A sub-path does NOT inherit
@@ -495,6 +492,22 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'test gateway channels')],
       },
     });
+    // Request/response probe — its default `created` event would otherwise fall
+    // through the global publisher's `global` scope and broadcast the probe
+    // result to every authenticated socket. Publish to no one.
+    app.service('gateway-channels/test').publish(() => []);
+
+    // Sub-path service resolving the Slack app id behind a channel's stored
+    // bot token (auth.test → bots.info). Same gating rationale as /test above:
+    // reads decrypted tokens via the repository, returns no token values.
+    app.use('/gateway-channels/app-info', createGatewayChannelsAppInfoService(db));
+    app.service('gateway-channels/app-info').hooks({
+      before: {
+        create: [ctx.requireAuth, requireMinimumRole(ROLES.ADMIN, 'read gateway app info')],
+      },
+    });
+    // Request/response read — same broadcast fall-through as /test above.
+    app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
     app.use('/gateway', createGatewayService(db, app), {
@@ -517,7 +530,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   configService.app = app;
   app.use('/admin/local-actions', createLocalActionsService());
 
-  app.use('/config', configService);
+  app.use('/agentic-tool-settings', createTenantAgenticToolSettingsService(db));
+  app.service('/agentic-tool-settings').hooks({ before: { all: [ctx.requireAuth] } });
+  app.use('/agentic-tool-presets', createAgenticToolPresetsService(db));
+  app.service('/agentic-tool-presets').hooks({ before: { all: [ctx.requireAuth] } });
 
   app.use('/config/resolve-api-key', {
     // biome-ignore lint/suspicious/noExplicitAny: taskId is branded UUID at runtime
@@ -557,12 +573,9 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const { UsersRepository, SessionRepository } = await import('@agor/core/db');
   const usersRepository = new UsersRepository(db);
   const sessionsRepository = new SessionRepository(db);
-
-  if (svcEnabled('file_browser')) {
-    app.use('/context', createContextService(branchRepository));
-    app.use('/file', createFileService(branchRepository));
-    app.use('/files', createFilesService(db, app));
-  }
+  app.use('/context', createContextService(branchRepository));
+  app.use('/file', createFileService(branchRepository));
+  app.use('/files', createFilesService(db, app));
 
   // Server-side Handlebars renderer. UI calls POST /templates so the browser
   // bundle can stay free of Handlebars (which uses `new Function` and would
@@ -570,12 +583,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use('/templates', createTemplatesService());
   app.service('/templates').hooks({ before: { create: [ctx.requireAuth] } });
 
-  const terminalsService = svcEnabled('terminals') ? new TerminalsService(app, db) : null;
-  if (terminalsService) {
-    app.use('/terminals', terminalsService, {
-      events: ['data', 'exit'],
-    });
-  }
+  const terminalsService = new TerminalsService(app, db);
+  app.use('/terminals', terminalsService, {
+    events: ['data', 'exit'],
+  });
 
   // ============================================================================
   // Session MCP Servers (top-level for WebSocket events)
@@ -602,62 +613,59 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       return [];
     },
   });
-
-  if (svcEnabled('mcp_servers')) {
-    app.use('/session-mcp-servers', {
-      async find(params?: {
-        query?: {
-          session_id?: string | { $in?: string[] };
-          mcp_server_id?: string;
-          enabled?: boolean;
-        };
-        _agorSqlSessionAccessUserId?: UUID;
-      }) {
-        const conditions: ReturnType<typeof eq>[] = [];
-        // session_id may be a scalar string or `{ $in: [...] }` from callers.
-        // RBAC scoping is composed below via `_agorSqlSessionAccessUserId`.
-        const sessionIdFilter = params?.query?.session_id;
-        if (typeof sessionIdFilter === 'string') {
-          conditions.push(eq(sessionMcpServers.session_id, sessionIdFilter));
-        } else if (
-          sessionIdFilter &&
-          typeof sessionIdFilter === 'object' &&
-          Array.isArray(sessionIdFilter.$in)
-        ) {
-          if (sessionIdFilter.$in.length === 0) {
-            return [];
-          }
-          conditions.push(inArray(sessionMcpServers.session_id, sessionIdFilter.$in));
+  app.use('/session-mcp-servers', {
+    async find(params?: {
+      query?: {
+        session_id?: string | { $in?: string[] };
+        mcp_server_id?: string;
+        enabled?: boolean;
+      };
+      _agorSqlSessionAccessUserId?: UUID;
+    }) {
+      const conditions: ReturnType<typeof eq>[] = [];
+      // session_id may be a scalar string or `{ $in: [...] }` from callers.
+      // RBAC scoping is composed below via `_agorSqlSessionAccessUserId`.
+      const sessionIdFilter = params?.query?.session_id;
+      if (typeof sessionIdFilter === 'string') {
+        conditions.push(eq(sessionMcpServers.session_id, sessionIdFilter));
+      } else if (
+        sessionIdFilter &&
+        typeof sessionIdFilter === 'object' &&
+        Array.isArray(sessionIdFilter.$in)
+      ) {
+        if (sessionIdFilter.$in.length === 0) {
+          return [];
         }
-        if (params?.query?.mcp_server_id) {
-          conditions.push(eq(sessionMcpServers.mcp_server_id, params.query.mcp_server_id));
-        }
-        if (params?.query?.enabled !== undefined) {
-          conditions.push(eq(sessionMcpServers.enabled, params.query.enabled));
-        }
-        if (params?._agorSqlSessionAccessUserId) {
-          conditions.push(
-            visibleSessionReferenceAccessExists(
-              db,
-              params._agorSqlSessionAccessUserId,
-              sessionMcpServers.session_id
-            )
-          );
-        }
-        let query = select(db).from(sessionMcpServers);
-        if (conditions.length > 0) {
-          query = query.where(and(...conditions)) as typeof query;
-        }
-        const rows = await query.all();
-        return rows.map((row: SessionMCPServerRow) => ({
-          session_id: row.session_id,
-          mcp_server_id: row.mcp_server_id,
-          enabled: Boolean(row.enabled),
-          added_at: new Date(row.added_at),
-        }));
-      },
-    });
-  }
+        conditions.push(inArray(sessionMcpServers.session_id, sessionIdFilter.$in));
+      }
+      if (params?.query?.mcp_server_id) {
+        conditions.push(eq(sessionMcpServers.mcp_server_id, params.query.mcp_server_id));
+      }
+      if (params?.query?.enabled !== undefined) {
+        conditions.push(eq(sessionMcpServers.enabled, params.query.enabled));
+      }
+      if (params?._agorSqlSessionAccessUserId) {
+        conditions.push(
+          visibleSessionReferenceAccessExists(
+            db,
+            params._agorSqlSessionAccessUserId,
+            sessionMcpServers.session_id
+          )
+        );
+      }
+      let query = select(db).from(sessionMcpServers);
+      if (conditions.length > 0) {
+        query = query.where(and(...conditions)) as typeof query;
+      }
+      const rows = await query.all();
+      return rows.map((row: SessionMCPServerRow) => ({
+        session_id: row.session_id,
+        mcp_server_id: row.mcp_server_id,
+        enabled: Boolean(row.enabled),
+        added_at: new Date(row.added_at),
+      }));
+    },
+  });
 
   // ============================================================================
   // Users service
@@ -728,9 +736,14 @@ function createExecuteHandler(
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
   ) => {
-    const session = await sessionsService.get(sessionId, params);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
+    const tenantId = getCurrentTenantId();
+    const session = await prepareSessionForExecutorStart(db, sessionsService, sessionId, params);
+    if (
+      session.agentic_tool_preset_id &&
+      data.permissionMode !== undefined &&
+      data.permissionMode !== session.permission_config?.mode
+    ) {
+      throw new Error('Preset-backed sessions cannot override permission mode per task');
     }
 
     // Validate stateless_fs_mode compatibility with agentic tool
@@ -777,12 +790,13 @@ function createExecuteHandler(
     // Get branch path
     let cwd = process.cwd();
     if (session.branch_id) {
-      try {
-        const branch = await app.service('branches').get(session.branch_id, params);
-        cwd = branch.path;
-      } catch (error) {
-        console.warn(`Could not get branch path for ${session.branch_id}:`, error);
-      }
+      const branchPath = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+        const branch = await new BranchRepository(tenantDb).findById(session.branch_id);
+        return branch?.path;
+      });
+      if (!branchPath)
+        throw new Error(`Branch ${session.branch_id} not found for executor startup`);
+      cwd = branchPath;
     }
 
     // Determine Unix user for executor
@@ -826,16 +840,15 @@ function createExecuteHandler(
     const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
 
     // Resolve gateway-level env vars
-    let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
     const gatewaySource = (session.custom_context as Record<string, unknown> | undefined)
       ?.gateway_source as { channel_id?: string } | undefined;
-    if (gatewaySource?.channel_id) {
-      try {
-        const { GatewayChannelRepository, decryptApiKey, isEncrypted } = await import(
-          '@agor/core/db'
+    const executorEnv = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      let gatewayEnv: import('@agor/core/types').GatewayEnvVar[] | undefined;
+      if (gatewaySource?.channel_id) {
+        const { decryptApiKey, isEncrypted } = await import('@agor/core/db');
+        const channel = await new GatewayChannelRepository(tenantDb).findById(
+          gatewaySource.channel_id
         );
-        const channelRepo = new GatewayChannelRepository(db);
-        const channel = await channelRepo.findById(gatewaySource.channel_id);
         if (channel?.agentic_config?.envVars) {
           gatewayEnv = channel.agentic_config.envVars.map((v) => ({
             ...v,
@@ -863,22 +876,19 @@ function createExecuteHandler(
             if (defaults.length > 0) gatewayEnv = [...(gatewayEnv ?? []), ...defaults];
           }
         }
-      } catch {
-        // Non-fatal
       }
-    }
 
-    // SDK spawn: scope per-tool credentials to the session's agentic_tool, so
-    // an Anthropic key on the user never leaks into a Codex/Gemini executor.
-    const executorEnv = await createUserProcessEnvironment(
-      userId,
-      db,
-      undefined,
-      !!executorUnixUser,
-      gatewayEnv,
-      sessionId as SessionID,
-      session.agentic_tool
-    );
+      // Provider connections are resolved once by the executor through the
+      // task-scoped daemon API. Generic process environment never carries them.
+      return createUserProcessEnvironment(
+        userId,
+        tenantDb,
+        undefined,
+        !!executorUnixUser,
+        gatewayEnv,
+        sessionId as SessionID
+      );
+    });
 
     // Validate required user environment variables
     const requiredUserEnvVars = config.execution?.required_user_env_vars;
@@ -895,14 +905,16 @@ function createExecuteHandler(
           '',
           'This is a one-time setup — once configured, this message will not appear again.',
         ].join('\n');
-        await appendSystemMessage({
-          app,
-          db,
-          sessionId,
-          taskId: data.taskId,
-          content: errorContent,
-          contentPreview: `Missing required env vars: ${missingVars.join(', ')}`,
-        });
+        await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+          appendSystemMessage({
+            app,
+            db,
+            sessionId,
+            taskId: data.taskId,
+            content: errorContent,
+            contentPreview: `Missing required env vars: ${missingVars.join(', ')}`,
+          })
+        );
         throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
       }
     }

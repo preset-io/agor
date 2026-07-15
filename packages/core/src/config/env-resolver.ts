@@ -87,29 +87,6 @@ export const ALLOWED_ENV_VARS = new Set([
   'GIT_COMMITTER_EMAIL',
   'GIT_SSH_COMMAND',
 
-  // Anthropic / AI SDK — Edited by Claude
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_AUTH_TOKEN',
-  'OPENAI_API_KEY',
-  'OPENAI_BASE_URL',
-  'GEMINI_API_KEY',
-  'GOOGLE_API_KEY',
-  'CURSOR_API_KEY',
-
-  // Vertex AI (Claude Code on GCP)
-  'CLAUDE_CODE_USE_VERTEX',
-  'ANTHROPIC_VERTEX_PROJECT_ID',
-  'ANTHROPIC_VERTEX_REGION',
-  'GOOGLE_CLOUD_PROJECT',
-  'GOOGLE_APPLICATION_CREDENTIALS',
-  'CLOUD_ML_REGION',
-  'CLOUD_ML_PROJECT_ID',
-
-  // Bedrock (Claude Code on AWS)
-  'CLAUDE_CODE_USE_BEDROCK',
-  'ANTHROPIC_BEDROCK_BASE_URL',
-
   // Agor session context (safe for executor/sessions)
   'DAEMON_URL',
 ]);
@@ -121,8 +98,6 @@ export const ALLOWED_ENV_VARS = new Set([
 export const ALLOWED_ENV_PREFIXES = [
   'LC_', // Locale settings (LC_ALL, LC_CTYPE, etc.)
   'XDG_', // Freedesktop directories (XDG_DATA_HOME, XDG_CONFIG_HOME, etc.)
-  'CLAUDE_CODE_', // All Claude Code config vars (use_vertex, use_bedrock, etc.)
-  'ANTHROPIC_', // All Anthropic SDK vars (catches future additions)
 ];
 
 /**
@@ -176,8 +151,8 @@ export interface ResolveUserEnvOptions {
  *
  * Precedence (later wins): tool credentials > user env vars. This matches the
  * UX intent: per-tool config screens are the explicit, "this is the credential
- * I want for this SDK" surface; global env vars are the fallback. The caller
- * (`createUserProcessEnvironment`) layers config.yaml/system env underneath.
+ * I want for this SDK" surface; generic user environment variables have lower
+ * precedence. Tenant connections resolve separately at the task boundary.
  *
  * Scope filtering on env_vars (v0.5):
  *   - `scope: 'global'` → always included

@@ -9,15 +9,11 @@ import chalk from 'chalk';
 export default class ConfigUnset extends Command {
   static description = 'Unset (clear) a configuration value';
 
-  static examples = [
-    '<%= config.bin %> <%= command.id %> defaults.board',
-    '<%= config.bin %> <%= command.id %> defaults.agent',
-    '<%= config.bin %> <%= command.id %> credentials.ANTHROPIC_API_KEY',
-  ];
+  static examples = ['<%= config.bin %> <%= command.id %> daemon.port'];
 
   static args = {
     key: Args.string({
-      description: 'Configuration key in format: section.key (e.g., defaults.board)',
+      description: 'Configuration key in format: section.key (e.g., daemon.port)',
       required: true,
     }),
   };

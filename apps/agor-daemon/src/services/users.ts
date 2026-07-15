@@ -7,10 +7,12 @@
 
 import { generateId } from '@agor/core';
 import {
+  assertInlineAgenticConfigurationAllowed,
   assertV05Scope,
   getEnvVarBlockReason,
   isEnvVarAllowed,
   normalizeStoredEnvMap,
+  resolveAgenticToolPreset,
   resolveUserEnvironment,
   type StoredEnvVar,
   validateEnvVar,
@@ -241,6 +243,7 @@ interface UpdateUserData {
    * Field names are env var names exported into the SDK CLI environment.
    */
   agentic_tools?: AgenticToolsUpdate;
+  agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
   // Environment variables for update (accepts plaintext, encrypted before storage)
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
   // Per-var scope updates (v0.5: 'global' | 'session'). Applied after env_vars
@@ -248,6 +251,8 @@ interface UpdateUserData {
   env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configurations
   default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
+  default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
+  default_mcp_server_ids?: string[];
 }
 
 /**
@@ -452,6 +457,17 @@ export class UsersService {
       updates.onboarding_completed = data.onboarding_completed;
 
     // Update data blob
+    if (data.default_agentic_selection) {
+      for (const [tool, selection] of Object.entries(data.default_agentic_selection)) {
+        if (!selection) continue;
+        if (selection.source === 'preset') {
+          await resolveAgenticToolPreset(this.db, tool as AgenticToolName, selection.preset_id);
+        } else if (selection.source === 'inline') {
+          await assertInlineAgenticConfigurationAllowed(this.db, tool as AgenticToolName);
+        }
+      }
+    }
+
     if (
       data.avatar_url !== undefined ||
       data.avatar !== undefined ||
@@ -460,9 +476,12 @@ export class UsersService {
       data.avatar_synced_at !== undefined ||
       data.preferences ||
       data.agentic_tools ||
+      data.agentic_auth_methods ||
       data.env_vars ||
       data.env_var_scopes ||
-      data.default_agentic_config
+      data.default_agentic_config ||
+      data.default_agentic_selection ||
+      data.default_mcp_server_ids !== undefined
     ) {
       const current = await this.get(id, params);
       const currentRow = await select(this.db)
@@ -477,8 +496,11 @@ export class UsersService {
         avatar_synced_at?: string;
         preferences?: Record<string, unknown>;
         agentic_tools?: StoredAgenticTools;
+        agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
         env_vars?: Record<string, string | StoredEnvVar>;
         default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
+        default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
+        default_mcp_server_ids?: string[];
       };
 
       // Handle per-tool credential patches (encrypt-on-write, drop-on-null).
@@ -603,8 +625,15 @@ export class UsersService {
             : (data.avatar_synced_at ?? current.avatar_synced_at),
         preferences: data.preferences ?? current.preferences,
         agentic_tools: Object.keys(nextAgenticTools).length > 0 ? nextAgenticTools : undefined,
+        agentic_auth_methods:
+          data.agentic_auth_methods !== undefined
+            ? { ...current.agentic_auth_methods, ...data.agentic_auth_methods }
+            : current.agentic_auth_methods,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
         default_agentic_config: data.default_agentic_config ?? current.default_agentic_config,
+        default_agentic_selection:
+          data.default_agentic_selection ?? current.default_agentic_selection,
+        default_mcp_server_ids: data.default_mcp_server_ids ?? current.default_mcp_server_ids,
       };
     }
 
@@ -821,8 +850,11 @@ export class UsersService {
       avatar_synced_at?: string;
       preferences?: Record<string, unknown>;
       agentic_tools?: StoredAgenticTools; // Encrypted per-tool credential blobs
+      agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
       default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
+      default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
+      default_mcp_server_ids?: string[];
     };
 
     const normalizedEnvVars = normalizeStoredEnvMap(data.env_vars);
@@ -855,6 +887,7 @@ export class UsersService {
       updated_at: row.updated_at ?? undefined,
       // Per-tool credential presence (boolean only — never expose decrypted values).
       agentic_tools: toAgenticToolsStatus(data.agentic_tools),
+      agentic_auth_methods: data.agentic_auth_methods,
       // Self-only: return plaintext for whitelisted non-secret fields
       // (base URLs) so the UI can render the saved value back. Field-level
       // secrets are NEVER on the whitelist; see `AGENTIC_TOOLS_PUBLIC_FIELDS`.
@@ -866,6 +899,8 @@ export class UsersService {
       env_vars: envVarMetadata,
       // Return default agentic config
       default_agentic_config: data.default_agentic_config,
+      default_agentic_selection: data.default_agentic_selection,
+      default_mcp_server_ids: data.default_mcp_server_ids,
     };
 
     if (includeAuthMetadata && row.tokens_valid_after) {

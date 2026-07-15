@@ -28,7 +28,7 @@ import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
 } from '../../utils/reactFlowDragClasses';
-import { ensureColorVisible } from '../../utils/theme';
+import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
 
 const DESCRIPTION_MAX_CHARS = 100;
 const CARD_WIDTH = 380;
@@ -51,7 +51,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
   const emoji = card.effective_emoji;
 
   // Match BranchCard pattern: ensure pin icon color is visible
-  const isDarkMode = token.colorBgContainer !== '#ffffff';
+  const isDarkMode = isDarkTheme(token);
   const visiblePinColor = useMemo(() => {
     if (!zoneColor) return undefined;
     return ensureColorVisible(zoneColor, isDarkMode, 50, 50);

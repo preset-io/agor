@@ -19,6 +19,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { textResult } from '../server.js';
+import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
 
 /**
  * Standard MCP-server payload returned by the MCP tools. Shared by the catalog
@@ -54,9 +55,10 @@ async function getOAuthStatus(
   // Both shared and per_user live in `user_mcp_oauth_tokens` — shared rows use
   // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres).
   const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
-  const userTokenRepo = new UserMCPOAuthTokenRepository(ctx.db);
   const lookupUserId = oauthMode === 'shared' ? null : ctx.userId;
-  const tokenData = await userTokenRepo.getToken(lookupUserId, mcpServer.mcp_server_id);
+  const tokenData = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+    new UserMCPOAuthTokenRepository(db).getToken(lookupUserId, mcpServer.mcp_server_id)
+  );
   if (tokenData) {
     if (!tokenData.oauth_token_expires_at || tokenData.oauth_token_expires_at > new Date()) {
       return {

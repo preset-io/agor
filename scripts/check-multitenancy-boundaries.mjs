@@ -37,20 +37,15 @@ const checks = [
     // Baseline of existing call sites. New occurrences should go through the
     // tenant-aware realtime facade instead of adding more raw emits/rooms.
     baseline: {
-      // Lowered after consolidating teammate board custom-method emits behind a single local helper.
-      'apps/agor-daemon/src/register-hooks.ts': 10,
-      'apps/agor-daemon/src/register-services.ts': 12,
-      'apps/agor-daemon/src/register-routes.ts': 19,
+      'apps/agor-daemon/src/register-hooks.ts': 1,
+      'apps/agor-daemon/src/register-services.ts': 11,
+      'apps/agor-daemon/src/register-routes.ts': 12,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
-      'apps/agor-daemon/src/services/artifacts.ts': 9,
-      'apps/agor-daemon/src/services/branches.ts': 3,
+      'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,
       'apps/agor-daemon/src/services/repos.ts': 1,
-      'apps/agor-daemon/src/services/claude-cli-integration.ts': 3,
-      'apps/agor-daemon/src/mcp/tools/artifacts.ts': 1,
-      'apps/agor-daemon/src/mcp/tools/boards.ts': 2,
-      'apps/agor-daemon/src/mcp/tools/cards.ts': 8,
+      'apps/agor-daemon/src/services/claude-cli-integration.ts': 2,
       // The tenant-aware realtime facade: tenant/session channel join, the
       // publish handler, session-stream join, the existence-gated room lookup
       // (existingChannel — used by publish + leave paths so they never
@@ -61,8 +56,35 @@ const checks = [
   },
 
   {
+    name: 'raw CRUD service emits',
+    roots: ['apps/agor-daemon/src'],
+    excludeTests: true,
+    patterns: [
+      /\.service\([^\n]+\)(?:\.|\?\.)emit(?:\?\.)?\s*\(\s*['"](?:created|patched|updated|removed)['"]/g,
+      /\bthis\.emit\?\.\(\s*['"](?:created|patched|updated|removed)['"]/gs,
+    ],
+    // Manual CRUD events must use emitServiceEvent() so realtime publishing
+    // receives the service path, original params, and tenant-aware context.
+    // Service-local CRUD emits predate emitServiceEvent(). Keep them explicit
+    // so new call sites cannot silently expand this legacy surface.
+    baseline: {},
+  },
+
+  {
+    name: 'unscoped MCP database access',
+    roots: ['apps/agor-daemon/src/mcp/tools'],
+    excludeTests: true,
+    patterns: [/\bctx\.db\b/g],
+    // MCP handlers carry tenant identity only. Database work must go through
+    // runWithMcpTenantDatabaseScope(), which opens a short RLS transaction and
+    // supplies the guarded DB proxy to the callback.
+    baseline: {},
+  },
+
+  {
     name: 'raw tenant database scope imports',
     roots: ['apps/agor-daemon/src'],
+    excludeTests: true,
     patterns: [/import\s*{[^}]*\btenantDatabaseScope\b[^}]*}\s*from\s*['"]@agor\/core\/db['"]/gs],
     baseline: {},
   },
@@ -82,7 +104,9 @@ const checks = [
       // Test-only async flush helpers / event loop flushes.
       'apps/agor-daemon/src/services/branches.test.ts': 1,
       'apps/agor-daemon/src/utils/tenant-db-scope.test.ts': 1,
-      'apps/agor-daemon/src/utils/tenant-db-scope.ts': 1,
+      // The two tenant-aware deferral helpers deliberately leave the current
+      // ALS store before scheduling and then re-enter identity or DB scope.
+      'apps/agor-daemon/src/utils/tenant-db-scope.ts': 2,
     },
   },
   {
@@ -123,7 +147,6 @@ const checks = [
       'packages/core/src/db/repositories/sessions.ts': 2,
       'packages/core/src/db/repositories/schedules.ts': 1,
       'packages/core/src/seed/demo-fixtures.ts': 1,
-      'apps/agor-daemon/src/services/scheduler.ts': 1,
     },
   },
 ];

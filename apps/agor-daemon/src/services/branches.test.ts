@@ -542,6 +542,169 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
+  // The health monitor probes every running env every 5s. updateEnvironment
+  // persists each observation timestamp, but broadcasts ONLY when a
+  // health-relevant field actually changes. Otherwise every client rebuilds
+  // its branch map and re-runs branch-derived subscriptions per probe.
+  describe('health-probe change gate', () => {
+    function createGateHarness(initialEnv: Record<string, unknown>) {
+      const { service, branchesService } = createServiceHarness();
+      let currentEnv = initialEnv;
+      const branch = {
+        branch_id: 'wt-gate' as BranchID,
+        repo_id: 'repo-1',
+        name: 'wt-gate',
+        path: '/tmp/wt-gate',
+        created_by: 'user-1' as UUID,
+        branch_unique_id: 1,
+      };
+      vi.spyOn(service, 'get').mockImplementation(
+        async () => ({ ...branch, environment_instance: currentEnv }) as never
+      );
+      const observationUpdateSpy = vi
+        .spyOn(
+          (
+            service as unknown as {
+              branchRepo: {
+                update: BranchRepository['update'];
+              };
+            }
+          ).branchRepo,
+          'update'
+        )
+        .mockImplementation(async (_id, data) => {
+          currentEnv = data.environment_instance as Record<string, unknown>;
+          return { ...branch, environment_instance: currentEnv } as never;
+        });
+      const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+        const next = { ...branch, ...(data as object) };
+        currentEnv = (next as { environment_instance: Record<string, unknown> })
+          .environment_instance;
+        return next as never;
+      });
+      return { service, branch, patchSpy, observationUpdateSpy, emit: branchesService.emit };
+    }
+
+    const healthyEnv = () => ({
+      status: 'running',
+      process: { pid: 123 },
+      last_health_check: {
+        timestamp: '2026-01-01T00:00:00.000Z',
+        status: 'healthy',
+        message: 'HTTP 200',
+      },
+      access_urls: [{ name: 'App', url: 'http://localhost:5173' }],
+    });
+
+    it('persists but does not emit when the re-probe only advances the timestamp', async () => {
+      const { service, branch, patchSpy, observationUpdateSpy, emit } = createGateHarness(
+        healthyEnv()
+      );
+
+      await service.updateEnvironment(branch.branch_id, {
+        status: 'running',
+        last_health_check: {
+          timestamp: '2026-01-01T00:00:05.000Z',
+          status: 'healthy',
+          message: 'HTTP 200',
+        },
+      });
+
+      expect(patchSpy).not.toHaveBeenCalled();
+      expect(observationUpdateSpy).toHaveBeenCalledWith(
+        branch.branch_id,
+        {
+          environment_instance: expect.objectContaining({
+            last_health_check: expect.objectContaining({
+              timestamp: '2026-01-01T00:00:05.000Z',
+            }),
+          }),
+        },
+        { preserveUpdatedAt: true }
+      );
+      expect(emit).not.toHaveBeenCalled();
+    });
+
+    it('does not broadcast timestamp bookkeeping', async () => {
+      const { service, branch, patchSpy, observationUpdateSpy, emit } = createGateHarness(
+        healthyEnv()
+      );
+
+      // Same status + health status + message; only the bookkeeping timestamp
+      // moved. A timestamp must never defeat the change gate.
+      await service.updateEnvironment(branch.branch_id, {
+        last_health_check: {
+          timestamp: '2026-06-30T12:00:00.000Z',
+          status: 'healthy',
+          message: 'HTTP 200',
+        },
+      });
+
+      expect(patchSpy).not.toHaveBeenCalled();
+      expect(observationUpdateSpy).toHaveBeenCalledTimes(1);
+      expect(emit).not.toHaveBeenCalled();
+    });
+
+    it('does not treat JSONB object key reordering as a health transition', async () => {
+      const initialEnv = healthyEnv();
+      initialEnv.last_health_check = {
+        message: 'HTTP 200',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        status: 'healthy',
+      };
+      const { service, branch, patchSpy, observationUpdateSpy, emit } =
+        createGateHarness(initialEnv);
+
+      await service.updateEnvironment(branch.branch_id, {
+        status: 'running',
+        last_health_check: {
+          timestamp: '2026-01-01T00:00:05.000Z',
+          status: 'healthy',
+          message: 'HTTP 200',
+        },
+      });
+
+      expect(patchSpy).not.toHaveBeenCalled();
+      expect(observationUpdateSpy).toHaveBeenCalledTimes(1);
+      expect(emit).not.toHaveBeenCalled();
+    });
+
+    it('does not write or emit an exactly identical observation', async () => {
+      const { service, branch, patchSpy, observationUpdateSpy, emit } = createGateHarness(
+        healthyEnv()
+      );
+
+      await service.updateEnvironment(branch.branch_id, {
+        status: 'running',
+        last_health_check: {
+          timestamp: '2026-01-01T00:00:00.000Z',
+          status: 'healthy',
+          message: 'HTTP 200',
+        },
+      });
+
+      expect(patchSpy).not.toHaveBeenCalled();
+      expect(observationUpdateSpy).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalled();
+    });
+
+    it('patches and emits exactly once when the health status flips', async () => {
+      const { service, branch, patchSpy, emit } = createGateHarness(healthyEnv());
+
+      await service.updateEnvironment(branch.branch_id, {
+        last_health_check: {
+          timestamp: '2026-01-01T00:00:05.000Z',
+          status: 'unhealthy',
+          message: 'HTTP 503 Service Unavailable',
+        },
+      });
+
+      expect(patchSpy).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit.mock.calls[0][0]).toBe('patched');
+    });
+  });
+
   it('accepts branch-scoped RPC envelope for updateEnvironment', async () => {
     const { service } = createServiceHarness();
     const branch = {
@@ -708,11 +871,13 @@ describe('BranchesService.patch primary teammate invariants', () => {
     expect(boardRepo.setPrimaryTeammateIfUnset).toHaveBeenCalledWith(boardB, branchId);
     expect(boardsService.emit).toHaveBeenCalledWith(
       'patched',
-      expect.objectContaining({ board_id: boardA })
+      expect.objectContaining({ board_id: boardA }),
+      expect.objectContaining({ path: 'boards', method: 'patch', id: boardA })
     );
     expect(boardsService.emit).toHaveBeenCalledWith(
       'patched',
-      expect.objectContaining({ board_id: boardB })
+      expect.objectContaining({ board_id: boardB }),
+      expect.objectContaining({ path: 'boards', method: 'patch', id: boardB })
     );
     expect(boardObjectsService.create).toHaveBeenCalledWith({
       board_id: boardB,
@@ -860,7 +1025,8 @@ describe('BranchesService one-shot teammate creation wiring', () => {
     expect(boardRepo.setPrimaryTeammateIfUnset).toHaveBeenCalledWith('board-a', 'teammate-new');
     expect(boardsEmit).toHaveBeenCalledWith(
       'patched',
-      expect.objectContaining({ board_id: 'board-a' })
+      expect.objectContaining({ board_id: 'board-a' }),
+      expect.objectContaining({ path: 'boards', method: 'patch', id: 'board-a' })
     );
   });
 
@@ -999,8 +1165,9 @@ describe('BranchesService.unarchive', () => {
 });
 
 describe('BranchesService.archiveOrDelete', () => {
-  it('preserves a zoned board object when archiving through the archive operation', async () => {
-    const { service, boardObjectsService, sessionsService } = createServiceHarness();
+  it('preserves placement and manually emits the tenant-aware archive transition', async () => {
+    const { service, boardObjectsService, sessionsService, branchesService } =
+      createServiceHarness();
     const branchId = 'wt-archive-op' as BranchID;
     const userId = 'user-1' as UUID;
 
@@ -1028,7 +1195,10 @@ describe('BranchesService.archiveOrDelete', () => {
     await service.archiveOrDelete(
       branchId,
       { metadataAction: 'archive', filesystemAction: 'preserved' },
-      { user: { user_id: userId } } as never
+      {
+        user: { user_id: userId },
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      } as never
     );
 
     expect(sessionsService.find).toHaveBeenCalledWith({
@@ -1037,6 +1207,20 @@ describe('BranchesService.archiveOrDelete', () => {
     });
     expect(boardObjectsService.findByBranchId).not.toHaveBeenCalled();
     expect(boardObjectsService.patch).not.toHaveBeenCalled();
+    expect(branchesService.emit).toHaveBeenCalledTimes(1);
+    expect(branchesService.emit).toHaveBeenCalledWith(
+      'patched',
+      expect.objectContaining({ branch_id: branchId, archived: true }),
+      expect.objectContaining({
+        path: 'branches',
+        method: 'patch',
+        event: 'patched',
+        id: branchId,
+        params: expect.objectContaining({
+          tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        }),
+      })
+    );
   });
 });
 

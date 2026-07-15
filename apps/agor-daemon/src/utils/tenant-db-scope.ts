@@ -5,9 +5,11 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
+  enqueueAfterTenantDatabaseCommit,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   runWithoutTenantDatabaseScope,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -20,6 +22,8 @@ interface TenantDatabaseScopeOptions {
   db: TenantScopeAwareDatabase;
   config: AgorConfig;
   jwtSecret: string;
+  /** Identity-only boundary for long custom operations with explicit DB units. */
+  transaction?: boolean;
 }
 
 function readHeaderValue(
@@ -92,6 +96,29 @@ export function deferWithTenantDatabaseScope(
   schedule();
 }
 
+/** Defer long orchestration work after commit with tenant identity only. */
+export function deferWithTenantContext(
+  params: unknown,
+  work: () => Promise<void>,
+  onError?: (error: unknown) => void
+): void {
+  const tenantId = resolveTenantIdForDeferredScope(params);
+  if (!tenantId) {
+    onError?.(new Error('Missing tenant context for deferred work'));
+    return;
+  }
+  const schedule = () => {
+    runWithoutTenantDatabaseScope(() => {
+      setImmediate(() => {
+        void runWithTenantContext(tenantId, work).catch((error) =>
+          onError ? onError(error) : console.error('[tenant-context] Deferred work failed:', error)
+        );
+      });
+    });
+  };
+  if (!enqueueAfterTenantDatabaseCommit(schedule)) schedule();
+}
+
 export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScopeOptions) {
   const multiTenancy = resolveMultiTenancyConfig(options.config);
 
@@ -152,6 +179,15 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
       throw error;
     }
 
-    await runWithTenantDatabaseScope(options.db, context.params.tenant?.tenant_id, next);
+    const tenantId = context.params.tenant?.tenant_id;
+    if (!tenantId) {
+      await runWithTenantDatabaseScope(options.db, tenantId, next);
+      return;
+    }
+    await runWithTenantContext(tenantId, () =>
+      options.transaction === false
+        ? next()
+        : runWithTenantDatabaseScope(options.db, tenantId, next)
+    );
   };
 }

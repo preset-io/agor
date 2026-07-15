@@ -41,12 +41,14 @@ export type TimezoneMode = 'local' | 'utc';
 export interface ScheduleAgenticToolConfig {
   /** Agent to spawn for this schedule's runs. */
   agentic_tool: AgenticToolName;
+  /** Live preset reference. Remaining runtime fields are ignored when present. */
+  preset_id?: import('./agentic-tool-preset').AgenticToolPresetID;
 
   /** Permission mode for spawned sessions (e.g., 'auto', 'ask', 'default'). */
   permission_mode?: PermissionMode;
 
   /**
-   * Model configuration for spawned sessions.
+   * Inline model configuration for spawned sessions. Ignored when preset_id is set.
    *
    * Reuses the canonical {@link DefaultModelConfig} shape so the UI form
    * helpers (`getFormValuesFromConfig` / `buildConfigFromFormValues`)
@@ -55,9 +57,6 @@ export interface ScheduleAgenticToolConfig {
    * inherit the agent's defaults.
    */
   model_config?: DefaultModelConfig;
-
-  /** MCP servers to attach to spawned sessions. Defaults to ['agor']. */
-  mcp_server_ids?: string[];
 
   /** Additional context files to load into the spawned session. */
   context_files?: string[];
@@ -145,10 +144,13 @@ export interface Schedule {
   prompt: string;
 
   /**
-   * Agentic-tool config snapshot (agent, permission mode, model, MCPs,
-   * context files). See `ScheduleAgenticToolConfig`.
+   * Agentic-tool configuration selection. Preset references resolve live for each run.
+   * See `ScheduleAgenticToolConfig`.
    */
   agentic_tool_config: ScheduleAgenticToolConfig;
+
+  /** MCP servers attached independently of the agentic-tool configuration. */
+  mcp_server_ids?: string[];
 
   // ===== Flags =====
 

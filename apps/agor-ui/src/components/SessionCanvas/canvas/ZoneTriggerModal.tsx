@@ -30,6 +30,10 @@ import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 // the page doesn't need CSP `script-src 'unsafe-eval'`.
 import { renderTemplate } from '../../../utils/templates';
 import { AgenticToolConfigForm } from '../../AgenticToolConfigForm';
+import {
+  AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
+} from '../../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
 import type { ModelConfig } from '../../ModelSelector';
 
@@ -54,6 +58,7 @@ interface ZoneTriggerModalProps {
     renderedTemplate: string;
     // New session config (only when sessionId === 'new')
     agent?: string;
+    agenticToolPresetId?: string;
     modelConfig?: ModelConfig;
     permissionMode?: PermissionMode;
     mcpServerIds?: string[];
@@ -100,6 +105,7 @@ export const ZoneTriggerModal = ({
 
   // Explicit state for session config (survives form mount/unmount cycles)
   const [sessionConfig, setSessionConfig] = useState<{
+    agenticToolPresetId?: string;
     modelConfig?: ModelConfig;
     permissionMode?: PermissionMode;
     mcpServerIds?: string[];
@@ -171,7 +177,7 @@ export const ZoneTriggerModal = ({
       const effectiveMcpServerIds =
         branch?.mcp_server_ids && branch.mcp_server_ids.length > 0
           ? branch.mcp_server_ids
-          : agentDefaults?.mcpServerIds || [];
+          : currentUser?.default_mcp_server_ids || [];
 
       // Calculate config values (priority: most recent session > user defaults)
       const configValues = {
@@ -179,7 +185,7 @@ export const ZoneTriggerModal = ({
         modelConfig:
           mostRecentSession?.model_config ||
           (agentDefaults?.modelConfig as ModelConfig | undefined),
-        mcpServerIds: effectiveMcpServerIds,
+        mcpServerIds: form.getFieldValue('mcpServerIds') ?? effectiveMcpServerIds,
       };
 
       // Store in both form (for UI) AND component state (for execution)
@@ -266,6 +272,10 @@ export const ZoneTriggerModal = ({
         action: 'prompt',
         renderedTemplate: editableTemplate,
         agent: selectedAgent,
+        agenticToolPresetId:
+          sessionConfig.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
+            ? undefined
+            : sessionConfig.agenticToolPresetId,
         modelConfig: sessionConfig.modelConfig,
         permissionMode: sessionConfig.permissionMode,
         mcpServerIds: sessionConfig.mcpServerIds,
@@ -428,15 +438,21 @@ export const ZoneTriggerModal = ({
                         showIcon
                       />
                     )}
-                    <AgenticToolConfigForm
-                      agenticTool={
-                        (mode === 'create_new'
-                          ? (selectedAgent as AgenticToolName)
-                          : (selectedSession?.agentic_tool as AgenticToolName)) || 'claude-code'
-                      }
-                      mcpServerById={mcpServerById}
-                      showHelpText={true}
-                    />
+                    {mode === 'create_new' ? (
+                      <AgenticToolConfigurationPicker
+                        tool={(selectedAgent as AgenticToolName) || 'claude-code'}
+                        mcpServerById={mcpServerById}
+                        showHelpText={true}
+                        client={client}
+                      />
+                    ) : (
+                      <AgenticToolConfigForm
+                        agenticTool={
+                          (selectedSession?.agentic_tool as AgenticToolName) || 'claude-code'
+                        }
+                        showHelpText={true}
+                      />
+                    )}
                   </Space>
                 ),
               },

@@ -1,0 +1,11 @@
+engine biome(1.0)
+language js(typescript, jsx)
+
+// JSX color attributes are not object properties, so cover short hex here.
+// Longer hex and color functions are already caught by the general literal
+// rule. Named values remain allowed because AntD component APIs intentionally
+// accept preset names such as `<Tag color="blue">`.
+JsxAttribute() as $attribute where {
+  $attribute <: r"(?i)^(?:color|fill|stroke|stopColor|floodColor|background|backgroundColor)=[{]?[\"']#[0-9a-f]{3}[\"'][}]?$",
+  register_diagnostic(span=$attribute, message="Use an Ant Design component or theme token instead of a hard-coded JSX color attribute. Exact-color assets require a documented plugin suppression.", severity="error")
+}

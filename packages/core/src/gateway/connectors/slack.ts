@@ -14,7 +14,9 @@
  *     enable_mpim?: boolean,                        // Listen in group DMs
  *     require_mention?: boolean,                    // Legacy; Slack channel-like prompts now always require @mention
  *     allow_thread_replies_without_mention?: boolean, // Legacy; ignored for Slack channel-like prompts
- *     allowed_channel_ids?: string[]                // Channel ID whitelist
+ *     allowed_channel_ids?: string[],               // Channel ID whitelist
+ *     ingest_files?: boolean,                       // Forward message attachments (requires files:read)
+ *     agent_tools?: SlackAgentToolsConfig           // Agent-callable MCP tool toggles (gated in the daemon tool layer)
  *   }
  *
  * Thread ID format: "{channel_id}-{thread_ts}"
@@ -26,8 +28,14 @@ import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slac
 import { WebClient } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
 
-import type { ChannelType, SlackTestFailure, SlackTestResult } from '../../types/gateway';
-import type { GatewayConnector, InboundMessage, OutboundPayload } from '../connector';
+import type {
+  ChannelType,
+  SlackAgentToolsConfig,
+  SlackAppInfo,
+  SlackTestFailure,
+  SlackTestResult,
+} from '../../types/gateway';
+import type { GatewayConnector, InboundFile, InboundMessage, OutboundPayload } from '../connector';
 
 // Block Kit table block limits (Slack docs, native block introduced Aug 2025).
 const TABLE_MAX_ROWS = 100;
@@ -82,6 +90,12 @@ interface SlackConfig {
 
   // User alignment: resolve Slack user email → Agor user
   align_slack_users?: boolean;
+
+  // Ingest files attached to inbound messages (requires files:read scope)
+  ingest_files?: boolean;
+
+  // Agent-callable MCP tool toggles (gated in the daemon tool layer)
+  agent_tools?: SlackAgentToolsConfig;
 }
 
 export interface SlackUserAvatarProfile {
@@ -89,6 +103,31 @@ export interface SlackUserAvatarProfile {
   email: string | null;
   displayName: string | null;
   avatarUrl: string | null;
+}
+
+/**
+ * Agent-facing metadata for a file attached to a Slack history message.
+ * Deliberately excludes `url_private_download` (and every other Slack file
+ * URL): agents reference a file by `id` and fetch it on demand through the
+ * capability-gated download tool, so bot-token-authenticated URLs never
+ * appear in agent-visible output.
+ */
+export interface SlackHistoryFile {
+  id: string;
+  name: string;
+  mimetype: string;
+  size: number;
+}
+
+/**
+ * Result of {@link SlackConnector.getFileInfo}. Server-side only: `file`
+ * carries the bot-token-authenticated download URL, and
+ * `sourceConversationIds` (the conversations the file is shared into) exists
+ * solely for the gateway's whitelist check — neither may reach agent output.
+ */
+export interface SlackFileInfo {
+  file: InboundFile;
+  sourceConversationIds: string[];
 }
 
 export interface SlackThreadHistoryMessage {
@@ -101,6 +140,7 @@ export interface SlackThreadHistoryMessage {
   is_bot: boolean;
   is_trigger: boolean;
   is_mention: boolean;
+  files?: SlackHistoryFile[];
 }
 
 export interface SlackThreadHistoryRequest {
@@ -117,6 +157,21 @@ export interface SlackThreadHistoryResult {
   threadId: string;
   channel: string;
   thread_ts: string;
+  messages: SlackThreadHistoryMessage[];
+  has_more?: boolean;
+}
+
+export interface SlackChannelHistoryRequest {
+  channelId: string;
+  oldestTs?: string;
+  latestTs?: string;
+  inclusive?: boolean;
+  limit?: number;
+  includeBotMessages?: boolean;
+}
+
+export interface SlackChannelHistoryResult {
+  channel: string;
   messages: SlackThreadHistoryMessage[];
   has_more?: boolean;
 }
@@ -635,6 +690,37 @@ const SLACK_NOT_VERIFIABLE = [
  * direct messages the moment any whitelist is configured. The whitelist only
  * governs channel-like surfaces (`channel`/`group`/`mpim`).
  */
+/**
+ * Normalize a Slack event's `files` array into provider-neutral
+ * {@link InboundFile} entries, dropping malformed items. Slack file objects
+ * carry many more fields; only the ones the gateway needs survive — notably
+ * `url_private_download`, which requires the bot token to fetch.
+ */
+export function extractSlackInboundFiles(raw: unknown): InboundFile[] {
+  if (!Array.isArray(raw)) return [];
+  const files: InboundFile[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) continue;
+    const candidate = item as Record<string, unknown>;
+    if (
+      typeof candidate.id === 'string' &&
+      typeof candidate.name === 'string' &&
+      typeof candidate.mimetype === 'string' &&
+      typeof candidate.size === 'number' &&
+      typeof candidate.url_private_download === 'string'
+    ) {
+      files.push({
+        id: candidate.id,
+        name: candidate.name,
+        mimetype: candidate.mimetype,
+        size: candidate.size,
+        url_private_download: candidate.url_private_download,
+      });
+    }
+  }
+  return files;
+}
+
 export function isChannelAllowedByWhitelist(
   channelType: string,
   channelId: string | undefined,
@@ -643,6 +729,63 @@ export function isChannelAllowedByWhitelist(
   if (channelType === 'im') return true;
   if (!allowedChannelIds || allowedChannelIds.length === 0) return true;
   return !!channelId && allowedChannelIds.includes(channelId);
+}
+
+/**
+ * Whether a Slack conversation ID is a direct message (IM).
+ *
+ * DM conversation IDs reliably start with "D" — unlike the "C" prefix (which
+ * is ambiguous between public and private channels, see the prefix-inference
+ * notes in {@link SlackConnector.startListening}), "D" is never used for a
+ * channel-like surface, so this is safe to use without an API round trip.
+ */
+export function isSlackDirectMessageId(channelId: string): boolean {
+  return channelId.startsWith('D');
+}
+
+/**
+ * Whether an agent-callable Slack WRITE tool (reactions, file upload) may
+ * target `channelId` given this gateway channel's `allowed_channel_ids`
+ * config.
+ *
+ * Mirrors the inbound listening whitelist ({@link isChannelAllowedByWhitelist}):
+ * `allowed_channel_ids` is a channel-like-surface concept, so DMs are always
+ * allowed regardless of the configured whitelist. These write tools default
+ * to the calling session's own conversation (via `gateway_source`), which is
+ * frequently a DM — applying the whitelist there would silently block the
+ * agent from reacting to/uploading into the very conversation that summoned
+ * it, the primary use case.
+ */
+export function isSlackWriteTargetAllowed(
+  config: Record<string, unknown>,
+  channelId: string
+): boolean {
+  const allowedChannelIds = normalizeAllowedChannelIds(config.allowed_channel_ids);
+  const channelType = isSlackDirectMessageId(channelId) ? 'im' : 'channel';
+  return isChannelAllowedByWhitelist(channelType, channelId, allowedChannelIds);
+}
+
+/**
+ * Whether a Slack file may be downloaded through this gateway channel, given
+ * the conversations the file is shared into and the channel's
+ * `allowed_channel_ids` config.
+ *
+ * `files.info` resolves ANY file the bot can see workspace-wide, so without
+ * this check a file id (from a permalink or prompt injection) would bypass the
+ * whitelist that bounds every other gateway tool. Policy mirrors
+ * {@link isSlackWriteTargetAllowed} per source conversation — DMs are always
+ * exempt, an empty/absent whitelist allows everything — and requires at least
+ * one source conversation to pass. A file with no visible source conversations
+ * is only allowed when no whitelist is configured, so the whitelist fails
+ * closed rather than open.
+ */
+export function isSlackFileSourceAllowed(
+  config: Record<string, unknown>,
+  sourceConversationIds: string[]
+): boolean {
+  const allowedChannelIds = normalizeAllowedChannelIds(config.allowed_channel_ids);
+  if (allowedChannelIds.length === 0) return true;
+  return sourceConversationIds.some((id) => isSlackWriteTargetAllowed(config, id));
 }
 
 export class SlackConnector implements GatewayConnector {
@@ -815,6 +958,29 @@ export class SlackConnector implements GatewayConnector {
       failures,
       notVerifiable,
     };
+  }
+
+  /**
+   * Resolve the Slack app behind the configured bot token: `auth.test` yields
+   * the bot id + team id, then `bots.info` (baseline `users:read` scope — no
+   * scope beyond what every gateway channel already holds) yields the app id.
+   *
+   * Best-effort: any failure returns nulls rather than throwing, so the UI can
+   * fall back to a generic Slack link. The result never carries token values.
+   */
+  async getAppInfo(): Promise<SlackAppInfo> {
+    let teamId: string | null = null;
+    try {
+      const authTest = await this.web.auth.test();
+      if (!authTest.ok) return { appId: null, teamId: null };
+      teamId = authTest.team_id ?? null;
+      if (!authTest.bot_id) return { appId: null, teamId };
+      const botsInfo = await this.web.bots.info({ bot: authTest.bot_id });
+      if (!botsInfo.ok) return { appId: null, teamId };
+      return { appId: botsInfo.bot?.app_id ?? null, teamId };
+    } catch {
+      return { appId: null, teamId };
+    }
   }
 
   /**
@@ -1295,6 +1461,99 @@ export class SlackConnector implements GatewayConnector {
     };
   }
 
+  /** Add an emoji reaction to a Slack message. */
+  async addReaction(req: { channel: string; timestamp: string; name: string }): Promise<void> {
+    const result = await this.web.reactions.add({
+      channel: req.channel,
+      timestamp: req.timestamp,
+      name: req.name,
+    });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+  }
+
+  /** Remove an emoji reaction from a Slack message. */
+  async removeReaction(req: { channel: string; timestamp: string; name: string }): Promise<void> {
+    const result = await this.web.reactions.remove({
+      channel: req.channel,
+      timestamp: req.timestamp,
+      name: req.name,
+    });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+  }
+
+  /**
+   * Upload a file to a Slack channel or thread via `files.uploadV2`.
+   *
+   * Cast to a minimal local shape because `@slack/web-api`'s `uploadV2`
+   * argument type is a discriminated union that doesn't narrow cleanly over
+   * a conditionally-spread object; the runtime response carries `files[0]`
+   * with the uploaded file's id/permalink/name.
+   */
+  async uploadFile(req: {
+    channel: string;
+    threadTs?: string;
+    file: Buffer;
+    filename: string;
+    comment?: string;
+  }): Promise<{ id: string; permalink: string | null; name: string }> {
+    const files = this.web.files as unknown as {
+      uploadV2: (args: Record<string, unknown>) => Promise<{
+        ok?: boolean;
+        error?: string;
+        files?: Array<{ id?: string; permalink?: string; name?: string }>;
+      }>;
+    };
+    const result = await files.uploadV2({
+      channel_id: req.channel,
+      file: req.file,
+      filename: req.filename,
+      ...(req.threadTs ? { thread_ts: req.threadTs } : {}),
+      ...(req.comment ? { initial_comment: req.comment } : {}),
+    });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+    const uploaded = result.files?.[0];
+    if (!uploaded?.id) {
+      throw new Error('Slack API error: upload response missing file id');
+    }
+    return {
+      id: uploaded.id,
+      permalink: uploaded.permalink ?? null,
+      name: uploaded.name ?? req.filename,
+    };
+  }
+
+  /**
+   * Fetch a Slack file's metadata (including its bot-token-authenticated
+   * `url_private_download`) via `files.info`. The returned {@link InboundFile}
+   * is for server-side download plumbing only — callers exposing file data to
+   * agents must strip the URL (see {@link SlackHistoryFile}).
+   * `sourceConversationIds` preserves where the file is shared
+   * (channels + groups + ims) so the gateway can enforce its
+   * `allowed_channel_ids` whitelist ({@link isSlackFileSourceAllowed});
+   * it must not be exposed to agents either.
+   */
+  async getFileInfo(fileId: string): Promise<SlackFileInfo> {
+    const result = await this.web.files.info({ file: fileId });
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+    }
+    const [file] = extractSlackInboundFiles([result.file]);
+    if (!file) {
+      throw new Error(`Slack files.info returned no downloadable file for ${fileId}`);
+    }
+    const raw = result.file as { channels?: unknown; groups?: unknown; ims?: unknown };
+    const sourceConversationIds = [raw.channels, raw.groups, raw.ims].flatMap((ids) =>
+      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
+    );
+    return { file, sourceConversationIds };
+  }
+
   /** Resolve a Slack channel by its human name (with or without #). */
   async resolveChannelByName(name: string): Promise<{ channel: string; name: string }> {
     const normalized = name.replace(/^#/, '').trim().toLowerCase();
@@ -1350,8 +1609,23 @@ export class SlackConnector implements GatewayConnector {
     return { channel: dmResult.channel.id, user_id: userResult.user.id };
   }
 
-  async fetchThreadHistory(req: SlackThreadHistoryRequest): Promise<SlackThreadHistoryResult> {
-    const { channel, thread_ts } = parseThreadId(req.threadId);
+  /**
+   * Shared pagination + normalization loop behind {@link fetchThreadHistory}
+   * and {@link fetchChannelHistory}. Collects up to `req.limit` normalized
+   * messages in the order the Slack API returns pages, over-fetching raw pages
+   * when bot messages are filtered out.
+   */
+  private async collectHistoryMessages(
+    fetchPage: (page: { limit: number; cursor?: string }) => Promise<{
+      ok?: boolean;
+      error?: string;
+      messages?: unknown[];
+      has_more?: boolean;
+      response_metadata?: { next_cursor?: string };
+    }>,
+    req: Pick<SlackThreadHistoryRequest, 'limit' | 'includeBotMessages' | 'triggerTs'>,
+    errorLabel: string
+  ): Promise<{ messages: SlackThreadHistoryMessage[]; hasMore: boolean }> {
     const requestedLimit = Math.min(Math.max(req.limit ?? 50, 1), 200);
     const messages: SlackThreadHistoryMessage[] = [];
     let cursor: string | undefined;
@@ -1361,18 +1635,10 @@ export class SlackConnector implements GatewayConnector {
       const rawLimit = req.includeBotMessages
         ? requestedLimit
         : Math.min(Math.max(requestedLimit * 4, requestedLimit), 200);
-      const result = await this.web.conversations.replies({
-        channel,
-        ts: thread_ts,
-        limit: rawLimit,
-        ...(cursor ? { cursor } : {}),
-        ...(req.oldestTs ? { oldest: req.oldestTs } : {}),
-        ...(req.latestTs ? { latest: req.latestTs } : {}),
-        ...(req.inclusive !== undefined ? { inclusive: req.inclusive } : {}),
-      });
+      const result = await fetchPage({ limit: rawLimit, ...(cursor ? { cursor } : {}) });
 
       if (!result.ok) {
-        throw new Error(`Slack thread history error: ${result.error ?? 'unknown error'}`);
+        throw new Error(`${errorLabel}: ${result.error ?? 'unknown error'}`);
       }
 
       const rawMessages = (result.messages ?? []) as Array<Record<string, unknown>>;
@@ -1402,6 +1668,12 @@ export class SlackConnector implements GatewayConnector {
               : undefined;
         const actorLabel = userName ?? botName ?? userId ?? botId ?? 'unknown';
         const text = typeof raw.text === 'string' ? raw.text : '';
+        const files = extractSlackInboundFiles(raw.files).map(({ id, name, mimetype, size }) => ({
+          id,
+          name,
+          mimetype,
+          size,
+        }));
         messages.push({
           ts,
           iso_time: slackTsToIso(ts),
@@ -1412,6 +1684,7 @@ export class SlackConnector implements GatewayConnector {
           is_bot: isBot,
           is_trigger: req.triggerTs === ts,
           is_mention: this.botUserId ? text.includes(`<@${this.botUserId}>`) : false,
+          ...(files.length > 0 ? { files } : {}),
         });
         if (messages.length >= requestedLimit) {
           stoppedAtRequestedLimitWithMoreRaw = i < rawMessages.length - 1;
@@ -1423,11 +1696,68 @@ export class SlackConnector implements GatewayConnector {
       hasMore = result.has_more === true || !!cursor || stoppedAtRequestedLimitWithMoreRaw;
     } while (!req.includeBotMessages && messages.length < requestedLimit && cursor);
 
+    return { messages: messages.slice(0, requestedLimit), hasMore };
+  }
+
+  async fetchThreadHistory(req: SlackThreadHistoryRequest): Promise<SlackThreadHistoryResult> {
+    const { channel, thread_ts } = parseThreadId(req.threadId);
+    const { messages, hasMore } = await this.collectHistoryMessages(
+      (page) =>
+        this.web.conversations.replies({
+          channel,
+          ts: thread_ts,
+          limit: page.limit,
+          ...(page.cursor ? { cursor: page.cursor } : {}),
+          ...(req.oldestTs ? { oldest: req.oldestTs } : {}),
+          ...(req.latestTs ? { latest: req.latestTs } : {}),
+          ...(req.inclusive !== undefined ? { inclusive: req.inclusive } : {}),
+        }),
+      req,
+      'Slack thread history error'
+    );
+
     return {
       threadId: req.threadId,
       channel,
       thread_ts,
-      messages: messages.slice(0, requestedLimit),
+      messages,
+      has_more: hasMore,
+    };
+  }
+
+  /**
+   * Fetch recent messages from a whole Slack conversation (not just one
+   * thread). Enforces the channel's `allowed_channel_ids` whitelist when one
+   * is configured. Slack returns newest-first pages, so `limit` selects the
+   * most recent matching messages; the result is reversed into chronological
+   * order for transcript-style consumption.
+   */
+  async fetchChannelHistory(req: SlackChannelHistoryRequest): Promise<SlackChannelHistoryResult> {
+    const allowedChannelIds = normalizeAllowedChannelIds(this.config.allowed_channel_ids);
+    if (allowedChannelIds.length > 0 && !allowedChannelIds.includes(req.channelId)) {
+      throw new Error(
+        `Slack channel ${req.channelId} is not in this gateway channel's allowed_channel_ids whitelist.`
+      );
+    }
+
+    const { messages, hasMore } = await this.collectHistoryMessages(
+      (page) =>
+        this.web.conversations.history({
+          channel: req.channelId,
+          limit: page.limit,
+          ...(page.cursor ? { cursor: page.cursor } : {}),
+          ...(req.oldestTs ? { oldest: req.oldestTs } : {}),
+          ...(req.latestTs ? { latest: req.latestTs } : {}),
+          ...(req.inclusive !== undefined ? { inclusive: req.inclusive } : {}),
+        }),
+      req,
+      'Slack channel history error'
+    );
+    messages.reverse();
+
+    return {
+      channel: req.channelId,
+      messages,
       has_more: hasMore,
     };
   }
@@ -1650,6 +1980,11 @@ export class SlackConnector implements GatewayConnector {
           console.log(
             `[slack] Resolved message_replied event to latest reply thread_ts=${event.thread_ts ?? '(none)'} ts=${event.ts ?? '(none)'}`
           );
+        } else if (event.subtype === 'file_share' && this.config.ingest_files === true) {
+          // Messages with uploaded files arrive as subtype `file_share` rather
+          // than a plain message. When file ingestion is enabled, treat them
+          // as normal new messages so the attachments (and any accompanying
+          // text) reach the gateway.
         } else {
           console.debug(
             `[slack] Skipping message subtype=${event.subtype} user=${event.user ?? '(none)'} thread_ts=${event.thread_ts ?? '(none)'} ts=${event.ts ?? '(none)'}`
@@ -1810,11 +2145,15 @@ export class SlackConnector implements GatewayConnector {
         slackChannelName = await this.lookupChannelName(event.channel);
       }
 
+      const inboundFiles =
+        this.config.ingest_files === true ? extractSlackInboundFiles(event.files) : [];
+
       callback({
         threadId,
         text: messageText,
         userId: event.user ?? 'unknown',
         timestamp: event.ts ?? new Date().toISOString(),
+        ...(inboundFiles.length > 0 ? { files: inboundFiles } : {}),
         metadata: {
           channel: event.channel,
           channel_type: channelType,

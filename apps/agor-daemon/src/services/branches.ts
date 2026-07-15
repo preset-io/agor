@@ -7,6 +7,7 @@
 
 import type { ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   createUserProcessEnvironment,
@@ -19,7 +20,9 @@ import {
   BoardRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  getCurrentTenantId,
   KnowledgeNamespaceRepository,
+  runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
@@ -73,7 +76,7 @@ import {
   runExecutorCommand,
   spawnExecutor,
 } from '../utils/spawn-executor.js';
-import { deferWithTenantDatabaseScope } from '../utils/tenant-db-scope.js';
+import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import type { InternalEnrichmentParams } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
@@ -142,8 +145,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
-    findByBranchId: (branchId: BranchID) => Promise<{ object_id: string; zone_id?: string } | null>;
-    create: (data: unknown) => Promise<unknown>;
+    findByBranchId: (
+      branchId: BranchID,
+      params?: unknown
+    ) => Promise<{ object_id: string; zone_id?: string } | null>;
+    create: (data: unknown, params?: unknown) => Promise<unknown>;
     remove: (id: string) => Promise<unknown>;
     patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
   };
@@ -163,6 +169,26 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     this.boardRepo = new BoardRepository(db);
     this.db = db;
     this.app = app;
+  }
+
+  /** Short tenant/RLS unit of work for custom methods that bypass Feathers hooks. */
+  private withTenantDatabase<T>(
+    params: BranchParams | undefined,
+    work: () => Promise<T>
+  ): Promise<T> {
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    return runWithTenantDatabaseScope(this.db, tenantId, work);
+  }
+
+  private loadEnvironmentForAction(
+    id: BranchID,
+    params: BranchParams | undefined,
+    action: string
+  ): Promise<BranchWithZoneAndSessions> {
+    return this.withTenantDatabase(params, async () => {
+      await this.ensureCanTriggerEnv(id, params, action);
+      return this.get(id, params);
+    });
   }
 
   /**
@@ -315,31 +341,41 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     };
   }
 
-  private async resolveEnvironmentExecutorContext(branch: Branch): Promise<{
+  private async resolveEnvironmentExecutorContext(
+    branch: Branch,
+    params?: BranchParams
+  ): Promise<{
     asUser?: string;
     env: Record<string, string>;
   }> {
     const config = await loadConfig();
     const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
-    let asUser: string | undefined;
+    return this.withTenantDatabase(params, async () => {
+      let asUser: string | undefined;
 
-    if (unixUserMode !== 'simple') {
-      const usersRepo = new UsersRepository(this.db);
-      const user = await usersRepo.findById(branch.created_by);
-      const impersonationResult = resolveUnixUserForImpersonation({
-        mode: unixUserMode,
-        userUnixUsername: user?.unix_username,
-        executorUnixUser: config.execution?.executor_unix_user,
-      });
+      if (unixUserMode !== 'simple') {
+        const usersRepo = new UsersRepository(this.db);
+        const user = await usersRepo.findById(branch.created_by);
+        const impersonationResult = resolveUnixUserForImpersonation({
+          mode: unixUserMode,
+          userUnixUsername: user?.unix_username,
+          executorUnixUser: config.execution?.executor_unix_user,
+        });
 
-      asUser = impersonationResult.unixUser ?? undefined;
-      if (asUser) {
-        validateResolvedUnixUser(unixUserMode, asUser);
+        asUser = impersonationResult.unixUser ?? undefined;
+        if (asUser) {
+          validateResolvedUnixUser(unixUserMode, asUser);
+        }
       }
-    }
 
-    const env = await createUserProcessEnvironment(branch.created_by, this.db, undefined, !!asUser);
-    return { asUser, env };
+      const env = await createUserProcessEnvironment(
+        branch.created_by,
+        this.db,
+        undefined,
+        !!asUser
+      );
+      return { asUser, env };
+    });
   }
 
   private async createEnvironmentExecutorPayload(options: {
@@ -358,16 +394,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const appWithToken = this.app as unknown as {
       sessionTokenService?: import('../services/session-token-service').SessionTokenService;
     };
-    const sessionToken = await appWithToken.sessionTokenService?.generateToken(
-      `environment-${action}`,
-      userId,
-      { branchId: branch.branch_id, maxUses: -1 }
+    const sessionToken = await this.withTenantDatabase(
+      params,
+      () =>
+        appWithToken.sessionTokenService?.generateToken(`environment-${action}`, userId, {
+          branchId: branch.branch_id,
+          maxUses: -1,
+        }) ?? Promise.resolve(undefined)
     );
     if (!sessionToken) {
       throw new Error(`Session token service unavailable; cannot dispatch environment ${action}`);
     }
 
-    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch);
+    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch, options.params);
 
     return {
       asUser,
@@ -429,7 +468,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     };
 
-    deferWithTenantDatabaseScope(this.db, params, spawnLifecycleExecutor, (error) => {
+    deferWithTenantContext(params, spawnLifecycleExecutor, (error) => {
       console.error(`${logPrefix} Failed to dispatch executor:`, error);
     });
   }
@@ -478,16 +517,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const appWithToken = this.app as unknown as {
       sessionTokenService?: import('../services/session-token-service').SessionTokenService;
     };
-    const sessionToken = await appWithToken.sessionTokenService?.generateToken(
-      'environment-logs',
-      userId,
-      { branchId: branch.branch_id, maxUses: -1 }
+    const sessionToken = await this.withTenantDatabase(
+      params,
+      () =>
+        appWithToken.sessionTokenService?.generateToken('environment-logs', userId, {
+          branchId: branch.branch_id,
+          maxUses: -1,
+        }) ?? Promise.resolve(undefined)
     );
     if (!sessionToken) {
       throw new Error('Session token service unavailable; cannot fetch environment logs');
     }
 
-    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch);
+    const { asUser, env } = await this.resolveEnvironmentExecutorContext(branch, params);
     const result = await runExecutorCommand(
       {
         command: 'environment.logs',
@@ -539,15 +581,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   private getBoardObjectsService() {
     if (!this.boardObjectsService) {
-      this.boardObjectsService = this.app.service('board-objects') as unknown as {
-        find: (params?: unknown) => Promise<unknown>;
-        findByBranchId: (
-          branchId: BranchID
-        ) => Promise<{ object_id: string; zone_id?: string } | null>;
-        create: (data: unknown) => Promise<unknown>;
-        remove: (id: string) => Promise<unknown>;
-        patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
-      };
+      this.boardObjectsService = this.app.service('board-objects') as unknown as NonNullable<
+        BranchesService['boardObjectsService']
+      >;
     }
     return this.boardObjectsService;
   }
@@ -711,7 +747,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const readyBranches = await Promise.all(
         created.map((branch) => this.maybeEnsureTeammateKnowledgeNamespace(branch, params))
       );
-      await Promise.all(readyBranches.map((branch) => this.maybeSetBoardPrimaryTeammate(branch)));
+      await Promise.all(
+        readyBranches.map((branch) => this.maybeSetBoardPrimaryTeammate(branch, params))
+      );
       for (const branch of readyBranches) {
         this.trackBranchCreated(branch);
       }
@@ -721,7 +759,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const withDefaults = await this.applyBranchCreateDefaults(data);
     const created = (await super.create(withDefaults, params)) as Branch;
     const readyBranch = await this.maybeEnsureTeammateKnowledgeNamespace(created, params);
-    await this.maybeSetBoardPrimaryTeammate(readyBranch);
+    await this.maybeSetBoardPrimaryTeammate(readyBranch, params);
     this.trackBranchCreated(readyBranch);
     return readyBranch;
   }
@@ -732,7 +770,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     });
   }
 
-  private async maybeSetBoardPrimaryTeammate(branch: Branch): Promise<void> {
+  private async maybeSetBoardPrimaryTeammate(branch: Branch, params?: BranchParams): Promise<void> {
     if (!branch.board_id || !isTeammate(branch)) return;
 
     try {
@@ -741,7 +779,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         branch.branch_id
       );
       if (updatedBoard) {
-        this.app.service('boards').emit('patched', updatedBoard);
+        emitServiceEvent(this.app, {
+          path: 'boards',
+          event: 'patched',
+          data: updatedBoard,
+          params,
+          id: updatedBoard.board_id,
+        });
       }
     } catch (error) {
       console.warn(
@@ -932,7 +976,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
   private async maintainPrimaryTeammateAfterPatch(
     previousBranch: Branch,
-    updatedBranch: Branch
+    updatedBranch: Branch,
+    params?: BranchParams
   ): Promise<void> {
     const oldBoardId = previousBranch.board_id;
     const newBoardId = updatedBranch.board_id;
@@ -961,7 +1006,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           previousBranch.branch_id
         );
         if (updatedOldBoard) {
-          this.app.service('boards').emit('patched', updatedOldBoard);
+          emitServiceEvent(this.app, {
+            path: 'boards',
+            event: 'patched',
+            data: updatedOldBoard,
+            params,
+            id: updatedOldBoard.board_id,
+          });
         }
       }
 
@@ -971,7 +1022,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           updatedBranch.branch_id
         );
         if (updatedNewBoard) {
-          this.app.service('boards').emit('patched', updatedNewBoard);
+          emitServiceEvent(this.app, {
+            path: 'boards',
+            event: 'patched',
+            data: updatedNewBoard,
+            params,
+            id: updatedNewBoard.board_id,
+          });
         }
       }
     } catch (error) {
@@ -1016,7 +1073,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Call parent patch
     const updatedBranch = (await super.patch(id, data, params)) as Branch;
-    await this.maintainPrimaryTeammateAfterPatch(currentBranch, updatedBranch);
+    await this.maintainPrimaryTeammateAfterPatch(currentBranch, updatedBranch, params);
 
     // Handle board_objects changes if board_id changed
     if (!boardIdProvided) {
@@ -1239,7 +1296,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const { deleteFromFilesystem } = params?.query || {};
 
     // Get branch details before deletion
-    const branch = await this.get(id, params);
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
 
     // Remove from database FIRST for instant UI feedback
     // CASCADE will clean up related comments automatically
@@ -1321,7 +1378,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions | { deleted: true; branch_id: BranchID }> {
     const { metadataAction, filesystemAction } = options;
-    const branch = await this.get(id, params);
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     // Hook chain enforces auth before we get here.
     const currentUserId = (params as AuthenticatedParams).user!.user_id as UUID;
 
@@ -1353,11 +1410,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // owns all branches and impersonation would resolve getBranchesDir()
       // to the wrong home directory, causing safety check failures.
 
-      appWithToken.sessionTokenService
-        ?.generateToken('branch-clean', userId ?? currentUserId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        })
+      void this.withTenantDatabase(
+        params,
+        () =>
+          appWithToken.sessionTokenService?.generateToken('branch-clean', userId ?? currentUserId, {
+            branchId: branch.branch_id,
+            maxUses: -1,
+          }) ?? Promise.reject(new Error('Session token service unavailable'))
+      )
         .then((sessionToken) => {
           spawnExecutor(
             {
@@ -1386,11 +1446,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // owns all branches and impersonation would resolve getBranchesDir()
       // to the wrong home directory, causing safety check failures.
 
-      appWithToken.sessionTokenService
-        ?.generateToken('branch-delete', userId ?? currentUserId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        })
+      void this.withTenantDatabase(
+        params,
+        () =>
+          appWithToken.sessionTokenService?.generateToken(
+            'branch-delete',
+            userId ?? currentUserId,
+            {
+              branchId: branch.branch_id,
+              maxUses: -1,
+            }
+          ) ?? Promise.reject(new Error('Session token service unavailable'))
+      )
         .then((sessionToken) => {
           spawnExecutor(
             {
@@ -1428,18 +1495,31 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       console.log(`📦 Archiving branch: ${branch.name} (filesystem: ${filesystemAction})`);
 
       // Update branch
-      const archivedBranch = await this.patch(
-        id,
-        {
-          archived: true,
-          archived_at: new Date().toISOString(),
-          archived_by: currentUserId,
-          filesystem_status: filesystemAction,
-          // Preserve board_id + board_object placement so unarchive can restore in-place
-          updated_at: new Date().toISOString(),
-        },
-        params
+      const archivedBranch = await this.withTenantDatabase(params, () =>
+        this.patch(
+          id,
+          {
+            archived: true,
+            archived_at: new Date().toISOString(),
+            archived_by: currentUserId,
+            filesystem_status: filesystemAction,
+            // Preserve board_id + board_object placement so unarchive can restore in-place
+            updated_at: new Date().toISOString(),
+          },
+          params
+        )
       );
+
+      // archiveOrDelete is a custom service method. Its internal this.patch()
+      // call bypasses Feathers' standard-method event hook, so publish the
+      // branch transition explicitly (with the request tenant/RBAC context).
+      emitServiceEvent(this.app, {
+        path: 'branches',
+        event: 'patched',
+        data: archivedBranch,
+        params,
+        id: archivedBranch.branch_id,
+      });
 
       // Archive all sessions in this branch
       // Use internal call (no provider) to bypass RBAC hooks that would ignore branch_id filter
@@ -1468,7 +1548,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
       console.log(`🗑️  Permanently deleting branch: ${branch.name}`);
 
-      await this.remove(id, params);
+      await this.withTenantDatabase(params, () => this.remove(id, params));
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
       return { deleted: true, branch_id: id };
@@ -1483,7 +1563,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     options?: { boardId?: BoardID },
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
-    const branch = await this.get(id, params);
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
 
     if (!branch.archived) {
       throw new Error(`Branch ${branch.name} is not archived`);
@@ -1506,7 +1586,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       patchData.board_id = options?.boardId;
     }
 
-    const unarchivedBranch = await this.patch(id, patchData, params);
+    const unarchivedBranch = await this.withTenantDatabase(params, () =>
+      this.patch(id, patchData, params)
+    );
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: unarchivedBranch,
+      params,
+      id: unarchivedBranch.branch_id,
+    });
 
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
@@ -1514,11 +1603,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       console.log(`📂 Branch directory missing, spawning executor to recreate: ${branch.path}`);
 
       // Set filesystem_status to 'creating' while we rebuild
-      await this.patch(id, { filesystem_status: 'creating' }, { provider: undefined });
+      await this.withTenantDatabase(params, () =>
+        this.patch(id, { filesystem_status: 'creating' }, { ...params, provider: undefined })
+      );
 
       // Look up repo to get local_path
       const reposService = this.app.service('repos');
-      const repo = (await reposService.get(branch.repo_id)) as Repo;
+      const repo = await this.withTenantDatabase(
+        params,
+        () => reposService.get(branch.repo_id, params) as Promise<Repo>
+      );
 
       // Unix group initialization is a filesystem concern controlled by
       // unix_user_mode. Logical branch RBAC may be enabled in simple/Cloud mode
@@ -1541,10 +1635,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           `Cannot unarchive clone-mode branch '${branch.name}' for repo '${repo.slug}': ` +
           `repo has no remote_url. The clone source URL is unknown.`;
         console.error(`⚠️  ${errMsg}`);
-        await this.patch(
-          id,
-          { filesystem_status: 'failed', error_message: errMsg },
-          { provider: undefined }
+        await this.withTenantDatabase(params, () =>
+          this.patch(
+            id,
+            { filesystem_status: 'failed', error_message: errMsg },
+            { ...params, provider: undefined }
+          )
         );
         return unarchivedBranch;
       }
@@ -1607,10 +1703,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
         // Mark as failed so the UI can show the error state
         const errMsg = error instanceof Error ? error.message : String(error);
-        await this.patch(
-          id,
-          { filesystem_status: 'failed', error_message: `Failed to spawn executor: ${errMsg}` },
-          { provider: undefined }
+        await this.withTenantDatabase(params, () =>
+          this.patch(
+            id,
+            { filesystem_status: 'failed', error_message: `Failed to spawn executor: ${errMsg}` },
+            { ...params, provider: undefined }
+          )
         );
       }
     }
@@ -1620,21 +1718,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (targetBoardId) {
       const boardObjectsService = this.getBoardObjectsService();
       try {
-        const existingObject = (await boardObjectsService.findByBranchId(id)) as {
-          object_id: string;
-        } | null;
-        if (!existingObject) {
-          const position = await this.computeDefaultBoardPositionForBranch(
-            targetBoardId,
-            id,
-            params
-          );
-          await boardObjectsService.create({
-            board_id: targetBoardId,
-            branch_id: id,
-            position,
-          });
-        }
+        await this.withTenantDatabase(params, async () => {
+          const existingObject = (await boardObjectsService.findByBranchId(id)) as {
+            object_id: string;
+          } | null;
+          if (!existingObject) {
+            const position = await this.computeDefaultBoardPositionForBranch(
+              targetBoardId,
+              id,
+              params
+            );
+            await boardObjectsService.create({ board_id: targetBoardId, branch_id: id, position });
+          }
+        });
       } catch (error) {
         console.error(
           `⚠️ Failed to restore board object for unarchived branch ${id}:`,
@@ -1774,7 +1870,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('Environment update is required');
     }
 
-    const existing = await this.get(id, resolvedParams);
+    const existing = await this.withTenantDatabase(resolvedParams, () =>
+      this.get(id, resolvedParams)
+    );
 
     const updatedEnvironment = {
       ...existing.environment_instance,
@@ -1790,8 +1888,20 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    // Check if environment state actually changed (ignoring timestamp-only updates)
-    // For health checks, we only care about status and message changes, not timestamp
+    // Distinguish persisted observations from user-visible state changes. A
+    // successful re-probe advances last_health_check.timestamp in storage, but
+    // that bookkeeping alone must not emit a full `branches.patched` payload to
+    // every authorized browser every five seconds.
+    const hasPersistedChange = !isDeepStrictEqual(
+      existing.environment_instance,
+      updatedEnvironment
+    );
+    if (!hasPersistedChange) {
+      return existing;
+    }
+
+    // For realtime publication, health status and message matter; the
+    // observation timestamp does not.
     const oldState = { ...existing.environment_instance };
     const newState = { ...updatedEnvironment };
 
@@ -1805,20 +1915,35 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       newState.last_health_check = healthCheck as typeof newState.last_health_check;
     }
 
-    const hasChanged = JSON.stringify(oldState) !== JSON.stringify(newState);
+    // PostgreSQL JSONB does not preserve object-key insertion order. Comparing
+    // serialized objects can therefore report a change when the JSON values are
+    // identical, sending every observation down the realtime patch path. Deep
+    // equality preserves array ordering while treating object key order as
+    // irrelevant, which matches the JSON semantics stored in the database.
+    const hasChanged = !isDeepStrictEqual(oldState, newState);
 
-    // Only emit WebSocket event if state changed
+    // Observation-only persistence deliberately bypasses Feathers publication.
+    // It also preserves branch.updated_at so health bookkeeping does not affect
+    // branch ordering or modification semantics every five seconds.
     if (!hasChanged) {
-      return existing;
+      return this.withTenantDatabase(resolvedParams, () =>
+        this.branchRepo.update(
+          id,
+          { environment_instance: updatedEnvironment },
+          { preserveUpdatedAt: true }
+        )
+      );
     }
 
-    const branch = await this.patch(
-      id,
-      {
-        environment_instance: updatedEnvironment,
-        updated_at: new Date().toISOString(),
-      },
-      resolvedParams
+    const branch = await this.withTenantDatabase(resolvedParams, () =>
+      this.patch(
+        id,
+        {
+          environment_instance: updatedEnvironment,
+          updated_at: new Date().toISOString(),
+        },
+        resolvedParams
+      )
     );
 
     // this.patch() calls the raw implementation and bypasses Feathers event
@@ -1845,8 +1970,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Start environment
    */
   async startEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'start branch environments');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'start branch environments');
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -1898,7 +2022,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
 
       // Keep status as 'starting' - let health checks transition to 'running'.
-      return await this.get(id, params);
+      return await this.withTenantDatabase(params, () => this.get(id, params));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const commandOutput =
@@ -1928,8 +2052,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Stop environment
    */
   async stopEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'stop branch environments');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'stop branch environments');
 
     await this.updateEnvironment(id, { status: 'stopping' }, params);
 
@@ -1955,7 +2078,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           });
         } else {
           await this.dispatchEnvironmentExecutor({ branch, action: 'stop', params });
-          return await this.get(id, params);
+          return await this.withTenantDatabase(params, () => this.get(id, params));
         }
       } else {
         // No down command - kill the managed process if we have it. This is
@@ -2013,8 +2136,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     id: BranchID,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'restart branch environments');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'restart branch environments');
 
     if (!branch.start_command) {
       throw new Error('No start command configured for this branch');
@@ -2045,7 +2167,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     try {
       await this.dispatchEnvironmentExecutor({ branch, action: 'restart', params });
-      return await this.get(id, params);
+      return await this.withTenantDatabase(params, () => this.get(id, params));
     } catch (error) {
       await this.updateEnvironment(
         id,
@@ -2067,8 +2189,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Nuke environment (destructive operation)
    */
   async nukeEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'nuke branch environments');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'nuke branch environments');
 
     if (!branch.nuke_command) {
       throw new Error('No nuke_command configured for this branch');
@@ -2098,7 +2219,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         });
       } else {
         await this.dispatchEnvironmentExecutor({ branch, action: 'nuke', params });
-        return await this.get(id, params);
+        return await this.withTenantDatabase(params, () => this.get(id, params));
       }
 
       const managedProcess = this.processes.get(id);
@@ -2141,8 +2262,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Custom method: Check health
    */
   async checkHealth(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    const branch = await this.get(id, params);
-    const _repo = (await this.app.service('repos').get(branch.repo_id, params)) as Repo;
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    const _repo = await this.withTenantDatabase(
+      params,
+      () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
+    );
 
     // Only check active environments, plus errored environments that may have been
     // started successfully out-of-band. Allowing explicit health checks to recover
@@ -2294,8 +2418,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     error?: string;
     truncated?: boolean;
   }> {
-    await this.ensureCanTriggerEnv(id, params, 'fetch branch environment logs');
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'fetch branch environment logs');
 
     // Check if static logs command is configured
     if (!branch.logs_command) {
@@ -2383,11 +2506,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: { variant?: string } | undefined,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
-    await this.ensureCanTriggerEnv(id, params, 'render branch environment');
-
-    const branch = await this.get(id, params);
+    const branch = await this.loadEnvironmentForAction(id, params, 'render branch environment');
     const reposService = this.app.service('repos');
-    const repo = (await reposService.get(branch.repo_id, params)) as Repo;
+    const repo = await this.withTenantDatabase(
+      params,
+      () => reposService.get(branch.repo_id, params) as Promise<Repo>
+    );
 
     const env = repo.environment;
     if (!env) {
@@ -2442,19 +2566,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       app: snapshot.app,
     });
 
-    return await this.patch(
-      id,
-      {
-        environment_variant: snapshot.variant,
-        start_command: snapshot.start || undefined,
-        stop_command: snapshot.stop || undefined,
-        nuke_command: snapshot.nuke,
-        logs_command: snapshot.logs,
-        health_check_url: snapshot.health,
-        app_url: snapshot.app,
-        updated_at: new Date().toISOString(),
-      },
-      params
+    return await this.withTenantDatabase(params, () =>
+      this.patch(
+        id,
+        {
+          environment_variant: snapshot.variant,
+          start_command: snapshot.start || undefined,
+          stop_command: snapshot.stop || undefined,
+          nuke_command: snapshot.nuke,
+          logs_command: snapshot.logs,
+          health_check_url: snapshot.health,
+          app_url: snapshot.app,
+          updated_at: new Date().toISOString(),
+        },
+        params
+      )
     );
   }
 }

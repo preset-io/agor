@@ -1,3 +1,4 @@
+import { theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { escapeRegExp } from '../components/HighlightMatch/HighlightMatch';
 
@@ -129,10 +130,11 @@ export function useSessionSearch(
   containerRef: React.RefObject<HTMLElement | null>,
   colors?: SessionSearchColors
 ) {
+  const { token } = theme.useToken();
   const resolvedColors = colors ?? {
-    highlight: '#faad14',
-    current: '#faad14',
-    currentText: 'rgba(0,0,0,0.88)',
+    highlight: token.colorWarning,
+    current: token.colorWarningBg,
+    currentText: token.colorText,
   };
 
   const [searchOpen, setSearchOpen] = useState(false);
