@@ -1,4 +1,4 @@
-import { Card, Space, Typography, theme } from 'antd';
+import { Card, Space, Tooltip, Typography, theme } from 'antd';
 import type { AgenticToolOption } from '../../types';
 import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
@@ -7,28 +7,46 @@ export interface AgentSelectionCardProps {
   agent: AgenticToolOption;
   selected?: boolean;
   onClick?: () => void;
+  /**
+   * `default` (full) shows the version and description inline. `small` is a
+   * denser, roughly half-height tile: icon + name + BETA, with the description
+   * moved to a tooltip. Additive — omit for the original rendering.
+   */
+  size?: 'default' | 'small';
 }
 
 export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
   agent,
   selected = false,
   onClick,
+  size = 'default',
 }) => {
   const { token } = theme.useToken();
 
+  const cardStyle: React.CSSProperties = {
+    borderColor: selected ? token.colorPrimary : undefined,
+    borderWidth: selected ? 2 : 1,
+    cursor: 'pointer',
+  };
+
+  if (size === 'small') {
+    return (
+      <Tooltip title={agent.description}>
+        <Card hoverable onClick={onClick} style={cardStyle} styles={{ body: { padding: 8 } }}>
+          <Space size={8} style={{ width: '100%' }}>
+            <ToolIcon tool={agent.id} size={20} />
+            <Typography.Text strong ellipsis style={{ fontSize: '13px' }}>
+              {agent.name}
+            </Typography.Text>
+            {agent.beta && <Tag color="warning">BETA</Tag>}
+          </Space>
+        </Card>
+      </Tooltip>
+    );
+  }
+
   return (
-    <Card
-      hoverable
-      onClick={onClick}
-      style={{
-        borderColor: selected ? token.colorPrimary : undefined,
-        borderWidth: selected ? 2 : 1,
-        cursor: 'pointer',
-      }}
-      styles={{
-        body: { padding: 8 },
-      }}
-    >
+    <Card hoverable onClick={onClick} style={cardStyle} styles={{ body: { padding: 8 } }}>
       <Space orientation="vertical" style={{ width: '100%' }} size={3}>
         <Space style={{ width: '100%', justifyContent: 'space-between' }} size={6}>
           <Space size={6}>

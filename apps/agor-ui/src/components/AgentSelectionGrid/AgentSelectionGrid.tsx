@@ -46,6 +46,8 @@ export interface AgentSelectionGridProps {
   helperText?: string;
   /** Show SDK comparison link (both variants) */
   showComparisonLink?: boolean;
+  /** Card density (cards variant only). `small` uses the dense half-height tile. */
+  size?: 'default' | 'small';
 }
 
 export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
@@ -57,6 +59,7 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
   showHelperText = false,
   helperText = 'Click on an agent card to select it',
   showComparisonLink = false,
+  size = 'default',
 }) => {
   const settings = useAgorStore((state) => state.agenticToolSettingsByName);
   const visibleAgents = agents.filter((agent) => {
@@ -116,6 +119,7 @@ export const AgentSelectionGrid: React.FC<AgentSelectionGridProps> = ({
             agent={agent}
             selected={selectedAgentId === agent.id}
             onClick={() => onSelect(agent.id)}
+            size={size}
           />
         ))}
       </div>
