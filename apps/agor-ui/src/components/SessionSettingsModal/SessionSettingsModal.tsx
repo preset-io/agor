@@ -19,6 +19,7 @@ import type {
   AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
+  EffortLevel,
   PermissionMode,
   Session,
   User,
@@ -31,10 +32,12 @@ import React from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectSessionMcpServerIds } from '../../store/selectors';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
+import type { AgenticFormValues } from '../AgenticToolConfigForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
+  persistUserDefaultFromForm,
 } from '../AgenticToolConfigurationPicker';
 import { CallbackConfigForm } from '../CallbackConfigForm';
 import { CallbackTargetDisplay } from '../CallbackToggleButton';
@@ -68,10 +71,12 @@ interface FormValues {
   title: string;
   mcpServerIds: string[];
   modelConfig: Session['model_config'];
+  effort?: EffortLevel;
   permissionMode: PermissionMode;
   codexSandboxMode: CodexSandboxMode;
   codexApprovalPolicy: CodexApprovalPolicy;
   codexNetworkAccess: boolean;
+  saveAsDefault?: boolean;
   custom_context: string;
   callbackConfig: {
     enabled: boolean;
@@ -264,6 +269,24 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         onUpdate(session.session_id, updates);
       }
 
+      // Promote the inline config to the user's default when requested.
+      if (
+        values.saveAsDefault &&
+        values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION &&
+        currentUser &&
+        client
+      ) {
+        const formValues: AgenticFormValues = {
+          modelConfig: values.modelConfig ?? undefined,
+          effort: values.effort,
+          permissionMode: values.permissionMode,
+          codexSandboxMode: values.codexSandboxMode,
+          codexApprovalPolicy: values.codexApprovalPolicy,
+          codexNetworkAccess: values.codexNetworkAccess,
+        };
+        void persistUserDefaultFromForm(client, currentUser, session.agentic_tool, formValues);
+      }
+
       if (
         onUpdateSessionMcpServers &&
         values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
@@ -381,9 +404,11 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           <AgenticToolConfigurationPicker
             tool={session.agentic_tool}
             mcpServerById={mcpServerById}
+            currentUser={currentUser}
             showHelpText={false}
             compact
             client={client}
+            enableSaveAsDefault
           />
         ) : (
           <>

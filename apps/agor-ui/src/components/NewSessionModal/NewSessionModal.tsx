@@ -8,24 +8,32 @@ import type {
   PermissionMode,
   User,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
-import { DownOutlined } from '@ant-design/icons';
-import { Alert, Collapse, Form, Input, Modal, Typography } from 'antd';
+import {
+  DEFAULT_CLAUDE_MODEL,
+  getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
+} from '@agor-live/client';
+import { DownOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Alert, Collapse, Form, Input, Modal, Space, Tooltip, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
+import type { AgenticFormValues } from '../AgenticToolConfigForm';
 import { getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
+  persistUserDefaultFromForm,
 } from '../AgenticToolConfigurationPicker';
 import {
   type AgenticToolOption,
   AgentSelectionGrid,
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import type { ModelConfig } from '../ModelSelector';
+import { CodexSettingsForm } from '../CodexSettingsForm';
+import { SessionMcpServersField } from '../MCPServerSelect';
+import { AdvisorModelSelect, type ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -97,6 +105,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
     useComposerAttachments({ sessionId: null, showError });
   const isFormValid = !!selectedAgent;
+
+  const watchedMcp = Form.useWatch('mcpServerIds', form) as string[] | undefined;
+  const watchedModelConfig = Form.useWatch('modelConfig', form) as ModelConfig | undefined;
+  const isClaudeAgent = selectedAgent === 'claude-code' || selectedAgent === 'claude-code-cli';
 
   // Reset form when modal opens, using user defaults if available
   // Only depends on `open` — branch/user refs may change while modal is open
@@ -170,13 +182,31 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         agentDefaults?.permissionMode ??
         getDefaultPermissionMode(selectedAgent as AgenticToolName);
 
+      const isInline = values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION;
+
+      // Promote the inline config to the user's default when requested. Fire and
+      // forget — session creation shouldn't block on the profile patch.
+      if (values.saveAsDefault && isInline && currentUser && client) {
+        const formValues: AgenticFormValues = {
+          modelConfig: values.modelConfig,
+          effort: values.effort as EffortLevel | undefined,
+          permissionMode: values.permissionMode,
+          codexSandboxMode: values.codexSandboxMode,
+          codexApprovalPolicy: values.codexApprovalPolicy,
+          codexNetworkAccess: values.codexNetworkAccess,
+        };
+        void persistUserDefaultFromForm(
+          client,
+          currentUser,
+          selectedAgent as AgenticToolName,
+          formValues
+        ).catch(() => showError('Failed to save your default configuration'));
+      }
+
       const config: NewSessionConfig = {
         branch_id: branchId,
         agent: selectedAgent,
-        agenticToolPresetId:
-          values.agenticToolPresetId === INLINE_AGENTIC_CONFIGURATION
-            ? undefined
-            : values.agenticToolPresetId,
+        agenticToolPresetId: isInline ? undefined : values.agenticToolPresetId,
         title: values.title,
         initialPrompt: values.initialPrompt,
         // Daemon's applySessionConfigDefaults hook fills the tool default.
@@ -216,6 +246,22 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     onClose();
   };
 
+  const setAdvisorModel = (advisorModel: string | undefined) => {
+    const current = form.getFieldValue('modelConfig') as ModelConfig | undefined;
+    form.setFieldValue('modelConfig', {
+      mode: current?.mode ?? 'alias',
+      model: current?.model || DEFAULT_CLAUDE_MODEL,
+      ...(current?.provider ? { provider: current.provider } : {}),
+      advisorModel,
+    });
+  };
+
+  const mcpCount = watchedMcp?.length ?? 0;
+  const advisorOn = !!watchedModelConfig?.advisorModel;
+  const advancedSummary = `Advanced · ${mcpCount} MCP server${mcpCount === 1 ? '' : 's'} · advisor ${
+    advisorOn ? 'on' : 'off'
+  }`;
+
   return (
     <Modal
       title="Create New Session"
@@ -246,40 +292,24 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           />
         )}
 
-        {/* Agent Selection */}
-        <Form.Item label="Select Coding Agent" required>
+        {/* Agent Selection — dense tiles */}
+        <Form.Item label="Coding Agent" required>
           <AgentSelectionGrid
             agents={availableAgents}
             selectedAgentId={selectedAgent}
             onSelect={setSelectedAgent}
-            columns={2}
-            showHelperText={true}
-            showComparisonLink={true}
+            columns={3}
+            size="small"
+            showComparisonLink={false}
           />
         </Form.Item>
 
-        <AgenticToolConfigurationPicker
-          tool={(selectedAgent as AgenticToolName) || 'claude-code'}
-          mcpServerById={mcpServerById}
-          showHelpText={true}
-          client={client}
-        />
-
-        {/* Session Title */}
-        <Form.Item name="title" label="Title (optional)">
-          <Input placeholder="e.g., Add authentication system" />
-        </Form.Item>
-
         {/* Initial Prompt */}
-        <Form.Item
-          name="initialPrompt"
-          label="Initial Prompt (optional)"
-          help="First message to send to the agent when session starts"
-        >
+        <Form.Item name="initialPrompt" label="Initial Prompt (optional)">
           <AutocompleteTextarea
             value={form.getFieldValue('initialPrompt') || ''}
             onChange={(value) => form.setFieldValue('initialPrompt', value)}
-            placeholder={`e.g., Build a JWT authentication system with secure password storage... (type @ for autocomplete, or ${PASTE_SHORTCUT} to paste a screenshot)`}
+            placeholder={`First message to send when the session starts — e.g., Build a JWT auth system… (type @ for autocomplete, or ${PASTE_SHORTCUT} to paste a screenshot)`}
             autoSize={{ minRows: 4, maxRows: 8 }}
             client={client}
             sessionId={null}
@@ -300,28 +330,71 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           </div>
         )}
 
+        {/* Session Title */}
+        <Form.Item name="title" label="Title (optional)">
+          <Input placeholder="e.g., Add authentication system" />
+        </Form.Item>
+
+        {/* Configuration (resolved preset / default / inline) */}
+        <AgenticToolConfigurationPicker
+          tool={(selectedAgent as AgenticToolName) || 'claude-code'}
+          mcpServerById={mcpServerById}
+          currentUser={currentUser}
+          client={client}
+          showHelpText={false}
+          showAdvisor={false}
+          compact
+          renderMcpField={false}
+          enableSaveAsDefault
+        />
+
         {/* Advanced Configuration (Collapsible) */}
         <Collapse
           ghost
           destroyOnHidden={false}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           items={[
-            ...(currentUser && client
-              ? [
-                  {
-                    key: 'env-vars',
-                    label: <Typography.Text strong>Environment Variables</Typography.Text>,
-                    children: (
+            {
+              key: 'advanced',
+              label: <Typography.Text type="secondary">{advancedSummary}</Typography.Text>,
+              children: (
+                <>
+                  <SessionMcpServersField mcpServerById={mcpServerById} />
+
+                  {currentUser && client && (
+                    <Form.Item label="Environment Variables">
                       <SessionEnvVarsSelector
                         ownerUserId={currentUser.user_id}
                         client={client}
                         value={envVarNames}
                         onChange={setEnvVarNames}
                       />
-                    ),
-                  },
-                ]
-              : []),
+                    </Form.Item>
+                  )}
+
+                  {isClaudeAgent && (
+                    <Form.Item
+                      label={
+                        <Space size={4}>
+                          <span>Advisor model</span>
+                          <Tooltip title="Optional Claude Code advisor-tool model. Leave off to use your existing Claude settings.">
+                            <InfoCircleOutlined />
+                          </Tooltip>
+                        </Space>
+                      }
+                    >
+                      <AdvisorModelSelect
+                        value={watchedModelConfig?.advisorModel}
+                        onChange={setAdvisorModel}
+                        client={client}
+                      />
+                    </Form.Item>
+                  )}
+
+                  {selectedAgent === 'codex' && <CodexSettingsForm showHelpText={false} />}
+                </>
+              ),
+            },
           ]}
           style={{ marginTop: 16 }}
         />
