@@ -94,6 +94,13 @@ const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
 
 const DEBUG_CODEX = process.env.AGOR_DEBUG_CODEX === '1' || process.env.DEBUG?.includes('codex');
 
+// `codex exec --json` currently serializes its non-fatal in-process transport
+// lag warning as an item with type="error". Keep the match deliberately exact:
+// every other item-level error must still reach the conversation. See upstream
+// openai/codex#19689.
+const CODEX_STREAM_LAG_WARNING =
+  /^in-process app-server event stream lagged; dropped \d+ events?$/i;
+
 function codexDebug(...args: unknown[]): void {
   if (DEBUG_CODEX) {
     console.debug(...args);
@@ -1433,6 +1440,10 @@ export class CodexPromptService {
               // Surface non-fatal item-level errors as assistant text so users can see
               // what happened instead of dropping them silently.
               if ('message' in event.item && event.item.type === 'error') {
+                if (CODEX_STREAM_LAG_WARNING.test(event.item.message)) {
+                  console.warn(`⚠️  [Codex] Non-fatal stream backpressure: ${event.item.message}`);
+                  break;
+                }
                 const errorContent = [
                   { type: 'text', text: `[Codex item error] ${event.item.message}` },
                 ];
