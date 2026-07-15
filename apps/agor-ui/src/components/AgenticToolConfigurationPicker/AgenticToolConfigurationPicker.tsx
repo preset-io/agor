@@ -7,6 +7,7 @@ import type {
   User,
 } from '@agor-live/client';
 import {
+  canonicalTenantAgenticTool,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor-live/client';
@@ -57,6 +58,11 @@ function summarizeConfig(tool: AgenticToolName, config?: DefaultAgenticToolConfi
  * Persist an inline configuration as the user's default for a tool. Callers
  * invoke this from their own submit handler when the save-as-default checkbox
  * is checked, then create/update the session as usual.
+ *
+ * Writes under the canonical tool key (claude-code-cli → claude-code, matching
+ * the daemon resolver) and also sets `default_agentic_selection[tool]` to
+ * `{ source: 'inline' }` — otherwise a user whose selection points at a preset
+ * or the workspace default would save a config blob the daemon never resolves.
  */
 export async function persistUserDefaultFromForm(
   client: AgorClient,
@@ -64,9 +70,14 @@ export async function persistUserDefaultFromForm(
   tool: AgenticToolName,
   values: AgenticFormValues
 ): Promise<void> {
-  const config = buildConfigFromFormValues(tool, values);
+  const canonical = canonicalTenantAgenticTool(tool);
+  const config = buildConfigFromFormValues(canonical, values);
   await client.service('users').patch(user.user_id, {
-    default_agentic_config: { ...user.default_agentic_config, [tool]: config },
+    default_agentic_config: { ...user.default_agentic_config, [canonical]: config },
+    default_agentic_selection: {
+      ...user.default_agentic_selection,
+      [canonical]: { source: 'inline' as const },
+    },
   });
 }
 
@@ -84,18 +95,38 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
 }) => {
   const form = Form.useFormInstance();
   const selected = Form.useWatch(fieldName, form);
-  const canonicalTool = tool === 'claude-code-cli' ? 'claude-code' : tool;
+  // Canonicalize the tool key exactly as the daemon does (claude-code-cli →
+  // claude-code) so defaults read/write under one key across both surfaces.
+  const canonicalTool = canonicalTenantAgenticTool(tool);
   const settings = useAgorStore((state) => state.agenticToolSettingsByName.get(canonicalTool));
   const inlineAllowed = settings?.inline_configuration_allowed !== false;
   const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // When no user is provided the picker can't know whether a default exists, so
-  // it preserves the legacy "My default" option. Only a known user with an
-  // empty config for this tool suppresses it (and starts from inline instead).
-  const userDefaultConfig = currentUser?.default_agentic_config?.[tool];
-  const hasUserDefault = currentUser ? !!userDefaultConfig : true;
   const workspacePreset = presets.find((preset) => preset.is_default);
+
+  // The daemon resolves the user default from `default_agentic_selection` first
+  // (preset / workspace_default / inline), falling back to the config blob. Mirror
+  // that here so a preset- or workspace-backed default is still surfaced as
+  // "My default" and reachable — not hidden and force-switched to inline.
+  const userSelection = currentUser?.default_agentic_selection?.[canonicalTool];
+  const userConfigBlob = currentUser?.default_agentic_config?.[canonicalTool];
+  // When no user is provided the picker can't know whether a default exists, so
+  // it preserves the legacy "My default" option.
+  const hasUserDefault = currentUser ? Boolean(userSelection ?? userConfigBlob) : true;
+
+  const myDefaultSummary = (): string => {
+    if (userSelection?.source === 'preset') {
+      const preset = presets.find((p) => p.preset_id === userSelection.preset_id);
+      if (!preset) return 'preset';
+      const summary = summarizeConfig(canonicalTool, preset.configuration);
+      return summary ? `${preset.name} · ${summary}` : preset.name;
+    }
+    if (userSelection?.source === 'workspace_default') {
+      return workspacePreset ? `Workspace default · ${workspacePreset.name}` : 'Workspace default';
+    }
+    return summarizeConfig(canonicalTool, userConfigBlob);
+  };
 
   useEffect(() => {
     if (!client) {
@@ -156,7 +187,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
     options.push({
       value: USER_DEFAULT_AGENTIC_CONFIGURATION,
       title: 'My default',
-      summary: summarizeConfig(tool, userDefaultConfig),
+      summary: myDefaultSummary(),
       label: 'My default',
     });
   }
@@ -164,7 +195,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
     value: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
     title: workspacePreset ? `Workspace default · ${workspacePreset.name}` : 'Workspace default',
     summary: workspacePreset
-      ? summarizeConfig(tool, workspacePreset.configuration)
+      ? summarizeConfig(canonicalTool, workspacePreset.configuration)
       : 'not configured',
     label: workspacePreset ? `Workspace default · ${workspacePreset.name}` : 'Workspace default',
     disabled: !workspacePreset,
@@ -173,7 +204,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
     options.push({
       value: preset.preset_id,
       title: preset.name,
-      summary: summarizeConfig(tool, preset.configuration),
+      summary: summarizeConfig(canonicalTool, preset.configuration),
       label: preset.name,
     });
   }

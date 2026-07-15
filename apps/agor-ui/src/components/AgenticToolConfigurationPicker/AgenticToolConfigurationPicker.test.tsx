@@ -1,4 +1,4 @@
-import type { AgorClient, User } from '@agor-live/client';
+import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -6,7 +6,10 @@ import {
 import { render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
-import { AgenticToolConfigurationPicker } from './AgenticToolConfigurationPicker';
+import {
+  AgenticToolConfigurationPicker,
+  persistUserDefaultFromForm,
+} from './AgenticToolConfigurationPicker';
 
 // Store: no per-tool override → inline configuration is allowed.
 vi.mock('../../store/agorStore', () => ({
@@ -25,16 +28,16 @@ vi.mock('../MCPServerSelect', () => ({
   SessionMcpServersField: () => <div data-testid="mcp-servers-field" />,
 }));
 
-const makeClient = () =>
+const makeClient = (presets: unknown[] = []) =>
   ({
     service: () => ({
-      find: async () => ({ data: [] }),
+      find: async () => ({ data: presets }),
       on: () => {},
       off: () => {},
     }),
   }) as unknown as AgorClient;
 
-const userWithDefault = {
+const userWithConfigDefault = {
   user_id: 'u1',
   default_agentic_config: {
     'claude-code': {
@@ -49,12 +52,24 @@ const userWithoutDefault = {
   default_agentic_config: {},
 } as unknown as User;
 
-function renderPicker(currentUser: User) {
+const teamPreset = {
+  preset_id: 'p1',
+  tool: 'claude-code',
+  name: 'Team Preset',
+  is_default: false,
+  configuration: { modelConfig: { model: 'claude-opus-4-8' }, permissionMode: 'auto' },
+};
+
+function renderPicker(
+  currentUser: User,
+  tool: AgenticToolName = 'claude-code',
+  presets: unknown[] = []
+) {
   return render(
     <Form>
       <AgenticToolConfigurationPicker
-        tool="claude-code"
-        client={makeClient()}
+        tool={tool}
+        client={makeClient(presets)}
         mcpServerById={new Map()}
         currentUser={currentUser}
         enableSaveAsDefault
@@ -65,7 +80,7 @@ function renderPicker(currentUser: User) {
 
 describe('AgenticToolConfigurationPicker', () => {
   it('shows "My default" with resolved model + permission summary', async () => {
-    renderPicker(userWithDefault);
+    renderPicker(userWithConfigDefault);
     await waitFor(() =>
       expect(screen.getByText(/My default · Claude Sonnet 5 · Accept edits/)).toBeInTheDocument()
     );
@@ -78,6 +93,69 @@ describe('AgenticToolConfigurationPicker', () => {
     expect(screen.queryByText('My default')).not.toBeInTheDocument();
     // Save-as-default is offered while inline config is active.
     expect(screen.getByText(/Save as my default/)).toBeInTheDocument();
+  });
+
+  it('keeps a preset-backed default reachable as "My default" with the preset summary', async () => {
+    // Selection points at a preset (no inline config blob) — must not be hidden
+    // or force-switched to inline.
+    const user = {
+      user_id: 'u3',
+      default_agentic_config: {},
+      default_agentic_selection: { 'claude-code': { source: 'preset', preset_id: 'p1' } },
+    } as unknown as User;
+    renderPicker(user, 'claude-code', [teamPreset]);
+    await waitFor(() => expect(screen.getByText(/My default · Team Preset/)).toBeInTheDocument());
+    // Not forced into inline.
+    expect(screen.queryByTestId('inline-config-form')).not.toBeInTheDocument();
+  });
+
+  it('treats a workspace_default selection as a default (not hidden)', async () => {
+    const user = {
+      user_id: 'u4',
+      default_agentic_config: {},
+      default_agentic_selection: { 'claude-code': { source: 'workspace_default' } },
+    } as unknown as User;
+    renderPicker(user);
+    await waitFor(() =>
+      expect(screen.getByText(/My default · Workspace default/)).toBeInTheDocument()
+    );
+    expect(screen.queryByTestId('inline-config-form')).not.toBeInTheDocument();
+  });
+
+  it('reads the default under the canonical key on claude-code-cli surfaces', async () => {
+    // Default stored under 'claude-code'; the CLI surface must still see it.
+    renderPicker(userWithConfigDefault, 'claude-code-cli');
+    await waitFor(() => expect(screen.getByText(/My default/)).toBeInTheDocument());
+    expect(screen.queryByTestId('inline-config-form')).not.toBeInTheDocument();
+  });
+});
+
+describe('persistUserDefaultFromForm', () => {
+  it('writes the config + inline selection under the canonical tool key', async () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const client = { service: () => ({ patch }) } as unknown as AgorClient;
+    const user = {
+      user_id: 'u9',
+      default_agentic_config: { codex: { permissionMode: 'auto' } },
+      default_agentic_selection: { codex: { source: 'inline' } },
+    } as unknown as User;
+
+    // claude-code-cli must canonicalize to claude-code for both writes.
+    await persistUserDefaultFromForm(client, user, 'claude-code-cli', {
+      permissionMode: 'acceptEdits',
+    });
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    const [userId, payload] = patch.mock.calls[0];
+    expect(userId).toBe('u9');
+    expect(payload.default_agentic_config['claude-code']).toEqual({
+      modelConfig: undefined,
+      permissionMode: 'acceptEdits',
+    });
+    expect(payload.default_agentic_selection['claude-code']).toEqual({ source: 'inline' });
+    // Existing per-tool entries are preserved.
+    expect(payload.default_agentic_config.codex).toEqual({ permissionMode: 'auto' });
+    expect(payload.default_agentic_selection.codex).toEqual({ source: 'inline' });
   });
 });
 

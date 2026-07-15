@@ -31,6 +31,7 @@ import { Collapse, Divider, Form, Modal, Typography } from 'antd';
 import React from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectSessionMcpServerIds } from '../../store/selectors';
+import { useThemedMessage } from '../../utils/message';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import type { AgenticFormValues } from '../AgenticToolConfigForm';
 import { AgenticToolConfigForm } from '../AgenticToolConfigForm';
@@ -195,6 +196,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   // Entity maps come from the store rather than being drilled through the App
   // shell. The whole session→MCP map is sliced to this session's ids here so
   // the rest of the component keeps working with a plain `string[]`.
+  const { showError } = useThemedMessage();
   const mcpServerById = useAgorStore(selectMcpServerById);
   const sessionMcpServerIds =
     useAgorStore(selectSessionMcpServerIds).get(session.session_id) ?? EMPTY_MCP_SERVER_IDS;
@@ -284,7 +286,12 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           codexApprovalPolicy: values.codexApprovalPolicy,
           codexNetworkAccess: values.codexNetworkAccess,
         };
-        void persistUserDefaultFromForm(client, currentUser, session.agentic_tool, formValues);
+        void persistUserDefaultFromForm(
+          client,
+          currentUser,
+          session.agentic_tool,
+          formValues
+        ).catch(() => showError('Failed to save your default configuration'));
       }
 
       if (
