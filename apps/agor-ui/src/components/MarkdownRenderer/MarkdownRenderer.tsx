@@ -22,6 +22,10 @@ import {
   streamdownRichContentPlugins,
   streamdownRichContentPluginsWithVegaLite,
 } from './richContentPlugins';
+import {
+  createVegaLiteActivationBudget,
+  VegaLiteActivationBudgetContext,
+} from './vegaLiteActivationBudget';
 import './MarkdownRenderer.css';
 
 interface MarkdownRendererProps {
@@ -108,11 +112,16 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
     : {};
 
   const mergedStyles = { ...style, ...compactStyles };
-  const vegaLiteFenceCount = countVegaLiteFences(rawText);
-  const plugins =
-    enableVegaLite && vegaLiteFenceCount <= MAX_VEGA_LITE_CHARTS_PER_DOCUMENT
-      ? streamdownRichContentPluginsWithVegaLite
-      : streamdownRichContentPlugins;
+  const plugins = enableVegaLite
+    ? streamdownRichContentPluginsWithVegaLite
+    : streamdownRichContentPlugins;
+  const vegaLiteActivationBudget = useMemo(
+    () => createVegaLiteActivationBudget(MAX_VEGA_LITE_CHARTS_PER_DOCUMENT, rawText),
+    // A changed Markdown source receives a fresh budget. Streamdown may retain
+    // renderer component positions while streaming, so source identity—not a
+    // regex approximation of fence syntax—is the correct reset boundary.
+    [rawText]
+  );
   const rehypePlugins = useMemo(
     () =>
       headingAnchors ? [...Object.values(defaultRehypePlugins), rehypeHeadingAnchors] : undefined,
@@ -133,32 +142,30 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   // Security: Streamdown sanitizes HTML by default to prevent XSS
   return (
     <Typography style={mergedStyles} className={compact ? 'markdown-compact' : undefined}>
-      <Streamdown
-        key={isStreaming ? undefined : markdownContentKey(rawText, { headingAnchors })}
-        mode={isStreaming ? 'streaming' : 'static'}
-        parseIncompleteMarkdown={isStreaming} // Parse incomplete syntax only while streaming
-        className={inline ? 'inline-markdown' : 'markdown-content'}
-        isAnimating={isStreaming} // Disable buttons during streaming
-        controls={showControls} // Show/hide controls based on context
-        mermaid={{ config: mermaidConfig }} // Set Mermaid theme based on current theme mode
-        plugins={plugins}
-        components={components}
-        rehypePlugins={rehypePlugins}
-        remarkPlugins={streamdownRemarkPlugins}
-        // Keep anchored documents in one Streamdown block so the heading slugger
-        // sees the whole document and duplicate headings are deduped globally.
-        parseMarkdownIntoBlocksFn={headingAnchors ? parseMarkdownAsSingleBlock : undefined}
-        // Use default ['github-light', 'github-dark'] for automatic theme switching
-      >
-        {text}
-      </Streamdown>
+      <VegaLiteActivationBudgetContext.Provider value={vegaLiteActivationBudget}>
+        <Streamdown
+          key={isStreaming ? undefined : markdownContentKey(rawText, { headingAnchors })}
+          mode={isStreaming ? 'streaming' : 'static'}
+          parseIncompleteMarkdown={isStreaming} // Parse incomplete syntax only while streaming
+          className={inline ? 'inline-markdown' : 'markdown-content'}
+          isAnimating={isStreaming} // Disable buttons during streaming
+          controls={showControls} // Show/hide controls based on context
+          mermaid={{ config: mermaidConfig }} // Set Mermaid theme based on current theme mode
+          plugins={plugins}
+          components={components}
+          rehypePlugins={rehypePlugins}
+          remarkPlugins={streamdownRemarkPlugins}
+          // Keep anchored documents in one Streamdown block so the heading slugger
+          // sees the whole document and duplicate headings are deduped globally.
+          parseMarkdownIntoBlocksFn={headingAnchors ? parseMarkdownAsSingleBlock : undefined}
+          // Use default ['github-light', 'github-dark'] for automatic theme switching
+        >
+          {text}
+        </Streamdown>
+      </VegaLiteActivationBudgetContext.Provider>
     </Typography>
   );
 };
-
-function countVegaLiteFences(markdown: string): number {
-  return markdown.match(/^[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*vega-lite(?:[ \t]|$)/gim)?.length ?? 0;
-}
 
 export const MarkdownRenderer = React.memo(MarkdownRendererInner);
 MarkdownRenderer.displayName = 'MarkdownRenderer';

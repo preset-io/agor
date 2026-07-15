@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useId, useRef, useState } from 'react';
 import {
   CodeBlock,
   CodeBlockCopyButton,
@@ -6,6 +6,7 @@ import {
   StreamdownContext,
 } from 'streamdown';
 import { isCodeCopyEnabled } from './streamdownControls';
+import { VegaLiteActivationBudgetContext } from './vegaLiteActivationBudget';
 import { loadVegaRenderer } from './vegaRendererLoader';
 
 interface VegaLiteErrorBoundaryProps extends CustomRendererProps {
@@ -40,15 +41,22 @@ class VegaLiteErrorBoundary extends React.Component<
  * never downloads or repeatedly invokes Vega.
  */
 export function VegaLiteRendererGate(props: CustomRendererProps) {
+  const activationBudget = useContext(VegaLiteActivationBudgetContext);
+  const activationId = useId();
   const gateRef = useRef<HTMLDivElement>(null);
   const [isNearViewport, setIsNearViewport] = useState(
     () => typeof IntersectionObserver === 'undefined'
   );
   const [Renderer, setRenderer] = useState<React.ComponentType<CustomRendererProps> | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [activationAllowed, setActivationAllowed] = useState(false);
 
   useEffect(() => {
-    if (isNearViewport || props.isIncomplete || !gateRef.current) return;
+    setActivationAllowed(props.isIncomplete ? false : activationBudget.claim(activationId));
+  }, [activationBudget, activationId, props.isIncomplete]);
+
+  useEffect(() => {
+    if (isNearViewport || props.isIncomplete || !activationAllowed || !gateRef.current) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return;
@@ -59,10 +67,11 @@ export function VegaLiteRendererGate(props: CustomRendererProps) {
     );
     observer.observe(gateRef.current);
     return () => observer.disconnect();
-  }, [isNearViewport, props.isIncomplete]);
+  }, [activationAllowed, isNearViewport, props.isIncomplete]);
 
   useEffect(() => {
-    if (props.isIncomplete || !isNearViewport || Renderer || loadFailed) return;
+    if (props.isIncomplete || !activationAllowed || !isNearViewport || Renderer || loadFailed)
+      return;
     let disposed = false;
     const load = async () => {
       try {
@@ -76,9 +85,13 @@ export function VegaLiteRendererGate(props: CustomRendererProps) {
     return () => {
       disposed = true;
     };
-  }, [Renderer, isNearViewport, loadFailed, props.isIncomplete]);
+  }, [Renderer, activationAllowed, isNearViewport, loadFailed, props.isIncomplete]);
 
   if (props.isIncomplete) {
+    return <VegaLiteCodeFallback {...props} />;
+  }
+
+  if (!activationAllowed) {
     return <VegaLiteCodeFallback {...props} />;
   }
 

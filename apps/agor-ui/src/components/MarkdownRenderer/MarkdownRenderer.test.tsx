@@ -1,10 +1,21 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MarkdownRenderer } from './MarkdownRenderer';
+
+const mocks = vi.hoisted(() => ({ loadRenderer: vi.fn() }));
+
+vi.mock('./vegaRendererLoader', () => ({ loadVegaRenderer: mocks.loadRenderer }));
 
 const doc = `# Knowledge Base: Next Steps\n\n- Add semantic and hybrid search once embeddings are configured.\n- Introduce smart document units/chunking for long pages, without exposing chunking as a user-facing concept.\n- Use Knowledge as durable memory for Agor teammates: preferences, project context, decisions, and reusable prompts.\n- Support skill bundles and lightweight import/export, including zip export later.\n- Keep polishing authoring: backlinks, better history/diff flows, and safer collaboration defaults.\n- autocomplete referencing from sessions and other places\n- Git syncing?`;
 
 describe('MarkdownRenderer', () => {
+  beforeEach(() => {
+    mocks.loadRenderer.mockReset();
+    mocks.loadRenderer.mockResolvedValue({
+      VegaLiteRenderer: () => <div data-testid="vega-lite-renderer" />,
+    });
+  });
+
   it('refreshes preview text when an earlier bullet list item changes', async () => {
     const { rerender } = render(<MarkdownRenderer content={doc} />);
     expect(screen.getByText(/Git syncing\?/)).toBeInTheDocument();
@@ -61,16 +72,39 @@ describe('MarkdownRenderer', () => {
     expect(container.querySelector('figure[aria-label="Chart"]')).not.toBeInTheDocument();
   });
 
-  it('fails closed to ordinary code when a document contains too many charts', async () => {
+  it('activates no more than four top-level charts in one Markdown document', async () => {
     const fence = '```vega-lite\n{"description":"Chart","mark":"bar"}\n```';
-    const { container } = render(
+    render(
       <MarkdownRenderer
         content={Array.from({ length: 5 }, () => fence).join('\n\n')}
         enableVegaLite
       />
     );
 
-    expect((await screen.findAllByText(/"description"/)).length).toBeGreaterThanOrEqual(5);
-    expect(container.querySelector('figure[aria-label="Chart"]')).not.toBeInTheDocument();
+    expect(await screen.findAllByTestId('vega-lite-renderer')).toHaveLength(4);
+    expect(mocks.loadRenderer).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    [
+      'blockquotes',
+      Array.from(
+        { length: 5 },
+        () => '> ```vega-lite\n> {"description":"Chart","mark":"bar"}\n> ```'
+      ).join('\n\n'),
+    ],
+    [
+      'list items',
+      Array.from(
+        { length: 5 },
+        (_, index) =>
+          `- chart ${index + 1}\n\n  \`\`\`vega-lite\n  {"description":"Chart","mark":"bar"}\n  \`\`\``
+      ).join('\n\n'),
+    ],
+  ])('enforces the renderer activation budget inside %s', async (_label, content) => {
+    render(<MarkdownRenderer content={content} enableVegaLite />);
+
+    expect(await screen.findAllByTestId('vega-lite-renderer')).toHaveLength(4);
+    expect(mocks.loadRenderer).toHaveBeenCalledTimes(4);
   });
 });

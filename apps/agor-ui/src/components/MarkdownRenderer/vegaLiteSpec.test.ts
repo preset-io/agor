@@ -3,6 +3,8 @@ import { parseVegaLiteSpec } from './vegaLiteSpec';
 
 const validSpec = {
   description: 'Revenue by month',
+  width: 'container',
+  height: 240,
   data: { values: [{ month: 'Jan', revenue: 28 }] },
   mark: 'bar',
   encoding: {
@@ -50,6 +52,17 @@ describe('parseVegaLiteSpec', () => {
   ])('rejects %s', (_label, spec) => {
     expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(
       /not allowed|image marks|static|unbounded/i
+    );
+  });
+
+  it.each([
+    ['coercible numeric width', { ...validSpec, width: '1e9' }],
+    ['step-sized width', { ...validSpec, width: { step: 100_000_000 } }],
+    ['negative height', { ...validSpec, height: -1 }],
+    ['unknown width keyword', { ...validSpec, width: 'fit' }],
+  ])('rejects %s', (_label, spec) => {
+    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(
+      /must be "container" or a finite nonnegative number/
     );
   });
 

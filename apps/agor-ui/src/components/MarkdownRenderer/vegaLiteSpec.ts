@@ -99,14 +99,8 @@ function inspectValue(value: unknown, path: string, depth: number, state: { node
         `${childPath} is not allowed because it can override embed behavior.`
       );
     }
-    if (
-      (normalizedKey === 'width' || normalizedKey === 'height') &&
-      typeof child === 'number' &&
-      child > MAX_DIMENSION
-    ) {
-      throw new VegaLiteSpecError(
-        `${childPath} cannot exceed ${MAX_DIMENSION.toLocaleString()} pixels.`
-      );
+    if (normalizedKey === 'width' || normalizedKey === 'height') {
+      validateDimension(child, childPath);
     }
     if (['params', 'selection', 'signals', 'bind', 'events'].includes(normalizedKey)) {
       throw new VegaLiteSpecError(
@@ -138,6 +132,16 @@ function inspectValue(value: unknown, path: string, depth: number, state: { node
 
     inspectValue(child, childPath, depth + 1, state);
   }
+}
+
+function validateDimension(value: unknown, path: string): void {
+  const isBoundedNumber =
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_DIMENSION;
+  if (isBoundedNumber || value === 'container') return;
+
+  throw new VegaLiteSpecError(
+    `${path} must be "container" or a finite nonnegative number no greater than ${MAX_DIMENSION.toLocaleString()} pixels; numeric strings, step sizing, and other objects are not allowed.`
+  );
 }
 
 /**
