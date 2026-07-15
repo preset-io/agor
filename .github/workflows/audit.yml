@@ -55,3 +55,14 @@ jobs:
       # Blocking: any CRITICAL advisory in production dependencies fails the build.
       - name: pnpm audit (prod, critical — blocking)
         run: pnpm audit --audit-level=critical --prod
+
+      # Advisory: retain HIGH+ visibility without changing the critical-only gate.
+      # `continue-on-error` is explicit workflow policy, not a shell-level failure mask.
+      - name: pnpm audit (prod, high — advisory)
+        continue-on-error: true
+        run: pnpm audit --audit-level=high --prod
+
+      # Include dev dependencies so nightly/manual runs keep surfacing their HIGH+ advisories.
+      - name: pnpm audit (all, high — advisory)
+        continue-on-error: true
+        run: pnpm audit --audit-level=high
