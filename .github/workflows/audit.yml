@@ -31,7 +31,12 @@ on:
   workflow_dispatch:
 
 env:
+  # Install runs on the repo's pinned pnpm (matches package.json `packageManager`
+  # and pnpm-lock.yaml's lockfileVersion). The audit runs on pnpm 11, the first
+  # line to query npm's bulk advisory endpoint — the legacy
+  # /-/npm/v1/security/audits endpoint that pnpm 9 uses was retired (HTTP 410).
   PNPM_VERSION: '9.15.1'
+  AUDIT_PNPM_VERSION: '11.13.0'
   NODE_VERSION: '22'
 
 jobs:
@@ -53,16 +58,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # Blocking: any CRITICAL advisory in prod deps fails the build.
+      # `--pm-on-fail=ignore` stops pnpm 11 from self-switching down to the
+      # pinned `packageManager` (pnpm 9) declared in package.json.
       - name: pnpm audit (prod, critical — blocking)
-        run: pnpm audit --audit-level=critical --prod
+        run: npx --yes pnpm@${{ env.AUDIT_PNPM_VERSION }} audit --audit-level=critical --prod --pm-on-fail=ignore
 
       # Advisory: HIGH+ advisories are surfaced but non-blocking.
       # Promote to blocking once the prod tree is clean at the HIGH level.
       - name: pnpm audit (prod, high — advisory)
         if: always()
-        run: pnpm audit --audit-level=high --prod || true
+        run: npx --yes pnpm@${{ env.AUDIT_PNPM_VERSION }} audit --audit-level=high --prod --pm-on-fail=ignore || true
 
       # Full tree (incl. dev deps) — advisory only.
       - name: pnpm audit (all, high — advisory)
         if: always()
-        run: pnpm audit --audit-level=high || true
+        run: npx --yes pnpm@${{ env.AUDIT_PNPM_VERSION }} audit --audit-level=high --pm-on-fail=ignore || true
