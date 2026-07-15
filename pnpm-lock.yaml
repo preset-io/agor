@@ -365,9 +365,15 @@ importers:
       '@xterm/addon-clipboard':
         specifier: ^0.2.0
         version: 0.2.0
+      '@xterm/addon-fit':
+        specifier: ^0.11.0
+        version: 0.11.0
       '@xterm/addon-web-links':
         specifier: ^0.12.0
         version: 0.12.0
+      '@xterm/addon-webgl':
+        specifier: ^0.19.0
+        version: 0.19.0
       '@xterm/xterm':
         specifier: ^6.0.0
         version: 6.0.0
@@ -4601,8 +4607,14 @@ packages:
   '@xterm/addon-clipboard@0.2.0':
     resolution: {integrity: sha512-Dl31BCtBhLaUEECUbEiVcCLvLBbaeGYdT7NofB8OJkGTD3MWgBsaLjXvfGAD4tQNHhm6mbKyYkR7XD8kiZsdNg==}
 
+  '@xterm/addon-fit@0.11.0':
+    resolution: {integrity: sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==}
+
   '@xterm/addon-web-links@0.12.0':
     resolution: {integrity: sha512-4Smom3RPyVp7ZMYOYDoC/9eGJJJqYhnPLGGqJ6wOBfB8VxPViJNSKdgRYb8NpaM6YSelEKbA2SStD7lGyqaobw==}
+
+  '@xterm/addon-webgl@0.19.0':
+    resolution: {integrity: sha512-b3fMOsyLVuCeNJWxolACEUED0vm7qC0cy4wRvf3oURSzDTYVQiGPhTnhWZwIHdvC48Y+oLhvYXnY4XDXPoJo6A==}
 
   '@xterm/headless@5.5.0':
     resolution: {integrity: sha512-5xXB7kdQlFBP82ViMJTwwEc3gKCLGKR/eoxQm4zge7GPBl86tCdI0IdPJjoKd8mUSFXz5V7i/25sfsEkP4j46g==}
@@ -6782,7 +6794,6 @@ packages:
 
   libsql@0.5.29:
     resolution: {integrity: sha512-8lMP8iMgiBzzoNbAPQ59qdVcj6UaE/Vnm+fiwX4doX4Narook0a4GPKWBEv+CR8a1OwbfkgL18uBfBjWdF0Fzg==}
-    cpu: [x64, arm64, wasm32, arm]
     os: [darwin, linux, win32]
 
   lightningcss-android-arm64@1.32.0:
@@ -13665,7 +13676,11 @@ snapshots:
     dependencies:
       js-base64: 3.7.8
 
+  '@xterm/addon-fit@0.11.0': {}
+
   '@xterm/addon-web-links@0.12.0': {}
+
+  '@xterm/addon-webgl@0.19.0': {}
 
   '@xterm/headless@5.5.0': {}
 

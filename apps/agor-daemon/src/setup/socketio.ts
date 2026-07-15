@@ -683,7 +683,11 @@ export function createSocketIOConfig(
           return;
         }
         const channel = `user/${data.userId}/terminal`;
-        io.to(channel).emit('terminal:output', data);
+        // `socket.to` (not `io.to`) excludes the sender. The executor joins
+        // its own `user/<id>/terminal` channel to relay I/O, so `io.to` would
+        // bounce every output frame straight back to the executor that just
+        // produced it — a wasted round trip on the hottest path.
+        socket.to(channel).emit('terminal:output', data);
       });
 
       // Route terminal input from browser to executor.

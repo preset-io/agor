@@ -3,10 +3,12 @@
 import type { AgorClient, User, UserID } from '@agor-live/client';
 import { hasMinimumRole } from '@agor-live/client';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
+import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import { App, Modal } from 'antd';
 import { useEffect, useRef, useState } from 'react';
+import { loadWebglRenderer } from '../../utils/xtermWebgl';
 import '@xterm/xterm/css/xterm.css';
 import { WEB_TERMINAL_MIN_ROLE } from './constants';
 
@@ -88,6 +90,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
   const { modal } = App.useApp();
   const terminalDivRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [modalReady, setModalReady] = useState(false);
   const [zellijMissing, setZellijMissing] = useState(false);
@@ -209,19 +212,41 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       });
       terminal.loadAddon(webLinksAddon);
 
+      // GPU renderer first (falls back to DOM if WebGL is unavailable), then
+      // fit the terminal to the modal body instead of the hardcoded 160×40.
+      loadWebglRenderer(terminal);
+      const fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+      fitAddonRef.current = fitAddon;
+
       return terminal;
+    };
+
+    const fitToContainer = () => {
+      if (!terminalDivRef.current || !fitAddonRef.current) return;
+      const box = terminalDivRef.current.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) return;
+      try {
+        fitAddonRef.current.fit();
+      } catch {
+        /* xterm refuses absurd sizes; ignore */
+      }
     };
 
     // Setup terminal (channel I/O via Zellij executor)
     const setupTerminal = async () => {
       const terminal = createTerminalInstance();
 
+      // Size the terminal to the modal body before announcing dims to the
+      // daemon, then keep it fitted as the viewport (and thus the modal) resizes.
+      fitToContainer();
+
       try {
         // Request terminal from daemon
         // This spawns an executor with zellij.attach if not already running
         const result = (await client.service('terminals').create({
-          rows: 40,
-          cols: 160,
+          rows: terminal.rows,
+          cols: terminal.cols,
           branchId,
         })) as {
           userId: UserID;
@@ -312,13 +337,19 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     // Setup terminal
     setupTerminal();
 
+    // Re-fit when the modal body resizes (viewport changes, browser zoom).
+    const ro = new ResizeObserver(() => fitToContainer());
+    if (terminalDivRef.current) ro.observe(terminalDivRef.current);
+
     return () => {
       mounted = false;
-      // Cleanup terminal instance
+      ro.disconnect();
+      // Cleanup terminal instance (also disposes its loaded addons).
       if (terminalRef.current) {
         terminalRef.current.dispose();
         terminalRef.current = null;
       }
+      fitAddonRef.current = null;
       // Zellij session persists - just clean up listeners
       removeChannelListeners();
       setIsConnected(false);
@@ -401,7 +432,9 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, color: '#fff' }}>
-          <div ref={terminalDivRef} />
+          {/* Concrete size gives @xterm/addon-fit a box to measure; the
+              width="auto" Modal then sizes itself to the terminal. */}
+          <div ref={terminalDivRef} style={{ width: '80vw', maxWidth: 1100, height: '70vh' }} />
         </div>
       )}
     </Modal>

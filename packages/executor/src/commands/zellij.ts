@@ -37,6 +37,78 @@ let _currentUserId: string | null = null;
 let currentPtyCols = 160;
 let currentPtyRows = 40;
 
+/** Longest a buffered chunk may wait before it is emitted. */
+const OUTPUT_FLUSH_INTERVAL_MS = 16;
+/** Flush early once the buffer reaches this size, regardless of the timer. */
+const OUTPUT_FLUSH_MAX_BYTES = 64 * 1024;
+
+export interface OutputCoalescer {
+  push(chunk: string): void;
+  flush(): void;
+  dispose(): void;
+}
+
+/**
+ * Coalesce rapid PTY output chunks into fewer, larger emits.
+ *
+ * node-pty's `onData` fires once per OS-level read; under heavy output
+ * (builds, `yes`, zellij full-screen redraws) that is hundreds of tiny
+ * callbacks per second, and emitting one Socket.IO frame per callback is
+ * what makes the browser terminal janky. We accumulate into a buffer and
+ * emit it as a single frame, flushing on whichever comes first:
+ *
+ *   - `setImmediate`: collapses every chunk that arrives before the event
+ *     loop next yields into one emit (the common heavy-output case), while
+ *     keeping interactive latency to a single tick.
+ *   - a `intervalMs` timer: caps how long a steady stream is held so output
+ *     still feels live.
+ *   - a `maxBytes` size cap: a runaway stream must not grow the buffer
+ *     unbounded while it waits for the timer.
+ *
+ * `intervalMs`/`maxBytes` are injectable for unit testing.
+ */
+export function createOutputCoalescer(
+  emit: (data: string) => void,
+  intervalMs: number = OUTPUT_FLUSH_INTERVAL_MS,
+  maxBytes: number = OUTPUT_FLUSH_MAX_BYTES
+): OutputCoalescer {
+  let buffer = '';
+  let immediate: ReturnType<typeof setImmediate> | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearScheduled() {
+    if (immediate) {
+      clearImmediate(immediate);
+      immediate = null;
+    }
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  }
+
+  function flush() {
+    clearScheduled();
+    if (buffer.length === 0) return;
+    const data = buffer;
+    buffer = '';
+    emit(data);
+  }
+
+  function push(chunk: string) {
+    if (chunk.length === 0) return;
+    buffer += chunk;
+    if (buffer.length >= maxBytes) {
+      flush();
+      return;
+    }
+    if (!immediate) immediate = setImmediate(flush);
+    if (!timer) timer = setTimeout(flush, intervalMs);
+  }
+
+  return { push, flush, dispose: flush };
+}
+
 /**
  * Handle zellij.attach command
  *
@@ -178,17 +250,18 @@ export async function handleZellijAttach(
 
     console.log(`[zellij.attach] PTY spawned, PID: ${pty.pid}`);
 
-    // Stream PTY output to channel
-    pty.onData((data) => {
-      socket.emit('terminal:output', {
-        userId,
-        data,
-      });
+    // Stream PTY output to channel, coalesced into fewer/larger frames so
+    // heavy output doesn't drown the browser terminal in tiny writes.
+    const outputCoalescer = createOutputCoalescer((data) => {
+      socket.emit('terminal:output', { userId, data });
     });
+    pty.onData((chunk) => outputCoalescer.push(chunk));
 
     // Handle PTY exit
     pty.onExit(({ exitCode, signal }) => {
       console.log(`[zellij.attach] PTY exited: code=${exitCode}, signal=${signal}`);
+      // Emit any buffered tail before the socket tears down.
+      outputCoalescer.dispose();
       ptyProcess = null;
 
       // Notify daemon that terminal ended

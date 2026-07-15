@@ -30,9 +30,11 @@
 
 import type { AgorClient, UserID } from '@agor-live/client';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
+import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef, useState } from 'react';
+import { loadWebglRenderer } from '../../utils/xtermWebgl';
 import '@xterm/xterm/css/xterm.css';
 
 export interface EmbeddedTerminalProps {
@@ -111,16 +113,6 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
       }
     };
 
-    // xterm's internal DOM doesn't flex with the container — its
-    // measurement is `cols × cellWidth` pixels, fixed at construction.
-    // Without @xterm/addon-fit (which we don't have as a dep yet) we
-    // implement fit manually: start with conservative bootstrap dims, let
-    // xterm render once so it publishes real per-cell pixel sizes via
-    // `_core._renderService.dimensions.css.cell`, then fit to the
-    // parent's clientWidth/clientHeight. Re-fit on every container size
-    // change via ResizeObserver. The xterm element itself is forced to
-    // fill its container via the inline-style block below, so font/zoom
-    // changes also trip the ResizeObserver and re-fit cleanly.
     const terminal = new Terminal({
       allowProposedApi: true,
       fontSize: 13,
@@ -143,65 +135,30 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
         window.open(uri, '_blank', 'noopener,noreferrer');
       })
     );
+    // GPU renderer first (falls back to DOM if WebGL is unavailable), then
+    // the fit addon derives cols/rows from the container size.
+    loadWebglRenderer(terminal);
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
     terminalRef.current = terminal;
 
-    // Force the xterm root + viewport to fill the container, so the
-    // .xterm element grows when the pane grows. xterm's stylesheet
-    // defaults to a fixed pixel size; we override here.
-    const xtermEl = containerRef.current.querySelector('.xterm') as HTMLElement | null;
-    if (xtermEl) {
-      xtermEl.style.width = '100%';
-      xtermEl.style.height = '100%';
-    }
-
+    // @xterm/addon-fit measures the container and resizes the terminal to
+    // match; the `onResize` handler below relays the new dims to the PTY.
     const fitToContainer = () => {
-      if (!terminalRef.current || !containerRef.current) return;
-      // biome-ignore lint/suspicious/noExplicitAny: tap xterm internals for cell metrics
-      const core = (terminalRef.current as any)._core;
-      const cellW: number | undefined = core?._renderService?.dimensions?.css?.cell?.width;
-      const cellH: number | undefined = core?._renderService?.dimensions?.css?.cell?.height;
-      if (!cellW || !cellH || cellW <= 0 || cellH <= 0) return; // not rendered yet
+      if (!containerRef.current) return;
       const box = containerRef.current.getBoundingClientRect();
       if (box.width <= 0 || box.height <= 0) return;
-      const cols = Math.max(20, Math.floor(box.width / cellW));
-      const rows = Math.max(5, Math.floor(box.height / cellH));
-      if (cols !== terminalRef.current.cols || rows !== terminalRef.current.rows) {
-        try {
-          terminalRef.current.resize(cols, rows);
-        } catch {
-          /* xterm refuses absurd sizes; ignore */
-        }
+      try {
+        fitAddon.fit();
+      } catch {
+        /* xterm refuses absurd sizes; ignore */
       }
     };
 
-    // First fit fires once xterm paints (cell metrics become real).
-    // We hit `fit` from multiple angles to defeat the layout-not-ready /
-    // font-not-loaded / cell-metrics-not-published race:
-    //
-    //   1. `terminal.onRender` — xterm's per-frame paint signal.
-    //   2. rAF nested rAF — catches the case where onRender already
-    //      fired before the listener attached.
-    //   3. ResizeObserver on the parent — catches container size changes
-    //      (tab toggles, browser zoom, pane drags).
-    //   4. A short setInterval burst for the first ~1.5s — covers
-    //      `document.fonts.ready` and weird Vite HMR remount paths
-    //      where cell metrics flip from default → real after paint.
-    let renderHandlerOff: { dispose(): void } | null = null;
-    try {
-      renderHandlerOff = terminal.onRender(() => fitToContainer());
-    } catch {
-      /* xterm v5 onRender signature variations — fall back to rAF only */
-    }
-    requestAnimationFrame(() => {
-      fitToContainer();
-      requestAnimationFrame(fitToContainer);
-    });
-    // Burst fit for 1.5s so the terminal definitively reaches its
-    // container size by the time the user is ready to read it.
-    const fitBurst = setInterval(fitToContainer, 100);
-    const fitBurstStop = setTimeout(() => clearInterval(fitBurst), 1500);
-    // Also re-fit when web fonts finish loading — Menlo / Monaco may
-    // arrive late and shift cellWidth.
+    // Fit once after the first paint (container has real dimensions), then
+    // on every container size change. Menlo/Monaco can arrive late and shift
+    // cell metrics, so re-fit when web fonts settle too.
+    requestAnimationFrame(fitToContainer);
     if (typeof document !== 'undefined' && 'fonts' in document) {
       (document as unknown as { fonts: { ready: Promise<void> } }).fonts.ready
         .then(() => fitToContainer())
@@ -265,14 +222,8 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
     return () => {
       mounted = false;
       ro.disconnect();
-      clearInterval(fitBurst);
-      clearTimeout(fitBurstStop);
-      try {
-        renderHandlerOff?.dispose();
-      } catch {
-        /* already disposed */
-      }
       if (terminalRef.current) {
+        // Disposing the terminal also disposes its loaded addons.
         terminalRef.current.dispose();
         terminalRef.current = null;
       }

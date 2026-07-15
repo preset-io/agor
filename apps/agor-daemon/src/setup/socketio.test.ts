@@ -56,11 +56,16 @@ interface FakeSocket {
     emit: (event: string, data: unknown) => void;
     to: (channel: string) => { emit: (event: string, data: unknown) => void };
   };
+  // socket.to(room) — broadcasts to a room EXCLUDING this socket. Mirrors the
+  // real socket.io semantics used by the terminal:output relay.
+  to: (channel: string) => { emit: (event: string, data: unknown) => void };
 }
 
 interface FakeIO {
   connectionHandler?: (socket: FakeSocket) => void;
   emitted: Array<{ channel: string; event: string; data: unknown }>;
+  /** Sender ids passed through the sender-excluding `socket.to` path. */
+  excludedSenders: string[];
   sockets: { sockets: Map<string, FakeSocket> };
   middlewares: Array<(socket: FakeSocket, next: (err?: Error) => void) => void>;
   on(event: string, fn: any): void;
@@ -97,12 +102,19 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
         },
       }),
     },
+    to: (channel: string) => ({
+      emit: (event: string, data: unknown) => {
+        io?.emitted.push({ channel, event, data });
+        io?.excludedSenders.push(id);
+      },
+    }),
   };
 }
 
 function makeIO(): FakeIO {
   const io: FakeIO = {
     emitted: [],
+    excludedSenders: [],
     sockets: { sockets: new Map() },
     middlewares: [],
     on(event, fn) {
@@ -461,7 +473,7 @@ describe('terminal:* handler authorization', () => {
       // client.authenticate() attaches `_isServiceAccount: true` to feathers.user
       // without ever setting socket.data.isService. Previous impl rejected this.
       const { io } = buildHarness();
-      const s = makeSocket('exec-sock');
+      const s = makeSocket('exec-sock', io);
       asServicePostConnect(s);
       connect(io, s);
       s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
@@ -474,10 +486,29 @@ describe('terminal:* handler authorization', () => {
       ]);
     });
 
+    it('terminal:output excludes the sending executor socket from the broadcast', () => {
+      // The executor joins its own `user/<id>/terminal` channel; relaying via
+      // `io.to` would echo every output frame back to it. The handler must use
+      // `socket.to` so the sender is excluded.
+      const { io } = buildHarness();
+      const s = makeSocket('exec-sock', io);
+      asServicePostConnect(s);
+      connect(io, s);
+      s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hello' });
+      expect(io.emitted).toEqual([
+        {
+          channel: `user/${ALICE}/terminal`,
+          event: 'terminal:output',
+          data: { userId: ALICE, data: 'hello' },
+        },
+      ]);
+      expect(io.excludedSenders).toEqual(['exec-sock']);
+    });
+
     it('terminal:output also accepts handshake-token service sockets (socket.data.isService path)', () => {
       // Separately covers the fast-path: service token presented at handshake.
       const { io } = buildHarness();
-      const s = makeSocket('exec-sock');
+      const s = makeSocket('exec-sock', io);
       asServiceHandshake(s);
       connect(io, s);
       s.handlers.get('terminal:output')?.({ userId: ALICE, data: 'hi' });
