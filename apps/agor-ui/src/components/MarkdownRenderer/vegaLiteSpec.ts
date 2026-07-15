@@ -47,6 +47,7 @@ export function parseVegaLiteSpec(source: string): ParsedVegaLiteSpec {
 
   const state = { nodes: 0 };
   inspectValue(parsed, '$', 0, state);
+  validateSpecLayout(parsed, '$');
   validateComposedViewCount(parsed);
 
   const description =
@@ -99,9 +100,6 @@ function inspectValue(value: unknown, path: string, depth: number, state: { node
         `${childPath} is not allowed because it can override embed behavior.`
       );
     }
-    if (normalizedKey === 'width' || normalizedKey === 'height') {
-      validateDimension(child, childPath);
-    }
     if (['params', 'selection', 'signals', 'bind', 'events'].includes(normalizedKey)) {
       throw new VegaLiteSpecError(
         `${childPath} is not allowed; conversation charts are static and cannot register event streams or bindings.`
@@ -134,6 +132,29 @@ function inspectValue(value: unknown, path: string, depth: number, state: { node
   }
 }
 
+/**
+ * Validate dimensions only where Vega-Lite interprets them as layout. A
+ * recursive property-name check is both incomplete (config aliases exist) and
+ * incorrect (inline data may legitimately contain fields named width/height).
+ */
+function validateSpecLayout(spec: Record<string, unknown>, path: string): void {
+  if (Object.hasOwn(spec, 'width')) validateDimension(spec.width, `${path}.width`);
+  if (Object.hasOwn(spec, 'height')) validateDimension(spec.height, `${path}.height`);
+
+  const config = spec.config;
+  if (isRecord(config) && isRecord(config.view)) {
+    validateViewConfig(config.view, `${path}.config.view`);
+  }
+
+  for (const key of ['layer', 'concat', 'hconcat', 'vconcat']) {
+    const children = spec[key];
+    if (!Array.isArray(children)) continue;
+    children.forEach((child, index) => {
+      if (isRecord(child)) validateSpecLayout(child, `${path}.${key}[${index}]`);
+    });
+  }
+}
+
 function validateDimension(value: unknown, path: string): void {
   const isBoundedNumber =
     typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_DIMENSION;
@@ -141,6 +162,36 @@ function validateDimension(value: unknown, path: string): void {
 
   throw new VegaLiteSpecError(
     `${path} must be "container" or a finite nonnegative number no greater than ${MAX_DIMENSION.toLocaleString()} pixels; numeric strings, step sizing, and other objects are not allowed.`
+  );
+}
+
+function validateViewConfig(view: Record<string, unknown>, path: string): void {
+  if (Object.hasOwn(view, 'step')) {
+    throw new VegaLiteSpecError(
+      `${path}.step is not allowed because per-category step sizing can create an unbounded aggregate chart dimension.`
+    );
+  }
+
+  for (const key of [
+    'width',
+    'height',
+    'continuousWidth',
+    'continuousHeight',
+    'discreteWidth',
+    'discreteHeight',
+  ]) {
+    if (!Object.hasOwn(view, key)) continue;
+    validateFixedDimension(view[key], `${path}.${key}`);
+  }
+}
+
+function validateFixedDimension(value: unknown, path: string): void {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_DIMENSION) {
+    return;
+  }
+
+  throw new VegaLiteSpecError(
+    `${path} must be a finite nonnegative number no greater than ${MAX_DIMENSION.toLocaleString()} pixels; step sizing and coercible values are not allowed.`
   );
 }
 

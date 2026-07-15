@@ -5,9 +5,9 @@ export interface VegaLiteActivationBudget {
   claim(id: string): boolean;
 }
 
-const unlimitedBudget: VegaLiteActivationBudget = { sourceIdentity: '', claim: () => true };
-
-export const VegaLiteActivationBudgetContext = createContext(unlimitedBudget);
+// A custom renderer used without an owning MarkdownRenderer must not silently
+// lose the document-level resource boundary.
+export const VegaLiteActivationBudgetContext = createContext<VegaLiteActivationBudget | null>(null);
 
 /**
  * A budget belongs to one Markdown source and counts actual custom-renderer

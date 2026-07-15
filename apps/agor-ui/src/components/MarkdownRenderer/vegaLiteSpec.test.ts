@@ -56,6 +56,29 @@ describe('parseVegaLiteSpec', () => {
   });
 
   it.each([
+    ['view step defaults', { ...validSpec, config: { view: { step: 100_000_000 } } }],
+    [
+      'continuous height defaults',
+      { ...validSpec, config: { view: { continuousHeight: 100_000_000 } } },
+    ],
+    [
+      'discrete width step defaults',
+      { ...validSpec, config: { view: { discreteWidth: { step: 100_000_000 } } } },
+    ],
+  ])('rejects unsafe %s', (_label, spec) => {
+    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(/step|no greater than/i);
+  });
+
+  it('does not mistake ordinary inline data fields for layout dimensions', () => {
+    const spec = {
+      ...validSpec,
+      data: { values: [{ width: 'small', height: 'tall', revenue: 28 }] },
+    };
+
+    expect(parseVegaLiteSpec(JSON.stringify(spec)).spec).toEqual(spec);
+  });
+
+  it.each([
     ['coercible numeric width', { ...validSpec, width: '1e9' }],
     ['step-sized width', { ...validSpec, width: { step: 100_000_000 } }],
     ['negative height', { ...validSpec, height: -1 }],

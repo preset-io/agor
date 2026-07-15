@@ -52,7 +52,9 @@ export function VegaLiteRendererGate(props: CustomRendererProps) {
   const [activationAllowed, setActivationAllowed] = useState(false);
 
   useEffect(() => {
-    setActivationAllowed(props.isIncomplete ? false : activationBudget.claim(activationId));
+    setActivationAllowed(
+      props.isIncomplete ? false : (activationBudget?.claim(activationId) ?? false)
+    );
   }, [activationBudget, activationId, props.isIncomplete]);
 
   useEffect(() => {

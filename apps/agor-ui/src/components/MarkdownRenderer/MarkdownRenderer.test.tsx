@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { VegaLiteRendererGate } from './VegaLiteRendererGate';
 
 const mocks = vi.hoisted(() => ({ loadRenderer: vi.fn() }));
 
@@ -70,6 +71,20 @@ describe('MarkdownRenderer', () => {
 
     expect(await screen.findByText(/"description"/)).toBeInTheDocument();
     expect(container.querySelector('figure[aria-label="Chart"]')).not.toBeInTheDocument();
+  });
+
+  it('fails closed when the Vega renderer gate has no activation-budget owner', async () => {
+    const { container } = render(
+      <VegaLiteRendererGate
+        code={'{"description":"Chart","mark":"bar"}'}
+        isIncomplete={false}
+        language="vega-lite"
+      />
+    );
+
+    expect(await screen.findByText(/"description"/)).toBeInTheDocument();
+    expect(container.querySelector('[data-language="vega-lite"]')).toBeInTheDocument();
+    expect(mocks.loadRenderer).not.toHaveBeenCalled();
   });
 
   it('activates no more than four top-level charts in one Markdown document', async () => {
