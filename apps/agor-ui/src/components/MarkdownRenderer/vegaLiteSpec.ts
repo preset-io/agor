@@ -258,9 +258,10 @@ function validateChannelDefinition(value: unknown, path: string): void {
   rejectUnknownKeys(value, CHANNEL_KEYS, path);
 
   const field = value.field;
+  const hasAuthoredField = Object.hasOwn(value, 'field');
   const hasField = typeof field === 'string' && field.length > 0;
   const isCount = value.aggregate === 'count';
-  if (!hasField && !isCount) {
+  if ((hasAuthoredField && !hasField) || (!hasAuthoredField && !isCount)) {
     throw new VegaLiteSpecError(`${path}.field must name an inline-data field.`);
   }
   if (hasField && field.length > MAX_FIELD_NAME_LENGTH) {
