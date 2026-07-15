@@ -392,6 +392,11 @@ describe('TerminalsService branch shell tabs', () => {
       },
     });
 
+    // Warm reuse only drives the executor once it has acked readiness — an
+    // adopted-but-not-yet-reconnected executor must not get commands fired into
+    // an empty room. Mark ready to model a live, acked executor.
+    service.handleExecutorReady(params.user.user_id as never);
+
     const second = await service.create(
       { branchId: secondBranch.branch_id, rows: 24, cols: 80 },
       params as never
@@ -400,12 +405,55 @@ describe('TerminalsService branch shell tabs', () => {
     expect(second).toMatchObject({
       isNew: false,
       branchName: 'same-name',
+      ready: true,
     });
-    expect(app.emit).toHaveBeenCalledWith('terminal:tab', {
-      userId: params.user.user_id,
-      action: 'create',
-      tabName: 'same-name · 22222222',
-      cwd: secondBranch.path,
+    await vi.waitFor(() => {
+      expect(app.emit).toHaveBeenCalledWith('terminal:tab', {
+        userId: params.user.user_id,
+        action: 'create',
+        tabName: 'same-name · 22222222',
+        cwd: secondBranch.path,
+      });
+    });
+  });
+
+  it('does not fire warm choreography until an adopted executor re-announces readiness', async () => {
+    // Model a post-restart adoption: pgrep finds the surviving process, so the
+    // executor is in the map (warm path) but has NOT re-acked readiness yet.
+    mocks.execSync.mockImplementation((cmd: string) => {
+      if (cmd === 'which zellij') return Buffer.from('/usr/bin/zellij\n');
+      if (cmd.startsWith('pgrep ')) return Buffer.from('4242\n'); // adoption hit
+      if (cmd.startsWith('sudo -n chown ')) return Buffer.from('');
+      throw new Error('not found');
+    });
+    const branch = {
+      ...mocks.branch,
+      branch_id: '33333333-3333-7333-8333-333333333333' as BranchID,
+      name: 'adopt-me',
+      path: '/tmp/repo/adopt-me',
+    };
+    mocks.branchesById.set(branch.branch_id, branch);
+
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+
+    const result = await service.create(
+      { branchId: branch.branch_id, rows: 24, cols: 80 },
+      params as never
+    );
+
+    // Adopted, not spawned, and not yet ready.
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ isNew: false, ready: false });
+    expect(app.emit).not.toHaveBeenCalledWith('terminal:tab', expect.anything());
+
+    // The surviving executor reconnects and re-announces — now choreography fires.
+    service.handleExecutorReady(params.user.user_id as never);
+    await vi.waitFor(() => {
+      expect(app.emit).toHaveBeenCalledWith(
+        'terminal:tab',
+        expect.objectContaining({ action: 'create', tabName: 'adopt-me · 33333333' })
+      );
     });
   });
 

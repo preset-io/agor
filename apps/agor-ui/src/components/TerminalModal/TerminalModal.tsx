@@ -122,6 +122,10 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     let mounted = true;
     let currentChannel: string | null = null;
     let initialCommandsSent = false;
+    // Monotonic attach generation: each (re)attach bumps it and a disconnect
+    // bumps it, so a stale/out-of-order attach resolve can't flip the modal
+    // back to connected after the socket has moved on.
+    let attachGeneration = 0;
     let transformData: (value: string) => string = (value) => value;
     const socket = client.io;
 
@@ -287,6 +291,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
     });
 
     const attach = async () => {
+      const generation = ++attachGeneration;
       try {
         // Request terminal from daemon
         // This spawns an executor with zellij.attach if not already running.
@@ -304,7 +309,10 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           ready?: boolean;
         };
 
-        if (!mounted) {
+        // Drop a stale/superseded attach (a later reconnect started, or the
+        // socket dropped while this call was in flight) so a late resolve
+        // can't wrongly flip the modal back to connected.
+        if (!mounted || generation !== attachGeneration || !socket.connected) {
           return;
         }
 
@@ -349,7 +357,7 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
           setReconnecting(false);
         }
       } catch (error) {
-        if (!mounted) return;
+        if (!mounted || generation !== attachGeneration) return;
         console.error('[Terminal] Failed to create terminal:', error);
         const message = error instanceof Error ? error.message : String(error);
         setReconnecting(false);
@@ -380,6 +388,9 @@ export const TerminalModal: React.FC<TerminalModalProps> = ({
       void attach();
     };
     const handleDisconnect = () => {
+      // Invalidate any in-flight attach so a late resolve can't flip us back
+      // to connected while we're actually down.
+      attachGeneration++;
       setIsConnected(false);
       setReconnecting(true);
     };

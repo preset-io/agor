@@ -791,11 +791,13 @@ export class TerminalsService {
           activeBranches: new Set(),
           startedAt: new Date(),
         });
-        // A live `zellij attach` process is by definition already bridging —
-        // treat it as ready so the warm path can flip the browser to connected
-        // without waiting on a ready ack the surviving executor won't re-send
-        // until its own socket reconnects.
-        this.readyExecutors.add(userId);
+        // Deliberately NOT marked ready here. A `pgrep` match means the process
+        // exists, not that it has re-established its socket + re-authenticated
+        // after the daemon restart — it may be reconnecting or failing auth.
+        // Readiness is granted only when the adopted executor actually
+        // re-announces `terminal:ready` (handleExecutorReady). Until then the
+        // warm path gates its choreography and reports ready:false so the
+        // browser waits for the real ack instead of us firing into a dead room.
       }
     }
 
@@ -813,44 +815,41 @@ export class TerminalsService {
         );
         if (branch) {
           const branchTabName = buildBranchShellTabName(branch);
-          // Emit tab command via channel - executor will handle it
-          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-            userId,
-            action: 'create',
-            tabName: branchTabName,
-            cwd: branch.path,
-          });
+          const channel = `user/${userId}/terminal`;
 
-          // Ensure-create the CLI tab when an `ensureCliSessionId` was
-          // supplied.
+          // Gate ALL executor-directed choreography on readiness. For a normal
+          // warm reuse (the executor acked ready this daemon session) this
+          // resolves immediately; for an adopted post-restart executor it
+          // waits until the process actually re-announces `terminal:ready`,
+          // so we don't emit tab/redraw commands into an empty/dead room.
           //
-          // Server-side claude liveness check (in dispatchTabFocus) decides:
-          //   - `claude` alive ⇒ `focus` (preserves scrollback)
-          //   - `claude` dead  ⇒ `create` + `forceRecreate: true`
-          //     (closes every stale duplicate of the tab name, then
-          //     spawns fresh with the layout-file claude argv)
-          //
-          // Without this branching, reopening a session whose
-          // foreground claude exited (Ctrl-D, kill -9, post-restart-
-          // before-watchdog-fires) left the user staring at a bash
-          // prompt — the executor's default "tab exists ⇒ focus"
-          // auto-converse focused the stale tab instead of respawning.
-          //
-          // Falls back to the old plain-focus behavior when the caller
-          // provided a `focusTabName` without an `ensureCliSessionId`. The
-          // executor here is already attached (it was in the map), so this
-          // fires immediately rather than guessing a boot delay.
-          await this.dispatchTabFocus(userId, {
-            cliEnsure: data.cliEnsure,
-            focusTabName: data.focusTabName,
-            skipTabName: branchTabName,
+          // dispatchTabFocus does the claude liveness branching (alive ⇒
+          // focus preserves scrollback; dead ⇒ create+forceRecreate spawns a
+          // fresh claude), falling back to a plain focus when only a
+          // `focusTabName` was supplied.
+          void this.awaitExecutorReady(userId).then(async (isReady) => {
+            if (!isReady) {
+              console.warn(
+                `[TerminalsService] readiness ack not received for user ${shortId(userId)} — warm choreography best-effort`
+              );
+            }
+            this.app.io?.to(channel).emit('terminal:tab', {
+              userId,
+              action: 'create',
+              tabName: branchTabName,
+              cwd: branch.path,
+            });
+            await this.dispatchTabFocus(userId, {
+              cliEnsure: data.cliEnsure,
+              focusTabName: data.focusTabName,
+              skipTabName: branchTabName,
+            });
+            this.app.io?.to(channel).emit('terminal:redraw', { userId });
           });
-
-          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
 
           return {
             userId,
-            channel: `user/${userId}/terminal`,
+            channel,
             sessionName: existing.sessionName,
             isNew: false,
             branchName: branch.name,
@@ -859,7 +858,11 @@ export class TerminalsService {
         }
       }
 
-      this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
+      void this.awaitExecutorReady(userId).then((isReady) => {
+        if (isReady) {
+          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
+        }
+      });
 
       return {
         userId,
@@ -941,9 +944,14 @@ export class TerminalsService {
       const userSessionSuffix = shortId(userId);
       const sessionName = `agor-${userSessionSuffix}`;
 
-      // Generate session token for executor
+      // Generate session token for executor. Bind the userId into the token
+      // (`terminal_user_id`) so the socket layer can scope this executor's
+      // terminal:* emits to its own user — a tenant-scoped service token alone
+      // can't act for the right user only. See socketio.ts terminal handlers.
       const daemonUrl = `http://localhost:${config.daemon?.port || 3030}`;
-      const sessionToken = generateScopedServiceToken(this.app, params);
+      const sessionToken = generateScopedServiceToken(this.app, params, {
+        terminal_user_id: userId,
+      });
 
       // File/process work stays outside the tenant database unit of work.
       const envFile = writeEnvFile(userId, userEnv, finalUnixUser);

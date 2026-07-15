@@ -202,7 +202,15 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
       socket.emit('terminal:resize', { userId, cols, rows });
     });
 
+    // Monotonic attach generation. Each (re)attach bumps it; a disconnect
+    // bumps it too. An attach only applies its result if it's still the
+    // current generation and the socket is still connected — otherwise a stale
+    // pre-disconnect attach could resolve late and wrongly flip the UI back to
+    // "connected", or out-of-order responses across flaps could clobber state.
+    let attachGeneration = 0;
+
     const attach = async () => {
+      const generation = ++attachGeneration;
       try {
         // The daemon-side terminals.create handles the tab-focus emit when
         // `focusTabName` is supplied — browser sockets are NOT allowed to
@@ -221,7 +229,9 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
           isNew: boolean;
           ready?: boolean;
         };
-        if (!mounted) return;
+        // Drop a stale/superseded attach: another (re)connect started after
+        // this call, or the socket dropped while it was in flight.
+        if (!mounted || generation !== attachGeneration || !socket.connected) return;
 
         currentChannel = result.channel;
         socket.emit('join', result.channel);
@@ -241,7 +251,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
           setError(null);
         }
       } catch (err) {
-        if (!mounted) return;
+        if (!mounted || generation !== attachGeneration) return;
         const msg = err instanceof Error ? err.message : String(err);
         setError(msg);
         setReconnecting(false);
@@ -262,6 +272,9 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
       void attach();
     };
     const handleDisconnect = () => {
+      // Invalidate any in-flight attach so a late resolve can't flip us back
+      // to connected while we're actually down.
+      attachGeneration++;
       setConnected(false);
       setReconnecting(true);
     };

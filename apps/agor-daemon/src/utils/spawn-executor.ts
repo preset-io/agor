@@ -881,9 +881,10 @@ export function generateScopedServiceToken(
   app: {
     settings: { authentication?: { secret?: string } };
   },
-  params?: Partial<AuthenticatedParams>
+  params?: Partial<AuthenticatedParams>,
+  extraScope: Record<string, unknown> = {}
 ): string {
-  return generateSessionToken(app, serviceTokenScopeForParams(params));
+  return generateSessionToken(app, { ...serviceTokenScopeForParams(params), ...extraScope });
 }
 
 // ============================================================================

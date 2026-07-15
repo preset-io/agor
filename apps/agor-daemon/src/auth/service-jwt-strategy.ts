@@ -142,6 +142,7 @@ export class ServiceJWTStrategy extends JWTStrategy {
           task_id?: string;
           branch_id?: string;
           purpose?: string;
+          terminal_user_id?: string;
         })
       | undefined;
 
@@ -149,7 +150,9 @@ export class ServiceJWTStrategy extends JWTStrategy {
       if (payload.purpose !== undefined && payload.purpose !== 'executor-service') {
         throw new Error('Invalid service token purpose');
       }
-      // Override user in result with service account
+      // Override user in result with service account. Carry the optional
+      // `terminal_user_id` scope so the socket layer can restrict this
+      // executor's terminal:* emits to its own user (see socketio.ts).
       return {
         ...result,
         user: {
@@ -157,6 +160,9 @@ export class ServiceJWTStrategy extends JWTStrategy {
           email: 'executor@agor.internal',
           role: 'service',
           _isServiceAccount: true,
+          ...(typeof payload.terminal_user_id === 'string'
+            ? { terminal_user_id: payload.terminal_user_id }
+            : {}),
         },
       };
     }

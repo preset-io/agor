@@ -225,6 +225,16 @@ function asServicePostConnect(socket: FakeSocket) {
     user: { user_id: 'executor-service', _isServiceAccount: true },
   };
 }
+/**
+ * A terminal executor service socket, user-scoped via the `terminal_user_id`
+ * claim bound into its token at spawn time (see terminals.ts / socketio.ts
+ * handshake middleware). This is what real terminal executors carry.
+ */
+function asServiceForUser(socket: FakeSocket, userId: string) {
+  socket.feathers = {
+    user: { user_id: 'executor-service', _isServiceAccount: true, terminal_user_id: userId },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -582,6 +592,16 @@ describe('terminal:* handler authorization', () => {
       ]);
     });
 
+    it("a user-scoped executor may not emit output/tab for a different user's channel", () => {
+      const { io } = buildHarness();
+      const s = makeSocket('exec-sock');
+      asServiceForUser(s, ALICE);
+      connect(io, s);
+      s.handlers.get('terminal:output')?.({ userId: BOB, data: 'x' });
+      s.handlers.get('terminal:tab')?.({ userId: BOB, action: 'create', tabName: 't' });
+      expect(io.emitted).toEqual([]);
+    });
+
     it('all three reject when allow_web_terminal is false even for service sockets', () => {
       const { io } = buildHarness({ webTerminalEnabled: false });
       const s = makeSocket('exec-sock');
@@ -595,10 +615,10 @@ describe('terminal:* handler authorization', () => {
   });
 
   describe('terminal:ready / terminal:error (executor readiness acks)', () => {
-    it('relays a service socket ready ack to the app for the terminals service', () => {
+    it('relays a user-scoped service socket ready ack to the app', () => {
       const { io, app } = buildHarness();
       const s = makeSocket('exec-sock');
-      asServicePostConnect(s);
+      asServiceForUser(s, ALICE);
       connect(io, s);
       s.handlers.get('terminal:ready')?.({ userId: ALICE, sessionName: 'agor-x', tabName: 't' });
       expect(app.emit).toHaveBeenCalledWith('terminal:ready', {
@@ -608,13 +628,36 @@ describe('terminal:* handler authorization', () => {
       });
     });
 
-    it('relays a service socket error ack to the app', () => {
+    it('relays a user-scoped service socket error ack to the app', () => {
+      const { io, app } = buildHarness();
+      const s = makeSocket('exec-sock');
+      asServiceForUser(s, ALICE);
+      connect(io, s);
+      s.handlers.get('terminal:error')?.({ userId: ALICE, message: 'boom' });
+      expect(app.emit).toHaveBeenCalledWith('terminal:error', { userId: ALICE, message: 'boom' });
+    });
+
+    it("rejects an executor scoped to ALICE flipping BOB's readiness (cross-user forgery)", () => {
+      const { io, app } = buildHarness();
+      const s = makeSocket('exec-sock');
+      asServiceForUser(s, ALICE);
+      connect(io, s);
+      s.handlers.get('terminal:ready')?.({ userId: BOB });
+      s.handlers.get('terminal:error')?.({ userId: BOB, message: 'spoof' });
+      expect(app.emit).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('may not act for'));
+    });
+
+    it('rejects ready/error from an unscoped service token (requireScope)', () => {
+      // A generic (non-terminal) service token carries no terminal_user_id and
+      // therefore may not drive per-user readiness state.
       const { io, app } = buildHarness();
       const s = makeSocket('exec-sock');
       asServicePostConnect(s);
       connect(io, s);
-      s.handlers.get('terminal:error')?.({ userId: ALICE, message: 'boom' });
-      expect(app.emit).toHaveBeenCalledWith('terminal:error', { userId: ALICE, message: 'boom' });
+      s.handlers.get('terminal:ready')?.({ userId: ALICE });
+      s.handlers.get('terminal:error')?.({ userId: ALICE });
+      expect(app.emit).not.toHaveBeenCalled();
     });
 
     it('rejects ready/error acks from user-token sockets (only service may emit)', () => {
@@ -630,7 +673,7 @@ describe('terminal:* handler authorization', () => {
     it('rejects ready/error acks when allow_web_terminal is false', () => {
       const { io, app } = buildHarness({ webTerminalEnabled: false });
       const s = makeSocket('exec-sock');
-      asServicePostConnect(s);
+      asServiceForUser(s, ALICE);
       connect(io, s);
       s.handlers.get('terminal:ready')?.({ userId: ALICE });
       s.handlers.get('terminal:error')?.({ userId: ALICE });

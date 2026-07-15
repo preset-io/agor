@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createReconnectGrace } from './zellij.js';
+import { createReconnectGrace, waitForZellijReady } from './zellij.js';
 
 describe('createReconnectGrace', () => {
   beforeEach(() => {
@@ -80,5 +80,53 @@ describe('createReconnectGrace', () => {
     grace.onDisconnect(); // must NOT restart the countdown
     vi.advanceTimersByTime(10_000);
     expect(onGraceElapsed).toHaveBeenCalledTimes(1);
+  });
+
+  it('tears down when the bridge never becomes healthy again (reconnect without re-auth)', () => {
+    // Models a socket that flaps back to transport-connected but never
+    // re-authenticates: onReconnect (which zellij.ts only calls after a
+    // successful re-auth) is never invoked, so the window still fires.
+    let bridgeHealthy = false;
+    const onGraceElapsed = vi.fn();
+    const grace = createReconnectGrace({
+      graceMs: 30_000,
+      isConnected: () => bridgeHealthy,
+      onGraceElapsed,
+    });
+
+    grace.onDisconnect();
+    // Transport blips but re-auth keeps failing; bridgeHealthy stays false and
+    // onReconnect is never called.
+    bridgeHealthy = false;
+    vi.advanceTimersByTime(30_000);
+    expect(onGraceElapsed).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('waitForZellijReady', () => {
+  it('resolves true as soon as the probe succeeds, without exhausting attempts', async () => {
+    let calls = 0;
+    const probe = vi.fn(async () => {
+      calls += 1;
+      return calls >= 3; // fail twice, then succeed
+    });
+    const ready = await waitForZellijReady('agor-x', {
+      attempts: 10,
+      probe,
+      sleep: async () => {},
+    });
+    expect(ready).toBe(true);
+    expect(probe).toHaveBeenCalledTimes(3);
+  });
+
+  it('resolves false after exhausting attempts when zellij never comes up', async () => {
+    const probe = vi.fn(async () => false);
+    const ready = await waitForZellijReady('agor-x', {
+      attempts: 4,
+      probe,
+      sleep: async () => {},
+    });
+    expect(ready).toBe(false);
+    expect(probe).toHaveBeenCalledTimes(4);
   });
 });

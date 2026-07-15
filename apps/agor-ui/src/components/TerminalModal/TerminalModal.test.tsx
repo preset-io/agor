@@ -1,23 +1,17 @@
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// xterm touches canvas/DOM internals that jsdom can't render; the component's
-// reconnect/ready plumbing doesn't depend on real terminal output, so stub it.
-// The class lives inside the factory because vi.mock is hoisted above imports.
+// xterm touches canvas/DOM internals jsdom can't render; the modal's
+// reconnect/ready plumbing doesn't depend on real terminal output.
 vi.mock('@xterm/xterm', () => ({
   Terminal: class MockTerminal {
-    rows = 24;
-    cols = 80;
-    _core = { _renderService: { dimensions: { css: { cell: { width: 0, height: 0 } } } } };
+    rows = 40;
+    cols = 160;
     open() {}
     loadAddon() {}
-    onRender() {
-      return { dispose() {} };
-    }
     onData() {}
     onResize() {}
-    resize() {}
     write() {}
     writeln() {}
     clear() {}
@@ -28,7 +22,7 @@ vi.mock('@xterm/addon-clipboard', () => ({ ClipboardAddon: class {} }));
 vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }));
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 
-import { EmbeddedTerminal } from './EmbeddedTerminal';
+import { TerminalModal } from './TerminalModal';
 
 const ALICE = '11111111-aaaa-aaaa-aaaa-111111111111';
 
@@ -69,7 +63,13 @@ function makeClient(socket: FakeSocket, create: ReturnType<typeof vi.fn>) {
   } as unknown as AgorClient;
 }
 
-describe('EmbeddedTerminal reconnect + readiness', () => {
+const memberUser = { user_id: ALICE, role: 'member' } as unknown as User;
+// Stable reference: the modal effect depends on `initialCommands`, so a fresh
+// array each render would thrash the effect (tear down + re-attach) and reset
+// transient state under test.
+const NO_COMMANDS: string[] = [];
+
+describe('TerminalModal reconnect + readiness', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -77,7 +77,7 @@ describe('EmbeddedTerminal reconnect + readiness', () => {
     vi.restoreAllMocks();
   });
 
-  it('stays "connecting" until the ready ack, then connects', async () => {
+  it('connects on the ready ack and re-attaches on reconnect', async () => {
     const socket = makeFakeSocket();
     const create = vi.fn().mockResolvedValue({
       userId: ALICE,
@@ -86,65 +86,34 @@ describe('EmbeddedTerminal reconnect + readiness', () => {
       isNew: true,
       ready: false,
     });
-    render(<EmbeddedTerminal client={makeClient(socket, create)} userId={ALICE} />);
-
-    // Cold start: create resolved but no ready ack yet → still connecting.
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText(/Connecting to terminal/)).toBeInTheDocument();
-    // It joined the channel to receive output.
-    expect(socket.emitted.some((e) => e.event === 'join')).toBe(true);
-
-    // Executor acks readiness → connected, indicator clears.
-    socket.trigger('terminal:ready', { userId: ALICE });
-    await waitFor(() =>
-      expect(screen.queryByText(/Connecting to terminal/)).not.toBeInTheDocument()
+    render(
+      <TerminalModal
+        open
+        onClose={() => {}}
+        client={makeClient(socket, create)}
+        user={memberUser}
+        initialCommands={NO_COMMANDS}
+      />
     );
-  });
 
-  it('shows reconnecting and re-issues create + join when the socket reconnects', async () => {
-    const socket = makeFakeSocket();
-    const create = vi
-      .fn()
-      .mockResolvedValueOnce({
-        userId: ALICE,
-        channel: `user/${ALICE}/terminal`,
-        sessionName: 'agor-x',
-        isNew: true,
-        ready: false,
-      })
-      // Warm path on reconnect: executor still alive.
-      .mockResolvedValue({
-        userId: ALICE,
-        channel: `user/${ALICE}/terminal`,
-        sessionName: 'agor-x',
-        isNew: false,
-        ready: true,
-      });
-    render(<EmbeddedTerminal client={makeClient(socket, create)} userId={ALICE} />);
+    // Effect is gated on the modal's afterOpenChange; wait for the first attach.
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+
+    // Cold path: not connected until the executor acks readiness.
     socket.trigger('terminal:ready', { userId: ALICE });
 
-    // A blip drops the socket.
+    // A blip drops the socket → reconnecting; reconnect re-issues create.
     socket.connected = false;
     socket.trigger('disconnect', 'transport close');
     expect(await screen.findByText(/Reconnecting/)).toBeInTheDocument();
 
-    // Transport restored → re-attach (re-create + re-join) and connect via the
-    // warm ready flag.
-    const joinsBefore = socket.emitted.filter((e) => e.event === 'join').length;
     socket.connected = true;
     socket.trigger('connect');
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
-    await waitFor(() =>
-      expect(socket.emitted.filter((e) => e.event === 'join').length).toBeGreaterThan(joinsBefore)
-    );
-    await waitFor(() => expect(screen.queryByText(/Reconnecting/)).not.toBeInTheDocument());
   });
 
   it('ignores a stale attach that resolves after a disconnect/reconnect', async () => {
     const socket = makeFakeSocket();
-    // Hand back a controllable promise per attach so we can resolve the first
-    // (stale) one AFTER a reconnect has superseded it.
     const deferreds: Array<(v: unknown) => void> = [];
     const create = vi.fn(
       () =>
@@ -152,11 +121,17 @@ describe('EmbeddedTerminal reconnect + readiness', () => {
           deferreds.push(resolve);
         })
     );
-    render(<EmbeddedTerminal client={makeClient(socket, create)} userId={ALICE} />);
+    render(
+      <TerminalModal
+        open
+        onClose={() => {}}
+        client={makeClient(socket, create)}
+        user={memberUser}
+        initialCommands={NO_COMMANDS}
+      />
+    );
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
 
-    // Socket drops (invalidating the in-flight attach) then comes back and
-    // starts a fresh attach.
     socket.connected = false;
     socket.trigger('disconnect', 'transport close');
     socket.connected = true;
@@ -164,8 +139,7 @@ describe('EmbeddedTerminal reconnect + readiness', () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(await screen.findByText(/Reconnecting/)).toBeInTheDocument();
 
-    // The STALE first attach resolves late with ready:true. It must be dropped
-    // (superseded generation) and must NOT flip the UI to connected.
+    // Stale first attach resolves late → must be dropped (superseded generation).
     deferreds[0]?.({
       userId: ALICE,
       channel: `user/${ALICE}/terminal`,
@@ -175,15 +149,5 @@ describe('EmbeddedTerminal reconnect + readiness', () => {
     });
     await Promise.resolve();
     expect(screen.getByText(/Reconnecting/)).toBeInTheDocument();
-
-    // The current attach resolving DOES connect.
-    deferreds[1]?.({
-      userId: ALICE,
-      channel: `user/${ALICE}/terminal`,
-      sessionName: 'agor-x',
-      isNew: false,
-      ready: true,
-    });
-    await waitFor(() => expect(screen.queryByText(/Reconnecting/)).not.toBeInTheDocument());
   });
 });

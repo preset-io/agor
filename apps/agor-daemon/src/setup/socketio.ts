@@ -61,6 +61,8 @@ interface FeathersSocket extends Socket {
   };
   data: {
     isService?: boolean;
+    /** Terminal user scope for handshake-token service sockets (see SocketAuthState). */
+    terminalUserId?: string;
     currentBoardId?: string;
     lastPresenceEmitAt?: number;
     tenant?: TenantContext;
@@ -117,14 +119,25 @@ export interface SocketAuthState {
   userId: string | null;
   isService: boolean;
   tenant?: TenantContext;
+  /**
+   * For terminal executor service sockets: the single user this executor is
+   * allowed to act for (bound into its token as `terminal_user_id` at spawn
+   * time). Undefined for generic (non-terminal) service tokens and for user
+   * sockets. Terminal handlers require the payload's userId to match this.
+   */
+  terminalUserId?: string;
 }
 
 function socketAuthState(
   userId: string | null,
   isService: boolean,
-  tenant?: TenantContext
+  tenant?: TenantContext,
+  terminalUserId?: string
 ): SocketAuthState {
-  return tenant ? { userId, isService, tenant } : { userId, isService };
+  const state: SocketAuthState = { userId, isService };
+  if (tenant) state.tenant = tenant;
+  if (terminalUserId) state.terminalUserId = terminalUserId;
+  return state;
 }
 
 /**
@@ -152,10 +165,15 @@ export function getSocketAuthState(socket: Socket): SocketAuthState {
   const s = socket as FeathersSocket;
   const user = s.feathers?.user;
   if (user?._isServiceAccount === true) {
-    return socketAuthState(null, true, s.data?.tenant);
+    return socketAuthState(
+      null,
+      true,
+      s.data?.tenant,
+      (user as { terminal_user_id?: string }).terminal_user_id
+    );
   }
   if (s.data?.isService === true) {
-    return socketAuthState(null, true, s.data?.tenant);
+    return socketAuthState(null, true, s.data?.tenant, s.data?.terminalUserId);
   }
   if (user?.user_id) {
     return socketAuthState(user.user_id, false, s.data?.tenant);
@@ -339,7 +357,7 @@ export function createSocketIOConfig(
         const decoded = jwt.verify(token, jwtSecret, {
           issuer: RUNTIME_JWT_ISSUER,
           audience: RUNTIME_JWT_AUDIENCE,
-        }) as { sub: string; type?: string; role?: string };
+        }) as { sub: string; type?: string; role?: string; terminal_user_id?: string };
 
         // Allow user tokens and service tokens (used by executor)
         // - undefined/access: User tokens (SessionTokenService doesn't set type claim)
@@ -374,11 +392,17 @@ export function createSocketIOConfig(
               email: 'executor@agor.internal',
               role: 'service',
               _isServiceAccount: true,
+              ...(typeof decoded.terminal_user_id === 'string'
+                ? { terminal_user_id: decoded.terminal_user_id }
+                : {}),
             },
           };
           // Keep the handshake fast-path marker too — older code and any
           // future callers that only look at socket.data still see it.
           fs.data.isService = true;
+          if (typeof decoded.terminal_user_id === 'string') {
+            fs.data.terminalUserId = decoded.terminal_user_id;
+          }
           if (tenant) {
             (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;
             if (fs.data) fs.data.tenant = tenant;
@@ -610,6 +634,49 @@ export function createSocketIOConfig(
         return auth.userId;
       };
 
+      // Common preflight for executor-emitted terminal events
+      // (output/exit/tab/ready/error). Requires a service socket and a
+      // non-empty payload userId. Additionally, when the service token is
+      // terminal-scoped (`terminalUserId`, bound at spawn time), the payload
+      // userId MUST match it — otherwise one user's executor could emit for
+      // another user. `requireScope` forces the scope to be present at all
+      // (used for the new ready/error acks, which every terminal executor
+      // carries); output/exit/tab enforce-if-present to stay compatible with
+      // any generic service emitter while still scoping real terminal
+      // executors. Returns true when the event may proceed.
+      const requireServiceForOwnUserId = (
+        event: string,
+        payloadUserId: unknown,
+        opts: { requireScope: boolean } = { requireScope: false }
+      ): boolean => {
+        if (!webTerminalEnabled) {
+          rejectTerminal(event, 'web terminal disabled (allow_web_terminal=false)');
+          return false;
+        }
+        const auth = getSocketAuthState(socket);
+        if (!auth.isService) {
+          rejectTerminal(event, `only service tokens may emit ${event}`);
+          return false;
+        }
+        if (typeof payloadUserId !== 'string' || !payloadUserId) {
+          rejectTerminal(event, 'missing userId');
+          return false;
+        }
+        if (opts.requireScope && !auth.terminalUserId) {
+          rejectTerminal(event, 'service token is not scoped to a terminal user');
+          return false;
+        }
+        if (auth.terminalUserId && auth.terminalUserId !== payloadUserId) {
+          rejectTerminal(
+            event,
+            `service token scoped to ${shortId(auth.terminalUserId)}… may not act for ` +
+              `${shortId(payloadUserId)}…`
+          );
+          return false;
+        }
+        return true;
+      };
+
       // Handle explicit channel joins (for terminal channels)
       socket.on('join', (channel: string) => {
         if (!webTerminalEnabled) {
@@ -669,19 +736,7 @@ export function createSocketIOConfig(
       // arbitrary output (e.g. fake "permission granted" prompts) into
       // another user's terminal.
       socket.on('terminal:output', (data: { userId: string; data: string }) => {
-        if (!webTerminalEnabled) {
-          rejectTerminal('terminal:output', 'web terminal disabled');
-          return;
-        }
-        const auth = getSocketAuthState(socket);
-        if (!auth.isService) {
-          rejectTerminal('terminal:output', 'only service tokens may emit terminal:output');
-          return;
-        }
-        if (typeof data?.userId !== 'string' || !data.userId) {
-          rejectTerminal('terminal:output', 'missing userId');
-          return;
-        }
+        if (!requireServiceForOwnUserId('terminal:output', data?.userId)) return;
         const channel = `user/${data.userId}/terminal`;
         // `socket.to` (not `io.to`) excludes the sender. The executor joins
         // its own `user/<id>/terminal` channel to relay I/O, so `io.to` would
@@ -728,22 +783,7 @@ export function createSocketIOConfig(
       socket.on(
         'terminal:tab',
         (data: { userId: string; action: string; tabName: string; cwd?: string }) => {
-          if (!webTerminalEnabled) {
-            rejectTerminal('terminal:tab', 'web terminal disabled');
-            return;
-          }
-          const auth = getSocketAuthState(socket);
-          if (!auth.isService) {
-            rejectTerminal(
-              'terminal:tab',
-              'only service tokens may emit terminal:tab (browsers must use HTTP terminals.create)'
-            );
-            return;
-          }
-          if (typeof data?.userId !== 'string' || !data.userId) {
-            rejectTerminal('terminal:tab', 'missing userId');
-            return;
-          }
+          if (!requireServiceForOwnUserId('terminal:tab', data?.userId)) return;
           const channel = `user/${data.userId}/terminal`;
           io.to(channel).emit('terminal:tab', data);
         }
@@ -753,19 +793,7 @@ export function createSocketIOConfig(
       // Executor-only — a forged exit would let a member terminate or
       // confuse another user's terminal session.
       socket.on('terminal:exit', (data: { userId: string; exitCode: number; signal?: number }) => {
-        if (!webTerminalEnabled) {
-          rejectTerminal('terminal:exit', 'web terminal disabled');
-          return;
-        }
-        const auth = getSocketAuthState(socket);
-        if (!auth.isService) {
-          rejectTerminal('terminal:exit', 'only service tokens may emit terminal:exit');
-          return;
-        }
-        if (typeof data?.userId !== 'string' || !data.userId) {
-          rejectTerminal('terminal:exit', 'missing userId');
-          return;
-        }
+        if (!requireServiceForOwnUserId('terminal:exit', data?.userId)) return;
         const channel = `user/${data.userId}/terminal`;
         io.to(channel).emit('terminal:exit', data);
         console.log(`🖥️  Terminal exited for user ${data.userId}: code=${data.exitCode}`);
@@ -781,36 +809,19 @@ export function createSocketIOConfig(
       socket.on(
         'terminal:ready',
         (data: { userId: string; sessionName?: string; tabName?: string }) => {
-          if (!webTerminalEnabled) {
-            rejectTerminal('terminal:ready', 'web terminal disabled');
-            return;
-          }
-          const auth = getSocketAuthState(socket);
-          if (!auth.isService) {
-            rejectTerminal('terminal:ready', 'only service tokens may emit terminal:ready');
-            return;
-          }
-          if (typeof data?.userId !== 'string' || !data.userId) {
-            rejectTerminal('terminal:ready', 'missing userId');
+          // requireScope: the ready ack flips global per-user readiness state
+          // and triggers browser broadcasts, so we insist the emitting token is
+          // actually scoped to this user (not just any service token).
+          if (!requireServiceForOwnUserId('terminal:ready', data?.userId, { requireScope: true })) {
             return;
           }
           app.emit('terminal:ready', data);
         }
       );
 
-      // Executor attach-failure ack. Same service-only trust model as ready.
+      // Executor attach-failure ack. Same user-scoped service trust as ready.
       socket.on('terminal:error', (data: { userId: string; message?: string }) => {
-        if (!webTerminalEnabled) {
-          rejectTerminal('terminal:error', 'web terminal disabled');
-          return;
-        }
-        const auth = getSocketAuthState(socket);
-        if (!auth.isService) {
-          rejectTerminal('terminal:error', 'only service tokens may emit terminal:error');
-          return;
-        }
-        if (typeof data?.userId !== 'string' || !data.userId) {
-          rejectTerminal('terminal:error', 'missing userId');
+        if (!requireServiceForOwnUserId('terminal:error', data?.userId, { requireScope: true })) {
           return;
         }
         app.emit('terminal:error', data);
