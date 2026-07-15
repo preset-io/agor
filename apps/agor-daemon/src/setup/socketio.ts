@@ -164,16 +164,19 @@ function socketAuthState(
 export function getSocketAuthState(socket: Socket): SocketAuthState {
   const s = socket as FeathersSocket;
   const user = s.feathers?.user;
+  // Terminal-scoped executor identity: a service identity for TERMINAL socket
+  // auth only (join/output/etc.), NOT a full RBAC-bypassing service account.
+  // Checked first and never carries `isService` privilege onto REST paths —
+  // those read `user._isServiceAccount`, which this identity lacks by design.
+  const terminalUserId = user?.terminal_user_id ?? s.data?.terminalUserId;
+  if (typeof terminalUserId === 'string' && terminalUserId) {
+    return socketAuthState(null, true, s.data?.tenant, terminalUserId);
+  }
   if (user?._isServiceAccount === true) {
-    return socketAuthState(
-      null,
-      true,
-      s.data?.tenant,
-      (user as { terminal_user_id?: string }).terminal_user_id
-    );
+    return socketAuthState(null, true, s.data?.tenant);
   }
   if (s.data?.isService === true) {
-    return socketAuthState(null, true, s.data?.tenant, s.data?.terminalUserId);
+    return socketAuthState(null, true, s.data?.tenant);
   }
   if (user?.user_id) {
     return socketAuthState(user.user_id, false, s.data?.tenant);
@@ -382,26 +385,35 @@ export function createSocketIOConfig(
           // a service socket (trusted, no user) from an anonymous socket that
           // simply hasn't authenticated yet (untrusted, no user).
           const fs = socket as FeathersSocket;
-          // Attach synthetic service user so getSocketAuthState returns
-          // isService=true via the canonical `_isServiceAccount` path. This
-          // mirrors what ServiceJWTStrategy.getEntity does on the Feathers
-          // side for sockets that authenticate post-connect.
+          const terminalUserId =
+            typeof decoded.terminal_user_id === 'string' ? decoded.terminal_user_id : undefined;
+          // Mirror ServiceJWTStrategy: a terminal-scoped token is a RESTRICTED
+          // identity (no `_isServiceAccount`, no `role: 'service'`, so no RBAC
+          // bypass on REST paths); a plain service token is a full service
+          // account. See getSocketAuthState + service-jwt-strategy.ts.
           fs.feathers = {
-            user: {
-              user_id: 'executor-service',
-              email: 'executor@agor.internal',
-              role: 'service',
-              _isServiceAccount: true,
-              ...(typeof decoded.terminal_user_id === 'string'
-                ? { terminal_user_id: decoded.terminal_user_id }
-                : {}),
-            },
+            user: terminalUserId
+              ? {
+                  user_id: 'executor-service',
+                  email: 'executor@agor.internal',
+                  role: 'terminal-executor',
+                  _isTerminalExecutor: true,
+                  terminal_user_id: terminalUserId,
+                }
+              : {
+                  user_id: 'executor-service',
+                  email: 'executor@agor.internal',
+                  role: 'service',
+                  _isServiceAccount: true,
+                },
           };
-          // Keep the handshake fast-path marker too — older code and any
-          // future callers that only look at socket.data still see it.
-          fs.data.isService = true;
-          if (typeof decoded.terminal_user_id === 'string') {
-            fs.data.terminalUserId = decoded.terminal_user_id;
+          if (terminalUserId) {
+            fs.data.terminalUserId = terminalUserId;
+          } else {
+            // Handshake fast-path marker ONLY for full service accounts — older
+            // code that looks at socket.data.isService must not see a terminal
+            // token as a full service account.
+            fs.data.isService = true;
           }
           if (tenant) {
             (fs as FeathersSocket & { tenant?: TenantContext }).tenant = tenant;

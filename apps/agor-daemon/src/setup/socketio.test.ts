@@ -226,21 +226,31 @@ function asServicePostConnect(socket: FakeSocket) {
   };
 }
 /**
- * A terminal executor service socket, user-scoped via the `terminal_user_id`
- * claim bound into its token at spawn time (see terminals.ts / socketio.ts
- * handshake middleware). This is what real terminal executors carry.
+ * A terminal executor socket: a RESTRICTED identity user-scoped via
+ * `terminal_user_id`. Deliberately NOT a full service account (no
+ * `_isServiceAccount`) — that's the whole point of the terminal-scoped token.
+ * Mirrors what ServiceJWTStrategy mints for a token carrying terminal_user_id.
  */
 function asServiceForUser(socket: FakeSocket, userId: string) {
   socket.feathers = {
-    user: { user_id: 'executor-service', _isServiceAccount: true, terminal_user_id: userId },
+    user: {
+      user_id: 'executor-service',
+      role: 'terminal-executor',
+      _isTerminalExecutor: true,
+      terminal_user_id: userId,
+    },
   };
 }
 /** Handshake-token variant of a user-scoped terminal executor socket. */
 function asServiceHandshakeForUser(socket: FakeSocket, userId: string) {
   socket.feathers = {
-    user: { user_id: 'executor-service', _isServiceAccount: true, terminal_user_id: userId },
+    user: {
+      user_id: 'executor-service',
+      role: 'terminal-executor',
+      _isTerminalExecutor: true,
+      terminal_user_id: userId,
+    },
   };
-  socket.data.isService = true;
   socket.data.terminalUserId = userId;
 }
 
@@ -284,6 +294,25 @@ describe('getSocketAuthState', () => {
     const s = makeSocket();
     asServicePostConnect(s);
     expect(getSocketAuthState(s as any)).toEqual({ userId: null, isService: true });
+  });
+  it('reports a terminal-scoped identity as service-for-terminal WITH its terminalUserId', () => {
+    const s = makeSocket();
+    asServiceForUser(s, ALICE);
+    expect(getSocketAuthState(s as any)).toEqual({
+      userId: null,
+      isService: true,
+      terminalUserId: ALICE,
+    });
+  });
+  it('a terminal-scoped identity carries no _isServiceAccount (no REST RBAC bypass)', () => {
+    // The whole point of the terminal token: it authenticates the socket for
+    // its own channel but is NOT a full service account, so the RBAC-bypass
+    // hooks (which read user._isServiceAccount) never fire for it.
+    const s = makeSocket();
+    asServiceForUser(s, ALICE);
+    const user = (s.feathers as { user: { _isServiceAccount?: boolean; role?: string } }).user;
+    expect(user._isServiceAccount).toBeUndefined();
+    expect(user.role).not.toBe('service');
   });
   it('service account wins over user_id: synthetic executor user is not treated as a real user', () => {
     // The synthetic service user carries user_id='executor-service'. If we

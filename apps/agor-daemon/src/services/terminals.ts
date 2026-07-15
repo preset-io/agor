@@ -63,7 +63,15 @@ import {
  * long-lived and the executor re-authenticates with the same token across
  * reconnects, so this must comfortably exceed a session's lifetime (the 5m
  * service-token default would break reconnection). 30 days covers realistic
- * usage; a token grants only terminal-channel access for one user.
+ * usage.
+ *
+ * SECURITY: the `terminal_user_id` claim makes this a RESTRICTED, low-privilege
+ * identity — ServiceJWTStrategy resolves it to `_isTerminalExecutor` (not a
+ * full `_isServiceAccount`), so it does NOT bypass RBAC on any REST/Feathers
+ * path; it only authorizes its own user's terminal socket channel. That
+ * confinement is what makes a long TTL acceptable (there's no revocation story
+ * for a stateless JWT). A leaked token grants terminal-channel I/O for that one
+ * user for its lifetime — no broader daemon access.
  */
 const TERMINAL_EXECUTOR_TOKEN_TTL = '30d';
 
@@ -471,10 +479,10 @@ export class TerminalsService {
   private readyWaiters: Map<UserID, Set<(ready: boolean) => void>> = new Map();
 
   /**
-   * How long the cold-start choreography waits for the readiness ack before
-   * giving up and firing best-effort. Generous relative to a typical zellij
-   * boot (~1-3s); a genuinely dead executor surfaces to the browser via its
-   * own `terminal:error` ack rather than this timeout.
+   * How long the choreography waits for the readiness ack before giving up and
+   * SKIPPING it entirely (no blind best-effort fire). Generous relative to a
+   * typical zellij boot (~1-3s); a genuinely dead executor surfaces to the
+   * browser via its own `terminal:error` ack rather than this timeout.
    */
   private static readonly READY_TIMEOUT_MS = 10_000;
 
@@ -1022,9 +1030,9 @@ export class TerminalsService {
       // channel, so a `terminal:tab` emitted now would land in an empty room
       // and be dropped. Gate the CLI ensure/focus dispatch on the executor's
       // `terminal:ready` ack instead of guessing a boot delay. Same liveness
-      // branching as the warm path (handled in dispatchTabFocus). Fire
-      // best-effort if the ack never arrives so a missed ack doesn't strand
-      // the tab, and log it.
+      // branching as the warm path (handled in dispatchTabFocus). If the ack
+      // never arrives we SKIP the dispatch entirely — no blind best-effort
+      // fire into a dead room — and log it.
       if (data.cliEnsure || data.focusTabName) {
         const { cliEnsure, focusTabName } = data;
         void this.awaitExecutorReady(userId).then((ready) => {

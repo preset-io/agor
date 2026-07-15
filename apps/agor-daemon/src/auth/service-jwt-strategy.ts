@@ -150,9 +150,29 @@ export class ServiceJWTStrategy extends JWTStrategy {
       if (payload.purpose !== undefined && payload.purpose !== 'executor-service') {
         throw new Error('Invalid service token purpose');
       }
-      // Override user in result with service account. Carry the optional
-      // `terminal_user_id` scope so the socket layer can restrict this
-      // executor's terminal:* emits to its own user (see socketio.ts).
+      const terminalUserId =
+        typeof payload.terminal_user_id === 'string' ? payload.terminal_user_id : undefined;
+      // A terminal-scoped token is a RESTRICTED identity: it authenticates the
+      // web-terminal executor's socket for its OWN user's terminal channel
+      // only. It must NOT be a full service account — `_isServiceAccount` and
+      // `role: 'service'` bypass RBAC across REST/Feathers paths (see
+      // register-hooks / board-owners / branch-owners / sessions /
+      // mcp-token-authorization), and the terminal executor makes no such
+      // calls. So we mint a low-privilege identity that carries no bypass
+      // anywhere; the socket terminal handlers enforce it via terminal_user_id.
+      if (terminalUserId) {
+        return {
+          ...result,
+          user: {
+            user_id: 'executor-service',
+            email: 'executor@agor.internal',
+            role: 'terminal-executor',
+            _isTerminalExecutor: true,
+            terminal_user_id: terminalUserId,
+          },
+        };
+      }
+      // Full service account (git/prompt/etc. executor paths).
       return {
         ...result,
         user: {
@@ -160,9 +180,6 @@ export class ServiceJWTStrategy extends JWTStrategy {
           email: 'executor@agor.internal',
           role: 'service',
           _isServiceAccount: true,
-          ...(typeof payload.terminal_user_id === 'string'
-            ? { terminal_user_id: payload.terminal_user_id }
-            : {}),
         },
       };
     }

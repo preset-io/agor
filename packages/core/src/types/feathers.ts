@@ -53,6 +53,17 @@ export interface AuthenticatedUser {
   role: string;
   /** True for service accounts (executor) — bypasses RBAC checks */
   _isServiceAccount?: boolean;
+  /**
+   * True for terminal-executor tokens: a RESTRICTED identity that authenticates
+   * a web-terminal executor's socket for its own user's terminal channel only.
+   * Deliberately distinct from `_isServiceAccount` — a terminal token must NOT
+   * bypass RBAC on REST/Feathers paths (the terminal executor only streams PTY
+   * I/O over the socket). Enforced by the socket terminal handlers via
+   * `terminal_user_id`; carries no privilege anywhere else.
+   */
+  _isTerminalExecutor?: boolean;
+  /** The single user a terminal-executor identity may act for on its channel. */
+  terminal_user_id?: string;
 }
 
 /**

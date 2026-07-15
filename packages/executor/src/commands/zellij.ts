@@ -491,6 +491,11 @@ export async function handleZellijAttach(
             message: 'Terminal failed to start: zellij session did not become ready',
           });
         }
+        // Tear down instead of lingering as a dead PTY the daemon would adopt
+        // (leaving the browser stuck on "Connecting…" with no recovery). Killing
+        // the PTY fires pty.onExit → terminal:exit → process.exit, so the daemon
+        // evicts its executor map entry and the next open does a clean cold spawn.
+        ptyProcess?.kill();
         return;
       }
       zellijAttached = true;
