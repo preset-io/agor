@@ -821,14 +821,22 @@ export function createServiceToken(
   expiresIn?: SignOptions['expiresIn'],
   scope: Record<string, unknown> = {}
 ): string {
+  // A terminal-scoped token (carries `terminal_user_id`) is a restricted
+  // identity, not a full service account. Stamp its role accordingly at MINT
+  // time too — both resolvers already override `role` before use, but this
+  // closes the trap where future code reads `payload.role` directly and would
+  // otherwise see a full 'service' role on a terminal token.
+  const isTerminalScoped =
+    typeof (scope as { terminal_user_id?: unknown }).terminal_user_id === 'string';
   return issueRuntimeToken(
     {
       sub: 'executor-service',
       type: 'service',
       purpose: 'executor-service',
-      // Service tokens can perform privileged operations
-      role: 'service',
       ...scope,
+      // Placed AFTER ...scope so it wins; service tokens can perform privileged
+      // operations, terminal-scoped tokens deliberately cannot.
+      role: isTerminalScoped ? 'terminal-executor' : 'service',
     },
     jwtSecret,
     expiresIn || '5m'

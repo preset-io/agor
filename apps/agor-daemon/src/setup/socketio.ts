@@ -28,6 +28,7 @@ import type {
 import jwt from 'jsonwebtoken';
 import type { Server, Socket } from 'socket.io';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
+import { isTerminalExecutorIdentity } from '../auth/terminal-executor-guard.js';
 import { leaveAllSessionStreamChannels } from '../utils/realtime-publish.js';
 import type { BuildInfo } from './build-info.js';
 import type { CorsOrigin } from './cors.js';
@@ -471,8 +472,12 @@ export function createSocketIOConfig(
       }
 
       // Auto-join per-user room for user-scoped events (OAuth prompts, notifications)
-      // Try at connection time (for sockets that authenticate via handshake token)
-      if (user?.user_id) {
+      // Try at connection time (for sockets that authenticate via handshake token).
+      // Terminal-executor identities are excluded from ALL room/channel joins —
+      // they only ever consume raw `terminal:*` events on their own
+      // `user/<id>/terminal` room, never Feathers channel broadcasts, so channel
+      // membership would just hand them a firehose subscription they must not have.
+      if (user?.user_id && !isTerminalExecutorIdentity(user)) {
         socket.join(userRoomName(user.user_id));
         console.log(
           `🏠 Socket ${socket.id} joined user room at connection: user:${shortId(user.user_id)}`
@@ -869,6 +874,8 @@ export function createSocketIOConfig(
       const result = authResult as { user?: { user_id?: string } };
       const userId = result.user?.user_id;
       if (!userId) return;
+      // Terminal-executor identities get no user room (see connection handler).
+      if (isTerminalExecutorIdentity(result.user)) return;
 
       // Find the socket whose feathers connection matches this login
       for (const [, socket] of io.sockets.sockets) {
@@ -937,6 +944,14 @@ export function configureChannels(
         authentication?: { payload?: unknown };
       };
       console.debug('✅ Login event fired:', result.user?.user_id, result.user?.email);
+
+      // A terminal-executor identity must NOT receive broadcast events. It only
+      // consumes raw `terminal:*` events on its own `user/<id>/terminal` room,
+      // never Feathers channel broadcasts — joining `authenticated`/tenant
+      // channels would give the long-lived terminal token a read-everything
+      // subscription to the realtime firehose. Keyed on `_isTerminalExecutor`
+      // specifically so full service accounts KEEP their channel membership.
+      if (isTerminalExecutorIdentity(result.user)) return;
 
       const connection = context.connection as FeathersSocket & { tenant?: TenantContext };
       const loginParams =

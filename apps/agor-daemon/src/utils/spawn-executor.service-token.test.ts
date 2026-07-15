@@ -37,6 +37,22 @@ describe('executor service token scoping', () => {
     expect(serviceTokenScopeForParams({})).toEqual({});
   });
 
+  it('stamps role: service for a plain (unscoped) service token', () => {
+    const decoded = jwt.decode(createServiceToken('test-secret', '5m', {})) as { role?: string };
+    expect(decoded.role).toBe('service');
+  });
+
+  it('stamps role: terminal-executor for a terminal-scoped token (no full service role)', () => {
+    // Both resolvers override role before use, but a token that leaks its raw
+    // role must not read as a full service account to any future consumer.
+    const decoded = jwt.decode(
+      createServiceToken('test-secret', '30d', { terminal_user_id: 'u1' })
+    ) as { role?: string; terminal_user_id?: string };
+    expect(decoded.role).toBe('terminal-executor');
+    expect(decoded.role).not.toBe('service');
+    expect(decoded.terminal_user_id).toBe('u1');
+  });
+
   it('generates tenant-scoped service tokens directly from params', () => {
     const token = generateScopedServiceToken(
       { settings: { authentication: { secret: 'test-secret' } } },

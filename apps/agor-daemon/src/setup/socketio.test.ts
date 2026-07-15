@@ -987,6 +987,46 @@ describe('configureChannels tenant isolation', () => {
     expect(joins.get(tenantUserChannelName('tenant-from-params', ALICE))).toEqual([connection]);
   });
 
+  it('does NOT join a terminal-executor identity to any broadcast channel', () => {
+    // The long-lived terminal token must not get a realtime firehose
+    // subscription — it consumes only raw terminal:* room events, never
+    // Feathers channel broadcasts.
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'default' as never,
+        auth_claim: 'tenant_id',
+      },
+    });
+    const connection = { data: {} } as any;
+
+    handlers.get('login')?.(
+      {
+        user: { user_id: 'executor-service', _isTerminalExecutor: true },
+        authentication: { payload: { tenant_id: 'tenant-a' } },
+      },
+      { connection }
+    );
+
+    expect(joins.size).toBe(0);
+  });
+
+  it('still joins a full service account to broadcast channels (service delivery)', () => {
+    const { app, handlers, joins } = makeChannelHarness();
+    configureChannels(app, {
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const connection = { data: {} } as any;
+
+    handlers.get('login')?.(
+      { user: { user_id: 'executor-service', _isServiceAccount: true }, authentication: {} },
+      { connection }
+    );
+
+    expect(joins.get('authenticated')).toEqual([connection]);
+  });
+
   it('leaves tenant-scoped channels on logout', () => {
     const { app, handlers, leaves } = makeChannelHarness();
     configureChannels(app, {

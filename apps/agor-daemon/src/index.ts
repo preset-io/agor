@@ -37,9 +37,7 @@ import {
   resolveGitConfigParameters,
   resolveMultiTenancyConfig,
   resolveSecurity,
-  resolveTenantContext,
   saveConfig,
-  TenantResolutionError,
 } from '@agor/core/config';
 import { getDatabaseUrl, runWithTenantDatabaseScope } from '@agor/core/db';
 import {
@@ -47,7 +45,6 @@ import {
   Forbidden,
   feathers,
   feathersExpress,
-  NotAuthenticated,
   rest,
   socketio,
 } from '@agor/core/feathers';
@@ -58,7 +55,7 @@ import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
 import { scopeExecutorRuntimeAuth } from './auth/executor-runtime-scope.js';
-import { rejectTerminalExecutorIdentity } from './auth/terminal-executor-guard.js';
+import { createRequireAuthHook } from './auth/require-auth.js';
 import { registerHooks } from './register-hooks.js';
 import { registerRoutes } from './register-routes.js';
 import { registerServices } from './register-services.js';
@@ -211,23 +208,7 @@ export async function startDaemon(options?: DaemonStartOptions): Promise<void> {
   const authenticatedHook = scopeExecutorRuntimeAuth(
     authenticate({ strategies: ['api-key', 'jwt'] })
   );
-  const requireAuth = async (context: HookContext): Promise<HookContext> => {
-    const authed = await authenticatedHook(context);
-    // A terminal-executor identity is valid ONLY for the Socket.IO terminal
-    // channel (handled outside Feathers); reject it from every REST/Feathers
-    // service call here, the shared auth chokepoint, so it can't ride the
-    // RBAC rank table's viewer-rank fallthrough into API access.
-    await rejectTerminalExecutorIdentity(authed);
-    try {
-      authed.params.tenant = resolveTenantContext(multiTenancy, { params: authed.params });
-      return authed;
-    } catch (error) {
-      if (error instanceof TenantResolutionError) {
-        throw new NotAuthenticated(error.message);
-      }
-      throw error;
-    }
-  };
+  const requireAuth = createRequireAuthHook(authenticatedHook, multiTenancy);
 
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;
