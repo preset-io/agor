@@ -21,8 +21,7 @@
     "nextra-theme-docs": "^4.6.1",
     "ogl": "^1.0.11",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "zod": "^3.25.76"
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
