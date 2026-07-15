@@ -50,9 +50,7 @@ describe('parseVegaLiteSpec', () => {
     ['facets', { ...validSpec, facet: { field: 'month' }, spec: validSpec }],
     ['repeated views', { repeat: { row: ['a'], column: ['b'] }, spec: validSpec }],
   ])('rejects %s', (_label, spec) => {
-    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(
-      /not allowed|image marks|static|unbounded/i
-    );
+    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(/outside|supported|not allowed/i);
   });
 
   it.each([
@@ -66,13 +64,17 @@ describe('parseVegaLiteSpec', () => {
       { ...validSpec, config: { view: { discreteWidth: { step: 100_000_000 } } } },
     ],
   ])('rejects unsafe %s', (_label, spec) => {
-    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(/step|no greater than/i);
+    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(/outside/i);
   });
 
   it('does not mistake ordinary inline data fields for layout dimensions', () => {
     const spec = {
       ...validSpec,
-      data: { values: [{ width: 'small', height: 'tall', revenue: 28 }] },
+      data: {
+        values: [
+          { width: 'small', height: 'tall', href: 'category-a', url: 'category-b', revenue: 28 },
+        ],
+      },
     };
 
     expect(parseVegaLiteSpec(JSON.stringify(spec)).spec).toEqual(spec);
@@ -85,24 +87,44 @@ describe('parseVegaLiteSpec', () => {
     ['unknown width keyword', { ...validSpec, width: 'fit' }],
   ])('rejects %s', (_label, spec) => {
     expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(
-      /must be "container" or a finite nonnegative number/
+      /must be ("container" or )?a finite nonnegative number/
     );
   });
 
-  it('rejects malformed and potentially explosive specs', () => {
+  it.each([
+    ['huge root padding', { ...validSpec, padding: 100_000_000 }],
+    ['concat spacing', { ...validSpec, concat: [validSpec], spacing: 100_000_000 }],
+    ['concat config spacing', { ...validSpec, config: { concat: { spacing: 100_000_000 } } }],
+    [
+      'authored mark geometry',
+      { ...validSpec, mark: { type: 'point', size: 10_000_000_000_000_000 } },
+    ],
+    [
+      'density transforms',
+      { ...validSpec, transform: [{ density: 'revenue', steps: 100_000_000 }] },
+    ],
+  ])('rejects %s outside the allowlisted unit-chart subset', (_label, spec) => {
+    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(/outside|mark geometry/i);
+  });
+
+  it('requires explicit bounded layout dimensions', () => {
+    const { width: _width, ...withoutWidth } = validSpec;
+    expect(() => parseVegaLiteSpec(JSON.stringify(withoutWidth))).toThrow(/width.*required/i);
+    expect(() => parseVegaLiteSpec(JSON.stringify({ ...validSpec, height: 'container' }))).toThrow(
+      /height must be a finite/i
+    );
+  });
+
+  it('rejects malformed and overly large specs', () => {
     expect(() => parseVegaLiteSpec('{"mark":')).toThrow(/Could not parse/);
-    expect(() =>
-      parseVegaLiteSpec(JSON.stringify({ data: { sequence: { start: 0, stop: 1_000_000 } } }))
-    ).toThrow(/generate more than/);
     expect(() =>
       parseVegaLiteSpec(
         JSON.stringify({
-          layer: Array.from({ length: 4 }, () => ({
-            concat: Array.from({ length: 5 }, () => validSpec),
-          })),
+          ...validSpec,
+          data: { values: Array.from({ length: 2_001 }, (_, value) => ({ value })) },
         })
       )
-    ).toThrow(/expands to 20 views/);
+    ).toThrow(/maximum is 2,000/);
     expect(() => parseVegaLiteSpec(' '.repeat(100_001))).toThrow(/too large/);
   });
 });

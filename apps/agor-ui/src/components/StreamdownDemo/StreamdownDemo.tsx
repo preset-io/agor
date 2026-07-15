@@ -39,9 +39,9 @@ The chart runtime loads only after Streamdown receives the complete fenced block
       {"month": "Jun", "revenue": 53}
     ]
   },
-  "mark": {"type": "bar", "cornerRadiusTopLeft": 4, "cornerRadiusTopRight": 4},
+  "mark": "bar",
   "encoding": {
-    "x": {"field": "month", "type": "nominal", "axis": {"labelAngle": 0}},
+    "x": {"field": "month", "type": "nominal"},
     "y": {"field": "revenue", "type": "quantitative", "title": "Revenue ($k)"},
     "color": {"field": "month", "type": "nominal", "legend": null}
   }

@@ -19,7 +19,7 @@ This is deliberately an integration POC, not a renderer rewrite.
 
 | Candidate                  | Decision                | Portable source                                                                                                                                      | Measured/expected cost                                                                                                                                                     | Maturity and reason                                                                                                                                                                                                                                                 |
 | -------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Vega-Lite**              | **Implement demo POC**  | High: a `vega-lite` JSON fence remains readable/copyable; several Markdown tools already recognize the language name even when they do not render it | **226,074 B gzip lazy** (renderer + Vega runtime); **32,598 B gzip initial delta** in the current-main control comparison because Vega shares some D3 modules with Mermaid | Vega 6.2.0, Vega-Lite 6.4.3, and Vega-Embed 7.1.0 were current and maintained at research time. Streamdown documents this exact custom-renderer use case, but does not publish an official Vega plugin. High value, but default-off pending production approval.    |
+| **Vega-Lite**              | **Implement demo POC**  | High: a `vega-lite` JSON fence remains readable/copyable; several Markdown tools already recognize the language name even when they do not render it | **226,518 B gzip lazy** (renderer + Vega runtime); **32,578 B gzip initial delta** in the current-main control comparison because Vega shares some D3 modules with Mermaid | Vega 6.2.0, Vega-Lite 6.4.3, and Vega-Embed 7.1.0 were current and maintained at research time. Streamdown documents this exact custom-renderer use case, but does not publish an official Vega plugin. High value, but default-off pending production approval.    |
 | **JSON/YAML tree + table** | **Defer**               | High for the standard `json`/`yaml` fences                                                                                                           | Existing Streamdown code highlighting is already in the initial chunk; a second renderer would add interaction, virtualization, and schema decisions                       | Syntax highlighting and copy already work. “Table” is ambiguous for nested/mixed data, while a tree duplicates editor/inspector UI elsewhere in Agor. Revisit only with a specific conversation workflow and large-document accessibility design.                   |
 | **Rich diff**              | **Defer**               | High for a standard `diff` fence                                                                                                                     | No new package is needed for highlighting; a richer viewer would need parsing and side-by-side/large-file behavior                                                         | Streamdown already highlights `diff`. Agor's `DiffBlock` already renders structured Edit/Write results and Knowledge history, where old/new file semantics are known. A generic fence does not reliably carry those semantics.                                      |
 | **ANSI terminal**          | **Defer**               | Medium: an `ansi` fence is readable only if the source contains printable text; raw escape bytes travel poorly                                       | `ansi-to-react` 6.2.6 is already installed (12,227 B package files), but promoting it to Markdown expands the untrusted-input surface                                      | Agor already uses ANSI rendering for terminal/tool output. Conversation Markdown should not interpret cursor movement, OSC links, OSC 52, or non-SGR terminal controls. A future renderer would need a strict SGR-only tokenizer, output caps, and plain-text copy. |
@@ -50,12 +50,13 @@ Package sizes above are actual installed-file totals or npm tarball `dist.unpack
 
 ## Vega-Lite security and resource policy
 
-Conversation content is untrusted. The POC therefore accepts a deliberately constrained subset:
+Conversation content is untrusted. A recursive denylist cannot prove a safe Vega-Lite subset because seemingly small configuration and transform options can generate enormous layouts or datasets. The POC therefore uses a deliberately small explicit allowlist:
 
-- JSON objects only; maximum UTF-8 source size 100,000 bytes, nesting depth 32, 10,000 visited values, 2,000 items per array, and 16 total nested composed views. Unit/layer layout `width` and `height` are validated at their schema locations—not by recursively matching ordinary data-field names—and accept only finite nonnegative numbers up to 2,000 or the exact `"container"` keyword. `config.view` sizing aliases are separately bounded, and per-category step defaults are rejected because their aggregate dimension depends on data cardinality. Coercible numeric strings, step objects, and unknown shapes fail closed.
-- Inline data only. Every case-insensitive `url` or `href` property is rejected recursively, as are image marks and `usermeta` embed overrides.
-- Static charts only. Authored `params`, legacy `selection`, Vega `signals`, `bind`, and `events` are rejected; facets and repeats are rejected because data cardinality can expand them after validation. Vega-Embed hover processing is disabled.
-- Generated sequences are capped at 10,000 rows.
+- One unit chart only. The root may contain only `$schema`, `description`, `title`, `width`, `height`, `data`, `mark`, and `encoding`. Authored transforms, composition/faceting/repeat, padding/spacing, configuration, projections, parameters, expressions, and generated datasets are outside the subset and remain ordinary source code.
+- JSON source is capped at 100,000 UTF-8 bytes, depth 32, 10,000 visited values, and 2,000 items per array. Both dimensions are required: width is a finite nonnegative number up to 2,000 or exact `"container"`; height is a finite nonnegative number up to 2,000. Step sizing and coercible values are rejected.
+- Data must be `{ "values": [...] }` with at most 2,000 object rows containing only finite JSON primitives. Data field names such as `width`, `height`, `url`, or `href` are ordinary data rather than being misclassified as configuration.
+- `mark` must be one of ten reviewed static mark names; authored mark objects/geometry are rejected. Encoding uses a closed list of field channels and field-definition properties. Field types and aggregates are enumerated; binning is boolean-only; guide configuration may only be disabled with `null`. Scale, condition, expression, value/datum, and other unaudited encoding forms are rejected.
+- Remote loads are not expressible through the allowlist. Vega-Embed hover processing is disabled as an additional static-chart constraint.
 - Vega-Embed receives an inline object, `actions: false`, `tooltip: false`, SVG output, and `ast: true`. Vega documents `ast: true` as the CSP-compatible expression-interpreter path; the default expression compiler otherwise uses `Function` construction.
 - A custom Vega loader rejects both `load` and `sanitize`, providing defense in depth if a resource-bearing property escapes validation. No chart-initiated fetch is allowed.
 - SVG is produced by the local Vega runtime rather than accepted as authored HTML. The normal Streamdown sanitizer still applies to surrounding Markdown.
@@ -82,7 +83,7 @@ Production builds used `pnpm --filter agor-ui build`. Sizes below are generated 
 | Current-main comparison build                            |  Initial raw | Initial gzip |                     Vega delta |
 | -------------------------------------------------------- | -----------: | -----------: | -----------------------------: |
 | Callouts + Streamdown parity, Vega renderer removed      | 17,653,015 B |  4,000,440 B |                              — |
-| Final demo-only POC with Vega registration and hardening | 17,744,582 B |  4,033,038 B | +91,567 B raw / +32,598 B gzip |
+| Final demo-only POC with Vega registration and hardening | 17,744,582 B |  4,033,018 B | +91,567 B raw / +32,578 B gzip |
 
 An earlier same-main comparison measured the Streamdown 1.5.1 → 2.5.0 parity-plugin upgrade at +815,513 B raw / +154,196 B gzip. That upgrade cost is separate from the Vega delta above.
 
@@ -90,9 +91,9 @@ Final chart-only chunks:
 
 | Lazy chunk                              |           Raw |          Gzip |
 | --------------------------------------- | ------------: | ------------: |
-| `VegaLiteRenderer`                      |       8,098 B |       3,282 B |
+| `VegaLiteRenderer`                      |       9,136 B |       3,726 B |
 | `vega` runtime                          |     653,271 B |     222,792 B |
-| **Lazy total on first completed chart** | **661,369 B** | **226,074 B** |
+| **Lazy total on first completed chart** | **662,407 B** | **226,518 B** |
 
 The initial Streamdown asset remains the dominant renderer cost and warrants separate optimization; this POC does not attempt that rewrite.
 
@@ -108,6 +109,8 @@ These examples also live on `/demo/streamdown`.
 ```vega-lite
 {
   "description": "Weekly completed tasks",
+  "width": "container",
+  "height": 240,
   "data": {
     "values": [
       { "day": "Mon", "tasks": 3 },
@@ -116,7 +119,7 @@ These examples also live on `/demo/streamdown`.
       { "day": "Thu", "tasks": 9 }
     ]
   },
-  "mark": { "type": "bar", "cornerRadiusEnd": 3 },
+  "mark": "bar",
   "encoding": {
     "x": { "field": "day", "type": "ordinal", "title": "Day" },
     "y": { "field": "tasks", "type": "quantitative", "title": "Completed tasks" },
@@ -177,8 +180,8 @@ digraph G { agent -> task -> report }
 ## Focused validation
 
 - `pnpm --filter agor-ui test -- src/components/MarkdownRenderer/MarkdownRenderer.test.tsx src/components/MarkdownRenderer/VegaLiteRenderer.test.tsx src/components/MarkdownRenderer/vegaLiteSpec.test.ts src/components/MarkdownRenderer/vegaRendererLoader.test.ts`
-  - 4 files, 37 tests passing
-  - covers default-off and renderer-boundary budgets (top-level, blockquote, list fences, and missing ownership), schema-aware dimension validation and `config.view` aliases, ordinary data fields named `width`/`height`, callouts, incomplete streaming, malformed/static-subset rejection, nested composition bounds, dark theme, both lazy/runtime timeouts, late finalization, control parity, accessibility, CSP mode, and blocked network loading
+  - 4 files, 43 tests passing
+  - covers default-off and renderer-boundary budgets (top-level, blockquote, list fences, and missing ownership), the explicit unit-chart grammar, ordinary data fields named `width`/`height`/`url`/`href`, huge padding/spacing/mark-geometry/density regressions, callouts, incomplete streaming, malformed/static-subset rejection, dark theme, both lazy/runtime timeouts, late finalization, control parity, accessibility, CSP mode, and blocked network loading
 - `pnpm --filter @agor/core test -- src/templates/session-context.test.ts` — 1 test passing; verifies the shared agent Markdown guidance
 - `pnpm --filter agor-ui typecheck` — passing
 - `pnpm exec biome check` on all changed UI source/config/package files — passing
@@ -188,7 +191,7 @@ digraph G { agent -> task -> report }
 ## Production follow-ups (not part of this POC)
 
 1. Decide whether the Streamdown 2 initial-bundle regression is acceptable or can be reduced upstream/before rollout.
-2. Profile hostile transform/expression specs on low-end hardware. A JavaScript timeout is not a CPU preemption boundary.
+2. Profile the maximum allowed workload (four near-viewport charts with 2,000 primitive rows each) on low-end hardware. A JavaScript timeout is not a CPU preemption boundary.
 3. Confirm the product's minimum Safari/iOS version against Streamdown 2's parser compatibility.
 4. If Vega is approved, consider requiring authors to provide `description` rather than accepting the generic fallback.
 5. Do not add a second diagram language without measured user demand and an independent security/accessibility review.

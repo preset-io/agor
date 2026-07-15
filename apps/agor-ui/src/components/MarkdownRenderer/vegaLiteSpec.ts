@@ -2,9 +2,84 @@ const MAX_SPEC_BYTES = 100_000;
 const MAX_DEPTH = 32;
 const MAX_NODES = 10_000;
 const MAX_ARRAY_ITEMS = 2_000;
-const MAX_COMPOSED_VIEWS = 16;
 const MAX_DIMENSION = 2_000;
-const MAX_SEQUENCE_ITEMS = 10_000;
+const MAX_FIELD_NAME_LENGTH = 256;
+const MAX_LABEL_LENGTH = 500;
+const MAX_DATA_STRING_LENGTH = 10_000;
+
+const TOP_LEVEL_KEYS = new Set([
+  '$schema',
+  'data',
+  'description',
+  'encoding',
+  'height',
+  'mark',
+  'title',
+  'width',
+]);
+const MARK_TYPES = new Set([
+  'arc',
+  'area',
+  'bar',
+  'circle',
+  'line',
+  'point',
+  'rect',
+  'rule',
+  'square',
+  'tick',
+]);
+const ENCODING_CHANNELS = new Set([
+  'color',
+  'detail',
+  'fill',
+  'opacity',
+  'order',
+  'radius',
+  'radius2',
+  'shape',
+  'size',
+  'stroke',
+  'theta',
+  'theta2',
+  'x',
+  'x2',
+  'y',
+  'y2',
+]);
+const CHANNEL_KEYS = new Set([
+  'aggregate',
+  'axis',
+  'bin',
+  'field',
+  'legend',
+  'sort',
+  'stack',
+  'title',
+  'type',
+]);
+const FIELD_TYPES = new Set(['nominal', 'ordinal', 'quantitative', 'temporal']);
+const DATA_KEYS = new Set(['values']);
+const SORT_VALUES = new Set<unknown>(['ascending', 'descending', null]);
+const STACK_VALUES = new Set<unknown>(['zero', 'normalize', 'center', null]);
+const AGGREGATES = new Set([
+  'average',
+  'count',
+  'distinct',
+  'max',
+  'mean',
+  'median',
+  'min',
+  'missing',
+  'q1',
+  'q3',
+  'stdev',
+  'stdevp',
+  'sum',
+  'valid',
+  'variance',
+  'variancep',
+]);
 
 export interface ParsedVegaLiteSpec {
   description: string;
@@ -21,9 +96,10 @@ export class VegaLiteSpecError extends Error {
 /**
  * Parse the deliberately constrained Vega-Lite subset used in conversations.
  *
- * The POC only accepts inline data. Blocking every `url`/`href` key is
- * intentionally conservative: Vega can load both datasets and images, and a
- * chart in an agent response must not become an ambient browser fetch.
+ * This is an explicit allowlist, not a partial Vega-Lite denylist. The POC
+ * accepts one bounded unit chart over inline primitive rows and deliberately
+ * excludes authored transforms, composition, configuration, expressions, and
+ * mark geometry. Unreviewed Vega-Lite features remain ordinary source code.
  */
 export function parseVegaLiteSpec(source: string): ParsedVegaLiteSpec {
   const byteLength = new TextEncoder().encode(source).byteLength;
@@ -47,8 +123,7 @@ export function parseVegaLiteSpec(source: string): ParsedVegaLiteSpec {
 
   const state = { nodes: 0 };
   inspectValue(parsed, '$', 0, state);
-  validateSpecLayout(parsed, '$');
-  validateComposedViewCount(parsed);
+  validateSupportedUnitSpec(parsed);
 
   const description =
     typeof parsed.description === 'string' && parsed.description.trim()
@@ -87,168 +162,159 @@ function inspectValue(value: unknown, path: string, depth: number, state: { node
   if (!isRecord(value)) return;
 
   for (const [key, child] of Object.entries(value)) {
-    const childPath = `${path}.${key}`;
-    const normalizedKey = key.toLowerCase();
-
-    if (normalizedKey === 'url' || normalizedKey === 'href') {
-      throw new VegaLiteSpecError(
-        `${childPath} is not allowed; conversation charts must use inline data and cannot load remote resources.`
-      );
-    }
-    if (normalizedKey === 'usermeta') {
-      throw new VegaLiteSpecError(
-        `${childPath} is not allowed because it can override embed behavior.`
-      );
-    }
-    if (['params', 'selection', 'signals', 'bind', 'events'].includes(normalizedKey)) {
-      throw new VegaLiteSpecError(
-        `${childPath} is not allowed; conversation charts are static and cannot register event streams or bindings.`
-      );
-    }
-    if (normalizedKey === 'facet' || normalizedKey === 'repeat') {
-      throw new VegaLiteSpecError(
-        `${childPath} is not allowed because it can expand one authored spec into an unbounded number of views.`
-      );
-    }
-    if (
-      ['layer', 'concat', 'hconcat', 'vconcat'].includes(normalizedKey) &&
-      Array.isArray(child) &&
-      child.length > MAX_COMPOSED_VIEWS
-    ) {
-      throw new VegaLiteSpecError(
-        `${childPath} cannot contain more than ${MAX_COMPOSED_VIEWS} views.`
-      );
-    }
-    if (normalizedKey === 'mark' && isImageMark(child)) {
-      throw new VegaLiteSpecError(
-        `${childPath} cannot use image marks because images may trigger remote loads.`
-      );
-    }
-    if (normalizedKey === 'sequence' && isRecord(child)) {
-      validateSequence(child, childPath);
-    }
-
-    inspectValue(child, childPath, depth + 1, state);
+    inspectValue(child, `${path}.${key}`, depth + 1, state);
   }
 }
 
-/**
- * Validate dimensions only where Vega-Lite interprets them as layout. A
- * recursive property-name check is both incomplete (config aliases exist) and
- * incorrect (inline data may legitimately contain fields named width/height).
- */
-function validateSpecLayout(spec: Record<string, unknown>, path: string): void {
-  if (Object.hasOwn(spec, 'width')) validateDimension(spec.width, `${path}.width`);
-  if (Object.hasOwn(spec, 'height')) validateDimension(spec.height, `${path}.height`);
+function validateSupportedUnitSpec(spec: Record<string, unknown>): void {
+  rejectUnknownKeys(spec, TOP_LEVEL_KEYS, '$');
 
-  const config = spec.config;
-  if (isRecord(config) && isRecord(config.view)) {
-    validateViewConfig(config.view, `${path}.config.view`);
+  if (
+    spec.$schema !== undefined &&
+    spec.$schema !== 'https://vega.github.io/schema/vega-lite/v6.json'
+  ) {
+    throw new VegaLiteSpecError('$.$schema must identify the supported Vega-Lite v6 schema.');
   }
+  validateOptionalText(spec.description, '$.description');
+  validateOptionalText(spec.title, '$.title');
 
-  for (const key of ['layer', 'concat', 'hconcat', 'vconcat']) {
-    const children = spec[key];
-    if (!Array.isArray(children)) continue;
-    children.forEach((child, index) => {
-      if (isRecord(child)) validateSpecLayout(child, `${path}.${key}[${index}]`);
-    });
+  if (!Object.hasOwn(spec, 'width') || !Object.hasOwn(spec, 'height')) {
+    throw new VegaLiteSpecError('$.width and $.height are required for a bounded unit chart.');
   }
+  validateDimension(spec.width, '$.width', true);
+  validateDimension(spec.height, '$.height', false);
+  validateInlineData(spec.data);
+  validateMark(spec.mark);
+  validateEncoding(spec.encoding);
 }
 
-function validateDimension(value: unknown, path: string): void {
+function validateDimension(value: unknown, path: string, allowContainer: boolean): void {
   const isBoundedNumber =
     typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_DIMENSION;
-  if (isBoundedNumber || value === 'container') return;
+  if (isBoundedNumber || (allowContainer && value === 'container')) return;
 
   throw new VegaLiteSpecError(
-    `${path} must be "container" or a finite nonnegative number no greater than ${MAX_DIMENSION.toLocaleString()} pixels; numeric strings, step sizing, and other objects are not allowed.`
+    `${path} must be ${allowContainer ? '"container" or ' : ''}a finite nonnegative number no greater than ${MAX_DIMENSION.toLocaleString()} pixels; numeric strings, step sizing, and other objects are not allowed.`
   );
 }
 
-function validateViewConfig(view: Record<string, unknown>, path: string): void {
-  if (Object.hasOwn(view, 'step')) {
+function validateInlineData(value: unknown): void {
+  if (!isRecord(value)) {
+    throw new VegaLiteSpecError('$.data must be an object containing inline values.');
+  }
+  rejectUnknownKeys(value, DATA_KEYS, '$.data');
+  if (!Array.isArray(value.values)) {
+    throw new VegaLiteSpecError('$.data.values must be an array of inline rows.');
+  }
+
+  value.values.forEach((row, rowIndex) => {
+    validateInlineRow(row, `$.data.values[${rowIndex}]`);
+  });
+}
+
+function validateInlineRow(value: unknown, path: string): void {
+  if (!isRecord(value)) {
+    throw new VegaLiteSpecError(`${path} must be an object with primitive field values.`);
+  }
+
+  for (const [field, fieldValue] of Object.entries(value)) {
+    if (!field || field.length > MAX_FIELD_NAME_LENGTH) {
+      throw new VegaLiteSpecError(`${path} contains an invalid or overly long field name.`);
+    }
+    const isPrimitive =
+      fieldValue === null || ['boolean', 'number', 'string'].includes(typeof fieldValue);
+    if (!isPrimitive || (typeof fieldValue === 'number' && !Number.isFinite(fieldValue))) {
+      throw new VegaLiteSpecError(`${path}.${field} must be a finite JSON primitive.`);
+    }
+    if (typeof fieldValue === 'string' && fieldValue.length > MAX_DATA_STRING_LENGTH) {
+      throw new VegaLiteSpecError(`${path}.${field} is too long.`);
+    }
+  }
+}
+
+function validateMark(value: unknown): void {
+  if (typeof value !== 'string' || !MARK_TYPES.has(value)) {
     throw new VegaLiteSpecError(
-      `${path}.step is not allowed because per-category step sizing can create an unbounded aggregate chart dimension.`
+      '$.mark must be one of the supported static mark names; authored mark geometry is not allowed.'
     );
   }
+}
 
-  for (const key of [
-    'width',
-    'height',
-    'continuousWidth',
-    'continuousHeight',
-    'discreteWidth',
-    'discreteHeight',
-  ]) {
-    if (!Object.hasOwn(view, key)) continue;
-    validateFixedDimension(view[key], `${path}.${key}`);
+function validateEncoding(value: unknown): void {
+  if (!isRecord(value) || Object.keys(value).length === 0) {
+    throw new VegaLiteSpecError('$.encoding must contain at least one supported field channel.');
+  }
+
+  rejectUnknownKeys(value, ENCODING_CHANNELS, '$.encoding');
+  for (const [channel, definition] of Object.entries(value)) {
+    validateChannelDefinition(definition, `$.encoding.${channel}`);
   }
 }
 
-function validateFixedDimension(value: unknown, path: string): void {
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_DIMENSION) {
-    return;
+function validateChannelDefinition(value: unknown, path: string): void {
+  if (!isRecord(value)) {
+    throw new VegaLiteSpecError(`${path} must be a field definition object.`);
   }
+  rejectUnknownKeys(value, CHANNEL_KEYS, path);
 
-  throw new VegaLiteSpecError(
-    `${path} must be a finite nonnegative number no greater than ${MAX_DIMENSION.toLocaleString()} pixels; step sizing and coercible values are not allowed.`
-  );
-}
-
-/**
- * Individual composition arrays are insufficient as a limit: nested arrays
- * multiply/sum into much larger render trees. Count unit views across the
- * complete authored composition and fail closed before Vega compiles it.
- */
-function validateComposedViewCount(spec: Record<string, unknown>): void {
-  const viewCount = countComposedViews(spec);
-  if (viewCount > MAX_COMPOSED_VIEWS) {
+  const field = value.field;
+  const hasField = typeof field === 'string' && field.length > 0;
+  const isCount = value.aggregate === 'count';
+  if (!hasField && !isCount) {
+    throw new VegaLiteSpecError(`${path}.field must name an inline-data field.`);
+  }
+  if (hasField && field.length > MAX_FIELD_NAME_LENGTH) {
+    throw new VegaLiteSpecError(`${path}.field is too long.`);
+  }
+  if (typeof value.type !== 'string' || !FIELD_TYPES.has(value.type)) {
     throw new VegaLiteSpecError(
-      `Spec expands to ${viewCount.toLocaleString()} views; the maximum is ${MAX_COMPOSED_VIEWS}.`
+      `${path}.type must be nominal, ordinal, quantitative, or temporal.`
     );
   }
-}
-
-function countComposedViews(spec: Record<string, unknown>): number {
-  let composedViews = 0;
-  for (const key of ['layer', 'concat', 'hconcat', 'vconcat']) {
-    const children = spec[key];
-    if (!Array.isArray(children)) continue;
-    composedViews += children.reduce(
-      (total, child) => total + (isRecord(child) ? countComposedViews(child) : 1),
-      0
-    );
+  if (value.aggregate !== undefined) {
+    if (typeof value.aggregate !== 'string' || !AGGREGATES.has(value.aggregate)) {
+      throw new VegaLiteSpecError(`${path}.aggregate is not supported.`);
+    }
   }
-
-  return composedViews || 1;
+  if (value.bin !== undefined && typeof value.bin !== 'boolean') {
+    throw new VegaLiteSpecError(`${path}.bin must be a boolean.`);
+  }
+  if (value.sort !== undefined && !SORT_VALUES.has(value.sort)) {
+    throw new VegaLiteSpecError(`${path}.sort must be ascending, descending, or null.`);
+  }
+  if (value.stack !== undefined && !STACK_VALUES.has(value.stack)) {
+    throw new VegaLiteSpecError(`${path}.stack is not supported.`);
+  }
+  for (const key of ['axis', 'legend']) {
+    if (value[key] !== undefined && value[key] !== null) {
+      throw new VegaLiteSpecError(
+        `${path}.${key} may only be null; authored guide configuration is not allowed.`
+      );
+    }
+  }
+  validateOptionalText(value.title, `${path}.title`, true);
 }
 
-function validateSequence(sequence: Record<string, unknown>, path: string): void {
-  const start = typeof sequence.start === 'number' ? sequence.start : 0;
-  const stop = typeof sequence.stop === 'number' ? sequence.stop : undefined;
-  const step = typeof sequence.step === 'number' ? sequence.step : 1;
-  if (
-    stop === undefined ||
-    !Number.isFinite(start) ||
-    !Number.isFinite(stop) ||
-    !Number.isFinite(step) ||
-    step === 0
-  ) {
+function validateOptionalText(value: unknown, path: string, allowNull = false): void {
+  if (value === undefined || (allowNull && value === null)) return;
+  if (typeof value !== 'string' || value.length > MAX_LABEL_LENGTH) {
     throw new VegaLiteSpecError(
-      `${path} must contain finite start/stop values and a non-zero step.`
-    );
-  }
-  const itemCount = Math.max(0, Math.ceil((stop - start) / step));
-  if (itemCount > MAX_SEQUENCE_ITEMS) {
-    throw new VegaLiteSpecError(
-      `${path} would generate more than ${MAX_SEQUENCE_ITEMS.toLocaleString()} rows.`
+      `${path} must be a string no longer than ${MAX_LABEL_LENGTH} characters.`
     );
   }
 }
 
-function isImageMark(value: unknown): boolean {
-  if (typeof value === 'string') return value.toLowerCase() === 'image';
-  return isRecord(value) && typeof value.type === 'string' && value.type.toLowerCase() === 'image';
+function rejectUnknownKeys(
+  value: Record<string, unknown>,
+  allowedKeys: ReadonlySet<string>,
+  path: string
+): void {
+  const unknownKey = Object.keys(value).find((key) => !allowedKeys.has(key));
+  if (unknownKey) {
+    throw new VegaLiteSpecError(
+      `${path}.${unknownKey} is outside the supported static unit-chart subset and will remain ordinary source code.`
+    );
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

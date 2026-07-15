@@ -15,6 +15,7 @@ vi.mock('./vegaRuntime', () => ({ loadVegaRuntime: mocks.loadRuntime }));
 const code = JSON.stringify({
   description: 'Monthly revenue',
   width: 'container',
+  height: 240,
   data: { values: [{ month: 'Jan', revenue: 28 }] },
   mark: 'bar',
   encoding: {
