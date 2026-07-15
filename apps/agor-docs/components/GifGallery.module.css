@@ -96,3 +96,30 @@
   width: 22px;
   background: #34e6c4;
 }
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 18px;
+  margin-bottom: 1rem;
+}
+
+.tab {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--agor-muted, #9fb4ae);
+  font-size: 0.92rem;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.tab:hover {
+  color: #7fe8df;
+}
+
+.tabActive {
+  color: #34e6c4;
+  font-weight: 600;
+}

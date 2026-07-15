@@ -52,7 +52,7 @@ export const sharedLayoutProps = {
   navigation: { prev: true, next: true },
   sidebar: { defaultMenuCollapseLevel: 1, toggleButton: true },
   toc: { backToTop: true },
-  editLink: <>Edit this page on GitHub →</>,
-  feedback: { content: 'Question? Give us feedback →', labels: 'feedback' },
+  editLink: <>Edit this page on GitHub</>,
+  feedback: { content: 'Question? Give us feedback', labels: 'feedback' },
   nextThemes: { defaultTheme: 'dark' },
 };

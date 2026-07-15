@@ -9,21 +9,25 @@ const gifs = [
   {
     src: '/Area.gif',
     alt: 'Spatial 2D Canvas',
+    label: 'Spatial canvas',
     caption: 'Spatial canvas with branches and zones',
   },
   {
     src: '/Convo.gif',
     alt: 'AI Conversation in Action',
+    label: 'AI conversations',
     caption: 'Rich web UI for AI conversations',
   },
   {
     src: '/Settings.gif',
     alt: 'Settings and Configuration',
+    label: 'MCP & branches',
     caption: 'MCP servers and branch management',
   },
   {
     src: '/Social.gif',
     alt: 'Real-time Multiplayer',
+    label: 'Collaboration',
     caption: 'Live collaboration with cursors and comments',
   },
 ];
@@ -33,6 +37,19 @@ export function GifGallery() {
 
   return (
     <div className={styles.carousel}>
+      <div className={styles.tabs}>
+        {gifs.map((gif, index) => (
+          <button
+            key={gif.src}
+            type="button"
+            aria-pressed={index === active}
+            className={index === active ? `${styles.tab} ${styles.tabActive}` : styles.tab}
+            onClick={() => setActive(index)}
+          >
+            {gif.label}
+          </button>
+        ))}
+      </div>
       <div className={styles.viewport}>
         <div
           className={styles.track}
