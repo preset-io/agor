@@ -110,6 +110,12 @@ body:has([class*="landingShell"]) .nextra-navbar-blur {
   border-bottom: 1px solid rgba(52, 230, 196, 0.1);
   backdrop-filter: blur(14px) saturate(1.4);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  /* Keep the glass layer promoted while video/WebGL content repaints below
+   * it. Without a stable compositor layer Chromium can briefly present the
+   * navbar before its backdrop-filter pass, which looks like a blur flicker. */
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: backdrop-filter;
 }
 
 /* Search field: pill shape + mint focus, matching the landing button system */
