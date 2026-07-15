@@ -41,6 +41,22 @@ describe('createOutputCoalescer', () => {
     expect(emit).toHaveBeenCalledTimes(1);
   });
 
+  it('counts UTF-8 bytes (not UTF-16 code units) against the cap', () => {
+    const emit = vi.fn<(data: string) => void>();
+    // Cap of 6 bytes. '★' is 3 UTF-8 bytes but a single JS string char, so a
+    // char-length check would need 6 chars to trip; a byte check trips at 2.
+    const coalescer = createOutputCoalescer(emit, 16, 6);
+
+    coalescer.push('★'); // 3 bytes buffered, under cap
+    expect(emit).not.toHaveBeenCalled();
+    coalescer.push('★'); // 6 bytes total → hits cap, flush now
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('★★');
+
+    vi.runAllTimers();
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
   it('starts a fresh window after a flush', () => {
     const emit = vi.fn<(data: string) => void>();
     const coalescer = createOutputCoalescer(emit, 16);

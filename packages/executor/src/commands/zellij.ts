@@ -73,6 +73,10 @@ export function createOutputCoalescer(
   maxBytes: number = OUTPUT_FLUSH_MAX_BYTES
 ): OutputCoalescer {
   let buffer = '';
+  // Tracked separately from `buffer.length`: that counts UTF-16 code units,
+  // but the cap is about the encoded UTF-8 payload we hand to Socket.IO, so
+  // multi-byte output (box-drawing, emoji, non-Latin) must count real bytes.
+  let bufferedBytes = 0;
   let immediate: ReturnType<typeof setImmediate> | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -92,13 +96,15 @@ export function createOutputCoalescer(
     if (buffer.length === 0) return;
     const data = buffer;
     buffer = '';
+    bufferedBytes = 0;
     emit(data);
   }
 
   function push(chunk: string) {
     if (chunk.length === 0) return;
     buffer += chunk;
-    if (buffer.length >= maxBytes) {
+    bufferedBytes += Buffer.byteLength(chunk, 'utf8');
+    if (bufferedBytes >= maxBytes) {
       flush();
       return;
     }
