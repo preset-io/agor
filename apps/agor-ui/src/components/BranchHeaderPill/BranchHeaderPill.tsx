@@ -10,6 +10,7 @@ import {
   FireOutlined,
   FolderOutlined,
   GlobalOutlined,
+  LoadingOutlined,
   PlayCircleOutlined,
   StopOutlined,
   TeamOutlined,
@@ -41,7 +42,7 @@ interface BranchHeaderPillProps {
   showNukeEnvironment?: boolean;
   /** Optional link for the branch identity area. Used by session surfaces for deep links. */
   identityLink?: string | null;
-  /** Fill the available row width and let the identity shrink before action sections. */
+  /** Cap the pill at the available row width and shrink the identity before action sections. */
   fluid?: boolean;
   /**
    * Compact rendering for constrained side panels.
@@ -186,7 +187,15 @@ export function BranchHeaderPill({
         return <StopOutlined style={{ color: token.colorTextDisabled, fontSize: size }} />;
       case 'starting':
       case 'stopping':
-        return <Spin size="small" style={{ fontSize: size }} />;
+        // Match sibling status icons: the default dot indicator ignores
+        // fontSize and misaligns in the 22px pill row.
+        return (
+          <Spin
+            size="small"
+            indicator={<LoadingOutlined spin style={{ fontSize: size }} />}
+            style={{ display: 'inline-flex', alignItems: 'center' }}
+          />
+        );
       case 'healthy':
         return <CheckCircleOutlined style={{ color: token.colorSuccess, fontSize: size }} />;
       case 'unhealthy':
@@ -228,7 +237,7 @@ export function BranchHeaderPill({
 
   const identityTooltip = `${repo.slug} / ${branch.name} · ${identityLink ? 'Open session' : 'Open branch settings'}`;
   const identityLinkStyle: React.CSSProperties = {
-    display: fluid ? 'flex' : 'inline-flex',
+    display: 'inline-flex',
     alignItems: 'center',
     gap: 4,
     padding: compact ? '0 6px' : '0 8px',
@@ -250,10 +259,12 @@ export function BranchHeaderPill({
         padding: 0,
         overflow: 'hidden',
         lineHeight: `${PILL_HEIGHT}px`,
-        display: fluid ? 'flex' : 'inline-flex',
+        display: 'inline-flex',
         alignItems: 'stretch',
         cursor: 'default',
-        ...(fluid ? { width: '100%', minWidth: 0, maxWidth: '100%' } : {}),
+        // Content-sized, but never wider than the row: the identity section
+        // truncates before the action sections are pushed out of view.
+        ...(fluid ? { maxWidth: '100%', minWidth: 0 } : {}),
       }}
     >
       {/* Section 1: Repo + Branch — click opens either the supplied identity URL or the branch modal. */}

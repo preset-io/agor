@@ -136,7 +136,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
         >
           {/* Pills section (only shown if there's content) */}
           {branch && (
-            <Flex vertical style={{ flex: '1 1 0', minWidth: 0 }}>
+            <Flex vertical align="flex-start" style={{ flex: '1 1 0', minWidth: 0 }}>
               {/* Unified Branch Pill — owns the first row so its actions keep priority. */}
               {repo && (
                 <BranchHeaderPill

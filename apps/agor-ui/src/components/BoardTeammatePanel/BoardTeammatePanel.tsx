@@ -300,7 +300,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </div>
             </div>
 
-            <Flex vertical style={{ minWidth: 0 }}>
+            <Flex vertical align="flex-start" style={{ minWidth: 0 }}>
               <BranchHeaderPill
                 repo={primaryTeammateRepo}
                 branch={primaryTeammateBranch}
