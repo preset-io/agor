@@ -108,7 +108,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
   const watchedMcp = Form.useWatch('mcpServerIds', form) as string[] | undefined;
   const watchedModelConfig = Form.useWatch('modelConfig', form) as ModelConfig | undefined;
+  const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
   const isClaudeAgent = selectedAgent === 'claude-code' || selectedAgent === 'claude-code-cli';
+  // The daemon overwrites model_config with the resolved preset/default when a
+  // non-inline configuration is chosen, so the Advanced advisor override only
+  // takes effect (and is only offered) while inline configuration is active.
+  const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
 
   // Reset form when modal opens, using user defaults if available
   // Only depends on `open` — branch/user refs may change while modal is open
@@ -132,6 +137,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     form.setFieldsValue({
       title: '',
       initialPrompt: '',
+      // Never carry a checked save-as-default across opens — it could silently
+      // overwrite the user's default on a later create.
+      saveAsDefault: false,
       ...baseValues,
       mcpServerIds:
         branchMcpIds && branchMcpIds.length > 0
@@ -257,7 +265,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   };
 
   const mcpCount = watchedMcp?.length ?? 0;
-  const advisorOn = !!watchedModelConfig?.advisorModel;
+  // Only report the advisor as "on" when it will actually apply (inline config).
+  const advisorOn = isInlineConfig && !!watchedModelConfig?.advisorModel;
   const advancedSummary = `Advanced · ${mcpCount} MCP server${mcpCount === 1 ? '' : 's'} · advisor ${
     advisorOn ? 'on' : 'off'
   }`;
@@ -372,7 +381,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
                     </Form.Item>
                   )}
 
-                  {isClaudeAgent && (
+                  {isClaudeAgent && isInlineConfig && (
                     <Form.Item
                       label={
                         <Space size={4}>
