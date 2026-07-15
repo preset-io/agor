@@ -134,10 +134,11 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             gap: token.sizeUnit * 2,
           }}
         >
-          {/* Pills section (only shown if there's content) */}
+          {/* Pills section (only shown if there's content). Branch pill first;
+              issue/PR links flow after it on the same line and wrap below when
+              the row runs out of room. */}
           {branch && (
-            <Flex vertical align="flex-start" style={{ flex: '1 1 0', minWidth: 0 }}>
-              {/* Unified Branch Pill — owns the first row so its actions keep priority. */}
+            <Flex wrap gap={token.sizeUnit} align="center" style={{ flex: '1 1 0', minWidth: 0 }}>
               {repo && (
                 <BranchHeaderPill
                   repo={repo}
@@ -151,18 +152,11 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                   fluid
                 />
               )}
-              {(branch.issue_url || branch.pull_request_url) && (
-                <Space size={token.sizeUnit * 2} wrap style={{ marginTop: token.sizeUnit }}>
-                  {branch.issue_url && (
-                    <IssuePill issueUrl={branch.issue_url} currentRepo={repo ?? undefined} />
-                  )}
-                  {branch.pull_request_url && (
-                    <PullRequestPill
-                      prUrl={branch.pull_request_url}
-                      currentRepo={repo ?? undefined}
-                    />
-                  )}
-                </Space>
+              {branch.issue_url && (
+                <IssuePill issueUrl={branch.issue_url} currentRepo={repo ?? undefined} />
+              )}
+              {branch.pull_request_url && (
+                <PullRequestPill prUrl={branch.pull_request_url} currentRepo={repo ?? undefined} />
               )}
             </Flex>
           )}

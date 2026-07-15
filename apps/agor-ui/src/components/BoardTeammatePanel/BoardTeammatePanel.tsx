@@ -300,7 +300,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </div>
             </div>
 
-            <Flex vertical align="flex-start" style={{ minWidth: 0 }}>
+            {/* Branch pill first; metadata links flow after it on the same
+                line and wrap below when the row runs out of room. */}
+            <Flex wrap gap={token.sizeUnit} align="center" style={{ minWidth: 0 }}>
               <BranchHeaderPill
                 repo={primaryTeammateRepo}
                 branch={primaryTeammateBranch}
@@ -310,31 +312,25 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                 compact
                 fluid
               />
-              {(primaryTeammateBranch.created_by ||
-                primaryTeammateBranch.issue_url ||
-                primaryTeammateBranch.pull_request_url) && (
-                <Flex gap={token.sizeUnit} wrap style={{ marginTop: token.sizeUnit }}>
-                  {primaryTeammateBranch.created_by && (
-                    <CreatedByTag
-                      createdBy={primaryTeammateBranch.created_by}
-                      currentUserId={currentUserId}
-                      userById={userById}
-                      prefix="Created by"
-                    />
-                  )}
-                  {primaryTeammateBranch.issue_url && (
-                    <IssuePill
-                      issueUrl={primaryTeammateBranch.issue_url}
-                      currentRepo={primaryTeammateRepo}
-                    />
-                  )}
-                  {primaryTeammateBranch.pull_request_url && (
-                    <PullRequestPill
-                      prUrl={primaryTeammateBranch.pull_request_url}
-                      currentRepo={primaryTeammateRepo}
-                    />
-                  )}
-                </Flex>
+              {primaryTeammateBranch.created_by && (
+                <CreatedByTag
+                  createdBy={primaryTeammateBranch.created_by}
+                  currentUserId={currentUserId}
+                  userById={userById}
+                  prefix="Created by"
+                />
+              )}
+              {primaryTeammateBranch.issue_url && (
+                <IssuePill
+                  issueUrl={primaryTeammateBranch.issue_url}
+                  currentRepo={primaryTeammateRepo}
+                />
+              )}
+              {primaryTeammateBranch.pull_request_url && (
+                <PullRequestPill
+                  prUrl={primaryTeammateBranch.pull_request_url}
+                  currentRepo={primaryTeammateRepo}
+                />
               )}
             </Flex>
             {teammateDescription && (
