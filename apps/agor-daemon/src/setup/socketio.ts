@@ -771,6 +771,51 @@ export function createSocketIOConfig(
         console.log(`🖥️  Terminal exited for user ${data.userId}: code=${data.exitCode}`);
       });
 
+      // Executor readiness ack: the PTY exists and zellij is attached.
+      // Executor-only — a forged ready could trick the daemon into driving
+      // tab choreography (and the browser into showing "connected") against a
+      // terminal that isn't actually up. Relayed to the TerminalsService via
+      // an app event so it can gate its choreography on this instead of a
+      // blind timer; the service is the sole authority that then notifies the
+      // browser channel.
+      socket.on(
+        'terminal:ready',
+        (data: { userId: string; sessionName?: string; tabName?: string }) => {
+          if (!webTerminalEnabled) {
+            rejectTerminal('terminal:ready', 'web terminal disabled');
+            return;
+          }
+          const auth = getSocketAuthState(socket);
+          if (!auth.isService) {
+            rejectTerminal('terminal:ready', 'only service tokens may emit terminal:ready');
+            return;
+          }
+          if (typeof data?.userId !== 'string' || !data.userId) {
+            rejectTerminal('terminal:ready', 'missing userId');
+            return;
+          }
+          app.emit('terminal:ready', data);
+        }
+      );
+
+      // Executor attach-failure ack. Same service-only trust model as ready.
+      socket.on('terminal:error', (data: { userId: string; message?: string }) => {
+        if (!webTerminalEnabled) {
+          rejectTerminal('terminal:error', 'web terminal disabled');
+          return;
+        }
+        const auth = getSocketAuthState(socket);
+        if (!auth.isService) {
+          rejectTerminal('terminal:error', 'only service tokens may emit terminal:error');
+          return;
+        }
+        if (typeof data?.userId !== 'string' || !data.userId) {
+          rejectTerminal('terminal:error', 'missing userId');
+          return;
+        }
+        app.emit('terminal:error', data);
+      });
+
       // Track disconnections
       socket.on('disconnect', (reason) => {
         activeConnections--;

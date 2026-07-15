@@ -233,6 +233,23 @@ export class TerminalsService {
     this.app = app;
     this.db = db;
 
+    // The socketio relay converts the executor's readiness/failure acks into
+    // app events (it can't reach this service instance directly). Readiness
+    // gates the tab choreography and tells the browser channel it may leave
+    // its "connecting" state.
+    (this.app as unknown as import('node:events').EventEmitter).on(
+      'terminal:ready',
+      (data: { userId?: string }) => {
+        if (data?.userId) this.handleExecutorReady(data.userId as UserID);
+      }
+    );
+    (this.app as unknown as import('node:events').EventEmitter).on(
+      'terminal:error',
+      (data: { userId?: string; message?: string }) => {
+        if (data?.userId) this.handleExecutorError(data.userId as UserID, data.message);
+      }
+    );
+
     // Check if Zellij is available - warn but don't fail
     this.zellijAvailable = isZellijAvailable();
 
@@ -276,6 +293,13 @@ export class TerminalsService {
     sessionName: string;
     isNew: boolean;
     branchName?: string;
+    /**
+     * Whether the executor's PTY bridge is confirmed up right now (ready ack
+     * received, or a live executor adopted). The browser flips to connected
+     * immediately when true; when false it waits for the async `terminal:ready`
+     * channel event rather than trusting this call's resolution.
+     */
+    ready: boolean;
   }> {
     if (!getCurrentTenantId()) {
       throw new Error('Missing active tenant context for terminal creation');
@@ -419,6 +443,136 @@ export class TerminalsService {
    * panic in its screen/plugin state update path.
    */
   private executorStarting: Map<UserID, Promise<void>> = new Map();
+
+  /**
+   * Users whose executor has confirmed (via `terminal:ready`) that its PTY is
+   * spawned and zellij is attached, or whose live executor we adopted after a
+   * restart. Membership means "the bridge is up right now" — the create()
+   * response reports it so the browser can flip to connected without waiting
+   * on a channel event that may have raced its own join.
+   */
+  private readyExecutors: Set<UserID> = new Set();
+
+  /**
+   * One-shot settlers waiting for a user's executor to resolve its readiness.
+   * Settled with `true` on a ready ack and `false` on executor exit/error or
+   * timeout. Used to gate cold-start tab choreography on the real ack instead
+   * of a blind boot timer.
+   */
+  private readyWaiters: Map<UserID, Set<(ready: boolean) => void>> = new Map();
+
+  /**
+   * How long the cold-start choreography waits for the readiness ack before
+   * giving up and firing best-effort. Generous relative to a typical zellij
+   * boot (~1-3s); a genuinely dead executor surfaces to the browser via its
+   * own `terminal:error` ack rather than this timeout.
+   */
+  private static readonly READY_TIMEOUT_MS = 10_000;
+
+  /**
+   * Record executor readiness: unblock any waiters and let a browser already
+   * sitting on the channel (cold boot, or a post-reconnect re-announce) leave
+   * its "connecting" state.
+   */
+  handleExecutorReady(userId: UserID): void {
+    this.readyExecutors.add(userId);
+    this.settleReadyWaiters(userId, true);
+    this.app.io?.to(`user/${userId}/terminal`).emit('terminal:ready', { userId });
+  }
+
+  /**
+   * Relay an executor attach failure to the browser channel so it shows an
+   * error instead of hanging on "connecting".
+   */
+  handleExecutorError(userId: UserID, message?: string): void {
+    this.readyExecutors.delete(userId);
+    this.settleReadyWaiters(userId, false);
+    this.app.io?.to(`user/${userId}/terminal`).emit('terminal:error', { userId, message });
+  }
+
+  /** Settle and clear every pending readiness waiter for a user. */
+  private settleReadyWaiters(userId: UserID, ready: boolean): void {
+    const waiters = this.readyWaiters.get(userId);
+    if (!waiters) return;
+    this.readyWaiters.delete(userId);
+    for (const settle of [...waiters]) settle(ready);
+  }
+
+  /**
+   * Resolve `true` once the user's executor is ready, or `false` if it exits /
+   * errors or hasn't become ready within {@link READY_TIMEOUT_MS}. Resolves
+   * immediately when the executor is already known-ready.
+   */
+  private awaitExecutorReady(userId: UserID): Promise<boolean> {
+    if (this.readyExecutors.has(userId)) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const waiters = this.readyWaiters.get(userId) ?? new Set();
+      const settle = (ready: boolean) => {
+        clearTimeout(timer);
+        waiters.delete(settle);
+        resolve(ready);
+      };
+      const timer = setTimeout(() => settle(false), TerminalsService.READY_TIMEOUT_MS);
+      // Don't keep the process (or a test worker) alive on this fallback timer.
+      timer.unref?.();
+      waiters.add(settle);
+      this.readyWaiters.set(userId, waiters);
+    });
+  }
+
+  /**
+   * Emit the CLI ensure-or-focus tab command for a user. Extracted so the warm
+   * and cold create paths share one implementation of the
+   * "claude alive ⇒ focus, dead ⇒ forceRecreate" branching.
+   *
+   * `skipTabName` suppresses a redundant focus when the requested tab is the
+   * same branch-shell tab we just created (warm path only).
+   */
+  private async dispatchTabFocus(
+    userId: UserID,
+    opts: {
+      cliEnsure?: {
+        tabName: string;
+        cwd: string;
+        command: string;
+        commandArgs: string[];
+        sessionId: string;
+      } | null;
+      focusTabName?: string;
+      skipTabName?: string;
+    }
+  ): Promise<void> {
+    const { cliEnsure, focusTabName, skipTabName } = opts;
+    const channel = `user/${userId}/terminal`;
+    if (cliEnsure && cliEnsure.tabName !== skipTabName) {
+      const alive = await isClaudeRunningFor(
+        cliEnsure.sessionId as unknown as import('@agor/core/types').SessionID
+      );
+      if (alive) {
+        this.app.io?.to(channel).emit('terminal:tab', {
+          userId,
+          action: 'focus',
+          tabName: cliEnsure.tabName,
+        });
+      } else {
+        this.app.io?.to(channel).emit('terminal:tab', {
+          userId,
+          action: 'create',
+          tabName: cliEnsure.tabName,
+          cwd: cliEnsure.cwd,
+          command: cliEnsure.command,
+          commandArgs: cliEnsure.commandArgs,
+          forceRecreate: true,
+        });
+      }
+    } else if (focusTabName && focusTabName !== skipTabName) {
+      this.app.io?.to(channel).emit('terminal:tab', {
+        userId,
+        action: 'focus',
+        tabName: focusTabName,
+      });
+    }
+  }
 
   /**
    * Create or join an executor-based terminal session
@@ -592,6 +746,7 @@ export class TerminalsService {
     sessionName: string;
     isNew: boolean;
     branchName?: string;
+    ready: boolean;
   }> {
     const userId = params?.user?.user_id as UserID;
     if (!userId) {
@@ -636,6 +791,11 @@ export class TerminalsService {
           activeBranches: new Set(),
           startedAt: new Date(),
         });
+        // A live `zellij attach` process is by definition already bridging —
+        // treat it as ready so the warm path can flip the browser to connected
+        // without waiting on a ready ack the surviving executor won't re-send
+        // until its own socket reconnects.
+        this.readyExecutors.add(userId);
       }
     }
 
@@ -664,7 +824,7 @@ export class TerminalsService {
           // Ensure-create the CLI tab when an `ensureCliSessionId` was
           // supplied.
           //
-          // Server-side claude liveness check decides the action:
+          // Server-side claude liveness check (in dispatchTabFocus) decides:
           //   - `claude` alive ⇒ `focus` (preserves scrollback)
           //   - `claude` dead  ⇒ `create` + `forceRecreate: true`
           //     (closes every stale duplicate of the tab name, then
@@ -677,45 +837,16 @@ export class TerminalsService {
           // auto-converse focused the stale tab instead of respawning.
           //
           // Falls back to the old plain-focus behavior when the caller
-          // provided a `focusTabName` without an `ensureCliSessionId`.
-          if (data.cliEnsure && data.cliEnsure.tabName !== branchTabName) {
-            const ensure = data.cliEnsure;
-            const alive = await isClaudeRunningFor(
-              ensure.sessionId as unknown as import('@agor/core/types').SessionID
-            );
-            setTimeout(() => {
-              if (alive) {
-                this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-                  userId,
-                  action: 'focus',
-                  tabName: ensure.tabName,
-                });
-              } else {
-                this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-                  userId,
-                  action: 'create',
-                  tabName: ensure.tabName,
-                  cwd: ensure.cwd,
-                  command: ensure.command,
-                  commandArgs: ensure.commandArgs,
-                  forceRecreate: true,
-                });
-              }
-            }, 300);
-          } else if (data.focusTabName && data.focusTabName !== branchTabName) {
-            setTimeout(() => {
-              this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-                userId,
-                action: 'focus',
-                tabName: data.focusTabName,
-              });
-            }, 300);
-          }
+          // provided a `focusTabName` without an `ensureCliSessionId`. The
+          // executor here is already attached (it was in the map), so this
+          // fires immediately rather than guessing a boot delay.
+          await this.dispatchTabFocus(userId, {
+            cliEnsure: data.cliEnsure,
+            focusTabName: data.focusTabName,
+            skipTabName: branchTabName,
+          });
 
-          // Request screen redraw after a short delay to let client join channel first
-          setTimeout(() => {
-            this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
-          }, 200);
+          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
 
           return {
             userId,
@@ -723,20 +854,19 @@ export class TerminalsService {
             sessionName: existing.sessionName,
             isNew: false,
             branchName: branch.name,
+            ready: this.readyExecutors.has(userId),
           };
         }
       }
 
-      // Request screen redraw after a short delay to let client join channel first
-      setTimeout(() => {
-        this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
-      }, 200);
+      this.app.io?.to(`user/${userId}/terminal`).emit('terminal:redraw', { userId });
 
       return {
         userId,
         channel: `user/${userId}/terminal`,
         sessionName: existing.sessionName,
         isNew: false,
+        ready: this.readyExecutors.has(userId),
       };
     }
 
@@ -843,6 +973,11 @@ export class TerminalsService {
         }
       );
 
+      // Fresh spawn: this executor hasn't acked readiness yet. Drop any stale
+      // flag from a prior (now-dead) executor so the gate below waits for the
+      // new one's real ack rather than a leftover.
+      this.readyExecutors.delete(userId);
+
       // Track the executor
       this.executorTerminals.set(userId, {
         sessionName,
@@ -851,43 +986,22 @@ export class TerminalsService {
       });
 
       // Cold-start path: the executor hasn't yet attached to its Feathers
-      // channel, so the `onCliSessionCreated` dispatch (if any) landed in
-      // an empty room and was dropped. Re-emit after the executor boots
-      // (~1.5s). Same liveness branching as the warm path — `claude`
-      // alive ⇒ focus, dead ⇒ forceRecreate (close any stale tab from
-      // an earlier daemon instance, then spawn fresh).
-      if (data.cliEnsure) {
-        const ensure = data.cliEnsure;
-        const alive = await isClaudeRunningFor(
-          ensure.sessionId as unknown as import('@agor/core/types').SessionID
-        );
-        setTimeout(() => {
-          if (alive) {
-            this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-              userId,
-              action: 'focus',
-              tabName: ensure.tabName,
-            });
-          } else {
-            this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-              userId,
-              action: 'create',
-              tabName: ensure.tabName,
-              cwd: ensure.cwd,
-              command: ensure.command,
-              commandArgs: ensure.commandArgs,
-              forceRecreate: true,
-            });
+      // channel, so a `terminal:tab` emitted now would land in an empty room
+      // and be dropped. Gate the CLI ensure/focus dispatch on the executor's
+      // `terminal:ready` ack instead of guessing a boot delay. Same liveness
+      // branching as the warm path (handled in dispatchTabFocus). Fire
+      // best-effort if the ack never arrives so a missed ack doesn't strand
+      // the tab, and log it.
+      if (data.cliEnsure || data.focusTabName) {
+        const { cliEnsure, focusTabName } = data;
+        void this.awaitExecutorReady(userId).then((ready) => {
+          if (!ready) {
+            console.warn(
+              `[TerminalsService] readiness ack not received for user ${shortId(userId)} — dispatching tab focus best-effort`
+            );
           }
-        }, 1500);
-      } else if (data.focusTabName) {
-        setTimeout(() => {
-          this.app.io?.to(`user/${userId}/terminal`).emit('terminal:tab', {
-            userId,
-            action: 'focus',
-            tabName: data.focusTabName,
-          });
-        }, 1500);
+          return this.dispatchTabFocus(userId, { cliEnsure, focusTabName });
+        });
       }
 
       return {
@@ -896,6 +1010,7 @@ export class TerminalsService {
         sessionName,
         isNew: true,
         branchName,
+        ready: false,
       };
     } finally {
       if (this.executorStarting.get(userId) === startReservation) {
@@ -951,6 +1066,10 @@ export class TerminalsService {
    */
   handleExecutorExit(userId: UserID): void {
     this.executorTerminals.delete(userId);
+    this.readyExecutors.delete(userId);
+    // Release any pending readiness waiters as not-ready so they settle
+    // immediately instead of hanging until their timeout.
+    this.settleReadyWaiters(userId, false);
     console.log(`[TerminalsService] Executor terminal exited for user ${shortId(userId)}`);
   }
 }

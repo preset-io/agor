@@ -33,6 +33,7 @@ import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
+import { Badge } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { loadWebglRenderer } from '../../utils/xtermWebgl';
 import '@xterm/xterm/css/xterm.css';
@@ -93,6 +94,7 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
   const terminalRef = useRef<Terminal | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
 
   useEffect(() => {
     if (!client || !userId || !containerRef.current) return;
@@ -111,6 +113,22 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
         terminalRef.current.writeln(`\r\n\r\n[Terminal exited with code ${payload.exitCode}]`);
         setConnected(false);
       }
+    };
+    // Readiness is the authoritative connected signal: the executor confirmed
+    // its PTY is spawned and attached. Flipping on this (not on the
+    // terminals.create resolution) avoids the "connected but silently dead"
+    // state after a reconnect or a post-spawn executor crash.
+    const handleReady = (payload: { userId: string }) => {
+      if (payload.userId !== userId) return;
+      setConnected(true);
+      setReconnecting(false);
+      setError(null);
+    };
+    const handleReadyError = (payload: { userId: string; message?: string }) => {
+      if (payload.userId !== userId) return;
+      setError(payload.message || 'Terminal failed to start');
+      setConnected(false);
+      setReconnecting(false);
     };
 
     const terminal = new Terminal({
@@ -170,12 +188,26 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
     const ro = new ResizeObserver(() => fitToContainer());
     ro.observe(containerRef.current);
 
-    (async () => {
+    // Register channel + input listeners once. They persist across socket
+    // reconnects (only the server-side room join is lost — see handleReconnect).
+    socket.on('terminal:output', handleOutput);
+    socket.on('terminal:exit', handleExit);
+    socket.on('terminal:ready', handleReady);
+    socket.on('terminal:error', handleReadyError);
+
+    terminal.onData((data) => {
+      socket.emit('terminal:input', { userId, input: data });
+    });
+    terminal.onResize(({ cols, rows }) => {
+      socket.emit('terminal:resize', { userId, cols, rows });
+    });
+
+    const attach = async () => {
       try {
         // The daemon-side terminals.create handles the tab-focus emit when
         // `focusTabName` is supplied — browser sockets are NOT allowed to
         // emit `terminal:tab` directly (rejected by the daemon's gateway
-        // guard).
+        // guard). It is idempotent, so re-issuing it on reconnect is safe.
         const result = (await client.service('terminals').create({
           rows: terminal.rows,
           cols: terminal.cols,
@@ -187,37 +219,56 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
           channel: string;
           sessionName: string;
           isNew: boolean;
+          ready?: boolean;
         };
         if (!mounted) return;
 
         currentChannel = result.channel;
         socket.emit('join', result.channel);
-        socket.on('terminal:output', handleOutput);
-        socket.on('terminal:exit', handleExit);
-
-        terminal.onData((data) => {
-          socket.emit('terminal:input', { userId, input: data });
-        });
-        terminal.onResize(({ cols, rows }) => {
-          socket.emit('terminal:resize', { userId, cols, rows });
-        });
-        // Kick a resize to trigger a Zellij full redraw.
+        // Kick a resize to trigger a Zellij full redraw once (re)joined.
         socket.emit('terminal:resize', {
           userId,
           cols: terminal.cols,
           rows: terminal.rows,
         });
 
-        setConnected(true);
+        // Warm path: the executor is already attached, so the response says
+        // it's ready and we connect right away. Cold path: stay in the
+        // connecting state until the executor's `terminal:ready` ack arrives.
+        if (result.ready) {
+          setConnected(true);
+          setReconnecting(false);
+          setError(null);
+        }
       } catch (err) {
+        if (!mounted) return;
         const msg = err instanceof Error ? err.message : String(err);
         setError(msg);
+        setReconnecting(false);
         if (terminalRef.current) {
           terminalRef.current.writeln('\r\n[Failed to attach to terminal]');
           terminalRef.current.writeln(`[Error: ${msg}]`);
         }
       }
-    })();
+    };
+
+    // The socket auto-reconnects after a network blip or daemon restart, but
+    // the server-side room membership and (possibly) the executor are gone.
+    // Re-join + re-issue create on every (re)connect; surface a visible
+    // "reconnecting" state rather than silently doing nothing.
+    const handleReconnect = () => {
+      setReconnecting(true);
+      setConnected(false);
+      void attach();
+    };
+    const handleDisconnect = () => {
+      setConnected(false);
+      setReconnecting(true);
+    };
+    socket.on('connect', handleReconnect);
+    socket.on('disconnect', handleDisconnect);
+
+    void attach();
 
     return () => {
       mounted = false;
@@ -230,11 +281,16 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
       if (socket) {
         socket.off('terminal:output', handleOutput);
         socket.off('terminal:exit', handleExit);
+        socket.off('terminal:ready', handleReady);
+        socket.off('terminal:error', handleReadyError);
+        socket.off('connect', handleReconnect);
+        socket.off('disconnect', handleDisconnect);
         if (currentChannel) {
           socket.emit('leave', currentChannel);
         }
       }
       setConnected(false);
+      setReconnecting(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, userId, branchId, focusTabName, ensureCliSessionId]);
@@ -292,12 +348,13 @@ export const EmbeddedTerminal: React.FC<EmbeddedTerminalProps> = ({
         ref={containerRef}
         style={fill ? { flex: 1, minHeight: 0 } : { flex: 1, minHeight: height - 24 }}
       />
-      {error && (
-        <div style={{ color: '#ff7875', fontSize: 12, padding: 4 }}>Terminal error: {error}</div>
-      )}
-      {!connected && !error && (
-        <div style={{ color: '#bfbfbf', fontSize: 12, padding: 4 }}>Connecting to terminal…</div>
-      )}
+      {error ? (
+        <Badge status="error" text={`Terminal error: ${error}`} style={{ padding: 4 }} />
+      ) : reconnecting ? (
+        <Badge status="warning" text="Reconnecting…" style={{ padding: 4 }} />
+      ) : !connected ? (
+        <Badge status="processing" text="Connecting to terminal…" style={{ padding: 4 }} />
+      ) : null}
     </div>
   );
 };

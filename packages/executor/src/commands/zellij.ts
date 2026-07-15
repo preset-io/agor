@@ -36,6 +36,75 @@ let feathersClient: AgorClient | null = null;
 let _currentUserId: string | null = null;
 let currentPtyCols = 160;
 let currentPtyRows = 40;
+let currentTabName: string | undefined;
+
+/**
+ * Grace window after a socket disconnect before the executor tears down.
+ *
+ * A transient network blip or a daemon restart drops the socket, but the
+ * zellij session is long-lived and survives detach, so the PTY bridge is
+ * recoverable: the feathers client auto-reconnects (and re-authenticates)
+ * on its own. We keep the PTY + zellij session alive for this long and only
+ * exit if the socket has not come back by the time it elapses. Exiting
+ * immediately (the old behavior) turned every blip into a dead terminal that
+ * the browser still believed was connected.
+ */
+const DISCONNECT_GRACE_MS = 30_000;
+
+/** Active grace controller for the running attach, so cleanup can cancel it. */
+let graceController: ReturnType<typeof createReconnectGrace> | null = null;
+
+/**
+ * A single-shot grace window that holds an executor alive across a socket
+ * disconnect and tears it down only if the socket has not reconnected when the
+ * window elapses. Extracted (and injectable) so the reconnect-before-exit
+ * behavior can be unit-tested without a live PTY or socket.
+ */
+export function createReconnectGrace(opts: {
+  graceMs: number;
+  isConnected: () => boolean;
+  onGraceElapsed: () => void;
+}): {
+  onDisconnect: () => void;
+  onReconnect: () => void;
+  cancel: () => void;
+  isPending: () => boolean;
+} {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const clear = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+  return {
+    onDisconnect() {
+      if (timer) return; // already counting down
+      timer = setTimeout(() => {
+        timer = null;
+        if (!opts.isConnected()) opts.onGraceElapsed();
+      }, opts.graceMs);
+    },
+    onReconnect: clear,
+    cancel: clear,
+    isPending: () => timer !== null,
+  };
+}
+
+/**
+ * Announce that the PTY exists and is attached so the daemon can gate its
+ * tab focus/redraw choreography on a real signal instead of a blind timer,
+ * and the browser can flip from "connecting" to connected. Safe to call
+ * repeatedly (initial spawn + every reconnect) — the daemon treats it as
+ * idempotent readiness.
+ */
+function emitTerminalReady(socket: AgorClient['io'], userId: string): void {
+  socket.emit('terminal:ready', {
+    userId,
+    sessionName: currentSessionName ?? undefined,
+    tabName: currentTabName,
+  });
+}
 
 /** Longest a buffered chunk may wait before it is emitted. */
 const OUTPUT_FLUSH_INTERVAL_MS = 16;
@@ -156,9 +225,19 @@ export async function handleZellijAttach(
   }
 
   try {
-    // Connect to daemon
+    // Connect to daemon. On reconnect, the socket is fresh: it has left the
+    // terminal channel room and a restarted daemon has forgotten this
+    // executor. Re-join and re-announce readiness once re-authenticated so
+    // input keeps flowing and the daemon rediscovers the live bridge.
     const daemonUrl = payload.daemonUrl || 'http://localhost:3030';
-    feathersClient = await createExecutorClient(daemonUrl, payload.sessionToken);
+    feathersClient = await createExecutorClient(daemonUrl, payload.sessionToken, {
+      onReauthenticated: () => {
+        const s = feathersClient?.io;
+        if (!s) return;
+        s.emit('join', `user/${userId}/terminal`);
+        if (ptyProcess) emitTerminalReady(s, userId);
+      },
+    });
     _currentUserId = userId;
 
     console.log(`[zellij.attach] Connected to daemon, joining channel user/${userId}/terminal`);
@@ -168,17 +247,32 @@ export async function handleZellijAttach(
     const socket = feathersClient.io;
     socket.emit('join', `user/${userId}/terminal`);
 
-    // Handle socket disconnect gracefully
-    // This happens when daemon restarts (watch mode) - just exit cleanly
-    // A new executor will be spawned when user reopens terminal
+    graceController = createReconnectGrace({
+      graceMs: DISCONNECT_GRACE_MS,
+      isConnected: () => socket.connected,
+      onGraceElapsed: () => {
+        console.log('[zellij.attach] Reconnect grace elapsed — exiting');
+        if (ptyProcess) {
+          ptyProcess.kill();
+          ptyProcess = null;
+        }
+        process.exit(0);
+      },
+    });
+
+    // Cancel any pending teardown the moment the transport is restored. The
+    // re-join + readiness re-announce happen in onReauthenticated above (the
+    // fresh socket must re-authenticate before the daemon accepts them).
+    socket.on('connect', () => graceController?.onReconnect());
+
+    // A disconnect is recoverable — hold the PTY through a grace window and
+    // let the client's auto-reconnect restore the bridge. Only tear down if
+    // the socket is still gone when the window elapses.
     socket.on('disconnect', (reason: string) => {
-      console.log(`[zellij.attach] Socket disconnected: ${reason}`);
-      // Clean up and exit gracefully instead of crashing
-      if (ptyProcess) {
-        ptyProcess.kill();
-        ptyProcess = null;
-      }
-      process.exit(0);
+      console.log(
+        `[zellij.attach] Socket disconnected: ${reason} — holding PTY for ${DISCONNECT_GRACE_MS}ms pending reconnect`
+      );
+      graceController?.onDisconnect();
     });
 
     // Import node-pty dynamically (native module)
@@ -251,10 +345,16 @@ export async function handleZellijAttach(
 
     ptyProcess = pty;
     currentSessionName = sessionName; // Store for tab management
+    currentTabName = tabName;
     currentPtyCols = cols || 80;
     currentPtyRows = rows || 24;
 
     console.log(`[zellij.attach] PTY spawned, PID: ${pty.pid}`);
+
+    // The PTY exists and zellij attach is running — announce readiness so the
+    // daemon can drive its tab choreography off a real signal and the browser
+    // can leave its "connecting" state.
+    emitTerminalReady(socket, userId);
 
     // Stream PTY output to channel, coalesced into fewer/larger frames so
     // heavy output doesn't drown the browser terminal in tiny writes.
@@ -407,6 +507,13 @@ export async function handleZellijAttach(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[zellij.attach] Failed:', errorMessage);
+
+    // Surface the attach failure to the browser so it shows an error instead
+    // of hanging on "connecting" forever — the readiness ack never arrives on
+    // this path.
+    if (feathersClient?.io.connected) {
+      feathersClient.io.emit('terminal:error', { userId, message: errorMessage });
+    }
 
     // Cleanup on error
     if (ptyProcess) {
@@ -806,6 +913,10 @@ ${argsLine}    }
  * Cleanup function - called when executor is shutting down
  */
 export function cleanupZellij(): void {
+  if (graceController) {
+    graceController.cancel();
+    graceController = null;
+  }
   if (ptyProcess) {
     console.log('[zellij] Killing PTY process');
     ptyProcess.kill();
@@ -816,4 +927,5 @@ export function cleanupZellij(): void {
     feathersClient = null;
   }
   currentSessionName = null;
+  currentTabName = undefined;
 }

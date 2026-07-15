@@ -119,6 +119,9 @@ function makeApp() {
   const emit = vi.fn();
   return {
     emit,
+    // The service subscribes to executor ready/error app events in its
+    // constructor; a no-op recorder keeps that wiring from throwing under test.
+    on: vi.fn(),
     io: {
       to: vi.fn(() => ({ emit })),
     },
@@ -218,6 +221,104 @@ describe('TerminalsService cold-start concurrency', () => {
     expect(firstResult.isNew).toBe(true);
     expect(secondResult.isNew).toBe(false);
     expect(firstResult.sessionName).toBe(secondResult.sessionName);
+  });
+});
+
+describe('TerminalsService readiness ack gating', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.execSync.mockImplementation((cmd: string) => {
+      if (cmd === 'which zellij') return Buffer.from('/usr/bin/zellij\n');
+      if (cmd.startsWith('sudo -n chown ')) return Buffer.from('');
+      throw new Error('not found');
+    });
+    mocks.resolveUnixUserForImpersonation.mockReturnValue({ unixUser: null });
+    mocks.resolveUserEnvironment.mockResolvedValue({});
+    mocks.createUserProcessEnvironment.mockResolvedValue({});
+    mocks.branchesById.clear();
+    mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
+    mocks.loadConfig.mockResolvedValue({
+      daemon: { port: 3030 },
+      execution: { branch_rbac: false },
+    });
+  });
+
+  it('reports ready=false on cold start and ready=true once the executor acks', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    const cold = await service.create(
+      { branchId: 'branch-1', rows: 24, cols: 80 },
+      params as never
+    );
+    expect(cold.isNew).toBe(true);
+    expect(cold.ready).toBe(false);
+
+    // Executor announces its PTY is attached.
+    service.handleExecutorReady(params.user.user_id as never);
+
+    const warm = await service.create(
+      { branchId: 'branch-1', rows: 24, cols: 80 },
+      params as never
+    );
+    expect(warm.isNew).toBe(false);
+    expect(warm.ready).toBe(true);
+  });
+
+  it('notifies the browser channel on ready and error acks', () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+
+    service.handleExecutorReady(params.user.user_id as never);
+    expect(app.io.to).toHaveBeenCalledWith(`user/${params.user.user_id}/terminal`);
+    expect(app.emit).toHaveBeenCalledWith('terminal:ready', { userId: params.user.user_id });
+
+    service.handleExecutorError(params.user.user_id as never, 'spawn failed');
+    expect(app.emit).toHaveBeenCalledWith('terminal:error', {
+      userId: params.user.user_id,
+      message: 'spawn failed',
+    });
+  });
+
+  it('defers cold-start tab focus until the readiness ack arrives', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+
+    await service.create(
+      { branchId: 'branch-1', focusTabName: 'cli-abc', rows: 24, cols: 80 },
+      params as never
+    );
+
+    // Cold start: the executor isn't up yet, so no focus is emitted.
+    expect(app.emit).not.toHaveBeenCalledWith(
+      'terminal:tab',
+      expect.objectContaining({ action: 'focus', tabName: 'cli-abc' })
+    );
+
+    // Ack arrives → the gated focus fires.
+    service.handleExecutorReady(params.user.user_id as never);
+    await vi.waitFor(() => {
+      expect(app.emit).toHaveBeenCalledWith('terminal:tab', {
+        userId: params.user.user_id,
+        action: 'focus',
+        tabName: 'cli-abc',
+      });
+    });
+  });
+
+  it('drops readiness when the executor exits so the next start waits again', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await service.create({ branchId: 'branch-1', rows: 24, cols: 80 }, params as never);
+    service.handleExecutorReady(params.user.user_id as never);
+    service.handleExecutorExit(params.user.user_id as never);
+
+    const afterExit = await service.create(
+      { branchId: 'branch-1', rows: 24, cols: 80 },
+      params as never
+    );
+    // Executor map was cleared on exit → this is a fresh cold start, not ready.
+    expect(afterExit.isNew).toBe(true);
+    expect(afterExit.ready).toBe(false);
   });
 });
 

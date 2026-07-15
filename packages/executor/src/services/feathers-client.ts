@@ -51,9 +51,22 @@ class MemoryStorage {
  * @param sessionToken - Session token for authentication
  * @returns Authenticated Feathers client
  */
+export interface ExecutorClientHooks {
+  /**
+   * Fired after the socket reconnects AND successfully re-authenticates as the
+   * executor service account. Long-running commands (e.g. the zellij terminal
+   * bridge) use this to re-establish socket-scoped state that a fresh socket
+   * loses — channel room membership and readiness announcements — which the
+   * auto-reconnect transport cannot restore on its own. Never fired for the
+   * initial connect; only for reconnects.
+   */
+  onReauthenticated?: () => void | Promise<void>;
+}
+
 export async function createExecutorClient(
   daemonUrl: string,
-  sessionToken: string
+  sessionToken: string,
+  hooks?: ExecutorClientHooks
 ): Promise<AgorClient> {
   const startedAt = Date.now();
   const logSocketEvent = (event: string, detail?: unknown) => {
@@ -108,6 +121,7 @@ export async function createExecutorClient(
       await client.reAuthenticate(true);
       console.log(`[executor] Re-authenticated successfully after ${label}`);
       resetServerDisconnectRecovery();
+      await hooks?.onReauthenticated?.();
       return true;
     } catch {
       // Fallback: authenticate with raw JWT if storage-based re-auth fails
@@ -118,6 +132,7 @@ export async function createExecutorClient(
         });
         console.log(`[executor] Re-authenticated with JWT fallback after ${label}`);
         resetServerDisconnectRecovery();
+        await hooks?.onReauthenticated?.();
         return true;
       } catch (error) {
         console.error(`[executor] Re-authentication failed after ${label}:`, error);

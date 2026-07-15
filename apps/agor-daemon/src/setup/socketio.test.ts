@@ -166,11 +166,13 @@ function makeIO(): FakeIO {
 }
 
 function makeApp(): Application {
-  // Minimal Application surface used by createSocketIOConfig: app.service('users').get
-  // and app.on('login'). Tests don't exercise the login event path.
+  // Minimal Application surface used by createSocketIOConfig: app.service('users').get,
+  // app.on('login'), and app.emit for the terminal:ready/error relay. Tests
+  // don't exercise the login event path.
   return {
     service: () => ({ get: async () => ({ user_id: 'u' }) }),
     on: () => {},
+    emit: vi.fn(),
   } as any;
 }
 
@@ -185,7 +187,7 @@ function buildHarness(opts: Partial<SocketIOOptions> = {}) {
     ...opts,
   } as SocketIOOptions);
   config.callback(io as any);
-  return { io, config };
+  return { io, config, app };
 }
 
 function connect(io: FakeIO, socket: FakeSocket) {
@@ -589,6 +591,50 @@ describe('terminal:* handler authorization', () => {
       s.handlers.get('terminal:exit')?.({ userId: ALICE, exitCode: 0 });
       s.handlers.get('terminal:tab')?.({ userId: ALICE, action: 'create', tabName: 't' });
       expect(io.emitted).toEqual([]);
+    });
+  });
+
+  describe('terminal:ready / terminal:error (executor readiness acks)', () => {
+    it('relays a service socket ready ack to the app for the terminals service', () => {
+      const { io, app } = buildHarness();
+      const s = makeSocket('exec-sock');
+      asServicePostConnect(s);
+      connect(io, s);
+      s.handlers.get('terminal:ready')?.({ userId: ALICE, sessionName: 'agor-x', tabName: 't' });
+      expect(app.emit).toHaveBeenCalledWith('terminal:ready', {
+        userId: ALICE,
+        sessionName: 'agor-x',
+        tabName: 't',
+      });
+    });
+
+    it('relays a service socket error ack to the app', () => {
+      const { io, app } = buildHarness();
+      const s = makeSocket('exec-sock');
+      asServicePostConnect(s);
+      connect(io, s);
+      s.handlers.get('terminal:error')?.({ userId: ALICE, message: 'boom' });
+      expect(app.emit).toHaveBeenCalledWith('terminal:error', { userId: ALICE, message: 'boom' });
+    });
+
+    it('rejects ready/error acks from user-token sockets (only service may emit)', () => {
+      const { io, app } = buildHarness();
+      const s = makeSocket('alice-sock');
+      asUser(s, ALICE);
+      connect(io, s);
+      s.handlers.get('terminal:ready')?.({ userId: ALICE });
+      s.handlers.get('terminal:error')?.({ userId: ALICE, message: 'spoof' });
+      expect(app.emit).not.toHaveBeenCalled();
+    });
+
+    it('rejects ready/error acks when allow_web_terminal is false', () => {
+      const { io, app } = buildHarness({ webTerminalEnabled: false });
+      const s = makeSocket('exec-sock');
+      asServicePostConnect(s);
+      connect(io, s);
+      s.handlers.get('terminal:ready')?.({ userId: ALICE });
+      s.handlers.get('terminal:error')?.({ userId: ALICE });
+      expect(app.emit).not.toHaveBeenCalled();
     });
   });
 
