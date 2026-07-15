@@ -238,7 +238,7 @@ export const StreamdownDemo: React.FC = () => {
         <Title level={2}>Streamdown Feature Showcase</Title>
 
         <Card>
-          <MarkdownRenderer content={demoContent} />
+          <MarkdownRenderer content={demoContent} enableVegaLite />
         </Card>
       </Space>
     </div>

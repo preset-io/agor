@@ -17,7 +17,11 @@ import { defaultRehypePlugins, Streamdown } from 'streamdown';
 import { rehypeHeadingAnchors } from '../../utils/headingAnchors';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 import { isDarkTheme } from '../../utils/theme';
-import { streamdownRemarkPlugins, streamdownRichContentPlugins } from './richContentPlugins';
+import {
+  streamdownRemarkPlugins,
+  streamdownRichContentPlugins,
+  streamdownRichContentPluginsWithVegaLite,
+} from './richContentPlugins';
 import './MarkdownRenderer.css';
 
 interface MarkdownRendererProps {
@@ -53,7 +57,11 @@ interface MarkdownRendererProps {
    * Intended for non-streaming document views such as Knowledge Base pages.
    */
   headingAnchors?: boolean;
+  /** Demo-only POC: opt in to constrained Vega-Lite fenced blocks. */
+  enableVegaLite?: boolean;
 }
+
+const MAX_VEGA_LITE_CHARTS_PER_DOCUMENT = 4;
 
 // Memoized: Streamdown does meaningful per-render work (syntax highlighting,
 // Mermaid, KaTeX) and this component is rendered once per text block in every
@@ -70,6 +78,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
   compact = false,
   showControls = true,
   headingAnchors = false,
+  enableVegaLite = false,
 }) => {
   const { token } = theme.useToken();
 
@@ -99,6 +108,11 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
     : {};
 
   const mergedStyles = { ...style, ...compactStyles };
+  const vegaLiteFenceCount = countVegaLiteFences(rawText);
+  const plugins =
+    enableVegaLite && vegaLiteFenceCount <= MAX_VEGA_LITE_CHARTS_PER_DOCUMENT
+      ? streamdownRichContentPluginsWithVegaLite
+      : streamdownRichContentPlugins;
   const rehypePlugins = useMemo(
     () =>
       headingAnchors ? [...Object.values(defaultRehypePlugins), rehypeHeadingAnchors] : undefined,
@@ -127,7 +141,7 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
         isAnimating={isStreaming} // Disable buttons during streaming
         controls={showControls} // Show/hide controls based on context
         mermaid={{ config: mermaidConfig }} // Set Mermaid theme based on current theme mode
-        plugins={streamdownRichContentPlugins}
+        plugins={plugins}
         components={components}
         rehypePlugins={rehypePlugins}
         remarkPlugins={streamdownRemarkPlugins}
@@ -141,6 +155,10 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
     </Typography>
   );
 };
+
+function countVegaLiteFences(markdown: string): number {
+  return markdown.match(/^[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*vega-lite(?:[ \t]|$)/gim)?.length ?? 0;
+}
 
 export const MarkdownRenderer = React.memo(MarkdownRendererInner);
 MarkdownRenderer.displayName = 'MarkdownRenderer';

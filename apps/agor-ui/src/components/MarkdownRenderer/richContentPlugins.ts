@@ -11,6 +11,11 @@ export const streamdownRichContentPlugins: PluginConfig = {
   code,
   math,
   mermaid,
+};
+
+/** Demo-only POC plugin set. Vega-Lite is intentionally default-off. */
+export const streamdownRichContentPluginsWithVegaLite: PluginConfig = {
+  ...streamdownRichContentPlugins,
   renderers: [{ language: 'vega-lite', component: VegaLiteRendererGate }],
 };
 

@@ -47,6 +47,7 @@ export function parseVegaLiteSpec(source: string): ParsedVegaLiteSpec {
 
   const state = { nodes: 0 };
   inspectValue(parsed, '$', 0, state);
+  validateComposedViewCount(parsed);
 
   const description =
     typeof parsed.description === 'string' && parsed.description.trim()
@@ -107,23 +108,24 @@ function inspectValue(value: unknown, path: string, depth: number, state: { node
         `${childPath} cannot exceed ${MAX_DIMENSION.toLocaleString()} pixels.`
       );
     }
+    if (['params', 'selection', 'signals', 'bind', 'events'].includes(normalizedKey)) {
+      throw new VegaLiteSpecError(
+        `${childPath} is not allowed; conversation charts are static and cannot register event streams or bindings.`
+      );
+    }
+    if (normalizedKey === 'facet' || normalizedKey === 'repeat') {
+      throw new VegaLiteSpecError(
+        `${childPath} is not allowed because it can expand one authored spec into an unbounded number of views.`
+      );
+    }
     if (
-      ['layer', 'concat', 'hconcat', 'vconcat', 'repeat'].includes(normalizedKey) &&
+      ['layer', 'concat', 'hconcat', 'vconcat'].includes(normalizedKey) &&
       Array.isArray(child) &&
       child.length > MAX_COMPOSED_VIEWS
     ) {
       throw new VegaLiteSpecError(
         `${childPath} cannot contain more than ${MAX_COMPOSED_VIEWS} views.`
       );
-    }
-    if (normalizedKey === 'repeat' && isRecord(child)) {
-      for (const [channel, fields] of Object.entries(child)) {
-        if (Array.isArray(fields) && fields.length > MAX_COMPOSED_VIEWS) {
-          throw new VegaLiteSpecError(
-            `${childPath}.${channel} cannot contain more than ${MAX_COMPOSED_VIEWS} repeated fields.`
-          );
-        }
-      }
     }
     if (normalizedKey === 'mark' && isImageMark(child)) {
       throw new VegaLiteSpecError(
@@ -136,6 +138,34 @@ function inspectValue(value: unknown, path: string, depth: number, state: { node
 
     inspectValue(child, childPath, depth + 1, state);
   }
+}
+
+/**
+ * Individual composition arrays are insufficient as a limit: nested arrays
+ * multiply/sum into much larger render trees. Count unit views across the
+ * complete authored composition and fail closed before Vega compiles it.
+ */
+function validateComposedViewCount(spec: Record<string, unknown>): void {
+  const viewCount = countComposedViews(spec);
+  if (viewCount > MAX_COMPOSED_VIEWS) {
+    throw new VegaLiteSpecError(
+      `Spec expands to ${viewCount.toLocaleString()} views; the maximum is ${MAX_COMPOSED_VIEWS}.`
+    );
+  }
+}
+
+function countComposedViews(spec: Record<string, unknown>): number {
+  let composedViews = 0;
+  for (const key of ['layer', 'concat', 'hconcat', 'vconcat']) {
+    const children = spec[key];
+    if (!Array.isArray(children)) continue;
+    composedViews += children.reduce(
+      (total, child) => total + (isRecord(child) ? countComposedViews(child) : 1),
+      0
+    );
+  }
+
+  return composedViews || 1;
 }
 
 function validateSequence(sequence: Record<string, unknown>, path: string): void {

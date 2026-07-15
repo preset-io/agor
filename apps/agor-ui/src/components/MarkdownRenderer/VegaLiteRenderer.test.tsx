@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { ConfigProvider, theme } from 'antd';
+import { StreamdownContext } from 'streamdown';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VegaLiteRenderer } from './VegaLiteRenderer';
 
@@ -83,6 +84,7 @@ describe('VegaLiteRenderer', () => {
       expect.objectContaining({
         actions: false,
         ast: true,
+        hover: false,
         mode: 'vega-lite',
         renderer: 'svg',
         tooltip: false,
@@ -112,6 +114,58 @@ describe('VegaLiteRenderer', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not parse');
     expect(screen.getByText(/"mark"/)).toBeInTheDocument();
     expect(mocks.embed).not.toHaveBeenCalled();
+  });
+
+  it('times out chart execution and finalizes a result that resolves late', async () => {
+    vi.useFakeTimers();
+    let resolveEmbed: ((value: { view: { finalize: () => void } }) => void) | undefined;
+    mocks.embed.mockReturnValue(
+      new Promise((resolve) => {
+        resolveEmbed = resolve;
+      })
+    );
+
+    try {
+      render(<VegaLiteRenderer code={code} isIncomplete={false} language="vega-lite" />);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mocks.embed).toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_100);
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent('Chart rendering timed out');
+
+      await act(async () => {
+        resolveEmbed?.({ view: { finalize: mocks.finalize } });
+        await Promise.resolve();
+      });
+      expect(mocks.finalize).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('honors Streamdown code controls being disabled', async () => {
+    render(
+      <StreamdownContext.Provider
+        value={{
+          controls: false,
+          isAnimating: false,
+          lineNumbers: true,
+          mode: 'static',
+          shikiTheme: ['github-light', 'github-dark'],
+        }}
+      >
+        <VegaLiteRenderer code={code} isIncomplete={false} language="vega-lite" />
+      </StreamdownContext.Provider>
+    );
+
+    await waitFor(() => expect(mocks.embed).toHaveBeenCalled());
+    expect(screen.queryByLabelText('Copy Vega-Lite spec')).not.toBeInTheDocument();
+    expect(screen.queryByText('View Vega-Lite source')).not.toBeInTheDocument();
   });
 });
 

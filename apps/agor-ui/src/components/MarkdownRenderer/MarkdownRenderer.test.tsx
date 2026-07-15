@@ -44,12 +44,33 @@ describe('MarkdownRenderer', () => {
 
   it('keeps an incomplete Vega-Lite fence as copyable code while streaming', async () => {
     const source = '```vega-lite\n{"mark":"bar"';
-    const { container } = render(<MarkdownRenderer content={source} isStreaming />);
+    const { container } = render(<MarkdownRenderer content={source} enableVegaLite isStreaming />);
 
     expect(await screen.findByText(/"mark"/)).toBeInTheDocument();
     expect(container.querySelector('[data-language="vega-lite"]')).toBeInTheDocument();
     expect(
       container.querySelector('[aria-label="Vega-Lite data visualization"]')
     ).not.toBeInTheDocument();
+  });
+
+  it('keeps Vega-Lite as ordinary code unless the POC is explicitly enabled', async () => {
+    const source = '```vega-lite\n{"description":"Chart","mark":"bar"}\n```';
+    const { container } = render(<MarkdownRenderer content={source} />);
+
+    expect(await screen.findByText(/"description"/)).toBeInTheDocument();
+    expect(container.querySelector('figure[aria-label="Chart"]')).not.toBeInTheDocument();
+  });
+
+  it('fails closed to ordinary code when a document contains too many charts', async () => {
+    const fence = '```vega-lite\n{"description":"Chart","mark":"bar"}\n```';
+    const { container } = render(
+      <MarkdownRenderer
+        content={Array.from({ length: 5 }, () => fence).join('\n\n')}
+        enableVegaLite
+      />
+    );
+
+    expect((await screen.findAllByText(/"description"/)).length).toBeGreaterThanOrEqual(5);
+    expect(container.querySelector('figure[aria-label="Chart"]')).not.toBeInTheDocument();
   });
 });

@@ -36,8 +36,21 @@ describe('parseVegaLiteSpec', () => {
     ],
     ['image marks', { ...validSpec, mark: 'image' }],
     ['embed overrides', { ...validSpec, usermeta: { embedOptions: { actions: true } } }],
+    [
+      'timer-driven selections',
+      {
+        ...validSpec,
+        params: [{ name: 'pulse', select: { type: 'point', on: 'timer:1' } }],
+      },
+    ],
+    ['authored event config', { ...validSpec, config: { events: { view: ['mousemove'] } } }],
+    ['signal bindings', { ...validSpec, signals: [{ name: 'value', bind: { input: 'range' } }] }],
+    ['facets', { ...validSpec, facet: { field: 'month' }, spec: validSpec }],
+    ['repeated views', { repeat: { row: ['a'], column: ['b'] }, spec: validSpec }],
   ])('rejects %s', (_label, spec) => {
-    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(/not allowed|image marks/i);
+    expect(() => parseVegaLiteSpec(JSON.stringify(spec))).toThrow(
+      /not allowed|image marks|static|unbounded/i
+    );
   });
 
   it('rejects malformed and potentially explosive specs', () => {
@@ -48,11 +61,12 @@ describe('parseVegaLiteSpec', () => {
     expect(() =>
       parseVegaLiteSpec(
         JSON.stringify({
-          repeat: { column: Array.from({ length: 17 }, (_, index) => `field_${index}`) },
-          spec: validSpec,
+          layer: Array.from({ length: 4 }, () => ({
+            concat: Array.from({ length: 5 }, () => validSpec),
+          })),
         })
       )
-    ).toThrow(/repeated fields/);
+    ).toThrow(/expands to 20 views/);
     expect(() => parseVegaLiteSpec(' '.repeat(100_001))).toThrow(/too large/);
   });
 });

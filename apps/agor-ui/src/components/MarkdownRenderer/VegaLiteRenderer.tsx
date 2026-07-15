@@ -1,12 +1,14 @@
 import { Alert, Flex, Skeleton, Typography, theme } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CodeBlock,
   CodeBlockContainer,
   CodeBlockCopyButton,
   type CustomRendererProps,
+  StreamdownContext,
 } from 'streamdown';
 import { isDarkTheme } from '../../utils/theme';
+import { isCodeCopyEnabled } from './streamdownControls';
 import { type ParsedVegaLiteSpec, parseVegaLiteSpec } from './vegaLiteSpec';
 import { loadVegaRuntime } from './vegaRuntime';
 
@@ -19,6 +21,8 @@ type RenderState =
 
 export function VegaLiteRenderer({ code, language }: CustomRendererProps) {
   const { token } = theme.useToken();
+  const { controls } = useContext(StreamdownContext);
+  const showCopy = isCodeCopyEnabled(controls);
   const containerRef = useRef<HTMLDivElement>(null);
   const [renderState, setRenderState] = useState<RenderState>({ status: 'loading' });
   const parsed = useMemo<
@@ -82,7 +86,7 @@ export function VegaLiteRenderer({ code, language }: CustomRendererProps) {
             legend: { labelColor: token.colorText, titleColor: token.colorText },
             title: { color: token.colorText },
           },
-          hover: true,
+          hover: false,
           loader: noNetworkLoader,
           mode: 'vega-lite',
           renderer: 'svg',
@@ -139,7 +143,7 @@ export function VegaLiteRenderer({ code, language }: CustomRendererProps) {
         }}
       >
         <Typography.Text code>{language}</Typography.Text>
-        <CodeBlockCopyButton aria-label="Copy Vega-Lite spec" code={code} />
+        {showCopy ? <CodeBlockCopyButton aria-label="Copy Vega-Lite spec" code={code} /> : null}
       </Flex>
       <figure
         aria-busy={renderState.status === 'loading'}
@@ -160,14 +164,16 @@ export function VegaLiteRenderer({ code, language }: CustomRendererProps) {
           }}
         />
       </figure>
-      <details
-        style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: token.paddingSM }}
-      >
-        <summary style={{ cursor: 'pointer' }}>View Vega-Lite source</summary>
-        <CodeBlock code={code} language="json" lineNumbers={false}>
-          <CodeBlockCopyButton code={code} />
-        </CodeBlock>
-      </details>
+      {showCopy ? (
+        <details
+          style={{ borderTop: `1px solid ${token.colorBorderSecondary}`, padding: token.paddingSM }}
+        >
+          <summary style={{ cursor: 'pointer' }}>View Vega-Lite source</summary>
+          <CodeBlock code={code} language="json" lineNumbers={false}>
+            <CodeBlockCopyButton code={code} />
+          </CodeBlock>
+        </details>
+      ) : null}
     </CodeBlockContainer>
   );
 }
@@ -181,6 +187,8 @@ function VegaLiteError({
   language: string;
   message: string;
 }) {
+  const { controls } = useContext(StreamdownContext);
+  const showCopy = isCodeCopyEnabled(controls);
   return (
     <Flex gap="small" vertical>
       <Alert
@@ -191,7 +199,7 @@ function VegaLiteError({
         type="warning"
       />
       <CodeBlock code={code} language={language} lineNumbers={false}>
-        <CodeBlockCopyButton code={code} />
+        {showCopy ? <CodeBlockCopyButton code={code} /> : null}
       </CodeBlock>
     </Flex>
   );
