@@ -35,7 +35,7 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
         <Card hoverable onClick={onClick} style={cardStyle} styles={{ body: { padding: 8 } }}>
           <Space size={8} style={{ width: '100%' }}>
             <ToolIcon tool={agent.id} size={20} />
-            <Typography.Text strong ellipsis style={{ fontSize: '13px' }}>
+            <Typography.Text strong ellipsis style={{ fontSize: token.fontSizeSM }}>
               {agent.name}
             </Typography.Text>
             {agent.beta && <Tag color="warning">BETA</Tag>}

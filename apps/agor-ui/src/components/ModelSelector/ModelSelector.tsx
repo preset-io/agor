@@ -412,6 +412,16 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       label: o.label,
       searchText: o.searchText,
     }));
+    // Compact has no pin toggle, so an exact/pinned current value would be
+    // absent from the curated list — always surface the current selection.
+    if (currentModel && !compactOptions.some((o) => o.value === currentModel)) {
+      const norm = normalizedList.find((m) => m.id === currentModel);
+      compactOptions.unshift({
+        value: currentModel,
+        label: norm?.displayName ?? getModelDisplayName(effectiveTool, currentModel),
+        searchText: currentModel.toLowerCase(),
+      });
+    }
     const modelSelect = (
       <Select
         value={currentModel}
