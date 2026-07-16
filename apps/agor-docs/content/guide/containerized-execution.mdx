@@ -19,7 +19,7 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 ### The Executor Model
 
 ```mermaid
-%%{init: {'flowchart': {'curve': 'step', 'wrappingWidth': 340}}}%%
+%%{init: {'flowchart': {'wrappingWidth': 340}}}%%
 graph TB
     Daemon["<b>Daemon — orchestration</b><br/>REST + WebSocket API (FeathersJS)<br/>database · auth · executor tokens"]
     Spawn["spawn · typed JSON payload via stdin"]
