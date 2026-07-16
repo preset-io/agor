@@ -1,0 +1,51 @@
+.card {
+  position: relative;
+  margin: 1.5rem 0;
+  padding: 1.5rem 1.75rem 1.75rem;
+  border: 1px solid rgba(52, 230, 196, 0.14);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(52, 230, 196, 0.035), transparent 120px), rgba(9, 20, 18, 0.5);
+}
+
+/* Mint accent rail down the left edge — the visual cue that breaks the wall
+ * of text into discrete answers without collapsing anything. */
+.card::before {
+  content: "";
+  position: absolute;
+  top: 1.4rem;
+  bottom: 1.4rem;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, #34e6c4, rgba(52, 230, 196, 0.15));
+}
+
+/* The question heading becomes the card header — kill the default large top
+ * margin and the theme's under-heading border so it reads as a title. */
+.card :global(h2) {
+  margin-top: 0;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0;
+  border-bottom: 0;
+  font-size: 1.35rem;
+}
+
+.card :global(h2 a) {
+  color: var(--agor-teal, #34e6c4);
+}
+
+/* First child (usually the lead paragraph or heading) shouldn't add top gap. */
+.card > :first-child {
+  margin-top: 0;
+}
+
+.card > :last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .card {
+    padding: 1.25rem 1.25rem 1.4rem;
+  }
+}
