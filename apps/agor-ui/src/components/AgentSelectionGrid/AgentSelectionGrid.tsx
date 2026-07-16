@@ -39,7 +39,7 @@ export interface AgentSelectionGridProps {
   /** Rendering style. `cards` (default) = grid of cards; `select` = compact Antd Select. */
   variant?: 'cards' | 'select';
   /** Number of columns (cards variant only) */
-  columns?: 2 | 3;
+  columns?: 2 | 3 | 4;
   /** Show helper text when no agent selected (cards variant only) */
   showHelperText?: boolean;
   /** Helper text to display (cards variant only) */

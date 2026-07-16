@@ -159,19 +159,16 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     label: string;
     description?: string;
   }> | null>(null);
-  const [claudeSource, setClaudeSource] = useState<'dynamic' | 'static' | null>(null);
   const [copilotServerOptions, setCopilotServerOptions] = useState<Array<{
     id: string;
     label: string;
     description?: string;
   }> | null>(null);
-  const [copilotSource, setCopilotSource] = useState<'dynamic' | 'static' | null>(null);
   const [cursorServerOptions, setCursorServerOptions] = useState<Array<{
     id: string;
     label: string;
     description?: string;
   }> | null>(null);
-  const [cursorSource, setCursorSource] = useState<'dynamic' | 'static' | null>(null);
   const [copilotDefaultModel, setCopilotDefaultModel] = useState(DEFAULT_COPILOT_MODEL);
   const [cursorDefaultModel, setCursorDefaultModel] = useState(DEFAULT_CURSOR_MODEL);
 
@@ -189,7 +186,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           description: m.description,
         }));
         setClaudeServerOptions(models);
-        setClaudeSource(response.source);
       } catch {
         // Silent fallback to local static — best-effort.
       }
@@ -224,7 +220,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           )
         );
         setCopilotDefaultModel(defaultModel);
-        setCopilotSource(response.source);
       } catch {
         // Silent fallback to local static — best-effort.
       }
@@ -259,7 +254,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           )
         );
         setCursorDefaultModel(defaultModel);
-        setCursorSource(response.source);
       } catch {
         // Silent fallback to local static — best-effort.
       }
@@ -385,26 +379,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   };
 
-  const sourceNote = isClaude
-    ? claudeSource === 'dynamic'
-      ? 'Live list from the Anthropic Models API.'
-      : claudeSource === 'static'
-        ? 'Showing the static fallback list. Set ANTHROPIC_API_KEY to load your live models.'
-        : undefined
-    : effectiveTool === 'copilot'
-      ? copilotSource === 'dynamic'
-        ? 'Live list from your Copilot account.'
-        : copilotSource === 'static'
-          ? 'Showing the static fallback. Set COPILOT_GITHUB_TOKEN to load your account list.'
-          : undefined
-      : effectiveTool === 'cursor'
-        ? cursorSource === 'dynamic'
-          ? 'Live list from your Cursor account.'
-          : cursorSource === 'static'
-            ? 'Showing the static fallback. Set CURSOR_API_KEY to load your Cursor models.'
-            : undefined
-        : undefined;
-
   // Compact: single dropdown for toolbars/popovers. Rich rows, displayName label.
   if (compact) {
     const compactOptions = aliasOptions.map((o) => ({
@@ -459,27 +433,16 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   return (
     <Space orientation="vertical" style={{ width: '100%' }} size={8}>
       {!pinned ? (
-        <Flex gap={8} align="center" style={{ width: '100%' }}>
-          <div style={{ flex: 1 }}>
-            <Select
-              showSearch
-              value={currentModel}
-              onChange={selectAlias}
-              optionLabelProp="label"
-              filterOption={(input, option) =>
-                (option?.searchText ?? '').includes(input.toLowerCase())
-              }
-              style={{ width: '100%' }}
-              options={aliasOptions}
-              optionRender={(option) => renderAliasOption(String(option.value))}
-            />
-          </div>
-          {sourceNote && (
-            <Tooltip title={sourceNote}>
-              <InfoCircleOutlined style={{ color: token.colorTextTertiary }} />
-            </Tooltip>
-          )}
-        </Flex>
+        <Select
+          showSearch
+          value={currentModel}
+          onChange={selectAlias}
+          optionLabelProp="label"
+          filterOption={(input, option) => (option?.searchText ?? '').includes(input.toLowerCase())}
+          style={{ width: '100%' }}
+          options={aliasOptions}
+          optionRender={(option) => renderAliasOption(String(option.value))}
+        />
       ) : (
         <AutoComplete
           value={currentModel}
@@ -490,24 +453,19 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               .toLowerCase()
               .includes(input.toLowerCase())
           }
-          placeholder={PIN_PLACEHOLDERS[effectiveTool] ?? 'e.g., claude-opus-4-20250514'}
+          placeholder={PIN_PLACEHOLDERS[effectiveTool] ?? 'e.g., claude-opus-4-8-20251115'}
           style={{ width: '100%' }}
         />
       )}
 
       {!pinned ? (
-        <Typography.Link onClick={enablePin} style={{ fontSize: 12 }}>
+        <Typography.Link onClick={enablePin} style={{ fontSize: token.fontSizeSM }}>
           Pin a specific version…
         </Typography.Link>
       ) : (
-        <Space size={4}>
-          <Typography.Link onClick={disablePin} style={{ fontSize: 12 }}>
-            Use a recommended model
-          </Typography.Link>
-          <Tooltip title="Pins an exact model release for reproducibility. Type any model ID.">
-            <InfoCircleOutlined style={{ color: token.colorTextTertiary, fontSize: 12 }} />
-          </Tooltip>
-        </Space>
+        <Typography.Link onClick={disablePin} style={{ fontSize: token.fontSizeSM }}>
+          Use a recommended model
+        </Typography.Link>
       )}
 
       {isClaude && showAdvisor && (

@@ -13,8 +13,8 @@ import {
   getDefaultPermissionMode,
   mapToCodexPermissionConfig,
 } from '@agor-live/client';
-import { DownOutlined, InfoCircleOutlined } from '@ant-design/icons';
-import { Alert, Collapse, Form, Input, Modal, Space, Tooltip, Typography } from 'antd';
+import { DownOutlined } from '@ant-design/icons';
+import { Collapse, Form, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
@@ -274,7 +274,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
   return (
     <Modal
-      title="Create New Session"
+      title={branch ? `New Session · ${branch.name}` : 'Create New Session'}
       open={open}
       onOk={handleCreate}
       onCancel={handleCancel}
@@ -288,34 +288,23 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       }}
     >
       <Form form={form} layout="vertical" style={{ marginTop: 16 }} preserve={false}>
-        {/* Branch Info */}
-        {branch && (
-          <Alert
-            title={
-              <>
-                Creating session in branch: <strong>{branch.name}</strong> ({branch.ref})
-              </>
-            }
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-        )}
-
         {/* Agent Selection — dense tiles (pick who you're talking to first) */}
         <Form.Item label="Coding Agent" required>
           <AgentSelectionGrid
             agents={availableAgents}
             selectedAgentId={selectedAgent}
             onSelect={setSelectedAgent}
-            columns={3}
+            columns={4}
             size="small"
             showComparisonLink={false}
           />
         </Form.Item>
 
         {/* Configuration — resolved config as editable chips under the tiles */}
-        <Form.Item label="Configuration">
+        <Form.Item
+          label="Configuration"
+          tooltip="Presets are admin-managed configs; “My default” is your personal setup. Click a chip to change it just for this session."
+        >
           <AgenticConfigChipRow
             tool={(selectedAgent as AgenticToolName) || 'claude-code'}
             mcpServerById={mcpServerById}
@@ -326,12 +315,20 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         </Form.Item>
 
         {/* Session Title */}
-        <Form.Item name="title" label="Title (optional)">
+        <Form.Item
+          name="title"
+          label="Title (optional)"
+          tooltip="Auto-generated from your first prompt when left blank."
+        >
           <Input placeholder="e.g., Add authentication system" />
         </Form.Item>
 
         {/* Initial Prompt */}
-        <Form.Item name="initialPrompt" label="Initial Prompt (optional)">
+        <Form.Item
+          name="initialPrompt"
+          label="Initial Prompt (optional)"
+          tooltip="Sent as the first message when the session starts."
+        >
           <AutocompleteTextarea
             value={form.getFieldValue('initialPrompt') || ''}
             onChange={(value) => form.setFieldValue('initialPrompt', value)}
@@ -368,7 +365,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
               children: (
                 <>
                   {currentUser && client && (
-                    <Form.Item label="Environment Variables">
+                    <Form.Item
+                      label="Environment Variables"
+                      tooltip="Exported into this session's executor process."
+                    >
                       <SessionEnvVarsSelector
                         ownerUserId={currentUser.user_id}
                         client={client}
@@ -380,14 +380,8 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
                   {isClaudeAgent && isInlineConfig && (
                     <Form.Item
-                      label={
-                        <Space size={4}>
-                          <span>Advisor model</span>
-                          <Tooltip title="Optional Claude Code advisor-tool model. Leave off to use your existing Claude settings.">
-                            <InfoCircleOutlined />
-                          </Tooltip>
-                        </Space>
-                      }
+                      label="Advisor model"
+                      tooltip="Optional Claude Code advisor-tool model. Leave off to use your existing Claude settings."
                     >
                       <AdvisorModelSelect
                         value={watchedModelConfig?.advisorModel}
