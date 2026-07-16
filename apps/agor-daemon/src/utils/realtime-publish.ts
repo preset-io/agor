@@ -233,7 +233,7 @@ function isServiceConnection(connection: unknown): boolean {
   return user?._isServiceAccount === true || (user?.role as string | undefined) === 'service';
 }
 
-/** Per-connection flag: this client spoke the session-streams protocol (subscribe or announce), so the owner fallback skips it. Reset per connection. */
+/** Per-connection flag: set only by the explicit `{capability:true}` announce (not by a plain subscribe), so the owner fallback skips this connection for all sessions. */
 export const SESSION_STREAMS_AWARE_FLAG = '__agorSessionStreamsAware';
 
 /** Set the aware flag. Lives beside the raw `app.channel` surface so realtime-routing mutations stay in one audited place. */
