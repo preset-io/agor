@@ -28,7 +28,7 @@
     "@streamdown/code": "^1.1.1",
     "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
-    "@tsparticles/engine": "^3.9.0",
+    "@tsparticles/engine": "^4.3.2",
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.0",
     "@types/diff": "^6.0.0",
