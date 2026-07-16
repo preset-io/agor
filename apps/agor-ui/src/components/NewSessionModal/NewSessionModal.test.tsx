@@ -72,7 +72,12 @@ vi.mock('../AgenticToolConfigForm', async () => {
 
 vi.mock('../AgenticToolConfigurationPicker', () => ({
   INLINE_AGENTIC_CONFIGURATION: '__inline__',
+  SAVE_AS_DEFAULT_FIELD: 'saveAsDefault',
+  persistUserDefaultFromForm: vi.fn(),
   AgenticToolConfigurationPicker: () => <div data-testid="agentic-tool-config" />,
+}));
+vi.mock('../AgenticConfigChipRow', () => ({
+  AgenticConfigChipRow: () => <div data-testid="config-chip-row" />,
 }));
 
 vi.mock('../../store/agorStore', () => ({

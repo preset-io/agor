@@ -27,12 +27,16 @@ vi.mock('../ModelSelector', () => ({
   AdvisorModelSelect: () => <div data-testid="advisor-select" />,
 }));
 
-// Picker stub that drives the shared `agenticToolPresetId` form field so the
-// test can toggle inline vs preset configuration.
 vi.mock('../AgenticToolConfigurationPicker', () => ({
   INLINE_AGENTIC_CONFIGURATION: '__inline__',
+  SAVE_AS_DEFAULT_FIELD: 'saveAsDefault',
   persistUserDefaultFromForm: vi.fn(),
-  AgenticToolConfigurationPicker: () => {
+}));
+
+// Chip-row stub that drives the shared `agenticToolPresetId` field so the test
+// can toggle inline vs preset configuration.
+vi.mock('../AgenticConfigChipRow', () => ({
+  AgenticConfigChipRow: () => {
     const form = Form.useFormInstance();
     return (
       <div>
@@ -80,9 +84,8 @@ describe('NewSessionModal advisor gating', { timeout: 10_000 }, () => {
       />
     );
 
-    // Expand the Advanced section (lazy-rendered); the MCP field confirms it opened.
-    fireEvent.click(screen.getByText(/Advanced ·/));
-    await screen.findByTestId('mcp-servers-field');
+    // Expand the Advanced section (lazy-rendered).
+    fireEvent.click(screen.getByText(/^Advanced/));
 
     // No configuration chosen yet → not inline → advisor hidden.
     expect(screen.queryByText('Advisor model')).not.toBeInTheDocument();

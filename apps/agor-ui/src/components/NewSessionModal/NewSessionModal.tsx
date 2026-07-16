@@ -19,10 +19,10 @@ import { useEffect, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
+import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import type { AgenticFormValues } from '../AgenticToolConfigForm';
 import { getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import {
-  AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
   persistUserDefaultFromForm,
 } from '../AgenticToolConfigurationPicker';
@@ -32,7 +32,6 @@ import {
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CodexSettingsForm } from '../CodexSettingsForm';
-import { SessionMcpServersField } from '../MCPServerSelect';
 import { AdvisorModelSelect, type ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
@@ -106,7 +105,6 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     useComposerAttachments({ sessionId: null, showError });
   const isFormValid = !!selectedAgent;
 
-  const watchedMcp = Form.useWatch('mcpServerIds', form) as string[] | undefined;
   const watchedModelConfig = Form.useWatch('modelConfig', form) as ModelConfig | undefined;
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
   const isClaudeAgent = selectedAgent === 'claude-code' || selectedAgent === 'claude-code-cli';
@@ -264,12 +262,15 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     });
   };
 
-  const mcpCount = watchedMcp?.length ?? 0;
   // Only report the advisor as "on" when it will actually apply (inline config).
   const advisorOn = isInlineConfig && !!watchedModelConfig?.advisorModel;
-  const advancedSummary = `Advanced · ${mcpCount} MCP server${mcpCount === 1 ? '' : 's'} · advisor ${
-    advisorOn ? 'on' : 'off'
-  }`;
+  const advancedBits: string[] = [];
+  if (envVarNames.length > 0) {
+    advancedBits.push(`${envVarNames.length} env var${envVarNames.length === 1 ? '' : 's'}`);
+  }
+  if (isClaudeAgent && isInlineConfig && advisorOn) advancedBits.push('advisor on');
+  if (selectedAgent === 'codex') advancedBits.push('Codex sandbox');
+  const advancedSummary = `Advanced${advancedBits.length > 0 ? ` · ${advancedBits.join(' · ')}` : ''}`;
 
   return (
     <Modal
@@ -301,16 +302,9 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           />
         )}
 
-        {/* Agent Selection — dense tiles */}
-        <Form.Item label="Coding Agent" required>
-          <AgentSelectionGrid
-            agents={availableAgents}
-            selectedAgentId={selectedAgent}
-            onSelect={setSelectedAgent}
-            columns={3}
-            size="small"
-            showComparisonLink={false}
-          />
+        {/* Session Title — name the thing first */}
+        <Form.Item name="title" label="Title (optional)">
+          <Input placeholder="e.g., Add authentication system" />
         </Form.Item>
 
         {/* Initial Prompt */}
@@ -339,23 +333,28 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           </div>
         )}
 
-        {/* Session Title */}
-        <Form.Item name="title" label="Title (optional)">
-          <Input placeholder="e.g., Add authentication system" />
+        {/* Agent Selection — dense tiles */}
+        <Form.Item label="Coding Agent" required>
+          <AgentSelectionGrid
+            agents={availableAgents}
+            selectedAgentId={selectedAgent}
+            onSelect={setSelectedAgent}
+            columns={3}
+            size="small"
+            showComparisonLink={false}
+          />
         </Form.Item>
 
-        {/* Configuration (resolved preset / default / inline) */}
-        <AgenticToolConfigurationPicker
-          tool={(selectedAgent as AgenticToolName) || 'claude-code'}
-          mcpServerById={mcpServerById}
-          currentUser={currentUser}
-          client={client}
-          showHelpText={false}
-          showAdvisor={false}
-          compact
-          renderMcpField={false}
-          enableSaveAsDefault
-        />
+        {/* Configuration — resolved config as editable chips under the tiles */}
+        <Form.Item label="Configuration">
+          <AgenticConfigChipRow
+            tool={(selectedAgent as AgenticToolName) || 'claude-code'}
+            mcpServerById={mcpServerById}
+            currentUser={currentUser}
+            client={client}
+            enableSaveAsDefault
+          />
+        </Form.Item>
 
         {/* Advanced Configuration (Collapsible) */}
         <Collapse
@@ -368,8 +367,6 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
               label: <Typography.Text type="secondary">{advancedSummary}</Typography.Text>,
               children: (
                 <>
-                  <SessionMcpServersField mcpServerById={mcpServerById} />
-
                   {currentUser && client && (
                     <Form.Item label="Environment Variables">
                       <SessionEnvVarsSelector
