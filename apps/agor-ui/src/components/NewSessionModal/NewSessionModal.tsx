@@ -300,20 +300,6 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           />
         </Form.Item>
 
-        {/* Configuration — resolved config as editable chips under the tiles */}
-        <Form.Item
-          label="Configuration"
-          tooltip="Presets are admin-managed configs; “My default” is your personal setup. Click a chip to change it just for this session."
-        >
-          <AgenticConfigChipRow
-            tool={(selectedAgent as AgenticToolName) || 'claude-code'}
-            mcpServerById={mcpServerById}
-            currentUser={currentUser}
-            client={client}
-            enableSaveAsDefault
-          />
-        </Form.Item>
-
         {/* Session Title */}
         <Form.Item
           name="title"
@@ -322,6 +308,15 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         >
           <Input placeholder="e.g., Add authentication system" />
         </Form.Item>
+
+        {/* Configuration — source Select + resolved chips, drawer-style directly above the prompt */}
+        <AgenticConfigChipRow
+          tool={(selectedAgent as AgenticToolName) || 'claude-code'}
+          mcpServerById={mcpServerById}
+          currentUser={currentUser}
+          client={client}
+          enableSaveAsDefault
+        />
 
         {/* Initial Prompt */}
         <Form.Item

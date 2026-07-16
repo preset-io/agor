@@ -47,6 +47,7 @@ const makeClient = () =>
     service: () => ({ find: async () => ({ data: [] }), on: () => {}, off: () => {} }),
   }) as unknown as AgorClient;
 
+// No effort set → the chip must resolve to the effective default ("High").
 const userWithDefault = {
   user_id: 'u1',
   default_agentic_config: {
@@ -84,22 +85,32 @@ function Harness({ user }: { user: User }) {
 }
 
 describe('AgenticConfigChipRow', () => {
-  it('renders the resolved config as chips for the user default', async () => {
+  it('renders a source Select and resolved-value chips (effort resolves to the effective default)', async () => {
     render(<Harness user={userWithDefault} />);
-    await waitFor(() => expect(screen.getByTestId('source-chip')).toHaveTextContent('My default'));
+    // Source Select shows the resolved "My default" summary.
+    await waitFor(() =>
+      expect(screen.getByText(/My default · Claude Opus 4.8 · Accept edits/)).toBeInTheDocument()
+    );
+    // Chips render real values — never "default".
     expect(screen.getByTestId('model-chip')).toHaveTextContent('Opus 4.8');
     expect(screen.getByTestId('permission-chip')).toHaveTextContent('Accept edits');
+    expect(screen.getByTestId('effort-chip')).toHaveTextContent('Effort: High');
+    expect(screen.getByTestId('effort-chip')).not.toHaveTextContent('default');
   });
 
-  it('switches the source to Custom (seeded from resolved values) when a config chip is edited', async () => {
+  it('flips the Select to Custom (seeded from resolved values) when a chip is edited', async () => {
     render(<Harness user={userWithDefault} />);
-    await waitFor(() => expect(screen.getByTestId('source-chip')).toHaveTextContent('My default'));
+    await waitFor(() =>
+      expect(screen.getByText(/My default · Claude Opus 4.8/)).toBeInTheDocument()
+    );
 
     // Open the model chip popover and change the model.
     fireEvent.click(screen.getByTestId('model-chip'));
     fireEvent.click(await screen.findByTestId('model-change'));
 
-    await waitFor(() => expect(screen.getByTestId('source-chip')).toHaveTextContent('Custom'));
+    // Select now reads "Custom"; chip reflects the new model.
+    await waitFor(() => expect(screen.getByText('Custom')).toBeInTheDocument());
+    expect(screen.getByTestId('model-chip')).toHaveTextContent('Haiku 4.5');
 
     const state = JSON.parse(screen.getByTestId('state').textContent || '{}');
     expect(state.src).toBe('__inline__');

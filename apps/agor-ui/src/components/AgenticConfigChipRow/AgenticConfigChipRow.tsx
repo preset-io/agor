@@ -20,9 +20,8 @@ import {
   ExperimentOutlined,
   InfoCircleOutlined,
   RobotOutlined,
-  SettingOutlined,
 } from '@ant-design/icons';
-import { Checkbox, Flex, Form, Menu, Popover, Typography, theme } from 'antd';
+import { Checkbox, Flex, Form, Popover, Select, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
@@ -53,7 +52,7 @@ export interface AgenticConfigChipRowProps {
   currentUser?: User | null;
   /** Form field holding the configuration source. */
   fieldName?: string;
-  /** Offer "Save as my default" in the source popover while Custom is active. */
+  /** Offer "Save as my default" under the chips while Custom is active. */
   enableSaveAsDefault?: boolean;
 }
 
@@ -64,6 +63,10 @@ const EFFORT_LABELS: Record<EffortLevel, string> = {
   xhigh: 'X-High',
   max: 'Max',
 };
+
+// The daemon treats an unset effort as "high" (see resolve-session-defaults),
+// so the chip resolves to that effective value rather than showing "default".
+const DEFAULT_EFFORT: EffortLevel = 'high';
 
 const CLAUDE_TOOLS = new Set<AgenticToolName>(['claude-code', 'claude-code-cli']);
 
@@ -89,12 +92,12 @@ function shortModelName(tool: AgenticToolName, modelId: string): string {
 }
 
 /**
- * Session-drawer-style chip row for agentic configuration. Renders the resolved
- * config (source / model / permission / effort / MCP / advisor) as clickable
- * chips whose popovers edit the underlying form fields. Editing a config chip
- * while a preset/default is selected switches the source to inline ("Custom"),
- * seeded from the resolved values — producing the same submit payload as the
- * explicit "Customize" path.
+ * Preset-plus-overrides configuration control: a full-width Select picks the
+ * source (My default / workspace default / preset / Custom); a row of chips
+ * below always renders the RESOLVED values. Editing any chip flips the Select
+ * to "Custom" (inline config seeded from the resolved values) — the same submit
+ * payload as choosing "Custom" outright. Form state is the single source of
+ * truth via `Form.useWatch`.
  */
 export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   tool,
@@ -113,15 +116,6 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
 
   const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
   const [loading, setLoading] = useState(true);
-  const [shown, setShown] = useState(false);
-
-  // Subtle fade-in when the row (re)renders for a newly selected tool.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: fade should retrigger per tool
-  useEffect(() => {
-    setShown(false);
-    const id = requestAnimationFrame(() => setShown(true));
-    return () => cancelAnimationFrame(id);
-  }, [tool]);
 
   useEffect(() => {
     if (!client) {
@@ -209,16 +203,19 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const resolved = configForSource(source);
   const resolvedModel = resolved.modelConfig?.model || getDefaultModelForTool(tool) || '';
   const resolvedPermission = resolved.permissionMode || getDefaultPermissionMode(tool);
-  const resolvedEffort = isInline ? formEffort : resolved.modelConfig?.effort;
+  const resolvedEffort = (isInline ? formEffort : resolved.modelConfig?.effort) ?? DEFAULT_EFFORT;
   const advisorModel = isInline ? formModelConfig?.advisorModel : undefined;
   const mcpCount = formMcp?.length ?? 0;
 
-  const sourceTitle = (src: string | undefined): string => {
-    if (src === INLINE_AGENTIC_CONFIGURATION) return 'Custom';
-    if (src === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION)
-      return workspacePreset ? workspacePreset.name : 'Workspace default';
-    if (src === USER_DEFAULT_AGENTIC_CONFIGURATION) return 'My default';
-    return presets.find((p) => p.preset_id === src)?.name ?? 'Preset';
+  // Summary of what "My default" resolves to, for the Select option label.
+  const myDefaultSummary = (): string => {
+    if (userSelection?.source === 'preset') {
+      return presets.find((p) => p.preset_id === userSelection.preset_id)?.name ?? 'preset';
+    }
+    if (userSelection?.source === 'workspace_default') {
+      return workspacePreset?.name ?? 'workspace default';
+    }
+    return summarize(canonicalTool, userConfigBlob);
   };
 
   // Seed inline fields from the currently-resolved config, then flip to Custom.
@@ -266,44 +263,24 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     else form.setFieldValue(fieldName, value);
   };
 
-  const chipStyle = (editable: boolean, color?: string): React.CSSProperties => ({
-    cursor: editable ? 'pointer' : 'default',
-    height: 22,
-    display: 'inline-flex',
-    alignItems: 'center',
-    maxWidth: 200,
-    color,
-  });
-
   const sourceOptions = [
     ...(hasUserDefault
       ? [
           {
-            key: USER_DEFAULT_AGENTIC_CONFIGURATION,
-            title: 'My default',
-            summary:
-              userSelection?.source === 'preset'
-                ? sourceTitle(USER_DEFAULT_AGENTIC_CONFIGURATION)
-                : summarize(canonicalTool, configForSource(USER_DEFAULT_AGENTIC_CONFIGURATION)),
+            value: USER_DEFAULT_AGENTIC_CONFIGURATION,
+            label: `My default${myDefaultSummary() ? ` · ${myDefaultSummary()}` : ''}`,
           },
         ]
       : []),
     {
-      key: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
-      title: workspacePreset ? `Workspace default · ${workspacePreset.name}` : 'Workspace default',
-      summary: workspacePreset
-        ? summarize(canonicalTool, workspacePreset.configuration)
-        : 'not configured',
+      value: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+      label: workspacePreset
+        ? `Workspace default · ${workspacePreset.name}`
+        : 'Workspace default · not configured',
       disabled: !workspacePreset,
     },
-    ...presets.map((preset) => ({
-      key: preset.preset_id as string,
-      title: preset.name,
-      summary: summarize(canonicalTool, preset.configuration),
-    })),
-    ...(inlineAllowed
-      ? [{ key: INLINE_AGENTIC_CONFIGURATION, title: 'Customize for this session…', summary: '' }]
-      : []),
+    ...presets.map((preset) => ({ value: preset.preset_id as string, label: preset.name })),
+    ...(inlineAllowed ? [{ value: INLINE_AGENTIC_CONFIGURATION, label: 'Custom' }] : []),
   ];
 
   const permissionMeta = getPermissionModeMeta(tool, resolvedPermission);
@@ -316,45 +293,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     </Typography.Text>
   );
 
-  const sourcePopover = (
-    <div style={{ width: 320, maxWidth: '90vw' }}>
-      <Menu
-        selectable
-        selectedKeys={source ? [source] : []}
-        onClick={({ key }) => onSelectSource(key)}
-        style={{ border: 'none' }}
-        items={sourceOptions.map((option) => ({
-          key: option.key,
-          disabled: option.disabled,
-          label: (
-            <div style={{ lineHeight: token.lineHeightSM }}>
-              <div>{option.title}</div>
-              {option.summary && (
-                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                  {option.summary}
-                </Typography.Text>
-              )}
-            </div>
-          ),
-        }))}
-      />
-      {enableSaveAsDefault && isInline && currentUser && client && (
-        <div style={{ padding: token.paddingXS }}>
-          <Form.Item name={SAVE_AS_DEFAULT_FIELD} valuePropName="checked" noStyle>
-            <Checkbox>Save as my default for {tool}</Checkbox>
-          </Form.Item>
-        </div>
-      )}
-    </div>
-  );
-
   return (
-    <div
-      style={{
-        opacity: shown ? 1 : 0,
-        transition: `opacity ${token.motionDurationMid} ${token.motionEaseInOut}`,
-      }}
-    >
+    <div style={{ marginBottom: token.marginXS }}>
       {/* Register the fields the chips edit imperatively so useWatch stays reactive. */}
       {['agenticToolPresetId', 'modelConfig', 'permissionMode', 'effort', 'mcpServerIds'].map(
         (name) => (
@@ -363,90 +303,98 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           </Form.Item>
         )
       )}
-      <Flex gap={token.sizeUnit} align="center" wrap="wrap">
-        {/* Source */}
-        <Popover
-          trigger="click"
-          placement="bottomLeft"
-          title="Configuration"
-          content={sourcePopover}
-        >
-          <Tag
-            icon={<SettingOutlined />}
-            color="default"
-            style={chipStyle(true)}
-            data-testid="source-chip"
-          >
-            {sourceTitle(source)}
-          </Tag>
-        </Popover>
 
-        {/* Model */}
-        <EditableChip
-          icon={<RobotOutlined />}
-          label={shortModelName(tool, resolvedModel)}
-          title="Model"
-          editable={inlineAllowed}
-          managedNote={managedNote}
-          width={420}
-          testid="model-chip"
-          chipStyle={chipStyle(inlineAllowed)}
-          content={
-            <ModelSelector
-              value={resolved.modelConfig as ModelConfig | undefined}
-              onChange={onModelChange}
-              agentic_tool={tool}
-              client={client}
-              showAdvisor={false}
-            />
-          }
+      <Form.Item
+        label="Configuration"
+        tooltip="Presets are admin-managed configs; “My default” is your personal setup. Edit any chip below to override just this session."
+        style={{ marginBottom: token.marginXS }}
+      >
+        <Select
+          value={source}
+          onChange={onSelectSource}
+          loading={loading}
+          options={sourceOptions}
+          style={{ width: '100%' }}
         />
+      </Form.Item>
 
-        {/* Permission */}
+      <Flex gap={token.sizeUnit} align="center" wrap="wrap">
+        {resolvedModel && (
+          <EditableChip
+            icon={<RobotOutlined />}
+            label={shortModelName(tool, resolvedModel)}
+            title="Model"
+            editable={inlineAllowed}
+            managedNote={managedNote}
+            minWidth={360}
+            testid="model-chip"
+            renderContent={() => (
+              <ModelSelector
+                value={resolved.modelConfig as ModelConfig | undefined}
+                onChange={onModelChange}
+                agentic_tool={tool}
+                client={client}
+                showAdvisor={false}
+              />
+            )}
+          />
+        )}
+
         <EditableChip
           icon={permissionMeta?.icon}
           label={getPermissionModeLabel(tool, resolvedPermission)}
           title="Permission mode"
           editable={inlineAllowed}
           managedNote={managedNote}
-          width={340}
+          color={permissionColor}
+          minWidth={340}
           testid="permission-chip"
-          chipStyle={chipStyle(inlineAllowed, permissionColor)}
-          content={
+          renderContent={(close) => (
             <PermissionModeSelector
               value={resolvedPermission}
-              onChange={onPermissionChange}
+              onChange={(mode) => {
+                onPermissionChange(mode);
+                close();
+              }}
               agentic_tool={tool}
               fullWidth
             />
-          }
+          )}
         />
 
-        {/* Effort (claude only) */}
         {isClaude && (
           <EditableChip
             icon={<ExperimentOutlined />}
-            label={`Effort: ${resolvedEffort ? EFFORT_LABELS[resolvedEffort] : 'default'}`}
+            label={`Effort: ${EFFORT_LABELS[resolvedEffort]}`}
             title="Reasoning effort"
             editable={inlineAllowed}
             managedNote={managedNote}
-            width={260}
+            minWidth={300}
             testid="effort-chip"
-            chipStyle={chipStyle(inlineAllowed)}
-            content={<EffortSelector value={resolvedEffort} onChange={onEffortChange} fullWidth />}
+            renderContent={(close) => (
+              <EffortSelector
+                value={resolvedEffort}
+                onChange={(effort) => {
+                  onEffortChange(effort);
+                  close();
+                }}
+                fullWidth
+              />
+            )}
           />
         )}
 
-        {/* MCP servers — orthogonal to preset config, always editable */}
+        {/* MCP servers — orthogonal to preset config, always editable; multi-select stays open */}
         <EditableChip
           icon={<ApiOutlined />}
-          label={mcpCount > 0 ? `${mcpCount} MCP` : 'No MCP'}
+          label={
+            mcpCount > 0 ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}` : 'No MCP servers'
+          }
           title="MCP servers"
           editable
-          width={360}
+          minWidth={360}
           testid="mcp-chip"
-          chipStyle={chipStyle(true)}
-          content={
+          renderContent={() => (
             <MCPServerSelect
               mcpServers={mapToArray(mcpServerById)}
               value={formMcp}
@@ -454,7 +402,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
               placeholder="No MCP servers attached"
               style={{ width: '100%' }}
             />
-          }
+          )}
         />
 
         {/* Advisor — only meaningful (and applied) while inline config is active */}
@@ -464,15 +412,22 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
             label={`Advisor: ${shortModelName(tool, advisorModel)}`}
             title="Advisor model"
             editable
-            width={360}
+            minWidth={340}
             testid="advisor-chip"
-            chipStyle={chipStyle(true)}
-            content={
+            renderContent={() => (
               <AdvisorModelSelect value={advisorModel} onChange={onAdvisorChange} client={client} />
-            }
+            )}
           />
         )}
       </Flex>
+
+      {enableSaveAsDefault && isInline && currentUser && client && (
+        <div style={{ marginTop: token.marginXS }}>
+          <Form.Item name={SAVE_AS_DEFAULT_FIELD} valuePropName="checked" noStyle>
+            <Checkbox>Save as my default for {tool}</Checkbox>
+          </Form.Item>
+        </div>
+      )}
     </div>
   );
 };
@@ -483,10 +438,11 @@ interface EditableChipProps {
   title: string;
   editable: boolean;
   managedNote?: React.ReactNode;
-  width: number;
+  color?: string;
+  minWidth: number;
   testid: string;
-  chipStyle: React.CSSProperties;
-  content: React.ReactNode;
+  /** Receives a `close` callback so single-value pickers can dismiss on select. */
+  renderContent: (close: () => void) => React.ReactNode;
 }
 
 /** A Tag chip that opens a popover editor on click (or shows a managed note). */
@@ -496,16 +452,27 @@ const EditableChip: React.FC<EditableChipProps> = ({
   title,
   editable,
   managedNote,
-  width,
+  color,
+  minWidth,
   testid,
-  chipStyle,
-  content,
+  renderContent,
 }) => {
+  const [open, setOpen] = useState(false);
+
   const chip = (
-    <Tag icon={icon} color="default" style={chipStyle} data-testid={testid}>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {label}
-      </span>
+    <Tag
+      icon={icon}
+      color="default"
+      style={{
+        cursor: editable ? 'pointer' : 'default',
+        height: 22,
+        display: 'inline-flex',
+        alignItems: 'center',
+        color,
+      }}
+      data-testid={testid}
+    >
+      {label}
     </Tag>
   );
 
@@ -519,11 +486,14 @@ const EditableChip: React.FC<EditableChipProps> = ({
 
   return (
     <Popover
+      open={open}
+      onOpenChange={setOpen}
       trigger="click"
       placement="bottomLeft"
       title={title}
-      overlayInnerStyle={{ padding: 8 }}
-      content={<div style={{ width, maxWidth: '90vw' }}>{content}</div>}
+      content={
+        <div style={{ minWidth, maxWidth: '90vw' }}>{renderContent(() => setOpen(false))}</div>
+      }
     >
       {chip}
     </Popover>
