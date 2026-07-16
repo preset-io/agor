@@ -16,6 +16,7 @@ import {
 } from '@agor/core/config';
 import {
   MessagesRepository,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
@@ -686,16 +687,22 @@ export async function startup(ctx: StartupContext): Promise<void> {
   app.set('knowledgeEmbeddingIndexer', knowledgeEmbeddingIndexer);
   console.log('🧠 Knowledge embedding indexer started');
 
-  // 8. Initialize gateway: refresh channel state cache, then start Socket Mode listeners
+  // 8. Initialize gateway listeners. Static mode preserves the historical
+  // tenant. Auth-resolved mode performs narrow global ID discovery, then
+  // reloads and starts each channel under its immutable tenant identity.
   const gatewayService = safeService('gateway') as unknown as GatewayService | undefined;
   if (gatewayService) {
-    runStartupTenantDatabaseScope(ctx, () => gatewayService.refreshChannelState())
-      .then(() => {
-        return runStartupTenantDatabaseScope(ctx, () => gatewayService.startListeners());
-      })
-      .catch((error: unknown) => {
-        console.error('[gateway] Failed to start listeners:', error);
-      });
+    const multiTenancy = resolveMultiTenancyConfig(config);
+    const startGateway =
+      multiTenancy.mode === 'static'
+        ? runWithTenantContext(multiTenancy.static_tenant_id, async () => {
+            await gatewayService.refreshChannelState();
+            await gatewayService.startListeners();
+          })
+        : gatewayService.startListenersAcrossTenants();
+    void startGateway.catch((error: unknown) => {
+      console.error('[gateway] Failed to start listeners:', error);
+    });
   }
 
   // 8. Graceful shutdown handler

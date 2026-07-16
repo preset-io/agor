@@ -288,4 +288,47 @@ describe('tenant-scoped database proxy', () => {
       )
     ).rejects.toThrow(/Cannot enter tenant scope tenant-a from active system database scope/);
   });
+
+  it('sets narrow Postgres system capabilities transaction-locally', async () => {
+    const tx = {
+      execute: vi.fn(async () => []),
+      marker: vi.fn(() => 'tx'),
+    };
+    const base = {
+      transaction: vi.fn(async (callback: (db: unknown) => Promise<unknown>) => callback(tx)),
+      marker: vi.fn(() => 'base'),
+    };
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database, {
+      requireScope: true,
+    });
+
+    await runWithSystemDatabaseScope(
+      db,
+      'gateway discovery test',
+      async (systemDb) => {
+        expect((systemDb as unknown as { marker(): string }).marker()).toBe('tx');
+        expect(getCurrentTenantDatabaseScope()).toMatchObject({
+          kind: 'system',
+          systemCapability: 'gateway_listener_discovery',
+        });
+      },
+      { capability: 'gateway_listener_discovery' }
+    );
+
+    expect(base.transaction).toHaveBeenCalledTimes(1);
+    expect(tx.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects changing capability inside an active system scope', async () => {
+    const db = { run: vi.fn() } as unknown as Database;
+
+    await expect(
+      runWithSystemDatabaseScope(
+        db,
+        'gateway discovery test',
+        async () => runWithSystemDatabaseScope(db, 'generic nested work', async () => undefined),
+        { capability: 'gateway_listener_discovery' }
+      )
+    ).rejects.toThrow(/Cannot change system database capability/);
+  });
 });

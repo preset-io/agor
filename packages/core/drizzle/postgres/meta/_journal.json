@@ -456,6 +456,13 @@
       "when": 1784555000000,
       "tag": "0065_executor_heartbeat_timezone",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1784555100000,
+      "tag": "0066_gateway_listener_discovery",
+      "breakpoints": true
     }
   ]
 }

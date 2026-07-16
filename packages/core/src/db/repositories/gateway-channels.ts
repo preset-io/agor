@@ -22,7 +22,7 @@ import {
 import { eq, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type GatewayChannelInsert, type GatewayChannelRow, gatewayChannels } from '../schema';
 import {
@@ -32,6 +32,11 @@ import {
   EntityNotFoundError,
   RepositoryError,
 } from './base';
+
+export interface EnabledGatewayChannelRef {
+  channel_id: GatewayChannelID;
+  tenant_id?: string;
+}
 
 /**
  * Encrypt sensitive fields within a config object
@@ -339,6 +344,31 @@ export class GatewayChannelRepository
         error
       );
     }
+  }
+
+  /**
+   * Process-wide listener discovery query. Returns routing metadata only so
+   * callers can leave system scope and re-enter the row's tenant before
+   * loading credentials or starting a connector.
+   */
+  async findEnabledRefs(): Promise<EnabledGatewayChannelRef[]> {
+    const tenantColumn = (gatewayChannels as unknown as { tenant_id?: unknown }).tenant_id;
+    const columns =
+      isPostgresDatabase(this.db) && tenantColumn
+        ? { channel_id: gatewayChannels.id, tenant_id: tenantColumn }
+        : { channel_id: gatewayChannels.id };
+
+    const rows = await select(this.db, columns)
+      .from(gatewayChannels)
+      .where(eq(gatewayChannels.enabled, true))
+      .all();
+
+    return (rows as Array<{ channel_id: string; tenant_id?: unknown }>).map((row) => ({
+      channel_id: row.channel_id as GatewayChannelID,
+      ...(typeof row.tenant_id === 'string' && row.tenant_id.length > 0
+        ? { tenant_id: row.tenant_id }
+        : {}),
+    }));
   }
 
   /**

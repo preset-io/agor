@@ -138,7 +138,10 @@ const checks = [
     // Agor store/tenant transaction wrapper once introduced.
     baseline: {
       'packages/core/src/db/database-wrapper.ts': 1,
-      'packages/core/src/db/tenant-scope.ts': 1,
+      // Tenant scopes use one transaction for agor.tenant_id. Narrow system
+      // capabilities use a second transaction path so their RLS GUC is local
+      // to one pooled connection checkout and cannot leak after discovery.
+      'packages/core/src/db/tenant-scope.ts': 2,
       'packages/core/src/db/repositories/tasks.ts': 1,
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
