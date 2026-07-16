@@ -16,11 +16,11 @@ import type {
   ChannelType,
   GatewayAgenticConfig,
   GatewayChannel,
+  GatewayConnectionTestResult,
   GatewayEnvVar,
   MCPServer,
   PermissionMode,
   SlackAppInfo,
-  SlackTestResult,
   User,
   UUID,
 } from '@agor-live/client';
@@ -522,12 +522,14 @@ const CompactAlert: React.FC<{
 };
 
 /**
- * Honest rendering of a connection probe ({@link SlackTestResult}, shared by
+ * Honest rendering of a connection probe ({@link GatewayConnectionTestResult}, shared by
  * the Slack and Shortcut connectors). A green result is advisory: `notVerifiable`
  * is surfaced as a warning so success is never read as "fully verified".
  * Slack-only fields (`appTokenValid`, `channelAccess`) render only when present.
  */
-const ConnectionTestResultView: React.FC<{ result: SlackTestResult }> = ({ result }) => {
+const ConnectionTestResultView: React.FC<{ result: GatewayConnectionTestResult }> = ({
+  result,
+}) => {
   const hasFollowups = result.failures.length > 0 || result.notVerifiable.length > 0;
   return (
     <div style={{ marginBottom: 16 }}>
@@ -809,7 +811,7 @@ const SlackSetupWizard: React.FC<{
   onAgentChange: (agent: string) => void;
   /** Slack sub-step within the unified create wizard (0=Options, 1=Create app, 2=Tokens). */
   step: number;
-  testResult: SlackTestResult | null;
+  testResult: GatewayConnectionTestResult | null;
   testLoading: boolean;
   onTest: () => void;
 }> = ({
@@ -1337,7 +1339,7 @@ const ChannelFormFields: React.FC<{
   githubLoading: boolean;
   githubError: string | null;
   /** Slack guided-setup state (create mode only). */
-  connectionTestResult: SlackTestResult | null;
+  connectionTestResult: GatewayConnectionTestResult | null;
   connectionTestLoading: boolean;
   onSlackTest: () => void;
   onShortcutTest: () => void;
@@ -2972,7 +2974,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   // ── Slack guided-setup state (create mode) ──
   const [connectionTestLoading, setConnectionTestLoading] = useState(false);
-  const [connectionTestResult, setConnectionTestResult] = useState<SlackTestResult | null>(null);
+  const [connectionTestResult, setConnectionTestResult] =
+    useState<GatewayConnectionTestResult | null>(null);
   // Slack app identity resolved server-side when the edit modal opens (edit mode).
   const [slackAppInfo, setSlackAppInfo] = useState<SlackAppInfo | null>(null);
   // Channel id the in-flight app-info fetch belongs to; a response is dropped
@@ -3123,7 +3126,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           : { channelType, config };
         const result = (await client
           .service('gateway-channels/test')
-          .create(payload)) as SlackTestResult;
+          .create(payload)) as GatewayConnectionTestResult;
         setConnectionTestResult(result);
       } catch (error) {
         setConnectionTestResult({

@@ -5,7 +5,12 @@
  * sending messages to and receiving messages from messaging platforms.
  */
 
-import type { ChannelType, GatewayEnvVar, SlackAppInfo, SlackTestResult } from '../types/gateway';
+import type {
+  ChannelType,
+  GatewayConnectionTestResult,
+  GatewayEnvVar,
+  SlackAppInfo,
+} from '../types/gateway';
 
 /**
  * File attached to an inbound message (provider-neutral shape).
@@ -128,7 +133,7 @@ export interface GatewayConnector {
    * a structured report. `result.notVerifiable` lists what the probe cannot
    * prove, so a green result is never mistaken for full verification.
    */
-  testConnection?(): Promise<SlackTestResult>;
+  testConnection?(): Promise<GatewayConnectionTestResult>;
 
   /**
    * Environment variables the connector's platform skills need inside a

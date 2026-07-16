@@ -38,9 +38,9 @@
 
 import type {
   ChannelType,
+  GatewayConnectionTestFailure,
+  GatewayConnectionTestResult,
   GatewayEnvVar,
-  SlackTestFailure,
-  SlackTestResult,
 } from '../../types/gateway';
 import type { GatewayConnector, InboundMessage } from '../connector';
 import { addToRingBuffer, escapeRegex } from './shared';
@@ -197,7 +197,7 @@ function toSearchDate(iso: string): string {
 
 /**
  * The things a Shortcut connection probe fundamentally cannot prove. Surfaced
- * verbatim in {@link SlackTestResult.notVerifiable} so a green result is never
+ * verbatim in {@link GatewayConnectionTestResult.notVerifiable} so a green result is never
  * read as "fully verified".
  */
 const SHORTCUT_NOT_VERIFIABLE = [
@@ -235,7 +235,11 @@ export class ShortcutConnector implements GatewayConnector {
   // ── HTTP ──────────────────────────────────────────────────
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(`${SHORTCUT_API_BASE}${path}`, {
+    // Search pagination returns the next page as an `/api/v3/...` path, while
+    // connector calls use paths relative to the API base. Normalize both forms
+    // onto the same trusted Shortcut origin instead of duplicating `/api/v3`.
+    const relativePath = path.startsWith('/api/v3/') ? path.slice('/api/v3'.length) : path;
+    const res = await fetch(`${SHORTCUT_API_BASE}${relativePath}`, {
       ...init,
       headers: {
         'Content-Type': 'application/json',
@@ -278,8 +282,8 @@ export class ShortcutConnector implements GatewayConnector {
    * that Shortcut cannot resolve is a real failure: the per-comment mention
    * check would silently match nothing. Never returns the token.
    */
-  async testConnection(): Promise<SlackTestResult> {
-    const failures: SlackTestFailure[] = [];
+  async testConnection(): Promise<GatewayConnectionTestResult> {
+    const failures: GatewayConnectionTestFailure[] = [];
     const notVerifiable = [...SHORTCUT_NOT_VERIFIABLE];
 
     // 1. Validate the token: GET /member returns the token owner (or 401s).
@@ -419,7 +423,7 @@ export class ShortcutConnector implements GatewayConnector {
     // With a handle, narrow to comments that mention it; otherwise scan all
     // recently-updated stories and rely on the per-comment mention check.
     const queryParts = [`updated:${toSearchDate(cutoff)}..*`];
-    if (mentionName) {
+    if (mentionName && requireMention) {
       queryParts.unshift(`comment:${mentionName}`);
     }
     if (this.config.search_query_extra?.trim()) {
@@ -430,27 +434,29 @@ export class ShortcutConnector implements GatewayConnector {
       page_size: String(DEFAULT_SEARCH_PAGE_SIZE),
     });
 
-    let search: ShortcutStorySearchResponse;
+    const candidateStoryIds = new Set<number>();
+    let searchPath: string | null = `/search/stories?${params}`;
     try {
-      search = await this.request<ShortcutStorySearchResponse>(`/search/stories?${params}`);
+      while (searchPath) {
+        const search: ShortcutStorySearchResponse =
+          await this.request<ShortcutStorySearchResponse>(searchPath);
+        for (const story of search.data ?? []) candidateStoryIds.add(story.id);
+        searchPath = search.next ?? null;
+      }
     } catch (error) {
       console.error('[shortcut] Story search failed:', error);
       return messages; // don't advance the watermark on error — retry next tick
     }
 
-    if (search.next) {
-      console.warn(
-        '[shortcut] Story search returned more than one page; only the first page is processed this tick'
-      );
-    }
-
     // ── Stage 2: precise per-comment check on each story ─────
-    for (const slim of search.data ?? []) {
+    let storyFetchFailed = false;
+    for (const storyId of candidateStoryIds) {
       let story: ShortcutStory;
       try {
-        story = await this.request<ShortcutStory>(`/stories/${slim.id}`);
+        story = await this.request<ShortcutStory>(`/stories/${storyId}`);
       } catch (error) {
-        console.warn(`[shortcut] Failed to fetch story ${slim.id}:`, error);
+        console.warn(`[shortcut] Failed to fetch story ${storyId}:`, error);
+        storyFetchFailed = true;
         continue;
       }
 
@@ -526,8 +532,10 @@ export class ShortcutConnector implements GatewayConnector {
       }
     }
 
-    // Advance the watermark only after a successful tick.
-    this.state.lastPollAt = nextWatermark;
+    // Advance only after every candidate story was fetched. Successfully
+    // processed comments are deduped, so retaining the old watermark retries a
+    // transiently-failed story next tick without duplicating earlier messages.
+    if (!storyFetchFailed) this.state.lastPollAt = nextWatermark;
     return messages;
   }
 

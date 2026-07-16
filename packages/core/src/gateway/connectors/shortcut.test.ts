@@ -116,6 +116,115 @@ describe('ShortcutConnector', () => {
   });
 });
 
+describe('polling', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  it('follows every Shortcut search page before advancing the poll', async () => {
+    const commentTime = new Date(Date.now() + 1_000).toISOString();
+    let ackId = 900;
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const value = String(url);
+      if (value.endsWith('/member')) return json({ id: 'agent-1' });
+      if (value.endsWith('/members/agent-1')) {
+        return json({ id: 'agent-1', profile: { mention_name: 'agorithm' } });
+      }
+      if (value.includes('/search/stories')) {
+        return value.includes('next=page-2')
+          ? json({ data: [{ id: 2 }], next: null })
+          : json({
+              data: [{ id: 1 }],
+              next: '/api/v3/search/stories?query=mentions&next=page-2',
+            });
+      }
+      if (init?.method === 'POST' && /\/stories\/\d+\/comments$/.test(value)) {
+        return json({ id: ackId++ }, 201);
+      }
+      const storyId = value.endsWith('/stories/1') ? 1 : 2;
+      return json({
+        id: storyId,
+        comments: [
+          {
+            id: storyId * 10,
+            author_id: `author-${storyId}`,
+            text: '@agorithm help',
+            member_mention_ids: ['agent-1'],
+            created_at: commentTime,
+          },
+        ],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok' });
+    const callback = vi.fn();
+    try {
+      await connector.startListening(callback);
+    } finally {
+      await connector.stopListening();
+    }
+
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(callback.mock.calls.map(([message]) => message.metadata.shortcut_story_id)).toEqual([
+      1, 2,
+    ]);
+    const searchUrls = fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.includes('/search/stories'));
+    expect(searchUrls).toHaveLength(2);
+    expect(searchUrls[1]).toBe(
+      'https://api.app.shortcut.com/api/v3/search/stories?query=mentions&next=page-2'
+    );
+  });
+
+  it('does not narrow discovery to mention text when mentions are optional', async () => {
+    const commentTime = new Date(Date.now() + 1_000).toISOString();
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const value = String(url);
+      if (value.endsWith('/member')) return json({ id: 'agent-1' });
+      if (value.endsWith('/members/agent-1')) {
+        return json({ id: 'agent-1', profile: { mention_name: 'agorithm' } });
+      }
+      if (value.includes('/search/stories')) return json({ data: [{ id: 1 }], next: null });
+      if (init?.method === 'POST') return json({ id: 900 }, 201);
+      return json({
+        id: 1,
+        comments: [
+          {
+            id: 10,
+            author_id: 'author-1',
+            text: 'help without a mention',
+            member_mention_ids: [],
+            created_at: commentTime,
+          },
+        ],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const connector = new ShortcutConnector({ api_token: 'tok', require_mention: false });
+    const callback = vi.fn();
+    try {
+      await connector.startListening(callback);
+    } finally {
+      await connector.stopListening();
+    }
+
+    expect(callback).toHaveBeenCalledOnce();
+    const searchUrl = String(
+      fetchMock.mock.calls.find(([url]) => String(url).includes('/search/stories'))?.[0]
+    );
+    expect(decodeURIComponent(searchUrl)).not.toContain('comment:agorithm');
+  });
+});
+
 describe('sendMessage', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -141,7 +250,7 @@ describe('sendMessage', () => {
     expect(String(url)).toBe('https://api.app.shortcut.com/api/v3/stories/12345/comments');
     expect(init?.method).toBe('POST');
     expect(JSON.parse(init?.body as string)).toEqual({ text: 'hello', parent_id: 67890 });
-    expect((init?.headers as Record<string, string>)['Shortcut-Token']).toBe('tok');
+    expect(new Headers(init?.headers).get('Shortcut-Token')).toBe('tok');
   });
 
   it('edits the ack comment in place (PUT) when edit_comment_id is set', async () => {
@@ -198,9 +307,7 @@ describe('testConnection', () => {
     expect(result.failures).toEqual([]);
     expect(result.bot).toEqual({ userId: 'owner-1', name: '@agorithm' });
     // GET /member sends the auth header.
-    expect((fetchMock.mock.calls[0][1]?.headers as Record<string, string>)['Shortcut-Token']).toBe(
-      'tok'
-    );
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get('Shortcut-Token')).toBe('tok');
   });
 
   it('fails with an api_token capability when GET /member is rejected', async () => {
