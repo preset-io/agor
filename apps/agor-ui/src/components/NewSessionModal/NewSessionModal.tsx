@@ -371,12 +371,12 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         <Form.Item
           name="initialPrompt"
           label="Initial Prompt"
-          tooltip="Optional — sent as the first message when the session starts. Sessions can also be created idle and prompted later."
+          tooltip={`Optional — the first message sent when the session starts. Type @ to reference files or knowledge, or paste (${PASTE_SHORTCUT}) a screenshot. Sessions can also start idle and be prompted later.`}
         >
           <AutocompleteTextarea
             value={form.getFieldValue('initialPrompt') || ''}
             onChange={(value) => form.setFieldValue('initialPrompt', value)}
-            placeholder={`First message to send when the session starts — e.g., Build a JWT auth system… (type @ for autocomplete, or ${PASTE_SHORTCUT} to paste a screenshot)`}
+            placeholder="e.g., Build a JWT authentication system"
             autoSize={{ minRows: 4, maxRows: 8 }}
             client={client}
             sessionId={null}
@@ -388,7 +388,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           />
         </Form.Item>
         {attachments.length > 0 && (
-          <div style={{ padding: '8px 0' }}>
+          <div style={{ paddingBlock: token.paddingXS }}>
             <SessionAttachmentTray
               attachments={attachments}
               onRemove={removeAttachment}

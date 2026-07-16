@@ -1,4 +1,4 @@
-import { Card, Space, Tooltip, Typography, theme } from 'antd';
+import { Card, Flex, Space, Tooltip, Typography, theme } from 'antd';
 import type { AgenticToolOption } from '../../types';
 import { Tag } from '../Tag';
 import { ToolIcon } from '../ToolIcon';
@@ -32,14 +32,29 @@ export const AgentSelectionCard: React.FC<AgentSelectionCardProps> = ({
   if (size === 'small') {
     return (
       <Tooltip title={agent.description}>
-        <Card hoverable onClick={onClick} style={cardStyle} styles={{ body: { padding: 8 } }}>
-          <Space size={8} style={{ width: '100%' }}>
-            <ToolIcon tool={agent.id} size={20} />
-            <Typography.Text strong ellipsis style={{ fontSize: token.fontSizeSM }}>
+        <Card
+          hoverable
+          onClick={onClick}
+          style={cardStyle}
+          styles={{ body: { padding: token.paddingXS } }}
+        >
+          <Flex align="center" gap={token.marginXS} style={{ width: '100%' }}>
+            <ToolIcon tool={agent.id} size={token.sizeMD} />
+            {/* flex:1 + minWidth:0 lets long names ellipsize so the BETA tag can't
+                push the tile past its grid track. */}
+            <Typography.Text
+              strong
+              ellipsis
+              style={{ fontSize: token.fontSizeSM, flex: 1, minWidth: 0 }}
+            >
               {agent.name}
             </Typography.Text>
-            {agent.beta && <Tag color="warning">BETA</Tag>}
-          </Space>
+            {agent.beta && (
+              <Tag color="warning" style={{ marginInlineEnd: 0 }}>
+                BETA
+              </Tag>
+            )}
+          </Flex>
         </Card>
       </Tooltip>
     );

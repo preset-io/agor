@@ -325,7 +325,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   );
 
   return (
-    <div style={{ marginBottom: token.marginXS }}>
+    <div style={{ marginBottom: token.marginSM }}>
       {/* Register the fields the chips edit imperatively so useWatch stays reactive. */}
       {['agenticToolPresetId', 'modelConfig', 'permissionMode', 'effort', 'mcpServerIds'].map(
         (name) => (
@@ -338,7 +338,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       <Form.Item
         label="Configuration"
         tooltip="Presets are admin-managed configs; “My default” is your personal setup. Edit any chip below to override just this session."
-        style={{ marginBottom: token.marginXS }}
+        style={{ marginBottom: token.marginSM }}
       >
         <Select
           value={source}
@@ -349,7 +349,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         />
       </Form.Item>
 
-      <Flex gap={token.sizeUnit} align="center" wrap="wrap">
+      <Flex gap={token.marginXS} align="center" wrap="wrap">
         {resolvedModel && (
           <EditableChip
             icon={<RobotOutlined />}
@@ -453,7 +453,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       </Flex>
 
       {enableSaveAsDefault && isInline && currentUser && client && (
-        <div style={{ marginTop: token.marginXS }}>
+        <div style={{ marginTop: token.marginSM }}>
           <Form.Item name={SAVE_AS_DEFAULT_FIELD} valuePropName="checked" noStyle>
             <Checkbox>Save as my default for {tool}</Checkbox>
           </Form.Item>
