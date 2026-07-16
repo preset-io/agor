@@ -3,6 +3,8 @@ title: Containerized Execution
 description: Running Agor executors in Kubernetes, Docker, or other containerized environments with shared storage
 ---
 
+import { ExecutorDiagram } from '../../components/ExecutorDiagram';
+
 # Containerized Execution
 
 This guide covers running Agor's executor component in containerized environments like Kubernetes, enabling scalable and isolated execution of AI coding agents.
@@ -18,24 +20,7 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 
 ### The Executor Model
 
-```mermaid
-graph TB
-    Daemon["<b>Daemon — orchestration</b><br/>REST + WebSocket API (FeathersJS)<br/>database · auth · executor tokens"]
-    Local["<b>Local</b> (default)<br/><code>node executor --stdin</code>"]
-    Remote["<b>Containerized</b><br/><code>executor_command_template</code> via <code>sh -c</code>"]
-    Executor["<b>Executor — isolation boundary</b> (ephemeral)<br/>Harnesses: Claude Code · Codex · Gemini<br/>OpenCode · Copilot · Cursor<br/>Git mutations (clone · branch) · Terminals (Zellij + node-pty)"]
-
-    Daemon ==>|"spawn · typed JSON via stdin"| Local
-    Daemon ==>|"spawn · typed JSON via stdin"| Remote
-    Local --> Executor
-    Remote --> Executor
-    Executor -.->|"results + events via WebSocket"| Daemon
-
-    classDef trusted stroke:#34e6c4,stroke-width:1.5px;
-    classDef iso stroke:#e8c468,stroke-width:1.5px;
-    class Daemon trusted;
-    class Executor iso;
-```
+<ExecutorDiagram />
 
 The daemon owns orchestration and delegates all git **mutations** to the executor — it still runs read-only git probes (remote URL, default branch) and credential scrubbing itself. Each executor process handles a single command and exits, except terminal (Zellij) executors, which stay alive until closed.
 
