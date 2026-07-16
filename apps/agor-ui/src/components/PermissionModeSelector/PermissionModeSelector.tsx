@@ -283,6 +283,15 @@ export const getPermissionModeLabel = (
   mode: PermissionMode
 ): string => getModesForTool(tool).find((option) => option.mode === mode)?.label ?? mode;
 
+/** Full option metadata (label/icon/tone) for a mode, for chip-style rendering. */
+export const getPermissionModeMeta = (
+  tool: PermissionModeSelectorProps['agentic_tool'],
+  mode: PermissionMode
+): ModeOption | undefined => getModesForTool(tool).find((option) => option.mode === mode);
+
+export const getPermissionModeColor = (tone: ModeOption['tone'], token: GlobalToken): string =>
+  getModeColor(tone, token);
+
 const getModeColor = (tone: ModeOption['tone'], token: GlobalToken): string => {
   switch (tone) {
     case 'danger':
