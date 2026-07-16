@@ -21,6 +21,7 @@ import {
   generateId,
   insert,
   RepoRepository,
+  runWithTenantContext,
   sessions,
   shortId,
 } from '@agor/core/db';
@@ -49,6 +50,15 @@ const JWT_SECRET = 'test-jwt-secret-do-not-use-in-production';
  */
 function makeApp(): any {
   return { settings: { authentication: { secret: JWT_SECRET } } };
+}
+
+function mintSessionToken(
+  app: ReturnType<typeof makeApp>,
+  sessionId: SessionID,
+  userId: UserID,
+  tenantId = 'tenant-a'
+): Promise<string> {
+  return runWithTenantContext(tenantId, () => generateSessionToken(app, sessionId, userId));
 }
 
 async function seedSession(
@@ -110,7 +120,7 @@ describe('generateSessionToken', () => {
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
     const app = makeApp();
 
-    const token = await generateSessionToken(app, sessionId, 'user-1' as UserID);
+    const token = await mintSessionToken(app, sessionId, 'user-1' as UserID);
 
     const decoded = jwt.verify(token, JWT_SECRET, {
       audience: MCP_TOKEN_AUDIENCE,
@@ -118,6 +128,7 @@ describe('generateSessionToken', () => {
 
     expect(decoded.sub).toBe(sessionId);
     expect(decoded.uid).toBe('user-1');
+    expect(decoded.tid).toBe('tenant-a');
     expect(decoded.aud).toBe(MCP_TOKEN_AUDIENCE);
     expect(decoded.iss).toBe(MCP_TOKEN_ISSUER);
     expect(typeof decoded.jti).toBe('string');
@@ -134,12 +145,12 @@ describe('generateSessionToken', () => {
       initMcpTokens({ db, expirationMs: 60_000 });
       const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
 
-      const t1 = await generateSessionToken(makeApp(), sessionId, 'u' as UserID);
-      const t2 = await generateSessionToken(makeApp(), sessionId, 'u' as UserID);
+      const t1 = await mintSessionToken(makeApp(), sessionId, 'u' as UserID);
+      const t2 = await mintSessionToken(makeApp(), sessionId, 'u' as UserID);
       expect(t2).toBe(t1);
 
       vi.setSystemTime(new Date(baseMs + 31_000));
-      const t3 = await generateSessionToken(makeApp(), sessionId, 'u' as UserID);
+      const t3 = await mintSessionToken(makeApp(), sessionId, 'u' as UserID);
       const d1 = jwt.decode(t1) as { jti?: string };
       const d3 = jwt.decode(t3) as { jti?: string };
 
@@ -154,9 +165,30 @@ describe('generateSessionToken', () => {
   dbTest('throws when the session does not exist', async ({ db }) => {
     initMcpTokens({ db });
     const missingSessionId = generateId() as SessionID;
-    await expect(generateSessionToken(makeApp(), missingSessionId, 'u1' as UserID)).rejects.toThrow(
+    await expect(mintSessionToken(makeApp(), missingSessionId, 'u1' as UserID)).rejects.toThrow(
       /not found/
     );
+  });
+
+  dbTest('fails closed when issuance has no tenant context', async ({ db }) => {
+    initMcpTokens({ db });
+    const sessionId = await seedSession(db);
+
+    await expect(generateSessionToken(makeApp(), sessionId, 'u1' as UserID)).rejects.toThrow(
+      /missing active tenant context/
+    );
+  });
+
+  dbTest('keeps cached tokens distinct across tenant bindings', async ({ db }) => {
+    initMcpTokens({ db });
+    const sessionId = await seedSession(db);
+
+    const tenantA = await mintSessionToken(makeApp(), sessionId, 'u1' as UserID, 'tenant-a');
+    const tenantB = await mintSessionToken(makeApp(), sessionId, 'u1' as UserID, 'tenant-b');
+
+    expect(tenantA).not.toBe(tenantB);
+    expect((jwt.decode(tenantA) as { tid?: string }).tid).toBe('tenant-a');
+    expect((jwt.decode(tenantB) as { tid?: string }).tid).toBe('tenant-b');
   });
 });
 
@@ -168,12 +200,13 @@ describe('validateSessionToken', () => {
   dbTest('accepts a freshly minted token', async ({ db }) => {
     initMcpTokens({ db });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-    const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
+    const token = await mintSessionToken(makeApp(), sessionId, 'u1' as UserID);
 
     const ctx = await validateSessionToken(makeApp(), token);
     expect(ctx).not.toBeNull();
     expect(ctx?.sessionId).toBe(sessionId);
     expect(ctx?.userId).toBe('u1');
+    expect(ctx?.tenantId).toBe('tenant-a');
     expect(typeof ctx?.jti).toBe('string');
   });
 
@@ -187,7 +220,7 @@ describe('validateSessionToken', () => {
     try {
       initMcpTokens({ db, expirationMs: 60_000 });
       const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-      const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
+      const token = await mintSessionToken(makeApp(), sessionId, 'u1' as UserID);
 
       // Still valid right after issuance.
       expect(await validateSessionToken(makeApp(), token)).not.toBeNull();
@@ -204,7 +237,7 @@ describe('validateSessionToken', () => {
   dbTest('rejects tokens for sessions that have been deleted', async ({ db }) => {
     initMcpTokens({ db });
     const sessionId = await seedSession(db, { sessionId: generateId() as SessionID });
-    const token = await generateSessionToken(makeApp(), sessionId, 'u1' as UserID);
+    const token = await mintSessionToken(makeApp(), sessionId, 'u1' as UserID);
 
     // Simulate the session being deleted out from under us.
     await deleteFrom(db, sessions).where(eq(sessions.session_id, sessionId)).run();
@@ -223,6 +256,7 @@ describe('validateSessionToken', () => {
       {
         sub: sessionId,
         uid: 'u1',
+        tid: 'tenant-a',
         aud: MCP_TOKEN_AUDIENCE,
         iss: 'not-agor',
         iat: nowSec,
@@ -266,6 +300,7 @@ describe('validateSessionToken', () => {
       {
         sub: sessionId,
         uid: 'u1',
+        tid: 'tenant-a',
         aud: MCP_TOKEN_AUDIENCE,
         iss: MCP_TOKEN_ISSUER,
         jti: generateId(),
@@ -287,6 +322,7 @@ describe('validateSessionToken', () => {
       {
         sub: sessionId,
         uid: 'u1',
+        tid: 'tenant-a',
         aud: MCP_TOKEN_AUDIENCE,
         iss: MCP_TOKEN_ISSUER,
         iat: nowSec,
@@ -299,4 +335,19 @@ describe('validateSessionToken', () => {
 
     expect(await validateSessionToken(makeApp(), forged)).toBeNull();
   });
+
+  dbTest(
+    'rejects replay against a different expected tenant before session lookup',
+    async ({ db }) => {
+      initMcpTokens({ db });
+      const sessionId = await seedSession(db);
+      const token = await mintSessionToken(makeApp(), sessionId, 'u1' as UserID, 'tenant-a');
+
+      expect(await validateSessionToken(makeApp(), token, 'tenant-b')).toBeNull();
+      expect(await validateSessionToken(makeApp(), token, 'tenant-a')).toMatchObject({
+        sessionId,
+        tenantId: 'tenant-a',
+      });
+    }
+  );
 });

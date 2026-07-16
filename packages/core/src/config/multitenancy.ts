@@ -138,24 +138,36 @@ export function resolveTenantContext(
 ): TenantContext {
   const resolved = 'static_tenant_id' in config ? config : resolveMultiTenancyConfig(config);
   const params = input.params;
-  if (params?.tenant) return params.tenant;
+  const candidates: TenantContext[] = [];
+  const paramsTenantId = normalizeTenantId(params?.tenant?.tenant_id);
+  if (paramsTenantId) {
+    candidates.push({ tenant_id: paramsTenantId, source: params?.tenant?.source ?? 'explicit' });
+  }
   const explicit = normalizeTenantId(params?.tenant_id);
-  if (explicit) return { tenant_id: explicit, source: 'explicit' };
+  if (explicit) candidates.push({ tenant_id: explicit, source: 'explicit' });
 
   if (resolved.mode === 'static') {
-    return { tenant_id: resolved.static_tenant_id, source: 'static' };
+    candidates.push({ tenant_id: resolved.static_tenant_id, source: 'static' });
+  } else {
+    const claimTenant =
+      readClaim(input.authPayload, resolved.auth_claim) ??
+      readClaim(readAuthenticationPayload(params?.authentication), resolved.auth_claim) ??
+      readClaim(params?.user, resolved.auth_claim);
+    if (claimTenant) candidates.push({ tenant_id: claimTenant, source: 'auth_claim' });
+
+    const headerTenant =
+      readHeader(input.headers, resolved.trusted_header) ??
+      readHeader(params?.headers, resolved.trusted_header);
+    if (headerTenant) candidates.push({ tenant_id: headerTenant, source: 'trusted_header' });
   }
 
-  const claimTenant =
-    readClaim(input.authPayload, resolved.auth_claim) ??
-    readClaim(readAuthenticationPayload(params?.authentication), resolved.auth_claim) ??
-    readClaim(params?.user, resolved.auth_claim);
-  if (claimTenant) return { tenant_id: claimTenant, source: 'auth_claim' };
-
-  const headerTenant =
-    readHeader(input.headers, resolved.trusted_header) ??
-    readHeader(params?.headers, resolved.trusted_header);
-  if (headerTenant) return { tenant_id: headerTenant, source: 'trusted_header' };
+  if (candidates.length > 0) {
+    const tenantId = candidates[0].tenant_id;
+    if (candidates.some((candidate) => candidate.tenant_id !== tenantId)) {
+      throw new TenantResolutionError('Conflicting tenant identities');
+    }
+    return candidates[0];
+  }
 
   throw new TenantResolutionError('Missing tenant context for multi_tenancy.required_from_auth');
 }

@@ -23,6 +23,15 @@ describe('multi-tenancy config and tenant resolution', () => {
     ).toEqual({ tenant_id: 'acme', source: 'static' });
   });
 
+  it('rejects an explicit tenant that conflicts with static mode', () => {
+    expect(() =>
+      resolveTenantContext(
+        { multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-a' } },
+        { params: { tenant_id: 'tenant-b' } }
+      )
+    ).toThrow(/Conflicting tenant identities/);
+  });
+
   it('rejects required_from_auth on SQLite because SQLite has no tenant columns/RLS', () => {
     vi.stubEnv('AGOR_DB_DIALECT', '');
     vi.stubEnv('DATABASE_URL', '');
@@ -80,6 +89,24 @@ describe('multi-tenancy config and tenant resolution', () => {
       { headers: { 'X-Agor-Tenant-Id': 'tenant-b' } }
     );
     expect(ctx).toEqual({ tenant_id: 'tenant-b', source: 'trusted_header' });
+  });
+
+  it('rejects conflicting authenticated and trusted-header tenant identities', () => {
+    expect(() =>
+      resolveTenantContext(
+        {
+          multi_tenancy: {
+            mode: 'required_from_auth',
+            auth_claim: 'tenant_id',
+            trusted_header: 'x-agor-tenant-id',
+          },
+        },
+        {
+          authPayload: { tenant_id: 'tenant-a' },
+          headers: { 'x-agor-tenant-id': 'tenant-b' },
+        }
+      )
+    ).toThrow(/Conflicting tenant identities/);
   });
 
   it('fails closed in required_from_auth mode when tenant context is missing', () => {
