@@ -320,7 +320,22 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         </Flex>
       }
     >
-      <Form form={form} layout="vertical" style={{ marginTop: 16 }} preserve={false}>
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        style={{ marginTop: 16 }}
+        // Render the required mark as a suffix ("Label *", before any info icon)
+        // rather than antd's default "* Label" prefix.
+        requiredMark={(label, { required }) => (
+          <>
+            {label}
+            {required && (
+              <span style={{ color: token.colorError, marginInlineStart: token.marginXXS }}>*</span>
+            )}
+          </>
+        )}
+      >
         {/* Agent Selection — dense tiles (pick who you're talking to first) */}
         <Form.Item label="Coding Agent" required>
           <AgentSelectionGrid

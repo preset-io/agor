@@ -69,6 +69,13 @@ describe('NewSessionModal create-button gating', { timeout: 10_000 }, () => {
     expect(screen.getByRole('button', { name: 'Create Session' })).toBeEnabled();
   });
 
+  it('renders the required mark as a suffix ("Coding Agent *"), not a prefix', () => {
+    renderModal();
+    const label = screen.getByText('Coding Agent').closest('label') as HTMLElement;
+    // Asterisk follows the label text rather than antd's default "* Coding Agent".
+    expect(label.textContent?.replace(/\s+/g, ' ').trim()).toMatch(/Coding Agent\s*\*$/);
+  });
+
   it('disables Create with a tooltip when the configuration cannot resolve', async () => {
     renderModal();
     const button = screen.getByRole('button', { name: 'Create Session' });
