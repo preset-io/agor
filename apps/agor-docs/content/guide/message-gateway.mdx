@@ -10,31 +10,31 @@ heroImage: '/screenshots/marketing/agor-marketing-slack-thread.png'
 
 **Security — Think Before Enabling**
 
-A Message Gateway channel opens an external pathway (Slack DM, GitHub `@mention`) that can prompt agents holding your branch's full surface area: code, MCP servers, env vars, and any credentials in scope. Worth thinking through before you flip it on, but not categorically dangerous.
+A Message Gateway channel opens an external pathway (Slack DM, GitHub `@mention`, Shortcut comment) that can prompt agents holding your branch's full surface area: code, MCP servers, env vars, and any credentials in scope. Worth thinking through before you flip it on, but not categorically dangerous.
 
 Things working in your favor:
 
-- **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub mentions are aligned via `user_map` (login → email) or the sender's public GitHub email. When a match exists, the spawned session is attributed to that real Agor user — so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins).
+- **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub and Shortcut mentions are aligned via an explicit `user_map` or the sender's platform email. When a match exists, the spawned session is attributed to that real Agor user — so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins).
 - **Encrypted credentials at rest.** Bot tokens, app tokens, and private keys are stored encrypted in the daemon database.
-- **Outbound-only transport.** Slack uses Socket Mode and GitHub uses API polling — no public webhook URLs to defend.
+- **Outbound-only transport.** Slack uses Socket Mode; GitHub and Shortcut use API polling. None of them require a public webhook URL.
 - **Per-channel agent config.** Permission modes, model, and MCP server attachments are scoped to the channel, not global.
 
 Things that still warrant caution:
 
-- **Channels open external pathways into agent context.** Anyone who can DM the bot (or `@mention` it on a watched repo) can ask the agent to read, write, or execute code on the target branch. If the channel runs in `trust` mode with broad MCP access, that pathway is effectively a remote prompt seat — treat it as such.
-- **Restrict who can reach the bot.** Limit Slack DM scope (private workspace or app distribution settings); narrow GitHub `watch_repos` to repos where mentions are intended.
+- **Channels open external pathways into agent context.** Anyone who can DM the bot or `@mention` it on a watched GitHub repo or Shortcut story can ask the agent to read, write, or execute code on the target branch. If the channel runs in `trust` mode with broad MCP access, that pathway is effectively a remote prompt seat — treat it as such.
+- **Restrict who can reach the bot.** Limit Slack DM scope (private workspace or app distribution settings), narrow GitHub `watch_repos`, and use Shortcut's search scope to constrain which stories can summon the assistant.
 - **Use dedicated branches.** Don't point channels at branches holding production secrets. Create isolated branches scoped to gateway use.
 - **Pick the right permission mode.** `supervised` or `manual` modes preserve human-in-the-loop on tool calls; `trust` is fine for bounded, well-understood automations but removes that gate.
 - **Mind the [Unix isolation mode](/guide/multiplayer-unix-isolation).** In `simple` mode the agent runs as the daemon user; in `strict` mode it runs as the matched Agor user's Unix identity, which is what you want when channels span teams.
-- **Rotate tokens.** Bot tokens, app tokens, private keys, and webhook secrets should be rotated like any other secret.
+- **Rotate tokens.** Bot tokens, app tokens, API tokens, private keys, and webhook secrets should be rotated like any other secret.
 
 > **The mental model:** a gateway channel is a remote terminal into an agent that holds the same authority as a human prompting that branch. Configure who can reach it, what it can do, and which identity it runs as — and the rest is normal Agor surface area.
 
 </div>
 
-The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack bot in a channel thread or mention `@agor` on a GitHub PR, and Agor spins up a coding session on the right branch with the right agent — then routes responses back to the platform. In Slack channels, every prompt requires an explicit bot mention; Agor catches the bot up on intervening thread replies when it is mentioned again.
+The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack bot in a channel thread, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent — then routes responses back to the platform. In Slack channels, every prompt requires an explicit bot mention; Agor catches the bot up on intervening thread replies when it is mentioned again.
 
-> Currently supports **Slack**, **GitHub**, and **Microsoft Teams**. Discord, WhatsApp, and Telegram connectors are planned.
+> Currently supports **Slack**, **GitHub**, **Shortcut**, and **Microsoft Teams**. Discord, WhatsApp, and Telegram connectors are planned.
 
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
@@ -57,7 +57,7 @@ You can create multiple channels for the same or different branches. For example
 - **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review branch, trust mode, no MCP servers
 - **"Codex Runner"** — Codex on a `superset-frontend` branch for quick JS tasks
 
-Gateway channels keep an internal per-channel key for Agor's generic inbound endpoint, but supported integrations usually do not require you to copy it anywhere. The Slack integration uses Socket Mode and the GitHub integration uses API polling — both are outbound-only, so no public webhook URLs are needed.
+Gateway channels keep an internal per-channel key for Agor's generic inbound endpoint, but supported integrations usually do not require you to copy it anywhere. Slack uses Socket Mode, while GitHub and Shortcut use API polling; no public webhook URL is needed for those connectors.
 
 ## How It Works
 
@@ -262,6 +262,50 @@ When mentioned on an issue:
 
 With a capable model (like Claude Opus) and Agor MCP tools available, even a minimal prompt produces good results — the agent figures out how to use branches, spawn sessions, and interact with GitHub. Over time, the teammate learns the codebase, team conventions, and review patterns across PRs.
 
+## Setting Up Shortcut Integration
+
+### How It Works
+
+When someone mentions the configured assistant in a Shortcut story comment, Agor creates or resumes a session for that comment thread. It immediately posts a 👀 acknowledgement, adds the Agor session link, and replaces that acknowledgement with the assistant's final response when the turn completes.
+
+Key behavior:
+
+- **Polling, not webhooks** — Agor polls the Shortcut API every 15 seconds by default, so the daemon does not need a public endpoint.
+- **Threaded sessions** — Each Shortcut comment thread maps to one Agor session. Later mentions in the same thread continue that session.
+- **Member identity** — The API token's Shortcut member is the default mention target. You can override the agent member ID when the token belongs to a different service account.
+- **Per-user attribution** — With **Align Shortcut users** enabled, Agor first checks the channel's member-ID-to-email map, then the member's Shortcut email. Unmatched senders are rejected instead of running as another user.
+- **Last-message-only responses** — Intermediate progress stays in Agor; only the assistant's final message is written back to Shortcut.
+
+### 1. Create a Shortcut API Token
+
+1. In Shortcut, open **Settings → API Tokens**.
+2. Generate a token for the Shortcut member that people should mention as the assistant.
+3. Copy the token. Treat it like a password; Agor encrypts it at rest after the channel is saved.
+
+### 2. Create the Channel in Agor
+
+1. Open **Settings → Gateway Channels → Add Channel**.
+2. Select **Shortcut**, choose a name and target branch, then continue to the connector settings.
+3. Paste the **API Token**.
+4. Leave **Agent Member ID** blank to use the token's own member, or enter a different Shortcut member ID to override the mention target.
+5. Click **Test connection**. The probe validates the token and resolves the member's mention name before you save.
+6. Configure discovery as needed:
+   - **Require @mention** — Keep enabled unless every new comment in the search scope should prompt the assistant.
+   - **Mention Name** — Normally auto-resolved. Set it only when the discovery handle needs an explicit override.
+   - **Search Scope** — Add a Shortcut search expression such as `team:"Backend"` to constrain the stories this channel watches. Use non-overlapping scopes when multiple channels watch the same workspace.
+   - **Poll Interval** — Defaults to 15 seconds; increase it if you need to reduce API traffic.
+7. Choose the identity behavior:
+   - Enable **Align Shortcut users** to run each session as the matching Agor user.
+   - Add **User Map** entries when a member's Shortcut email differs from their Agor email. Keys are Shortcut member IDs and values are Agor email addresses.
+   - If alignment is disabled, select the single Agor user under whose identity all channel sessions run.
+8. Save the channel. Polling starts immediately when the channel is enabled.
+
+### 3. Mention the Assistant
+
+Add a comment to a story and `@mention` the Shortcut member resolved during setup. Agor posts an acknowledgement and session link, runs the assistant on the target branch, then edits the acknowledgement into the final threaded response.
+
+Follow-up mentions in the same Shortcut thread continue the existing session. Comments without a mention are ignored while **Require @mention** is enabled.
+
 ## Setting Up Microsoft Teams Integration
 
 ### How It Works
@@ -336,7 +380,7 @@ The gateway is built as a set of loosely coupled components:
 - **Gateway Service** (`/gateway`) — Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
 - **Gateway Channels** (`/gateway-channels`) — CRUD for channel configurations with encrypted credential storage.
 - **Thread-Session Map** (`/thread-session-map`) — Persists the mapping between platform thread IDs and Agor session IDs.
-- **Connector Layer** — Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `GitHubConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `startListening()`.
+- **Connector Layer** — Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `GitHubConnector` and `ShortcutConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `startListening()`.
 - **Outbound Hook** — FeathersJS `after.create` hook on the messages service. Fire-and-forget; never blocks message creation.
 
 ### Adding a New Platform
@@ -391,6 +435,14 @@ The `blocks` field is opaque platform-specific data — currently only the Slack
 - **Mentions detected but no session created.** Check that `mention_name` matches your app's slug (default: `agor`). Mentions inside code blocks are ignored by design.
 - **Response posted as wrong user.** GitHub comments should appear as the app's bot identity (e.g., `agor[bot]`). If comments appear as a human user, something is bypassing the connector and using a personal `GITHUB_TOKEN` instead.
 - **Rate limit errors.** At 15s polling with 5 repos, you use ~1,200 req/hour out of 5,000. If you're monitoring many repos, increase `poll_interval_ms` or use `watch_repos` to narrow scope.
+
+### Shortcut
+
+- **Connection test cannot resolve the assistant.** Verify the API token and, if supplied, the **Agent Member ID**. Leaving the member ID blank uses the token's own Shortcut member.
+- **Mentions are not detected.** Confirm **Require @mention** is enabled, the configured mention name matches the Shortcut member, and **Search Scope** includes the story. Check daemon logs for `[shortcut] Starting poll loop` or search failures.
+- **A commenter is rejected as unlinked.** With user alignment enabled, the commenter's Shortcut email must match an Agor account. Add their Shortcut member ID and Agor email to **User Map** when the emails differ.
+- **Multiple assistants respond to one comment.** Give channels non-overlapping **Search Scope** expressions so a story is discovered by exactly one channel for that mention target.
+- **API errors or delayed responses.** Test the token again, check Shortcut API availability, and increase the poll interval if the workspace generates enough activity to approach API limits.
 
 ### Teams
 

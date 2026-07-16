@@ -2650,9 +2650,8 @@ export class GatewayService {
    * Flush the buffered last message for a session (GitHub / Shortcut).
    *
    * Called when a session transitions to idle (turn complete). Posts the last
-   * buffered message as a PR/issue/story comment — GitHub edits the
-   * "Processing..." comment; Shortcut posts a new threaded reply. If no
-   * buffered message exists, this is a no-op.
+   * buffered message as a PR/issue/story comment by editing the connector's
+   * processing acknowledgement. If no buffered message exists, this is a no-op.
    */
   async flushOutboundBuffer(sessionId: string): Promise<void> {
     const bufferedMessage = this.lastMessageBuffer.get(sessionId);
