@@ -14,8 +14,8 @@ import {
   mapToCodexPermissionConfig,
 } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
-import { Collapse, Form, Input, Modal, Typography } from 'antd';
-import { useEffect, useState } from 'react';
+import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme } from 'antd';
+import { useCallback, useEffect, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
@@ -97,13 +97,33 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
   const [form] = Form.useForm();
+  const { token } = theme.useToken();
   const { showError } = useThemedMessage();
   const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
   const [isCreating, setIsCreating] = useState(false);
   const [envVarNames, setEnvVarNames] = useState<string[]>([]);
+  const [configValidity, setConfigValidity] = useState<{ valid: boolean; reason?: string }>({
+    valid: true,
+  });
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
     useComposerAttachments({ sessionId: null, showError });
-  const isFormValid = !!selectedAgent;
+
+  // Stable callback so the chip row's reporting effect doesn't loop.
+  const handleConfigValidity = useCallback((valid: boolean, reason?: string) => {
+    setConfigValidity((prev) =>
+      prev.valid === valid && prev.reason === reason ? prev : { valid, reason }
+    );
+  }, []);
+
+  // The only genuinely-required input is an agent (always preselected); the
+  // configuration is the one thing that can become unresolvable (admin edge).
+  // Everything else defaults, so the happy path needs zero input.
+  const missingReason = !selectedAgent
+    ? 'Select an agent to continue'
+    : !configValidity.valid
+      ? configValidity.reason
+      : undefined;
+  const canCreate = !missingReason;
 
   const watchedModelConfig = Form.useWatch('modelConfig', form) as ModelConfig | undefined;
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
@@ -276,16 +296,29 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     <Modal
       title={branch ? `New Session · ${branch.name}` : 'Create New Session'}
       open={open}
-      onOk={handleCreate}
       onCancel={handleCancel}
-      okText="Create Session"
-      cancelText="Cancel"
       width={700}
       maskClosable={false}
-      okButtonProps={{
-        disabled: !isFormValid || isCreating,
-        loading: isCreating,
-      }}
+      footer={
+        <Flex justify="flex-end" gap={token.marginXS}>
+          <Button onClick={handleCancel}>Cancel</Button>
+          {/* Disabled buttons don't emit hover events, so the wrapper span carries
+              the Tooltip that explains what's blocking creation. */}
+          <Tooltip title={missingReason}>
+            <span style={{ display: 'inline-block' }}>
+              <Button
+                type="primary"
+                onClick={handleCreate}
+                disabled={!canCreate || isCreating}
+                loading={isCreating}
+                style={canCreate ? undefined : { pointerEvents: 'none' }}
+              >
+                Create Session
+              </Button>
+            </span>
+          </Tooltip>
+        </Flex>
+      }
     >
       <Form form={form} layout="vertical" style={{ marginTop: 16 }} preserve={false}>
         {/* Agent Selection — dense tiles (pick who you're talking to first) */}
@@ -303,7 +336,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
         {/* Session Title */}
         <Form.Item
           name="title"
-          label="Title (optional)"
+          label="Title"
           tooltip="Auto-generated from your first prompt when left blank."
         >
           <Input placeholder="e.g., Add authentication system" />
@@ -316,13 +349,14 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           currentUser={currentUser}
           client={client}
           enableSaveAsDefault
+          onConfigValidityChange={handleConfigValidity}
         />
 
         {/* Initial Prompt */}
         <Form.Item
           name="initialPrompt"
-          label="Initial Prompt (optional)"
-          tooltip="Sent as the first message when the session starts."
+          label="Initial Prompt"
+          tooltip="Optional — sent as the first message when the session starts. Sessions can also be created idle and prompted later."
         >
           <AutocompleteTextarea
             value={form.getFieldValue('initialPrompt') || ''}

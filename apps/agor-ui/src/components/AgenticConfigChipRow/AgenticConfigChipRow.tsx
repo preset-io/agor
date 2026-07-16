@@ -54,6 +54,12 @@ export interface AgenticConfigChipRowProps {
   fieldName?: string;
   /** Offer "Save as my default" under the chips while Custom is active. */
   enableSaveAsDefault?: boolean;
+  /**
+   * Reports whether the current source can actually resolve to a session
+   * configuration. It only becomes false in the admin edge where inline config
+   * is disallowed and no preset/default is available. `reason` explains why.
+   */
+  onConfigValidityChange?: (valid: boolean, reason?: string) => void;
 }
 
 const EFFORT_LABELS: Record<EffortLevel, string> = {
@@ -106,6 +112,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   currentUser,
   fieldName = 'agenticToolPresetId',
   enableSaveAsDefault = false,
+  onConfigValidityChange,
 }) => {
   const { token } = theme.useToken();
   const form = Form.useFormInstance();
@@ -163,6 +170,30 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const hasUserDefault = currentUser ? Boolean(userSelection ?? userConfigBlob) : true;
   const workspacePreset = presets.find((preset) => preset.is_default);
   const isInline = source === INLINE_AGENTIC_CONFIGURATION;
+
+  // Can the selected source actually resolve to a config? Mirrors the daemon's
+  // create logic (assertInlineAgenticConfigurationAllowed / reference resolution).
+  const configResolvable = (() => {
+    if (loading) return true; // optimistic until presets load
+    if (presets.some((preset) => preset.preset_id === source)) return true;
+    if (source === USER_DEFAULT_AGENTIC_CONFIGURATION) {
+      if (userSelection?.source === 'preset') return true;
+      if (userSelection?.source === 'workspace_default') return inlineAllowed || !!workspacePreset;
+      return inlineAllowed; // inline user default
+    }
+    if (source === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION)
+      return inlineAllowed || !!workspacePreset;
+    return inlineAllowed; // inline / not-yet-resolved source
+  })();
+
+  useEffect(() => {
+    onConfigValidityChange?.(
+      configResolvable,
+      configResolvable
+        ? undefined
+        : 'This agent requires an admin-managed preset, and none is configured for this workspace'
+    );
+  }, [configResolvable, onConfigValidityChange]);
 
   // Keep the source valid — mirrors the daemon's resolution precedence.
   useEffect(() => {
