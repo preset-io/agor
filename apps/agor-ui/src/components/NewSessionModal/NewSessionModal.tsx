@@ -302,7 +302,30 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           />
         )}
 
-        {/* Session Title — name the thing first */}
+        {/* Agent Selection — dense tiles (pick who you're talking to first) */}
+        <Form.Item label="Coding Agent" required>
+          <AgentSelectionGrid
+            agents={availableAgents}
+            selectedAgentId={selectedAgent}
+            onSelect={setSelectedAgent}
+            columns={3}
+            size="small"
+            showComparisonLink={false}
+          />
+        </Form.Item>
+
+        {/* Configuration — resolved config as editable chips under the tiles */}
+        <Form.Item label="Configuration">
+          <AgenticConfigChipRow
+            tool={(selectedAgent as AgenticToolName) || 'claude-code'}
+            mcpServerById={mcpServerById}
+            currentUser={currentUser}
+            client={client}
+            enableSaveAsDefault
+          />
+        </Form.Item>
+
+        {/* Session Title */}
         <Form.Item name="title" label="Title (optional)">
           <Input placeholder="e.g., Add authentication system" />
         </Form.Item>
@@ -332,29 +355,6 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
             />
           </div>
         )}
-
-        {/* Agent Selection — dense tiles */}
-        <Form.Item label="Coding Agent" required>
-          <AgentSelectionGrid
-            agents={availableAgents}
-            selectedAgentId={selectedAgent}
-            onSelect={setSelectedAgent}
-            columns={3}
-            size="small"
-            showComparisonLink={false}
-          />
-        </Form.Item>
-
-        {/* Configuration — resolved config as editable chips under the tiles */}
-        <Form.Item label="Configuration">
-          <AgenticConfigChipRow
-            tool={(selectedAgent as AgenticToolName) || 'claude-code'}
-            mcpServerById={mcpServerById}
-            currentUser={currentUser}
-            client={client}
-            enableSaveAsDefault
-          />
-        </Form.Item>
 
         {/* Advanced Configuration (Collapsible) */}
         <Collapse
