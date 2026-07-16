@@ -14,16 +14,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import {
-  type ResolvedMultiTenancyConfig,
-  resolveMultiTenancyConfig,
-  resolveTenantContext,
-  TenantResolutionError,
-} from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { shortId, UserApiKeysRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { SessionID, UserID } from '@agor/core/types';
+import type { SessionID, TenantContext, UserID } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -61,6 +55,13 @@ function mcpRequestDebug(...args: unknown[]): void {
   if (DEBUG_MCP_REQUESTS) {
     console.debug(...args);
   }
+}
+
+function tenantFromAuthenticatedUser(user: AuthenticatedUser): TenantContext | undefined {
+  const tenantId = typeof user.tenant_id === 'string' ? user.tenant_id.trim() : '';
+  return tenantId
+    ? { tenant_id: tenantId as TenantContext['tenant_id'], source: 'auth_claim' }
+    : undefined;
 }
 
 /**
@@ -362,8 +363,7 @@ function createMcpServer(ctx: McpContext, toolSearchEnabled: boolean): McpServer
 export function setupMCPRoutes(
   app: Application,
   db: TenantScopeAwareDatabase,
-  toolSearchEnabled = true,
-  multiTenancyConfig?: ResolvedMultiTenancyConfig
+  toolSearchEnabled = true
 ): void {
   // Eagerly build the registry at startup so first request isn't slower
   if (toolSearchEnabled) {
@@ -372,15 +372,6 @@ export function setupMCPRoutes(
   }
 
   const personalApiKeys = new UserApiKeysRepository(db);
-
-  // Multi-tenancy config, injected by the caller. REST/socket requests acquire
-  // their tenant scope from the tenant around-hook (see index.ts `requireAuth`);
-  // MCP requests reach service methods (and custom methods like
-  // `branches.startEnvironment`) outside that hook, so we mirror the hook at the
-  // MCP boundary below — resolving the tenant per request and running dispatch
-  // inside its database scope. Falls back to the static default when a caller
-  // (e.g. a unit test) doesn't inject one.
-  const multiTenancy = multiTenancyConfig ?? resolveMultiTenancyConfig({});
 
   type StatefulTransportEntry = {
     transport: StreamableHTTPServerTransport;
@@ -559,6 +550,7 @@ export function setupMCPRoutes(
         }
       }
 
+      const tenant = tenantFromAuthenticatedUser(authenticatedUser);
       const baseServiceParams: Pick<
         AuthenticatedParams,
         'user' | 'authenticated' | 'provider' | 'tenant'
@@ -567,34 +559,11 @@ export function setupMCPRoutes(
           user_id: authenticatedUser.user_id,
           email: authenticatedUser.email,
           role: authenticatedUser.role,
-          // Carry the user's tenant claim so required_from_auth resolution below
-          // can read it — REST's api-key strategy passes the full user for the
-          // same reason. Undefined/no-op in static mode.
-          ...(authenticatedUser.tenant_id ? { tenant_id: authenticatedUser.tenant_id } : {}),
         },
         authenticated: true,
         provider: 'mcp',
+        ...(tenant ? { tenant } : {}),
       };
-
-      // Attach the app-level tenant context, mirroring the REST/socket tenant
-      // around-hook. Standard service calls made by tool handlers get their
-      // tenant scope from that hook per call, but custom methods invoked
-      // directly (e.g. `branches.startEnvironment`) bypass it and defer
-      // tenant-scoped executor work; `deferWithTenantDatabaseScope` re-enters
-      // the scope from `params.tenant.tenant_id`, so it must be set here or the
-      // deferred work throws "Missing tenant context". Static mode resolves the
-      // fixed tenant; cloud mode reads it from the authenticated user (401 if
-      // absent).
-      try {
-        baseServiceParams.tenant = resolveTenantContext(multiTenancy, {
-          params: baseServiceParams,
-        });
-      } catch (error) {
-        if (error instanceof TenantResolutionError) {
-          return res.status(401).json({ ...jsonRpcError(req, -32001, error.message) });
-        }
-        throw error;
-      }
 
       // Personal API key callers may optionally bind a current-session context
       // using a header/query param. Validate through the normal sessions

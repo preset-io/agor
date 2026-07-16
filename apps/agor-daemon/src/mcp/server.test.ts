@@ -297,8 +297,7 @@ describe('POST /mcp with personal API keys', () => {
 
   async function withMcpServer(
     services: Record<string, unknown>,
-    fn: (baseUrl: string) => Promise<void>,
-    multiTenancyConfig?: Parameters<typeof setupMCPRoutes>[4]
+    fn: (baseUrl: string) => Promise<void>
   ) {
     const webApp = express();
     webApp.use(express.json());
@@ -308,7 +307,7 @@ describe('POST /mcp with personal API keys', () => {
       return svc;
     };
 
-    setupMCPRoutes(webApp as never, {} as never, /* toolSearchEnabled */ false, multiTenancyConfig);
+    setupMCPRoutes(webApp as never, {} as never, /* toolSearchEnabled */ false);
 
     const httpServer = webApp.listen(0);
     try {
@@ -556,15 +555,7 @@ describe('POST /mcp with personal API keys', () => {
             tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
           })
         );
-      },
-      // Resolve from the user's claim (required_from_auth). In static mode our
-      // resolver returns the fixed tenant instead (source 'static') — covered by
-      // the static-mode test below.
-      {
-        mode: 'required_from_auth',
-        static_tenant_id: 'default',
-        auth_claim: 'tenant_id',
-      } as unknown as Parameters<typeof setupMCPRoutes>[4]
+      }
     );
   });
 
@@ -806,169 +797,5 @@ describe('POST /mcp with personal API keys', () => {
       const result = JSON.parse(parsed.result!.content![0].text);
       expect(result.user_id).toBe('user-1');
     });
-  });
-
-  // The MCP boundary must attach the app-level tenant to baseServiceParams the
-  // same way the REST/socket tenant around-hook does. Without it, custom methods
-  // like branches.startEnvironment defer executor work whose
-  // deferWithTenantDatabaseScope call can't resolve a tenant and throws.
-  it('attaches the resolved app tenant to baseServiceParams (static mode)', async () => {
-    await mockPersonalApiKeyUser();
-    const getUser = vi.fn(async () => ({
-      user_id: 'user-1',
-      email: 'alice@example.com',
-      role: 'member',
-    }));
-    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
-
-    await withMcpServer(
-      { users: { get: getUser }, sessions: { get: getSession } },
-      async (baseUrl) => {
-        const resp = await fetch(`${baseUrl}/mcp`, {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json, text/event-stream',
-            'Content-Type': 'application/json',
-            'X-API-Key': 'agor_sk_valid',
-            'X-Agor-Session-Id': 'session-short',
-          },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 3,
-            method: 'tools/call',
-            params: { name: 'agor_users_get_current', arguments: {} },
-          }),
-        });
-
-        expect(resp.status).toBe(200);
-        // The params that reach service calls (and, downstream, startEnvironment)
-        // carry the resolved tenant — this is what deferred executor work reads.
-        expect(getSession).toHaveBeenCalledWith(
-          'session-short',
-          expect.objectContaining({
-            tenant: expect.objectContaining({ tenant_id: 'default', source: 'static' }),
-          })
-        );
-      }
-    );
-  });
-
-  it('resolves the tenant from the authenticated user claim (required_from_auth boundary)', async () => {
-    await mockPersonalApiKeyUser();
-    // Counterpart to the negative case below: with a tenant claim present on the
-    // user, the boundary resolves it (source 'auth_claim') and threads it into
-    // downstream service params. This proves the negative test rejects for the
-    // right reason (no claim), not because the field is unconditionally dropped.
-    // (End-to-end required_from_auth MCP additionally needs the auth-flow
-    // users.get to be tenant-scoped — a separate concern, out of scope here.)
-    const cloudMultiTenancy = {
-      mode: 'required_from_auth',
-      static_tenant_id: 'default',
-      auth_claim: 'tenant_id',
-    } as unknown as Parameters<typeof setupMCPRoutes>[4];
-
-    const getUser = vi.fn(async () => ({
-      user_id: 'user-1',
-      email: 'alice@example.com',
-      role: 'member',
-      tenant_id: 'tenant-a',
-    }));
-    const getSession = vi.fn(async () => ({ session_id: 'session-full-id' }));
-
-    const webApp = express();
-    webApp.use(express.json());
-    (webApp as unknown as { service: (name: string) => unknown }).service = (name: string) => {
-      if (name === 'users') return { get: getUser };
-      if (name === 'sessions') return { get: getSession };
-      throw new Error(`Unexpected service lookup: ${name}`);
-    };
-
-    setupMCPRoutes(webApp as never, {} as never, /* toolSearchEnabled */ false, cloudMultiTenancy);
-
-    const httpServer = webApp.listen(0);
-    try {
-      const address = httpServer.address();
-      if (!address || typeof address === 'string') throw new Error('no listen address');
-      const resp = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json, text/event-stream',
-          'Content-Type': 'application/json',
-          'X-API-Key': 'agor_sk_valid',
-          'X-Agor-Session-Id': 'session-short',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 5,
-          method: 'tools/call',
-          params: { name: 'agor_users_get_current', arguments: {} },
-        }),
-      });
-
-      expect(resp.status).toBe(200);
-      expect(getSession).toHaveBeenCalledWith(
-        'session-short',
-        expect.objectContaining({
-          tenant: expect.objectContaining({ tenant_id: 'tenant-a', source: 'auth_claim' }),
-        })
-      );
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
-  });
-
-  it('rejects an MCP request whose tenant cannot be resolved in cloud mode (401)', async () => {
-    await mockPersonalApiKeyUser();
-    // A required_from_auth tenant that must come from an auth claim the user
-    // lacks — resolution fails and the request is refused before any tool runs.
-    const cloudMultiTenancy = {
-      mode: 'required_from_auth',
-      static_tenant_id: 'default',
-      auth_claim: 'tenant_id',
-    } as unknown as Parameters<typeof setupMCPRoutes>[4];
-
-    const webApp = express();
-    webApp.use(express.json());
-    const getUser = vi.fn(async () => ({
-      user_id: 'user-1',
-      email: 'alice@example.com',
-      role: 'member',
-    }));
-    (webApp as unknown as { service: (name: string) => unknown }).service = (name: string) => {
-      if (name !== 'users') throw new Error(`Unexpected service lookup: ${name}`);
-      return { get: getUser };
-    };
-
-    setupMCPRoutes(webApp as never, {} as never, /* toolSearchEnabled */ false, cloudMultiTenancy);
-
-    const httpServer = webApp.listen(0);
-    try {
-      const address = httpServer.address();
-      if (!address || typeof address === 'string') throw new Error('no listen address');
-      const resp = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json, text/event-stream',
-          'Content-Type': 'application/json',
-          'X-API-Key': 'agor_sk_valid',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 4,
-          method: 'tools/call',
-          params: { name: 'agor_users_get_current', arguments: {} },
-        }),
-      });
-
-      expect(resp.status).toBe(401);
-      const body = (await resp.json()) as { error?: { message?: string } };
-      expect(body.error?.message).toMatch(/tenant/i);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
   });
 });
