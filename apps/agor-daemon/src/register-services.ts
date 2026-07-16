@@ -1574,6 +1574,54 @@ async function registerMCPServices(
 
   app.service('mcp-servers/test-jwt').hooks({ before: { create: [ctx.requireAuth] } });
 
+  /**
+   * Some MCP servers (e.g. Google's Gmail/Calendar remote MCP servers) allow
+   * unauthenticated `initialize`/`tools/list` and only return 401 once a real
+   * tool is invoked (auth is enforced per tool-call, not at the handshake).
+   * A bare `initialize` probe misreads these as "no auth required". Before
+   * giving up, retry against a tool the server itself marks safe to call
+   * (`readOnlyHint: true`) so we don't risk side effects on write tools.
+   * Returns the 401 Response if one is found this way, otherwise null.
+   */
+  async function probeMcpAuthViaReadOnlyToolCall(mcpUrl: string): Promise<Response | null> {
+    try {
+      const listResponse = await fetch(mcpUrl, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!listResponse.ok) return null;
+
+      const listBody = (await listResponse.json()) as {
+        result?: { tools?: Array<{ name?: string; annotations?: { readOnlyHint?: boolean } }> };
+      };
+      const readOnlyTool = listBody.result?.tools?.find(
+        (tool) => tool.annotations?.readOnlyHint === true && typeof tool.name === 'string'
+      );
+      if (!readOnlyTool?.name) return null;
+
+      const callResponse = await fetch(mcpUrl, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'tools/call',
+          id: 2,
+          params: { name: readOnlyTool.name, arguments: {} },
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      return callResponse.status === 401 ? callResponse : null;
+    } catch (probeError) {
+      console.log(
+        '[OAuth Probe] Read-only tool-call fallback probe failed:',
+        probeError instanceof Error ? probeError.message : String(probeError)
+      );
+      return null;
+    }
+  }
+
   // OAuth 2.0/2.1 test endpoint (large — kept inline for now)
   app.use('/mcp-servers/test-oauth', {
     async create(
@@ -1605,6 +1653,17 @@ async function registerMCPServices(
             success: false,
             error: `Failed to connect to MCP server: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`,
           };
+        }
+
+        if (probeResponse.status !== 401) {
+          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(data.mcp_url);
+          if (fallbackProbe) {
+            console.log(
+              '[OAuth Test] Handshake-level probe returned no auth requirement; ' +
+                'a read-only tool call did — server defers auth to tool invocation.'
+            );
+            probeResponse = fallbackProbe;
+          }
         }
 
         const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
@@ -1945,12 +2004,23 @@ async function registerMCPServices(
           }
         }
 
-        const probeResponse = await fetch(data.mcp_url, {
+        let probeResponse = await fetch(data.mcp_url, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
           body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
           signal: AbortSignal.timeout(15_000),
         });
+
+        if (probeResponse.status !== 401) {
+          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(data.mcp_url);
+          if (fallbackProbe) {
+            console.log(
+              '[OAuth Start] Handshake-level probe returned no auth requirement; ' +
+                'a read-only tool call did — server defers auth to tool invocation.'
+            );
+            probeResponse = fallbackProbe;
+          }
+        }
 
         if (probeResponse.status !== 401) {
           return {
