@@ -9,6 +9,33 @@ const CODE = '#7fe8df';
 const MUTED = '#9fb4ae';
 const INK = '#eafff9';
 
+// Corner radius shared by every bend, so all four loop corners match.
+// 0 = sharp rectangle · large = more circular.
+const R = 26;
+
+// Orthogonal path through waypoints with a uniform rounded corner at each
+// interior point (quadratic bend of radius R). Keeps every corner identical.
+function roundPath(pts: Array<[number, number]>): string {
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1];
+    const [cx, cy] = pts[i];
+    const [nx, ny] = pts[i + 1];
+    const inLen = Math.hypot(cx - px, cy - py);
+    const outLen = Math.hypot(nx - cx, ny - cy);
+    const ri = Math.min(R, inLen / 2);
+    const ro = Math.min(R, outLen / 2);
+    const ex = cx - ((cx - px) / inLen) * ri;
+    const ey = cy - ((cy - py) / inLen) * ri;
+    const xx = cx + ((nx - cx) / outLen) * ro;
+    const xy = cy + ((ny - cy) / outLen) * ro;
+    d += ` L${ex.toFixed(1)},${ey.toFixed(1)} Q${cx},${cy} ${xx.toFixed(1)},${xy.toFixed(1)}`;
+  }
+  const [lx, ly] = pts[pts.length - 1];
+  d += ` L${lx},${ly}`;
+  return d;
+}
+
 // Reusable box (rounded rect + centered multi-line text).
 function Box({
   x,
@@ -67,21 +94,44 @@ export function ExecutorDiagram() {
         </marker>
       </defs>
 
-      {/* ---- Connectors (drawn first, behind the boxes) ---- */}
+      {/* ---- Connectors (drawn first, behind the boxes). Every corner uses
+             the shared radius R via roundPath, so all four bends match. ---- */}
       <g fill="none" stroke={LINE} strokeWidth={1.6}>
-        {/* Left loop: Daemon left → spawn(L) → Local → Executor left */}
-        <path d="M283,95 C205,95 120,105 120,168" markerEnd="url(#arrow)" />
+        {/* Left arc: Daemon.left → spawn(L).top (corner) */}
+        <path
+          d={roundPath([
+            [283, 87],
+            [120, 87],
+            [120, 170],
+          ])}
+          markerEnd="url(#arrow)"
+        />
         <path d="M120,222 L120,262" markerEnd="url(#arrow)" />
-        <path d="M118,360 C118,430 210,470 292,486" markerEnd="url(#arrow)" />
+        {/* Left arc: Local.bottom → Executor.left (corner) */}
+        <path
+          d={roundPath([
+            [120, 360],
+            [120, 499],
+            [292, 499],
+          ])}
+          markerEnd="url(#arrow)"
+        />
 
-        {/* Center spine: Daemon → spawn(C) → Containerized → Executor */}
-        <path d="M410,158 L410,168" markerEnd="url(#arrow)" />
+        {/* Center spine (straight) */}
+        <path d="M410,152 L410,168" markerEnd="url(#arrow)" />
         <path d="M410,222 L410,262" markerEnd="url(#arrow)" />
-        <path d="M410,360 L410,398" markerEnd="url(#arrow)" />
+        <path d="M411,360 L411,396" markerEnd="url(#arrow)" />
 
-        {/* Right loop (return): Executor right → WebSocket → Daemon right */}
-        <path d="M530,486 C650,486 662,392 662,330" />
-        <path d="M662,270 C662,150 605,108 539,100" markerEnd="url(#arrow)" />
+        {/* Right arc (return): Executor.right → up → Daemon.right (two corners) */}
+        <path
+          d={roundPath([
+            [526, 499],
+            [662, 499],
+            [662, 87],
+            [543, 87],
+          ])}
+          markerEnd="url(#arrow)"
+        />
       </g>
 
       {/* ---- Boxes ---- */}
