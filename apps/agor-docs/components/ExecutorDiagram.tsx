@@ -94,20 +94,21 @@ export function ExecutorDiagram() {
         </marker>
       </defs>
 
-      {/* ---- Connectors (drawn first, behind the boxes). Every corner uses
-             the shared radius R via roundPath, so all four bends match. ---- */}
+      {/* ---- Connectors (drawn first, behind the boxes). The spawn/WebSocket
+             pills are labels that sit ON these lines — each edge is one
+             continuous line with a single arrowhead at its destination NODE,
+             so no pill has an inbound arrow. Every corner shares radius R. ---- */}
       <g fill="none" stroke={LINE} strokeWidth={1.6}>
-        {/* Left arc: Daemon.left → spawn(L).top (corner) */}
+        {/* Left branch: Daemon.left → Local.top (left spawn pill sits on it) */}
         <path
           d={roundPath([
-            [283, 87],
-            [120, 87],
-            [120, 170],
+            [283, 74],
+            [120, 74],
+            [120, 262],
           ])}
           markerEnd="url(#arrow)"
         />
-        <path d="M120,222 L120,262" markerEnd="url(#arrow)" />
-        {/* Left arc: Local.bottom → Executor.left (corner) */}
+        {/* Local.bottom → Executor.left */}
         <path
           d={roundPath([
             [120, 360],
@@ -117,18 +118,19 @@ export function ExecutorDiagram() {
           markerEnd="url(#arrow)"
         />
 
-        {/* Center spine (straight) */}
-        <path d="M410,152 L410,168" markerEnd="url(#arrow)" />
-        <path d="M410,222 L410,262" markerEnd="url(#arrow)" />
+        {/* Center branch: Daemon.bottom → Containerized.top (spawn pill on it) */}
+        <path d="M410,126 L410,262" markerEnd="url(#arrow)" />
+        {/* Containerized.bottom → Executor.top */}
         <path d="M411,360 L411,396" markerEnd="url(#arrow)" />
 
-        {/* Right arc (return): Executor.right → up → Daemon.right (two corners) */}
+        {/* Right branch (return): Executor.right → Daemon.right (WebSocket pill
+            sits on it) */}
         <path
           d={roundPath([
             [526, 499],
-            [662, 499],
-            [662, 87],
-            [543, 87],
+            [665, 499],
+            [665, 74],
+            [539, 74],
           ])}
           markerEnd="url(#arrow)"
         />
@@ -136,15 +138,15 @@ export function ExecutorDiagram() {
 
       {/* ---- Boxes ---- */}
       {/* Daemon */}
-      <Box x={283} y={22} w={256} h={130} stroke="#34e6c4">
+      <Box x={283} y={22} w={256} h={104} stroke="#34e6c4">
         <text textAnchor="middle" fill={INK}>
-          <tspan x={411} y={54} fontWeight="700">
+          <tspan x={411} y={52} fontWeight="700">
             Daemon — orchestration
           </tspan>
-          <tspan x={411} y={80} fill={MUTED} fontSize={13}>
+          <tspan x={411} y={77} fill={MUTED} fontSize={13}>
             REST + WebSocket API (FeathersJS)
           </tspan>
-          <tspan x={411} y={100} fill={MUTED} fontSize={13}>
+          <tspan x={411} y={97} fill={MUTED} fontSize={13}>
             database · auth · executor tokens
           </tspan>
         </text>
