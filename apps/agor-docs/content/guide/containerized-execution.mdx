@@ -22,12 +22,14 @@ Agor's architecture separates the **daemon** (orchestration layer) from the **ex
 %%{init: {'flowchart': {'curve': 'step', 'wrappingWidth': 340}}}%%
 graph TB
     Daemon["<b>Daemon — orchestration</b><br/>REST + WebSocket API (FeathersJS)<br/>database · auth · executor tokens"]
+    Spawn["spawn · typed JSON payload via stdin"]
     Local["<b>Local</b> (default)<br/><code>node executor --stdin</code>"]
     Remote["<b>Containerized</b><br/><code>executor_command_template</code> via <code>sh -c</code>"]
     Executor["<b>Executor — isolation boundary</b><br/>ephemeral · one per command<br/>&nbsp;<br/><b>Harnesses</b>&nbsp; Claude Code · Codex · Gemini<br/>OpenCode · Copilot · Cursor<br/><b>Git</b>&nbsp; clone · branch<br/><b>Terminals</b>&nbsp; Zellij + node-pty"]
 
-    Daemon -->|"spawn · typed JSON via stdin"| Local
-    Daemon -->|"spawn · typed JSON via stdin"| Remote
+    Daemon --> Spawn
+    Spawn --> Local
+    Spawn --> Remote
     Local --> Executor
     Remote --> Executor
     Executor -.->|"results + events via WebSocket"| Daemon
