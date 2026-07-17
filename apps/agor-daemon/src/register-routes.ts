@@ -11,6 +11,7 @@ import {
   isTenantAgenticToolEnabled,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
+  resolveSdkWatchdogConfig,
   resolveTeammateFrameworkRepoUrl,
   resolveTenantContext,
 } from '@agor/core/config';
@@ -1138,6 +1139,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       task.task_id,
       {
         ...launchState,
+        ...(launchState.executor_mode
+          ? { sdk_watchdog_mode: resolveSdkWatchdogConfig(config.execution).mode }
+          : {}),
         queue_position: undefined,
         message_range: {
           start_index: messageStartIndex,

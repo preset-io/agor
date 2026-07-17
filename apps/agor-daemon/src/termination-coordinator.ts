@@ -11,7 +11,7 @@ export interface TerminationResult {
   reason?: string;
 }
 
-interface TerminationInput {
+export interface TerminationInput {
   app: Application;
   taskId: TaskID | string;
   cause: TerminationCause;
@@ -45,7 +45,7 @@ async function recordRequest(input: TerminationInput): Promise<Task> {
   const existingRequest = current.termination_request;
   const cause =
     input.cause === 'user_stop' || !existingRequest ? input.cause : existingRequest.cause;
-  const sdkFailure = current.sdk_failure ?? input.sdkFailure;
+  const sdkFailure = input.sdkFailure ?? current.sdk_failure;
   const task = await tasks.patch(
     input.taskId,
     {
@@ -164,13 +164,28 @@ export async function requestExecutorTermination(
     return { status: 'terminal', task: requested };
   }
 
+  return startContainment(input, requested);
+}
+
+function startContainment(input: TerminationInput, requested: Task): Promise<TerminationResult> {
   const existing = operations.get(requested.task_id);
   if (existing) return existing;
   const operation = runContainment(input, requested).finally(() => {
     operations.delete(requested.task_id);
   });
   operations.set(requested.task_id, operation);
+  void operation.catch((error) =>
+    console.error(`[termination] Failed to coordinate Task ${shortId(requested.task_id)}:`, error)
+  );
   return operation;
+}
+
+/** Persist ownership before returning, then contain asynchronously. */
+export async function beginExecutorTermination(input: TerminationInput): Promise<Task> {
+  const requested = await recordRequest(input);
+  if (isTerminalTaskStatus(requested.status) || operations.has(requested.task_id)) return requested;
+  startContainment(input, requested);
+  return requested;
 }
 
 export async function forceFailUnverifiedTask(input: {

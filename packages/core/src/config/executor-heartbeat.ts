@@ -4,6 +4,12 @@ export const EXECUTOR_HEARTBEAT_DEFAULT_INTERVAL_MS = 10_000;
 export const EXECUTOR_HEARTBEAT_MIN_STALE_AFTER_MS = 30_000;
 export const EXECUTOR_HEARTBEAT_DEFAULT_CALLBACK_TIMEOUT_MS = 3_000;
 export const EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS = 5 * 60_000;
+export interface ResolvedSdkWatchdogConfig {
+  mode: 'disabled' | 'observe' | 'enforce';
+  first_progress_timeout_ms: number;
+  abort_grace_ms: number;
+  claude_idle_timeout_ms: number | null;
+}
 
 export interface ResolvedExecutorHeartbeatConfig {
   enabled: boolean;
@@ -56,4 +62,39 @@ export function resolveDispatchConnectTimeoutMs(execution?: AgorExecutionSetting
     execution?.dispatch_connect_timeout_ms,
     EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS
   );
+}
+
+export function resolveSdkWatchdogConfig(
+  execution?: AgorExecutionSettings
+): ResolvedSdkWatchdogConfig {
+  const raw = execution?.sdk_watchdog;
+  if (raw?.mode && !['disabled', 'observe', 'enforce'].includes(raw.mode)) {
+    throw new Error(
+      'Config error: execution.sdk_watchdog.mode must be disabled, observe, or enforce'
+    );
+  }
+  const positive = (value: number | undefined, fallback: number, path: string): number => {
+    if (value === undefined) return fallback;
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(`Config error: ${path} must be a positive safe integer`);
+    }
+    return value;
+  };
+  return {
+    mode: raw?.mode ?? 'observe',
+    first_progress_timeout_ms: positive(
+      raw?.first_progress_timeout_ms,
+      180_000,
+      'execution.sdk_watchdog.first_progress_timeout_ms'
+    ),
+    abort_grace_ms: positive(raw?.abort_grace_ms, 15_000, 'execution.sdk_watchdog.abort_grace_ms'),
+    claude_idle_timeout_ms:
+      raw?.claude_idle_timeout_ms === null
+        ? null
+        : positive(
+            raw?.claude_idle_timeout_ms,
+            3_600_000,
+            'execution.sdk_watchdog.claude_idle_timeout_ms'
+          ),
+  };
 }

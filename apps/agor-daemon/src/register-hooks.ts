@@ -3007,6 +3007,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       connectExecutor: [requireExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireExecutorRuntimeToken()],
+      reportSdkHealthFailure: [requireExecutorRuntimeToken()],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete tasks'),
         // RBAC: deleting a task requires 'all' permission on the branch

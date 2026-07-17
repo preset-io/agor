@@ -155,6 +155,9 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         metadata: task.metadata, // Generic metadata bag (e.g., is_agor_callback, source)
         executor_mode: task.executor_mode,
         latest_executor_pulse: task.latest_executor_pulse,
+        sdk_failure: task.sdk_failure,
+        termination_request: task.termination_request,
+        sdk_watchdog_mode: task.sdk_watchdog_mode,
       },
     };
   }

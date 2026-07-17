@@ -623,7 +623,8 @@ describe('createClient', () => {
       };
       expect(tasksService.methods).toHaveBeenCalledWith(
         'connectExecutor',
-        'reportRuntimeTelemetry'
+        'reportRuntimeTelemetry',
+        'reportSdkHealthFailure'
       );
     });
 

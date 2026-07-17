@@ -250,6 +250,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       'remove',
       'connectExecutor',
       'reportRuntimeTelemetry',
+      'reportSdkHealthFailure',
     ],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket

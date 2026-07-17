@@ -11,7 +11,7 @@ import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
-import { resolveExecutorHeartbeatConfig } from './executor-heartbeat';
+import { resolveExecutorHeartbeatConfig, resolveSdkWatchdogConfig } from './executor-heartbeat';
 import { assertValidMultiTenancyConfig } from './multitenancy';
 import {
   type AgorConfig,
@@ -355,6 +355,7 @@ function validateConfig(config: AgorConfig): void {
   }
   only(config.execution, 'execution', [
     'executor_heartbeat',
+    'sdk_watchdog',
     'dispatch_connect_timeout_ms',
     'executor_unix_user',
     'unix_user_mode',
@@ -386,6 +387,15 @@ function validateConfig(config: AgorConfig): void {
     'command_template',
     'timeout_ms',
   ]);
+  only(config.execution?.sdk_watchdog, 'execution.sdk_watchdog', [
+    'mode',
+    'first_progress_timeout_ms',
+    'abort_grace_ms',
+    'claude_idle_timeout_ms',
+  ]);
+  if (config.execution?.sdk_watchdog) {
+    resolveSdkWatchdogConfig(config.execution);
+  }
   only(config.execution?.branch_storage, 'execution.branch_storage', [
     'default_mode',
     'allowed_modes',

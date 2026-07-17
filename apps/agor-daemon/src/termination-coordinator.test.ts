@@ -5,7 +5,11 @@ const containExecutorProcess = vi.hoisted(() => vi.fn());
 const untrackExecutorProcess = vi.hoisted(() => vi.fn());
 vi.mock('./executor-tracking.js', () => ({ containExecutorProcess, untrackExecutorProcess }));
 
-import { forceFailUnverifiedTask, requestExecutorTermination } from './termination-coordinator.js';
+import {
+  beginExecutorTermination,
+  forceFailUnverifiedTask,
+  requestExecutorTermination,
+} from './termination-coordinator.js';
 
 function appDouble() {
   let task: any = {
@@ -56,6 +60,25 @@ describe('termination coordinator', () => {
     expect(state.task().status).toBe(TaskStatus.STOPPED);
     expect(state.session()).toMatchObject({ status: 'idle', ready_for_prompt: true });
     expect(untrackExecutorProcess).toHaveBeenCalledOnce();
+  });
+
+  it('persists ownership before background containment completes', async () => {
+    let release!: (value: { status: 'verified_absent' }) => void;
+    containExecutorProcess.mockReturnValue(new Promise((resolve) => (release = resolve)));
+    const state = appDouble();
+
+    const requested = await beginExecutorTermination({
+      app: state.app,
+      taskId: state.task().task_id,
+      cause: 'sdk_health_failure',
+      errorMessage: 'SDK stalled',
+    });
+
+    expect(requested.status).toBe(TaskStatus.STOPPING);
+    expect(state.session()).toMatchObject({ status: 'stopping', ready_for_prompt: false });
+    expect(state.failForLostHeartbeat).not.toHaveBeenCalled();
+    release({ status: 'verified_absent' });
+    await vi.waitFor(() => expect(state.failForLostHeartbeat).toHaveBeenCalledOnce());
   });
 
   it('keeps the session blocked and visible when absence is unverified', async () => {

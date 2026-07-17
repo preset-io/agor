@@ -27,6 +27,7 @@ import { createFeathersBackedRepositories } from '../../db/feathers-repositories
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
+import { isSdkHealthAbort } from '../../sdk-watchdog.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
@@ -415,6 +416,7 @@ export async function executeToolTask(params: {
 }): Promise<void> {
   const { client, sessionId, taskId, prompt, permissionMode, apiKeyEnvVar, toolName, createTool } =
     params;
+  const coordinatorOwnsTerminality = () => isSdkHealthAbort(params.abortController);
 
   console.log(`[${toolName}] Executing task ${shortId(taskId)}...`);
 
@@ -505,6 +507,8 @@ export async function executeToolTask(params: {
       params.abortController,
       params.messageSource
     );
+
+    if (coordinatorOwnsTerminality()) return;
 
     console.log(
       `[${toolName}] Execution completed: user=${result.userMessageId}, assistant=${result.assistantMessageIds.length} messages`
@@ -615,6 +619,7 @@ export async function executeToolTask(params: {
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
     await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
+    if (coordinatorOwnsTerminality()) return;
     const err = error as Error;
     console.error(`[${toolName}] Execution failed:`, err);
 

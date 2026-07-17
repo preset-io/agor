@@ -172,7 +172,6 @@ export interface ProcessorOptions {
   sessionId: SessionID;
   existingSdkSessionId?: string;
   enableTokenStreaming?: boolean;
-  idleTimeoutMs?: number;
   /**
    * Minimum chunk size in characters before emitting to prevent tiny/out-of-order chunks
    * @default 20
@@ -194,11 +193,9 @@ interface ProcessorState {
   capturedAgentSessionId?: string;
   messageCount: number;
   assistantMessageCount: number;
-  lastActivityTime: number;
   lastAssistantMessageTime: number;
   resolvedModel?: string;
   enableTokenStreaming: boolean;
-  idleTimeoutMs: number;
   minChunkSize: number;
   // Track current content blocks for tool_complete events
   contentBlockStack: Array<{
@@ -231,10 +228,8 @@ export class SDKMessageProcessor {
       capturedAgentSessionId: undefined,
       messageCount: 0,
       assistantMessageCount: 0,
-      lastActivityTime: Date.now(),
       lastAssistantMessageTime: Date.now(),
       enableTokenStreaming: options.enableTokenStreaming ?? true,
-      idleTimeoutMs: options.idleTimeoutMs ?? 30000, // 30s default
       minChunkSize: options.minChunkSize ?? DEFAULT_MIN_CHUNK_SIZE,
       contentBlockStack: [],
       textChunkBuffer: '',
@@ -252,7 +247,6 @@ export class SDKMessageProcessor {
    */
   async process(msg: SDKMessage): Promise<ProcessedEvent[]> {
     this.state.messageCount++;
-    this.state.lastActivityTime = Date.now();
 
     // Log message type for debugging (skip stream_event as it's too verbose)
     if (this.state.messageCount % 10 === 0 && msg.type !== 'stream_event') {
@@ -274,15 +268,6 @@ export class SDKMessageProcessor {
     }
 
     return this.routeMessage(msg);
-  }
-
-  /**
-   * Check if processor has timed out due to inactivity
-   * Uses lastActivityTime (updated on EVERY message) for proper moving anchor behavior
-   */
-  hasTimedOut(): boolean {
-    const timeSinceLastActivity = Date.now() - this.state.lastActivityTime;
-    return timeSinceLastActivity > this.state.idleTimeoutMs;
   }
 
   /**

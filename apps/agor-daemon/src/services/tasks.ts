@@ -10,7 +10,11 @@ import {
   type ChildCompletionContext,
   renderChildCompletionCallback,
 } from '@agor/core/callbacks/child-completion-template';
-import { PAGINATION, resolveExecutorHeartbeatConfig } from '@agor/core/config';
+import {
+  PAGINATION,
+  resolveExecutorHeartbeatConfig,
+  resolveSdkWatchdogConfig,
+} from '@agor/core/config';
 import {
   enqueueTenantDatabasePostCommitCallback,
   shortId,
@@ -24,6 +28,8 @@ import type {
   Paginated,
   QueryParams,
   RuntimeTelemetryInput,
+  SdkFailure,
+  SdkHealthFailureInput,
   Session,
   SessionID,
   Task,
@@ -38,6 +44,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { beginExecutorTermination } from '../termination-coordinator.js';
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import {
   type ExecutorHeartbeatCallbackPayload,
@@ -1276,6 +1283,88 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
     this.emit?.('patched', task);
     return task;
+  }
+
+  /** Persist one authenticated watchdog decision; only the daemon owns lifecycle effects. */
+  async reportSdkHealthFailure(data: SdkHealthFailureInput, params?: TaskParams): Promise<Task> {
+    const allowedReasons = new Set([
+      'no_first_progress',
+      'progress_stalled',
+      'stream_disconnected',
+      'unknown_activity',
+    ]);
+    if (!allowedReasons.has(data.reason)) throw new BadRequest('invalid SDK health reason');
+    if (
+      data.elapsed_ms !== undefined &&
+      (!Number.isSafeInteger(data.elapsed_ms) || data.elapsed_ms < 0)
+    ) {
+      throw new BadRequest('elapsed_ms must be a non-negative safe integer');
+    }
+    if (
+      data.unknown_event_count !== undefined &&
+      (!Number.isSafeInteger(data.unknown_event_count) || data.unknown_event_count < 0)
+    ) {
+      throw new BadRequest('unknown_event_count must be a non-negative safe integer');
+    }
+    if (
+      data.sdk_version !== undefined &&
+      (!/^[A-Za-z0-9@/._-]+$/.test(data.sdk_version) || data.sdk_version.length > 128)
+    ) {
+      throw new BadRequest('sdk_version must be a bounded identifier');
+    }
+
+    const current = await this.get(data.task_id, params);
+    const mode = current.sdk_watchdog_mode ?? 'observe';
+    if (mode === 'disabled') throw new Conflict('SDK watchdog is disabled for this Task');
+    const action =
+      data.reason === 'unknown_activity' || mode === 'observe' ? 'would_fire' : 'enforced';
+    if (data.watchdog_action !== action) {
+      throw new BadRequest(`watchdog_action must be ${action} for this Task`);
+    }
+    const duplicate =
+      current.sdk_failure?.reason === data.reason &&
+      current.sdk_failure.watchdog_action === action &&
+      (action === 'would_fire' ||
+        isTerminalTaskStatus(current.status) ||
+        (current.status === TaskStatus.STOPPING &&
+          current.termination_request?.cause === 'sdk_health_failure'));
+    if (duplicate) return current;
+    if (
+      isTerminalTaskStatus(current.status) ||
+      current.status === TaskStatus.STOPPING ||
+      !current.executor_connected_at
+    ) {
+      throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
+    }
+    const session = await this.app.service('sessions').get(current.session_id, params);
+    const failure: SdkFailure = {
+      reason: data.reason,
+      detected_at: new Date().toISOString(),
+      tool: session.agentic_tool,
+      last_pulse: current.latest_executor_pulse,
+      elapsed_ms: data.elapsed_ms,
+      watchdog_action: action,
+      unknown_event_count: data.unknown_event_count,
+      sdk_version: data.sdk_version,
+      termination: action === 'enforced' ? 'requested' : 'not_requested',
+    };
+    if (action === 'would_fire') {
+      return (await this.patch(
+        data.task_id,
+        { sdk_failure: failure },
+        { ...params, provider: undefined }
+      )) as Task;
+    }
+
+    return beginExecutorTermination({
+      app: this.app,
+      taskId: current.task_id,
+      cause: 'sdk_health_failure',
+      errorMessage: `SDK activity stalled (${data.reason}).`,
+      params,
+      signalDelayMs: resolveSdkWatchdogConfig(this.app.get?.('config')?.execution).abort_grace_ms,
+      sdkFailure: failure,
+    });
   }
 
   /**

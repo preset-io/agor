@@ -37,6 +37,7 @@ import type {
   Repo,
   RuntimeTelemetryInput,
   Schedule,
+  SdkHealthFailureInput,
   Session,
   Task,
   TeammateWelcomeNoteRequest,
@@ -300,6 +301,8 @@ export interface TasksService extends AgorService<Task> {
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
   /** Report daemon-stamped wrapper liveness and the latest coalesced SDK pulse. */
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
+  /** Report a daemon-authorized SDK watchdog decision. */
+  reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
   /**
    * Create multiple tasks in a single request
    * Returns array of created tasks with IDs
@@ -883,7 +886,7 @@ function extendTasksService(client: AgorClient): void {
   };
   if (tasksService[TASKS_SERVICE_EXTENDED]) return;
   if (typeof tasksService.methods === 'function') {
-    tasksService.methods('connectExecutor', 'reportRuntimeTelemetry');
+    tasksService.methods('connectExecutor', 'reportRuntimeTelemetry', 'reportSdkHealthFailure');
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;
 }

@@ -27,6 +27,7 @@ describe('executorRuntimeScopeGuard', () => {
   it.each([
     'connectExecutor',
     'reportRuntimeTelemetry',
+    'reportSdkHealthFailure',
   ])('accepts scoped %s and rejects a different task', async (method) => {
     const context = ctx({ path: 'tasks', method, data: { task_id: 'task-1' } });
 

@@ -11,6 +11,10 @@ export const SDK_ACTIVITY_VERSION_MANIFEST: Record<SdkActivityAdapter, string> =
   opencode: '@opencode-ai/sdk@1.14.33',
 };
 
+export function getSdkActivityVersion(adapter: string): string | undefined {
+  return SDK_ACTIVITY_VERSION_MANIFEST[adapter as SdkActivityAdapter];
+}
+
 const STARTED = new Set([
   'claude-code:system',
   'codex:thread.started',

@@ -65,6 +65,11 @@ export interface SdkFailure {
   termination: 'not_requested' | 'requested' | 'verified' | 'unverified';
 }
 
+export type SdkHealthFailureInput = Pick<
+  SdkFailure,
+  'reason' | 'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
+> & { task_id: string };
+
 export type TerminationCause =
   | 'user_stop'
   | 'startup_timeout'

@@ -64,4 +64,30 @@ describe('startExecutorHeartbeat', () => {
       vi.useRealTimers();
     }
   });
+
+  it('keeps 100 concurrent pulse streams bounded to heartbeat cadence', async () => {
+    vi.useFakeTimers();
+    try {
+      const write = vi.fn().mockResolvedValue({});
+      const client = { service: () => ({ reportRuntimeTelemetry: write }) } as never;
+      const handles = Array.from({ length: 100 }, (_, executor) => {
+        const handle = startExecutorHeartbeat({
+          client,
+          taskId: `task-${executor}`,
+          intervalMs: 1000,
+        });
+        for (let pulse = 0; pulse < 100; pulse++) handle.recordPulse('progress', `e.${pulse}`);
+        return handle;
+      });
+      await Promise.resolve();
+      expect(write).toHaveBeenCalledTimes(100);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(write).toHaveBeenCalledTimes(200);
+      handles.forEach((handle) => {
+        handle.stop();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

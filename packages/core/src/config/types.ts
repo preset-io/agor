@@ -324,6 +324,12 @@ export interface AgorExecutionSettings {
    * stdin; keep secrets out of the command argv.
    */
   executor_heartbeat?: AgorExecutorHeartbeatSettings;
+  sdk_watchdog?: {
+    mode?: 'disabled' | 'observe' | 'enforce';
+    first_progress_timeout_ms?: number;
+    abort_grace_ms?: number;
+    claude_idle_timeout_ms?: number | null;
+  };
 
   dispatch_connect_timeout_ms?: number | null;
 

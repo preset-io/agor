@@ -14,6 +14,7 @@ import {
   loadConfigSync,
   type ResolvedConfigSlice,
   resolveExecutorHeartbeatConfig,
+  resolveSdkWatchdogConfig,
 } from '@agor/core/config';
 
 /**
@@ -60,6 +61,7 @@ export function buildResolvedConfigSlice(): ResolvedConfigSlice {
       enabled: heartbeat.enabled,
       interval_ms: heartbeat.interval_ms,
     };
+    executionSlice.sdk_watchdog = resolveSdkWatchdogConfig(config.execution);
     if (Object.keys(executionSlice).length > 0) {
       slice.execution = executionSlice;
     }

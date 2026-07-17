@@ -921,6 +921,35 @@ describe('TaskRepository.update', () => {
     });
   });
 
+  dbTest('round-trips bounded executor health state through JSON data', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const created = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    await taskRepo.update(created.task_id, {
+      sdk_watchdog_mode: 'enforce',
+      sdk_failure: {
+        reason: 'no_first_progress',
+        detected_at: '2026-07-10T20:03:00.000Z',
+        tool: 'codex',
+        watchdog_action: 'enforced',
+        termination: 'requested',
+      },
+      termination_request: {
+        cause: 'sdk_health_failure',
+        requested_at: '2026-07-10T20:03:00.000Z',
+        final_status: 'failed',
+      },
+    });
+
+    expect(await taskRepo.findById(created.task_id)).toMatchObject({
+      sdk_watchdog_mode: 'enforce',
+      sdk_failure: { reason: 'no_first_progress', termination: 'requested' },
+      termination_request: { cause: 'sdk_health_failure', final_status: 'failed' },
+    });
+  });
+
   for (const terminalStatus of [TaskStatus.COMPLETED, TaskStatus.STOPPED]) {
     dbTest(
       `does not revive a ${terminalStatus} task through awaiting_permission then running`,

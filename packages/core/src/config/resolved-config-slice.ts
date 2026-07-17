@@ -44,6 +44,14 @@ export const ResolvedConfigSliceSchema = z.object({
           interval_ms: z.number().int().positive(),
         })
         .optional(),
+      sdk_watchdog: z
+        .object({
+          mode: z.enum(['disabled', 'observe', 'enforce']),
+          first_progress_timeout_ms: z.number().int().positive(),
+          abort_grace_ms: z.number().int().positive(),
+          claude_idle_timeout_ms: z.number().int().positive().nullable(),
+        })
+        .optional(),
     })
     .optional(),
 
