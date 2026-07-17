@@ -81,6 +81,30 @@ describe('termination coordinator', () => {
     await vi.waitFor(() => expect(state.failForLostHeartbeat).toHaveBeenCalledOnce());
   });
 
+  it('lets user Stop override a concurrent health failure without duplicate containment', async () => {
+    let release!: (value: { status: 'verified_absent' }) => void;
+    containExecutorProcess.mockReturnValue(new Promise((resolve) => (release = resolve)));
+    const state = appDouble();
+    await beginExecutorTermination({
+      app: state.app,
+      taskId: state.task().task_id,
+      cause: 'sdk_health_failure',
+      errorMessage: 'SDK stalled',
+    });
+    const stop = requestExecutorTermination({
+      app: state.app,
+      taskId: state.task().task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user',
+    });
+    await vi.waitFor(() => expect(state.task().termination_request?.cause).toBe('user_stop'));
+    release({ status: 'verified_absent' });
+
+    await expect(stop).resolves.toMatchObject({ status: 'terminal' });
+    expect(state.task().status).toBe(TaskStatus.STOPPED);
+    expect(containExecutorProcess).toHaveBeenCalledOnce();
+  });
+
   it('keeps the session blocked and visible when absence is unverified', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'unverified', reason: 'EPERM' });
     const state = appDouble();
