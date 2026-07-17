@@ -22,8 +22,12 @@ import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
-import { getSdkActivityVersion } from './sdk-handlers/sdk-activity.js';
-import { isSdkHealthAbort, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
+import {
+  getSdkActivityVersion,
+  isSdkHealthAbort,
+  markSdkHealthAbort,
+  SdkWatchdog,
+} from './sdk-watchdog.js';
 import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
 import { tryMarkTaskTerminal } from './terminal-task.js';
 

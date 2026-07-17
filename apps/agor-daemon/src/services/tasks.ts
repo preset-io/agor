@@ -1218,12 +1218,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return this.taskRepo.findOrphaned();
   }
 
-  /** Internal helper for hooks that must validate persisted executor connection state. */
   async findByIdForScopeCheck(taskId: TaskID): Promise<Task | null> {
     return this.taskRepo.findById(taskId);
   }
 
-  /** Claim a DISPATCHING task after executor transport authentication. */
   async connectExecutor(data: { task_id: string }, params?: TaskParams): Promise<Task> {
     const connection = await this.taskRepo.connectExecutor(data.task_id);
     if (!connection) {
@@ -1253,7 +1251,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return connection.task;
   }
 
-  /** Accept one authenticated heartbeat plus the latest coalesced SDK pulse. */
   async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
     if (data.pulse) {
       const { sequence, kind, detail } = data.pulse;

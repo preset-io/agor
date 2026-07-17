@@ -5,7 +5,7 @@ import {
   reportSdkActivity,
   SDK_ACTIVITY_VERSION_MANIFEST,
   type SdkActivityAdapter,
-} from './sdk-activity.js';
+} from '../sdk-watchdog.js';
 
 describe('SDK activity mapping', () => {
   it.each([

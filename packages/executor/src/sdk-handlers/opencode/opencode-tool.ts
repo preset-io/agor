@@ -27,6 +27,7 @@ import type {
   MCPServerRepository,
   SessionMCPServerRepository,
 } from '../../db/feathers-repositories.js';
+import { reportSdkActivity } from '../../sdk-watchdog.js';
 import type { NormalizedSdkResponse, RawSdkResponse } from '../../types/sdk-response.js';
 import { enrichContentBlocks } from '../base/diff-enrichment.js';
 import type {
@@ -40,7 +41,6 @@ import type {
 } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import type { ITool } from '../base/tool.interface.js';
-import { reportSdkActivity } from '../sdk-activity.js';
 
 export interface OpenCodeConfig {
   enabled: boolean;
