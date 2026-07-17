@@ -69,7 +69,7 @@ jobs:
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         env:
           # Make `type=sha` emit the PR *head* SHA, so the tag equals
           # `git rev-parse HEAD` of the PR branch. No effect on push events.
