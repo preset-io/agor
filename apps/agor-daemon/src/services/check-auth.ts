@@ -16,13 +16,12 @@
  * variables are not credential fallbacks.
  */
 
-import { isTenantAgenticToolEnabled, loadConfigSync, resolveApiKey } from '@agor/core/config';
+import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
-  UsersRepository,
 } from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
 import { Claude } from '@agor/core/sdk';
@@ -34,12 +33,8 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
-import {
-  resolveUnixUserForImpersonation,
-  type UnixUserMode,
-  validateResolvedUnixUser,
-} from '@agor/core/unix';
 import { parseCodexAuthJson, readCodexAuthFile } from '../utils/codex-auth-file.js';
+import { resolveCodexUnixIdentity } from './codex-auth-import.js';
 
 const FETCH_TIMEOUT_MS = 8_000;
 const SDK_AUTH_PROBE_TIMEOUT_MS = 10_000;
@@ -249,48 +244,32 @@ async function probeCodexAuthFile(
   userId: UserID | undefined,
   withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>
 ): Promise<AuthCheckResult> {
-  const config = loadConfigSync();
-  const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-
-  let unixUsername: string | null = null;
-  if (mode === 'strict') {
-    if (!userId) {
-      return unknown('Cannot resolve a Unix identity for this Codex login check.');
-    }
-    const row = await withTenantDatabase((tenantDb) =>
-      new UsersRepository(tenantDb).findById(userId)
-    );
-    unixUsername = row?.unix_username ?? null;
-    if (!unixUsername) {
-      return unauthenticated(
-        'none',
-        'Codex subscription login needs a Unix account — ask an admin to set your unix_username.'
-      );
-    }
+  const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+  if (!identity.ok) {
+    // A missing unix_username is a real configuration gap (no credential can
+    // exist for this user yet); any other resolution failure is inconclusive.
+    return identity.reason === 'missing-username'
+      ? unauthenticated(
+          'none',
+          'Codex subscription login needs a Unix account — ask an admin to set your unix_username.'
+        )
+      : unknown('Could not resolve the Unix account that holds the Codex login.');
   }
 
-  let asUser: string | null;
-  try {
-    const resolved = resolveUnixUserForImpersonation({
-      mode,
-      userUnixUsername: unixUsername,
-      executorUnixUser: config.execution?.executor_unix_user,
-    });
-    validateResolvedUnixUser(mode, resolved.unixUser);
-    asUser = resolved.unixUser;
-  } catch {
-    return unknown('Could not resolve the Unix account that holds the Codex login.');
+  const read = readCodexAuthFile(identity.unixUser);
+  if (!read.ok) {
+    // Only a genuinely absent file proves "no login". Permission/sudo/
+    // transport failures mean we could not LOOK, which must never surface as
+    // the persistent "credentials aren't working" state.
+    return read.reason === 'not-found'
+      ? unauthenticated(
+          'none',
+          'No Codex login found on this server — import your auth.json or run `codex login` from a branch terminal.'
+        )
+      : unknown('Could not read the Codex auth file — check daemon logs and sudo configuration.');
   }
 
-  const raw = readCodexAuthFile(asUser);
-  if (raw === null) {
-    return unauthenticated(
-      'none',
-      'No Codex login found on this server — import your auth.json or run `codex login` from a branch terminal.'
-    );
-  }
-
-  const parsed = parseCodexAuthJson(raw);
+  const parsed = parseCodexAuthJson(read.content);
   if (!parsed.ok) {
     return unauthenticated(
       'none',

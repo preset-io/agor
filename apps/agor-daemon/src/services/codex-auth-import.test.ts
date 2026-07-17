@@ -1,5 +1,5 @@
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
-import { runWithTenantContext } from '@agor/core/db';
+import { runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readCodexAuthFile, writeCodexAuthFile } from '../utils/codex-auth-file.js';
 import { createCodexAuthImportService } from './codex-auth-import';
@@ -10,6 +10,24 @@ vi.mock('@agor/core/config', async () => {
     ...actual,
     isTenantAgenticToolEnabled: vi.fn(),
     loadConfigSync: vi.fn(),
+  };
+});
+
+vi.mock('@agor/core/db', async () => {
+  const actual = await vi.importActual<typeof import('@agor/core/db')>('@agor/core/db');
+  return {
+    ...actual,
+    UsersRepository: vi.fn(),
+  };
+});
+
+vi.mock('@agor/core/unix', async () => {
+  const actual = await vi.importActual<typeof import('@agor/core/unix')>('@agor/core/unix');
+  return {
+    ...actual,
+    // The real validator asserts against /etc/passwd — the mocked Unix
+    // accounts in these tests don't exist on the test host.
+    validateResolvedUnixUser: vi.fn(),
   };
 });
 
@@ -28,6 +46,7 @@ const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
 const writeCodexAuthFileMock = vi.mocked(writeCodexAuthFile);
 const readCodexAuthFileMock = vi.mocked(readCodexAuthFile);
+const usersRepositoryMock = vi.mocked(UsersRepository);
 
 const TEST_DB = { run: vi.fn() } as never;
 
@@ -66,7 +85,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   isTenantAgenticToolEnabledMock.mockResolvedValue(true);
   loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'simple' } } as never);
-  readCodexAuthFileMock.mockReturnValue(VALID_AUTH_JSON);
+  readCodexAuthFileMock.mockReturnValue({ ok: true, content: VALID_AUTH_JSON });
 });
 
 describe('codex-auth-import', () => {
@@ -131,22 +150,77 @@ describe('codex-auth-import', () => {
     expect(JSON.stringify(result)).not.toContain('access-abc');
   });
 
-  it('surfaces a friendly error when the readback verification fails', async () => {
-    readCodexAuthFileMock.mockReturnValue(null);
+  it('surfaces a friendly error when the readback verification fails persistently', async () => {
+    readCodexAuthFileMock.mockReturnValue({ ok: false, reason: 'unreadable' });
     const { app, usersService } = makeApp();
     await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
       /verification/
     );
+    // One retry on a transient-looking read failure, then give up.
+    expect(readCodexAuthFileMock).toHaveBeenCalledTimes(2);
     expect(usersService.patch).not.toHaveBeenCalled();
   });
 
-  it('maps write failures to a friendly error without token material', async () => {
-    writeCodexAuthFileMock.mockImplementation(() => {
-      throw new Error('sudo: a password is required');
+  it('retries the readback once and succeeds on a transient read failure', async () => {
+    readCodexAuthFileMock
+      .mockReturnValueOnce({ ok: false, reason: 'unreadable' })
+      .mockReturnValueOnce({ ok: true, content: VALID_AUTH_JSON });
+    const { app, usersService } = makeApp();
+    const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
+    expect(result.status).toBe('authenticated');
+    expect(usersService.patch).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps write failures to a friendly error and logs only the error class', async () => {
+    writeCodexAuthFileMock.mockImplementationOnce(() => {
+      throw new Error('sudo: a password is required; stderr: refresh-xyz');
     });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { app } = makeApp();
+      await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
+        /Could not write/
+      );
+      const logged = errorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+      expect(logged).toContain('Error');
+      expect(logged).not.toContain('refresh-xyz');
+      expect(logged).not.toContain('password is required');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('strict mode targets the caller’s unix_username', async () => {
+    loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'strict' } } as never);
+    // `new UsersRepository(db)` — the implementation must be constructible.
+    usersRepositoryMock.mockImplementation(function mockRepo() {
+      return { findById: vi.fn(async () => ({ unix_username: 'alice' })) };
+    } as never);
+    const { app } = makeApp();
+    const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
+    expect(result.status).toBe('authenticated');
+    expect(writeCodexAuthFileMock).toHaveBeenCalledWith(expect.any(String), 'alice');
+  });
+
+  it('strict mode without a unix_username rejects before writing', async () => {
+    loadConfigSyncMock.mockReturnValue({ execution: { unix_user_mode: 'strict' } } as never);
+    usersRepositoryMock.mockImplementation(function mockRepo() {
+      return { findById: vi.fn(async () => ({ unix_username: null })) };
+    } as never);
     const { app } = makeApp();
     await expect(service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS)).rejects.toThrow(
-      /Could not write/
+      /Unix account/
     );
+    expect(writeCodexAuthFileMock).not.toHaveBeenCalled();
+  });
+
+  it('insulated mode targets the configured executor user', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      execution: { unix_user_mode: 'insulated', executor_unix_user: 'agor_executor' },
+    } as never);
+    const { app } = makeApp();
+    const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
+    expect(result.status).toBe('authenticated');
+    expect(writeCodexAuthFileMock).toHaveBeenCalledWith(expect.any(String), 'agor_executor');
   });
 });
