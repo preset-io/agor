@@ -47,46 +47,44 @@ export type ParseCodexAuthResult =
   | { ok: true; normalized: string; summary: CodexAuthSummary }
   | { ok: false; error: string };
 
-/**
- * Decode a JWT payload segment without verifying the signature. We only mine
- * display metadata (plan type) from a token the user already possesses, so
- * verification adds nothing — treat every field as untrusted display data.
- */
-function decodeJwtClaims(token: string): Record<string, unknown> | null {
-  const segments = token.split('.');
-  if (segments.length !== 3) return null;
-  try {
-    const payload = Buffer.from(segments[1], 'base64url').toString('utf8');
-    const claims = JSON.parse(payload) as unknown;
-    return claims && typeof claims === 'object' ? (claims as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Codex id_tokens nest account metadata under this claim key. */
 const OPENAI_AUTH_CLAIM = 'https://api.openai.com/auth';
 
 /**
- * Mine display/bookkeeping metadata from a Codex id_token: the ChatGPT plan
- * type and the account id Codex records as `tokens.account_id`. Best-effort —
- * an unparseable token yields an empty result, never an error.
+ * Mine metadata from a Codex id_token payload (unverified — the signature is
+ * not checked): the ChatGPT plan type and the account id Codex records as
+ * `tokens.account_id`. Best-effort — an unparseable token yields an empty
+ * result, never an error.
+ *
+ * Trust note: "unverified" here means safe against parse errors, not a trust
+ * statement. When these claims matter (the device flow writing account_id
+ * into auth.json), trust flows from having received the id_token over the
+ * provider's TLS token endpoint — not from this parse.
  */
 export function codexIdTokenClaims(idToken: unknown): {
   planType?: string;
   accountId?: string;
 } {
-  if (typeof idToken !== 'string' || !idToken) return {};
-  const claims = decodeJwtClaims(idToken);
-  const authClaim = claims?.[OPENAI_AUTH_CLAIM];
-  if (!authClaim || typeof authClaim !== 'object') return {};
-  const record = authClaim as Record<string, unknown>;
-  const planType = record.chatgpt_plan_type;
-  const accountId = record.chatgpt_account_id;
-  return {
-    ...(typeof planType === 'string' && planType ? { planType } : {}),
-    ...(typeof accountId === 'string' && accountId ? { accountId } : {}),
-  };
+  if (typeof idToken !== 'string') return {};
+  const segments = idToken.split('.');
+  if (segments.length !== 3) return {};
+  try {
+    const claims = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8')) as unknown;
+    const authClaim =
+      claims && typeof claims === 'object'
+        ? (claims as Record<string, unknown>)[OPENAI_AUTH_CLAIM]
+        : undefined;
+    if (!authClaim || typeof authClaim !== 'object') return {};
+    const record = authClaim as Record<string, unknown>;
+    const planType = record.chatgpt_plan_type;
+    const accountId = record.chatgpt_account_id;
+    return {
+      ...(typeof planType === 'string' && planType ? { planType } : {}),
+      ...(typeof accountId === 'string' && accountId ? { accountId } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 /**

@@ -527,11 +527,12 @@ const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   }, [deviceService]);
 
   // On mount, adopt a still-live attempt (user toggled away and back) instead
-  // of burning a fresh code; otherwise request one.
-  const bootstrappedRef = useRef(false);
+  // of burning a fresh code; otherwise request one. Keyed by service identity
+  // so a client swap mid-flow re-bootstraps against the new connection.
+  const bootstrappedForRef = useRef<unknown>(null);
   useEffect(() => {
-    if (bootstrappedRef.current || !deviceService) return;
-    bootstrappedRef.current = true;
+    if (!deviceService || bootstrappedForRef.current === deviceService) return;
+    bootstrappedForRef.current = deviceService;
     void (async () => {
       try {
         const existing = (await deviceService.find()) as CodexDeviceAuthStatus;
@@ -587,7 +588,7 @@ const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0' }}>
         <LoadingOutlined style={{ color: token.colorTextTertiary, fontSize: 14 }} />
         <Text style={{ color: token.colorTextTertiary, fontSize: 13 }}>
-          Getting your sign-in code…
+          {client ? 'Getting your sign-in code…' : 'Waiting for the server connection…'}
         </Text>
       </div>
     );

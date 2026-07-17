@@ -78,7 +78,9 @@ beforeEach(() => {
   writeCodexAuthFileMock.mockImplementation((content: string) => {
     written = content;
   });
-  readCodexAuthFileMock.mockImplementation(() => written || null);
+  readCodexAuthFileMock.mockImplementation(() =>
+    written ? { ok: true, content: written } : { ok: false, reason: 'not-found' }
+  );
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
 });
@@ -147,6 +149,8 @@ describe('codex-device-auth', () => {
       );
 
     await withTenant(() => service.create({}, AUTH_PARAMS));
+    // interval "1" is floored to MIN_POLL_INTERVAL_MS (2s) — each 2.1s
+    // advance crosses exactly one scheduled poll.
     await vi.advanceTimersByTimeAsync(2100); // first poll (pending)
     await vi.advanceTimersByTimeAsync(2100); // second poll (approved + exchange)
 
@@ -179,6 +183,85 @@ describe('codex-device-auth', () => {
     const callsAfterSuccess = fetchMock.mock.calls.length;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(fetchMock.mock.calls.length).toBe(callsAfterSuccess);
+  });
+
+  it('a provider 5xx mid-window is transient — polling continues instead of erroring', async () => {
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB);
+    mockUserCodeIssued();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(502, {}))
+      .mockResolvedValueOnce(jsonResponse(403, {}));
+
+    await withTenant(() => service.create({}, AUTH_PARAMS));
+    await vi.advanceTimersByTimeAsync(2100); // 502 → keep polling
+    expect((await withTenant(() => service.find(AUTH_PARAMS))).phase).toBe('pending');
+    await vi.advanceTimersByTimeAsync(2100); // 403 → still pending
+    expect((await withTenant(() => service.find(AUTH_PARAMS))).phase).toBe('pending');
+    expect(fetchMock.mock.calls.length).toBe(3); // usercode + two polls
+  });
+
+  it('a non-pending 4xx during polling is terminal', async () => {
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB);
+    mockUserCodeIssued();
+    fetchMock.mockResolvedValueOnce(jsonResponse(410, {}));
+
+    await withTenant(() => service.create({}, AUTH_PARAMS));
+    await vi.advanceTimersByTimeAsync(2100);
+    expect((await withTenant(() => service.find(AUTH_PARAMS))).phase).toBe('error');
+  });
+
+  it('an approved response missing the PKCE fields is terminal (contract break)', async () => {
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB);
+    mockUserCodeIssued();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { authorization_code: 'authz-1' }));
+
+    await withTenant(() => service.create({}, AUTH_PARAMS));
+    await vi.advanceTimersByTimeAsync(2100);
+    const status = await withTenant(() => service.find(AUTH_PARAMS));
+    expect(status.phase).toBe('error');
+    expect(writeCodexAuthFileMock).not.toHaveBeenCalled();
+  });
+
+  it('overlapping create calls do not leave an orphaned poll loop', async () => {
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB);
+
+    // First create's usercode response is held until after the second create
+    // fully completes — the classic double-click race.
+    let releaseFirst: (() => void) | undefined;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFirst = () =>
+            resolve(
+              jsonResponse(200, { device_auth_id: 'dev-1', user_code: 'ABCD-1234', interval: '1' })
+            );
+        })
+    );
+    const first = withTenant(() => service.create({}, AUTH_PARAMS));
+    await Promise.resolve(); // let the first create reach its awaited fetch
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { device_auth_id: 'dev-2', user_code: 'WXYZ-9876', interval: '1' })
+    );
+    const second = await withTenant(() => service.create({}, AUTH_PARAMS));
+    expect(second.userCode).toBe('WXYZ-9876');
+
+    releaseFirst?.();
+    await first;
+
+    // Only the second attempt is registered and polling.
+    expect((await withTenant(() => service.find(AUTH_PARAMS))).userCode).toBe('WXYZ-9876');
+    fetchMock.mockResolvedValue(jsonResponse(403, {}));
+    await vi.advanceTimersByTimeAsync(2100);
+    const pollBodies = fetchMock.mock.calls
+      .filter(([url]) => String(url).includes('/deviceauth/token'))
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string).device_auth_id);
+    expect(pollBodies).not.toContain('dev-1');
+    expect(pollBodies).toContain('dev-2');
   });
 
   it('hard-stops at code expiry and reports expired', async () => {

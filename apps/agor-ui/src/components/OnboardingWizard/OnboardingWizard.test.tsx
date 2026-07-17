@@ -711,6 +711,8 @@ describe('Codex ChatGPT device sign-in', () => {
     openDevicePane();
 
     expect(await screen.findByText('KEEP-0001')).toBeInTheDocument();
+    // The adopted attempt's expiry drives the countdown just like a fresh one.
+    expect(await screen.findByText(/code expires in/i)).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
   });
 });

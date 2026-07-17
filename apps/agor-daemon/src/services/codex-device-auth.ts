@@ -48,7 +48,7 @@ import { codexIdTokenClaims } from '../utils/codex-auth-file.js';
 import {
   type AppLike,
   persistVerifiedCodexAuth,
-  resolveCodexAuthTargetUser,
+  resolveCodexUnixIdentity,
 } from './codex-auth-import.js';
 
 const CODEX_AUTH_ISSUER = 'https://auth.openai.com';
@@ -73,6 +73,28 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
+/**
+ * Provider failure with an explicit retry disposition, so callers never have
+ * to infer transient-vs-terminal from message text. 5xx are transient (a
+ * provider blip must not kill a 15-minute approval window); non-pending 4xx
+ * and contract breaks (missing response fields) are terminal.
+ */
+class DeviceAuthProviderError extends Error {
+  constructor(
+    readonly disposition: 'transient' | 'terminal',
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+function providerStatusError(endpoint: string, status: number): DeviceAuthProviderError {
+  return new DeviceAuthProviderError(
+    status >= 500 ? 'transient' : 'terminal',
+    `${endpoint} failed with status ${status}`
+  );
+}
+
 interface UserCodeGrant {
   deviceAuthId: string;
   userCode: string;
@@ -87,13 +109,13 @@ async function requestUserCode(): Promise<UserCodeGrant | 'unavailable'> {
     body: JSON.stringify({ client_id: CODEX_CLIENT_ID }),
   });
   if (res.status === 404 || res.status === 403) return 'unavailable';
-  if (!res.ok) throw new Error(`usercode request failed with status ${res.status}`);
+  if (!res.ok) throw providerStatusError('usercode request', res.status);
 
   const body = (await res.json()) as Record<string, unknown>;
   const deviceAuthId = body.device_auth_id;
   const userCode = body.user_code ?? body.usercode;
   if (typeof deviceAuthId !== 'string' || typeof userCode !== 'string') {
-    throw new Error('usercode response missing expected fields');
+    throw new DeviceAuthProviderError('terminal', 'usercode response missing expected fields');
   }
   // The server sends `interval` as a decimal string (seconds).
   const intervalSeconds = Number.parseInt(String(body.interval ?? ''), 10);
@@ -122,13 +144,14 @@ async function pollDeviceToken(
     body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
   });
   if (res.status === 403 || res.status === 404) return 'pending';
-  if (!res.ok) throw new Error(`device token poll failed with status ${res.status}`);
+  if (!res.ok) throw providerStatusError('device token poll', res.status);
 
   const body = (await res.json()) as Record<string, unknown>;
   const authorizationCode = body.authorization_code;
   const codeVerifier = body.code_verifier;
   if (typeof authorizationCode !== 'string' || typeof codeVerifier !== 'string') {
-    throw new Error('device token response missing expected fields');
+    // The response contract broke — retrying the same request cannot help.
+    throw new DeviceAuthProviderError('terminal', 'device token response missing expected fields');
   }
   return { authorizationCode, codeVerifier };
 }
@@ -196,12 +219,18 @@ interface DeviceAuthAttempt {
   hint?: string;
   timer?: ReturnType<typeof setTimeout>;
   cancelled: boolean;
+  finishedAtMs?: number;
 }
+
+/** How long a finished attempt stays queryable before eviction. */
+const TERMINAL_ATTEMPT_TTL_MS = 60 * 60 * 1000;
 
 function statusOf(attempt: DeviceAuthAttempt | undefined): CodexDeviceAuthStatus {
   if (!attempt) return { phase: 'idle' };
   const base: CodexDeviceAuthStatus = { phase: attempt.phase };
-  if (attempt.phase === 'pending') {
+  // userCode is empty while the slot is reserved but the provider has not
+  // answered yet — don't surface a blank code for that sub-second window.
+  if (attempt.phase === 'pending' && attempt.userCode) {
     base.userCode = attempt.userCode;
     base.verificationUrl = `${CODEX_AUTH_ISSUER}/codex/device`;
     base.expiresAt = new Date(attempt.expiresAtMs).toISOString();
@@ -227,9 +256,23 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
     hint?: string
   ): void {
     attempt.phase = phase;
+    attempt.finishedAtMs = Date.now();
     if (hint) attempt.hint = hint;
     if (attempt.timer) clearTimeout(attempt.timer);
     attempt.timer = undefined;
+  }
+
+  /**
+   * Abandoned flows would otherwise grow the map forever on long-running
+   * daemons — one entry per user who started and never finished a sign-in.
+   */
+  function pruneFinishedAttempts(): void {
+    const cutoff = Date.now() - TERMINAL_ATTEMPT_TTL_MS;
+    for (const [key, attempt] of attempts) {
+      if (attempt.phase !== 'pending' && (attempt.finishedAtMs ?? 0) < cutoff) {
+        attempts.delete(key);
+      }
+    }
   }
 
   async function pollTick(attempt: DeviceAuthAttempt): Promise<void> {
@@ -243,10 +286,10 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
     try {
       approved = await pollDeviceToken(attempt.deviceAuthId, attempt.userCode);
     } catch (err) {
-      // Transient transport errors should not kill a 15-minute window; only
-      // an unexpected provider status is terminal.
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('status')) {
+      // Network blips and provider 5xx are transient — keep polling until the
+      // code expires. Only a definitive rejection or contract break ends the
+      // attempt early.
+      if (err instanceof DeviceAuthProviderError && err.disposition === 'terminal') {
         finish(attempt, 'error', 'ChatGPT sign-in failed — get a new code and try again.');
         return;
       }
@@ -281,9 +324,13 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
           : 'Signed in with ChatGPT.'
       );
     } catch (err) {
+      // Messages reaching this catch are already sanitized: the raw-token
+      // write path rethrows as BadRequest with operator-safe text inside
+      // persistVerifiedCodexAuth, and everything else is service/DB failures
+      // whose messages help operators.
       console.error(
         `[CodexDeviceAuth] Finalizing sign-in failed: ${
-          err instanceof Error ? err.constructor.name : 'unknown error'
+          err instanceof Error ? `${err.constructor.name}: ${err.message}` : 'unknown error'
         }`
       );
       finish(
@@ -341,65 +388,66 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
 
       // Resolve the destination identity up front so a strict-mode user with
       // no unix_username fails fast instead of after approving the code.
-      let targetUnixUser: string | null;
-      try {
-        targetUnixUser = await resolveCodexAuthTargetUser(userId, withTenantDatabase);
-      } catch (err) {
+      const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+      if (!identity.ok) {
         throw new BadRequest(
-          `Cannot determine which Unix account should hold this Codex login: ${
-            err instanceof Error ? err.message : String(err)
-          }`
+          `Cannot determine which Unix account should hold this Codex login: ${identity.message}`
         );
       }
 
+      // Reserve the per-user slot BEFORE any await: an overlapping create()
+      // (double-click, impatient retry) then cancels THIS attempt instead of
+      // racing past a not-yet-registered one and leaving its poll loop
+      // orphaned against OpenAI for the full 15-minute window.
       cancelAttempt(key);
-
-      let grant: UserCodeGrant | 'unavailable';
-      try {
-        grant = await requestUserCode();
-      } catch {
-        throw new BadRequest(
-          'Could not reach ChatGPT to start the sign-in — check the server’s network access and try again.'
-        );
-      }
-
-      if (grant === 'unavailable') {
-        const attempt: DeviceAuthAttempt = {
-          userId,
-          tenantId,
-          authUser,
-          targetUnixUser,
-          phase: 'unavailable',
-          deviceAuthId: '',
-          userCode: '',
-          intervalMs: 0,
-          expiresAtMs: 0,
-          hint: UNAVAILABLE_HINT,
-          cancelled: false,
-        };
-        attempts.set(key, attempt);
-        return statusOf(attempt);
-      }
-
+      pruneFinishedAttempts();
       const attempt: DeviceAuthAttempt = {
         userId,
         tenantId,
         authUser,
-        targetUnixUser,
+        targetUnixUser: identity.unixUser,
         phase: 'pending',
-        deviceAuthId: grant.deviceAuthId,
-        userCode: grant.userCode,
-        intervalMs: grant.intervalMs,
+        deviceAuthId: '',
+        userCode: '',
+        intervalMs: 0,
         expiresAtMs: Date.now() + DEVICE_CODE_LIFETIME_MS,
         cancelled: false,
       };
       attempts.set(key, attempt);
+
+      let grant: UserCodeGrant | 'unavailable';
+      try {
+        grant = await requestUserCode();
+      } catch (err) {
+        if (!attempt.cancelled) {
+          finish(attempt, 'error', 'Could not get a sign-in code from ChatGPT.');
+        }
+        const terminal = err instanceof DeviceAuthProviderError && err.disposition === 'terminal';
+        throw new BadRequest(
+          terminal
+            ? 'ChatGPT rejected the sign-in request — try again later, or paste an auth.json / use an API key instead.'
+            : 'Could not reach ChatGPT to start the sign-in — check the server’s network access and try again.'
+        );
+      }
+      // A newer attempt replaced this one while the provider was answering.
+      if (attempt.cancelled) return statusOf(attempts.get(key));
+
+      if (grant === 'unavailable') {
+        finish(attempt, 'unavailable', UNAVAILABLE_HINT);
+        return statusOf(attempt);
+      }
+
+      attempt.deviceAuthId = grant.deviceAuthId;
+      attempt.userCode = grant.userCode;
+      attempt.intervalMs = grant.intervalMs;
+      attempt.expiresAtMs = Date.now() + DEVICE_CODE_LIFETIME_MS;
       scheduleNext(attempt);
       return statusOf(attempt);
     },
 
     async find(params?: AuthenticatedParams): Promise<CodexDeviceAuthStatus> {
       const { key } = await requireContext(params);
+      pruneFinishedAttempts();
       return statusOf(attempts.get(key));
     },
   };
