@@ -14,11 +14,6 @@ export function classifyExecutorExit(input: {
   return input.nonzeroMayHaveDispatched ? 'ambiguous' : 'authoritative';
 }
 
-/**
- * Build the task fields persisted immediately before launch. CLI sessions have
- * no executor connection, so they skip DISPATCHING and remain without an
- * executor connection timestamp.
- */
 export function buildTaskLaunchState(
   agenticTool: AgenticToolName,
   startedAt: string,
