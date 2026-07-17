@@ -4,12 +4,9 @@ export const EXECUTOR_HEARTBEAT_DEFAULT_INTERVAL_MS = 10_000;
 export const EXECUTOR_HEARTBEAT_MIN_STALE_AFTER_MS = 30_000;
 export const EXECUTOR_HEARTBEAT_DEFAULT_CALLBACK_TIMEOUT_MS = 3_000;
 export const EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS = 5 * 60_000;
-export interface ResolvedSdkWatchdogConfig {
-  mode: 'disabled' | 'observe' | 'enforce';
-  first_progress_timeout_ms: number;
-  abort_grace_ms: number;
-  claude_idle_timeout_ms: number | null;
-}
+export type ResolvedSdkWatchdogConfig = Required<
+  NonNullable<AgorExecutionSettings['sdk_watchdog']>
+>;
 
 export interface ResolvedExecutorHeartbeatConfig {
   enabled: boolean;

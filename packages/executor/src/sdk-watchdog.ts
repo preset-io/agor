@@ -39,17 +39,14 @@ export function evaluateSdkWatchdog(
     return undefined;
   }
   if (state.firstProgressAt === undefined) {
+    const firstExpired = now - state.startedAt >= config.first_progress_timeout_ms;
     if (
-      now - state.startedAt >= config.first_progress_timeout_ms &&
+      firstExpired &&
       now - (state.lastRawAt ?? state.startedAt) >= config.first_progress_timeout_ms
     ) {
       return 'no_first_progress';
     }
-    if (
-      !state.unknownReported &&
-      state.unknownCount > 0 &&
-      now - state.startedAt >= config.first_progress_timeout_ms
-    ) {
+    if (firstExpired && !state.unknownReported && state.unknownCount > 0) {
       return 'unknown_activity';
     }
     return undefined;
@@ -122,7 +119,6 @@ export class SdkWatchdog {
   stop(): void {
     this.decided = true;
     if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
   }
 
   private now(): number {
@@ -133,72 +129,57 @@ export class SdkWatchdog {
     if (this.decided) return;
     const now = this.now();
     const reason = evaluateSdkWatchdog(this.state, now, this.options.tool, this.options.config);
-    if (reason === 'unknown_activity') {
-      this.state.unknownReported = true;
-      void this.options.onDecision(this.evidence(reason, now, 'would_fire'));
+    if (!reason) {
       this.schedule();
       return;
     }
-    if (reason) {
-      this.stop();
-      void this.options.onDecision(
-        this.evidence(
-          reason,
-          now,
-          this.options.config.mode === 'enforce' ? 'enforced' : 'would_fire'
-        )
-      );
-      return;
-    }
-    this.schedule();
-  }
-
-  private evidence(
-    reason: WatchdogEvidence['reason'],
-    now: number,
-    watchdog_action: NonNullable<WatchdogEvidence['watchdog_action']>
-  ): WatchdogEvidence {
-    return {
+    const action =
+      reason === 'unknown_activity' || this.options.config.mode !== 'enforce'
+        ? 'would_fire'
+        : 'enforced';
+    const evidence: WatchdogEvidence = {
       reason,
       elapsed_ms: Math.max(0, Math.round(now - (this.state.startedAt ?? now))),
-      watchdog_action,
+      watchdog_action: action,
       unknown_event_count: this.state.unknownCount,
       sdk_version: this.options.sdkVersion,
     };
+    if (reason === 'unknown_activity') {
+      this.state.unknownReported = true;
+      void this.options.onDecision(evidence);
+      this.schedule();
+      return;
+    }
+    this.stop();
+    void this.options.onDecision(evidence);
   }
 
   private schedule(): void {
     if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
+    const { state } = this;
+    const { config, tool } = this.options;
     if (
       this.decided ||
-      this.state.pausedAt !== undefined ||
-      this.state.startedAt === undefined ||
-      this.state.toolActive
+      state.pausedAt !== undefined ||
+      state.startedAt === undefined ||
+      state.toolActive
     ) {
       return;
     }
     const now = this.now();
     let deadline: number | undefined;
-    if (this.state.firstProgressAt === undefined) {
-      const firstDeadline = this.state.startedAt + this.options.config.first_progress_timeout_ms;
+    if (state.firstProgressAt === undefined) {
+      const firstDeadline = state.startedAt + config.first_progress_timeout_ms;
       const silenceDeadline =
-        (this.state.lastRawAt ?? this.state.startedAt) +
-        this.options.config.first_progress_timeout_ms;
-      deadline =
-        now < firstDeadline && !this.state.unknownReported ? firstDeadline : silenceDeadline;
-    } else if (
-      this.options.tool === 'claude-code' &&
-      this.options.config.claude_idle_timeout_ms !== null
-    ) {
+        (state.lastRawAt ?? state.startedAt) + config.first_progress_timeout_ms;
+      deadline = now < firstDeadline && !state.unknownReported ? firstDeadline : silenceDeadline;
+    } else if (tool === 'claude-code' && config.claude_idle_timeout_ms !== null) {
       const idleDeadline =
-        (this.state.idleAnchor ?? this.state.firstProgressAt) +
-        this.options.config.claude_idle_timeout_ms;
+        (state.idleAnchor ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
       deadline =
-        now < idleDeadline && !this.state.unknownReported
+        now < idleDeadline && !state.unknownReported
           ? idleDeadline
-          : (this.state.lastRawAt ?? this.state.firstProgressAt) +
-            this.options.config.claude_idle_timeout_ms;
+          : (state.lastRawAt ?? state.firstProgressAt) + config.claude_idle_timeout_ms;
     }
     if (deadline === undefined) return;
     this.timer = setTimeout(() => this.check(), Math.max(0, deadline - now));

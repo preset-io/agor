@@ -1285,26 +1285,23 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return task;
   }
 
-  /** Persist one authenticated watchdog decision; only the daemon owns lifecycle effects. */
   async reportSdkHealthFailure(data: SdkHealthFailureInput, params?: TaskParams): Promise<Task> {
-    const allowedReasons = new Set([
-      'no_first_progress',
-      'progress_stalled',
-      'stream_disconnected',
-      'unknown_activity',
-    ]);
-    if (!allowedReasons.has(data.reason)) throw new BadRequest('invalid SDK health reason');
     if (
-      data.elapsed_ms !== undefined &&
-      (!Number.isSafeInteger(data.elapsed_ms) || data.elapsed_ms < 0)
-    ) {
-      throw new BadRequest('elapsed_ms must be a non-negative safe integer');
-    }
-    if (
-      data.unknown_event_count !== undefined &&
-      (!Number.isSafeInteger(data.unknown_event_count) || data.unknown_event_count < 0)
-    ) {
-      throw new BadRequest('unknown_event_count must be a non-negative safe integer');
+      ![
+        'no_first_progress',
+        'progress_stalled',
+        'stream_disconnected',
+        'unknown_activity',
+      ].includes(data.reason)
+    )
+      throw new BadRequest('invalid SDK health reason');
+    for (const [name, value] of Object.entries({
+      elapsed_ms: data.elapsed_ms,
+      unknown_event_count: data.unknown_event_count,
+    })) {
+      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+        throw new BadRequest(`${name} must be a non-negative safe integer`);
+      }
     }
     if (
       data.sdk_version !== undefined &&
