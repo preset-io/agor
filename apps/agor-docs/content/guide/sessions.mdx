@@ -1,11 +1,11 @@
 ---
 title: Sessions & Trees
-description: Sessions are AI conversations that branch — fork to explore alternatives, spawn subsessions to delegate, or fire ephemeral side-questions. Genealogy is first-class.
+description: Sessions are AI conversations that branch. Fork to explore alternatives, spawn subsessions to delegate, or fire ephemeral side-questions. Genealogy is first-class.
 ---
 
 # Sessions & Trees
 
-**A session is an AI conversation.** Unlike a CLI where conversations scroll up and disappear, Agor sessions can **branch** — fork siblings, spawn children, or ask side questions — building a genealogy tree you can navigate, resume, and reason about.
+**A session is an AI conversation.** Unlike a CLI where conversations scroll up and disappear, Agor sessions can **branch** (fork siblings, spawn children, or ask side questions), building a genealogy tree you can navigate, resume, and reason about.
 
 Every session lives inside exactly one [branch](/guide/branches). Multiple sessions on the same branch share a filesystem but have independent conversations.
 
@@ -21,11 +21,11 @@ Branch: "auth-feature"
 
 <img
   src="/screenshots/security-review-fanout.png"
-  alt="Branch card on the board showing a parent coordinator session that spawned eight specialized security-review children in parallel — each child a separately introspectable conversation"
+  alt="Branch card on the board showing a parent coordinator session that spawned eight specialized security-review children in parallel, each child a separately introspectable conversation"
   style={{ maxWidth: '500px', borderRadius: '8px' }}
 />
 
-_A coordinator session fanned out to eight parallel security-review children — each its own introspectable conversation._
+_A coordinator session fanned out to eight parallel security-review children, each its own introspectable conversation._
 
 ---
 
@@ -42,7 +42,7 @@ Session: "Built user authentication feature"
 └─ Fork: "Generate API documentation"
 ```
 
-Use forks when downstream work needs the _same starting knowledge_ but different focus. (Currently Claude Code only — other SDKs don't yet expose conversation copy.)
+Use forks when downstream work needs the _same starting knowledge_ but different focus. (Currently Claude Code only. Other SDKs don't yet expose conversation copy.)
 
 ### Spawn — delegate with fresh context
 
@@ -59,17 +59,17 @@ Use spawns when the parent is orchestrating and you want children to do focused 
 
 ### BTW — ephemeral side question
 
-A **btw** is an ephemeral fork that runs concurrently and auto-archives when done. The parent never blocks — the answer is delivered back as a message in the parent's conversation.
+A **btw** is an ephemeral fork that runs concurrently and auto-archives when done. The parent never blocks. The answer is delivered back as a message in the parent's conversation.
 
 The "btw" button (❓) sits next to the prompt input. Click it, type your question, and it runs in a separate ephemeral session. When it completes, the result is injected back into the parent.
 
-For orchestrating agents, the same thing is exposed via `agor_sessions_prompt` with `mode: "btw"` — agents can ask peer sessions quick questions without breaking their flow.
+For orchestrating agents, the same thing is exposed via `agor_sessions_prompt` with `mode: "btw"`. Agents can ask peer sessions quick questions without breaking their flow.
 
 > BTW uses session forking under the hood, so it's currently Claude-only. For tools without fork support (Codex, Gemini), use `mode: "subsession"` instead.
 
 <img
   src="/screenshots/btw-inline.png"
-  alt="A btw side-question rendered inline in the parent session timeline — the answer is delivered back as a message in the parent's conversation when the ephemeral fork completes"
+  alt="A btw side-question rendered inline in the parent session timeline. The answer is delivered back as a message in the parent's conversation when the ephemeral fork completes"
   style={{ maxWidth: '600px' }}
 />
 
@@ -83,10 +83,10 @@ _A btw question runs in an ephemeral fork; the answer is delivered back inline i
 
 **Branched conversations are exploratory.** Every fork/spawn is:
 
-- **Introspectable** — Full conversation history kept on disk; click any node and read it.
-- **Composable** — Fork from forks, spawn from spawns, build deep delegation trees.
-- **Multiplayer-friendly** — Teammates see the tree on the branch card and understand the exploration.
-- **Resumable** — Prompt any session in the tree at any time, even after it "completed."
+- **Introspectable**: Full conversation history kept on disk; click any node and read it.
+- **Composable**: Fork from forks, spawn from spawns, build deep delegation trees.
+- **Multiplayer-friendly**: Teammates see the tree on the branch card and understand the exploration.
+- **Resumable**: Prompt any session in the tree at any time, even after it "completed."
 
 The tree is rendered on the branch card on the board, and in full detail in the session view.
 
@@ -96,10 +96,10 @@ The tree is rendered on the branch card on the board, and in full detail in the 
 
 Spawning is more than "start a child." Subsessions in Agor have first-class **callback** semantics:
 
-- **Non-blocking** — The parent stays responsive while children run. If a callback arrives while the parent is mid-prompt, it queues.
-- **Automatic reports** — When a child completes, it sends a callback message to the parent: status, summary, tool usage count, optional final message.
-- **Persistent** — Children don't disappear after completing. You can prompt them again ("can you fix the tests you broke?") or have them spawn their own children.
-- **Cross-tool** — Spawn a Codex child from a Claude parent, or a Gemini child from a Codex parent. Pick the right tool per subtask.
+- **Non-blocking**: The parent stays responsive while children run. If a callback arrives while the parent is mid-prompt, it queues.
+- **Automatic reports**: When a child completes, it sends a callback message to the parent: status, summary, tool usage count, optional final message.
+- **Persistent**: Children don't disappear after completing. You can prompt them again ("can you fix the tests you broke?") or have them spawn their own children.
+- **Cross-tool**: Spawn a Codex child from a Claude parent, or a Gemini child from a Codex parent. Pick the right tool per subtask.
 
 <img
   src="/screenshots/subsession-spawn-codex-review.png"
@@ -111,11 +111,11 @@ Spawning is more than "start a child." Subsessions in Agor have first-class **ca
 
 When spawning, you can override:
 
-- **Agentic tool** — Claude Code, Codex, Gemini, OpenCode
-- **Model** — Use a different model than the parent
-- **Permissions** — Stricter or looser approval requirements
-- **MCP servers** — Different tool sets (Codex MCP support pending)
-- **Callback content** — Include last message (default on), include original prompt (default off), extra formatting instructions
+- **Agentic tool**: Claude Code, Codex, Gemini, OpenCode
+- **Model**: Use a different model than the parent
+- **Permissions**: Stricter or looser approval requirements
+- **MCP servers**: Different tool sets (Codex MCP support pending)
+- **Callback content**: Include last message (default on), include original prompt (default off), extra formatting instructions
 
 ### Comparison with Claude Code's native subagents
 
@@ -163,7 +163,7 @@ Claude (implements feature)
       └─ Callback: critical bug found at file:line
 ```
 
-Different agent, fresh eyes. Codex isn't defending its own implementation choices — it's just looking at the code. Especially effective for security audits, validating cross-SDK consistency, and catching bugs before PR submission.
+Different agent, fresh eyes. Codex isn't defending its own implementation choices. It's just looking at the code. Especially effective for security audits, validating cross-SDK consistency, and catching bugs before PR submission.
 
 <img
   src="/screenshots/subsession-callback-findings.png"
@@ -202,13 +202,13 @@ Each level delegates to specialized agents. Each session has a focused context w
 
 A session has more knobs than a CLI invocation:
 
-- **Model** — Switch model mid-session from the panel footer
-- **Effort** — `low` / `medium` / `high` / `xhigh` / `max` reasoning depth
-- **Permissions** — How tool calls are gated (auto-approve, supervised, manual)
-- **MCP servers** — Which tool sets are attached
-- **Effort and 1M context** — Models with `[1m]` enable extended context
+- **Model**: Switch model mid-session from the panel footer
+- **Effort**: `low` / `medium` / `high` / `xhigh` / `max` reasoning depth
+- **Permissions**: How tool calls are gated (auto-approve, supervised, manual)
+- **MCP servers**: Which tool sets are attached
+- **Effort and 1M context**: Models with `[1m]` enable extended context
 
-All of this is changeable at any point — you don't have to start a new session to dial things up or down.
+All of this is changeable at any point. You don't have to start a new session to dial things up or down.
 
 <img
   src="/screenshots/session-settings.png"
@@ -216,14 +216,14 @@ All of this is changeable at any point — you don't have to start a new session
   style={{ maxWidth: '500px' }}
 />
 
-_Session Settings modal — model, effort, permissions, MCP, env vars, callbacks, all editable mid-session._
+_Session Settings modal: model, effort, permissions, MCP, env vars, callbacks, all editable mid-session._
 
 ---
 
 ## Related
 
-- [Branches](/guide/branches) — The container for sessions
-- [Agor MCP Server](/guide/internal-mcp) — How agents introspect and spawn each other programmatically
-- [Rich Chat UX](/guide/rich-chat-ux) — Token accounting, context window viz, tool blocks, queueing
-- [In-Conversation Widgets](/guide/in-conversation-widgets) — Agent-rendered inline forms (env vars today, more soon) that capture input without it ever entering the model's context
-- [SDK Comparison](/guide/sdk-comparison) — What each agent SDK supports
+- [Branches](/guide/branches): The container for sessions
+- [Agor MCP Server](/guide/internal-mcp): How agents introspect and spawn each other programmatically
+- [Rich Chat UX](/guide/rich-chat-ux): Token accounting, context window viz, tool blocks, queueing
+- [In-Conversation Widgets](/guide/in-conversation-widgets): Agent-rendered inline forms (env vars today, more soon) that capture input without it ever entering the model's context
+- [SDK Comparison](/guide/sdk-comparison): What each agent SDK supports

@@ -1,6 +1,6 @@
 ---
 title: Message Gateway
-description: Route messages from Slack, GitHub, and other platforms directly into Agor sessions — turning any chat thread or PR comment into a portal to an autonomous coding agent.
+description: Route messages from Slack, GitHub, and other platforms directly into Agor sessions, turning any chat thread or PR comment into a portal to an autonomous coding agent.
 heroImage: '/screenshots/marketing/agor-marketing-slack-thread.png'
 ---
 
@@ -8,31 +8,31 @@ heroImage: '/screenshots/marketing/agor-marketing-slack-thread.png'
 
 <div style={{ marginTop: '16px', marginBottom: '24px', padding: '16px 20px', border: '1px solid #4a90c0', borderRadius: '8px', backgroundColor: 'rgba(74, 144, 192, 0.08)' }}>
 
-**Security — Think Before Enabling**
+**Security: Think Before Enabling**
 
 A Message Gateway channel opens an external pathway (Slack DM, GitHub `@mention`, Shortcut comment) that can prompt agents holding your branch's full surface area: code, MCP servers, env vars, and any credentials in scope. Worth thinking through before you flip it on, but not categorically dangerous.
 
 Things working in your favor:
 
-- **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub and Shortcut mentions are aligned via an explicit `user_map` or the sender's platform email. When a match exists, the spawned session is attributed to that real Agor user — so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins).
+- **Email-based user matching.** Inbound Slack messages are aligned to Agor users via the `users:read.email` scope; GitHub and Shortcut mentions are aligned via an explicit `user_map` or the sender's platform email. When a match exists, the spawned session is attributed to that real Agor user, so prompts run under their identity and audit trail, not as a generic bot. Unmatched senders are rejected (or surfaced to admins).
 - **Encrypted credentials at rest.** Bot tokens, app tokens, and private keys are stored encrypted in the daemon database.
 - **Outbound-only transport.** Slack uses Socket Mode; GitHub and Shortcut use API polling. None of them require a public webhook URL.
 - **Per-channel agent config.** Permission modes, model, and MCP server attachments are scoped to the channel, not global.
 
 Things that still warrant caution:
 
-- **Channels open external pathways into agent context.** Anyone who can DM the bot or `@mention` it on a watched GitHub repo or Shortcut story can ask the agent to read, write, or execute code on the target branch. If the channel runs in `trust` mode with broad MCP access, that pathway is effectively a remote prompt seat — treat it as such.
+- **Channels open external pathways into agent context.** Anyone who can DM the bot or `@mention` it on a watched GitHub repo or Shortcut story can ask the agent to read, write, or execute code on the target branch. If the channel runs in `trust` mode with broad MCP access, that pathway is effectively a remote prompt seat. Treat it as such.
 - **Restrict who can reach the bot.** Limit Slack DM scope (private workspace or app distribution settings), narrow GitHub `watch_repos`, and use Shortcut's search scope to constrain which stories can summon the assistant.
 - **Use dedicated branches.** Don't point channels at branches holding production secrets. Create isolated branches scoped to gateway use.
 - **Pick the right permission mode.** `supervised` or `manual` modes preserve human-in-the-loop on tool calls; `trust` is fine for bounded, well-understood automations but removes that gate.
 - **Mind the [Unix isolation mode](/guide/multiplayer-unix-isolation).** In `simple` mode the agent runs as the daemon user; in `strict` mode it runs as the matched Agor user's Unix identity, which is what you want when channels span teams.
 - **Rotate tokens.** Bot tokens, app tokens, API tokens, private keys, and webhook secrets should be rotated like any other secret.
 
-> **The mental model:** a gateway channel is a remote terminal into an agent that holds the same authority as a human prompting that branch. Configure who can reach it, what it can do, and which identity it runs as — and the rest is normal Agor surface area.
+> **The mental model:** a gateway channel is a remote terminal into an agent that holds the same authority as a human prompting that branch. Configure who can reach it, what it can do, and which identity it runs as, and the rest is normal Agor surface area.
 
 </div>
 
-The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack bot in a channel thread, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent — then routes responses back to the platform. In Slack channels, every prompt requires an explicit bot mention; Agor catches the bot up on intervening thread replies when it is mentioned again.
+The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack bot in a channel thread, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent, then routes responses back to the platform. In Slack channels, every prompt requires an explicit bot mention; Agor catches the bot up on intervening thread replies when it is mentioned again.
 
 > Currently supports **Slack**, **GitHub**, **Shortcut**, and **Microsoft Teams**. Discord, WhatsApp, and Telegram connectors are planned.
 
@@ -46,16 +46,16 @@ The Message Gateway connects external messaging platforms to Agor's agent sessio
 
 A **Channel** is a portal into a branch. It defines:
 
-- **A home branch** — the persistent branch where every session spawned by this channel will operate. Think of it as a command center, like an [teammate](/guide/teammates) branch that supervises a project.
-- **An agentic tool configuration** — which coding agent to use (Claude Code, Codex, Gemini, OpenCode), its preset or inline model and permission settings.
-- **An MCP server selection** — which external capabilities to attach, independently of the agentic-tool preset.
-- **Platform credentials** — bot token, app token, and other secrets needed to send and receive messages (encrypted at rest).
+- **A home branch.** The persistent branch where every session spawned by this channel will operate. Think of it as a command center, like an [teammate](/guide/teammates) branch that supervises a project.
+- **An agentic tool configuration.** Which coding agent to use (Claude Code, Codex, Gemini, OpenCode), its preset or inline model and permission settings.
+- **An MCP server selection.** Which external capabilities to attach, independently of the agentic-tool preset.
+- **Platform credentials.** Bot token, app token, and other secrets needed to send and receive messages (encrypted at rest).
 
 You can create multiple channels for the same or different branches. For example:
 
-- **"Optimus Prime"** — Claude Code (Opus 4.8) on your main teammate branch, with Slack + GitHub MCP servers
-- **"Scout"** — Claude Code (Sonnet 4.5) on a lighter review branch, trust mode, no MCP servers
-- **"Codex Runner"** — Codex on a `superset-frontend` branch for quick JS tasks
+- **"Optimus Prime"** runs Claude Code (Opus 4.8) on your main teammate branch, with Slack + GitHub MCP servers
+- **"Scout"** runs Claude Code (Sonnet 4.5) on a lighter review branch, trust mode, no MCP servers
+- **"Codex Runner"** runs Codex on a `superset-frontend` branch for quick JS tasks
 
 Gateway channels keep an internal per-channel key for Agor's generic inbound endpoint, but supported integrations usually do not require you to copy it anywhere. Slack uses Socket Mode, while GitHub and Shortcut use API polling; no public webhook URL is needed for those connectors.
 
@@ -65,7 +65,7 @@ When a message arrives from a platform (e.g., a Slack bot mention or a GitHub `@
 
 1. **Authenticate.** The gateway looks up the channel by its key and verifies it's enabled.
 2. **Map thread to session.** If this is a new platform thread, create a fresh Agor session on the channel's target branch with the channel's agentic tool configuration. If this thread has been seen before for this gateway channel, route the mention to the existing session. Multiple Slack bots can participate in the same Slack thread; each bot gets its own mapping.
-3. **Send prompt.** The message text is sent to the session via Agor's standard prompt flow — task creation, executor spawn, the full pipeline.
+3. **Send prompt.** The message text is sent to the session via Agor's standard prompt flow (task creation, executor spawn, the full pipeline).
 4. **Agent runs.** The coding agent (Claude Code, Codex, etc.) processes the prompt with full access to the branch, MCP servers, and any configured tools.
 5. **Route response back.** When the agent produces a response, Agor's outbound routing hook intercepts it and posts it back into the same platform thread. Formatting is adapted per platform (Slack mrkdwn conversion, GitHub markdown pass-through).
 6. **Repeat.** Slack follow-ups require another explicit mention. When mentioned again, Agor fetches intervening Slack thread replies and includes them as catch-up context before prompting the agent.
@@ -94,7 +94,7 @@ Slack DM                    Agor Daemon                    Agent
   │                              │                           │
 ```
 
-The outbound routing is a lightweight after-hook on message creation. For sessions without a gateway mapping (the vast majority), it's a single database lookup that returns immediately — effectively a no-op.
+The outbound routing is a lightweight after-hook on message creation. For sessions without a gateway mapping (the vast majority), it's a single database lookup that returns immediately, effectively a no-op.
 
 ### Outbound branch binding
 
@@ -113,12 +113,12 @@ This keeps normal team discussions from turning into implicit agent prompts whil
 
 ## Setting Up Slack Integration
 
-Slack setup is **manifest-based**. Instead of clicking through OAuth scopes, event subscriptions, and Socket Mode by hand, you describe what the bot should do and Agor produces a complete Slack app manifest. Pasting that manifest into Slack's "Create app from manifest" flow preconfigures every scope and event in one step — so the scope list can never drift from what the connector actually calls.
+Slack setup is **manifest-based**. Instead of clicking through OAuth scopes, event subscriptions, and Socket Mode by hand, you describe what the bot should do and Agor produces a complete Slack app manifest. Pasting that manifest into Slack's "Create app from manifest" flow preconfigures every scope and event in one step, so the scope list can never drift from what the connector actually calls.
 
 There are two ways to get the manifest:
 
 - **The Add Channel wizard (UI).** When you create a Slack channel in Agor, a guided wizard builds the manifest from your choices and shows it (with a live scope/event preview) ready to copy.
-- **The `agor_gateway_slack_manifest_generate` MCP tool (agent-driven).** Ask an agent to generate the manifest for you. The tool is the programmatic equivalent of the wizard, backed by the same generator: from a set of capability toggles it returns the manifest JSON, the derived bot scopes and events, ordered setup steps, and the channel config to pass to `agor_gateway_channels_create`. It is pure — it creates no Slack app, no Agor channel, and validates no tokens. When an agent completes setup, it creates the channel disabled and without tokens via `agor_gateway_channels_create` (`enabled: false`), then calls `agor_widgets_request_gateway_token` so you enter the `xoxb-`/`xapp-` tokens in a secure inline form — the agent never asks you to paste tokens into the chat or passes them as `agor_gateway_channels_create` arguments, because raw secrets in tool arguments would leak into the MCP transcript.
+- **The `agor_gateway_slack_manifest_generate` MCP tool (agent-driven).** Ask an agent to generate the manifest for you. The tool is the programmatic equivalent of the wizard, backed by the same generator: from a set of capability toggles it returns the manifest JSON, the derived bot scopes and events, ordered setup steps, and the channel config to pass to `agor_gateway_channels_create`. It is pure. It creates no Slack app, no Agor channel, and validates no tokens. When an agent completes setup, it creates the channel disabled and without tokens via `agor_gateway_channels_create` (`enabled: false`), then calls `agor_widgets_request_gateway_token` so you enter the `xoxb-`/`xapp-` tokens in a secure inline form. The agent never asks you to paste tokens into the chat or passes them as `agor_gateway_channels_create` arguments, because raw secrets in tool arguments would leak into the MCP transcript.
 
 Once a channel exists, its edit form also has an **App Manifest** panel showing the recommended manifest for the channel's current options. Re-paste it into Slack whenever you change surfaces or capabilities so the app's scopes stay aligned.
 
@@ -127,13 +127,13 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 ### 1. Build the manifest in Agor
 
 1. Open **Settings** (gear icon) → **Gateway Channels** → **Add Channel**.
-2. Select **Slack** as the channel type. A four-step wizard appears: **Channel → Options → Create app → Tokens & test**. A consistent footer carries the flow — **Back** and **Cancel** plus a primary button that reads **Continue** on each step and **Create channel** on the last.
+2. Select **Slack** as the channel type. A four-step wizard appears: **Channel → Options → Create app → Tokens & test**. A consistent footer carries the flow, with **Back** and **Cancel** plus a primary button that reads **Continue** on each step and **Create channel** on the last.
 3. On the **Channel** step, set the basics: **Channel Type** (Slack), a **Name** for the Agor channel, the **Target Branch** where sessions run, and whether the channel is **Enabled**. Click **Continue**.
 4. On the **Options** step, choose what the bot can do:
-   - **App Name** — the display name for the Slack app.
-   - **Surfaces** — where the bot listens. Direct messages are always on; optionally add **Public channels** (all, or a specific list of channel IDs), **Private channels**, and **Group DMs**.
-   - **Align Slack users** — match each Slack profile's email to an Agor user (unmatched senders are rejected). When off, pick a single Agor user to run every session as.
-   - **Enable outbound sends** — allow authorized agents to post proactive Slack messages through this channel.
+   - **App Name.** The display name for the Slack app.
+   - **Surfaces.** Where the bot listens. Direct messages are always on; optionally add **Public channels** (all, or a specific list of channel IDs), **Private channels**, and **Group DMs**.
+   - **Align Slack users.** Match each Slack profile's email to an Agor user (unmatched senders are rejected). When off, pick a single Agor user to run every session as.
+   - **Enable outbound sends.** Allow authorized agents to post proactive Slack messages through this channel.
 5. As you toggle options, the wizard updates a **live manifest preview** and the derived **bot scopes** and **event subscriptions**. You never add a scope by hand. Click **Continue**.
 
 ### 2. Create the Slack app from the manifest
@@ -148,7 +148,7 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 ### 3. Finish the channel in Agor
 
 1. On the **Tokens & test** step, paste the **Bot Token** (`xoxb-…`) and **App Token** (`xapp-…`).
-2. Optionally click **Test connection** to verify the bot and app tokens before saving. (A passing test is advisory — Slack can't fully verify channel access up front.)
+2. Optionally click **Test connection** to verify the bot and app tokens before saving. (A passing test is advisory. Slack can't fully verify channel access up front.)
 3. Optionally expand **Agent Configuration** to set the agent, model, permission mode, MCP servers, and channel-level environment variables for sessions created by this channel.
 4. Click **Create channel**. The daemon immediately starts a Socket Mode listener for the channel.
 
@@ -158,7 +158,7 @@ DM the bot from the **Apps** section of Slack, or `@mention` it in any channel o
 
 ### Scope reference
 
-The wizard and manifest bake these in automatically — this table is for understanding what each capability grants, not a checklist to apply by hand. Scopes are bot scopes (requested in the manifest); `connections:write` is the one app-level scope, generated separately on the app-level (`xapp-`) token.
+The wizard and manifest bake these in automatically. This table is for understanding what each capability grants, not a checklist to apply by hand. Scopes are bot scopes (requested in the manifest); `connections:write` is the one app-level scope, generated separately on the app-level (`xapp-`) token.
 
 | Capability                                | Bot scopes added                                                                    | Events added  |
 | ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------- |
@@ -171,7 +171,7 @@ The wizard and manifest bake these in automatically — this table is for unders
 
 Notes:
 
-- `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled — those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
+- `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
 - `connections:write` never appears in the manifest. It lives on the app-level token you generate under **Basic Information → App-Level Tokens**.
 
 ## Setting Up GitHub Integration
@@ -182,10 +182,10 @@ When someone mentions `@agor` (or your app's name) in a PR or issue comment, Ago
 
 Key differences from Slack:
 
-- **Polling, not WebSocket** — Agor polls the GitHub API every 15 seconds (configurable). No public endpoint needed.
-- **Per-PR/issue sessions** — Each PR or issue gets its own session. All `@agor` mentions within the same PR route to the same session.
-- **Last-message-only responses** — Unlike Slack (which streams every message), only the agent's final response is posted to GitHub. Intermediate progress is visible in the Agor UI.
-- **Bot identity** — Responses are posted as the GitHub App's bot user, not as any human user.
+- **Polling, not WebSocket.** Agor polls the GitHub API every 15 seconds (configurable). No public endpoint needed.
+- **Per-PR/issue sessions.** Each PR or issue gets its own session. All `@agor` mentions within the same PR route to the same session.
+- **Last-message-only responses.** Unlike Slack (which streams every message), only the agent's final response is posted to GitHub. Intermediate progress is visible in the Agor UI.
+- **Bot identity.** Responses are posted as the GitHub App's bot user, not as any human user.
 
 ### 1. Create a GitHub App
 
@@ -195,7 +195,7 @@ You can create the app through Agor's setup wizard or manually:
 
 1. Open **Settings** → **Gateway** tab → **Add Channel**.
 2. Select `github` as the channel type.
-3. Click **"Create GitHub App"** — this opens GitHub's App Manifest flow.
+3. Click **"Create GitHub App"**. This opens GitHub's App Manifest flow.
 4. Name your app (default: "Agor") and click **Create**.
 5. Agor captures the credentials automatically.
 
@@ -204,7 +204,7 @@ You can create the app through Agor's setup wizard or manually:
 1. Go to your GitHub org's **Settings** → **Developer settings** → **GitHub Apps** → **New GitHub App**.
 2. Set permissions: `Contents: Read`, `Issues: Read & Write`, `Pull requests: Read & Write`, `Metadata: Read`.
 3. Subscribe to events: `issue_comment`, `issues`, `pull_request`, `pull_request_review`, `pull_request_review_comment`.
-4. Disable webhooks (set `Active` to false) — Agor uses polling.
+4. Disable webhooks (set `Active` to false). Agor uses polling.
 5. After creating, generate a private key and note the App ID.
 
 ### 2. Install the App
@@ -217,16 +217,16 @@ You can create the app through Agor's setup wizard or manually:
 
 1. Open **Settings** → **Gateway** tab → **Add Channel**.
 2. Fill in:
-   - **Name** — e.g., "GitHub: preset-io"
-   - **Channel Type** — Select `github`.
-   - **Target Branch** — Pick the branch where sessions will run. Ideally, this is an [teammate](/guide/teammates) branch configured for GitHub work.
-   - **App ID** — Your GitHub App's ID.
-   - **Private Key** — The PEM private key (encrypted at rest).
-   - **Installation ID** — Found via the setup wizard or GitHub's API.
+   - **Name.** For example, "GitHub: preset-io"
+   - **Channel Type.** Select `github`.
+   - **Target Branch.** Pick the branch where sessions will run. Ideally, this is an [teammate](/guide/teammates) branch configured for GitHub work.
+   - **App ID.** Your GitHub App's ID.
+   - **Private Key.** The PEM private key (encrypted at rest).
+   - **Installation ID.** Found via the setup wizard or GitHub's API.
 3. Optionally configure:
-   - **Watch Repos** — Specific repos to monitor (empty = all repos in the installation).
-   - **Poll Interval** — How often to check for new mentions (default: 15 seconds).
-   - **Mention Name** — The keyword to trigger on (default: `agor`, matches `@agor`).
+   - **Watch Repos.** Specific repos to monitor (empty = all repos in the installation).
+   - **Poll Interval.** How often to check for new mentions (default: 15 seconds).
+   - **Mention Name.** The keyword to trigger on (default: `agor`, matches `@agor`).
 4. Save. Polling starts immediately.
 
 ### 4. Mention @agor on a PR
@@ -238,11 +238,11 @@ Comment `@agor review this PR` on any PR in a watched repo. Within 15 seconds:
 3. The agent reviews the PR.
 4. The "Processing..." comment is replaced with the agent's response.
 
-Follow-up `@agor` mentions on the same PR continue the same session — the agent has full conversation history.
+Follow-up `@agor` mentions on the same PR continue the same session. The agent has full conversation history.
 
 ### Setting Up the Teammate
 
-The gateway routes messages to a session on the target branch. What the agent _does_ with those messages is up to you — configured via the teammate's instructions on the target branch.
+The gateway routes messages to a session on the target branch. What the agent _does_ with those messages is up to you, configured via the teammate's instructions on the target branch.
 
 A minimal teammate prompt might be:
 
@@ -260,7 +260,7 @@ When mentioned on an issue:
 - Respond with analysis or next steps
 ```
 
-With a capable model (like Claude Opus) and Agor MCP tools available, even a minimal prompt produces good results — the agent figures out how to use branches, spawn sessions, and interact with GitHub. Over time, the teammate learns the codebase, team conventions, and review patterns across PRs.
+With a capable model (like Claude Opus) and Agor MCP tools available, even a minimal prompt produces good results. The agent figures out how to use branches, spawn sessions, and interact with GitHub. Over time, the teammate learns the codebase, team conventions, and review patterns across PRs.
 
 ## Setting Up Shortcut Integration
 
@@ -270,11 +270,11 @@ When someone mentions the configured assistant in a Shortcut story comment, Agor
 
 Key behavior:
 
-- **Polling, not webhooks** — Agor polls the Shortcut API every 15 seconds by default, so the daemon does not need a public endpoint.
-- **Threaded sessions** — Each Shortcut comment thread maps to one Agor session. Later mentions in the same thread continue that session.
-- **Member identity** — The API token's Shortcut member is the default mention target. You can override the agent member ID when the token belongs to a different service account.
-- **Per-user attribution** — With **Align Shortcut users** enabled, Agor first checks the channel's member-ID-to-email map, then the member's Shortcut email. Unmatched senders are rejected instead of running as another user.
-- **Last-message-only responses** — Intermediate progress stays in Agor; only the assistant's final message is written back to Shortcut.
+- **Polling, not webhooks.** Agor polls the Shortcut API every 15 seconds by default, so the daemon does not need a public endpoint.
+- **Threaded sessions.** Each Shortcut comment thread maps to one Agor session. Later mentions in the same thread continue that session.
+- **Member identity.** The API token's Shortcut member is the default mention target. You can override the agent member ID when the token belongs to a different service account.
+- **Per-user attribution.** With **Align Shortcut users** enabled, Agor first checks the channel's member-ID-to-email map, then the member's Shortcut email. Unmatched senders are rejected instead of running as another user.
+- **Last-message-only responses.** Intermediate progress stays in Agor; only the assistant's final message is written back to Shortcut.
 
 ### 1. Create a Shortcut API Token
 
@@ -290,10 +290,10 @@ Key behavior:
 4. Leave **Agent Member ID** blank to use the token's own member, or enter a different Shortcut member ID to override the mention target.
 5. Click **Test connection**. The probe validates the token and resolves the member's mention name before you save.
 6. Configure discovery as needed:
-   - **Require @mention** — Keep enabled unless every new comment in the search scope should prompt the assistant.
-   - **Mention Name** — Normally auto-resolved. Set it only when the discovery handle needs an explicit override.
-   - **Search Scope** — Add a Shortcut search expression such as `team:"Backend"` to constrain the stories this channel watches. Use non-overlapping scopes when multiple channels watch the same workspace.
-   - **Poll Interval** — Defaults to 15 seconds; increase it if you need to reduce API traffic.
+   - **Require @mention.** Keep enabled unless every new comment in the search scope should prompt the assistant.
+   - **Mention Name.** Normally auto-resolved. Set it only when the discovery handle needs an explicit override.
+   - **Search Scope.** Add a Shortcut search expression such as `team:"Backend"` to constrain the stories this channel watches. Use non-overlapping scopes when multiple channels watch the same workspace.
+   - **Poll Interval.** Defaults to 15 seconds; increase it if you need to reduce API traffic.
 7. Choose the identity behavior:
    - Enable **Align Shortcut users** to run each session as the matching Agor user.
    - Add **User Map** entries when a member's Shortcut email differs from their Agor email. Keys are Shortcut member IDs and values are Agor email addresses.
@@ -310,26 +310,26 @@ Follow-up mentions in the same Shortcut thread continue the existing session. Co
 
 ### How It Works
 
-When you message Agor's bot in a 1:1 chat — or `@mention` it in a Teams channel — Agor receives the activity through a [Bot Framework](https://dev.botframework.com) webhook and creates a session. The session runs on the target branch, and the agent's response is posted back into the same conversation under the bot's identity.
+When you message Agor's bot in a 1:1 chat (or `@mention` it in a Teams channel), Agor receives the activity through a [Bot Framework](https://dev.botframework.com) webhook and creates a session. The session runs on the target branch, and the agent's response is posted back into the same conversation under the bot's identity.
 
 Key differences from Slack and GitHub:
 
-- **Webhook, not polling or WebSocket** — Inbound messages arrive at an HTTP endpoint (default `/api/messages` on port `3978`) that the Azure Bot's messaging endpoint points to. The daemon must be reachable from Azure (e.g., via a public host or tunnel).
-- **Bot Framework identity** — Replies are sent as the registered Azure Bot, using a `ConversationReference` captured from the inbound activity (proactive messaging).
-- **1:1 DM vs channel threads** — In a personal (1:1) chat, every message routes to that conversation's session. In a channel or group chat, Agor replies in the same thread and, by default, only responds when `@mentioned` (configurable). The bot mention is stripped before the text reaches the agent.
-- **Thread IDs** — Conversations map to `{conversationId}|{activityId}`; personal chats are normalized to the conversation so follow-up messages stay in one session.
+- **Webhook, not polling or WebSocket.** Inbound messages arrive at an HTTP endpoint (default `/api/messages` on port `3978`) that the Azure Bot's messaging endpoint points to. The daemon must be reachable from Azure (e.g., via a public host or tunnel).
+- **Bot Framework identity.** Replies are sent as the registered Azure Bot, using a `ConversationReference` captured from the inbound activity (proactive messaging).
+- **1:1 DM vs channel threads.** In a personal (1:1) chat, every message routes to that conversation's session. In a channel or group chat, Agor replies in the same thread and, by default, only responds when `@mentioned` (configurable). The bot mention is stripped before the text reaches the agent.
+- **Thread IDs.** Conversations map to `{conversationId}|{activityId}`; personal chats are normalized to the conversation so follow-up messages stay in one session.
 
 ### 1. Create an Azure Bot
 
 1. In the [Azure Portal](https://portal.azure.com), create an **Azure Bot** resource backed by an app registration.
-2. Note the **App ID** (Application/client ID) and create a **client secret** — copy the secret _value_, not its ID.
+2. Note the **App ID** (Application/client ID) and create a **client secret**. Copy the secret _value_, not its ID.
 3. Note the **Tenant ID** (required so the bot can acquire tokens to send replies).
 4. Under the bot's **Configuration**, set the **Messaging endpoint** to `https://<your-daemon-host>/api/messages` (matching the webhook path and port you configure in Agor).
 5. Under **Channels**, add the **Microsoft Teams** channel.
 
 ### 2. Add the App to Teams
 
-1. Build a Teams app manifest referencing your bot's **App ID** — use the [Developer Portal for Teams](https://dev.teams.microsoft.com) or a `manifest.json`.
+1. Build a Teams app manifest referencing your bot's **App ID**. Use the [Developer Portal for Teams](https://dev.teams.microsoft.com) or a `manifest.json`.
 2. Add the `bot` capability with the scopes you need: `personal` (1:1 chats), `team` (channels), and `groupChat`.
 3. Sideload the custom app (or publish it to your org), then install it into the relevant team or chat.
 
@@ -337,16 +337,16 @@ Key differences from Slack and GitHub:
 
 1. Open **Settings** → **Gateway** tab → **Add Channel**.
 2. Fill in:
-   - **Name** — e.g., "Teams: Platform Team"
-   - **Channel Type** — Select `teams`.
-   - **Target Branch** — Pick the branch where sessions will run. Ideally, this is an [teammate](/guide/teammates) branch.
-   - **App ID** — Your Azure Bot's Application (client) ID.
-   - **App Password** — The Azure Bot client secret value (encrypted at rest).
-   - **Tenant ID** — Your Azure AD tenant ID.
+   - **Name.** For example, "Teams: Platform Team"
+   - **Channel Type.** Select `teams`.
+   - **Target Branch.** Pick the branch where sessions will run. Ideally, this is an [teammate](/guide/teammates) branch.
+   - **App ID.** Your Azure Bot's Application (client) ID.
+   - **App Password.** The Azure Bot client secret value (encrypted at rest).
+   - **Tenant ID.** Your Azure AD tenant ID.
 3. Optionally configure:
-   - **Webhook Port** — Port for the Bot Framework endpoint (default: `3978`).
-   - **Webhook Path** — Path for inbound activities (default: `/api/messages`).
-   - **Require mention** — Require an `@mention` to trigger in channels and group chats (default: on).
+   - **Webhook Port.** Port for the Bot Framework endpoint (default: `3978`).
+   - **Webhook Path.** Path for inbound activities (default: `/api/messages`).
+   - **Require mention.** Require an `@mention` to trigger in channels and group chats (default: on).
 4. Save. The webhook listener starts immediately.
 
 ### 4. Message the Bot or @mention agor
@@ -358,7 +358,7 @@ In a 1:1 chat, just message the bot. In a channel, post `@agor review this threa
 3. Runs the agent on the target branch.
 4. Posts the agent's response back into the same chat or channel thread.
 
-Follow-up messages in the same conversation continue the same session — the agent has full conversation history.
+Follow-up messages in the same conversation continue the same session. The agent has full conversation history.
 
 ## Agentic Tool Configuration
 
@@ -377,11 +377,11 @@ The gateway resolves configuration with a fallback chain: **channel config** > *
 
 The gateway is built as a set of loosely coupled components:
 
-- **Gateway Service** (`/gateway`) — Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
-- **Gateway Channels** (`/gateway-channels`) — CRUD for channel configurations with encrypted credential storage.
-- **Thread-Session Map** (`/thread-session-map`) — Persists the mapping between platform thread IDs and Agor session IDs.
-- **Connector Layer** — Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `GitHubConnector` and `ShortcutConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `startListening()`.
-- **Outbound Hook** — FeathersJS `after.create` hook on the messages service. Fire-and-forget; never blocks message creation.
+- **Gateway Service** (`/gateway`). Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
+- **Gateway Channels** (`/gateway-channels`). CRUD for channel configurations with encrypted credential storage.
+- **Thread-Session Map** (`/thread-session-map`). Persists the mapping between platform thread IDs and Agor session IDs.
+- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `GitHubConnector` and `ShortcutConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `startListening()`.
+- **Outbound Hook.** FeathersJS `after.create` hook on the messages service. Fire-and-forget; never blocks message creation.
 
 ### Adding a New Platform
 
@@ -402,14 +402,14 @@ interface GatewayConnector {
 }
 ```
 
-Implement this interface, register it in the connector registry, and the gateway service handles the rest — authentication, thread mapping, session lifecycle, and outbound routing all work automatically.
+Implement this interface, register it in the connector registry, and the gateway service handles the rest. Authentication, thread mapping, session lifecycle, and outbound routing all work automatically.
 
-The `blocks` field is opaque platform-specific data — currently only the Slack connector uses it (to emit Block Kit `table` blocks for markdown tables). Other connectors can ignore it and rely on `text`.
+The `blocks` field is opaque platform-specific data. Currently only the Slack connector uses it (to emit Block Kit `table` blocks for markdown tables). Other connectors can ignore it and rely on `text`.
 
 ## Best Practices
 
 - **Use trust or auto mode for unattended agents.** If you want the agent to operate without human approval on each tool call, set the permission mode accordingly.
-- **Attach relevant MCP servers.** A Slack-connected agent that also has GitHub MCP can create PRs, check CI status, and post updates — all from a DM.
+- **Attach relevant MCP servers.** A Slack-connected agent that also has GitHub MCP can create PRs, check CI status, and post updates. All from a DM.
 - **One branch per concern.** Create separate channels for different projects or responsibilities rather than funneling everything through one branch.
 - **Name channels descriptively.** When you have multiple channels, names like "Frontend Review Bot (Sonnet)" are much more useful than "Channel 1."
 - **Keep credentials rotated.** Bot tokens and app tokens are encrypted at rest, but rotate them periodically through the channel edit UI.
@@ -418,13 +418,13 @@ The `blocks` field is opaque platform-specific data — currently only the Slack
 
 ### Slack
 
-- **`missing_scope` errors.** Slack reports the exact scope it needs in the error. Add the capability in the channel (or re-copy the **App Manifest** from the channel's edit form), paste the updated manifest into your Slack app, then **reinstall the app** — new scopes only take effect after a reinstall.
+- **`missing_scope` errors.** Slack reports the exact scope it needs in the error. Add the capability in the channel (or re-copy the **App Manifest** from the channel's edit form), paste the updated manifest into your Slack app, then **reinstall the app**. New scopes only take effect after a reinstall.
 - **Bot doesn't respond to DMs.** Check that the **App Token** (`xapp-…`) is set in the channel config and that the daemon logs show a Socket Mode listener started for the channel.
 - **Socket Mode won't connect.** This is almost always the app-level token. Confirm the `xapp-` token was generated with the **`connections:write`** scope under **Basic Information → App-Level Tokens**.
-- **Bot ignores channel messages.** In channels and group DMs the bot wakes only on an explicit `@`-mention. Ordinary replies are ignored by design — mention the bot again to continue. (Direct messages don't need a mention.)
+- **Bot ignores channel messages.** In channels and group DMs the bot wakes only on an explicit `@`-mention. Ordinary replies are ignored by design. Mention the bot again to continue. (Direct messages don't need a mention.)
 - **Response appears in logs but not in Slack.** The bot token may lack a needed scope, or the bot may not be a member of the target channel. Reinstall after aligning scopes, and add the bot to the channel.
 - **Editing tokens.** Token fields are write-only. Leaving a token field blank on edit **keeps** the stored value; entering a value **overwrites** it. To swap a token, generate a new one in Slack and paste it in.
-- **Token rotation.** Slack's automatic token rotation is not used — the manifest disables it. Rotate manually by generating a fresh token and pasting it into the channel.
+- **Token rotation.** Slack's automatic token rotation is not used. The manifest disables it. Rotate manually by generating a fresh token and pasting it into the channel.
 - **Multiple workspaces / Enterprise Grid.** Each workspace needs its own Slack app and its own bot + app token pair, configured as a separate Agor channel. One token pair maps to one workspace.
 - **Infinite message loop.** The connector filters out bot messages (`bot_id` or `subtype: bot_message`). If you see loops, check that your Slack app's bot user is properly configured.
 
@@ -457,7 +457,7 @@ The `blocks` field is opaque platform-specific data — currently only the Slack
 
 ## Related Reading
 
-- [Branch Scheduler](./scheduler) — Automate recurring work on branches (complements gateway for event-driven vs. time-driven automation).
-- [Agor MCP Server](./internal-mcp) — Give gateway-spawned agents full self-awareness and orchestration capabilities.
-- [Agent SDK Comparison](./sdk-comparison) — Choose the right coding agent for your channel's use case.
-- [Spawned Subsessions](./spawned-subsessions) — Gateway-created sessions can themselves spawn child sessions for parallel work.
+- [Branch Scheduler](./scheduler). Automate recurring work on branches (complements gateway for event-driven vs. time-driven automation).
+- [Agor MCP Server](./internal-mcp). Give gateway-spawned agents full self-awareness and orchestration capabilities.
+- [Agent SDK Comparison](./sdk-comparison). Choose the right coding agent for your channel's use case.
+- [Spawned Subsessions](./spawned-subsessions). Gateway-created sessions can themselves spawn child sessions for parallel work.

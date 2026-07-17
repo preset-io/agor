@@ -1,6 +1,6 @@
 ---
 title: Rich Chat UX
-description: Agor's chat surface is objectively richer than any CLI — token and dollar accounting per prompt, live context-window meter, structured tool blocks, queued messages, autocomplete, favicon status, chimes, Streamdown markdown.
+description: Agor's chat surface is objectively richer than any CLI, with token and dollar accounting per prompt, live context-window meter, structured tool blocks, queued messages, autocomplete, favicon status, chimes, Streamdown markdown.
 heroImage: '/screenshots/context-meter-timeline.png'
 ---
 
@@ -8,13 +8,13 @@ heroImage: '/screenshots/context-meter-timeline.png'
 
 **A CLI can't show you this.** When you run a coding agent in your terminal, you get scrollback. That's it.
 
-Agor's chat surface exposes everything the SDKs make available — and adds the affordances multiplayer work demands. Live token and dollar accounting, structured tool blocks, todo tracking, queued prompts, autocomplete, completion chimes, and richly rendered streaming markdown.
+Agor's chat surface exposes everything the SDKs make available, and adds the affordances multiplayer work demands. Live token and dollar accounting, structured tool blocks, todo tracking, queued prompts, autocomplete, completion chimes, and richly rendered streaming markdown.
 
 This isn't decoration. It's how you stay oriented when you have 5 sessions running across 3 branches.
 
 <img
   src="/screenshots/context-meter-timeline.png"
-  alt="Session timeline with context-window meter rendered as a backdrop bar behind each prompt — green early, amber mid-session, red as the session fills up"
+  alt="Session timeline with context-window meter rendered as a backdrop bar behind each prompt: green early, amber mid-session, red as the session fills up"
   style={{ maxWidth: '500px', borderRadius: '8px' }}
 />
 
@@ -48,18 +48,18 @@ Combined with **per-user analytics** (Settings → Analytics), this gives you a 
 | -------- | -------------------------------------------- |
 | `low`    | Quick lookups, simple edits                  |
 | `medium` | Balanced speed/quality                       |
-| `high`   | Default — complex coding, reviews            |
+| `high`   | Default (complex coding, reviews)            |
 | `max`    | Critical decisions, architecture (Opus only) |
 
 Models with the `[1m]` suffix (e.g., `claude-sonnet-4-6[1m]`) enable Anthropic's 1M-token extended context window. They appear as separate dropdown entries.
 
-You don't have to start a new session to dial things up or down — flip the selector, the next prompt uses the new config.
+You don't have to start a new session to dial things up or down. Flip the selector, and the next prompt uses the new config.
 
 ---
 
 ## 📊 Context Window Progression
 
-**See exactly how much of your context is left.** Color-coded underlays in the conversation show token consumption — the closer you are to the cap, the more saturated the bar.
+**See exactly how much of your context is left.** Color-coded underlays in the conversation show token consumption. The closer you are to the cap, the more saturated the bar.
 
 <img
   src="/screenshots/context-window-viz.png"
@@ -81,7 +81,7 @@ This makes "should I [spawn](/guide/sessions#spawn--delegate-with-fresh-context)
 
 ## 🧰 Structured Tool Blocks
 
-**Every tool call is a structured, inspectable block — not a wall of text.** Read, Edit, Write, Bash, Grep, Glob, and custom MCP tool calls each render with their own affordances:
+**Every tool call is a structured, inspectable block, not a wall of text.** Read, Edit, Write, Bash, Grep, Glob, and custom MCP tool calls each render with their own affordances:
 
 - Edits show the diff inline
 - Reads show file paths with click-through
@@ -90,13 +90,13 @@ This makes "should I [spawn](/guide/sessions#spawn--delegate-with-fresh-context)
 
 <img
   src="/screenshots/tool-blocks.png"
-  alt="Chat showing collapsible thinking blocks, a Grep with pattern badge, an Edit with red/green inline diff, and a Bash tool block — each with its own structured rendering"
+  alt="Chat showing collapsible thinking blocks, a Grep with pattern badge, an Edit with red/green inline diff, and a Bash tool block, each with its own structured rendering"
   style={{ maxWidth: '600px' }}
 />
 
-_Thinking blocks, Grep, Edit (with inline diff), and Bash — each as its own structured, collapsible block._
+_Thinking blocks, Grep, Edit (with inline diff), and Bash, each as its own structured, collapsible block._
 
-Plus a **per-message git tracking** view that shows what changed on disk after each agent turn — which files were modified and what the diff looks like.
+Plus a **per-message git tracking** view that shows what changed on disk after each agent turn. You see which files were modified and what the diff looks like.
 
 <img
   src="/screenshots/git-state-changes.png"
@@ -183,7 +183,7 @@ White dot (lower-left) means _something is running_. Green dot (lower-right) mea
 
 ## 🎯 Branch Highlighting
 
-**Branch cards pulse with a teal glow when sessions need your attention** — completed work, pending callbacks, or human-input prompts. You can leave the board open in a tab and pulse-watch from your peripheral vision.
+**Branch cards pulse with a teal glow when sessions need your attention** (completed work, pending callbacks, or human-input prompts). You can leave the board open in a tab and pulse-watch from your peripheral vision.
 
 <img
   src="/screenshots/branch-highlighted.png"
@@ -211,11 +211,11 @@ Settings → Audio.
 
 **Rich markdown that streams correctly.** Agor uses [Streamdown](https://github.com/vercel/streamdown) by Vercel to render AI-generated markdown in real time:
 
-- **Mermaid diagrams** — Flowcharts and sequence diagrams with one-click rendering
-- **Math** — LaTeX/KaTeX for inline (`$E = mc^2$`) and block equations
-- **Syntax highlighting** — 100+ languages via Shiki (server-side)
-- **GitHub Flavored Markdown** — Tables, task lists, strikethrough, and more
-- **Streaming-optimized** — Handles incomplete chunks gracefully during real-time delivery
+- **Mermaid diagrams** render flowcharts and sequence diagrams with one click
+- **Math** renders LaTeX/KaTeX for inline (`$E = mc^2$`) and block equations
+- **Syntax highlighting** covers 100+ languages via Shiki (server-side)
+- **GitHub Flavored Markdown** brings tables, task lists, strikethrough, and more
+- **Streaming-optimized** rendering handles incomplete chunks gracefully during real-time delivery
 
 <img
   src="/screenshots/streamdown.png"
@@ -231,9 +231,9 @@ The agent can return a Mermaid diagram of your service architecture, and you'll 
 
 **Personalize without affecting teammates.** Each user has their own:
 
-- **API keys** — Bring your own Claude/Codex/Gemini credentials, encrypted at rest
-- **Environment variables** — Secrets that get injected into agent shells (e.g., `OPENAI_API_KEY` for an [artifact](/guide/artifacts))
-- **Agent defaults** — Default model, effort, permissions, MCP servers for new sessions
+- **API keys** let you bring your own Claude/Codex/Gemini credentials, encrypted at rest
+- **Environment variables** are secrets that get injected into agent shells (e.g., `OPENAI_API_KEY` for an [artifact](/guide/artifacts))
+- **Agent defaults** set the model, effort, permissions, and MCP servers for new sessions
 
 <img
   src="/screenshots/per-user-api-keys.png"
@@ -268,6 +268,6 @@ Useful for handing screenshots, designs, error logs, or test fixtures to the age
 
 ## Related
 
-- [Sessions & Trees](/guide/sessions) — How conversations branch
-- [Multiplayer & Social](/guide/multiplayer-social) — Cursors, facepile, comments
-- [Agor MCP Server](/guide/internal-mcp) — How agents tap the same data the UI shows
+- [Sessions & Trees](/guide/sessions) (how conversations branch)
+- [Multiplayer & Social](/guide/multiplayer-social) (cursors, facepile, comments)
+- [Agor MCP Server](/guide/internal-mcp) (how agents tap the same data the UI shows)

@@ -1,16 +1,16 @@
 ---
 title: TypeScript Client
-description: Drive Agor from TypeScript or JavaScript with @agor-live/client — the same fully-typed client Agor's UI uses, including REST, real-time Socket.IO, and a reactive session API.
+description: Drive Agor from TypeScript or JavaScript with @agor-live/client, the same fully-typed client Agor's UI uses, including REST, real-time Socket.IO, and a reactive session API.
 ---
 
 # TypeScript Client
 
-If you're scripting Agor from Node, building a custom dashboard, wiring it into a CI workflow, or embedding live session views in your own app — **`@agor-live/client` is the way**. It's the same fully-typed client the Agor UI consumes internally, so it stays in lockstep with the daemon API and ships first-class types for every service, model, and event.
+If you're scripting Agor from Node, building a custom dashboard, wiring it into a CI workflow, or embedding live session views in your own app, **`@agor-live/client` is the way**. It's the same fully-typed client the Agor UI consumes internally, so it stays in lockstep with the daemon API and ships first-class types for every service, model, and event.
 
-**Two doorways into Agor — same daemon, two audiences:**
+**Two doorways into Agor (same daemon, two audiences):**
 
-- **Inside agents** (Claude Code, Codex, Gemini) — the [Agor MCP Server](/guide/internal-mcp) gives sessions self-aware orchestration.
-- **Outside agents** (TS/JS apps, scripts, services) — `@agor-live/client` gives humans and services the same API.
+- **Inside agents** (Claude Code, Codex, Gemini), the [Agor MCP Server](/guide/internal-mcp) gives sessions self-aware orchestration.
+- **Outside agents** (TS/JS apps, scripts, services), `@agor-live/client` gives humans and services the same API.
 
 Use whichever side of the fence you're on.
 
@@ -24,7 +24,7 @@ pnpm add @agor-live/client
 
 Requires Node ≥ 22.12 (or any modern browser). ESM and CJS builds are both included; TypeScript types are first-class.
 
-## Quickstart — REST
+## Quickstart (REST)
 
 For one-off scripts, automation, or anywhere you don't need real-time updates:
 
@@ -44,11 +44,11 @@ const session = await client.service('sessions').create({
 console.log(`Session ${session.session_id} started`);
 ```
 
-REST clients exit cleanly without keeping a socket open — perfect for CLI tools and short-lived scripts.
+REST clients exit cleanly without keeping a socket open. Perfect for CLI tools and short-lived scripts.
 
 ### Driving the executor without MCP
 
-Two equivalent ways to send work to a session — pick whichever fits your harness:
+Two equivalent ways to send work to a session. Pick whichever fits your harness:
 
 ```ts
 // One-shot: create the task and start execution in a single call.
@@ -65,9 +65,9 @@ const task = await client.service('tasks').create({
 await client.tasks.run(task.task_id, { stream: true });
 ```
 
-`client.tasks.run()` calls `POST /tasks/:id/run` — the explicit "fire this task now" trigger. It accepts `created` tasks on idle sessions; `queued` tasks drain automatically in order, and busy sessions should be prompted via `client.sessions.prompt()` (which queues atomically).
+`client.tasks.run()` calls `POST /tasks/:id/run`, the explicit "fire this task now" trigger. It accepts `created` tasks on idle sessions; `queued` tasks drain automatically in order, and busy sessions should be prompted via `client.sessions.prompt()` (which queues atomically).
 
-## Quickstart — Real-time
+## Quickstart (Real-time)
 
 For UIs, live dashboards, or anything that needs to react to session events as they fire:
 
@@ -89,9 +89,9 @@ client.service('sessions').on('patched', (session) => {
 
 `createClient()` returns a Socket.IO-backed Feathers client with full event subscriptions: `created`, `patched`, `removed` per service, plus the streaming events that power live agent transcripts.
 
-## Reactive Sessions — the cool part
+## Reactive Sessions (the cool part)
 
-The headline feature: a **reactive session handle** that mirrors the entire UI state surface for one session — tasks, messages, queued prompts, streaming chunks, tool executions — and notifies you on every change. Same primitive that powers the Agor UI's session panel.
+The headline feature: a **reactive session handle** that mirrors the entire UI state surface for one session (tasks, messages, queued prompts, streaming chunks, tool executions) and notifies you on every change. Same primitive that powers the Agor UI's session panel.
 
 ```ts
 import { createClient, retainReactiveSession } from '@agor-live/client';
@@ -120,13 +120,13 @@ What you get on `handle.state`:
 |---|---|
 | `session` | The full `Session` model (status, current task, agent config, …) |
 | `tasks` | All tasks for this session, ordered |
-| `messagesByTask` | `Map<taskId, Message[]>` — hydrated lazily or eagerly per `taskHydration` option |
+| `messagesByTask` | `Map<taskId, Message[]>`, hydrated lazily or eagerly per `taskHydration` option |
 | `queuedTasks` | Tasks queued but not yet running, ordered by `queue_position` |
 | `streamingMessages` | In-flight assistant messages with live `content` + `thinkingContent` |
 | `toolsByTask` | Tool executions per task, with `executing` / `complete` status |
 | `connected`, `loading`, `error`, `lastSyncedAt` | Connection + sync metadata |
 
-`retainReactiveSession()` is reference-counted — multiple subscribers on the same session ID share one handle and one set of socket listeners. Call `release()` when you're done; the handle tears itself down when the last consumer releases.
+`retainReactiveSession()` is reference-counted. Multiple subscribers on the same session ID share one handle and one set of socket listeners. Call `release()` when you're done; the handle tears itself down when the last consumer releases.
 
 This is what you'd reach for if you wanted to:
 - Build a custom session viewer in your own React/Vue/Svelte app
@@ -143,17 +143,17 @@ This is what you'd reach for if you wanted to:
 
 Authentication is required on every endpoint. There is no anonymous strategy.
 
-Issue API keys from **User Settings → Personal API Keys**. Keys are scoped to your user — every action runs under your identity, billing, env vars, and MCP OAuth grants.
+Issue API keys from **User Settings → Personal API Keys**. Keys are scoped to your user. Every action runs under your identity, billing, env vars, and MCP OAuth grants.
 
 ## What's in the surface
 
-Service types are exported and fully typed — `client.service('sessions')`, `client.service('branches')`, `client.service('boards')`, `client.service('messages')`, `client.service('tasks')`, `client.service('repos')`, `client.service('users')`, and the rest. Every model lives in `@agor/core/types` (re-exported from `@agor-live/client`), so `Session`, `Branch`, `Task`, `Message`, `Board`, etc. are available without round-tripping through `any`.
+Service types are exported and fully typed, including `client.service('sessions')`, `client.service('branches')`, `client.service('boards')`, `client.service('messages')`, `client.service('tasks')`, `client.service('repos')`, `client.service('users')`, and the rest. Every model lives in `@agor/core/types` (re-exported from `@agor-live/client`), so `Session`, `Branch`, `Task`, `Message`, `Board`, etc. are available without round-tripping through `any`.
 
 Helpers worth knowing:
 
-- `isDaemonRunning(url)` — health check before connecting
-- `getApiKeyFromEnv()` — pull `AGOR_API_KEY` from the environment
-- `shortId(id)` — render the canonical short form Agor uses everywhere (URLs, pills, logs, notifications)
+- `isDaemonRunning(url)` runs a health check before connecting
+- `getApiKeyFromEnv()` pulls `AGOR_API_KEY` from the environment
+- `shortId(id)` renders the canonical short form Agor uses everywhere (URLs, pills, logs, notifications)
 
 ## When to reach for which client
 
@@ -166,6 +166,6 @@ Helpers worth knowing:
 
 ## Related
 
-- [Agor MCP Server](/guide/internal-mcp) — The agent-facing companion to this client
-- [Architecture](/guide/architecture) — How services, sockets, and the daemon fit together
-- [Sessions & Trees](/guide/sessions) — The data model the client surfaces
+- [Agor MCP Server](/guide/internal-mcp) (the agent-facing companion to this client)
+- [Architecture](/guide/architecture) (how services, sockets, and the daemon fit together)
+- [Sessions & Trees](/guide/sessions) (the data model the client surfaces)

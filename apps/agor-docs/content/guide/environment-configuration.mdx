@@ -45,9 +45,9 @@ Managed environments are built out of three layers, precedence **low → high**:
 
 - **Layer 1** is authored by repo maintainers and lives in `.agor.yml`. It's portable: clone the repo, `Import .agor.yml`, done.
 - **Layer 2** is where each Agor deployment pins its own values (host IP, internal registry, AWS profile) without touching the shared file. Stored in the DB, never exported.
-- **Layer 3** is the output: a flat set of rendered strings attached to the branch. Executors run these verbatim — no templating at execute time.
+- **Layer 3** is the output: a flat set of rendered strings attached to the branch. Executors run these verbatim, with no templating at execute time.
 
-Re-rendering is **explicit**. Editing a variant or an override does not retroactively rewrite existing branches — you hit the **Render** button when you want a branch to pick up changes.
+Re-rendering is **explicit**. Editing a variant or an override does not retroactively rewrite existing branches. You hit the **Render** button when you want a branch to pick up changes.
 
 <img
   src="/screenshots/env-variants-full.png"
@@ -55,15 +55,15 @@ Re-rendering is **explicit**. Editing a variant or an override does not retroact
   style={{ maxWidth: '700px', borderRadius: '8px' }}
 />
 
-_Branch Environment tab — variant YAML on top, picker in the middle, rendered snapshot below. The `extends: sqlite` line on the `postgres` variant shows variants can inherit from each other._
+_Branch Environment tab, with variant YAML on top, picker in the middle, rendered snapshot below. The `extends: sqlite` line on the `postgres` variant shows variants can inherit from each other._
 
 <img
   src="/screenshots/env-variants-dropdown.png"
-  alt="Variant dropdown open showing four named variants — docs, full, sqlite (default), postgres — each with a one-line description"
+  alt="Variant dropdown open showing four named variants (docs, full, sqlite (default), and postgres), each with a one-line description"
   style={{ maxWidth: '600px' }}
 />
 
-_Picking a variant — `sqlite` is the default for fastest boot; `full` mirrors production with PostgreSQL + RBAC + Unix isolation._
+_Picking a variant. `sqlite` is the default for fastest boot; `full` mirrors production with PostgreSQL + RBAC + Unix isolation._
 
 ---
 
@@ -82,7 +82,7 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
 | `{{branch.gid}}` | Branch | `1042` | Unix GID of the branch's isolation group. |
 | `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
-| `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag` — whether `base_ref` names a branch or a tag. Defaults to `branch`. |
+| `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
 | `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
 | `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `branch.custom_context`. |
@@ -98,7 +98,7 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `div` | `{{div 60 branch.unique_id}}` | `20` |
 | `mod` | `{{mod branch.unique_id 4}}` | `3` |
 
-Math helpers are deterministic — the same branch always renders the same ports, which is what keeps parallel branches from colliding.
+Math helpers are deterministic. The same branch always renders the same ports, which is what keeps parallel branches from colliding.
 
 > Broken template syntax is reported at **render time**, not at save time. Click Render to see the exact error with a line number.
 
@@ -137,10 +137,10 @@ always URL templates, not shell commands.
 ### Required fields
 
 - `version: 2` at the top level.
-- `environment.default` — must reference a variant that exists in `environment.variants`.
+- `environment.default` must reference a variant that exists in `environment.variants`.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
-`nuke`, `logs`, `health`, and `app` are optional — the corresponding UI buttons simply hide or no-op when absent.
+`nuke`, `logs`, `health`, and `app` are optional. The corresponding UI buttons simply hide or no-op when absent.
 
 ### `extends` (single-level only)
 
@@ -153,7 +153,7 @@ chains deeper than one level are not allowed
 
 Resolution is a straight per-field merge: child fields win, omitted fields inherit from the base.
 
-### Worked example — Superset: `lean` / `postgres` / `full`
+### Worked example for Superset: `lean` / `postgres` / `full`
 
 ```yaml
 version: 2
@@ -187,7 +187,7 @@ environment:
       logs:   "docker compose -p agor-{{branch.name}} logs --tail=100"
 ```
 
-Notice that `postgres` and `full` both extend `lean` (not each other) — that's the single-level rule. Both inherit `health` and `app` from `lean` and override the rest.
+Notice that `postgres` and `full` both extend `lean` (not each other). That's the single-level rule. Both inherit `health` and `app` from `lean` and override the rest.
 
 ### Import / export
 
@@ -198,7 +198,7 @@ Two admin-only actions in the repo editor header:
 | **Import `.agor.yml`** | Parses `$BRANCH_PATH/.agor.yml` and **replaces** `environment.variants` + `environment.default` in the DB. `template_overrides` and branch snapshots are untouched. |
 | **Export `.agor.yml`** | Writes the current `environment.variants` + `environment.default` to `$BRANCH_PATH/.agor.yml`. `template_overrides` is **stripped** before writing. |
 
-Both paths go through a confirm dialog. Import is **replace, not merge** — a variant that exists in the DB but not in the file gets dropped.
+Both paths go through a confirm dialog. Import is **replace, not merge**. A variant that exists in the DB but not in the file gets dropped.
 
 Because the target is always the file in the **currently open branch**, the normal workflow is:
 
@@ -217,7 +217,7 @@ Because the target is always the file in the **currently open branch**, the norm
 
 ### Why it exists
 
-Superset's upstream `.agor.yml` shouldn't hard-code `10.0.1.42` as the host IP — that's Preset's infra, not Apache's. Instead, Superset's variants reference `{{host.ip_address}}` and Preset sets it once, per-repo, in `template_overrides`. The shared file stays clean; the deployment-specific values stay in the deployment.
+Superset's upstream `.agor.yml` shouldn't hard-code `10.0.1.42` as the host IP. That's Preset's infra, not Apache's. Instead, Superset's variants reference `{{host.ip_address}}` and Preset sets it once, per-repo, in `template_overrides`. The shared file stays clean; the deployment-specific values stay in the deployment.
 
 ### Schema
 
@@ -231,7 +231,7 @@ template_overrides:
     compose_profile: "preset"
 ```
 
-The structure is a plain `{ host, custom }` map. `template_overrides` is root-level and applies to **all variants** — there are no per-variant overrides.
+The structure is a plain `{ host, custom }` map. `template_overrides` is root-level and applies to **all variants**. There are no per-variant overrides.
 
 ### Precedence
 
@@ -244,9 +244,9 @@ At render time the context is assembled in this order (later wins):
 
 ### What it is **not**
 
-> **⚠ `template_overrides` is not a secret store.** It's visible to every user with read access to the repo (admins edit, members read). Use it for **infrastructure identifiers** — IPs, registry hostnames, profile names — **never** for API keys, tokens, or passwords.
+> **⚠ `template_overrides` is not a secret store.** It's visible to every user with read access to the repo (admins edit, members read). Use it for **infrastructure identifiers** (IPs, registry hostnames, profile names), **never** for API keys, tokens, or passwords.
 >
-> For secrets, use the per-session env-var system — scope is per-session, access is the session owner only.
+> For secrets, use the per-session env-var system. Scope is per-session, access is the session owner only.
 
 The import/export parser **refuses** any `template_overrides:` key found in `.agor.yml` and the exporter **always strips** it. This is a defense-in-depth guarantee that values like `host.ip_address: 10.0.1.42` cannot be accidentally committed upstream to a public repo.
 
@@ -256,8 +256,8 @@ The import/export parser **refuses** any `template_overrides:` key found in `.ag
 
 Each branch has:
 
-- `environment_variant` — the chosen variant name (e.g. `"postgres"`).
-- `start_command`, `stop_command`, `nuke_command`, `logs_command`, `health_check_url`, `app_url` — the **rendered** strings, fully substituted, no Handlebars left.
+- `environment_variant`, the chosen variant name (e.g. `"postgres"`).
+- `start_command`, `stop_command`, `nuke_command`, `logs_command`, `health_check_url`, `app_url` hold the **rendered** strings, fully substituted, no Handlebars left.
 
 The Environment tab has two stacked editors:
 
@@ -278,7 +278,7 @@ Members see both editors **read-only**. Users with branch `all` permission and a
 2. Click **Render**.
 3. Agor re-evaluates `variant + template_overrides` and overwrites the branch snapshot.
 
-If the snapshot has unsaved manual edits (admins only — members can't make them), Render prompts a confirm: *"Rendering will discard your local edits. Continue?"*
+If the snapshot has unsaved manual edits (admins only, since members can't make them), Render prompts a confirm: *"Rendering will discard your local edits. Continue?"*
 
 ### No auto-tracking
 
@@ -322,7 +322,7 @@ No forced user action. The upgrade is silent:
 | Before | After |
 |---|---|
 | `repos.environment_config: { up_command, down_command, … }` | `repos.environment: { version: 2, default: "default", variants: { default: <old value> }, template_overrides: {} }` |
-| Branch `start_command` / `stop_command` / … | Unchanged — they're already the rendered snapshot this design formalizes. |
+| Branch `start_command` / `stop_command` / … | Unchanged. They're already the rendered snapshot this design formalizes. |
 | `.agor.yml` v1 (flat `environment: { start, stop, … }`) | Still parses. Loaded as `variants.default`. Export writes v2 going forward. |
 | `daemon.host_ip_address` in `~/.agor/config.yaml` | Still works as the fallback for `{{host.ip_address}}`. For new setups, prefer per-repo `template_overrides.host.ip_address`. |
 
@@ -336,18 +336,18 @@ Two things worth internalizing before you ship a variant to the rest of the team
 
 ### 1. Deny-list runs on the rendered string, at execute time
 
-The deny-list guard (the thing that blocks destructive commands like `rm -rf /`) runs on the **final rendered command**, **at execute time** — not against the template, and not at save time. That means:
+The deny-list guard (the thing that blocks destructive commands like `rm -rf /`) runs on the **final rendered command**, **at execute time** (not against the template, and not at save time). That means:
 
 - A template can render to a denied command under some branch contexts and not others.
 - The first visibility you have that a command is denied is when someone clicks Start / Stop / Nuke and it fails.
-- Keep your templates simple — if the rendered shape of a command isn't obvious from reading the template, add a `description:` to the variant so teammates know what they're launching.
+- Keep your templates simple. If the rendered shape of a command isn't obvious from reading the template, add a `description:` to the variant so teammates know what they're launching.
 
 ### 2. `template_overrides` is not a secret store
 
 Restating the callout from above because it's the single most common mistake:
 
 - `template_overrides` values are **visible to every user with repo access**.
-- Values get **baked into shell strings** at render time — anyone who can read the branch snapshot sees them.
+- Values get **baked into shell strings** at render time. Anyone who can read the branch snapshot sees them.
 - Use it for IPs, hostnames, registries, profile names. **Not** for API keys, tokens, or passwords.
 - For secrets, use the per-session env-var system. Scope is per-session, access is limited to the session owner, and values never land in a rendered command.
 
@@ -401,7 +401,7 @@ expose them.
 
 ## See also
 
-- [Containerized execution](/guide/containerized-execution) — running the rendered commands inside isolated containers.
-- [Multiplayer and Unix isolation](/guide/multiplayer-unix-isolation) — how RBAC and Unix user modes gate who can Start / Render / edit env config.
+- [Containerized execution](/guide/containerized-execution) runs the rendered commands inside isolated containers.
+- [Multiplayer and Unix isolation](/guide/multiplayer-unix-isolation) covers how RBAC and Unix user modes gate who can Start / Render / edit env config.
 - Template helper source: `packages/core/src/templates/handlebars-helpers.ts`
 - `.agor.yml` parser source: `packages/core/src/config/agor-yml.ts`

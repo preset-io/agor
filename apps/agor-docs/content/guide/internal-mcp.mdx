@@ -1,6 +1,6 @@
 ---
 title: Agor MCP Server
-description: Agents are first-class users in Agor. The built-in MCP server gives them the same surface area you have in the UI — sessions, branches, boards, zones, users, environments — as structured JSON-RPC.
+description: Agents are first-class users in Agor. The built-in MCP server gives them the same surface area you have in the UI (sessions, branches, boards, zones, users, environments) as structured JSON-RPC.
 heroImage: '/mcp_self_aware.png'
 ---
 
@@ -14,20 +14,20 @@ heroImage: '/mcp_self_aware.png'
   />
 </div>
 
-**Anything a user can do in Agor, an agent can do too.** The same daemon that serves the UI's REST and WebSocket APIs also exposes a built-in **Model Context Protocol (MCP) server** — a structured automation surface that turns every session into a self-aware orchestrator.
+**Anything a user can do in Agor, an agent can do too.** The same daemon that serves the UI's REST and WebSocket APIs also exposes a built-in **Model Context Protocol (MCP) server**, a structured automation surface that turns every session into a self-aware orchestrator.
 
 This is the foundational layer: [teammates](/guide/teammates), [scheduled prompts](/guide/scheduler), [cards](/guide/cards), [artifacts](/guide/artifacts), and the [message gateway](/guide/message-gateway) are all built on top of it.
 
-> **The other doorway:** if you're driving Agor from outside an agent — TS/JS scripts, custom dashboards, internal services — reach for the official [`@agor-live/client`](/guide/typescript-client) instead. Same daemon, same types, REST + Socket.IO + a reactive session API.
+> **The other doorway:** if you're driving Agor from outside an agent (TS/JS scripts, custom dashboards, internal services), reach for the official [`@agor-live/client`](/guide/typescript-client) instead. Same daemon, same types, REST + Socket.IO + a reactive session API.
 
 ## Key Ideas
 
-- **Agents as first-class users:** Every MCP tool wraps a FeathersJS service. Sessions, branches, boards, zones, users, environments — anything you can click or `agor`-CLI is available as JSON-RPC.
-- **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows *which* session, branch, and board it's in — and can act on that context.
+- **Agents as first-class users:** Every MCP tool wraps a FeathersJS service. Sessions, branches, boards, zones, users, environments. Anything you can click or reach via the `agor` CLI is available as JSON-RPC.
+- **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows *which* session, branch, and board it's in, and can act on that context.
 - **No separate server:** MCP is part of the daemon. Nothing to install, nothing extra to run.
 - **Remote access:** External agents and dashboards can connect over HTTP to drive Agor (create boards, branches, or even invite new users).
 
-> MCP is enabled by default and every session already has credentials injected — no setup required for in-Agor agents.
+> MCP is enabled by default and every session already has credentials injected. No setup required for in-Agor agents.
 
 ## Capabilities At a Glance
 
@@ -41,7 +41,7 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 | **Users & Teams**      | Create users, update profiles or avatars, assign roles, invite collaborators                            |
 | **Context Resources**  | Enumerate context files, load concept docs, ingest repo metadata                                        |
 
-Because tools route through FeathersJS services, every action emits the same events the UI listens to—real-time updates appear instantly for everyone watching the board.
+Because tools route through FeathersJS services, every action emits the same events the UI listens to. Real-time updates appear instantly for everyone watching the board.
 
 ## Self-Aware Agents Inside Agor
 
@@ -58,7 +58,7 @@ When you launch a session in Agor, the SDK config includes the internal MCP serv
 ```
 
 The daemon requires the token in the `Authorization: Bearer` header. Query-
-string tokens are rejected — don't put secrets in URLs, where they'd leak
+string tokens are rejected. Don't put secrets in URLs, where they'd leak
 into access logs and browser history.
 
 From there agents can:
@@ -93,13 +93,13 @@ External agents can use the same MCP endpoint:
 
 1. Obtain an authenticated token (session token for scoped access today; broader API tokens are planned).
 2. Connect over HTTP/SSE to `http(s)://<daemon-host>:<port>/mcp`.
-3. Call the same tools internal agents use—no separate API surface required.
+3. Call the same tools internal agents use. No separate API surface required.
 
 This makes Agor a control plane for other AI systems, enabling remote triage bots, automation pipelines, or custom dashboards to work against live boards.
 
 ## Best Practices
 
-- **Keep permission policies tight.** MCP calls respect Agor’s permission system—configure approvals so agents only do what the team expects.
+- **Keep permission policies tight.** MCP calls respect Agor’s permission system. Configure approvals so agents only do what the team expects.
 - **Design idempotent workflows.** Make repeated calls safe; agents may retry when handling errors.
 - **Log agent activity.** Sessions capture every MCP action they trigger, making reviews and audits straightforward.
 - **Reuse concept files.** Agents can load `context/` docs via MCP, ensuring automations stay aligned with team conventions.
@@ -110,7 +110,7 @@ MCP session tokens are short-lived JWTs (aud `agor:mcp:internal`) embedding
 a `jti` (per-issuance ID) and an `exp`. Tokens are re-minted fresh on every
 `GET /sessions/:id` and `POST /sessions`.
 
-There is no revocation mechanics — no per-jti ledger, no session-generation
+There is no revocation mechanics, no per-jti ledger, no session-generation
 counter. The authorised blast radius of a leak is bounded by `exp` (default
 24h). Validation additionally rejects tokens whose session has been deleted.
 If/when MCP is opened externally we'd design auth from scratch (OAuth / API
@@ -122,15 +122,15 @@ Because an MCP token binds `uid = session.created_by` and lets the bearer
 act AS the creator on the MCP channel, it's only issued to callers who are
 already allowed to act as that creator:
 
-- **`GET /sessions/:id`** — the creator themselves (provided they are still
+- **`GET /sessions/:id`** issues a token to the creator themselves (provided they are still
   `member+`), a superadmin, or the executor's service identity
   (`role: 'service'`, used when spawning the child process). A plain
   `member+` with `view` permission on the branch does **not** receive a
-  token — handing one out would let them impersonate the creator, sidestepping
+  token. Handing one out would let them impersonate the creator, sidestepping
   the `session`-tier "own sessions only" rule enforced elsewhere.
-- **`POST /sessions`** — the caller is the creator by construction, so
+- For **`POST /sessions`**, the caller is the creator by construction, so
   `member+` is the only gate here.
-- **Viewers** never receive an `mcp_token` on either path — they cannot
+- **Viewers** never receive an `mcp_token` on either path. They cannot
   prompt via REST either, so MCP would be useless for them regardless.
 
 ### Config knobs
@@ -146,14 +146,14 @@ execution:
 | Symptom                                            | Likely cause                                               | Fix                                           |
 |----------------------------------------------------|------------------------------------------------------------|-----------------------------------------------|
 | `token rejected: expired`                          | Token past its `exp`                                       | Session will re-mint on next `GET /sessions`  |
-| `token rejected: session … not found`              | Token's session was deleted                                | Expected — token can no longer be used        |
+| `token rejected: session … not found`              | Token's session was deleted                                | Expected, token can no longer be used         |
 | `token rejected: missing jti`                      | Pre-rollout token (no `jti`/`exp`)                         | Re-prompt / restart the session to re-mint    |
 
 ## Related Reading
 
-- [Sessions & Trees](/guide/sessions) — How agents spawn, fork, and ask side questions through MCP
-- [Teammates](/guide/teammates) — Long-lived AI teammates that drive Agor through MCP
-- [Scheduler](/guide/scheduler) — Cron-style triggers that fire prompts via the same surface
-- [TypeScript Client](/guide/typescript-client) — The non-agent doorway: drive Agor from JS/TS apps, scripts, and services
+- [Sessions & Trees](/guide/sessions) (how agents spawn, fork, and ask side questions through MCP)
+- [Teammates](/guide/teammates) (long-lived AI teammates that drive Agor through MCP)
+- [Scheduler](/guide/scheduler) (cron-style triggers that fire prompts via the same surface)
+- [TypeScript Client](/guide/typescript-client) (the non-agent doorway: drive Agor from JS/TS apps, scripts, and services)
 - [Architecture: Agor as an MCP Server](/guide/architecture#agor-as-an-mcp-server)
 - [SDK Comparison](/guide/sdk-comparison)

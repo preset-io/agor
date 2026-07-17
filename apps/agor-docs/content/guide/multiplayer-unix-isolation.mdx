@@ -18,7 +18,7 @@ Agor's multiplayer mode brings back the power of shared development servers with
 - **Process impersonation** - Agent sessions run as the actual user who created them
 - **Real-time collaboration** - See what teammates are working on, share terminals, pair program
 
-Think of it as **"once upon a time, teams shared servers"** — but with proper RBAC, credential isolation, and modern workflows.
+Think of it as **"once upon a time, teams shared servers"**, but with proper RBAC, credential isolation, and modern workflows.
 
 ---
 
@@ -257,7 +257,7 @@ and filesystem permissions.
 ### 4b. (Optional) Disable the Web Terminal
 
 The browser-based terminal (xterm.js modal) is enabled by default for any user
-with role `member` or higher. To disable it for everyone — including admins —
+with role `member` or higher. To disable it for everyone (including admins),
 set:
 
 ```yaml
@@ -268,7 +268,7 @@ execution:
 Default behavior (flag unset or `true`):
 
 - Any authenticated user with role `member` or higher can open a terminal.
-- Branch-level permissions still apply — opening a terminal tab against a
+- Branch-level permissions still apply. Opening a terminal tab against a
   branch requires at least `session` permission on that branch (when
   `branch_rbac` is on).
 
@@ -277,14 +277,14 @@ When set to `false`:
 - Terminal buttons are hidden in the UI and the `/terminals` service rejects
   requests from every role.
 
-> ⚠️ **Security caveat — this flag does not reason about Unix isolation.**
+> ⚠️ **Security caveat. This flag does not reason about Unix isolation.**
 >
 > - In `unix_user_mode: simple`, the terminal runs as the daemon user. A member
 >   opening a terminal gains a shell with read access to `~/.agor/config.yaml`,
 >   `agor.db`, and the JWT secret. The daemon prints a startup warning on every
 >   boot in this combination (which is the default for fresh installs).
 > - In `unix_user_mode: insulated`, the terminal runs as the shared executor
->   user — daemon secrets are protected, but members share `$HOME`/`/tmp` with
+>   user. Daemon secrets are protected, but members share `$HOME`/`/tmp` with
 >   each other.
 > - In `unix_user_mode: strict`, terminals run as the user's own Unix account,
 >   which is the SSH-equivalent safe default.
@@ -433,7 +433,7 @@ getent group agor_users
 
 ## Related Docs
 
-- [Architecture](/guide/architecture) — System design overview
-- [Multiplayer & Social](/guide/multiplayer-social) — Shared terminals, cursors, comments
-- [Branches](/guide/branches) and [Sessions & Trees](/guide/sessions) — Core primitives
-- [Security](/security) — Trust boundaries and deployment modes
+- [Architecture](/guide/architecture) (system design overview)
+- [Multiplayer & Social](/guide/multiplayer-social) (shared terminals, cursors, comments)
+- [Branches](/guide/branches) and [Sessions & Trees](/guide/sessions) (core primitives)
+- [Security](/security) (trust boundaries and deployment modes)

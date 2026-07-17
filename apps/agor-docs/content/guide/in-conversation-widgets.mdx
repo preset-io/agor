@@ -1,15 +1,15 @@
 ---
 title: In-Conversation Widgets
-description: Agents can render small interactive UI inline in the transcript — a form, a button, a picker — that captures user input without that input ever entering the LLM's context. v1 ships the env_vars widget.
+description: Agents can render small interactive UI inline in the transcript (a form, a button, a picker) that captures user input without that input ever entering the LLM's context. v1 ships the env_vars widget.
 ---
 
 # In-Conversation Widgets
 
-**Agents sometimes need something from you mid-task** — an API key, a confirmation, a choice between options. Without widgets, the only way to get that input is for the agent to ask in chat and for you to paste a value back. That breaks two things at once: your flow (the agent now needs to wait, you need to context-switch) and the security guarantee (the value lands in the model's context window, in logs, in transcripts that survive).
+**Agents sometimes need something from you mid-task.** It might be an API key, a confirmation, a choice between options. Without widgets, the only way to get that input is for the agent to ask in chat and for you to paste a value back. That breaks two things at once: your flow (the agent now needs to wait, you need to context-switch) and the security guarantee (the value lands in the model's context window, in logs, in transcripts that survive).
 
-**Widgets fix that.** When the agent calls a widget tool, a small form renders inline in the transcript. You fill it out. The values flow **directly browser → daemon** — they never reach the agent. A sanitized "[Agor] User submitted X" prompt is auto-queued into the agent's next turn so it can pick up where it left off.
+**Widgets fix that.** When the agent calls a widget tool, a small form renders inline in the transcript. You fill it out. The values flow **directly browser → daemon**. They never reach the agent. A sanitized "[Agor] User submitted X" prompt is auto-queued into the agent's next turn so it can pick up where it left off.
 
-Widgets are a primitive. v1 ships one widget type — `env_vars` — as the canonical example. Future widget types (confirmations, OAuth connect, MCP-server picker, file picker) use the same plumbing.
+Widgets are a primitive. v1 ships one widget type (`env_vars`) as the canonical example. Future widget types (confirmations, OAuth connect, MCP-server picker, file picker) use the same plumbing.
 
 ---
 
@@ -38,7 +38,7 @@ A small form renders inline in the transcript:
 
 - The variable name(s) the agent is asking for
 - A short reason
-- An optional instructions block (rendered as sanitized markdown — links and emphasis only, no scripts)
+- An optional instructions block (rendered as sanitized markdown, with links and emphasis only, no scripts)
 - A password input per variable
 - A scope selector (Session / Global)
 - **Dismiss** and **Save & continue** buttons
@@ -54,7 +54,7 @@ A new user-role message arrives in the agent's next turn:
 [Agor] User submitted HUBSPOT_API_KEY (scope: global). You can now retry the operation that needed it.
 ```
 
-The agent retries. **Only the name** appears in that prompt — the value is read from the encrypted store at executor spawn time, as if you had set it via the Settings panel.
+The agent retries. **Only the name** appears in that prompt. The value is read from the encrypted store at executor spawn time, as if you had set it via the Settings panel.
 
 ### The `already_present` short-circuit
 
@@ -82,14 +82,14 @@ The widget primitive has one hard requirement: **submitted values never enter th
 
 | Path | Carries values? |
 |---|---|
-| Agent → MCP tool call | **No** — input schema only accepts names + reason + instructions |
-| Widget message row | **No** — the row stores params (names, reason, ...) and lifecycle state |
-| MCP tool return value | **No** — returns `{ widget_id, status }` only |
-| Browser → daemon submit | **Yes** — direct HTTP, authenticated, never traverses the agent |
-| Daemon → users service | **Yes** — encrypted at the boundary, never logged |
-| Auto-resume prompt to agent | **No** — built from sanitized `result_meta` (just names + scope) |
-| `widget:resolved` WebSocket event | **No** — same sanitized payload |
-| Transcript reload | **No** — the row never held values |
+| Agent → MCP tool call | **No**, input schema only accepts names + reason + instructions |
+| Widget message row | **No**, the row stores params (names, reason, ...) and lifecycle state |
+| MCP tool return value | **No**, returns `{ widget_id, status }` only |
+| Browser → daemon submit | **Yes**, direct HTTP, authenticated, never traverses the agent |
+| Daemon → users service | **Yes**, encrypted at the boundary, never logged |
+| Auto-resume prompt to agent | **No**, built from sanitized `result_meta` (just names + scope) |
+| `widget:resolved` WebSocket event | **No**, same sanitized payload |
+| Transcript reload | **No**, the row never held values |
 
 The disclaimer text on the form (*"Type values here, never paste them into chat"*) is there for one specific reason: if the agent goes off-script and asks you to type a value into chat instead of into the widget, **don't**. The widget is the only path that preserves the no-LLM-context guarantee.
 
@@ -113,7 +113,7 @@ If a particular request is sensitive enough that even the name shouldn't appear 
 
 ## Multi-user behavior
 
-When `branch_rbac: true` and someone other than the session creator submits the widget (under `others_can: prompt`), the env var lands in **the session creator's** identity — that's whose env the agent will read at retry. The submitting user is recorded in `result_meta.submitted_by` for audit.
+When `branch_rbac: true` and someone other than the session creator submits the widget (under `others_can: prompt`), the env var lands in **the session creator's** identity. That's whose env the agent will read at retry. The submitting user is recorded in `result_meta.submitted_by` for audit.
 
 This is consistent with `dangerously_allow_session_sharing: false` (the default-safe posture). For the full multi-user story see [Multiplayer Unix Isolation](./multiplayer-unix-isolation.mdx).
 
@@ -125,6 +125,6 @@ Three reasons:
 
 1. **Secrets stay out of the model.** The values flow directly to the daemon's encrypted store. The agent never sees them.
 2. **No flow-breaking context switch.** You don't have to leave the conversation to go set up Settings → Env Vars.
-3. **Async-friendly.** The widget is durable. Submit it now, submit it in an hour, submit it tomorrow — the session picks up wherever it was, on whatever device. Slack and gateway sessions work the same way.
+3. **Async-friendly.** The widget is durable. Submit it now, submit it in an hour, submit it tomorrow. The session picks up wherever it was, on whatever device. Slack and gateway sessions work the same way.
 
-This is the v1 instance of a broader primitive. Future widgets — confirmations, OAuth-connect, MCP-server picker — use the same machinery and the same security guarantees.
+This is the v1 instance of a broader primitive. Future widgets (confirmations, OAuth-connect, MCP-server picker) use the same machinery and the same security guarantees.

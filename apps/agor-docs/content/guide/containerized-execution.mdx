@@ -195,13 +195,13 @@ before the rest of the storage discussion.
 holds `repos/` and `branches/`) MUST also be persistent.** The database
 stores absolute paths to every repository clone and every branch on
 disk. If the database survives a pod restart but the filesystem does not
-— for example, the database is backed by a `PersistentVolumeClaim` while
-`$HOME` is an `emptyDir` — then on redeploy the daemon will reference
+(for example, the database is backed by a `PersistentVolumeClaim` while
+`$HOME` is an `emptyDir`), then on redeploy the daemon will reference
 paths that no longer exist. Opening a terminal or running a session will
 fail when the executor tries to `chdir` into a directory that's gone.
 
 The daemon will surface a clear error in this state (`cwd does not exist
-on disk: ...` — see [issue
+on disk: ...`, see [issue
 \#1109](https://github.com/preset-io/agor/issues/1109)), but the only
 real fix is to restore the volume or, if the volume is unrecoverable,
 clean up the orphan database rows using
@@ -212,7 +212,7 @@ Safe configurations:
 - **Both persistent**: Database on PVC, `$HOME` (or `data_home`) on
   PVC/EFS/NFS. Recommended for production.
 - **Both ephemeral**: Database on `emptyDir`, `$HOME` on `emptyDir`. Fine
-  for short-lived test pods — everything resets together.
+  for short-lived test pods. Everything resets together.
 - **Avoid mixing**: Persistent database + ephemeral filesystem is the
   broken state described above.
 

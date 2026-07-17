@@ -19,7 +19,7 @@ heroImage: '/images/knowledge-hero.png'
 
 Agor **Knowledge** is the built-in context layer for your team command center: a central place where humans and agents can store, organize, connect, and find the context that makes work compound over time.
 
-It has everything required to become your team's main context hub: markdown documents, version history, rich rendering, search, graph links, permissions, and first-class MCP tools for agents. Use it as the source of truth for runbooks, decisions, prompts, teammate memory, and operational knowledge — or as a fast staging area before context moves to another destination. Either way, Knowledge is core to how Agor helps teams and agents accumulate shared understanding.
+It has everything required to become your team's main context hub: markdown documents, version history, rich rendering, search, graph links, permissions, and first-class MCP tools for agents. Use it as the source of truth for runbooks, decisions, prompts, teammate memory, and operational knowledge, or as a fast staging area before context moves to another destination. Either way, Knowledge is core to how Agor helps teams and agents accumulate shared understanding.
 
 Context is everywhere: GitHub, Notion, Linear, Slack, repo files, and other knowledge bases. Agor does not ask you to replace all of that on day one. It gives users and agents a durable default place to file the useful bits now, then search, link, reorganize, and reshuffle them later.
 
@@ -43,15 +43,15 @@ No MCP server setup is required. Knowledge is part of the Agor daemon, and in-Ag
 
 ## What you can store
 
-Knowledge documents are markdown pages grouped into namespaces/spaces. Documents can be tagged by kind — for example `doc`, `memory`, `skill`, `prompt`, `guide`, `decision`, `bundle`, or `external` — and can be public or private.
+Knowledge documents are markdown pages grouped into namespaces/spaces. Documents can be tagged by kind (for example `doc`, `memory`, `skill`, `prompt`, `guide`, `decision`, `bundle`, or `external`) and can be public or private.
 
 Good fits include:
 
-- **Team runbooks** — deploy steps, incident notes, review checklists, escalation paths.
-- **Decisions and rationale** — the “why” behind architecture, product, and process choices.
-- **Reusable prompts and workflows** — instructions that agents should reuse instead of rediscovering.
-- **Teammate memory** — durable preferences, project context, operating principles, and daily learnings.
-- **Scratch-to-structured notes** — context filed quickly now and organized more carefully later.
+- **Team runbooks**: deploy steps, incident notes, review checklists, escalation paths.
+- **Decisions and rationale**: the “why” behind architecture, product, and process choices.
+- **Reusable prompts and workflows**: instructions that agents should reuse instead of rediscovering.
+- **Teammate memory**: durable preferences, project context, operating principles, and daily learnings.
+- **Scratch-to-structured notes**: context filed quickly now and organized more carefully later.
 
 ---
 
@@ -107,7 +107,7 @@ Knowledge has first-class MCP tools, so agents can use it without leaving their 
 Common workflows:
 
 - **Browse, search, and load context** with `agor_kb_tree`, `agor_kb_search`, `agor_kb_get`, `agor_kb_outline`, and `agor_kb_get_range`.
-  Use `agor_kb_tree({ namespace, pathPrefix?, depth? })` for the common “show me what is in this namespace” request. It returns a compact folder/document tree with icon, title, kind, path, URI, reference URI, and status only — no document content or version metadata.
+  Use `agor_kb_tree({ namespace, pathPrefix?, depth? })` for the common “show me what is in this namespace” request. It returns a compact folder/document tree with icon, title, kind, path, URI, reference URI, and status only. No document content or version metadata.
   `agor_kb_search` is optimized for query discovery: non-empty searches return metadata plus short snippets by default, while browse/listing calls with `query: ""` return metadata only. Use `contentMode: "none" | "snippet" | "full"` and `snippetLines` to control result verbosity, and prefer `agor_kb_get` or `agor_kb_get_range` when you need to read document content.
   For large markdown docs, use `agor_kb_outline` as the map: it returns heading titles, line ranges, compact size hints, duplicate-heading occurrences, and `sectionRef` selectors such as `root.h1[1].h2[2]`. Then call `agor_kb_get_range` with that `sectionRef` (or a line range / `headingPath` + `occurrence`) to read only the needed section with nearby context. For very large sections, page through the selected section with `offsetLines` and `maxLines`.
 - **File new context** with `agor_kb_put` when an agent discovers something worth keeping.

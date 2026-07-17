@@ -3,7 +3,7 @@
 Many enterprise REST APIs (Shortcut, Linear, Jira, …) don't return
 `Access-Control-Allow-Origin` headers. A Sandpack [artifact](/guide/artifacts)
 running inside `https://*.codesandbox.io` therefore can't call them directly
-from the browser — the browser's CORS check fails before any response is
+from the browser. The browser's CORS check fails before any response is
 seen, regardless of headers, preflight, or library used.
 
 The Agor daemon ships a thin **HTTP proxy** to solve this. Anything sent to
@@ -22,18 +22,18 @@ hosts, or sandbox hostnames that resolve privately) before the request reaches
 
 This is a **dumb pass-through proxy**:
 
-- ✅ Pass-through bytes only — no transformation, no schema awareness, no caching.
-- ✅ Read-only by default — `allowed_methods` defaults to `[GET]`.
-- ✅ Off by default — no `proxies:` block in `config.yaml` means the route
+- ✅ Pass-through bytes only, no transformation, no schema awareness, no caching.
+- ✅ Read-only by default. `allowed_methods` defaults to `[GET]`.
+- ✅ Off by default. No `proxies:` block in `config.yaml` means the route
   is not mounted at all.
 - ❌ **No auth injection.** The daemon does not read your env vars and does
-  not set auth headers. Auth is your responsibility — set it in
+  not set auth headers. Auth is your responsibility. Set it in
   `agor.config.js` and pass it on every request.
 - ❌ No vendor presets. Configuration is yaml-driven; the daemon ships no
   built-in adapters for Shortcut/Linear/etc.
 
 If you want OAuth flows, token refresh, response caching, or schema-aware
-routing, this proxy is the wrong layer — wire those into the artifact or a
+routing, this proxy is the wrong layer. Wire those into the artifact or a
 dedicated backend.
 
 ## Configuration
@@ -78,7 +78,7 @@ a request to `/proxies/shortcut/api/v3/projects` lands at
 `https://api.app.shortcut.com/api/v3/projects`.
 
 If the operator includes a path prefix in `upstream` *and* the caller
-specifies the same prefix, you get a double-prefix bug — that's why we
+specifies the same prefix, you get a double-prefix bug. That's why we
 recommend the bare-host convention.
 
 ## Security model
@@ -93,17 +93,17 @@ The proxy:
    parties.
 3. **Strips outbound `set-cookie`** so the upstream cannot set cookies on
    the daemon's domain.
-4. **Forwards everything else as-is** — including arbitrary `Authorization`
+4. **Forwards everything else as-is**, including arbitrary `Authorization`
    and vendor-specific tokens (`Shortcut-Token`, `X-Linear-Api-Key`, etc.)
    that the artifact set intentionally.
-5. **Rate-limits per (user, vendor)** at 600 req/min by default — sized as
+5. **Rate-limits per (user, vendor)** at 600 req/min by default, sized as
    a daemon-protection cap, not a workload tuner. Hits return `429`
    immediately (no queueing).
 6. **Caps response bodies at 5 MB** to keep a misbehaving upstream from
    exhausting daemon memory.
 7. **Times out at 30 seconds** for the entire upstream round-trip.
 
-Unsuccessful upstream responses (404, 401, 5xx) are forwarded verbatim — the
+Unsuccessful upstream responses (404, 401, 5xx) are forwarded verbatim. The
 artifact wants to see Shortcut's `401` if the token is wrong, etc.
 
 ## Using a proxy from an artifact
@@ -152,13 +152,13 @@ exposed in the template context.
 Agents authoring artifacts can introspect configured proxies via two
 read-only [MCP tools](/guide/internal-mcp):
 
-- **`agor_proxies_list`** — returns all configured proxies with their URL,
+- **`agor_proxies_list`** returns all configured proxies with their URL,
   upstream, allowed methods, and description.
-- **`agor_proxies_get(vendor)`** — same shape, scalar. Errors if the vendor
+- **`agor_proxies_get(vendor)`** returns the same shape (scalar). Errors if the vendor
   is not configured.
 
 These tools never expose internal config (rate limit thresholds, max body
-size, etc.) — only the metadata an agent needs to write a working artifact.
+size, etc.), only the metadata an agent needs to write a working artifact.
 
 ## Error responses
 
@@ -172,7 +172,7 @@ size, etc.) — only the metadata an agent needs to write a working artifact.
 | `502` | `{"error":"upstream_error"}` | Network error, DNS failure, or 30 s timeout reached. |
 | `502` | `{"error":"upstream_too_large"}` | Upstream `Content-Length` > 5 MB. |
 
-The proxy does **not** echo upstream error messages — only the upstream
+The proxy does **not** echo upstream error messages, only the upstream
 status code and body. Errors visible to the caller therefore come from one
 of two sources: the proxy itself (with the JSON shapes above) or the
 upstream (verbatim status + body).
@@ -180,7 +180,7 @@ upstream (verbatim status + body).
 ## Anti-patterns
 
 - ❌ Don't paste long-lived service tokens into `proxies:` config. The
-  config is read by the daemon, not surfaced to artifacts — but it's also
+  config is read by the daemon, not surfaced to artifacts, but it's also
   not a secret store. Auth tokens belong in user
   [environment variables](/guide/artifacts#user-environment-variables).
 - ❌ Don't add an `*` upstream or a "passthrough to anything" vendor entry.
@@ -191,5 +191,5 @@ upstream (verbatim status + body).
 
 ## See also
 
-- [Artifacts](/guide/artifacts) — Sandpack-based live web apps.
-- [Agor MCP Server](/guide/internal-mcp) — agent-facing introspection tools.
+- [Artifacts](/guide/artifacts) (Sandpack-based live web apps)
+- [Agor MCP Server](/guide/internal-mcp) (agent-facing introspection tools)

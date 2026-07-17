@@ -16,7 +16,7 @@ docker compose up
 # Visit http://localhost:5173 → Login: admin@agor.live / admin
 ```
 
-That gives you SQLite, single-user, no RBAC — the fastest path to a running daemon. For Postgres, multiplayer + RBAC, or the docs site, see the variant system below.
+That gives you SQLite, single-user, no RBAC, the fastest path to a running daemon. For Postgres, multiplayer + RBAC, or the docs site, see the variant system below.
 
 ## Seeding test data
 
@@ -27,8 +27,8 @@ Two optional, composable env switches pre-populate the database on first boot:
 SEED=true LOAD_FIXTURES=true docker compose up
 ```
 
-- **`SEED=true`** — clones the real `agor` repo and creates one runnable `test-branch`.
-- **`LOAD_FIXTURES=true`** — inserts hardcoded, `demo-`-prefixed fake data (pure DB
+- **`SEED=true`** clones the real `agor` repo and creates one runnable `test-branch`.
+- **`LOAD_FIXTURES=true`** inserts hardcoded, `demo-`-prefixed fake data (pure DB
   inserts, no git/network): 4 loginable users, 2 repos, a board with 4 zones, 5
   branches, 4 sessions with fork/spawn genealogy + transcripts, kanban cards, and a
   live Sandpack artifact. Idempotent and **dev-only**. You can also run it manually
@@ -55,22 +55,22 @@ extra demo logins are available (passwords printed in the seed log):
 
 See [`packages/core/src/seed/README.md`](https://github.com/preset-io/agor/blob/main/packages/core/src/seed/README.md) for the full inventory.
 
-## `.agor.yml` — the variant system
+## `.agor.yml` (the variant system)
 
-Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.agor.yml) — a declarative schema describing how to spawn an environment for this codebase. The same schema you'd write for any repo you load into Agor: Agor uses it to develop itself. Each variant is a Handlebars-templated `start` / `stop` / `nuke` / `logs` / `health` / `app` block.
+Agor's repo ships [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.agor.yml), a declarative schema describing how to spawn an environment for this codebase. The same schema you'd write for any repo you load into Agor: Agor uses it to develop itself. Each variant is a Handlebars-templated `start` / `stop` / `nuke` / `logs` / `health` / `app` block.
 
 | Variant                  | What you get                                                                                                                                  | Base ports                                        |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
 | **`sqlite`** _(default)_ | SQLite, single-user, no RBAC. Fastest to boot.                                                                                                | daemon: `3000 + branch.unique_id`, UI: `5000 + …` |
 | **`postgres`**           | Postgres backend (closer to multi-user prod). RBAC off. **Requires Postgres 13+** (migrations use `gen_random_uuid()` from pg_catalog).       | same as `sqlite`                                  |
 | **`full`**               | Postgres + branch RBAC + strict Unix-user impersonation. Requires the sudoers config under `docker/sudoers/`. Same PG13+ floor as `postgres`. | same as `sqlite`                                  |
-| **`docs`**               | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone — no daemon, no DB.                                   | `7000 + branch.unique_id`                         |
-| **`sqlite-demo`**        | `sqlite` plus `LOAD_FIXTURES=true` — boots a populated demo board with 4 loginable demo users for instant E2E testing. Dev-only.              | same as `sqlite`                                  |
-| **`postgres-demo`**      | `postgres` plus `LOAD_FIXTURES=true` — same demo fixtures on a Postgres backend. Dev-only.                                                    | same as `sqlite`                                  |
+| **`docs`**               | The Nextra docs site (`apps/agor-docs`) in its own self-contained container. Standalone (no daemon, no DB).                                   | `7000 + branch.unique_id`                         |
+| **`sqlite-demo`**        | `sqlite` plus `LOAD_FIXTURES=true`, which boots a populated demo board with 4 loginable demo users for instant E2E testing. Dev-only.              | same as `sqlite`                                  |
+| **`postgres-demo`**      | `postgres` plus `LOAD_FIXTURES=true`, with the same demo fixtures on a Postgres backend. Dev-only.                                                    | same as `sqlite`                                  |
 
 Ports derive from `branch.unique_id` so multiple branches run side-by-side without colliding. The `docs` variant uses `{{host.ip_address}}` in its app URL so the dev server is reachable from your laptop, not just localhost on the daemon host.
 
-Pick a variant by setting `AGOR_VARIANT` in your environment or selecting it in the branch's environment settings — or render it manually with the appropriate `docker compose` invocation from the file.
+Pick a variant by setting `AGOR_VARIANT` in your environment or selecting it in the branch's environment settings. You can also render it manually with the appropriate `docker compose` invocation from the file.
 
 A representative variant block, abridged from the file:
 
@@ -88,23 +88,23 @@ sqlite:
   app: http://localhost:{{add 5000 branch.unique_id}}
 ```
 
-Other variants `extends: sqlite` to inherit the unchanged blocks — the schema enforces single-level extension only (no chains).
+Other variants `extends: sqlite` to inherit the unchanged blocks. The schema enforces single-level extension only (no chains).
 
 ## Agor in Agor (recommended)
 
 The whole point of `.agor.yml` is that Agor can develop itself. The natural workflow:
 
-1. **Run a "host" Agor** (any way you like — `npm i -g agor-live`, `docker compose up`, anything).
-2. **Register the agor repo** in your host Agor — clone or point it at your local checkout.
+1. **Run a "host" Agor** (any way you like, via `npm i -g agor-live`, `docker compose up`, anything).
+2. **Register the agor repo** in your host Agor. Clone or point it at your local checkout.
 3. **Create a branch per feature**. Each branch gets a unique `branch.unique_id` → unique ports → fully isolated dev stack.
 4. **Pick a variant** in the branch's environment settings (sqlite for most things, postgres if you're touching DB code, full if you're testing RBAC, docs for documentation work).
-5. **Spawn an agent session**. The session has [Agor MCP](/guide/internal-mcp) access, so it can spin up environments, monitor health and logs, run tasks against the running stack, and tear it down — without you ever leaving the canvas.
+5. **Spawn an agent session**. The session has [Agor MCP](/guide/internal-mcp) access, so it can spin up environments, monitor health and logs, run tasks against the running stack, and tear it down, all without you ever leaving the canvas.
 
 This is also the only sane way to develop multiple Agor features in parallel: each branch's variant picks its own ports, mounts source for HMR, and persists `node_modules` in a named volume.
 
 ## When to use `pnpm dev` instead
 
-Skip Docker if you're working on the **environment-spawning system itself** — running Agor in Docker while it tries to spawn `docker compose` for environments creates docker-in-docker entanglements that aren't worth fighting.
+Skip Docker if you're working on the **environment-spawning system itself**. Running Agor in Docker while it tries to spawn `docker compose` for environments creates docker-in-docker entanglements that aren't worth fighting.
 
 ```bash
 git clone https://github.com/preset-io/agor && cd agor && pnpm install
@@ -124,7 +124,7 @@ cd apps/agor-ui && pnpm dev
 
 ## Custom builds
 
-To test the **packaged artifact** end-to-end — the way users actually install Agor — build the `agor-live` npm package locally:
+To test the **packaged artifact** end-to-end (the way users actually install Agor), build the `agor-live` npm package locally:
 
 ```bash
 cd packages/agor-live
@@ -148,15 +148,15 @@ When the daemon runs in Docker, `pnpm install` populates `node_modules/` with **
 
 Two fixes:
 
-1. **Commit inside the container** _(recommended)_ — `docker compose exec agor-dev git add . && docker compose exec agor-dev git commit -m "msg"`. Hooks run in Linux.
-2. **Reinstall on host** — run `pnpm install` from the host once to get host-OS binaries; commit normally afterward. (You'll end up with both binary sets in `node_modules`, which is harmless but bloats the tree.)
+1. **Commit inside the container** _(recommended)_. Run `docker compose exec agor-dev git add . && docker compose exec agor-dev git commit -m "msg"`. Hooks run in Linux.
+2. **Reinstall on host.** Run `pnpm install` from the host once to get host-OS binaries; commit normally afterward. (You'll end up with both binary sets in `node_modules`, which is harmless but bloats the tree.)
 
 ## Checking which database is active
 
 Open **Settings → About** (admin only):
 
-- 💾 SQLite — shows the database file path
-- 🐘 PostgreSQL — shows the connection URL (password masked)
+- 💾 SQLite shows the database file path
+- 🐘 PostgreSQL shows the connection URL (password masked)
 
 Or hit the daemon directly:
 
