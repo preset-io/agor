@@ -897,6 +897,9 @@ export function OnboardingWizard({
               .service('codex-auth/import')
               .create({ authJson: apiKey })) as CodexAuthImportResult;
             setLlmAuthVerified((prev) => ({ ...prev, codex: true }));
+            // Drop the pasted token material from React state as soon as the
+            // daemon has it — nothing needs it after a successful import.
+            setApiKey('');
             goToStep('workspace');
           } catch (err) {
             setLlmError(

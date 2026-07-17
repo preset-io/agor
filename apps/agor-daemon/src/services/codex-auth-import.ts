@@ -39,7 +39,6 @@ import {
   validateResolvedUnixUser,
 } from '@agor/core/unix';
 import {
-  type CodexAuthSummary,
   parseCodexAuthJson,
   readCodexAuthFile,
   writeCodexAuthFile,
@@ -59,42 +58,65 @@ interface AppLike {
   service(path: string): unknown;
 }
 
-function importHint(summary: CodexAuthSummary): string {
-  if (summary.authMode === 'api_key') {
-    return 'Imported a Codex auth file carrying an OpenAI API key.';
-  }
-  return summary.planType
-    ? `Signed in with ChatGPT (${summary.planType} plan).`
-    : 'Signed in with ChatGPT.';
-}
+export type CodexUnixIdentityResolution =
+  | { ok: true; unixUser: string | null }
+  | { ok: false; reason: 'missing-username' | 'resolve-failed'; message: string };
 
 /**
  * Resolve the Unix account whose `~/.codex/auth.json` Codex will actually read
  * for this user: the daemon user (simple), the shared executor user
  * (insulated), or the caller's own Unix account (strict).
+ *
+ * Returns a discriminated result rather than throwing so callers with
+ * different failure semantics (the import endpoint rejects, the check-auth
+ * probe must distinguish "no identity configured" from "could not resolve")
+ * don't have to grep error messages.
  */
-export async function resolveCodexAuthTargetUser(
-  userId: UserID,
+export async function resolveCodexUnixIdentity(
+  userId: UserID | undefined,
   withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>
-): Promise<string | null> {
+): Promise<CodexUnixIdentityResolution> {
   const config = loadConfigSync();
   const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
 
   let unixUsername: string | null = null;
   if (mode === 'strict') {
+    if (!userId) {
+      return {
+        ok: false,
+        reason: 'resolve-failed',
+        message: 'Strict Unix user mode requires an authenticated user context.',
+      };
+    }
     const row = await withTenantDatabase((tenantDb) =>
       new UsersRepository(tenantDb).findById(userId)
     );
     unixUsername = row?.unix_username ?? null;
+    if (!unixUsername) {
+      return {
+        ok: false,
+        reason: 'missing-username',
+        message:
+          'Strict Unix user mode requires a unix_username — ask an admin to set one for your account.',
+      };
+    }
   }
 
-  const resolved = resolveUnixUserForImpersonation({
-    mode,
-    userUnixUsername: unixUsername,
-    executorUnixUser: config.execution?.executor_unix_user,
-  });
-  validateResolvedUnixUser(mode, resolved.unixUser);
-  return resolved.unixUser;
+  try {
+    const resolved = resolveUnixUserForImpersonation({
+      mode,
+      userUnixUsername: unixUsername,
+      executorUnixUser: config.execution?.executor_unix_user,
+    });
+    validateResolvedUnixUser(mode, resolved.unixUser);
+    return { ok: true, unixUser: resolved.unixUser };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'resolve-failed',
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareDatabase) {
@@ -130,16 +152,13 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
       const parsed = parseCodexAuthJson(data?.authJson);
       if (!parsed.ok) throw new BadRequest(parsed.error);
 
-      let targetUnixUser: string | null;
-      try {
-        targetUnixUser = await resolveCodexAuthTargetUser(userId, withTenantDatabase);
-      } catch (err) {
+      const identity = await resolveCodexUnixIdentity(userId, withTenantDatabase);
+      if (!identity.ok) {
         throw new BadRequest(
-          `Cannot determine which Unix account should hold this Codex login: ${
-            err instanceof Error ? err.message : String(err)
-          }`
+          `Cannot determine which Unix account should hold this Codex login: ${identity.message}`
         );
       }
+      const targetUnixUser = identity.unixUser;
 
       try {
         writeCodexAuthFile(parsed.normalized, targetUnixUser);
@@ -156,8 +175,16 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
         );
       }
 
-      const readBack = readCodexAuthFile(targetUnixUser);
-      const verified = readBack ? parseCodexAuthJson(readBack) : null;
+      // Read-back verification. A transient read failure gets one retry —
+      // the write already succeeded by exit status, so a persistent read
+      // failure here is an environment problem, not bad input. Failing out
+      // leaves the file on disk with the auth method unflipped; that state is
+      // harmless because a re-import cleanly overwrites both.
+      let readBack = readCodexAuthFile(targetUnixUser);
+      if (!readBack.ok && readBack.reason === 'unreadable') {
+        readBack = readCodexAuthFile(targetUnixUser);
+      }
+      const verified = readBack.ok ? parseCodexAuthJson(readBack.content) : null;
       if (!verified?.ok) {
         throw new BadRequest(
           'The Codex credentials file was written but could not be read back for verification — try again.'
@@ -174,11 +201,17 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
         { user: authUser, authenticated: true }
       );
 
+      const { summary } = verified;
       return {
         status: 'authenticated',
-        authMode: verified.summary.authMode,
-        ...(verified.summary.planType ? { planType: verified.summary.planType } : {}),
-        hint: importHint(verified.summary),
+        authMode: summary.authMode,
+        ...(summary.planType ? { planType: summary.planType } : {}),
+        hint:
+          summary.authMode === 'api_key'
+            ? 'Imported a Codex auth file carrying an OpenAI API key.'
+            : summary.planType
+              ? `Signed in with ChatGPT (${summary.planType} plan).`
+              : 'Signed in with ChatGPT.',
       };
     },
   };

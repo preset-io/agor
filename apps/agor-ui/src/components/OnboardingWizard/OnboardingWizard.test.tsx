@@ -568,16 +568,27 @@ describe('Codex ChatGPT login import', () => {
   });
 
   it('switching auth methods clears the pasted value and error state', async () => {
-    renderWizard({ initialStep: 'llm' });
+    const create = vi.fn(async () => {
+      throw new Error('This file has no ChatGPT login tokens and no API key.');
+    });
+    renderWithCodexImport(create);
 
     clickButton('GPT');
     clickButton('ChatGPT login');
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: '{"a":1}' },
     });
+    clickButton(/^connect →/i);
+    expect(
+      await screen.findByText(/This file has no ChatGPT login tokens and no API key\./)
+    ).toBeInTheDocument();
 
     clickButton('API key');
     const keyInput = screen.getByLabelText('OpenAI API key') as HTMLInputElement;
     expect(keyInput.value).toBe('');
+    // A stale rejection from the paste attempt must not linger on the API-key pane.
+    expect(
+      screen.queryByText(/This file has no ChatGPT login tokens and no API key\./)
+    ).not.toBeInTheDocument();
   });
 });

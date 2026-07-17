@@ -159,8 +159,11 @@ export function writeCodexAuthFile(content: string, asUser?: string | null): voi
     if (!isValidUnixUsername(asUser)) {
       throw new Error(`writeCodexAuthFile: invalid Unix username: ${JSON.stringify(asUser)}`);
     }
+    // `set -eu` so a mid-stream `cat` failure (disk full, quota) aborts the
+    // script with a non-zero exit instead of leaving a truncated file that a
+    // still-running `chmod` would silently bless as success.
     const script =
-      'umask 077; mkdir -p "$HOME/.codex"; cat > "$HOME/.codex/auth.json"; chmod 600 "$HOME/.codex/auth.json"';
+      'set -eu; umask 077; mkdir -p "$HOME/.codex"; cat > "$HOME/.codex/auth.json"; chmod 600 "$HOME/.codex/auth.json"';
     execFileSync('sudo', ['-n', '-u', asUser, 'bash', '-c', script], {
       input: content,
       stdio: ['pipe', 'ignore', 'pipe'],
@@ -171,37 +174,60 @@ export function writeCodexAuthFile(content: string, asUser?: string | null): voi
 
   const codexHome = daemonCodexHome();
   fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  // mkdirSync's mode is masked by the process umask and never applied to a
+  // pre-existing directory — chmod explicitly so the containing dir is 0700.
+  fs.chmodSync(codexHome, 0o700);
   const authPath = path.join(codexHome, 'auth.json');
   fs.writeFileSync(authPath, content, { mode: 0o600 });
   fs.chmodSync(authPath, 0o600);
 }
 
+export type ReadCodexAuthResult =
+  | { ok: true; content: string }
+  | { ok: false; reason: 'not-found' | 'unreadable' };
+
+/** Sentinel exit code the impersonated read script uses for "file absent". */
+const READ_NOT_FOUND_EXIT = 3;
+
 /**
  * Read `auth.json` from the given Unix user's Codex home (or the daemon's).
- * Returns null when the file is absent or unreadable — callers treat that as
- * "no Codex login", not as an error. Contents are SECRET; never log them.
+ *
+ * `not-found` (file genuinely absent) is positive evidence of "no Codex
+ * login"; `unreadable` (permission/sudo/transport failure) is NOT — callers
+ * doing auth checks must map it to their "could not verify" state, never to
+ * "unauthenticated". The impersonated script signals absence via a sentinel
+ * exit code so the distinction survives the sudo boundary without parsing
+ * locale-dependent stderr. Contents are SECRET; never log them.
  */
-export function readCodexAuthFile(asUser?: string | null): string | null {
+export function readCodexAuthFile(asUser?: string | null): ReadCodexAuthResult {
   if (asUser) {
-    if (!isValidUnixUsername(asUser)) return null;
+    if (!isValidUnixUsername(asUser)) return { ok: false, reason: 'unreadable' };
+    const script = `[ -e "$HOME/.codex/auth.json" ] || exit ${READ_NOT_FOUND_EXIT}; cat "$HOME/.codex/auth.json"`;
     try {
-      return execFileSync(
-        'sudo',
-        ['-n', '-u', asUser, 'bash', '-c', 'cat "$HOME/.codex/auth.json"'],
-        {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'ignore'],
-          timeout: SUDO_TIMEOUT_MS,
-        }
-      );
-    } catch {
-      return null;
+      const content = execFileSync('sudo', ['-n', '-u', asUser, 'bash', '-c', script], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: SUDO_TIMEOUT_MS,
+      });
+      return { ok: true, content };
+    } catch (err) {
+      const exitStatus = (err as { status?: unknown }).status;
+      return {
+        ok: false,
+        reason: exitStatus === READ_NOT_FOUND_EXIT ? 'not-found' : 'unreadable',
+      };
     }
   }
 
   try {
-    return fs.readFileSync(path.join(daemonCodexHome(), 'auth.json'), 'utf8');
-  } catch {
-    return null;
+    return {
+      ok: true,
+      content: fs.readFileSync(path.join(daemonCodexHome(), 'auth.json'), 'utf8'),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: (err as { code?: unknown }).code === 'ENOENT' ? 'not-found' : 'unreadable',
+    };
   }
 }

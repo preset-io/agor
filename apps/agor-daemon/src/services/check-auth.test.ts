@@ -2,7 +2,9 @@ import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { Claude } from '@agor/core/sdk';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readCodexAuthFile } from '../utils/codex-auth-file.js';
 import { createCheckAuthService } from './check-auth';
+import { resolveCodexUnixIdentity } from './codex-auth-import.js';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -19,9 +21,25 @@ vi.mock('@agor/core/sdk', () => ({
   },
 }));
 
+vi.mock('../utils/codex-auth-file.js', async () => {
+  const actual = await vi.importActual<typeof import('../utils/codex-auth-file.js')>(
+    '../utils/codex-auth-file.js'
+  );
+  return {
+    ...actual,
+    readCodexAuthFile: vi.fn(),
+  };
+});
+
+vi.mock('./codex-auth-import.js', () => ({
+  resolveCodexUnixIdentity: vi.fn(),
+}));
+
 const resolveApiKeyMock = vi.mocked(resolveApiKey);
 const isTenantAgenticToolEnabledMock = vi.mocked(isTenantAgenticToolEnabled);
 const claudeQueryMock = vi.mocked(Claude.query);
+const readCodexAuthFileMock = vi.mocked(readCodexAuthFile);
+const resolveCodexUnixIdentityMock = vi.mocked(resolveCodexUnixIdentity);
 const TEST_DB = { run: vi.fn() } as never;
 
 function mockClaudeAccount(account: Record<string, unknown> | null) {
@@ -206,5 +224,76 @@ describe('check-auth tri-state', () => {
     const result = await service().create({ tool: 'claude-code', apiKey: 'sk-typed' }, params);
     expect(result.status).toBe('unauthenticated');
     fetchMock.mockRestore();
+  });
+});
+
+// Codex subscription login is verified against the auth.json of the Unix
+// identity that runs Codex. The probe must stay honestly tri-state: only a
+// genuinely absent/malformed file is "unauthenticated"; failures to LOOK
+// (sudo/permission/transport) are "unknown".
+describe('check-auth codex auth.json probe', () => {
+  const params = { user: { user_id: 'user-1' } } as never;
+
+  function fakeJwt(payload: Record<string, unknown>): string {
+    const enc = (obj: Record<string, unknown>) =>
+      Buffer.from(JSON.stringify(obj)).toString('base64url');
+    return `${enc({ alg: 'RS256' })}.${enc(payload)}.sig`;
+  }
+
+  beforeEach(() => {
+    resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'user', useNativeAuth: true });
+    resolveCodexUnixIdentityMock.mockResolvedValue({ ok: true, unixUser: null });
+  });
+
+  it('valid ChatGPT tokens → authenticated via oauth with a plan hint', async () => {
+    readCodexAuthFileMock.mockReturnValue({
+      ok: true,
+      content: JSON.stringify({
+        OPENAI_API_KEY: null,
+        tokens: {
+          id_token: fakeJwt({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' } }),
+          access_token: 'a',
+          refresh_token: 'r',
+        },
+      }),
+    });
+
+    const result = await service().create({ tool: 'codex' }, params);
+    expect(result).toMatchObject({ status: 'authenticated', method: 'oauth' });
+    expect(result.hint).toContain('plus');
+  });
+
+  it('genuinely absent auth.json → unauthenticated', async () => {
+    readCodexAuthFileMock.mockReturnValue({ ok: false, reason: 'not-found' });
+    const result = await service().create({ tool: 'codex' }, params);
+    expect(result.status).toBe('unauthenticated');
+  });
+
+  it('unreadable auth.json (sudo/permission failure) → unknown, never unauthenticated', async () => {
+    readCodexAuthFileMock.mockReturnValue({ ok: false, reason: 'unreadable' });
+    const result = await service().create({ tool: 'codex' }, params);
+    expect(result.status).toBe('unknown');
+  });
+
+  it('malformed auth.json → unauthenticated (positive evidence of a broken login)', async () => {
+    readCodexAuthFileMock.mockReturnValue({ ok: true, content: 'not json at all' });
+    const result = await service().create({ tool: 'codex' }, params);
+    expect(result.status).toBe('unauthenticated');
+  });
+
+  it('identity resolution failure → unknown; missing unix_username → unauthenticated', async () => {
+    resolveCodexUnixIdentityMock.mockResolvedValue({
+      ok: false,
+      reason: 'resolve-failed',
+      message: 'x',
+    });
+    expect((await service().create({ tool: 'codex' }, params)).status).toBe('unknown');
+
+    resolveCodexUnixIdentityMock.mockResolvedValue({
+      ok: false,
+      reason: 'missing-username',
+      message: 'x',
+    });
+    expect((await service().create({ tool: 'codex' }, params)).status).toBe('unauthenticated');
   });
 });

@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { parseCodexAuthJson } from './codex-auth-file';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { parseCodexAuthJson, readCodexAuthFile } from './codex-auth-file';
 
 /** Build an unsigned JWT with the given payload — enough for claim mining. */
 function fakeJwt(payload: Record<string, unknown>): string {
@@ -97,5 +100,41 @@ describe('parseCodexAuthJson', () => {
       expect(JSON.parse(result.normalized)).toEqual(withExtras);
       expect(result.normalized.endsWith('\n')).toBe(true);
     }
+  });
+});
+
+describe('readCodexAuthFile (daemon-user path)', () => {
+  // The daemon-user branch honors $CODEX_HOME, which lets these tests point
+  // it at a throwaway directory.
+  const originalCodexHome = process.env.CODEX_HOME;
+  let tmpHome: string;
+
+  afterEach(() => {
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  function useTmpCodexHome(): string {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-auth-test-'));
+    process.env.CODEX_HOME = tmpHome;
+    return tmpHome;
+  }
+
+  it('returns the file content when present', () => {
+    const home = useTmpCodexHome();
+    fs.writeFileSync(path.join(home, 'auth.json'), '{"OPENAI_API_KEY":"sk-x"}');
+    expect(readCodexAuthFile(null)).toEqual({ ok: true, content: '{"OPENAI_API_KEY":"sk-x"}' });
+  });
+
+  it('distinguishes a genuinely absent file (not-found) from other failures', () => {
+    useTmpCodexHome();
+    expect(readCodexAuthFile(null)).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  it('reports unreadable (not not-found) when the path exists but cannot be read as a file', () => {
+    const home = useTmpCodexHome();
+    fs.mkdirSync(path.join(home, 'auth.json'));
+    expect(readCodexAuthFile(null)).toEqual({ ok: false, reason: 'unreadable' });
   });
 });
