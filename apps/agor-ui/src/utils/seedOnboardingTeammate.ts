@@ -1,6 +1,9 @@
 import type { AgenticToolName, AgorClient, Repo } from '@agor-live/client';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
-import { buildTeammateBootstrapPrompt } from './teammateBootstrapPrompt';
+import {
+  buildTeammateBootstrapPrompt,
+  buildTeammateOnboardingSessionTitle,
+} from './teammateBootstrapPrompt';
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
 
 export interface SeedOnboardingTeammateInput {
@@ -79,7 +82,10 @@ export async function seedOnboardingTeammate(
       sessionConfig: {
         branch_id: branch.branch_id,
         agent: input.agent ?? 'claude-code',
-        title: `${input.teammateEmoji ? `${input.teammateEmoji} ` : ''}${teammateName} onboarding`,
+        title: buildTeammateOnboardingSessionTitle({
+          displayName: teammateName,
+          emoji: input.teammateEmoji,
+        }),
         initialPrompt: buildTeammateBootstrapPrompt({
           displayName: teammateName,
           emoji: input.teammateEmoji,

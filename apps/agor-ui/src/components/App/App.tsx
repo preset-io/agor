@@ -64,7 +64,10 @@ import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
-import { buildTeammateBootstrapPrompt } from '../../utils/teammateBootstrapPrompt';
+import {
+  buildTeammateBootstrapPrompt,
+  buildTeammateOnboardingSessionTitle,
+} from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -915,7 +918,7 @@ export const App: React.FC<AppProps> = ({
       branch_id: branch.branch_id,
       agent: result.agent,
       agenticToolPresetId: result.agenticToolPresetId,
-      title: `${result.emoji ? `${result.emoji} ` : ''}${result.displayName} bootstrap`,
+      title: buildTeammateOnboardingSessionTitle(result),
       initialPrompt: buildTeammateBootstrapPrompt({
         displayName: result.displayName,
         emoji: result.emoji,
