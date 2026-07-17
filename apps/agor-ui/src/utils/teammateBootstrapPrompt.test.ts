@@ -2,9 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateBootstrapPromptContext,
+  buildTeammateOnboardingSessionTitle,
 } from './teammateBootstrapPrompt';
 
 describe('buildTeammateBootstrapPrompt', () => {
+  it('uses onboarding terminology for the visible first-session title', () => {
+    expect(buildTeammateOnboardingSessionTitle({ displayName: 'Rusty', emoji: '🤖' })).toBe(
+      '🤖 Rusty onboarding'
+    );
+    expect(buildTeammateOnboardingSessionTitle({ displayName: 'Rusty' })).toBe('Rusty onboarding');
+  });
+
   it('formats teammate identity params without browser-side Handlebars rendering', () => {
     const prompt = buildTeammateBootstrapPrompt({
       displayName: 'PR Reviewer',

@@ -27,6 +27,13 @@ export interface TeammateBootstrapPromptContext {
   firstSession: true;
 }
 
+export function buildTeammateOnboardingSessionTitle({
+  displayName,
+  emoji,
+}: Pick<TeammateBootstrapPromptInput, 'displayName' | 'emoji'>): string {
+  return `${emoji ? `${emoji} ` : ''}${displayName} onboarding`;
+}
+
 function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext): string {
   const lines = [
     '### First-session onboarding instructions for Agor AI teammate',
