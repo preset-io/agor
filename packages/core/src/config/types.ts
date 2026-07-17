@@ -464,6 +464,9 @@ export interface AgorExecutionSettings {
    */
   executor_command_template?: string;
 
+  /** A nonzero template launcher may still have submitted remote work. Default: false. */
+  executor_command_nonzero_may_have_dispatched?: boolean;
+
   /**
    * Required user environment variables.
    * When set, prompts are blocked if any listed var is missing from the user's resolved environment.

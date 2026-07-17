@@ -19,6 +19,8 @@ export const TaskStatus = {
 
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
+export type ExecutorMode = 'local' | 'templated';
+
 /**
  * Structured metadata attached to a task. All fields are optional, but the
  * ones that are present are load-bearing — typing them here prevents drift
@@ -263,5 +265,7 @@ export interface Task {
   executor_connected_at?: string; // UTC ISO string
   /** Latest heartbeat emitted by the executor while this task is active. */
   last_executor_heartbeat_at?: string; // UTC ISO string
+  /** Immutable launch-mode snapshot used to classify launcher exit safely. */
+  executor_mode?: ExecutorMode;
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }

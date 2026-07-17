@@ -371,6 +371,7 @@ export const tasks = sqliteTable(
 
         // Generic metadata (e.g., is_agor_callback, source, child_session_id)
         metadata?: Task['metadata'];
+        executor_mode?: Task['executor_mode'];
       }>()
       .notNull(),
   },

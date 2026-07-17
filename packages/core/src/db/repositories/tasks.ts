@@ -153,6 +153,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         report: task.report,
         permission_request: task.permission_request, // Permission state for UI approval flow
         metadata: task.metadata, // Generic metadata bag (e.g., is_agor_callback, source)
+        executor_mode: task.executor_mode,
       },
     };
   }
@@ -493,12 +494,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
           // STEP 2: Deep merge updates into current task (in memory)
           // Preserves nested objects like message_range when doing partial updates.
-          // The latest pulse is a complete snapshot; replacing it avoids stale
-          // id/label fields surviving when a newer pulse omits them.
           const merged = deepMerge(current, updates);
-          if (updates.latest_executor_pulse !== undefined) {
-            merged.latest_executor_pulse = updates.latest_executor_pulse;
-          }
           const insertData = this.taskToInsert(merged);
 
           // STEP 3: Write merged task (within same transaction)

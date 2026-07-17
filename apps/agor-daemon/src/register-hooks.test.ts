@@ -110,6 +110,12 @@ describe('protectServerManagedTaskWrites', () => {
     ).rejects.toThrow('executor_connected_at is server-managed');
   });
 
+  it('rejects executor_mode on external patches', async () => {
+    await expect(
+      protectServerManagedTaskWrites(externalContext('patch', { executor_mode: 'local' }))
+    ).rejects.toThrow('executor_mode is server-managed');
+  });
+
   it.each([
     'create',
     'update',

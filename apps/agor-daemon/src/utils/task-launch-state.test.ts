@@ -1,6 +1,6 @@
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { buildTaskLaunchState } from './task-launch-state.js';
+import { buildTaskLaunchState, classifyExecutorExit } from './task-launch-state.js';
 
 describe('buildTaskLaunchState', () => {
   it('launches claude-code-cli directly into running without a connection timestamp', () => {
@@ -24,6 +24,29 @@ describe('buildTaskLaunchState', () => {
     expect(buildTaskLaunchState(tool, '2026-07-10T20:00:00.000Z')).toEqual({
       status: TaskStatus.DISPATCHING,
       started_at: '2026-07-10T20:00:00.000Z',
+      executor_mode: 'local',
     });
+  });
+
+  it('snapshots templated execution at dispatch', () => {
+    expect(buildTaskLaunchState('codex', '2026-07-10T20:00:00.000Z', 'templated')).toMatchObject({
+      status: TaskStatus.DISPATCHING,
+      executor_mode: 'templated',
+    });
+  });
+});
+
+describe('classifyExecutorExit', () => {
+  it.each([
+    [{ mode: 'local', code: 0, connected: true, nonzeroMayHaveDispatched: false }, 'authoritative'],
+    [{ mode: 'templated', code: 0, connected: false, nonzeroMayHaveDispatched: false }, 'passive'],
+    [{ mode: 'templated', code: 9, connected: true, nonzeroMayHaveDispatched: false }, 'passive'],
+    [
+      { mode: 'templated', code: 9, connected: false, nonzeroMayHaveDispatched: false },
+      'authoritative',
+    ],
+    [{ mode: 'templated', code: 9, connected: false, nonzeroMayHaveDispatched: true }, 'ambiguous'],
+  ] as const)('classifies %# as %s', (input, expected) => {
+    expect(classifyExecutorExit(input)).toBe(expected);
   });
 });

@@ -1126,7 +1126,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const gitStateAtStart = 'unknown';
     const refAtStart = 'unknown';
 
-    const launchState = buildTaskLaunchState(session.agentic_tool, startTimestamp);
+    const launchState = buildTaskLaunchState(
+      session.agentic_tool,
+      startTimestamp,
+      config.execution?.executor_command_template ? 'templated' : 'local'
+    );
 
     // Patch task: queued/created → launch status, with real ranges. queue_position
     // is cleared here so a draining task is no longer considered queued.
@@ -1146,7 +1150,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           sha_at_start: gitStateAtStart,
         },
       },
-      params
+      { ...params, provider: undefined }
     )) as Task;
 
     // Alt D — write the user-message row before spawning. Gated by kill switch.

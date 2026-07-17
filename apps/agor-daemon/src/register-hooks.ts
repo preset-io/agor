@@ -497,6 +497,9 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   if (records.some((write) => Object.hasOwn(write, 'executor_connected_at'))) {
     throw new Forbidden('executor_connected_at is server-managed');
   }
+  if (records.some((write) => Object.hasOwn(write, 'executor_mode'))) {
+    throw new Forbidden('executor_mode is server-managed');
+  }
   if (records.some((write) => write.status === TaskStatus.DISPATCHING)) {
     throw new Forbidden('dispatching task status is server-managed');
   }

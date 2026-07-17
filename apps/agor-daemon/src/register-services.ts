@@ -144,6 +144,7 @@ import {
 } from './utils/session-state.js';
 import { pullIfNeeded, pushAsync } from './utils/session-state-hooks.js';
 import { spawnExecutor } from './utils/spawn-executor.js';
+import { classifyExecutorExit } from './utils/task-launch-state.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -980,14 +981,45 @@ function createExecuteHandler(
         task_id: taskId,
         unix_user: executorUnixUser || undefined,
       },
-      onSpawn: (child) => {
-        if (child.pid) {
+      onSpawn: (child, spawnContext) => {
+        if (spawnContext.mode === 'local' && child.pid) {
           trackExecutorProcess(sessionId, child.pid);
           console.log(`${logPrefix} PID: ${child.pid}`);
         }
       },
-      onExit: async (code) => {
+      onExit: async (code, spawnContext) => {
         console.log(`${logPrefix} Exited with code ${code}`);
+
+        if (spawnContext.mode === 'templated') {
+          const connected = await app
+            .service('tasks')
+            .get(taskId, params)
+            .then((task) => Boolean(task.executor_connected_at))
+            .catch(() => false);
+          const disposition = classifyExecutorExit({
+            mode: spawnContext.mode,
+            code,
+            connected,
+            nonzeroMayHaveDispatched:
+              config.execution?.executor_command_nonzero_may_have_dispatched === true,
+          });
+          if (disposition !== 'authoritative') {
+            if (disposition === 'ambiguous') {
+              await app.service('tasks').patch(
+                taskId,
+                {
+                  error_message: `Executor launcher exited with code ${code ?? 'unknown'}, but configuration says remote work may have been dispatched.`,
+                },
+                { ...params, provider: undefined }
+              );
+            }
+            console.log(
+              `${logPrefix} Launcher exit is passive; awaiting remote executor lifecycle`
+            );
+            return;
+          }
+        }
+
         untrackExecutorProcess(sessionId);
 
         // Safety net: check if task is still running

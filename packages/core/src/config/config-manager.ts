@@ -369,6 +369,7 @@ function validateConfig(config: AgorConfig): void {
     'permission_timeout_ms',
     'stateless_fs_mode',
     'executor_command_template',
+    'executor_command_nonzero_may_have_dispatched',
     'required_user_env_vars',
     'managed_envs_minimum_role',
     'managed_envs_execution_mode',
