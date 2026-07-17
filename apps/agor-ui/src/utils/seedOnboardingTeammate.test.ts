@@ -81,7 +81,7 @@ describe('seedOnboardingTeammate', () => {
     expect(initialPrompt).toContain('developer');
     expect(initialPrompt).toContain('- Suggested integrations: Slack, GitHub');
     expect(initialPrompt).toContain('Read ONBOARDING.md');
-    expect(initialPrompt).not.toContain('BOOTSTRAP.md');
+    expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
 
     expect(result).toEqual({ sessionId: 'session-1' });
     expect(onWarn).not.toHaveBeenCalled();

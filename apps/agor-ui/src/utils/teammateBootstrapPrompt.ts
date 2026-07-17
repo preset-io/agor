@@ -65,7 +65,7 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
 
   lines.push('');
   lines.push(
-    "Read ONBOARDING.md, then respond to the user. Use the supplied context and live Agor state, and ask only the next useful question if the user's goal is not already clear."
+    "Read ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md. Then respond to the user. Use the supplied context and live Agor state, and ask only the next useful question if the user's goal is not already clear."
   );
 
   return lines.join('\n');
