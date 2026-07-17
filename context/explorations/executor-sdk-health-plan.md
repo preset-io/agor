@@ -1,6 +1,7 @@
 # Executor SDK Health and Containment Plan
 
-**Status:** Proposed. This document must be approved before implementation.
+**Status:** Implemented on `fix/executor-sdk-health`. Enforcement remains opt-in until the
+observe-only soak in §13.12 passes; see `executor-sdk-health-qa.md` for the implementation receipt.
 
 **Delivery shape:** One clean branch from current `main`, one self-contained pull request, no stacked pull requests.
 
