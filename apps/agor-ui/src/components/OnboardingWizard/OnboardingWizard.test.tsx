@@ -520,9 +520,10 @@ describe('Codex ChatGPT login import', () => {
     renderWizard({ initialStep: 'llm' });
 
     clickButton('GPT');
-    expect(screen.getByText('ChatGPT login')).toBeInTheDocument();
+    expect(screen.getByText('Sign in with ChatGPT')).toBeInTheDocument();
+    expect(screen.getByText('Import login')).toBeInTheDocument();
 
-    clickButton('ChatGPT login');
+    clickButton('Import login');
     expect(screen.getByLabelText('Codex auth.json contents')).toBeInTheDocument();
     // Inline help: where the file lives, how to print it, and the overwrite caveat.
     expect(screen.getByText(/cat ~\/\.codex\/auth\.json/)).toBeInTheDocument();
@@ -539,7 +540,7 @@ describe('Codex ChatGPT login import', () => {
     const { importCreate } = renderWithCodexImport(create);
 
     clickButton('GPT');
-    clickButton('ChatGPT login');
+    clickButton('Import login');
     const pasted = JSON.stringify({ OPENAI_API_KEY: null, tokens: { refresh_token: 'r' } });
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: pasted },
@@ -557,7 +558,7 @@ describe('Codex ChatGPT login import', () => {
     renderWithCodexImport(create);
 
     clickButton('GPT');
-    clickButton('ChatGPT login');
+    clickButton('Import login');
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: '{"tokens":{}}' },
     });
@@ -577,7 +578,7 @@ describe('Codex ChatGPT login import', () => {
     renderWithCodexImport(create);
 
     clickButton('GPT');
-    clickButton('ChatGPT login');
+    clickButton('Import login');
     fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
       target: { value: '{"a":1}' },
     });
@@ -593,5 +594,123 @@ describe('Codex ChatGPT login import', () => {
     expect(
       screen.queryByText(/This file has no ChatGPT login tokens and no API key\./)
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('Codex ChatGPT device sign-in', () => {
+  // Client harness with a controllable codex-auth/device service.
+  function renderWithDeviceService(overrides: {
+    create?: ReturnType<typeof vi.fn>;
+    find?: ReturnType<typeof vi.fn>;
+  }) {
+    const create =
+      overrides.create ??
+      vi.fn(async () => ({
+        phase: 'pending',
+        userCode: 'ABCD-1234',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      }));
+    const find = overrides.find ?? vi.fn(async () => ({ phase: 'idle' }));
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name === 'codex-auth/device' ? { create, find } : { create: vi.fn(), find: vi.fn() }
+      ),
+    };
+    const rendered = renderWizard({ initialStep: 'llm', client: client as never });
+    return { ...rendered, deviceCreate: create, deviceFind: find };
+  }
+
+  function openDevicePane() {
+    clickButton('GPT');
+    clickButton('Sign in with ChatGPT');
+  }
+
+  it('requests a code on selection and shows it with the verification link and expiry', async () => {
+    const { deviceCreate } = renderWithDeviceService({});
+    openDevicePane();
+
+    await waitFor(() => expect(deviceCreate).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('ABCD-1234')).toBeInTheDocument();
+    expect(screen.getByText(/auth\.openai\.com\/codex\/device/)).toBeInTheDocument();
+    expect(screen.getByText(/waiting for approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/code expires in/i)).toBeInTheDocument();
+    // Approval has not happened — Connect stays disabled.
+    expect(screen.getByText(/^connect →/i).closest('button')).toBeDisabled();
+  });
+
+  it('advances once the daemon reports success', async () => {
+    const find = vi.fn().mockResolvedValueOnce({ phase: 'idle' }).mockResolvedValue({
+      phase: 'success',
+      planType: 'pro',
+      hint: 'Signed in with ChatGPT (pro plan).',
+    });
+    renderWithDeviceService({ find });
+    openDevicePane();
+
+    // The 2s status poll flips the pane to success.
+    expect(
+      await screen.findByText(/signed in with chatgpt \(pro plan\)/i, {}, { timeout: 5000 })
+    ).toBeInTheDocument();
+
+    // The pane reports success to the parent via effect — enablement lands a tick later.
+    await waitFor(() => expect(screen.getByText(/^connect →/i).closest('button')).toBeEnabled());
+    const connect = screen.getByText(/^connect →/i).closest('button');
+    fireEvent.click(connect as HTMLButtonElement);
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+  });
+
+  it('treats a gated account as a first-class state with working fallbacks', async () => {
+    const create = vi.fn(async () => ({
+      phase: 'unavailable',
+      hint: 'Your ChatGPT account does not allow device-code sign-in.',
+    }));
+    renderWithDeviceService({ create });
+    openDevicePane();
+
+    expect(
+      await screen.findByText(/device sign-in is turned off for this chatgpt account/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/device code authorization for codex/i)).toBeInTheDocument();
+
+    clickButton('Paste a login file');
+    expect(screen.getByLabelText('Codex auth.json contents')).toBeInTheDocument();
+  });
+
+  it('offers a fresh code after expiry', async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce({
+        phase: 'expired',
+        hint: 'The sign-in code expired — get a new one and try again.',
+      })
+      .mockResolvedValue({
+        phase: 'pending',
+        userCode: 'WXYZ-9876',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      });
+    renderWithDeviceService({ create });
+    openDevicePane();
+
+    expect(await screen.findByText(/code expired/i)).toBeInTheDocument();
+    await findAndClickButton(/get a new code/i);
+    expect(await screen.findByText('WXYZ-9876')).toBeInTheDocument();
+  });
+
+  it('adopts a still-pending attempt instead of burning a fresh code', async () => {
+    const find = vi.fn(async () => ({
+      phase: 'pending',
+      userCode: 'KEEP-0001',
+      verificationUrl: 'https://auth.openai.com/codex/device',
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    }));
+    const create = vi.fn();
+    renderWithDeviceService({ create, find });
+    openDevicePane();
+
+    expect(await screen.findByText('KEEP-0001')).toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
   });
 });

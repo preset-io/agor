@@ -10,6 +10,7 @@ import type {
   AgorClient,
   AuthCheckResult,
   CodexAuthImportResult,
+  CodexDeviceAuthStatus,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -23,7 +24,7 @@ import {
   LoadingOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { ONBOARDING_PERSONAS } from '../../utils/onboardingPersonas';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
@@ -34,7 +35,12 @@ const { useToken } = theme;
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export type WizardStep = 'persona' | 'llm' | 'workspace' | 'integrations' | 'done';
-type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth' | 'codex-auth-json';
+type AuthMethod =
+  | 'api-key'
+  | 'claude-subscription-token'
+  | 'codex-cli-auth'
+  | 'codex-auth-json'
+  | 'codex-device-auth';
 
 /**
  * Per-agent auth-method toggle entries. Agents absent here have exactly one
@@ -49,7 +55,8 @@ const AUTH_METHOD_OPTIONS: Partial<
   ],
   codex: [
     { label: 'API key', value: 'api-key' },
-    { label: 'ChatGPT login', value: 'codex-auth-json' },
+    { label: 'Sign in with ChatGPT', value: 'codex-device-auth' },
+    { label: 'Import login', value: 'codex-auth-json' },
   ],
 };
 
@@ -455,6 +462,240 @@ const PARTICLE_DIRS = [
   [-51, -51],
 ] as const;
 
+// ─── Codex device-code sign-in pane ──────────────────────────────────────────
+
+const DEVICE_STATUS_POLL_MS = 2000;
+
+function formatCountdown(remainingMs: number): string {
+  const totalSeconds = Math.max(Math.floor(remainingMs / 1000), 0);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+interface CodexDeviceSignInProps {
+  client: AgorClient | null;
+  /** Fired once the daemon confirms tokens were saved for this user. */
+  onVerified: () => void;
+  /** Switch to another codex auth method (gated-account fallback). */
+  onUseFallback: (method: AuthMethod) => void;
+}
+
+/**
+ * Self-contained device-code pane: requests a code, shows it with the
+ * verification link and a countdown, and polls the daemon for approval.
+ * Memoized with its own state so the 1s countdown and 2s status polls
+ * re-render only this pane, never the whole wizard.
+ */
+const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
+  client,
+  onVerified,
+  onUseFallback,
+}: CodexDeviceSignInProps) {
+  const { token } = useToken();
+  const [status, setStatus] = useState<CodexDeviceAuthStatus>({ phase: 'idle' });
+  const [starting, setStarting] = useState(false);
+  const [remainingMs, setRemainingMs] = useState<number | null>(null);
+
+  const deviceService = useMemo(
+    () =>
+      client
+        ? (client.service('codex-auth/device') as unknown as {
+            create(data: Record<string, never>): Promise<unknown>;
+            find(): Promise<unknown>;
+          })
+        : null,
+    [client]
+  );
+
+  const requestCode = useCallback(async () => {
+    if (!deviceService) return;
+    setStarting(true);
+    try {
+      setStatus((await deviceService.create({})) as CodexDeviceAuthStatus);
+    } catch (err) {
+      setStatus({
+        phase: 'error',
+        hint:
+          err instanceof Error && err.message
+            ? err.message
+            : 'Could not start the ChatGPT sign-in — try again.',
+      });
+    } finally {
+      setStarting(false);
+    }
+  }, [deviceService]);
+
+  // On mount, adopt a still-live attempt (user toggled away and back) instead
+  // of burning a fresh code; otherwise request one.
+  const bootstrappedRef = useRef(false);
+  useEffect(() => {
+    if (bootstrappedRef.current || !deviceService) return;
+    bootstrappedRef.current = true;
+    void (async () => {
+      try {
+        const existing = (await deviceService.find()) as CodexDeviceAuthStatus;
+        if (existing.phase === 'pending' || existing.phase === 'success') {
+          setStatus(existing);
+          return;
+        }
+      } catch {
+        // No adoptable attempt — fall through to a fresh request.
+      }
+      await requestCode();
+    })();
+  }, [deviceService, requestCode]);
+
+  // Poll while pending; terminal phases stop the loop. Identity-preserving
+  // setState keeps unchanged polls from re-rendering even this pane.
+  useEffect(() => {
+    if (status.phase !== 'pending' || !deviceService) return;
+    const id = setInterval(async () => {
+      try {
+        const next = (await deviceService.find()) as CodexDeviceAuthStatus;
+        setStatus((prev) =>
+          prev.phase === next.phase && prev.userCode === next.userCode && prev.hint === next.hint
+            ? prev
+            : next
+        );
+      } catch {
+        // Transient — keep polling until the code expires.
+      }
+    }, DEVICE_STATUS_POLL_MS);
+    return () => clearInterval(id);
+  }, [status.phase, deviceService]);
+
+  // 1s countdown while a code is live.
+  useEffect(() => {
+    if (status.phase !== 'pending' || !status.expiresAt) {
+      setRemainingMs(null);
+      return;
+    }
+    const expiresAtMs = Date.parse(status.expiresAt);
+    const update = () => setRemainingMs(Math.max(expiresAtMs - Date.now(), 0));
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [status.phase, status.expiresAt]);
+
+  useEffect(() => {
+    if (status.phase === 'success') onVerified();
+  }, [status.phase, onVerified]);
+
+  if (starting || status.phase === 'idle') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0' }}>
+        <LoadingOutlined style={{ color: token.colorTextTertiary, fontSize: 14 }} />
+        <Text style={{ color: token.colorTextTertiary, fontSize: 13 }}>
+          Getting your sign-in code…
+        </Text>
+      </div>
+    );
+  }
+
+  if (status.phase === 'pending') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 0' }}>
+        <Text style={{ color: token.colorTextSecondary, fontSize: 13 }}>
+          Open the link below, sign in to ChatGPT, and enter this one-time code:
+        </Text>
+        <Text
+          copyable
+          aria-label="ChatGPT sign-in code"
+          style={{
+            color: token.colorText,
+            fontFamily: 'monospace',
+            fontSize: 26,
+            fontWeight: 600,
+            letterSpacing: 4,
+          }}
+        >
+          {status.userCode}
+        </Text>
+        {status.verificationUrl && (
+          <Typography.Link
+            href={status.verificationUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 13 }}
+          >
+            Open {status.verificationUrl} →
+          </Typography.Link>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <LoadingOutlined style={{ color: token.colorTextTertiary, fontSize: 13 }} />
+          <Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
+            Waiting for approval — we finish automatically once you approve.
+            {remainingMs !== null && ` Code expires in ${formatCountdown(remainingMs)}.`}
+          </Text>
+        </div>
+      </div>
+    );
+  }
+
+  if (status.phase === 'success') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0' }}>
+        <CheckCircleOutlined style={{ color: token.colorSuccess, fontSize: 14 }} />
+        <Text style={{ color: token.colorSuccess, fontSize: 13 }}>
+          {status.hint ?? 'Signed in with ChatGPT.'}
+        </Text>
+      </div>
+    );
+  }
+
+  if (status.phase === 'unavailable') {
+    return (
+      <Alert
+        type="warning"
+        showIcon
+        style={{ fontSize: 12 }}
+        message="Device sign-in is turned off for this ChatGPT account"
+        description={
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <span>
+              Personal accounts: enable it under ChatGPT Settings → Security → “Device code
+              authorization for Codex”, then try again. Workspace accounts: a workspace admin has to
+              enable it. Either way, the two options below work right now.
+            </span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <Button size="small" onClick={() => onUseFallback('codex-auth-json')}>
+                Paste a login file
+              </Button>
+              <Button size="small" onClick={() => onUseFallback('api-key')}>
+                Use an API key
+              </Button>
+              <Button size="small" type="text" onClick={requestCode}>
+                Try again
+              </Button>
+            </div>
+          </div>
+        }
+      />
+    );
+  }
+
+  // expired / error
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 0' }}>
+      <Alert
+        type={status.phase === 'expired' ? 'warning' : 'error'}
+        showIcon
+        style={{ fontSize: 12 }}
+        message={
+          status.hint ??
+          (status.phase === 'expired' ? 'The sign-in code expired.' : 'The ChatGPT sign-in failed.')
+        }
+      />
+      <div>
+        <Button size="small" onClick={requestCode}>
+          Get a new code
+        </Button>
+      </div>
+    </div>
+  );
+});
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 export interface OnboardingWizardProps {
@@ -729,6 +970,11 @@ export function OnboardingWizard({
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
+        // Device sign-in has no typed input — it enables once the daemon
+        // confirms the login (llmAuthVerified flips before the user record
+        // refresh that agentIsVerifiedConnected depends on).
+        if (selectedAgent === 'codex' && authMethod === 'codex-device-auth')
+          return llmAuthVerified.codex === true;
         // Key stored, check still in progress — keep enabled so user isn't stuck
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return true;
         // Require a new key with valid format (stored key absent or broken)
@@ -767,6 +1013,11 @@ export function OnboardingWizard({
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
+        if (selectedAgent === 'codex' && authMethod === 'codex-device-auth') {
+          return llmAuthVerified.codex === true
+            ? null
+            : 'Approve the sign-in code in ChatGPT first';
+        }
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return null;
         if (!apiKey.trim()) {
           return authMethod === 'codex-auth-json'
@@ -854,6 +1105,18 @@ export function OnboardingWizard({
     setCurrentStep(step);
   }, []);
 
+  // Stable handlers for the memoized device sign-in pane — identity-preserving
+  // so its internal timers never force wizard-wide re-renders.
+  const handleCodexDeviceVerified = useCallback(() => {
+    setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
+  }, []);
+
+  const handleCodexAuthMethodFallback = useCallback((method: AuthMethod) => {
+    setAuthMethod(method);
+    setApiKey('');
+    setLlmError(null);
+  }, []);
+
   const handleBack = useCallback(() => {
     if (stepIndex > 0) goToStep(STEPS[stepIndex - 1]);
   }, [stepIndex, goToStep]);
@@ -876,6 +1139,12 @@ export function OnboardingWizard({
         if (!selectedAgent) return;
         if (agentIsVerifiedConnected(selectedAgent)) {
           goToStep('workspace');
+          return;
+        }
+        // Device sign-in completes daemon-side; the primary button only ever
+        // advances once the attempt succeeded (button is disabled until then).
+        if (selectedAgent === 'codex' && authMethod === 'codex-device-auth') {
+          if (llmAuthVerified.codex === true) goToStep('workspace');
           return;
         }
         // Key stored, auth check still running — proceed optimistically
@@ -1419,31 +1688,39 @@ export function OnboardingWizard({
                       </div>
                     )}
 
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginTop: !methodOptions && !keyBroken ? 12 : 0,
-                        marginBottom: 8,
-                      }}
-                    >
-                      <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
-                        {getKeyLabel(option.agent, authMethod)}
-                      </Text>
-                      {option.keyLink && authMethod === 'api-key' && (
-                        <Typography.Link
-                          href={option.keyLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: 12, color: PRIMARY }}
-                        >
-                          Get your key at {option.keyLinkLabel} →
-                        </Typography.Link>
-                      )}
-                    </div>
+                    {authMethod !== 'codex-device-auth' && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginTop: !methodOptions && !keyBroken ? 12 : 0,
+                          marginBottom: 8,
+                        }}
+                      >
+                        <Text style={{ color: TEXT_PRIMARY, fontSize: 13, fontWeight: 500 }}>
+                          {getKeyLabel(option.agent, authMethod)}
+                        </Text>
+                        {option.keyLink && authMethod === 'api-key' && (
+                          <Typography.Link
+                            href={option.keyLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize: 12, color: PRIMARY }}
+                          >
+                            Get your key at {option.keyLinkLabel} →
+                          </Typography.Link>
+                        )}
+                      </div>
+                    )}
 
-                    {authMethod === 'codex-auth-json' ? (
+                    {authMethod === 'codex-device-auth' ? (
+                      <CodexDeviceSignIn
+                        client={client}
+                        onVerified={handleCodexDeviceVerified}
+                        onUseFallback={handleCodexAuthMethodFallback}
+                      />
+                    ) : authMethod === 'codex-auth-json' ? (
                       <>
                         <Alert
                           type="info"
