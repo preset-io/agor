@@ -75,7 +75,7 @@ Deletion happened with replacement, not as a compatibility tail:
 | UI full suite           | `pnpm --filter @agor/ui test` — 147 files, 941 tests passed                                                |
 | CLI full suite          | `pnpm --filter @agor/cli test` — 3 files, 19 tests passed                                                  |
 | Source typechecks       | Core, daemon, and executor `typecheck` all passed                                                          |
-| Changed formatting/lint | `pnpm exec biome ci --changed --since=b357aa73d --no-errors-on-unmatched` — 76 files passed                |
+| Changed formatting/lint | `pnpm exec biome ci --changed --since=b357aa73d --no-errors-on-unmatched` — 75 files passed                |
 | Tenant boundaries       | `node scripts/check-multitenancy-boundaries.mjs` — passed                                                  |
 | Short-ID contract       | `node scripts/check-no-ad-hoc-shortid.mjs` — passed                                                        |
 | Focused telemetry       | Connection/telemetry and coordinator suites — 10 tests passed                                              |
