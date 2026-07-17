@@ -9,6 +9,7 @@ import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
+  CodexAuthImportResult,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -33,7 +34,24 @@ const { useToken } = theme;
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export type WizardStep = 'persona' | 'llm' | 'workspace' | 'integrations' | 'done';
-type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth';
+type AuthMethod = 'api-key' | 'claude-subscription-token' | 'codex-cli-auth' | 'codex-auth-json';
+
+/**
+ * Per-agent auth-method toggle entries. Agents absent here have exactly one
+ * way in (an API key / endpoint URL) and render no toggle.
+ */
+const AUTH_METHOD_OPTIONS: Partial<
+  Record<AgenticToolName, { label: string; value: AuthMethod }[]>
+> = {
+  'claude-code': [
+    { label: 'API key', value: 'api-key' },
+    { label: 'Subscription token', value: 'claude-subscription-token' },
+  ],
+  codex: [
+    { label: 'API key', value: 'api-key' },
+    { label: 'ChatGPT login', value: 'codex-auth-json' },
+  ],
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -328,6 +346,7 @@ function hasAnyLlmKey(user: User | null | undefined): boolean {
     claude?.ANTHROPIC_API_KEY ||
     claude?.CLAUDE_CODE_OAUTH_TOKEN ||
     codex?.OPENAI_API_KEY ||
+    user.agentic_auth_methods?.codex === 'subscription' ||
     gemini?.GEMINI_API_KEY ||
     user.env_vars?.ANTHROPIC_API_KEY ||
     user.env_vars?.OPENAI_API_KEY ||
@@ -344,6 +363,7 @@ function keyNameForAgent(agent: AgenticToolName, authMethod: AuthMethod = 'api-k
 
 function getKeyLabel(agent: AgenticToolName, authMethod: AuthMethod): string {
   if (authMethod === 'claude-subscription-token') return 'Subscription token';
+  if (authMethod === 'codex-auth-json') return 'Codex login file (auth.json)';
   switch (agent) {
     case 'claude-code':
       return 'Anthropic API key';
@@ -599,7 +619,11 @@ export function OnboardingWizard({
         user?.env_vars?.ANTHROPIC_API_KEY
       ) {
         setSelectedAgent('claude-code');
-      } else if (codex?.OPENAI_API_KEY || user?.env_vars?.OPENAI_API_KEY) {
+      } else if (
+        codex?.OPENAI_API_KEY ||
+        user?.agentic_auth_methods?.codex === 'subscription' ||
+        user?.env_vars?.OPENAI_API_KEY
+      ) {
         setSelectedAgent('codex');
       } else if (gemini?.GEMINI_API_KEY || user?.env_vars?.GEMINI_API_KEY) {
         setSelectedAgent('gemini');
@@ -633,7 +657,13 @@ export function OnboardingWizard({
           user.env_vars?.ANTHROPIC_API_KEY
         );
       }
-      if (agent === 'codex') return !!(codex?.OPENAI_API_KEY || user.env_vars?.OPENAI_API_KEY);
+      if (agent === 'codex') {
+        return !!(
+          codex?.OPENAI_API_KEY ||
+          user.agentic_auth_methods?.codex === 'subscription' ||
+          user.env_vars?.OPENAI_API_KEY
+        );
+      }
       if (agent === 'gemini') return !!(gemini?.GEMINI_API_KEY || user.env_vars?.GEMINI_API_KEY);
       if (agent === 'opencode') {
         const opencode = user.agentic_tools?.opencode;
@@ -703,8 +733,10 @@ export function OnboardingWizard({
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return true;
         // Require a new key with valid format (stored key absent or broken)
         if (!apiKey.trim()) return false;
-        // Subscription tokens have no fixed format — any non-empty string is accepted
-        if (authMethod === 'claude-subscription-token') return true;
+        // Subscription tokens and pasted auth files have no fixed format —
+        // any non-empty string is accepted (the daemon validates the file)
+        if (authMethod === 'claude-subscription-token' || authMethod === 'codex-auth-json')
+          return true;
         return validateLlmKeyPattern(selectedAgent, apiKey.trim()) === null;
       }
       case 'workspace':
@@ -736,7 +768,12 @@ export function OnboardingWizard({
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return null;
-        if (!apiKey.trim()) return 'Enter your API key to continue';
+        if (!apiKey.trim()) {
+          return authMethod === 'codex-auth-json'
+            ? 'Paste your auth.json contents to continue'
+            : 'Enter your API key to continue';
+        }
+        if (authMethod === 'codex-auth-json') return null;
         const err = validateLlmKeyPattern(selectedAgent, apiKey.trim());
         return err ?? null;
       }
@@ -754,6 +791,7 @@ export function OnboardingWizard({
     agentHasKey,
     llmAuthVerified,
     apiKey,
+    authMethod,
     hasExistingBoard,
     teammateName,
     llmSaving,
@@ -846,6 +884,31 @@ export function OnboardingWizard({
           return;
         }
         if (!user || !apiKey.trim()) return;
+        // Pasted auth.json goes to the daemon as-is: it validates the shape,
+        // writes the file 0600 for the right Unix identity, and flips the
+        // user's Codex auth method to subscription. The pasted secret never
+        // touches user records or agent context.
+        if (selectedAgent === 'codex' && authMethod === 'codex-auth-json') {
+          if (!client) return;
+          setLlmSaving(true);
+          setLlmError(null);
+          try {
+            (await client
+              .service('codex-auth/import')
+              .create({ authJson: apiKey })) as CodexAuthImportResult;
+            setLlmAuthVerified((prev) => ({ ...prev, codex: true }));
+            goToStep('workspace');
+          } catch (err) {
+            setLlmError(
+              err instanceof Error && err.message
+                ? err.message
+                : 'Could not import the Codex login — try again.'
+            );
+          } finally {
+            setLlmSaving(false);
+          }
+          return;
+        }
         // Subscription tokens have no fixed format (see primaryEnabled/disabledReason
         // above, which already treat them as exempt) — only pattern-validate API keys.
         if (authMethod !== 'claude-subscription-token') {
@@ -1130,6 +1193,7 @@ export function OnboardingWizard({
             const isVerified = llmAuthVerified[option.agent];
             const effectiveHasKey = hasKey && isVerified === true;
             const keyBroken = hasKey && isVerified === false;
+            const methodOptions = AUTH_METHOD_OPTIONS[option.agent];
             return (
               <div
                 key={option.id}
@@ -1304,8 +1368,8 @@ export function OnboardingWizard({
                       />
                     )}
 
-                    {/* Auth method toggle — Claude only */}
-                    {option.agent === 'claude-code' && (
+                    {/* Auth method toggle — agents with more than one way in */}
+                    {methodOptions && (
                       <div
                         style={{
                           display: 'flex',
@@ -1321,12 +1385,7 @@ export function OnboardingWizard({
                           boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
                         }}
                       >
-                        {(
-                          [
-                            { label: 'API key', value: 'api-key' },
-                            { label: 'Subscription token', value: 'claude-subscription-token' },
-                          ] as { label: string; value: AuthMethod }[]
-                        ).map((opt, idx) => {
+                        {methodOptions.map((opt, idx) => {
                           const active = authMethod === opt.value;
                           return (
                             <button
@@ -1362,12 +1421,7 @@ export function OnboardingWizard({
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
-                        marginTop:
-                          option.agent !== 'claude-code' && keyBroken
-                            ? 0
-                            : option.agent !== 'claude-code'
-                              ? 12
-                              : 0,
+                        marginTop: !methodOptions && !keyBroken ? 12 : 0,
                         marginBottom: 8,
                       }}
                     >
@@ -1386,7 +1440,40 @@ export function OnboardingWizard({
                       )}
                     </div>
 
-                    {authMethod === 'claude-subscription-token' ? (
+                    {authMethod === 'codex-auth-json' ? (
+                      <>
+                        <Alert
+                          type="info"
+                          showIcon
+                          style={{ marginBottom: 10, fontSize: 12 }}
+                          message={
+                            <span>
+                              Already signed in to Codex on your laptop? Your login lives in{' '}
+                              <code>~/.codex/auth.json</code> there. Print it with{' '}
+                              <code>cat ~/.codex/auth.json</code> and paste the whole thing below —
+                              this replaces any Codex login already on this server. Prefer a
+                              terminal? Run <code>codex login --device-auth</code> from a branch
+                              terminal instead.
+                            </span>
+                          }
+                        />
+                        <Input.Password
+                          aria-label="Codex auth.json contents"
+                          placeholder="Paste the JSON from ~/.codex/auth.json…"
+                          value={apiKey}
+                          onChange={(e) => {
+                            setApiKey(e.target.value);
+                            setLlmError(null);
+                          }}
+                          style={{
+                            background: 'rgba(0,0,0,0.3)',
+                            borderColor: 'rgba(255,255,255,0.12)',
+                            fontFamily: 'monospace',
+                            fontSize: 13,
+                          }}
+                        />
+                      </>
+                    ) : authMethod === 'claude-subscription-token' ? (
                       <>
                         <Alert
                           type="info"

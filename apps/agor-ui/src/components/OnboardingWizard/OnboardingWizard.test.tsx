@@ -499,3 +499,85 @@ describe('OnboardingWizard', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('Codex ChatGPT login import', () => {
+  // Client harness whose codex-auth/import service is controllable per test.
+  function renderWithCodexImport(create: ReturnType<typeof vi.fn>) {
+    const boardsService = {
+      create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+    };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) =>
+        name === 'boards' ? boardsService : name === 'codex-auth/import' ? { create } : {}
+      ),
+    };
+    const rendered = renderWizard({ initialStep: 'llm', client: client as never });
+    return { ...rendered, importCreate: create };
+  }
+
+  it('offers an auth-method toggle for GPT and reveals the paste flow with inline help', async () => {
+    renderWizard({ initialStep: 'llm' });
+
+    clickButton('GPT');
+    expect(screen.getByText('ChatGPT login')).toBeInTheDocument();
+
+    clickButton('ChatGPT login');
+    expect(screen.getByLabelText('Codex auth.json contents')).toBeInTheDocument();
+    // Inline help: where the file lives, how to print it, and the overwrite caveat.
+    expect(screen.getByText(/cat ~\/\.codex\/auth\.json/)).toBeInTheDocument();
+    expect(screen.getByText(/replaces any Codex login/i)).toBeInTheDocument();
+    // No API-key format validation applies to a pasted file.
+    expect(screen.queryByText(/OpenAI keys start with/i)).not.toBeInTheDocument();
+  });
+
+  it('submits the pasted auth.json to the daemon and advances on success', async () => {
+    const create = vi.fn(async () => ({ status: 'authenticated', authMode: 'chatgpt' }));
+    const { importCreate } = renderWithCodexImport(create);
+
+    clickButton('GPT');
+    clickButton('ChatGPT login');
+    const pasted = JSON.stringify({ OPENAI_API_KEY: null, tokens: { refresh_token: 'r' } });
+    fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
+      target: { value: pasted },
+    });
+    clickButton(/^connect →/i);
+
+    await waitFor(() => expect(importCreate).toHaveBeenCalledWith({ authJson: pasted }));
+    expect(await screen.findByText('Name your AI teammate')).toBeInTheDocument();
+  });
+
+  it('shows the daemon rejection message and stays on the LLM step', async () => {
+    const create = vi.fn(async () => {
+      throw new Error('This file has no ChatGPT login tokens and no API key.');
+    });
+    renderWithCodexImport(create);
+
+    clickButton('GPT');
+    clickButton('ChatGPT login');
+    fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
+      target: { value: '{"tokens":{}}' },
+    });
+    clickButton(/^connect →/i);
+
+    expect(
+      await screen.findByText(/This file has no ChatGPT login tokens and no API key\./)
+    ).toBeInTheDocument();
+    expect(screen.getByText('Connect your AI')).toBeInTheDocument();
+    expect(screen.queryByText('Name your AI teammate')).not.toBeInTheDocument();
+  });
+
+  it('switching auth methods clears the pasted value and error state', async () => {
+    renderWizard({ initialStep: 'llm' });
+
+    clickButton('GPT');
+    clickButton('ChatGPT login');
+    fireEvent.change(screen.getByLabelText('Codex auth.json contents'), {
+      target: { value: '{"a":1}' },
+    });
+
+    clickButton('API key');
+    const keyInput = screen.getByLabelText('OpenAI API key') as HTMLInputElement;
+    expect(keyInput.value).toBe('');
+  });
+});
