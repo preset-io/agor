@@ -6,7 +6,7 @@
  */
 
 import type { AgorClient } from '@agor-live/client';
-import { createClient, ensureSessionStreamsCapabilityAnnounce } from '@agor-live/client';
+import { createClient } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
 import { isDefiniteAuthFailure } from '../utils/authErrors';
@@ -16,6 +16,7 @@ import {
   TOKENS_REFRESHED_EVENT,
 } from '../utils/singleFlightRefresh';
 import type { RefreshResult } from '../utils/tokenRefresh';
+import { ensureSessionStreamsCapabilityAnnounce } from './sessionStreamsCapability';
 
 interface UseAgorClientResult {
   client: AgorClient | null;
