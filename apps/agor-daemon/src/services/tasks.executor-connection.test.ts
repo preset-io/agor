@@ -26,13 +26,12 @@ describe('TasksService executor connection', () => {
       started_at: '2026-01-01T00:00:01.000Z',
       executor_connected_at: '2026-01-01T00:00:01.125Z',
     } as Task;
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      emit: ReturnType<typeof vi.fn>;
-    };
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const emit = vi.fn();
     Reflect.set(service, 'taskRepo', {
       connectExecutor: vi.fn().mockResolvedValue({ task, transitioned: true }),
     });
-    service.emit = vi.fn();
+    Reflect.set(service, 'app', { service: () => ({ emit }) });
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     await service.connectExecutor({ task_id: task.task_id });
@@ -40,7 +39,7 @@ describe('TasksService executor connection', () => {
     expect(log).toHaveBeenCalledWith(
       '🔌 [TasksService] Executor connected for task 018f00000000700080000000 in 125ms'
     );
-    expect(service.emit).toHaveBeenCalledWith('patched', task);
+    expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
   });
 });
 
@@ -60,14 +59,13 @@ describe('TasksService runtime telemetry', () => {
   } as Task;
 
   it('validates, persists, and publishes one bounded pulse fact', async () => {
-    const service = Object.create(TasksService.prototype) as TasksService & {
-      emit: ReturnType<typeof vi.fn>;
-    };
+    const service = Object.create(TasksService.prototype) as TasksService;
+    const emit = vi.fn();
     const reportRuntimeTelemetry = vi.fn().mockResolvedValue(task);
     const heartbeatCallback = vi.fn().mockResolvedValue(undefined);
     Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry });
     Reflect.set(service, 'handleExecutorHeartbeat', heartbeatCallback);
-    service.emit = vi.fn();
+    Reflect.set(service, 'app', { service: () => ({ emit }) });
 
     const result = await service.reportRuntimeTelemetry({
       task_id: task.task_id,
@@ -80,7 +78,7 @@ describe('TasksService runtime telemetry', () => {
       kind: 'progress',
       detail: 'tool.start',
     });
-    expect(service.emit).toHaveBeenCalledWith('patched', task);
+    expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
   });
 
   it.each([

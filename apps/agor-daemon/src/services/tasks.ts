@@ -46,6 +46,7 @@ import {
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { beginExecutorTermination } from '../termination-coordinator.js';
 import { appendSystemMessage } from '../utils/append-system-message.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
   type ExecutorHeartbeatCallbackPayload,
   ExecutorHeartbeatCallbackRunner,
@@ -1223,7 +1224,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /** Claim a DISPATCHING task after executor transport authentication. */
-  async connectExecutor(data: { task_id: string }, _params?: TaskParams): Promise<Task> {
+  async connectExecutor(data: { task_id: string }, params?: TaskParams): Promise<Task> {
     const connection = await this.taskRepo.connectExecutor(data.task_id);
     if (!connection) {
       const current = await this.taskRepo.findById(data.task_id);
@@ -1241,15 +1242,19 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         );
       }
       this.trackTaskStarted(connection.task);
-      // The guarded repository transition bypasses the standard patch method,
-      // so publish the canonical patched event explicitly for reactive clients.
-      this.emit?.('patched', connection.task);
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: connection.task,
+        id: connection.task.task_id,
+        params,
+      });
     }
     return connection.task;
   }
 
   /** Accept one authenticated heartbeat plus the latest coalesced SDK pulse. */
-  async reportRuntimeTelemetry(data: RuntimeTelemetryInput): Promise<Task> {
+  async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
     if (data.pulse) {
       const { sequence, kind, detail } = data.pulse;
       if (!Number.isSafeInteger(sequence) || sequence <= 0) {
@@ -1281,7 +1286,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     void this.handleExecutorHeartbeat(task, task.last_executor_heartbeat_at!).catch((error) =>
       console.warn('Executor heartbeat callback failed:', error)
     );
-    this.emit?.('patched', task);
+    emitServiceEvent(this.app, {
+      path: 'tasks',
+      event: 'patched',
+      data: task,
+      id: task.task_id,
+      params,
+    });
     return task;
   }
 

@@ -14,6 +14,7 @@ import {
   insert,
   isSQLiteDatabase,
   lockRowForUpdate,
+  runDatabaseTransaction,
   select,
   txAsDb,
   update,
@@ -407,8 +408,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     try {
       const fullId = await this.resolveId(id);
       return await this.runTaskMutation(() =>
-        this.db.transaction(async (tx) => {
-          const txDb = txAsDb(tx);
+        runDatabaseTransaction(this.db, async (txDb) => {
           await this.lockTaskForMutation(txDb, fullId);
 
           const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
@@ -452,8 +452,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   ): Promise<Task | null> {
     const fullId = await this.resolveId(id);
     return this.runTaskMutation(() =>
-      this.db.transaction(async (tx) => {
-        const txDb = txAsDb(tx);
+      runDatabaseTransaction(this.db, async (txDb) => {
         await this.lockTaskForMutation(txDb, fullId);
         const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
         if (!row) throw new EntityNotFoundError('Task', id);
