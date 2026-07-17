@@ -150,31 +150,31 @@ You don't have to wait for a long-running prompt to finish before you start writ
 
 **See session activity at a glance, even in background browser tabs.** The favicon shows live status dots:
 
-<div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
-  <div style={{ textAlign: 'center' }}>
+<div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+  <figure style={{ margin: 0, flex: '1 1 200px', maxWidth: '260px', textAlign: 'center' }}>
     <img
       src="/screenshots/favicon-white-dot.png"
-      alt="White dot lower-left: agent working"
-      style={{ width: '48px', height: '48px' }}
+      alt="Browser tab with the Agor favicon showing a white dot at lower-left"
+      style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
     />
-    <p style={{ fontSize: '12px', marginTop: '8px' }}>⚪ Agent working</p>
-  </div>
-  <div style={{ textAlign: 'center' }}>
+    <figcaption style={{ fontSize: '13px', marginTop: '8px' }}>⚪ Agent working</figcaption>
+  </figure>
+  <figure style={{ margin: 0, flex: '1 1 200px', maxWidth: '260px', textAlign: 'center' }}>
     <img
       src="/screenshots/favicon-green-dot.png"
-      alt="Green dot lower-right: ready for prompt"
-      style={{ width: '48px', height: '48px' }}
+      alt="Browser tab with the Agor favicon showing a green dot at lower-right"
+      style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
     />
-    <p style={{ fontSize: '12px', marginTop: '8px' }}>🟢 Ready for prompt</p>
-  </div>
-  <div style={{ textAlign: 'center' }}>
+    <figcaption style={{ fontSize: '13px', marginTop: '8px' }}>🟢 Ready for prompt</figcaption>
+  </figure>
+  <figure style={{ margin: 0, flex: '1 1 200px', maxWidth: '260px', textAlign: 'center' }}>
     <img
       src="/screenshots/favicon-both.png"
-      alt="Both dots: working + ready"
-      style={{ width: '48px', height: '48px' }}
+      alt="Browser tab with the Agor favicon showing both a white and a green dot"
+      style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
     />
-    <p style={{ fontSize: '12px', marginTop: '8px' }}>⚪🟢 Both states</p>
-  </div>
+    <figcaption style={{ fontSize: '13px', marginTop: '8px' }}>⚪🟢 Both states</figcaption>
+  </figure>
 </div>
 
 White dot (lower-left) means _something is running_. Green dot (lower-right) means _something is ready for input_. Both can show at once. Updates in real time over WebSocket.
