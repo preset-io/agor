@@ -1,0 +1,61 @@
+.scroll {
+  margin: 1.25rem 0;
+  overflow-x: auto;
+  /* Visible scroll affordance: a thin always-styled scrollbar. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(52, 230, 196, 0.4) transparent;
+}
+
+.scroll::-webkit-scrollbar {
+  height: 8px;
+}
+.scroll::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: rgba(52, 230, 196, 0.4);
+}
+.scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.scroll table {
+  margin: 0;
+  width: max-content;
+  min-width: 100%;
+  /* Nextra makes tables their own overflow-x:auto scroll container; undo that
+   * so THIS wrapper is the sole scroll container and sticky cells stick to it. */
+  display: table;
+  overflow: visible;
+  /* separate (not collapse) so position: sticky works on cells; spacing 0
+   * keeps it visually collapsed. Cells carry their own right/bottom borders. */
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.scroll :is(th, td) {
+  border: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Pin the first column. */
+.scroll :is(th, td):first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+.scroll thead th:first-child {
+  z-index: 2;
+}
+
+/* Opaque background + a soft shadow on the frozen column's right edge so it
+ * reads as pinned while the rest scrolls under it. Light is the base; the
+ * global .dark theme class (not a module-scoped one) overrides for dark. */
+.scroll :is(th, td):first-child {
+  background: #fff;
+  box-shadow: 7px 0 9px -7px rgba(0, 0, 0, 0.18);
+}
+
+:global(.dark) .scroll :is(th, td):first-child {
+  background: #0b1613;
+  box-shadow: 7px 0 9px -7px rgba(0, 0, 0, 0.7);
+}
