@@ -4,6 +4,7 @@ description: Frequently asked questions about branches, multi-repo workflows, se
 ---
 
 import { FaqSection } from '../components/FaqSection';
+import { Tree } from '../components/Tree';
 
 # FAQ
 
@@ -24,17 +25,18 @@ Agor uses **git branches** under the hood (same concept as `git branch` command)
 
 **Best practice**: 1 branch = 1 issue = 1 PR = 1 feature
 
-```
-Branch "auth-feature" (issue #123, PR #456)
-├─ Working directory: ~/.agor/worktrees/myapp/auth-feature
-├─ Git ref: feature/oauth2-auth
-└─ Sessions: All AI sessions working on this feature
+<Tree>
 
-Branch "payment-integration" (issue #124, PR #457)
-├─ Working directory: ~/.agor/worktrees/myapp/payment-integration
-├─ Git ref: feature/stripe-integration
-└─ Sessions: All AI sessions working on this feature
-```
+- Branch `auth-feature` (issue #123, PR #456)
+  - Working directory: `~/.agor/worktrees/myapp/auth-feature`
+  - Git ref: `feature/oauth2-auth`
+  - Sessions: All AI sessions working on this feature
+- Branch `payment-integration` (issue #124, PR #457)
+  - Working directory: `~/.agor/worktrees/myapp/payment-integration`
+  - Git ref: `feature/stripe-integration`
+  - Sessions: All AI sessions working on this feature
+
+</Tree>
 
 Each branch is completely isolated - changes in one don't affect the other. This lets you work on multiple features simultaneously without switching branches or stashing changes.
 
@@ -72,13 +74,15 @@ Agor's strength is the control plane: multiple isolated branches, visible on boa
 
 **Sessions in Agor can fork and spawn, creating genealogy trees** - this is what makes Agor fundamentally different from linear CLI tools.
 
-```
-Session: "Build authentication system"
-├─ Fork: "Write tests for auth"
-├─ Fork: "Build user profile that uses auth"
-└─ Spawn: "Research OAuth2 best practices"
-   └─ Spawn: "Evaluate PKCE vs implicit flow"
-```
+<Tree>
+
+- Session: "Build authentication system"
+  - Fork: "Write tests for auth"
+  - Fork: "Build user profile that uses auth"
+  - Spawn: "Research OAuth2 best practices"
+    - Spawn: "Evaluate PKCE vs implicit flow"
+
+</Tree>
 
 ### Why this matters:
 
@@ -387,12 +391,14 @@ After forking, the conversations diverge. The fork has its own independent conve
 
 **Parallelize work that needs the same starting context**
 
-```
-Session: "Built user authentication feature" <- snapshot taken here
-├─ Fork A: "Write comprehensive unit tests for auth"
-├─ Fork B: "Build user profile page that uses auth"
-└─ Fork C: "Generate API documentation"
-```
+<Tree>
+
+- Session: "Built user authentication feature" _snapshot taken here_
+  - Fork A: "Write comprehensive unit tests for auth"
+  - Fork B: "Build user profile page that uses auth"
+  - Fork C: "Generate API documentation"
+
+</Tree>
 
 Each fork starts with the full context of how auth works, then builds its own conversation. They work on different files so no conflicts.
 
@@ -465,21 +471,25 @@ Then later, prompt the parent: `"Read /tmp/payment-report.md and integrate the p
 
 **Break down complex work**
 
-```
-Parent: "Build complete e-commerce checkout flow"
-├─ Spawn: "Implement payment gateway integration"
-├─ Spawn: "Build inventory validation service"
-└─ Spawn: "Create order confirmation email templates"
-```
+<Tree>
+
+- Parent: "Build complete e-commerce checkout flow"
+  - Spawn: "Implement payment gateway integration"
+  - Spawn: "Build inventory validation service"
+  - Spawn: "Create order confirmation email templates"
+
+</Tree>
 
 **Delegate to different agents**
 
-```
-Parent (Claude): "Refactor legacy codebase"
-├─ Spawn (Codex): "Write comprehensive unit tests"
-├─ Spawn (Gemini): "Generate API documentation"
-└─ Spawn (Claude): "Extract common utilities"
-```
+<Tree>
+
+- Parent (Claude): "Refactor legacy codebase"
+  - Spawn (Codex): "Write comprehensive unit tests"
+  - Spawn (Gemini): "Generate API documentation"
+  - Spawn (Claude): "Extract common utilities"
+
+</Tree>
 
 Parent orchestrates, children execute focused subsessions with clean context.
 
@@ -533,16 +543,17 @@ Parent orchestrates, children execute focused subsessions with clean context.
 
 **Example:**
 
-```
-Branch "auth-feature" (issue #123, PR #456)
-└─ Session: "Build OAuth2 authentication"
-   ├─ Fork: "Write unit tests for OAuth2"        <- Same branch
-   ├─ Fork: "Build user profile that uses auth"  <- Same branch
-   └─ Fork: "Document OAuth2 API"                <- Same branch
+<Tree>
 
-Branch "payment-feature" (issue #124, PR #457)  <- Different feature = different branch
-└─ Session: "Build Stripe integration"
-```
+- Branch `auth-feature` (issue #123, PR #456)
+  - Session: "Build OAuth2 authentication"
+    - Fork: "Write unit tests for OAuth2" _same branch_
+    - Fork: "Build user profile that uses auth" _same branch_
+    - Fork: "Document OAuth2 API" _same branch_
+- Branch `payment-feature` (issue #124, PR #457) _different feature = different branch_
+  - Session: "Build Stripe integration"
+
+</Tree>
 
 **Rule of thumb**: If they're working on the same issue/feature and won't conflict on disk, fork the session. If they're different features or would conflict, use a different Agor branch.
 
