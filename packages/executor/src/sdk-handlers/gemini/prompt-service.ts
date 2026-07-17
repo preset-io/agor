@@ -39,6 +39,7 @@ import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import { reportSdkActivity, type SdkActivityCallback } from '../sdk-activity.js';
 import { convertConversationToHistory } from './conversation-converter.js';
 import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models.js';
 import { mapPermissionMode } from './permission-mapper.js';
@@ -135,7 +136,8 @@ export class GeminiPromptService {
     sessionId: SessionID,
     prompt: string,
     taskId?: TaskID,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    onActivity?: SdkActivityCallback
   ): AsyncGenerator<GeminiStreamEvent> {
     // Get session metadata for model
     const session = await this.sessionsRepo.findById(sessionId);
@@ -194,6 +196,7 @@ export class GeminiPromptService {
 
         // Stream all events from this turn
         for await (const event of stream) {
+          reportSdkActivity(onActivity, 'gemini', String(event.type));
           // Debug logging for all events
           const eventValue = 'value' in event ? event.value : undefined;
           console.debug(

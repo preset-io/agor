@@ -138,6 +138,7 @@ export class AgorExecutor {
       console.log('[executor] Received permission_resolved event:', event);
 
       if (event.taskId === this.config.taskId) {
+        this.heartbeat?.recordPulse('sdk_started', 'permission.resolved');
         // Forward to global permission manager
         globalPermissionManager.resolvePermission({
           requestId: event.requestId,
@@ -191,6 +192,7 @@ export class AgorExecutor {
         abortController: this.abortController,
         messageSource: this.config.messageSource,
         resolvedConfig: this.config.resolvedConfig,
+        onPulse: (kind, detail) => this.heartbeat?.recordPulse(kind, detail),
       });
     } finally {
       this.heartbeat?.stop();

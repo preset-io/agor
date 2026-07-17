@@ -127,7 +127,8 @@ export interface ExecutionContext {
 export function createStreamingCallbacks(
   client: AgorClient,
   toolName: string,
-  sessionId: SessionID
+  sessionId: SessionID,
+  onPulse?: StreamingCallbacks['onPulse']
 ): StreamingCallbacks {
   // Use session_id passed in (available before any streaming starts)
   // This ensures thinking events have session_id even if they fire before onStreamStart
@@ -145,6 +146,7 @@ export function createStreamingCallbacks(
   };
 
   return {
+    onPulse,
     onStreamStart: async (message_id, data) => {
       // Initialize sequence counter for this message
       sequenceCounters.set(message_id, 0);
@@ -220,12 +222,13 @@ export function createStreamingCallbacks(
 export function createExecutionContext(
   client: AgorClient,
   toolName: string,
-  sessionId: SessionID
+  sessionId: SessionID,
+  onPulse?: StreamingCallbacks['onPulse']
 ): ExecutionContext {
   return {
     client,
     repos: createFeathersBackedRepositories(client),
-    callbacks: createStreamingCallbacks(client, toolName, sessionId),
+    callbacks: createStreamingCallbacks(client, toolName, sessionId, onPulse),
   };
 }
 
@@ -402,6 +405,7 @@ export async function executeToolTask(params: {
   abortController: AbortController;
   apiKeyEnvVar: ApiKeyName;
   toolName: AgenticToolName;
+  onPulse?: StreamingCallbacks['onPulse'];
   messageSource?: MessageSource;
   createTool: (
     repos: ReturnType<typeof createFeathersBackedRepositories>,
@@ -454,7 +458,7 @@ export async function executeToolTask(params: {
   }
 
   // Create execution context
-  const ctx = createExecutionContext(client, toolName, sessionId);
+  const ctx = createExecutionContext(client, toolName, sessionId, params.onPulse);
 
   // Create tool instance using factory function
   // Pass the resolved key (or empty string) and useNativeAuth flag
@@ -489,6 +493,7 @@ export async function executeToolTask(params: {
   params.abortController.signal.addEventListener('abort', abortHandler);
 
   try {
+    ctx.callbacks.onPulse?.('sdk_started', toolName);
     // Execute prompt with streaming
     // Pass abortController directly to SDK for proper cancellation support
     const result = await tool.executePromptWithStreaming(

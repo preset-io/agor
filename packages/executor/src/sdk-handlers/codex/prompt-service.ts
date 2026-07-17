@@ -51,6 +51,7 @@ import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
+import { reportSdkActivity, type SdkActivityCallback } from '../sdk-activity.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
@@ -971,7 +972,8 @@ export class CodexPromptService {
     prompt: string,
     taskId?: TaskID,
     permissionMode?: PermissionMode,
-    abortController?: AbortController
+    abortController?: AbortController,
+    onActivity?: SdkActivityCallback
   ): AsyncGenerator<CodexStreamEvent> {
     // Get session to check for existing thread ID and working directory
     const session = await this.sessionsRepo.findById(sessionId);
@@ -1221,6 +1223,15 @@ export class CodexPromptService {
       for await (const event of events) {
         eventCount++;
         codexDebug(`📨 [Codex] Event ${eventCount}: ${event.type}`);
+
+        const activityEvent = event as { type: string; payload?: { type?: string } };
+        const activityPayloadType =
+          activityEvent.type === 'event_msg' ? activityEvent.payload?.type : undefined;
+        reportSdkActivity(
+          onActivity,
+          'codex',
+          activityPayloadType ? `${activityEvent.type}.${activityPayloadType}` : activityEvent.type
+        );
 
         // Check if stop was requested
         if (this.stopRequested.get(sessionId)) {

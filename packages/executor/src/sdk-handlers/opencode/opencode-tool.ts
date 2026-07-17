@@ -40,6 +40,7 @@ import type {
 } from '../base/index.js';
 import { getMcpServersForSession } from '../base/mcp-scoping.js';
 import type { ITool } from '../base/tool.interface.js';
+import { reportSdkActivity } from '../sdk-activity.js';
 
 export interface OpenCodeConfig {
   enabled: boolean;
@@ -569,6 +570,7 @@ export class OpenCodeTool implements ITool {
         for await (const event of eventStream.stream) {
           // Log event type (skip noisy heartbeats)
           const eventType = event.type as string;
+          reportSdkActivity(streamingCallbacks.onPulse, 'opencode', eventType);
           if (eventType !== 'server.heartbeat') {
             console.log('[OpenCodeTool] Event:', eventType);
           }

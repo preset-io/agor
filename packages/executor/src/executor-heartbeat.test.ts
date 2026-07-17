@@ -39,4 +39,29 @@ describe('startExecutorHeartbeat', () => {
       vi.useRealTimers();
     }
   });
+
+  it('coalesces many pulses into the latest fact at heartbeat cadence', async () => {
+    vi.useFakeTimers();
+    try {
+      const reportRuntimeTelemetry = vi.fn().mockResolvedValue({});
+      const client = { service: () => ({ reportRuntimeTelemetry }) } as never;
+      const handle = startExecutorHeartbeat({ client, taskId: 'task-1', intervalMs: 1000 });
+      await Promise.resolve();
+
+      for (let index = 1; index <= 100; index++) {
+        handle.recordPulse('progress', `event.${index}`);
+      }
+      expect(reportRuntimeTelemetry).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(reportRuntimeTelemetry).toHaveBeenCalledTimes(2);
+      expect(reportRuntimeTelemetry).toHaveBeenLastCalledWith({
+        task_id: 'task-1',
+        pulse: { sequence: 100, kind: 'progress', detail: 'event.100' },
+      });
+      handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

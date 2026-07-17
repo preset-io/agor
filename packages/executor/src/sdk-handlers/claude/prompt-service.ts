@@ -20,6 +20,7 @@ import type { PermissionService } from '../../permissions/permission-service.js'
 import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
+import { reportSdkActivity, type SdkActivityCallback } from '../sdk-activity.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
 
@@ -126,7 +127,8 @@ If you continue to see authentication errors, please contact your Agor administr
     taskId?: TaskID,
     permissionMode?: PermissionMode,
     _chunkCallback?: (messageId: string, chunk: string) => void,
-    abortController?: AbortController
+    abortController?: AbortController,
+    onActivity?: SdkActivityCallback
   ): AsyncGenerator<ProcessedEvent> {
     // Intercept slash commands that don't work via the Claude Agent SDK.
     // Commands like /compact and /cost are handled natively by the SDK and pass through.
@@ -230,6 +232,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
     try {
       for await (const msg of result) {
+        reportSdkActivity(onActivity, 'claude-code', msg.type);
         // Check for timeout - throw error to trigger proper cleanup
         if (processor.hasTimedOut()) {
           const state = processor.getState();

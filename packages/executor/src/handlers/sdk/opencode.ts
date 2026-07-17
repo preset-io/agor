@@ -10,7 +10,13 @@
  */
 
 import { generateId, shortId } from '@agor/core';
-import type { MessageID, PermissionMode, SessionID, TaskID } from '@agor/core/types';
+import type {
+  ExecutorPulseKind,
+  MessageID,
+  PermissionMode,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import type { ResolvedConfigSlice } from '../../payload-types.js';
@@ -31,6 +37,7 @@ export async function executeOpenCodeTask(params: {
   permissionMode?: PermissionMode;
   abortController: AbortController;
   resolvedConfig?: ResolvedConfigSlice;
+  onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
 }): Promise<void> {
   const { client, sessionId, taskId, prompt } = params;
 
@@ -48,7 +55,7 @@ export async function executeOpenCodeTask(params: {
 
     // Create execution context (similar to other handlers)
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'opencode', sessionId);
+    const callbacks = createStreamingCallbacks(client, 'opencode', sessionId, params.onPulse);
 
     // OpenCode server URL: env var > daemon-resolved config slice > default.
     const serverUrl =
