@@ -39,6 +39,7 @@ import {
   validateResolvedUnixUser,
 } from '@agor/core/unix';
 import {
+  type CodexAuthSummary,
   parseCodexAuthJson,
   readCodexAuthFile,
   writeCodexAuthFile,
@@ -54,7 +55,7 @@ interface UsersServiceLike {
   ): Promise<unknown>;
 }
 
-interface AppLike {
+export interface AppLike {
   service(path: string): unknown;
 }
 
@@ -119,6 +120,66 @@ export async function resolveCodexUnixIdentity(
   }
 }
 
+/**
+ * Persist a validated auth.json for a user: write it 0600 as the target Unix
+ * user, verify by reading it back, then flip the user's Codex auth method to
+ * `subscription` so executors resolve native auth. Shared by the paste-import
+ * and device-code sign-in flows. Throws `BadRequest` with user-facing,
+ * secret-free messages.
+ */
+export async function persistVerifiedCodexAuth(options: {
+  app: AppLike;
+  normalized: string;
+  targetUnixUser: string | null;
+  userId: UserID;
+  authUser: NonNullable<AuthenticatedParams['user']>;
+}): Promise<CodexAuthSummary> {
+  const { app, normalized, targetUnixUser, userId, authUser } = options;
+
+  try {
+    writeCodexAuthFile(normalized, targetUnixUser);
+  } catch (err) {
+    // The error may carry sudo/bash stderr; log a class-level summary only
+    // so token material (or its absence) never reaches daemon logs.
+    console.error(
+      `[CodexAuth] Failed to write auth.json${targetUnixUser ? ` as ${targetUnixUser}` : ''}: ${
+        err instanceof Error ? err.constructor.name : 'unknown error'
+      }`
+    );
+    throw new BadRequest(
+      'Could not write the Codex credentials file on the server. Check daemon logs and sudo configuration, or use an API key instead.'
+    );
+  }
+
+  // Read-back verification: the file must contain exactly the bytes just
+  // written — "some valid credential is there" would let a concurrent
+  // import/refresh be mistaken for this one. A transient read failure gets
+  // one retry (the write already succeeded by exit status). Failing out
+  // leaves the file on disk with the auth method unflipped; that state is
+  // harmless because a re-import cleanly overwrites both.
+  let readBack = readCodexAuthFile(targetUnixUser);
+  if (!readBack.ok && readBack.reason === 'unreadable') {
+    readBack = readCodexAuthFile(targetUnixUser);
+  }
+  const verified =
+    readBack.ok && readBack.content === normalized ? parseCodexAuthJson(readBack.content) : null;
+  if (!verified?.ok) {
+    throw new BadRequest(
+      'The Codex credentials file was written but could not be verified back — try again.'
+    );
+  }
+
+  const usersService = app.service('users') as UsersServiceLike;
+  const current = await usersService.get(userId, { user: authUser, authenticated: true });
+  await usersService.patch(
+    userId,
+    { agentic_auth_methods: { ...current.agentic_auth_methods, codex: 'subscription' } },
+    { user: authUser, authenticated: true }
+  );
+
+  return verified.summary;
+}
+
 export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareDatabase) {
   return {
     async create(
@@ -158,54 +219,15 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
           `Cannot determine which Unix account should hold this Codex login: ${identity.message}`
         );
       }
-      const targetUnixUser = identity.unixUser;
 
-      try {
-        writeCodexAuthFile(parsed.normalized, targetUnixUser);
-      } catch (err) {
-        // The error may carry sudo/bash stderr; log a class-level summary only
-        // so token material (or its absence) never reaches daemon logs.
-        console.error(
-          `[CodexAuthImport] Failed to write auth.json${
-            targetUnixUser ? ` as ${targetUnixUser}` : ''
-          }: ${err instanceof Error ? err.constructor.name : 'unknown error'}`
-        );
-        throw new BadRequest(
-          'Could not write the Codex credentials file on the server. Check daemon logs and sudo configuration, or use an API key instead.'
-        );
-      }
-
-      // Read-back verification: the file must contain exactly the bytes just
-      // written — "some valid credential is there" would let a concurrent
-      // import/refresh be mistaken for this one. A transient read failure
-      // gets one retry (the write already succeeded by exit status). Failing
-      // out leaves the file on disk with the auth method unflipped; that
-      // state is harmless because a re-import cleanly overwrites both.
-      let readBack = readCodexAuthFile(targetUnixUser);
-      if (!readBack.ok && readBack.reason === 'unreadable') {
-        readBack = readCodexAuthFile(targetUnixUser);
-      }
-      const verified =
-        readBack.ok && readBack.content === parsed.normalized
-          ? parseCodexAuthJson(readBack.content)
-          : null;
-      if (!verified?.ok) {
-        throw new BadRequest(
-          'The Codex credentials file was written but could not be verified back — try again.'
-        );
-      }
-
-      // Flip the user's Codex auth method so executors resolve native auth
-      // (auth.json) instead of expecting an OPENAI_API_KEY.
-      const usersService = app.service('users') as UsersServiceLike;
-      const current = await usersService.get(userId, { user: authUser, authenticated: true });
-      await usersService.patch(
+      const summary = await persistVerifiedCodexAuth({
+        app,
+        normalized: parsed.normalized,
+        targetUnixUser: identity.unixUser,
         userId,
-        { agentic_auth_methods: { ...current.agentic_auth_methods, codex: 'subscription' } },
-        { user: authUser, authenticated: true }
-      );
+        authUser,
+      });
 
-      const { summary } = verified;
       return {
         status: 'authenticated',
         authMode: summary.authMode,

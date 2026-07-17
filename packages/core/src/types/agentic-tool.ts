@@ -233,6 +233,43 @@ export interface CodexAuthImportResult {
 }
 
 /**
+ * Lifecycle of a ChatGPT device-code sign-in attempt driven by the daemon's
+ * `/codex-auth/device` endpoints.
+ * - `idle`: no attempt exists for this user.
+ * - `pending`: a code was issued; the daemon is polling for approval.
+ * - `success`: tokens were exchanged and persisted to the user's Codex home.
+ * - `expired`: the code's 15-minute window elapsed without approval.
+ * - `unavailable`: OpenAI's server refused to issue a code — device-code
+ *   authorization is disabled for this account/workspace (a common, first-class
+ *   state, not an edge case).
+ * - `error`: the attempt failed for another reason; start a fresh one.
+ */
+export type CodexDeviceAuthPhase =
+  | 'idle'
+  | 'pending'
+  | 'success'
+  | 'expired'
+  | 'unavailable'
+  | 'error';
+
+/**
+ * Non-secret status of a device-code sign-in attempt. The user code and
+ * verification URL are meant to be displayed; tokens never appear here.
+ */
+export interface CodexDeviceAuthStatus {
+  phase: CodexDeviceAuthPhase;
+  /** One-time code the user enters on the verification page (pending only). */
+  userCode?: string;
+  /** Page where the user approves the code (pending only). */
+  verificationUrl?: string;
+  /** ISO timestamp when the pending code stops working. */
+  expiresAt?: string;
+  /** ChatGPT plan type parsed from the id_token after success, when present. */
+  planType?: string;
+  hint?: string;
+}
+
+/**
  * Canonical mapping from AgenticToolName to the env-var name that holds its primary API key.
  * Tools that authenticate without a key (opencode) are intentionally absent.
  *

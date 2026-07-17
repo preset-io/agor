@@ -67,13 +67,26 @@ function decodeJwtClaims(token: string): Record<string, unknown> | null {
 /** Codex id_tokens nest account metadata under this claim key. */
 const OPENAI_AUTH_CLAIM = 'https://api.openai.com/auth';
 
-function planTypeFromIdToken(idToken: unknown): string | undefined {
-  if (typeof idToken !== 'string' || !idToken) return undefined;
+/**
+ * Mine display/bookkeeping metadata from a Codex id_token: the ChatGPT plan
+ * type and the account id Codex records as `tokens.account_id`. Best-effort —
+ * an unparseable token yields an empty result, never an error.
+ */
+export function codexIdTokenClaims(idToken: unknown): {
+  planType?: string;
+  accountId?: string;
+} {
+  if (typeof idToken !== 'string' || !idToken) return {};
   const claims = decodeJwtClaims(idToken);
   const authClaim = claims?.[OPENAI_AUTH_CLAIM];
-  if (!authClaim || typeof authClaim !== 'object') return undefined;
-  const planType = (authClaim as Record<string, unknown>).chatgpt_plan_type;
-  return typeof planType === 'string' && planType ? planType : undefined;
+  if (!authClaim || typeof authClaim !== 'object') return {};
+  const record = authClaim as Record<string, unknown>;
+  const planType = record.chatgpt_plan_type;
+  const accountId = record.chatgpt_account_id;
+  return {
+    ...(typeof planType === 'string' && planType ? { planType } : {}),
+    ...(typeof accountId === 'string' && accountId ? { accountId } : {}),
+  };
 }
 
 /**
@@ -135,7 +148,7 @@ export function parseCodexAuthJson(raw: string | undefined | null): ParseCodexAu
   const summary: CodexAuthSummary = hasChatgptLogin
     ? {
         authMode: 'chatgpt',
-        planType: planTypeFromIdToken(tokens?.id_token),
+        planType: codexIdTokenClaims(tokens?.id_token).planType,
         lastRefresh: typeof record.last_refresh === 'string' ? record.last_refresh : undefined,
       }
     : { authMode: 'api_key', apiKey };
