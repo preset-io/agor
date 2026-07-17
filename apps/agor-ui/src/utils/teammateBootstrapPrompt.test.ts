@@ -26,9 +26,10 @@ describe('buildTeammateBootstrapPrompt', () => {
     expect(prompt).toContain('- AI teammate: PR Reviewer 🧐');
     expect(prompt).toContain('- AI teammate description: Reviews pull requests');
     expect(prompt).toContain('- User: Max <max@example.com>');
-    expect(prompt).toContain('- User: Max <max@example.com>\n\nRead ONBOARDING.md');
+    expect(prompt).toContain(
+      '- User: Max <max@example.com>\n\nRead ONBOARDING.md if it exists; otherwise, read BOOTSTRAP.md'
+    );
     expect(prompt).toContain('ask only the next useful question');
-    expect(prompt).not.toContain('BOOTSTRAP.md');
     expect(prompt).not.toContain("don't re-ask");
     expect(prompt).not.toMatch(/\{\{\s*#?\/?\s*(assistant|user)\b/);
   });
