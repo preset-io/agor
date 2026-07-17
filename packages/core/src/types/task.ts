@@ -1,4 +1,5 @@
 // src/types/task.ts
+import type { AgenticToolName } from './agentic-tool';
 import type { MessageID, SessionID, TaskID } from './id';
 import type { MessageSource } from './message';
 import type { ReportPath, ReportTemplate } from './report';
@@ -41,6 +42,39 @@ export interface ExecutorPulse {
 export interface RuntimeTelemetryInput {
   task_id: string;
   pulse?: Omit<ExecutorPulse, 'observed_at'>;
+}
+
+export type SdkFailureReason =
+  | 'startup_timeout'
+  | 'no_first_progress'
+  | 'progress_stalled'
+  | 'stream_disconnected'
+  | 'unknown_activity'
+  | 'heartbeat_lost'
+  | 'termination_unverified';
+
+export interface SdkFailure {
+  reason: SdkFailureReason;
+  detected_at: string;
+  tool: AgenticToolName;
+  last_pulse?: ExecutorPulse;
+  elapsed_ms?: number;
+  watchdog_action?: 'would_fire' | 'enforced';
+  unknown_event_count?: number;
+  sdk_version?: string;
+  termination: 'not_requested' | 'requested' | 'verified' | 'unverified';
+}
+
+export type TerminationCause =
+  | 'user_stop'
+  | 'startup_timeout'
+  | 'heartbeat_lost'
+  | 'sdk_health_failure';
+
+export interface TerminationRequest {
+  cause: TerminationCause;
+  requested_at: string;
+  final_status: 'stopped' | 'failed';
 }
 
 /**
@@ -291,5 +325,11 @@ export interface Task {
   executor_mode?: ExecutorMode;
   /** Latest bounded SDK activity fact; this is not an event history. */
   latest_executor_pulse?: ExecutorPulse;
+  /** Bounded SDK/process health diagnosis. */
+  sdk_failure?: SdkFailure;
+  /** Durable intent while verified local containment is pending. */
+  termination_request?: TerminationRequest;
+  /** Immutable watchdog policy snapshot for this dispatch. */
+  sdk_watchdog_mode?: 'disabled' | 'observe' | 'enforce';
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }

@@ -376,7 +376,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     cwd,
     env: asUser ? undefined : { ...envWithDaemonUrl }, // When impersonating, env is in the command; otherwise pass to spawn
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
-    detached: false, // Don't detach - let daemon manage lifecycle
+    detached: process.platform !== 'win32',
   });
 
   // Best-effort safety-net cleanup: the inner bash script `rm -f`s the env

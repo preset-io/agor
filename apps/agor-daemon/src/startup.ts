@@ -10,6 +10,7 @@ import path from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import {
   getAgorHome,
+  resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
@@ -23,6 +24,7 @@ import {
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus, TaskStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
+import { containAllTrackedExecutors } from './executor-tracking.js';
 import { ExecutorHeartbeatSupervisor } from './services/executor-heartbeat-supervisor.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
@@ -169,10 +171,22 @@ async function cleanupOrphanStatusesInTenantScope(
 
   if (orphanedTasks.length > 0) {
     for (const task of orphanedTasks) {
+      const session = await sessionsService.get(task.session_id, startupParams as never);
       await tasksService.patch(
         task.task_id,
         {
           status: TaskStatus.STOPPED,
+          sdk_failure: task.sdk_failure
+            ? { ...task.sdk_failure, termination: 'unverified' }
+            : {
+                reason: 'termination_unverified',
+                detected_at: new Date().toISOString(),
+                tool: session.agentic_tool,
+                last_pulse: task.latest_executor_pulse,
+                termination: 'unverified',
+              },
+          error_message:
+            'Daemon restart released this Task without verifying executor termination.',
         },
         startupParams as never
       );
@@ -609,7 +623,11 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
   // 5. Start executor heartbeat stale supervisor
   const heartbeatConfig = resolveExecutorHeartbeatConfig(config.execution);
-  const heartbeatSupervisor = new ExecutorHeartbeatSupervisor({ app, config: heartbeatConfig });
+  const heartbeatSupervisor = new ExecutorHeartbeatSupervisor({
+    app,
+    config: heartbeatConfig,
+    dispatchConnectTimeoutMs: resolveDispatchConnectTimeoutMs(config.execution),
+  });
   heartbeatSupervisor.start();
   if (heartbeatConfig.enabled) {
     console.log(
@@ -674,6 +692,8 @@ export async function startup(ctx: StartupContext): Promise<void> {
 
       // Stop heartbeat supervisor
       heartbeatSupervisor.stop();
+
+      await containAllTrackedExecutors();
 
       // Clean up terminal sessions
       if (terminalsService) {

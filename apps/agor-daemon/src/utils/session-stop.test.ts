@@ -68,9 +68,6 @@ describe('stopSessionPreserveQueue', () => {
       })),
       patch: vi.fn(async (_id, data) => data),
     };
-    const tasksService = {
-      patch: vi.fn(async (id, data) => ({ task_id: id, ...data })),
-    };
     const taskRepo = {
       findQueued: vi.fn(async () => [queuedTask]),
     };
@@ -84,7 +81,7 @@ describe('stopSessionPreserveQueue', () => {
         throw new Error(`unexpected service ${name}`);
       },
     };
-    const killExecutorProcess = vi.fn(() => true);
+    const requestTermination = vi.fn(async () => ({ status: 'terminal', task: runningTask }));
     const params = { provider: 'rest' };
 
     const result = await stopSessionPreserveQueue(
@@ -92,8 +89,7 @@ describe('stopSessionPreserveQueue', () => {
         app: app as never,
         taskRepo: taskRepo as never,
         sessionsService: sessionsService as never,
-        tasksService: tasksService as never,
-        killExecutorProcess,
+        requestTermination: requestTermination as never,
       },
       sessionId as never,
       params,
@@ -106,20 +102,8 @@ describe('stopSessionPreserveQueue', () => {
       stoppedTaskId: runningTask.task_id,
       queuedTasksPreserved: 1,
     });
-    expect(killExecutorProcess).toHaveBeenCalledWith(sessionId);
-    expect(tasksService.patch).toHaveBeenCalledTimes(1);
-    expect(tasksService.patch).toHaveBeenCalledWith(
-      runningTask.task_id,
-      expect.objectContaining({ status: 'stopped' }),
-      expect.objectContaining({
-        suppressTerminalQueueProcessing: true,
-        suppressCompletionCallbacks: true,
-      })
-    );
-    expect(sessionsService.patch).toHaveBeenCalledWith(
-      sessionId,
-      { status: 'idle', ready_for_prompt: true },
-      expect.objectContaining({ provider: 'rest', suppressTerminalQueueProcessing: true })
+    expect(requestTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: runningTask.task_id, cause: 'user_stop' })
     );
   });
 
@@ -141,9 +125,6 @@ describe('stopSessionPreserveQueue', () => {
       })),
       patch: vi.fn(async (_id, data) => data),
     };
-    const tasksService = {
-      patch: vi.fn(async (id, data) => ({ task_id: id, ...data })),
-    };
     const taskRepo = {
       findQueued: vi.fn(async () => []),
     };
@@ -157,15 +138,17 @@ describe('stopSessionPreserveQueue', () => {
         throw new Error(`unexpected service ${name}`);
       },
     };
-    const killExecutorProcess = vi.fn(() => true);
+    const requestTermination = vi.fn(async () => ({
+      status: 'terminal',
+      task: awaitingInputTask,
+    }));
 
     const result = await stopSessionPreserveQueue(
       {
         app: app as never,
         taskRepo: taskRepo as never,
         sessionsService: sessionsService as never,
-        tasksService: tasksService as never,
-        killExecutorProcess,
+        requestTermination: requestTermination as never,
       },
       sessionId as never,
       {},
@@ -178,11 +161,8 @@ describe('stopSessionPreserveQueue', () => {
       stoppedTaskId: awaitingInputTask.task_id,
       queuedTasksPreserved: 0,
     });
-    expect(killExecutorProcess).toHaveBeenCalledWith(sessionId);
-    expect(tasksService.patch).toHaveBeenCalledWith(
-      awaitingInputTask.task_id,
-      expect.objectContaining({ status: 'stopped' }),
-      expect.objectContaining({ suppressCompletionCallbacks: true })
+    expect(requestTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: awaitingInputTask.task_id, cause: 'user_stop' })
     );
   });
 
@@ -206,9 +186,6 @@ describe('stopSessionPreserveQueue', () => {
         throw new Error('patch denied');
       }),
     };
-    const tasksService = {
-      patch: vi.fn(async (id, data) => ({ task_id: id, ...data })),
-    };
     const taskRepo = {
       findQueued: vi.fn(async () => []),
     };
@@ -223,24 +200,20 @@ describe('stopSessionPreserveQueue', () => {
       },
     };
 
+    const requestTermination = vi.fn(async () => {
+      throw new Error('containment failed');
+    });
     await expect(
       stopSessionPreserveQueue(
         {
           app: app as never,
           taskRepo: taskRepo as never,
           sessionsService: sessionsService as never,
-          tasksService: tasksService as never,
-          killExecutorProcess: vi.fn(() => true),
+          requestTermination: requestTermination as never,
         },
         sessionId as never,
         { provider: 'rest' }
       )
-    ).rejects.toThrow('patch denied');
-
-    expect(tasksService.patch).toHaveBeenCalledWith(
-      runningTask.task_id,
-      expect.objectContaining({ status: 'stopped' }),
-      expect.objectContaining({ suppressTerminalQueueProcessing: true })
-    );
+    ).rejects.toThrow('containment failed');
   });
 });

@@ -307,7 +307,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   async failForLostHeartbeat(
     id: string,
-    data: { completed_at?: string; error_message: string },
+    data: { completed_at?: string; error_message: string; sdk_failure?: Task['sdk_failure'] },
     params?: TaskParams
   ): Promise<Task> {
     const result = await this.patch(
@@ -316,6 +316,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         status: TaskStatus.FAILED,
         completed_at: data.completed_at,
         error_message: data.error_message,
+        ...(data.sdk_failure ? { sdk_failure: data.sdk_failure } : {}),
       },
       {
         ...params,
@@ -458,6 +459,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const nextStatus = data.status;
     const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
+    if (
+      currentTask?.status === TaskStatus.STOPPING &&
+      currentTask.termination_request &&
+      params?.provider &&
+      isTerminalTaskStatus(nextStatus)
+    ) {
+      console.log(
+        `⏭️ [TasksService] Coordinator owns terminality for stopping task ${shortId(currentTask.task_id)}`
+      );
+      return currentTask;
+    }
     if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
       console.warn(
         `⏭️ [TasksService] Ignoring status rewrite for terminal task ${shortId(currentTask.task_id)} ` +

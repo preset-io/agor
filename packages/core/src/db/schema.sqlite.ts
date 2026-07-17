@@ -373,6 +373,9 @@ export const tasks = sqliteTable(
         metadata?: Task['metadata'];
         executor_mode?: Task['executor_mode'];
         latest_executor_pulse?: Task['latest_executor_pulse'];
+        sdk_failure?: Task['sdk_failure'];
+        termination_request?: Task['termination_request'];
+        sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
       }>()
       .notNull(),
   },

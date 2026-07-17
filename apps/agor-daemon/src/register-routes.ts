@@ -90,7 +90,6 @@ import type {
   SessionsServiceImpl,
   TasksServiceImpl,
 } from './declarations.js';
-import { killExecutorProcess } from './executor-tracking.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -110,6 +109,7 @@ import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import { markAuthenticationUserLookup, markLocalAuthenticationLookup } from './services/users.js';
 import { registerProxies } from './setup/proxies.js';
+import { forceFailUnverifiedTask } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
@@ -2224,10 +2224,32 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async create(data: unknown, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
-        const stopReason =
-          data && typeof data === 'object' && 'reason' in data && typeof data.reason === 'string'
-            ? data.reason
-            : undefined;
+        const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+        if (body.force_unverified === true) {
+          return withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
+            const session = await app.service('sessions').get(id, params);
+            const taskId = session.tasks?.[session.tasks.length - 1];
+            if (!taskId) throw new BadRequest('Session has no Task to force-fail.');
+            const userId = params.user?.user_id;
+            const isAdmin = hasMinimumRole(params.user?.role, ROLES.ADMIN);
+            const isOwner =
+              !!userId && (await branchRepository.isOwner(session.branch_id, userId as UUID));
+            if (!isAdmin && !isOwner) {
+              throw new Forbidden('Only a branch owner or administrator may force-fail a Task.');
+            }
+            if (typeof body.confirmation !== 'string') {
+              throw new BadRequest(`Type ${shortId(taskId)} to confirm force-fail.`);
+            }
+            const task = await forceFailUnverifiedTask({
+              app,
+              taskId,
+              confirmation: body.confirmation,
+              params,
+            });
+            return { success: true, status: task.status, stoppedTaskId: task.task_id };
+          });
+        }
+        const stopReason = typeof body.reason === 'string' ? body.reason : undefined;
 
         const sessionsServiceWithHooks = app.service('sessions') as unknown as SessionsServiceImpl;
 
@@ -2237,8 +2259,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               app,
               taskRepo: new TaskRepository(db),
               sessionsService: sessionsServiceWithHooks,
-              tasksService,
-              killExecutorProcess,
             },
             id as SessionID,
             params,

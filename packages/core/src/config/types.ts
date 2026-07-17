@@ -325,6 +325,8 @@ export interface AgorExecutionSettings {
    */
   executor_heartbeat?: AgorExecutorHeartbeatSettings;
 
+  dispatch_connect_timeout_ms?: number | null;
+
   /** Unix user to run executors as (default: undefined = run as daemon user). When set, uses sudo impersonation. */
   executor_unix_user?: string;
 

@@ -3,6 +3,31 @@ import { describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
 
 describe('TasksService executor heartbeat helpers', () => {
+  it('does not let an executor terminal patch bypass coordinator-owned stopping', async () => {
+    const stoppingTask = {
+      task_id: '018f0000-0000-7000-8000-000000000000',
+      session_id: '018f0000-0000-7000-8000-000000000010',
+      status: TaskStatus.STOPPING,
+      created_at: '2026-01-01T00:00:00.000Z',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-01-01T00:00:01.000Z',
+        final_status: 'stopped',
+      },
+    };
+    const service = Object.create(TasksService.prototype) as TasksService & {
+      get: ReturnType<typeof vi.fn>;
+      repository: { update: ReturnType<typeof vi.fn> };
+    };
+    service.get = vi.fn().mockResolvedValue(stoppingTask);
+    service.repository = { update: vi.fn() };
+
+    await expect(
+      service.patch(stoppingTask.task_id, { status: TaskStatus.STOPPED }, { provider: 'socketio' })
+    ).resolves.toBe(stoppingTask);
+    expect(service.repository.update).not.toHaveBeenCalled();
+  });
+
   it('fails lost heartbeat tasks and marks the session failed without draining its queue', async () => {
     const taskId = '018f0000-0000-7000-8000-000000000001';
     const sessionId = '018f0000-0000-7000-8000-000000000002';

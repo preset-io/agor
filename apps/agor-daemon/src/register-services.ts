@@ -44,14 +44,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import {
-  AGENTIC_TOOL_CAPABILITIES,
-  isSessionExecuting,
-  isTaskExecuting,
-  ROLES,
-  SessionStatus,
-  TaskStatus,
-} from '@agor/core/types';
+import { AGENTIC_TOOL_CAPABILITIES, ROLES } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
 import type express from 'express';
 import type {
@@ -59,7 +52,11 @@ import type {
   MessagesServiceImpl,
   SessionsServiceImpl,
 } from './declarations.js';
-import { trackExecutorProcess, untrackExecutorProcess } from './executor-tracking.js';
+import {
+  getTrackedExecutor,
+  markExecutorProcessExited,
+  trackExecutorProcess,
+} from './executor-tracking.js';
 import { runInOAuthTenantScope } from './oauth-auth-helpers.js';
 import {
   cacheOAuth21Token,
@@ -128,6 +125,7 @@ import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
 import { createUsersService } from './services/users.js';
 import { userRoomName } from './setup/socketio.js';
+import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
@@ -980,6 +978,7 @@ function createExecuteHandler(
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
 
+    let localExecutorPid: number | undefined;
     spawnExecutor(executorPayload, {
       cwd,
       asUser: executorUnixUser || undefined,
@@ -992,12 +991,20 @@ function createExecuteHandler(
       },
       onSpawn: (child, spawnContext) => {
         if (spawnContext.mode === 'local' && child.pid) {
-          trackExecutorProcess(sessionId, child.pid);
+          localExecutorPid = child.pid;
+          trackExecutorProcess({
+            sessionId,
+            taskId,
+            pid: child.pid,
+            ...(executorUnixUser ? { asUser: executorUnixUser } : {}),
+          });
           console.log(`${logPrefix} PID: ${child.pid}`);
         }
       },
       onExit: async (code, spawnContext) => {
         console.log(`${logPrefix} Exited with code ${code}`);
+
+        if (spawnContext.mode === 'local') markExecutorProcessExited(sessionId, localExecutorPid);
 
         if (spawnContext.mode === 'templated') {
           const connected = await app
@@ -1029,62 +1036,23 @@ function createExecuteHandler(
           }
         }
 
-        untrackExecutorProcess(sessionId);
-
-        // Safety net: check if task is still running
         try {
-          const currentSession = await app.service('sessions').get(sessionId, params);
-          const latestTaskId = currentSession.tasks?.[currentSession.tasks.length - 1];
-
-          if (latestTaskId && latestTaskId !== taskId) {
-            console.log(
-              `⏭️ [Executor] Task ${shortId(taskId)} is not the latest (latest: ${shortId(latestTaskId)}), skipping safety net`
-            );
-          } else if (
-            isSessionExecuting(currentSession) ||
-            currentSession.status === SessionStatus.TIMED_OUT
-          ) {
-            try {
-              const currentTask = await app.service('tasks').get(taskId, params);
-              if (isTaskExecuting(currentTask) || currentTask.status === TaskStatus.TIMED_OUT) {
-                await app.service('tasks').patch(
-                  taskId,
-                  {
-                    status: TaskStatus.FAILED,
-                    error_message: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
-                  },
-                  params
-                );
-                console.log(
-                  `✅ [Executor] Task ${shortId(taskId)} marked as FAILED after executor exit (code: ${code})`
-                );
-              } else {
-                console.log(
-                  `⚠️  [Executor] Task ${shortId(taskId)} already ${currentTask.status}, but session still ${currentSession.status} — repairing session state`
-                );
-                await app
-                  .service('sessions')
-                  .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
-              }
-            } catch (taskError) {
-              console.error(
-                `⚠️  [Executor] Failed to mark task ${shortId(taskId)} as FAILED, falling back to session IDLE update:`,
-                taskError
-              );
-              await app
-                .service('sessions')
-                .patch(sessionId, { status: SessionStatus.IDLE, ready_for_prompt: true }, params);
-              console.log(
-                `✅ [Executor] Session ${shortId(sessionId)} status updated to IDLE after executor exit (was: ${currentSession.status})`
-              );
-            }
-          } else {
-            console.log(
-              `ℹ️  [Executor] Session ${shortId(sessionId)} already in ${currentSession.status} state, skipping IDLE update`
-            );
-          }
+          await requestExecutorTermination({
+            app,
+            taskId,
+            cause: 'heartbeat_lost',
+            errorMessage: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+            params,
+            absenceVerified: !getTrackedExecutor(sessionId),
+            sdkFailure: {
+              reason: 'heartbeat_lost',
+              detected_at: new Date().toISOString(),
+              tool: session.agentic_tool,
+              termination: 'requested',
+            },
+          });
         } catch (error) {
-          console.error(`❌ [Executor] Failed to handle executor exit:`, error);
+          console.error(`❌ [Executor] Failed to coordinate executor exit:`, error);
         }
 
         // Stateless FS mode: serialize session file to DB after executor exits

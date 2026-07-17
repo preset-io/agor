@@ -355,6 +355,7 @@ function validateConfig(config: AgorConfig): void {
   }
   only(config.execution, 'execution', [
     'executor_heartbeat',
+    'dispatch_connect_timeout_ms',
     'executor_unix_user',
     'unix_user_mode',
     'branch_rbac',

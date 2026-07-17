@@ -110,6 +110,7 @@ function makeTask(overrides: Partial<Task>): Task {
 function makeSession(overrides: Partial<Session>): Session {
   return {
     session_id: 'session-1',
+    agentic_tool: 'codex',
     status: SessionStatus.IDLE,
     ready_for_prompt: false,
     tasks: [],
@@ -128,6 +129,29 @@ describe('startup tenant database scope', () => {
       sessionsResetFromOrphanedTasks: 0,
     });
     expect(baseDb.marker).toHaveBeenCalled();
+  });
+
+  it('preserves restart recovery while disclosing unverified termination', async () => {
+    const task = makeTask({});
+    const session = makeSession({ tasks: [task.task_id] as Session['tasks'] });
+    const { ctx, tasksService } = makeStartupContextWithGuardedDb({
+      orphanedTasks: [task],
+      sessionsById: { [session.session_id]: session },
+    });
+
+    await cleanupOrphanStatuses(ctx);
+    expect(tasksService.patch).toHaveBeenCalledWith(
+      task.task_id,
+      expect.objectContaining({
+        status: TaskStatus.STOPPED,
+        sdk_failure: expect.objectContaining({
+          reason: 'termination_unverified',
+          termination: 'unverified',
+        }),
+        error_message: expect.stringContaining('without verifying executor termination'),
+      }),
+      expect.anything()
+    );
   });
 
   it('demonstrates guarded startup DB access fails without scope', () => {

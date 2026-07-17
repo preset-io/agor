@@ -1,0 +1,62 @@
+import { spawn } from 'node:child_process';
+import { describe, expect, it } from 'vitest';
+import {
+  containExecutorProcess,
+  trackExecutorProcess,
+  untrackExecutorProcess,
+} from './executor-tracking.js';
+
+describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
+  'executor process-group containment',
+  () => {
+    it('kills a process group whose leader and descendant ignore SIGTERM', async () => {
+      const script = `
+        const { spawn } = require('node:child_process');
+        spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], { stdio: 'ignore' });
+        process.on('SIGTERM', () => {});
+        setInterval(() => {}, 1000);
+      `;
+      const leader = spawn(process.execPath, ['-e', script], { detached: true, stdio: 'ignore' });
+      if (!leader.pid) throw new Error('leader PID missing');
+      trackExecutorProcess({ sessionId: 'session-tree', taskId: 'task-tree', pid: leader.pid });
+      try {
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        await expect(
+          containExecutorProcess('session-tree', 'task-tree', {
+            termGraceMs: 50,
+            killGraceMs: 1000,
+            pollMs: 10,
+          })
+        ).resolves.toEqual({ status: 'verified_absent' });
+      } finally {
+        try {
+          process.kill(-leader.pid, 'SIGKILL');
+        } catch {}
+        untrackExecutorProcess('session-tree');
+      }
+    });
+
+    it('fails closed for cross-UID execution without signaling', async () => {
+      const leader = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      if (!leader.pid) throw new Error('leader PID missing');
+      trackExecutorProcess({
+        sessionId: 'session-uid',
+        taskId: 'task-uid',
+        pid: leader.pid,
+        asUser: 'agor_executor',
+      });
+      try {
+        await expect(containExecutorProcess('session-uid', 'task-uid')).resolves.toEqual({
+          status: 'unverified',
+          reason: 'Cross-UID process-group signaling is not verified for this execution mode.',
+        });
+      } finally {
+        process.kill(-leader.pid, 'SIGKILL');
+        untrackExecutorProcess('session-uid');
+      }
+    });
+  }
+);

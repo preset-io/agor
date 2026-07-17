@@ -3,6 +3,7 @@ import type { AgorExecutionSettings } from './types';
 export const EXECUTOR_HEARTBEAT_DEFAULT_INTERVAL_MS = 10_000;
 export const EXECUTOR_HEARTBEAT_MIN_STALE_AFTER_MS = 30_000;
 export const EXECUTOR_HEARTBEAT_DEFAULT_CALLBACK_TIMEOUT_MS = 3_000;
+export const EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS = 5 * 60_000;
 
 export interface ResolvedExecutorHeartbeatConfig {
   enabled: boolean;
@@ -48,4 +49,11 @@ export function resolveExecutorHeartbeatConfig(
       timeout_ms: timeoutMs,
     },
   };
+}
+
+export function resolveDispatchConnectTimeoutMs(execution?: AgorExecutionSettings): number {
+  return positiveIntegerOrDefault(
+    execution?.dispatch_connect_timeout_ms,
+    EXECUTOR_DISPATCH_CONNECT_TIMEOUT_MS
+  );
 }

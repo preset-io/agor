@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { getDefaultConfig } from './config-manager';
-import { resolveExecutorHeartbeatConfig } from './executor-heartbeat';
+import {
+  resolveDispatchConnectTimeoutMs,
+  resolveExecutorHeartbeatConfig,
+} from './executor-heartbeat';
 
 describe('resolveExecutorHeartbeatConfig', () => {
   it('defaults to enabled with a 10s interval and conservative stale threshold', () => {
@@ -25,5 +28,10 @@ describe('resolveExecutorHeartbeatConfig', () => {
     expect(getDefaultConfig().execution?.executor_heartbeat).toEqual(
       resolveExecutorHeartbeatConfig()
     );
+  });
+
+  it('resolves the independent local dispatch connection deadline', () => {
+    expect(resolveDispatchConnectTimeoutMs()).toBe(5 * 60_000);
+    expect(resolveDispatchConnectTimeoutMs({ dispatch_connect_timeout_ms: 42_000 })).toBe(42_000);
   });
 });

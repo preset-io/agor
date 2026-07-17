@@ -134,7 +134,7 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   getActiveWithExecutorHeartbeat(params?: FeathersParams): Promise<Task[]>;
   failForLostHeartbeat(
     id: string,
-    data: { completed_at?: string; error_message: string },
+    data: { completed_at?: string; error_message: string; sdk_failure?: Task['sdk_failure'] },
     params?: FeathersParams
   ): Promise<Task>;
 }
