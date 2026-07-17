@@ -219,6 +219,20 @@ export interface AuthCheckResult {
 }
 
 /**
+ * Result of importing a Codex `auth.json` via the daemon's `/codex-auth/import`
+ * endpoint. Carries ONLY non-secret metadata — token material stays on the
+ * daemon/filesystem side and never transits back to callers.
+ */
+export interface CodexAuthImportResult {
+  status: 'authenticated';
+  /** Whether the imported file carries ChatGPT login tokens or a bare API key. */
+  authMode: 'chatgpt' | 'api_key';
+  /** ChatGPT plan type parsed from the id_token claims (e.g. "plus", "pro"), when present. */
+  planType?: string;
+  hint?: string;
+}
+
+/**
  * Canonical mapping from AgenticToolName to the env-var name that holds its primary API key.
  * Tools that authenticate without a key (opencode) are intentionally absent.
  *

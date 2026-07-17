@@ -80,6 +80,7 @@ import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeModelsService } from './services/claude-models.js';
+import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createConfigService } from './services/config.js';
 import { createContextService } from './services/context.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
@@ -549,6 +550,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   app.use('/check-auth', createCheckAuthService(db));
   app.service('/check-auth').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // Imports a pasted Codex CLI auth.json for the authenticated user — writes
+  // it 0600 into the Unix identity that runs Codex and flips their auth
+  // method to subscription. Token material never leaves the daemon.
+  app.use('/codex-auth/import', createCodexAuthImportService(app, db));
+  app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
   // Resolves ANTHROPIC_API_KEY per-user (with config.yaml + env fallback)

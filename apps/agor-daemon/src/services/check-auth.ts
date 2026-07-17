@@ -16,12 +16,13 @@
  * variables are not credential fallbacks.
  */
 
-import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
+import { isTenantAgenticToolEnabled, loadConfigSync, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
+  UsersRepository,
 } from '@agor/core/db';
 import type { SDKUserMessage } from '@agor/core/sdk';
 import { Claude } from '@agor/core/sdk';
@@ -33,6 +34,12 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { TOOL_API_KEY_NAMES } from '@agor/core/types';
+import {
+  resolveUnixUserForImpersonation,
+  type UnixUserMode,
+  validateResolvedUnixUser,
+} from '@agor/core/unix';
+import { parseCodexAuthJson, readCodexAuthFile } from '../utils/codex-auth-file.js';
 
 const FETCH_TIMEOUT_MS = 8_000;
 const SDK_AUTH_PROBE_TIMEOUT_MS = 10_000;
@@ -228,6 +235,84 @@ function resultFromKeyStatus(status: AuthCheckStatus, rejectedHint: string): Aut
   return unknown('Could not reach the provider to verify this key.');
 }
 
+/**
+ * Probe the Codex `auth.json` belonging to the Unix identity that will run
+ * Codex for this user (daemon user in simple mode, shared executor user in
+ * insulated, the caller's own account in strict). File contents stay on the
+ * daemon side; only shape/metadata drive the result.
+ *
+ * An embedded API key is verified against the provider; ChatGPT login tokens
+ * cannot be verified without consuming a refresh, so a well-formed token set
+ * counts as authenticated — Codex refreshes it at session start.
+ */
+async function probeCodexAuthFile(
+  userId: UserID | undefined,
+  withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>
+): Promise<AuthCheckResult> {
+  const config = loadConfigSync();
+  const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
+
+  let unixUsername: string | null = null;
+  if (mode === 'strict') {
+    if (!userId) {
+      return unknown('Cannot resolve a Unix identity for this Codex login check.');
+    }
+    const row = await withTenantDatabase((tenantDb) =>
+      new UsersRepository(tenantDb).findById(userId)
+    );
+    unixUsername = row?.unix_username ?? null;
+    if (!unixUsername) {
+      return unauthenticated(
+        'none',
+        'Codex subscription login needs a Unix account — ask an admin to set your unix_username.'
+      );
+    }
+  }
+
+  let asUser: string | null;
+  try {
+    const resolved = resolveUnixUserForImpersonation({
+      mode,
+      userUnixUsername: unixUsername,
+      executorUnixUser: config.execution?.executor_unix_user,
+    });
+    validateResolvedUnixUser(mode, resolved.unixUser);
+    asUser = resolved.unixUser;
+  } catch {
+    return unknown('Could not resolve the Unix account that holds the Codex login.');
+  }
+
+  const raw = readCodexAuthFile(asUser);
+  if (raw === null) {
+    return unauthenticated(
+      'none',
+      'No Codex login found on this server — import your auth.json or run `codex login` from a branch terminal.'
+    );
+  }
+
+  const parsed = parseCodexAuthJson(raw);
+  if (!parsed.ok) {
+    return unauthenticated(
+      'none',
+      'The Codex auth file on this server is malformed — import a fresh auth.json or run `codex login` again.'
+    );
+  }
+
+  if (parsed.summary.authMode === 'api_key' && parsed.summary.apiKey) {
+    return resultFromKeyStatus(
+      await validateApiKey('codex', parsed.summary.apiKey),
+      'The API key inside the Codex auth file was rejected — import a fresh auth.json.'
+    );
+  }
+
+  return authed(
+    'oauth',
+    parsed.summary.planType
+      ? `ChatGPT login found (${parsed.summary.planType} plan).`
+      : 'ChatGPT login found.'
+  );
+}
+
 export function createCheckAuthService(db: TenantScopeAwareDatabase) {
   return {
     async create(
@@ -309,9 +394,7 @@ export function createCheckAuthService(db: TenantScopeAwareDatabase) {
       }
 
       if (tool === 'codex' && useNativeAuth) {
-        return unknown(
-          'Codex subscription login is configured for this user but can only be verified when Codex runs.'
-        );
+        return probeCodexAuthFile(userId, withTenantDatabase);
       }
 
       if (tool === 'claude-code') {
