@@ -252,3 +252,20 @@ code span[style*="--shiki-dark:#6A737D"] {
 .nextra-navbar nav > button:not(.navbar-cloud-cta) {
   order: 4;
 }
+
+/* Docs content headings — adopt the marketing display font (Space Grotesk)
+ * and a light tint so pages read less like a wall of white. Distinct from
+ * the teal link color; scoped away from the landing page (its headings carry
+ * their own styles). */
+body:not(:has([class*='landingShell'])) main :is(h1, h2, h3) {
+  font-family: var(--font-display), 'Space Grotesk', system-ui, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+.dark body:not(:has([class*='landingShell'])) main :is(h1, h2, h3) {
+  color: #c9efe7;
+}
+
+html:not(.dark) body:not(:has([class*='landingShell'])) main :is(h1, h2, h3) {
+  color: #0d6f5f;
+}
