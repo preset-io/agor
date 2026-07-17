@@ -21,6 +21,7 @@ import type {
   Params as FeathersParams,
   Message,
   Repo,
+  RuntimeTelemetryInput,
   Session,
   Task,
 } from '@agor/core/types';
@@ -121,6 +122,7 @@ export interface SessionsServiceImpl extends Service<Session, Partial<Session>, 
  */
 export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersParams> {
   connectExecutor(data: { task_id: string }, params?: FeathersParams): Promise<Task>;
+  reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   createMany(data: Array<Partial<Task>>): Promise<Task[]>;
   complete(
     id: string,

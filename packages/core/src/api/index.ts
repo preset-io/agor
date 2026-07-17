@@ -35,6 +35,7 @@ import type {
   PatchAgenticToolPreset,
   PermissionMode,
   Repo,
+  RuntimeTelemetryInput,
   Schedule,
   Session,
   Task,
@@ -297,6 +298,8 @@ export interface SessionsService extends AgorService<Session> {
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
+  /** Report daemon-stamped wrapper liveness and the latest coalesced SDK pulse. */
+  reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /**
    * Create multiple tasks in a single request
    * Returns array of created tasks with IDs
@@ -880,7 +883,7 @@ function extendTasksService(client: AgorClient): void {
   };
   if (tasksService[TASKS_SERVICE_EXTENDED]) return;
   if (typeof tasksService.methods === 'function') {
-    tasksService.methods('connectExecutor');
+    tasksService.methods('connectExecutor', 'reportRuntimeTelemetry');
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;
 }

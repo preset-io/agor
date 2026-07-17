@@ -24,18 +24,15 @@ function ctx(overrides: Partial<HookContext>): HookContext {
 }
 
 describe('executorRuntimeScopeGuard', () => {
-  it('accepts the scoped executor connection method and rejects a different task', async () => {
-    const context = ctx({
-      path: 'tasks',
-      method: 'connectExecutor',
-      data: { task_id: 'task-1' },
-    });
+  it.each([
+    'connectExecutor',
+    'reportRuntimeTelemetry',
+  ])('accepts scoped %s and rejects a different task', async (method) => {
+    const context = ctx({ path: 'tasks', method, data: { task_id: 'task-1' } });
 
     await expect(executorRuntimeScopeGuard()(context)).resolves.toBe(context);
     await expect(
-      executorRuntimeScopeGuard()(
-        ctx({ path: 'tasks', method: 'connectExecutor', data: { task_id: 'task-2' } })
-      )
+      executorRuntimeScopeGuard()(ctx({ path: 'tasks', method, data: { task_id: 'task-2' } }))
     ).rejects.toThrow(/task scope/);
   });
 

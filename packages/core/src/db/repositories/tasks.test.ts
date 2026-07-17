@@ -820,6 +820,55 @@ describe('TaskRepository.connectExecutor', () => {
   );
 });
 
+describe('TaskRepository.reportRuntimeTelemetry', () => {
+  dbTest('stamps heartbeat and advances only to a greater pulse sequence', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+    await taskRepo.connectExecutor(task.task_id);
+
+    const first = await taskRepo.reportRuntimeTelemetry(
+      task.task_id,
+      { sequence: 2, kind: 'progress', detail: 'tool.start' },
+      new Date('2026-01-01T00:00:02.000Z')
+    );
+    const retry = await taskRepo.reportRuntimeTelemetry(
+      task.task_id,
+      { sequence: 2, kind: 'waiting' },
+      new Date('2026-01-01T00:00:03.000Z')
+    );
+
+    expect(first).toMatchObject({
+      last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
+      latest_executor_pulse: {
+        sequence: 2,
+        kind: 'progress',
+        detail: 'tool.start',
+        observed_at: '2026-01-01T00:00:02.000Z',
+      },
+    });
+    expect(retry).toMatchObject({
+      last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
+      latest_executor_pulse: first?.latest_executor_pulse,
+    });
+  });
+
+  dbTest('rejects telemetry before connect and after terminality', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+    );
+
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+    await taskRepo.connectExecutor(task.task_id);
+    await taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED });
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+  });
+});
+
 // ============================================================================
 // Update
 // ============================================================================

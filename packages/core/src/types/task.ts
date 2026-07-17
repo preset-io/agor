@@ -21,6 +21,28 @@ export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
 export type ExecutorMode = 'local' | 'templated';
 
+export const ExecutorPulseKind = {
+  SDK_STARTED: 'sdk_started',
+  PROGRESS: 'progress',
+  WAITING: 'waiting',
+  UNKNOWN_ACTIVITY: 'unknown_activity',
+} as const;
+
+export type ExecutorPulseKind = (typeof ExecutorPulseKind)[keyof typeof ExecutorPulseKind];
+
+export interface ExecutorPulse {
+  sequence: number;
+  kind: ExecutorPulseKind;
+  detail?: string;
+  /** Daemon-authored time; advances only with a greater sequence. */
+  observed_at: string;
+}
+
+export interface RuntimeTelemetryInput {
+  task_id: string;
+  pulse?: Omit<ExecutorPulse, 'observed_at'>;
+}
+
 /**
  * Structured metadata attached to a task. All fields are optional, but the
  * ones that are present are load-bearing — typing them here prevents drift
@@ -267,5 +289,7 @@ export interface Task {
   last_executor_heartbeat_at?: string; // UTC ISO string
   /** Immutable launch-mode snapshot used to classify launcher exit safely. */
   executor_mode?: ExecutorMode;
+  /** Latest bounded SDK activity fact; this is not an event history. */
+  latest_executor_pulse?: ExecutorPulse;
   completed_at?: string; // When task reached terminal status (UTC ISO string)
 }

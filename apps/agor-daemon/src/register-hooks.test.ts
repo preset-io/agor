@@ -117,6 +117,21 @@ describe('protectServerManagedTaskWrites', () => {
   });
 
   it.each([
+    'last_executor_heartbeat_at',
+    'latest_executor_pulse',
+    'sdk_failure',
+    'termination_request',
+    'sdk_watchdog_mode',
+  ])('rejects server-owned health field %s at top level or in data', async (field) => {
+    await expect(
+      protectServerManagedTaskWrites(externalContext('patch', { [field]: 'forged' }))
+    ).rejects.toThrow('executor health fields are server-managed');
+    await expect(
+      protectServerManagedTaskWrites(externalContext('patch', { data: { [field]: 'forged' } }))
+    ).rejects.toThrow('executor health fields are server-managed');
+  });
+
+  it.each([
     'create',
     'update',
     'patch',

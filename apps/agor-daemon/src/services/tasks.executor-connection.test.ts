@@ -43,3 +43,55 @@ describe('TasksService executor connection', () => {
     expect(service.emit).toHaveBeenCalledWith('patched', task);
   });
 });
+
+describe('TasksService runtime telemetry', () => {
+  const task = {
+    task_id: '018f0000-0000-7000-8000-000000000001',
+    session_id: '018f0000-0000-7000-8000-000000000002',
+    created_by: '018f0000-0000-7000-8000-000000000003',
+    full_prompt: 'test',
+    status: TaskStatus.RUNNING,
+    message_range: { start_index: 0, end_index: 0, start_timestamp: '2026-01-01' },
+    git_state: { ref_at_start: 'main', sha_at_start: 'abc123' },
+    tool_use_count: 0,
+    created_at: '2026-01-01T00:00:00.000Z',
+    executor_connected_at: '2026-01-01T00:00:01.000Z',
+    last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
+  } as Task;
+
+  it('validates, persists, and publishes one bounded pulse fact', async () => {
+    const service = Object.create(TasksService.prototype) as TasksService & {
+      emit: ReturnType<typeof vi.fn>;
+    };
+    const reportRuntimeTelemetry = vi.fn().mockResolvedValue(task);
+    const heartbeatCallback = vi.fn().mockResolvedValue(undefined);
+    Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry });
+    Reflect.set(service, 'handleExecutorHeartbeat', heartbeatCallback);
+    service.emit = vi.fn();
+
+    const result = await service.reportRuntimeTelemetry({
+      task_id: task.task_id,
+      pulse: { sequence: 1, kind: 'progress', detail: 'tool.start' },
+    });
+
+    expect(result).toBe(task);
+    expect(reportRuntimeTelemetry).toHaveBeenCalledWith(task.task_id, {
+      sequence: 1,
+      kind: 'progress',
+      detail: 'tool.start',
+    });
+    expect(service.emit).toHaveBeenCalledWith('patched', task);
+  });
+
+  it.each([
+    { sequence: 0, kind: 'progress' },
+    { sequence: 1, kind: 'progress', detail: 'raw prompt content!' },
+    { sequence: 1, kind: 'progress', detail: 'x'.repeat(129) },
+  ] as const)('rejects malformed pulse %#', async (pulse) => {
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry: vi.fn() });
+    await expect(
+      service.reportRuntimeTelemetry({ task_id: task.task_id, pulse })
+    ).rejects.toThrow();
+  });
+});

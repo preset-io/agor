@@ -6,7 +6,6 @@ export interface ExecutorHeartbeatOptions {
   taskId: TaskID | string;
   enabled?: boolean;
   intervalMs?: number;
-  now?: () => Date;
   warn?: (...args: unknown[]) => void;
 }
 
@@ -28,7 +27,6 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     options.intervalMs > 0
       ? Math.floor(options.intervalMs)
       : DEFAULT_INTERVAL_MS;
-  const now = options.now ?? (() => new Date());
   const warn = options.warn ?? console.warn;
   let stopped = false;
   let inFlight = false;
@@ -38,9 +36,7 @@ export function startExecutorHeartbeat(options: ExecutorHeartbeatOptions): Execu
     if (stopped || inFlight) return;
     inFlight = true;
     try {
-      await options.client.service('tasks').patch(options.taskId, {
-        last_executor_heartbeat_at: now().toISOString(),
-      });
+      await options.client.service('tasks').reportRuntimeTelemetry({ task_id: options.taskId });
     } catch (error) {
       warn(
         '[executor-heartbeat] Failed to write heartbeat:',

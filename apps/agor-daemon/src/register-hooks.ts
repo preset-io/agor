@@ -500,6 +500,26 @@ export async function protectServerManagedTaskWrites(context: HookContext): Prom
   if (records.some((write) => Object.hasOwn(write, 'executor_mode'))) {
     throw new Forbidden('executor_mode is server-managed');
   }
+  const healthFields = [
+    'last_executor_heartbeat_at',
+    'latest_executor_pulse',
+    'sdk_failure',
+    'termination_request',
+    'sdk_watchdog_mode',
+  ];
+  if (
+    records.some((write) => {
+      const nested =
+        write.data && typeof write.data === 'object'
+          ? (write.data as Record<string, unknown>)
+          : undefined;
+      return healthFields.some(
+        (field) => Object.hasOwn(write, field) || Object.hasOwn(nested ?? {}, field)
+      );
+    })
+  ) {
+    throw new Forbidden('executor health fields are server-managed');
+  }
   if (records.some((write) => write.status === TaskStatus.DISPATCHING)) {
     throw new Forbidden('dispatching task status is server-managed');
   }
@@ -2986,6 +3006,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           : []),
       ],
       connectExecutor: [requireExecutorRuntimeToken()],
+      reportRuntimeTelemetry: [requireExecutorRuntimeToken()],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete tasks'),
         // RBAC: deleting a task requires 'all' permission on the branch

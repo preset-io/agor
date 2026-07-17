@@ -4,7 +4,7 @@
  * Type-safe CRUD operations for tasks with short ID support.
  */
 
-import type { SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
+import type { ExecutorPulse, SessionID, Task, TaskMetadata, UUID } from '@agor/core/types';
 import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { generateId, shortId } from '../../lib/ids';
@@ -154,6 +154,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         permission_request: task.permission_request, // Permission state for UI approval flow
         metadata: task.metadata, // Generic metadata bag (e.g., is_agor_callback, source)
         executor_mode: task.executor_mode,
+        latest_executor_pulse: task.latest_executor_pulse,
       },
     };
   }
@@ -438,6 +439,43 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         error
       );
     }
+  }
+
+  /** Atomically stamp heartbeat time and advance the latest pulse fact. */
+  async reportRuntimeTelemetry(
+    id: string,
+    pulse?: Omit<ExecutorPulse, 'observed_at'>,
+    observedAt = new Date()
+  ): Promise<Task | null> {
+    const fullId = await this.resolveId(id);
+    return this.runTaskMutation(() =>
+      this.db.transaction(async (tx) => {
+        const txDb = txAsDb(tx);
+        await this.lockTaskForMutation(txDb, fullId);
+        const row = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        if (!row) throw new EntityNotFoundError('Task', id);
+        if (
+          !row.executor_connected_at ||
+          ![TaskStatus.RUNNING, TaskStatus.AWAITING_PERMISSION, TaskStatus.AWAITING_INPUT].includes(
+            row.status
+          )
+        ) {
+          return null;
+        }
+
+        const previous = row.data.latest_executor_pulse;
+        const latest =
+          pulse && (!previous || pulse.sequence > previous.sequence)
+            ? { ...pulse, observed_at: observedAt.toISOString() }
+            : previous;
+        const data = { ...row.data, latest_executor_pulse: latest };
+        await update(txDb, tasks)
+          .set({ last_executor_heartbeat_at: observedAt, data })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+        return this.rowToTask({ ...row, last_executor_heartbeat_at: observedAt, data });
+      })
+    );
   }
 
   /**

@@ -17,12 +17,13 @@ import {
   TaskRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { type Application, Conflict } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   ContentBlock,
   Paginated,
   QueryParams,
+  RuntimeTelemetryInput,
   Session,
   SessionID,
   Task,
@@ -30,6 +31,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  ExecutorPulseKind,
   isTerminalTaskStatus,
   SessionStatus,
   type TaskMetadata,
@@ -514,27 +516,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     if (isRunningTransition && !Array.isArray(result)) {
       this.trackTaskStarted(result as Task);
-    }
-
-    if (data.last_executor_heartbeat_at && !Array.isArray(result)) {
-      analyticsLogger.track(
-        'executor.heartbeat',
-        {
-          task_id: (result as Task).task_id,
-          session_id: (result as Task).session_id,
-          status: (result as Task).status,
-          last_executor_heartbeat_at: data.last_executor_heartbeat_at,
-        },
-        { userId: (result as Task).created_by }
-      );
-      this.handleExecutorHeartbeat(result as Task, data.last_executor_heartbeat_at).catch(
-        (error) => {
-          console.warn(
-            `⚠️  [TasksService] Executor heartbeat callback failed for task ${shortId((result as Task).task_id)}:`,
-            error
-          );
-        }
-      );
     }
 
     // Emit analytics for terminal task transitions, including timeouts that do not
@@ -1246,6 +1227,43 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       this.emit?.('patched', connection.task);
     }
     return connection.task;
+  }
+
+  /** Accept one authenticated heartbeat plus the latest coalesced SDK pulse. */
+  async reportRuntimeTelemetry(data: RuntimeTelemetryInput): Promise<Task> {
+    if (data.pulse) {
+      const { sequence, kind, detail } = data.pulse;
+      if (!Number.isSafeInteger(sequence) || sequence <= 0) {
+        throw new BadRequest('pulse sequence must be a positive safe integer');
+      }
+      if (!Object.values(ExecutorPulseKind).includes(kind)) {
+        throw new BadRequest('invalid executor pulse kind');
+      }
+      if (
+        detail !== undefined &&
+        (!/^[A-Za-z0-9._:/-]+$/.test(detail) || Buffer.byteLength(detail, 'utf8') > 128)
+      ) {
+        throw new BadRequest('pulse detail must be a bounded identifier');
+      }
+    }
+
+    const task = await this.taskRepo.reportRuntimeTelemetry(data.task_id, data.pulse);
+    if (!task) throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
+    analyticsLogger.track(
+      'executor.heartbeat',
+      {
+        task_id: task.task_id,
+        session_id: task.session_id,
+        status: task.status,
+        last_executor_heartbeat_at: task.last_executor_heartbeat_at,
+      },
+      { userId: task.created_by }
+    );
+    void this.handleExecutorHeartbeat(task, task.last_executor_heartbeat_at!).catch((error) =>
+      console.warn('Executor heartbeat callback failed:', error)
+    );
+    this.emit?.('patched', task);
+    return task;
   }
 
   /**
