@@ -565,7 +565,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       return result;
     } catch (error) {
       if (error instanceof RepositoryError) throw error;
-      if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to update task: ${error instanceof Error ? error.message : String(error)}`,
         error
@@ -580,12 +579,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     try {
       const fullId = await this.resolveId(id);
 
-      const result = await deleteFrom(this.db, tasks).where(eq(tasks.task_id, fullId)).run();
+      const result = await deleteFrom(this.db, tasks)
+        .where(and(eq(tasks.task_id, fullId), eq(tasks.status, TaskStatus.QUEUED)))
+        .run();
 
       if (result.rowsAffected === 0) {
-        throw new EntityNotFoundError('Task', id);
+        const existing = await select(this.db).from(tasks).where(eq(tasks.task_id, fullId)).one();
+        if (!existing) throw new EntityNotFoundError('Task', id);
+        throw new RepositoryError('Only queued tasks can be deleted');
       }
     } catch (error) {
+      if (error instanceof RepositoryError) throw error;
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to delete task: ${error instanceof Error ? error.message : String(error)}`,

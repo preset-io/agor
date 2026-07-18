@@ -25,6 +25,7 @@ import {
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  protectExternalTaskCreate,
   protectServerManagedTaskWrites,
   shouldDrainQueueAfterSessionPostTurnPatch,
   shouldRunSessionPostTurnHooks,
@@ -49,6 +50,41 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('protectExternalTaskCreate', () => {
+  const context = (data: unknown, provider: string | null = 'rest') =>
+    ({ data, params: { provider } }) as import('@agor/core/types').HookContext;
+
+  it('preserves the documented dormant create/run contract', () => {
+    const hook = context({ session_id: 'session-1', full_prompt: 'hello' });
+    expect(protectExternalTaskCreate(hook)).toBe(hook);
+    expect(hook.data).toEqual({
+      session_id: 'session-1',
+      full_prompt: 'hello',
+      status: TaskStatus.CREATED,
+    });
+  });
+
+  it.each(['running', 'queued', 'completed'])('rejects externally forged status %s', (status) => {
+    expect(() =>
+      protectExternalTaskCreate(context({ session_id: 'session-1', full_prompt: 'hello', status }))
+    ).toThrow('must use status created');
+  });
+
+  it('rejects lifecycle and identity fields outside the create contract', () => {
+    expect(() =>
+      protectExternalTaskCreate(
+        context({ session_id: 'session-1', full_prompt: 'hello', created_by: 'forged' })
+      )
+    ).toThrow('not client-managed');
+  });
+
+  it('leaves trusted internal task creation unchanged', () => {
+    const hook = context({ status: TaskStatus.RUNNING }, null);
+    expect(protectExternalTaskCreate(hook)).toBe(hook);
+    expect(hook.data).toEqual({ status: TaskStatus.RUNNING });
+  });
+});
 
 describe('protectServerManagedTaskWrites', () => {
   const executorPayload = {

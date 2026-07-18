@@ -1179,8 +1179,8 @@ describe('TaskRepository.delete', () => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
 
-    const data1 = createTaskData({ session_id: sessionId });
-    const data2 = createTaskData({ session_id: sessionId });
+    const data1 = createTaskData({ session_id: sessionId, status: TaskStatus.QUEUED });
+    const data2 = createTaskData({ session_id: sessionId, status: TaskStatus.QUEUED });
     await taskRepo.create(data1);
     await taskRepo.create(data2);
 
@@ -1198,6 +1198,21 @@ describe('TaskRepository.delete', () => {
     const taskRepo = new TaskRepository(db);
     await expect(taskRepo.delete('99999999')).rejects.toThrow(EntityNotFoundError);
   });
+
+  dbTest('never deletes an active task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const running = await taskRepo.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+
+    await expect(taskRepo.delete(running.task_id)).rejects.toThrow(
+      'Only queued tasks can be deleted'
+    );
+    expect(await taskRepo.findById(running.task_id)).toMatchObject({
+      status: TaskStatus.RUNNING,
+    });
+  });
 });
 
 // ============================================================================
@@ -1214,7 +1229,7 @@ describe('TaskRepository.countBySession', () => {
     expect(await taskRepo.countBySession(session1)).toBe(0);
 
     // After creates
-    const data1 = createTaskData({ session_id: session1 });
+    const data1 = createTaskData({ session_id: session1, status: TaskStatus.QUEUED });
     const data2 = createTaskData({ session_id: session1 });
     await taskRepo.create(data1);
     await taskRepo.create(data2);

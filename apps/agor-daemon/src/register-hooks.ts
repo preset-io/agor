@@ -501,6 +501,34 @@ const EXECUTOR_TASK_PATCH_FIELDS = new Set([
   'session_md5',
 ]);
 
+const EXTERNAL_TASK_CREATE_FIELDS = new Set(['session_id', 'full_prompt', 'status']);
+
+/** Keep the documented two-step create/run API dormant until the explicit run call. */
+export function protectExternalTaskCreate(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+
+  const data =
+    context.data && typeof context.data === 'object' && !Array.isArray(context.data)
+      ? (context.data as Record<string, unknown>)
+      : undefined;
+  if (!data) throw new BadRequest('Task creation requires one task');
+
+  const unsupported = Object.keys(data).find((field) => !EXTERNAL_TASK_CREATE_FIELDS.has(field));
+  if (unsupported) throw new BadRequest(`Task create field is not client-managed: ${unsupported}`);
+  if (typeof data.session_id !== 'string' || !data.session_id) {
+    throw new BadRequest('session_id is required when creating a task');
+  }
+  if (typeof data.full_prompt !== 'string') {
+    throw new BadRequest('full_prompt is required when creating a task');
+  }
+  if (data.status !== undefined && data.status !== TaskStatus.CREATED) {
+    throw new BadRequest('Externally created tasks must use status created');
+  }
+
+  data.status = TaskStatus.CREATED;
+  return context;
+}
+
 async function taskForExecutorPatch(context: HookContext): Promise<{
   status?: unknown;
   executor_connected_at?: unknown;
@@ -3008,6 +3036,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
+        protectExternalTaskCreate,
         injectCreatedBy(),
       ],
       patch: [

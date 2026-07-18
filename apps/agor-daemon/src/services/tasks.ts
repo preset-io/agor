@@ -128,7 +128,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         default: PAGINATION.DEFAULT_LIMIT,
         max: PAGINATION.MAX_LIMIT,
       },
-      multi: ['patch', 'remove'],
+      multi: ['patch'],
     });
 
     this.taskRepo = taskRepo;

@@ -244,6 +244,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     methods: [
       'find',
       'get',
+      'create',
       'patch',
       'remove',
       'connectExecutor',

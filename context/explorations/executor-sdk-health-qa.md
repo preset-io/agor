@@ -49,22 +49,25 @@ metadata, tests, docs, and the plan are counted separately.
 | Phase 5: watchdog before contraction                           |       467 |      49 |       +418 |             <= +200 |
 | Watchdog contraction                                           |        49 |      74 |        -25 |  contraction credit |
 | Final redundant-comment contraction                            |         0 |      10 |        -10 |        Phase 6 <= 0 |
-| Review hardening and mutation-surface contraction              |       136 |      85 |        +51 |   correctness delta |
-| **Beyond PR #1888 (per-commit gross)**                         | **1,713** | **462** | **+1,251** |       **<= +1,200** |
-| **Total (per-commit gross)**                                   | **2,082** | **523** | **+1,559** |       **<= +2,500** |
-| **Final product diff**                                         | **1,882** | **323** | **+1,559** |       **<= +2,500** |
+| Review hardening and mutation-surface contraction              |       173 |      87 |        +86 |   correctness delta |
+| **Beyond PR #1888 (per-commit gross)**                         | **1,750** | **464** | **+1,286** |       **<= +1,200** |
+| **Total (per-commit gross)**                                   | **2,119** | **525** | **+1,594** |       **<= +2,500** |
+| **Final product diff**                                         | **1,920** | **326** | **+1,594** |       **<= +2,500** |
 
 Phase 5's original slice estimate was too low: the final watchdog mechanism is +393 after its
-own contraction. Review hardening then removed external Task create/update authority and added
-strict executor patch, identity, configuration, and adapter-session boundaries. That correctness
-delta exceeds the reviewed post-#1888 target by 51 net lines while remaining below the global
-ceiling, with three focused production modules, three Task custom methods, one column, and no new
-tables. The variance is disclosed rather than hidden by reclassification.
+own contraction. Review hardening then removed external Task update authority, constrained the
+documented create/run API to dormant tasks, made deletion atomic queued-work cancellation, and
+added strict executor patch, identity, configuration, and adapter-session boundaries. That
+correctness delta exceeds the reviewed post-#1888 target by 86 net lines while remaining below the
+global ceiling, with three focused production modules, three Task custom methods, one column, and
+no new tables. The variance is disclosed rather than hidden by reclassification.
 
 Deletion happened with replacement, not as a compatibility tail:
 
 - Generic `tasks.patch` heartbeat writes were removed with `reportRuntimeTelemetry`.
-- Generic external Task create/update writes were removed; executor patches now use one allowlist.
+- External Task update was removed; create accepts only `session_id`, `full_prompt`, and `created`
+  status, queued deletion is one conditional repository operation, and executor patches use one
+  allowlist.
 - Local/templated launcher exit classification replaced the unconditional exit assumption.
 - Single-PID Stop, direct stale-heartbeat failure, and direct executor-exit terminalization were
   replaced by the shared coordinator/process-group path.
@@ -74,8 +77,8 @@ Deletion happened with replacement, not as a compatibility tail:
 
 | Area                    | Command/result                                                                                             |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Core full suite         | `pnpm --filter @agor/core test` — 108 passed, 1 skipped files; 2,819 passed, 2 skipped tests               |
-| Daemon full suite       | `pnpm --filter @agor/daemon test` — 141 passed, 1 skipped files; 1,782 passed, 31 skipped tests            |
+| Core full suite         | `pnpm --filter @agor/core test` — 108 passed, 1 skipped files; 2,820 passed, 2 skipped tests               |
+| Daemon full suite       | `pnpm --filter @agor/daemon test` — 141 passed, 1 skipped files; 1,788 passed, 31 skipped tests            |
 | UI full suite           | `pnpm --filter @agor/ui test` — 147 files, 941 tests passed                                                |
 | CLI full suite          | `pnpm --filter @agor/cli test` — 3 files, 19 tests passed                                                  |
 | Source typechecks       | Core, daemon, and executor `typecheck` all passed                                                          |
@@ -84,7 +87,7 @@ Deletion happened with replacement, not as a compatibility tail:
 | Short-ID contract       | `node scripts/check-no-ad-hoc-shortid.mjs` — passed                                                        |
 | Focused telemetry       | Connection/telemetry and coordinator suites — 10 tests passed                                              |
 | Focused watchdog        | Watchdog/heartbeat suites — 13 tests passed                                                                |
-| Review hardening        | Task authority/identity, strict config, and OpenCode session ownership — 171 focused tests passed          |
+| Review hardening        | Task authority/identity, strict config, and OpenCode session ownership — 178 focused tests passed          |
 | Migrations              | Core migration suite passed for both schema histories; PostgreSQL live repository test skipped without URL |
 
 The full executor suite reached 37 passing files and 507 passing tests, with three unrelated
